@@ -112,6 +112,13 @@ interface VoiceConversation {
   topscholarCpIds?: string[] | null;
   topscholarChapter?: string | null;
   /**
+   * Raw human-readable launch scope (board/medium/grade/subject/chapter) kept
+   * alongside the resolved cpIds so the system instructions can DESCRIBE what
+   * this tutor teaches — used for tutor-style off-topic declines. Null when no
+   * scope was supplied (non-TopScholar business voice).
+   */
+  topscholarScope?: TopscholarVoiceScope | null;
+  /**
    * Curriculum diagrams retrieved for the turn currently being answered, as
    * CANDIDATES only. Deliberately kept OUT of the text handed to the model — a
    * spoken tutor would read the URL aloud — so which of these (if any) actually
@@ -264,16 +271,39 @@ export class RealtimeVoiceService {
         if (topscholarDoubtId) {
           conversation.topscholarDoubtId = topscholarDoubtId;
         }
-        // Re-bind the curriculum scope verified for THIS upgrade too. Without
-        // this a resumed session would keep answering, but unscoped.
-        if (topscholarScope) {
-          conversation.topscholarCpIds = scopedCpIds;
-          conversation.topscholarChapter = scopedChapter;
-        }
+        // Re-bind the curriculum scope verified for THIS upgrade too —
+        // unconditionally, so a reconnect can never keep a stale scope (or a
+        // stale absence of scope: a scoped upgrade of a previously unscoped
+        // session must become a tutor session and vice versa).
+        const scopeChanged =
+          JSON.stringify(conversation.topscholarScope ?? null) !== JSON.stringify(topscholarScope ?? null);
+        conversation.topscholarCpIds = scopedCpIds;
+        conversation.topscholarChapter = scopedChapter;
+        conversation.topscholarScope = topscholarScope ?? null;
         if (selectedLanguage !== undefined) {
           conversation.selectedLanguage = selectedLanguage;
         }
-        
+
+        // The guardrail persona (tutor vs business) lives in the OpenAI session
+        // instructions, which were built from the OLD scope. Rebuild and push
+        // them when the scope changed, or the model keeps declining with the
+        // previous persona until an unrelated instructions refresh happens.
+        if (scopeChanged && conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+          try {
+            const updatedInstructions = await this.buildSystemInstructions(conversation);
+            conversation.openaiWs.send(JSON.stringify({
+              type: 'session.update',
+              session: {
+                type: 'realtime',
+                instructions: updatedInstructions,
+              }
+            }));
+            console.log('[RealtimeVoice] Reconnect: scope changed — session instructions rebuilt and pushed');
+          } catch (err) {
+            console.warn('[RealtimeVoice] Reconnect: failed to refresh instructions:', (err as Error).message);
+          }
+        }
+
         // Setup client handlers for new WebSocket
         this.setupClientHandlers(existingConversationId, conversation);
         
@@ -359,6 +389,7 @@ export class RealtimeVoiceService {
         topscholarDoubtId,
         topscholarCpIds: scopedCpIds,
         topscholarChapter: scopedChapter,
+        topscholarScope: topscholarScope || null,
         elevenlabsApiKey: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsApiKey : undefined,
         elevenlabsVoiceId: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsVoiceId : undefined,
       };
@@ -975,6 +1006,30 @@ export class RealtimeVoiceService {
     }
   }
 
+  /**
+   * Human-readable one-liner of what this tutor session teaches, built from
+   * the signed launch scope (e.g. "Mathematics, CBSE Class 7 (English medium),
+   * chapter 'Fractions'"). Returns null for non-TopScholar sessions or when
+   * the scope carries no describable fields — callers fall back to the
+   * business guardrail in that case.
+   */
+  private describeTopscholarScope(conversation: VoiceConversation): string | null {
+    const s = conversation.topscholarScope;
+    if (!s) return null;
+    const parts: string[] = [];
+    if (s.subject) parts.push(s.subject);
+    const cls: string[] = [];
+    if (s.board) cls.push(s.board);
+    if (s.grade) cls.push(`Class ${s.grade}`);
+    if (cls.length > 0) parts.push(cls.join(' ') + (s.medium ? ` (${s.medium} medium)` : ''));
+    else if (s.medium) parts.push(`${s.medium} medium`);
+    if (s.chapter) parts.push(`chapter "${s.chapter}"`);
+    // A scope was supplied but carried no printable fields (e.g. cpId-only):
+    // still a tutor session — never let it fall back to the business wording.
+    if (parts.length === 0) return 'your school curriculum subjects';
+    return parts.join(', ');
+  }
+
   private async buildSystemInstructions(conversation: VoiceConversation): Promise<string> {
     const { personality, companyDescription, customInstructions, currencySymbol, currency, businessAccountId, conversationId } = conversation;
 
@@ -1061,13 +1116,28 @@ export class RealtimeVoiceService {
     }
 
     // CRITICAL GUARDRAILS
-    instructions += '\n\nGUARDRAILS (MUST FOLLOW):\n';
-    instructions += '- ONLY answer questions related to this business\'s products, services, pricing, FAQs, and company information\n';
-    instructions += '- DECLINE politely if asked about unrelated topics (world events, general knowledge, entertainment, sports, history, science, politics, health advice, financial advice)\n';
-    instructions += '- When declining, keep it SHORT (1 sentence), friendly, and redirect to what you CAN help with\n';
-    instructions += '- Example decline: "I focus on helping with our products and services. What can I tell you about what we offer?"\n';
-    instructions += '- NEVER provide medical, legal, or financial advice\n';
-    instructions += '- NEVER expose internal operations or backend processes\n';
+    // Tutor sessions (a TopScholar launch scope is bound) get a tutor-voiced
+    // guardrail that names what this tutor actually teaches; business widgets
+    // keep the original products/services wording unchanged.
+    const scopeSummary = this.describeTopscholarScope(conversation);
+    if (scopeSummary) {
+      instructions += '\n\nGUARDRAILS (MUST FOLLOW):\n';
+      instructions += `- You are a personal TUTOR. You teach exactly this: ${scopeSummary}.\n`;
+      instructions += '- ONLY answer questions related to those subjects/chapters, the curriculum content your tools return, and general study guidance for them\n';
+      instructions += '- DECLINE politely if asked about unrelated topics (celebrities, movies, sports, world events, politics, or anything outside the curriculum)\n';
+      instructions += '- When declining, speak AS A TUTOR, keep it SHORT (1 sentence), and name what you CAN teach — never mention "products" or "services"\n';
+      instructions += `- Example decline: "That's outside our lessons — I'm your tutor for ${scopeSummary}. Shall we pick a topic from there?"\n`;
+      instructions += '- NEVER provide medical, legal, or financial advice\n';
+      instructions += '- NEVER expose internal operations or backend processes\n';
+    } else {
+      instructions += '\n\nGUARDRAILS (MUST FOLLOW):\n';
+      instructions += '- ONLY answer questions related to this business\'s products, services, pricing, FAQs, and company information\n';
+      instructions += '- DECLINE politely if asked about unrelated topics (world events, general knowledge, entertainment, sports, history, science, politics, health advice, financial advice)\n';
+      instructions += '- When declining, keep it SHORT (1 sentence), friendly, and redirect to what you CAN help with\n';
+      instructions += '- Example decline: "I focus on helping with our products and services. What can I tell you about what we offer?"\n';
+      instructions += '- NEVER provide medical, legal, or financial advice\n';
+      instructions += '- NEVER expose internal operations or backend processes\n';
+    }
 
     // K12 GUARDRAILS — mirror the text-chat tutor guardrails for voice mode
     try {
