@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { HardDrive, CheckCircle, XCircle, Loader2, Eye, EyeOff, TestTube, Trash2 } from "lucide-react";
+import { HardDrive, CheckCircle, XCircle, Loader2, Eye, EyeOff, TestTube, Trash2, Wand2 } from "lucide-react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -111,6 +111,14 @@ export default function SuperAdminR2Settings() {
     },
   });
 
+  const handleFillDefaults = () => {
+    setAccountId("9f8d08f5ad09debb50ba5b0593424999");
+    setBucketName("chroneylive");
+    setAccessKeyId("df1e32533a54f74f972ec36ab65ca715");
+    setSecretAccessKey("9f0340125a8909c23bfa9c107c7e28942ae5389ddac9257d93386ecbf1e8d0be");
+    setPublicUrl("https://pub-1fde9645751a4887b618ddaf30e8c546.r2.dev");
+  };
+
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     if (!accountId || !accessKeyId || !secretAccessKey || !bucketName) {
@@ -195,7 +203,18 @@ export default function SuperAdminR2Settings() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Configure R2 Storage</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle>Configure R2 Storage</CardTitle>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleFillDefaults}
+              >
+                <Wand2 className="h-4 w-4 mr-2" />
+                Fill Defaults
+              </Button>
+            </div>
             <CardDescription>
               Enter your Cloudflare R2 credentials. These will be encrypted and stored in the database.
             </CardDescription>
