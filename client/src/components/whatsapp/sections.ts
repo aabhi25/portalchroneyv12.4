@@ -179,22 +179,6 @@ const LEAD_GEN_ITEMS: WhatsappNavItem[] = [
     matches: l => l === "/admin/whatsapp-smart-replies",
   },
   {
-    key: "crm",
-    label: "CRM sync",
-    description: "Push captured leads to your CRM",
-    href: "/admin/crm?from=whatsapp",
-    icon: Link2,
-    formerly: "CRM",
-    sidebarTestId: "link-wa-crm",
-    gradient: "bg-gradient-to-br from-indigo-500 to-purple-600",
-    tone: "bg-indigo-50 group-hover:bg-indigo-100",
-    matches: l =>
-      l === "/admin/crm" ||
-      l === "/admin/leadsquared" ||
-      l === "/admin/salesforce" ||
-      l === "/admin/custom-crm",
-  },
-  {
     key: "allowed-numbers",
     label: "Allowed numbers",
     description: "Restrict who gets a reply — affects campaigns too",
