@@ -156,6 +156,20 @@ export function InlineVoiceMode({
     }
   };
 
+  /**
+   * Drop every scheduled and queued sample immediately. Used when an answer is
+   * abandoned — playback runs ahead of what the student has heard, so audio
+   * left in the pipeline would otherwise play on into the next answer.
+   */
+  const flushQueuedAudio = () => {
+    activeSourcesRef.current.forEach((s) => { try { s.stop(); } catch {} });
+    activeSourcesRef.current.clear();
+    audioQueueRef.current = [];
+    isPlayingRef.current = false;
+    nextPlaybackTimeRef.current = 0;
+    pcmLeftoverByteRef.current = null;
+  };
+
   const { toast } = useToast();
 
   const safeSend = useCallback((data: string | ArrayBuffer) => {
@@ -380,6 +394,20 @@ export function InlineVoiceMode({
         }
         break;
 
+      case 'response_cancelled':
+        // The server abandoned this answer — typically a barge-in it detected
+        // while we were still inside our own grace window, so we never ran
+        // handleInterruption. Drop what we have buffered for it; playback runs
+        // ahead of the student's ears, so it would otherwise be heard on top of
+        // whatever comes next.
+        if (data.responseId) {
+          markResponseInterrupted(data.responseId);
+          if (currentResponseIdRef.current === data.responseId) {
+            flushQueuedAudio();
+          }
+        }
+        break;
+
       case 'transcript_correction':
         onTranscriptCorrection?.(data.original, data.corrected);
         break;
@@ -455,20 +483,25 @@ export function InlineVoiceMode({
         // doesn't accidentally mark the previous (already-completed) response
         // as cancelled.
         if (data.responseId) {
-          // If a brand-new response is starting while audio from the previous
-          // answer is still queued / playing (e.g. ElevenLabs HTTP stream
-          // hadn't finished delivering when the user moved on), hard-flush
-          // the audio pipeline so the two answers don't bleed together.
-          // Defense-in-depth — the server now also aborts the prior synth.
-          const isNewResponse =
-            currentResponseIdRef.current && currentResponseIdRef.current !== data.responseId;
-          if (isNewResponse && (isPlayingRef.current || activeSourcesRef.current.size > 0)) {
-            activeSourcesRef.current.forEach((s) => { try { s.stop(); } catch {} });
-            activeSourcesRef.current.clear();
-            audioQueueRef.current = [];
-            isPlayingRef.current = false;
-            nextPlaybackTimeRef.current = 0;
-            pcmLeftoverByteRef.current = null;
+          // A new response arriving while the previous one is still playing is
+          // two different situations needing opposite handling, and only
+          // ownership tells them apart — never duration:
+          //
+          //  - the previous answer was ABANDONED (barge-in, or a server-side
+          //    cancellation). Its audio must go, or a stale answer runs on into
+          //    this one. Both paths mark the response first: handleInterruption
+          //    locally, 'response_cancelled' from the server.
+          //  - the previous answer was NOT abandoned, so this is a legitimate
+          //    continuation and the queued speech is the end of a sentence the
+          //    student is still hearing. Flushing it is the mid-word chop.
+          //    Audio schedules sequentially from nextPlaybackTimeRef, so
+          //    letting it drain plays the two in order, not over each other.
+          const previousResponseId = currentResponseIdRef.current;
+          const isNewResponse = previousResponseId && previousResponseId !== data.responseId;
+          const previousWasAbandoned =
+            !!previousResponseId && interruptedResponseIdsRef.current.has(previousResponseId);
+          if (isNewResponse && previousWasAbandoned && (isPlayingRef.current || activeSourcesRef.current.size > 0)) {
+            flushQueuedAudio();
           }
           currentResponseIdRef.current = data.responseId;
         }

@@ -509,6 +509,25 @@ export class RealtimeVoiceService {
   // playing. This stops the AI's own opening audio / mic echo from killing the
   // answer. Deliberate cancellations (post-transcript "smart interruption",
   // full cleanup) pass respectGrace=false and always cancel.
+  /**
+   * Mark a response abandoned and tell the client so it can drop the audio it
+   * has already buffered for it.
+   *
+   * Without this the client only learns of a cancellation it initiated itself.
+   * A cancellation decided server-side — a barge-in detected while the client
+   * is still inside its own grace window — left the abandoned answer's queued
+   * speech playing, so it ran on into the next answer.
+   */
+  private markResponseCancelled(conversation: VoiceConversation, responseId?: string) {
+    if (!responseId) return;
+    conversation.cancelledResponseIds.add(responseId);
+    if (conversation.cancelledResponseIds.size > 20) {
+      const first = conversation.cancelledResponseIds.values().next().value;
+      if (first) conversation.cancelledResponseIds.delete(first);
+    }
+    this.sendToClient(conversation.clientWs, { type: 'response_cancelled', responseId });
+  }
+
   private cancelResponse(conversation: VoiceConversation, respectGrace = false) {
     if (respectGrace && conversation.activeElevenLabsStartedAt) {
       const sincePlaybackStart = Date.now() - conversation.activeElevenLabsStartedAt;
@@ -527,13 +546,7 @@ export class RealtimeVoiceService {
     if (conversation.activeElevenLabsAbort) {
       const abortedResponseId = conversation.activeElevenLabsResponseId;
       console.log('[RealtimeVoice] Aborting in-flight ElevenLabs synth due to user interrupt, responseId:', abortedResponseId, 'openaiActive:', conversation.isProcessing);
-      if (abortedResponseId) {
-        conversation.cancelledResponseIds.add(abortedResponseId);
-        if (conversation.cancelledResponseIds.size > 20) {
-          const first = conversation.cancelledResponseIds.values().next().value;
-          if (first) conversation.cancelledResponseIds.delete(first);
-        }
-      }
+      this.markResponseCancelled(conversation, abortedResponseId);
       try { conversation.activeElevenLabsAbort.abort(); } catch {}
       conversation.activeElevenLabsAbort = undefined;
       conversation.activeElevenLabsResponseId = undefined;
@@ -544,13 +557,7 @@ export class RealtimeVoiceService {
     // audio plays after the barge-in. Mark the queue's response cancelled so a
     // chunk caught mid-flight (between sentences, when there's no active abort)
     // is suppressed too.
-    if (conversation.ttsResponseId) {
-      conversation.cancelledResponseIds.add(conversation.ttsResponseId);
-      if (conversation.cancelledResponseIds.size > 20) {
-        const first = conversation.cancelledResponseIds.values().next().value;
-        if (first) conversation.cancelledResponseIds.delete(first);
-      }
-    }
+    this.markResponseCancelled(conversation, conversation.ttsResponseId);
     if (conversation.ttsQueue && conversation.ttsQueue.length > 0) {
       conversation.ttsQueue = [];
     }
@@ -565,11 +572,7 @@ export class RealtimeVoiceService {
       // from OpenAI for this id must be suppressed so the client doesn't render a
       // phantom second bubble after the interrupt.
       if (conversation.currentResponseId) {
-        conversation.cancelledResponseIds.add(conversation.currentResponseId);
-        if (conversation.cancelledResponseIds.size > 20) {
-          const first = conversation.cancelledResponseIds.values().next().value;
-          if (first) conversation.cancelledResponseIds.delete(first);
-        }
+        this.markResponseCancelled(conversation, conversation.currentResponseId);
         // Drop curriculum images belonging to the answer being cancelled (or not
         // yet bound to any answer) so they can't surface on a later, unrelated one.
         const mediaOwner = conversation.pendingCurriculumMediaResponseId;
@@ -2240,12 +2243,26 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
   private async sendNormalResponse(conversation: VoiceConversation): Promise<void> {
     if (!conversation.openaiWs || conversation.openaiWs.readyState !== WebSocket.OPEN) return;
 
+    let curriculumInjected = false;
     if (conversation.k12ContentOnly && this.shouldForceK12Fetch(conversation.currentUserTranscript)) {
-      await this.injectK12CurriculumContext(conversation);
+      curriculumInjected = await this.injectK12CurriculumContext(conversation);
     }
 
     if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
-      conversation.openaiWs.send(JSON.stringify({ type: 'response.create' }));
+      // When we already did the lookup, close tool calling for THIS response.
+      // A Realtime response terminates the moment the model emits a function
+      // call, so leaving the tool open let the model open with "let me pull in
+      // the curriculum content", call fetch_k12_topic it did not need, and end
+      // the turn there — splitting one answer into two replies and chopping the
+      // first one off mid-sentence. Turns without injection (greetings, chit
+      // chat) keep tools available exactly as before.
+      const payload = curriculumInjected
+        ? { type: 'response.create', response: { tool_choice: 'none' } }
+        : { type: 'response.create' };
+      conversation.openaiWs.send(JSON.stringify(payload));
+      if (curriculumInjected) {
+        console.log('[RealtimeVoice] Answering from injected curriculum in a single turn (tool_choice=none)');
+      }
     }
   }
 
@@ -2314,14 +2331,36 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
   }
 
   /**
+   * Did the curriculum lookup fail, as opposed to legitimately finding nothing?
+   *
+   * The resolvers swallow their own errors and hand back the same success:true
+   * envelope they use for a genuine no-match, so the message is the only signal
+   * there is. Getting this wrong in the "no-match" direction is the damaging
+   * one: the student is told their syllabus lacks a topic it actually contains.
+   */
+  private looksLikeRetrievalFailure(result: any): boolean {
+    if (!result || result.success === false) return true;
+    const message = typeof result.message === 'string' ? result.message : '';
+    return message.startsWith('SYSTEM ERROR')
+      || message.startsWith('Failed to fetch topics from external API')
+      || message.startsWith('External API error');
+  }
+
+  /**
    * K12 content-only: retrieve curriculum for the student's question server-side
    * and inject it as a system context item so the next response is grounded.
    * Best-effort — on any failure we simply skip injection and let the normal
    * response proceed (never break the turn).
+   *
+   * Returns true when context was actually injected. The caller uses that to
+   * close tool calling for the turn: if the model can still reach for
+   * fetch_k12_topic it will, and a Realtime response ENDS at a function call —
+   * so the greeting sentence becomes one finished reply and the real answer
+   * becomes a second one, which is heard as the tutor cutting itself off.
    */
-  private async injectK12CurriculumContext(conversation: VoiceConversation): Promise<void> {
+  private async injectK12CurriculumContext(conversation: VoiceConversation): Promise<boolean> {
     const query = (conversation.currentUserTranscript || '').trim();
-    if (!query || !conversation.conversationId) return;
+    if (!query || !conversation.conversationId) return false;
 
     try {
       console.log('[RealtimeVoice] K12 content-only: retrieving curriculum server-side for query:', query.slice(0, 80));
@@ -2342,6 +2381,17 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
         false
       );
 
+      // "The store is unreachable" and "your syllabus doesn't cover this" both
+      // come back as success:true with an empty data array — only the message
+      // separates them. Treating an outage as a definitive not-found would tell
+      // the student the topic doesn't exist AND close tool calling, leaving the
+      // model no way to recover. So on failure we inject nothing and return
+      // false, which keeps the lookup available for the model to try itself.
+      if (this.looksLikeRetrievalFailure(result)) {
+        console.warn('[RealtimeVoice] Curriculum retrieval failed this turn — skipping injection and leaving the lookup available:', typeof result?.message === 'string' ? result.message.slice(0, 120) : result?.error);
+        return false;
+      }
+
       // Capture any curriculum images for this turn BEFORE compaction strips
       // them out of the model-facing text.
       conversation.pendingCurriculumMedia = this.extractCurriculumMedia(result);
@@ -2349,9 +2399,14 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
       conversation.pendingCurriculumMediaResponseId = null;
 
       const curriculum = this.compactK12Curriculum(result);
+      // Say plainly that this IS the lookup result. Presented as mere background
+      // context, the model tries to look the topic up again "to be sure" — and
+      // its second, narrower query ("stem" for "Tell me about stems") can come
+      // back empty, so it refuses a topic it was already holding the answer to.
+      const provenance = `The curriculum lookup for this question has ALREADY BEEN RUN for you and its result is below. This is the complete result — there is nothing further to look up and no tool to call. Answer from it directly, in this same reply.`;
       const instruction = curriculum
-        ? `CURRICULUM CONTEXT for the student's question "${query}". Answer the student's question using ONLY the curriculum content below. If it does not contain the answer, tell the student you don't have that in the curriculum yet — do NOT use outside knowledge. Give a THOROUGH, COMPLETE spoken lesson that covers EVERY key point in this content (definitions, examples, sub-concepts, distinctions) — match the depth of a full written answer, do not summarize or shorten it. Convey structure out loud with spoken signposting ("First…", "Next…", "For example…") rather than reading bullet symbols or markdown. Do NOT read this context aloud verbatim and do NOT mention tools or JSON; answer in a natural, warm teaching voice.\n\n${curriculum}`
-        : `No curriculum content was found for the student's question "${query}". Tell the student you don't have that topic in the curriculum yet and invite them to ask about another topic. Do NOT answer from outside knowledge and do NOT mention tools or JSON.`;
+        ? `${provenance}\n\nCURRICULUM CONTEXT for the student's question "${query}". Answer the student's question using ONLY the curriculum content below. If it does not contain the answer, tell the student you don't have that in the curriculum yet — do NOT use outside knowledge. Give a THOROUGH, COMPLETE spoken lesson that covers EVERY key point in this content (definitions, examples, sub-concepts, distinctions) — match the depth of a full written answer, do not summarize or shorten it. Convey structure out loud with spoken signposting ("First…", "Next…", "For example…") rather than reading bullet symbols or markdown. Do NOT read this context aloud verbatim and do NOT mention tools or JSON; answer in a natural, warm teaching voice.\n\n${curriculum}`
+        : `The curriculum lookup for the student's question "${query}" has ALREADY BEEN RUN for you and it found nothing. That is the final answer — there is nothing further to look up and no tool to call. Tell the student, in this same reply, that you don't have that topic in the curriculum yet and invite them to ask about another topic. Do NOT answer from outside knowledge and do NOT mention tools or JSON.`;
 
       if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
         conversation.openaiWs.send(JSON.stringify({
@@ -2363,10 +2418,12 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           }
         }));
         console.log('[RealtimeVoice] Injected K12 curriculum context (' + curriculum.length + ' chars)');
+        return true;
       }
     } catch (err) {
       console.error('[RealtimeVoice] K12 curriculum retrieval failed, proceeding without injection:', err);
     }
+    return false;
   }
 
   /**
