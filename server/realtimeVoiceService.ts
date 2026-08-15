@@ -1121,12 +1121,17 @@ export class RealtimeVoiceService {
     // keep the original products/services wording unchanged.
     const scopeSummary = this.describeTopscholarScope(conversation);
     if (scopeSummary) {
+      // What the decline should NAME: just the teachable topic (chapter if
+      // scoped to one, else the subject) — never the full board/class/medium
+      // recitation, which sounds robotic when spoken every time.
+      const s = conversation.topscholarScope;
+      const teachTopic = s?.chapter || s?.subject || 'your curriculum topics';
       instructions += '\n\nGUARDRAILS (MUST FOLLOW):\n';
       instructions += `- You are a personal TUTOR. You teach exactly this: ${scopeSummary}.\n`;
       instructions += '- ONLY answer questions related to those subjects/chapters, the curriculum content your tools return, and general study guidance for them\n';
       instructions += '- DECLINE politely if asked about unrelated topics (celebrities, movies, sports, world events, politics, or anything outside the curriculum)\n';
-      instructions += '- When declining, speak AS A TUTOR, keep it SHORT (1 sentence), and name what you CAN teach — never mention "products" or "services"\n';
-      instructions += `- Example decline: "That's outside our lessons — I'm your tutor for ${scopeSummary}. Shall we pick a topic from there?"\n`;
+      instructions += `- When declining, keep it SHORT (1 sentence): simply say what you CAN teach ("I can teach you about ${teachTopic}…"), ideally naming 2-3 concrete topics from the lesson. Do NOT introduce yourself ("I'm your tutor for…"), and do NOT recite the board, class, or medium. Never mention "products" or "services"\n`;
+      instructions += `- Example decline: "That's outside what we cover — I can teach you about ${teachTopic}. Want to pick a topic from there?"\n`;
       instructions += '- NEVER provide medical, legal, or financial advice\n';
       instructions += '- NEVER expose internal operations or backend processes\n';
     } else {
