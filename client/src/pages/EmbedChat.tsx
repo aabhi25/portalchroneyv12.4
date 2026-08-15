@@ -26,15 +26,6 @@ import { convertLatexDelimiters } from '@/lib/convertLatexDelimiters';
 const VoiceMode = lazy(() => import("@/components/VoiceMode").then(m => ({ default: m.VoiceMode })));
 const InlineVoiceMode = lazy(() => import("@/components/InlineVoiceMode").then(m => ({ default: m.InlineVoiceMode })));
 
-/**
- * Render curriculum images as Markdown so the existing message renderer picks
- * them up. Voice delivers these separately from the spoken answer — the tutor
- * must never read a URL aloud — so they are appended to the bubble here.
- */
-function buildVoiceMediaMarkdown(imageUrls: string[]): string {
-  if (!imageUrls || imageUrls.length === 0) return '';
-  return '\n\n' + imageUrls.map(url => `![curriculum image](${url})`).join('\n\n');
-}
 const AppointmentCalendar = lazy(() => import("@/components/AppointmentCalendar").then(m => ({ default: m.AppointmentCalendar })));
 const FormStep = lazy(() => import("@/components/FormStep").then(m => ({ default: m.FormStep })));
 const ProductCarousel = lazy(() => import("@/components/ProductCarousel").then(m => ({ default: m.ProductCarousel })));
@@ -445,9 +436,6 @@ export default function EmbedChat() {
   const [isVoiceModeOpen, setIsVoiceModeOpen] = useState(false);
   const [isInlineVoiceActive, setIsInlineVoiceActive] = useState(false);
   const inlineVoiceAIMessagesRef = useRef<Map<string, string>>(new Map());
-  // Curriculum images attached to a spoken voice answer, kept per message so a
-  // later formatted-transcript swap doesn't drop them.
-  const inlineVoiceMediaRef = useRef<Map<string, string[]>>(new Map());
   const [selectedLanguage, setSelectedLanguage] = useState<string>('auto');
   const [isLanguageDropdownOpen, setIsLanguageDropdownOpen] = useState(false);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -5975,7 +5963,6 @@ export default function EmbedChat() {
                 onClose={() => {
                   setIsInlineVoiceActive(false);
                   inlineVoiceAIMessagesRef.current.clear();
-                  inlineVoiceMediaRef.current.clear();
                   setStreamingMessageId(null);
                 }}
                 userId={widgetUserIdRef.current}
@@ -6026,29 +6013,14 @@ export default function EmbedChat() {
                   inlineVoiceAIMessagesRef.current.delete(messageId);
                 }}
                 onAIMessageReplace={(messageId, formattedMarkdown) => {
-                  // STEM (math/science) voice answer — swap the raw transcript for
-                  // properly formatted Markdown + LaTeX so equations render on screen.
+                  // Final on-screen version of a spoken answer: formatted Markdown
+                  // (LaTeX for math/science) with any curriculum diagrams already
+                  // placed inline. The tutor never said the URLs; the pictures just
+                  // appear where they belong once the answer finishes.
                   inlineVoiceAIMessagesRef.current.set(messageId, formattedMarkdown);
-                  // Re-attach any images already added, since this replaces content.
-                  const media = inlineVoiceMediaRef.current.get(messageId) || [];
-                  const withMedia = formattedMarkdown + buildVoiceMediaMarkdown(media);
                   setMessages(prev => prev.map(m =>
-                    m.id === messageId ? { ...m, content: withMedia } : m
+                    m.id === messageId ? { ...m, content: formattedMarkdown } : m
                   ));
-                }}
-                onAIMessageMedia={(messageId, imageUrls) => {
-                  // Curriculum images for an answer that has already been spoken.
-                  // The tutor never said the URL; the picture just appears.
-                  if (!imageUrls || imageUrls.length === 0) return;
-                  inlineVoiceMediaRef.current.set(messageId, imageUrls);
-                  const block = buildVoiceMediaMarkdown(imageUrls);
-                  setMessages(prev => prev.map(m => {
-                    if (m.id !== messageId) return m;
-                    // Idempotent: the same media can arrive twice if a formatted
-                    // swap and the media event race.
-                    if (m.content.includes(imageUrls[0])) return m;
-                    return { ...m, content: m.content + block };
-                  }));
                 }}
               />
             </Suspense>

@@ -27,13 +27,13 @@ interface InlineVoiceModeProps {
   onAIMessageStart?: (messageId: string) => void;
   onAIMessageChunk?: (messageId: string, text: string) => void;
   onAIMessageDone?: (messageId: string) => void;
-  onAIMessageReplace?: (messageId: string, formattedMarkdown: string) => void;
   /**
-   * Curriculum images for a spoken answer. They travel around the model rather
-   * than through it — the tutor never says a URL — so they arrive separately and
-   * are attached to the bubble that has already been spoken.
+   * Final on-screen version of a spoken answer: formatted Markdown, with any
+   * curriculum diagrams already placed inline. Diagrams travel around the model
+   * rather than through it — the tutor never says a URL — so they arrive here,
+   * after the answer, rather than in the spoken stream.
    */
-  onAIMessageMedia?: (messageId: string, imageUrls: string[]) => void;
+  onAIMessageReplace?: (messageId: string, formattedMarkdown: string) => void;
   /**
    * TopScholar launch identity. The server refuses a widget voice connection on
    * this account without it, and refuses it outright once the doubt is closed.
@@ -59,7 +59,6 @@ export function InlineVoiceMode({
   onAIMessageChunk,
   onAIMessageDone,
   onAIMessageReplace,
-  onAIMessageMedia,
   topscholarToken,
   topscholarCpId,
 }: InlineVoiceModeProps) {
@@ -135,9 +134,6 @@ export function InlineVoiceMode({
   // the bubble for that responseId (rare but possible if formatter is faster
   // than the first chunk for a tiny response).
   const pendingFormattedRef = useRef<Map<string, string>>(new Map());
-  // Same buffering problem for curriculum images: the media event can land before
-  // the bubble for that responseId exists.
-  const pendingMediaRef = useRef<Map<string, string[]>>(new Map());
   // Most recent OpenAI responseId observed via ai_chunk — captured at interrupt
   // time so we know which response was cancelled even after we clear the bubble ref.
   const currentResponseIdRef = useRef<string | null>(null);
@@ -427,11 +423,6 @@ export function InlineVoiceMode({
               // Defer one tick so onAIMessageStart/Chunk are processed first.
               setTimeout(() => onAIMessageReplace?.(messageId, buffered), 0);
             }
-            const bufferedMedia = pendingMediaRef.current.get(data.responseId);
-            if (bufferedMedia && bufferedMedia.length > 0) {
-              pendingMediaRef.current.delete(data.responseId);
-              setTimeout(() => onAIMessageMedia?.(messageId, bufferedMedia), 0);
-            }
           }
           onAIMessageStart?.(messageId);
           onAIMessageChunk?.(messageId, data.text);
@@ -503,25 +494,6 @@ export function InlineVoiceMode({
           } else {
             // Bubble not created yet — buffer until first ai_chunk binds the responseId.
             pendingFormattedRef.current.set(data.responseId, data.formattedMarkdown);
-          }
-        }
-        break;
-
-      case 'curriculum_media':
-        // Images from the curriculum for the answer just spoken. The tutor never
-        // read the URLs aloud; they attach to the on-screen bubble instead.
-        if (data.responseId && interruptedResponseIdsRef.current.has(data.responseId)) {
-          pendingMediaRef.current.delete(data.responseId);
-          break;
-        }
-        if (Array.isArray(data.imageUrls) && data.imageUrls.length > 0) {
-          const mediaTarget = data.responseId
-            ? responseIdToMessageIdRef.current.get(data.responseId)
-            : currentAIMessageIdRef.current;
-          if (mediaTarget) {
-            onAIMessageMedia?.(mediaTarget, data.imageUrls);
-          } else if (data.responseId) {
-            pendingMediaRef.current.set(data.responseId, data.imageUrls);
           }
         }
         break;

@@ -54,3 +54,28 @@ for a long time.
 Because retrieval happens *before* the response that will speak it exists, pending
 media has to be bound to a response id and discarded on interruption; otherwise
 images from an abandoned question attach to whatever the student asks next.
+
+## Routing media around the model means nothing is choosing it
+
+Taking the URLs away from the speaking model removes the thing that made the text
+path work: in chat, the model *chooses* which image to emit, so a refusal emits
+none. A server that attaches whatever retrieval returned has no idea what the
+answer said, so it decorates filler, refusals and "stop, I understand" alike —
+and since retrieval returns a fixed number of passages that nearly all carry a
+picture, it hits the display cap every single time. "Always exactly N images" is
+the signature of this bug, not a coincidence.
+
+**Why:** restoring images to voice reintroduced them as a blind server-side
+attachment, which read as a wall of six identical diagrams on every reply.
+
+**How to apply:** the relevance decision has to be made by *something*, and it
+cannot be the speaking model. Give it to a separate text pass that can safely see
+URLs because nothing it returns is spoken — ideally one that already runs on the
+finished transcript. Treat retrieved media as candidates, carry the topic and
+chapter each came from (a URL alone gives a later pass nothing to judge), and
+fail closed to zero images when that pass fails.
+
+Persist the chosen result on the *display* variant of the message rather than
+appending images to the stored content, so a reload replays exactly what the
+student saw and a failed selection degrades to a plain answer instead of the old
+attach-everything behaviour.

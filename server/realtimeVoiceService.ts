@@ -7,7 +7,7 @@ import { ToolExecutionService } from './services/toolExecutionService';
 import { journeyOrchestrator } from './services/journeyOrchestrator';
 import { journeyService } from './services/journeyService';
 import { isElevenLabsVoice, getElevenLabsVoiceId, synthesizeSpeechStreaming } from './services/elevenlabsService';
-import { formatVoiceTranscript } from './services/voiceFormatterService';
+import { formatVoiceTranscript, type VoiceDiagramCandidate } from './services/voiceFormatterService';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { resolveCpIdsForScope } from './services/topscholar/scopeResolver';
 import { aiUsageLogger } from './services/aiUsageLogger';
@@ -112,11 +112,13 @@ interface VoiceConversation {
   topscholarCpIds?: string[] | null;
   topscholarChapter?: string | null;
   /**
-   * Curriculum image URLs retrieved for the turn currently being answered.
-   * Deliberately kept OUT of the text handed to the model — a spoken tutor must
-   * never read a URL aloud — and attached to the on-screen message instead.
+   * Curriculum diagrams retrieved for the turn currently being answered, as
+   * CANDIDATES only. Deliberately kept OUT of the text handed to the model — a
+   * spoken tutor would read the URL aloud — so which of these (if any) actually
+   * belong on screen is decided afterwards, by the formatter pass, from what the
+   * answer turned out to teach. Nothing here is shown until something chooses it.
    */
-  pendingCurriculumMedia?: string[];
+  pendingCurriculumMedia?: VoiceDiagramCandidate[];
   /**
    * Which response those images belong to. Retrieval happens BEFORE the response
    * exists, so this starts null ("awaiting binding") and is stamped when the next
@@ -1939,10 +1941,11 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
 
           // Save complete AI response to database and conversation memory
           if (conversation.conversationId && conversation.currentAITranscript) {
-            // Curriculum images for this turn. They were kept out of everything the
-            // model saw, so the spoken answer is identical whether or not a diagram
-            // exists; they get attached to the on-screen message only. Skipped for
-            // an interrupted answer, which isn't a real reply.
+            // Curriculum diagrams retrieved for this turn. They were kept out of
+            // everything the model saw, so the spoken answer is identical whether or
+            // not a diagram exists. They are only CANDIDATES here — nothing is shown
+            // until the formatter pass below decides the answer actually taught one.
+            // Skipped for an interrupted answer, which isn't a real reply.
             const mediaResponseId = conversation.currentResponseId;
             const mediaCancelled = !!(mediaResponseId && conversation.cancelledResponseIds.has(mediaResponseId));
             // Only consume images that were bound to THIS response. Anything still
@@ -1959,44 +1962,37 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
               conversation.pendingCurriculumMediaResponseId = undefined;
             }
 
-            // Persist transcript + images together so they still render after a
-            // reload; the live bubble is patched separately below.
-            const persistedContent = curriculumMedia.length > 0
-              ? conversation.currentAITranscript + '\n\n' + curriculumMedia.map(u => `![curriculum image](${u})`).join('\n\n')
-              : conversation.currentAITranscript;
-
-            const savedMessageId = await this.saveMessageToDB(conversation.conversationId, 'assistant', persistedContent);
+            // The stored message is the spoken answer, nothing else. Diagrams live
+            // on the formatted variant written below, which is what history replays
+            // — so the live bubble and the reloaded one cannot disagree, and a
+            // failed selection simply means no diagrams rather than all of them.
+            const savedMessageId = await this.saveMessageToDB(conversation.conversationId, 'assistant', conversation.currentAITranscript);
             // Memory keeps the SPOKEN text only. Image tags here would come back as
             // conversation history on a later turn and get read aloud.
             conversationMemory.storeMessage(conversation.userId, 'assistant', conversation.currentAITranscript);
             console.log('[RealtimeVoice] Saved AI message to DB:', conversation.currentAITranscript.substring(0, 50) + '...');
 
-            if (curriculumMedia.length > 0 && conversation.clientWs && conversation.clientWs.readyState === WebSocket.OPEN) {
-              this.sendToClient(conversation.clientWs, {
-                type: 'curriculum_media',
-                responseId: mediaResponseId,
-                messageId: savedMessageId,
-                imageUrls: curriculumMedia,
-              });
-              console.log(`[RealtimeVoice] Sent ${curriculumMedia.length} curriculum image(s) for responseId:`, mediaResponseId);
-            }
-
-            // STEM formatter: fire-and-forget background pass that converts the spoken
-            // transcript into properly formatted Markdown + LaTeX for math/science answers.
-            // Audio playback is unaffected — only the on-screen bubble is updated.
+            // Display pass: fire-and-forget background call that decides what the
+            // student SEES for this answer — proper Markdown + LaTeX for math and
+            // science, and which curriculum diagrams (at most two, only when the
+            // answer actually taught them) belong inline. Audio playback is
+            // unaffected; only the on-screen bubble is updated. This is the only
+            // route a diagram can reach the screen, so if it fails or times out the
+            // student simply sees the spoken answer with no diagrams.
             const transcriptSnapshot = conversation.currentAITranscript;
             const responseIdSnapshot = conversation.currentResponseId;
             const conversationIdSnapshot = conversation.conversationId;
             const businessAccountIdSnapshot = conversation.businessAccountId;
             const apiKeySnapshot = conversation.openaiApiKey;
             const clientWsSnapshot = conversation.clientWs;
-            // Skip the STEM formatter for cancelled responses — the user
+            const diagramCandidates = curriculumMedia;
+            // Skip the display pass for cancelled responses — the user
             // interrupted, so the partial transcript isn't a real "answer".
             // Saves a gpt-4o-mini call AND prevents the client from rendering
             // a phantom formatted bubble for content the user cut off.
             const wasCancelled = !!(responseIdSnapshot && conversation.cancelledResponseIds.has(responseIdSnapshot));
             if (wasCancelled) {
-              console.log('[RealtimeVoice] Skipping STEM formatter for cancelled response:', responseIdSnapshot);
+              console.log('[RealtimeVoice] Skipping display pass for cancelled response:', responseIdSnapshot);
             }
             if (!wasCancelled && responseIdSnapshot && apiKeySnapshot) {
               (async () => {
@@ -2005,12 +2001,24 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
                     transcriptSnapshot,
                     apiKeySnapshot,
                     businessAccountIdSnapshot,
-                    conversationIdSnapshot
+                    conversationIdSnapshot,
+                    diagramCandidates
                   );
-                  if (!result || !result.isStem || !result.formattedMarkdown) {
+                  // No formatted variant means there was nothing worth replacing
+                  // the spoken transcript with — and, critically, no diagram
+                  // earned its place. Fail closed: show the answer as spoken.
+                  if (!result || !result.formattedMarkdown) {
                     return;
                   }
-                  // Persist formatted variant on the message row for replays
+                  console.log(
+                    `[RealtimeVoice] Display pass chose ${result.imageUrls?.length ?? 0} of ${diagramCandidates.length} diagram(s) for responseId:`,
+                    responseIdSnapshot
+                  );
+                  // Persist the display variant on the message row — this is what
+                  // history replays, so it must land BEFORE the live bubble is
+                  // patched. If it fails, the student keeps the plain spoken
+                  // answer on screen, which is exactly what a reload would show:
+                  // better than diagrams that vanish the next time they open it.
                   if (savedMessageId) {
                     try {
                       await storage.updateMessageMetadata(savedMessageId, {
@@ -2018,7 +2026,8 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
                         formatSubject: result.subject
                       });
                     } catch (err) {
-                      console.warn('[RealtimeVoice] Could not persist formatted content:', (err as Error).message);
+                      console.warn('[RealtimeVoice] Could not persist formatted content, leaving the spoken answer on screen so it matches a reload:', (err as Error).message);
+                      return;
                     }
                   }
                   // Push to live client if still connected
@@ -2386,9 +2395,11 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
 
         if (header) lines.push(`### ${header}`);
 
-        // Description (brief overview of the topic)
+        // Description (brief overview of the topic). Stripped like every other
+        // field: any string reaching a speaking model is a string it might read.
         if (typeof r?.description === 'string' && r.description.trim()) {
-          lines.push(`**Overview:** ${r.description.trim()}`);
+          const overview = this.stripMediaMarkdown(r.description);
+          if (overview) lines.push(`**Overview:** ${overview}`);
         }
 
         // Main revision notes (primary content)
@@ -2403,7 +2414,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
             .filter((n: any) => n?.title || n?.content)
             .slice(0, 10)
             .map((n: any) => {
-              const title = typeof n?.title === 'string' ? n.title.trim() : '';
+              const title = typeof n?.title === 'string' ? this.stripMediaMarkdown(n.title) : '';
               const content = typeof n?.content === 'string' ? this.stripMediaMarkdown(n.content).slice(0, MAX_NOTE_CHARS) : '';
               return title && content ? `**${title}:** ${content}` : (content || title);
             })
@@ -2423,8 +2434,8 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
   }
 
   /**
-   * Remove Markdown image tags (and any bare image URL left behind) from text
-   * that is about to be handed to the model.
+   * Remove Markdown image tags and every bare URL from text that is about to be
+   * handed to the model.
    *
    * This is not cosmetic. Retrieval appends the curriculum's images to the end of
    * the notes as `![...](https://...)`. In the text path that is exactly what you
@@ -2442,8 +2453,11 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
       // ![alt](url) and the occasional [text](url) pointing straight at an image
       .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
       .replace(/\[[^\]]*\]\((https?:\/\/[^)]+\.(?:png|jpe?g|gif|webp|svg)[^)]*)\)/gi, ' ')
-      // Bare image URLs sitting on their own
-      .replace(/https?:\/\/\S+\.(?:png|jpe?g|gif|webp|svg)(?:\?\S*)?/gi, ' ')
+      // Any remaining bare URL. Matching on file extension used to be enough,
+      // but it misses every link that carries none — object-storage keys and
+      // signed URLs in particular — and there is no URL a spoken tutor should
+      // ever read out, image or not.
+      .replace(/https?:\/\/\S+/gi, ' ')
       // Collapse the whitespace the removals leave behind
       .replace(/[ \t]{2,}/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
@@ -2473,17 +2487,25 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
   }
 
   /**
-   * Pull the curriculum image URLs out of a retrieval result so they can be
-   * attached to the on-screen message. Mirrors the text path, which keeps
-   * `mediaUrls` through compaction; voice used to drop them entirely, which is
-   * why images never appeared in a spoken lesson.
+   * Pull the curriculum diagrams out of a retrieval result as CANDIDATES for the
+   * formatter pass to choose from.
+   *
+   * Each one carries the topic and chapter it came from, because that is the
+   * only way a later pass can tell whether the answer actually taught this
+   * diagram's subject or merely searched near it. Retrieval returns six passages
+   * and nearly all of them carry a picture, so handing this list straight to the
+   * screen is what produced a wall of six diagrams on every reply — including on
+   * refusals and filler.
+   *
+   * The cap here is only to bound the choosing prompt, NOT a display limit; at
+   * most two ever reach the student.
    */
-  private extractCurriculumMedia(result: any): string[] {
+  private extractCurriculumMedia(result: any): VoiceDiagramCandidate[] {
     try {
       const data = Array.isArray(result?.data) ? result.data : [];
-      const urls: string[] = [];
+      const candidates: VoiceDiagramCandidate[] = [];
       const seen = new Set<string>();
-      const MAX_IMAGES = 6;
+      const MAX_CANDIDATES = 8;
 
       for (const passage of data) {
         const media = Array.isArray(passage?.mediaUrls) ? passage.mediaUrls : [];
@@ -2491,13 +2513,20 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           const url = typeof raw === 'string' ? raw.trim() : '';
           // Only http(s) — never let a data: or javascript: URI reach an <img>.
           if (!/^https?:\/\//i.test(url)) continue;
+          // The same picture is often listed twice inside one passage, and again
+          // by a neighbouring passage from the same chapter.
           if (seen.has(url)) continue;
           seen.add(url);
-          urls.push(url);
-          if (urls.length >= MAX_IMAGES) return urls;
+          candidates.push({
+            url,
+            topic: typeof passage?.name === 'string' ? passage.name : '',
+            chapter: typeof passage?.chapterName === 'string' ? passage.chapterName : '',
+            subject: typeof passage?.subjectName === 'string' ? passage.subjectName : '',
+          });
+          if (candidates.length >= MAX_CANDIDATES) return candidates;
         }
       }
-      return urls;
+      return candidates;
     } catch {
       return [];
     }
