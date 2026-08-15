@@ -832,7 +832,7 @@ export const aiTools = [
     type: 'function',
     function: {
       name: 'fetch_k12_questions',
-      description: 'Fetch practice questions/MCQs for a topic from the curriculum question bank. ALWAYS call this after fetch_k12_topic to offer practice questions. Also call directly when students ask to practice, test knowledge, solve MCQs, or take a quiz. Returns multiple-choice questions with options, correct answers, and solutions.',
+      description: 'Fetch practice questions/MCQs for a topic from the curriculum question bank. Call this when students explicitly ask to practice, test their knowledge, solve MCQs, or take a quiz. Returns multiple-choice questions with options, correct answers, and solutions.',
       parameters: {
         type: 'object',
         properties: {

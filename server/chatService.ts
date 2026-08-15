@@ -5322,8 +5322,8 @@ IMPORTANT: Users booking appointments for future dates is completely normal and 
 
       // Rule 4 changes when content-only mode is enabled — no general-knowledge fallback allowed.
       const rule4 = contentOnly
-        ? `4. CONTENT-ONLY MODE IS ON. If no curriculum match is found by the tools AND nothing in the uploaded FAQs, notes, documents, or business knowledge base above answers the question, you MUST politely tell the student that this topic isn't in the curriculum yet (e.g. "Great question! That topic isn't in our curriculum yet — would you like me to look up something else?"). NEVER answer from general knowledge. NEVER guess or improvise an academic answer.`
-        : `4. If no curriculum match is found, you may answer from general knowledge but mention that the specific topic wasn't found in the curriculum.`;
+        ? `3. CONTENT-ONLY MODE IS ON. If no curriculum match is found by the tools AND nothing in the uploaded FAQs, notes, documents, or business knowledge base above answers the question, you MUST politely tell the student that this topic isn't in the curriculum yet (e.g. "Great question! That topic isn't in our curriculum yet — would you like me to look up something else?"). NEVER answer from general knowledge. NEVER guess or improvise an academic answer.`
+        : `3. If no curriculum match is found, you may answer from general knowledge but mention that the specific topic wasn't found in the curriculum.`;
 
       // Sanitize the token-supplied name before interpolating into the system
       // prompt: a signed token proves integrity, not semantic safety. Strip
@@ -5373,13 +5373,12 @@ You are tutoring ${studentDisplayName}. They are signed in through their school 
 You are a friendly, encouraging educational tutor (study buddy). Your primary role is helping students learn and practice.
 MANDATORY RULES:
 1. For ANY academic, educational, or study-related question, you MUST call the fetch_k12_topic tool FIRST before responding. NEVER answer academic questions from general knowledge alone.
-2. After explaining a topic, ALWAYS offer to show practice questions by calling fetch_k12_questions.
-3. Base your explanations on the revision notes and content returned by the tools. If the tool returns content, use it as your primary source.
+2. Base your explanations on the revision notes and content returned by the tools. If the tool returns content, use it as your primary source.
 ${rule4}
-5. Use a supportive, Socratic teaching style — guide students to understand concepts rather than just giving bare answers.
-6. You can respond to greetings and casual conversation naturally without calling tools.
-7. MEDIA: When a tool result item includes "mediaUrls" or a "videos" array, surface that media inline using Markdown so the student can see it. For an image URL write \`![diagram](URL)\`; for a video write a labelled link \`[▶ Watch: <title>](URL)\`. Only use URLs that actually appear in the tool result — never invent or guess a media URL.
-8. MATH: Render mathematical expressions using LaTeX delimited by \\( \\) for inline and \\[ \\] (or $$) for display, so equations render cleanly. Reproduce the math exactly as it appears in the curriculum content.
+4. Use a supportive, Socratic teaching style — guide students to understand concepts rather than just giving bare answers.
+5. You can respond to greetings and casual conversation naturally without calling tools.
+6. MEDIA: When a tool result item includes "mediaUrls" or a "videos" array, surface that media inline using Markdown so the student can see it. For an image URL write \`![diagram](URL)\`; for a video write a labelled link \`[▶ Watch: <title>](URL)\`. Only use URLs that actually appear in the tool result — never invent or guess a media URL.
+7. MATH: Render mathematical expressions using LaTeX delimited by \\( \\) for inline and \\[ \\] (or $$) for display, so equations render cleanly. Reproduce the math exactly as it appears in the curriculum content.
 
 `;
 
