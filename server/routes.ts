@@ -69,7 +69,7 @@ import net from "net";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { WebSocketServer } from "ws";
-import { realtimeVoiceService } from "./realtimeVoiceService";
+import { realtimeVoiceService, type TopscholarVoiceScope } from "./realtimeVoiceService";
 import { r2Storage } from "./services/r2StorageService";
 import { databaseBackupService } from "./services/databaseBackupService";
 import { backupJobManager } from "./services/backupJobManager";
@@ -35409,6 +35409,10 @@ Return ONLY a valid JSON object in this format:
         // doubt goes terminal on any device — the upgrade check alone only
         // covers connections started AFTER the lock.
         let voiceDoubtId: string | null = null;
+        // Curriculum scope from the signed launch identity. Voice used to drop
+        // this, so a session could answer from any subject or grade the account
+        // owned; the text path has always passed it into retrieval.
+        let voiceScope: TopscholarVoiceScope | undefined;
         if (userId.startsWith('widget_')) {
           try {
             const { isTopscholarAccount, getTopscholarConfig } = await import('./services/topscholar/config');
@@ -35431,6 +35435,14 @@ Return ONLY a valid JSON object in this format:
                 return;
               }
               voiceDoubtId = voiceHandoff.doubtId;
+              voiceScope = {
+                cpId: voiceHandoff.cpId,
+                board: voiceHandoff.board,
+                medium: voiceHandoff.medium,
+                grade: voiceHandoff.grade,
+                subject: voiceHandoff.subject,
+                chapter: voiceHandoff.chapter,
+              };
               if (voiceDoubtId) {
                 const voiceConv = await storage.getLatestConversationByDoubtId(businessAccountId, voiceDoubtId);
                 const { doubtLockStateFor } = await import('./services/topscholar/doubtStatus');
@@ -35456,7 +35468,7 @@ Return ONLY a valid JSON object in this format:
 
         wss.handleUpgrade(request, socket, head, (ws) => {
           console.log('[WebSocket] Voice connection established');
-          realtimeVoiceService.handleConnection(ws, businessAccountId, userId, conversationId || undefined, selectedLanguage, textConversationId, voiceDoubtId || undefined);
+          realtimeVoiceService.handleConnection(ws, businessAccountId, userId, conversationId || undefined, selectedLanguage, textConversationId, voiceDoubtId || undefined, voiceScope);
         });
       } catch (error: any) {
         console.error('[WebSocket] Upgrade error:', error);

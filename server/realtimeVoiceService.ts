@@ -9,6 +9,7 @@ import { journeyService } from './services/journeyService';
 import { isElevenLabsVoice, getElevenLabsVoiceId, synthesizeSpeechStreaming } from './services/elevenlabsService';
 import { formatVoiceTranscript } from './services/voiceFormatterService';
 import { isTopscholarAccount } from './services/topscholar/config';
+import { resolveCpIdsForScope } from './services/topscholar/scopeResolver';
 import { aiUsageLogger } from './services/aiUsageLogger';
 
 /**
@@ -32,6 +33,21 @@ const REALTIME_MODEL = 'gpt-realtime-2.1-mini';
  * confirm the breakdown is being read correctly.
  */
 let realtimeUsageShapeLogged = false;
+
+/**
+ * Curriculum scope carried by a signed TopScholar launch identity, handed to the
+ * voice session at upgrade time. The text path resolves the same fields into
+ * content packs before every retrieval; voice historically dropped them, which
+ * let a session answer from any subject or grade the account owned.
+ */
+export interface TopscholarVoiceScope {
+  cpId?: string | null;
+  board?: string | null;
+  medium?: string | null;
+  grade?: string | null;
+  subject?: string | null;
+  chapter?: string | null;
+}
 
 interface VoiceConversation {
   clientWs: WebSocket; // WebSocket to client (browser)
@@ -82,6 +98,32 @@ interface VoiceConversation {
    * Used to tear the session down if the doubt is resolved/escalated elsewhere.
    */
   topscholarDoubtId?: string;
+  /**
+   * Curriculum scope for this voice session, resolved once at connect time from
+   * the signed launch identity. Mirrors what the text path passes into every
+   * retrieval so voice and chat draw on exactly the same content.
+   *   - null       → no scope supplied (admin dashboard / non-TopScholar voice);
+   *                  retrieval keeps its historical whole-account behaviour.
+   *   - non-empty  → restrict retrieval to exactly these content packs.
+   *   - empty []   → a scope WAS supplied but matched no synced pack. Retrieval
+   *                  must return nothing rather than falling back to the whole
+   *                  account, which is what let other grades' content leak in.
+   */
+  topscholarCpIds?: string[] | null;
+  topscholarChapter?: string | null;
+  /**
+   * Curriculum image URLs retrieved for the turn currently being answered.
+   * Deliberately kept OUT of the text handed to the model — a spoken tutor must
+   * never read a URL aloud — and attached to the on-screen message instead.
+   */
+  pendingCurriculumMedia?: string[];
+  /**
+   * Which response those images belong to. Retrieval happens BEFORE the response
+   * exists, so this starts null ("awaiting binding") and is stamped when the next
+   * response is created. Without it, images retrieved for a question the student
+   * then interrupted would be attached to whatever they asked next.
+   */
+  pendingCurriculumMediaResponseId?: string | null;
   // K12 content-only mode (TopScholar or k12ContentOnlyMode). When true, academic
   // turns must force fetch_k12_topic so answers are curriculum-grounded (mirrors
   // the text-chat path). Cached during buildSystemInstructions to avoid per-turn DB hits.
@@ -181,10 +223,15 @@ export class RealtimeVoiceService {
     return closed;
   }
 
-  async handleConnection(clientWs: WebSocket, businessAccountId: string, userId: string, existingConversationId?: string, selectedLanguage?: string, textConversationId?: string, topscholarDoubtId?: string) {
+  async handleConnection(clientWs: WebSocket, businessAccountId: string, userId: string, existingConversationId?: string, selectedLanguage?: string, textConversationId?: string, topscholarDoubtId?: string, topscholarScope?: TopscholarVoiceScope) {
     console.log('[RealtimeVoice] New connection:', { businessAccountId, userId, existingConversationId });
 
     try {
+      // Resolve the launch scope into content packs ONCE per connect. Cheap no-op
+      // (no DB hit) when no scope was supplied, i.e. non-TopScholar voice.
+      const { cpIds: scopedCpIds, chapter: scopedChapter } =
+        await this.resolveVoiceCurriculumScope(businessAccountId, topscholarScope);
+
       // CRITICAL FIX: Check if this is a reconnection with existing conversationId
       if (existingConversationId && this.conversations.has(existingConversationId)) {
         const conversation = this.conversations.get(existingConversationId)!;
@@ -207,6 +254,12 @@ export class RealtimeVoiceService {
         // session stays attached to the doubt that can terminate it.
         if (topscholarDoubtId) {
           conversation.topscholarDoubtId = topscholarDoubtId;
+        }
+        // Re-bind the curriculum scope verified for THIS upgrade too. Without
+        // this a resumed session would keep answering, but unscoped.
+        if (topscholarScope) {
+          conversation.topscholarCpIds = scopedCpIds;
+          conversation.topscholarChapter = scopedChapter;
         }
         if (selectedLanguage !== undefined) {
           conversation.selectedLanguage = selectedLanguage;
@@ -295,6 +348,8 @@ export class RealtimeVoiceService {
         selectedLanguage,
         textConversationId,
         topscholarDoubtId,
+        topscholarCpIds: scopedCpIds,
+        topscholarChapter: scopedChapter,
         elevenlabsApiKey: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsApiKey : undefined,
         elevenlabsVoiceId: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsVoiceId : undefined,
       };
@@ -512,6 +567,13 @@ export class RealtimeVoiceService {
         if (conversation.cancelledResponseIds.size > 20) {
           const first = conversation.cancelledResponseIds.values().next().value;
           if (first) conversation.cancelledResponseIds.delete(first);
+        }
+        // Drop curriculum images belonging to the answer being cancelled (or not
+        // yet bound to any answer) so they can't surface on a later, unrelated one.
+        const mediaOwner = conversation.pendingCurriculumMediaResponseId;
+        if (mediaOwner == null || mediaOwner === conversation.currentResponseId) {
+          conversation.pendingCurriculumMedia = undefined;
+          conversation.pendingCurriculumMediaResponseId = undefined;
         }
       }
       conversation.openaiWs.send(JSON.stringify({
@@ -1132,6 +1194,12 @@ export class RealtimeVoiceService {
       for (const msg of recentMessages) {
         if (!msg.content || msg.content.trim() === '') continue;
 
+        // Text-chat answers embed curriculum images as Markdown, and voice's own
+        // saved messages now do too. Handing those tags to a speaking model invites
+        // it to read the URL out loud, so history goes in as words only.
+        const historyText = this.stripMediaMarkdown(msg.content);
+        if (!historyText) continue;
+
         const item: any = {
           type: 'conversation.item.create',
           item: {
@@ -1139,7 +1207,7 @@ export class RealtimeVoiceService {
             role: msg.role === 'user' ? 'user' : 'assistant',
             content: [{
               type: msg.role === 'user' ? 'input_text' : 'output_text',
-              text: msg.content.substring(0, 2000)
+              text: historyText.substring(0, 2000)
             }]
           }
         };
@@ -1623,6 +1691,18 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           // Track current response ID
           conversation.currentResponseId = event.response?.id;
 
+          // Bind (or discard) curriculum images to the response that will speak
+          // them. Images retrieved for a turn the student interrupted must not
+          // ride along on whatever they ask next.
+          if (conversation.pendingCurriculumMedia?.length) {
+            if (conversation.pendingCurriculumMediaResponseId == null) {
+              conversation.pendingCurriculumMediaResponseId = conversation.currentResponseId ?? null;
+            } else if (conversation.pendingCurriculumMediaResponseId !== conversation.currentResponseId) {
+              conversation.pendingCurriculumMedia = undefined;
+              conversation.pendingCurriculumMediaResponseId = undefined;
+            }
+          }
+
           // Tell the client which OpenAI responseId is about to start, so it can
           // map this to the local message bubble it creates on the first ai_chunk.
           // Used by the formatted_transcript event to find the correct bubble.
@@ -1859,9 +1939,47 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
 
           // Save complete AI response to database and conversation memory
           if (conversation.conversationId && conversation.currentAITranscript) {
-            const savedMessageId = await this.saveMessageToDB(conversation.conversationId, 'assistant', conversation.currentAITranscript);
+            // Curriculum images for this turn. They were kept out of everything the
+            // model saw, so the spoken answer is identical whether or not a diagram
+            // exists; they get attached to the on-screen message only. Skipped for
+            // an interrupted answer, which isn't a real reply.
+            const mediaResponseId = conversation.currentResponseId;
+            const mediaCancelled = !!(mediaResponseId && conversation.cancelledResponseIds.has(mediaResponseId));
+            // Only consume images that were bound to THIS response. Anything still
+            // awaiting a binding belongs to a later answer (e.g. a tool call whose
+            // reply has not been generated yet) and must be left alone.
+            const mediaIsForThisResponse =
+              !!conversation.pendingCurriculumMedia?.length &&
+              conversation.pendingCurriculumMediaResponseId === mediaResponseId;
+            const curriculumMedia = (!mediaCancelled && mediaIsForThisResponse)
+              ? conversation.pendingCurriculumMedia!
+              : [];
+            if (mediaIsForThisResponse) {
+              conversation.pendingCurriculumMedia = undefined;
+              conversation.pendingCurriculumMediaResponseId = undefined;
+            }
+
+            // Persist transcript + images together so they still render after a
+            // reload; the live bubble is patched separately below.
+            const persistedContent = curriculumMedia.length > 0
+              ? conversation.currentAITranscript + '\n\n' + curriculumMedia.map(u => `![curriculum image](${u})`).join('\n\n')
+              : conversation.currentAITranscript;
+
+            const savedMessageId = await this.saveMessageToDB(conversation.conversationId, 'assistant', persistedContent);
+            // Memory keeps the SPOKEN text only. Image tags here would come back as
+            // conversation history on a later turn and get read aloud.
             conversationMemory.storeMessage(conversation.userId, 'assistant', conversation.currentAITranscript);
             console.log('[RealtimeVoice] Saved AI message to DB:', conversation.currentAITranscript.substring(0, 50) + '...');
+
+            if (curriculumMedia.length > 0 && conversation.clientWs && conversation.clientWs.readyState === WebSocket.OPEN) {
+              this.sendToClient(conversation.clientWs, {
+                type: 'curriculum_media',
+                responseId: mediaResponseId,
+                messageId: savedMessageId,
+                imageUrls: curriculumMedia,
+              });
+              console.log(`[RealtimeVoice] Sent ${curriculumMedia.length} curriculum image(s) for responseId:`, mediaResponseId);
+            }
 
             // STEM formatter: fire-and-forget background pass that converts the spoken
             // transcript into properly formatted Markdown + LaTeX for math/science answers.
@@ -2123,6 +2241,70 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
   }
 
   /**
+   * Turn a signed launch scope into the set of content packs voice retrieval is
+   * allowed to search. Deliberately mirrors the text path's precedence so the two
+   * modes never disagree about what a subject means:
+   *   - full board/medium/grade/subject → resolve from the scope mappings, even
+   *     if the identity also names a cp_id directly
+   *   - cp_id only (legacy identity)    → that single pack. Note retrieval only
+   *     honours the cp_id LIST, so a bare cp_id must be wrapped or it silently
+   *     goes unscoped
+   *   - partial / unresolvable          → [] (refuse), never "search everything"
+   */
+  private async resolveVoiceCurriculumScope(
+    businessAccountId: string,
+    scope?: TopscholarVoiceScope,
+  ): Promise<{ cpIds: string[] | null; chapter: string | null }> {
+    // No scope supplied at all — admin dashboard voice, other tenants. Keep the
+    // historical whole-account behaviour for them.
+    if (!scope) return { cpIds: null, chapter: null };
+
+    const chapter = String(scope.chapter ?? '').trim() || null;
+    const cpId = String(scope.cpId ?? '').trim();
+    const board = String(scope.board ?? '').trim();
+    const medium = String(scope.medium ?? '').trim();
+    const grade = String(scope.grade ?? '').trim();
+    const subject = String(scope.subject ?? '').trim();
+    const fullScope = !!(board && medium && grade && subject);
+
+    const anyScope = !!(board || medium || grade || subject);
+
+    // A partial scope is refused even when the identity also names a content
+    // package — the text path does exactly this, and diverging here would mean
+    // the same launch answers in voice but refuses in chat.
+    if (anyScope && !fullScope) {
+      console.warn('[RealtimeVoice] Partial launch scope (need board, medium, grade AND subject) — refusing curriculum for this session');
+      return { cpIds: [], chapter };
+    }
+
+    if (fullScope) {
+      try {
+        const cpIds = await resolveCpIdsForScope(businessAccountId, { board, medium, grade, subject });
+        if (cpIds.length === 0) {
+          console.warn('[RealtimeVoice] Launch scope matched no content package — refusing curriculum for this session:', { board, medium, grade, subject });
+        } else {
+          console.log(`[RealtimeVoice] Curriculum scope resolved to ${cpIds.length} content package(s)`, { board, medium, grade, subject, chapter });
+        }
+        return { cpIds, chapter };
+      } catch (err) {
+        // Fail closed: a lookup failure must not silently widen the session to
+        // the whole account.
+        console.error('[RealtimeVoice] Scope resolution failed — refusing curriculum for this session:', (err as Error).message);
+        return { cpIds: [], chapter };
+      }
+    }
+
+    // Legacy identity: no scope fields at all, just a content package.
+    if (cpId) {
+      console.log('[RealtimeVoice] Curriculum scope bound to a single content package from the launch identity', { chapter });
+      return { cpIds: [cpId], chapter };
+    }
+
+    console.warn('[RealtimeVoice] Launch identity carried neither a content package nor a scope — refusing curriculum for this session');
+    return { cpIds: [], chapter };
+  }
+
+  /**
    * K12 content-only: retrieve curriculum for the student's question server-side
    * and inject it as a system context item so the next response is grounded.
    * Best-effort — on any failure we simply skip injection and let the normal
@@ -2141,11 +2323,21 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           businessAccountId: conversation.businessAccountId,
           userId: conversation.userId,
           conversationId: conversation.conversationId,
-          userMessage: query
+          userMessage: query,
+          // Scope retrieval to the launch identity's curriculum, exactly as the
+          // text path does. Omitting these searches the whole account.
+          cpIds: conversation.topscholarCpIds,
+          chapter: conversation.topscholarChapter,
         },
         query,
         false
       );
+
+      // Capture any curriculum images for this turn BEFORE compaction strips
+      // them out of the model-facing text.
+      conversation.pendingCurriculumMedia = this.extractCurriculumMedia(result);
+      // Unbound until the response that will speak this answer is created.
+      conversation.pendingCurriculumMediaResponseId = null;
 
       const curriculum = this.compactK12Curriculum(result);
       const instruction = curriculum
@@ -2201,7 +2393,8 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
 
         // Main revision notes (primary content)
         if (typeof r?.revisionNotes === 'string' && r.revisionNotes.trim()) {
-          lines.push(r.revisionNotes.trim().slice(0, MAX_REVISION_CHARS));
+          const notes = this.stripMediaMarkdown(r.revisionNotes);
+          if (notes) lines.push(notes.slice(0, MAX_REVISION_CHARS));
         }
 
         // Structured sub-topic notes (title + content pairs — often the richest content)
@@ -2211,7 +2404,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
             .slice(0, 10)
             .map((n: any) => {
               const title = typeof n?.title === 'string' ? n.title.trim() : '';
-              const content = typeof n?.content === 'string' ? n.content.trim().slice(0, MAX_NOTE_CHARS) : '';
+              const content = typeof n?.content === 'string' ? this.stripMediaMarkdown(n.content).slice(0, MAX_NOTE_CHARS) : '';
               return title && content ? `**${title}:** ${content}` : (content || title);
             })
             .filter(Boolean);
@@ -2226,6 +2419,87 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
       return parts.join('\n\n---\n\n');
     } catch {
       return '';
+    }
+  }
+
+  /**
+   * Remove Markdown image tags (and any bare image URL left behind) from text
+   * that is about to be handed to the model.
+   *
+   * This is not cosmetic. Retrieval appends the curriculum's images to the end of
+   * the notes as `![...](https://...)`. In the text path that is exactly what you
+   * want — the model echoes it and the browser renders a picture. A voice tutor
+   * would instead READ THE LINK OUT LOUD, which is jarring. Images reach the
+   * student through `pendingCurriculumMedia` and the on-screen bubble instead, so
+   * the model never needs to see a URL.
+   */
+  private stripMediaMarkdown(text: string): string {
+    if (typeof text !== 'string' || !text) return '';
+    return text
+      // XML namespace declarations (MathML content carries these). Pure markup,
+      // but they are literal URLs sitting in text a speaking model reads.
+      .replace(/\s+xmlns(?::\w+)?="[^"]*"/gi, '')
+      // ![alt](url) and the occasional [text](url) pointing straight at an image
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+      .replace(/\[[^\]]*\]\((https?:\/\/[^)]+\.(?:png|jpe?g|gif|webp|svg)[^)]*)\)/gi, ' ')
+      // Bare image URLs sitting on their own
+      .replace(/https?:\/\/\S+\.(?:png|jpe?g|gif|webp|svg)(?:\?\S*)?/gi, ' ')
+      // Collapse the whitespace the removals leave behind
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  /**
+   * Deep-clean a tool result before it is handed to the voice model: drop media
+   * fields outright and strip image Markdown / bare image URLs out of every
+   * string. The text path can safely pass these through because a browser
+   * renders them; a voice tutor would pronounce them.
+   */
+  private sanitizeToolResultForVoice(value: any, depth = 0): any {
+    if (depth > 8) return value;
+    if (typeof value === 'string') return this.stripMediaMarkdown(value);
+    if (Array.isArray(value)) return value.map(v => this.sanitizeToolResultForVoice(v, depth + 1));
+    if (value && typeof value === 'object') {
+      const out: any = {};
+      for (const [key, v] of Object.entries(value)) {
+        // Media collections are for the on-screen bubble only — never the model.
+        if (key === 'mediaUrls' || key === 'imageUrl' || key === 'imageUrls' || key === 'thumbnailUrl') continue;
+        out[key] = this.sanitizeToolResultForVoice(v, depth + 1);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  /**
+   * Pull the curriculum image URLs out of a retrieval result so they can be
+   * attached to the on-screen message. Mirrors the text path, which keeps
+   * `mediaUrls` through compaction; voice used to drop them entirely, which is
+   * why images never appeared in a spoken lesson.
+   */
+  private extractCurriculumMedia(result: any): string[] {
+    try {
+      const data = Array.isArray(result?.data) ? result.data : [];
+      const urls: string[] = [];
+      const seen = new Set<string>();
+      const MAX_IMAGES = 6;
+
+      for (const passage of data) {
+        const media = Array.isArray(passage?.mediaUrls) ? passage.mediaUrls : [];
+        for (const raw of media) {
+          const url = typeof raw === 'string' ? raw.trim() : '';
+          // Only http(s) — never let a data: or javascript: URI reach an <img>.
+          if (!/^https?:\/\//i.test(url)) continue;
+          if (seen.has(url)) continue;
+          seen.add(url);
+          urls.push(url);
+          if (urls.length >= MAX_IMAGES) return urls;
+        }
+      }
+      return urls;
+    } catch {
+      return [];
     }
   }
 
@@ -2281,7 +2555,11 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           businessAccountId: conversation.businessAccountId,
           userId: conversation.userId,
           conversationId: conversation.conversationId,
-          userMessage: conversation.currentUserTranscript
+          userMessage: conversation.currentUserTranscript,
+          // Same curriculum scope as the server-side retrieval above — a tool the
+          // model invokes itself must not be a way around the session's scope.
+          cpIds: conversation.topscholarCpIds,
+          chapter: conversation.topscholarChapter,
         },
         conversation.currentUserTranscript,
         appointmentsEnabled
@@ -2289,13 +2567,25 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
 
       console.log('[RealtimeVoice] Tool execution result:', result);
 
+      // Curriculum images from a model-invoked lookup ride the same out-of-band
+      // channel as the server-side path (never through the spoken answer).
+      const toolMedia = this.extractCurriculumMedia(result);
+      if (toolMedia.length > 0) {
+        conversation.pendingCurriculumMedia = toolMedia;
+        // Unbound: the model answers on the NEXT response, not this one.
+        conversation.pendingCurriculumMediaResponseId = null;
+      }
+
       // Send tool result back to OpenAI
       const toolOutput = {
         type: 'conversation.item.create',
         item: {
           type: 'function_call_output',
           call_id: call_id,
-          output: JSON.stringify(result)
+          // Sanitized: the raw result carries mediaUrls and image Markdown inside
+          // the notes. Handing those to a SPEAKING model invites it to read the
+          // URL out loud. Images reach the student via the out-of-band channel.
+          output: JSON.stringify(this.sanitizeToolResultForVoice(result))
         }
       };
 
