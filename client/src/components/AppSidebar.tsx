@@ -410,45 +410,30 @@ export function AppSidebar({ user }: AppSidebarProps) {
                     {hasWhatsappEnabled && (
                       <SidebarMenuItem>
                         <Collapsible open={whatsappNavOpen} onOpenChange={setWhatsappNavOpen}>
-                          <SidebarMenuButton
-                            onClick={() => {
-                              setLocation("/admin/whatsapp");
-                              setWhatsappNavOpen(true);
-                            }}
-                            isActive={isWhatsappLocation(location)}
-                            data-testid="link-whatsapp"
-                            className={`group/nav relative transition-all duration-200 ${
-                              isWhatsappLocation(location)
-                                ? 'bg-gradient-to-r from-purple-50 to-indigo-50 text-purple-700 font-medium shadow-sm border border-purple-100/60'
-                                : 'hover:bg-gray-50/80'
-                            }`}
-                          >
-                            <div className={`flex items-center justify-center w-7 h-7 rounded-lg transition-all duration-200 ${
-                              isWhatsappLocation(location)
-                                ? 'bg-gradient-to-br from-green-500 to-emerald-600'
-                                : 'bg-gray-100 group-hover/nav:bg-gray-200/80'
-                            }`}>
-                              <MessageSquare className={`w-3.5 h-3.5 transition-colors ${isWhatsappLocation(location) ? 'text-white' : 'text-gray-500 group-hover/nav:text-gray-700'}`} />
-                            </div>
-                            <span className="text-[14px]">WhatsApp</span>
-                            {/* A span rather than a button: SidebarMenuButton already renders a
-                                button, and nesting one inside another is invalid markup. */}
-                            <CollapsibleTrigger asChild>
-                              <span
-                                role="button"
-                                tabIndex={0}
-                                aria-label={whatsappNavOpen ? "Collapse WhatsApp sections" : "Expand WhatsApp sections"}
-                                data-testid="toggle-whatsapp-sections"
-                                onClick={(e) => e.stopPropagation()}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter" || e.key === " ") e.stopPropagation();
-                                }}
-                                className="ml-auto p-0.5 rounded hover:bg-gray-200/70"
-                              >
-                                <ChevronRight className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${whatsappNavOpen ? 'rotate-90' : ''}`} />
-                              </span>
-                            </CollapsibleTrigger>
-                          </SidebarMenuButton>
+                          {/* The whole row is a collapse/expand toggle — clicking it never
+                              navigates anywhere. The sub-rows handle their own navigation. */}
+                          <CollapsibleTrigger asChild>
+                            <SidebarMenuButton
+                              isActive={isWhatsappLocation(location)}
+                              data-testid="link-whatsapp"
+                              aria-label={whatsappNavOpen ? "Collapse WhatsApp sections" : "Expand WhatsApp sections"}
+                              className={`group/nav relative transition-all duration-200 ${
+                                isWhatsappLocation(location)
+                                  ? 'bg-gradient-to-r from-purple-50 to-indigo-50 text-purple-700 font-medium shadow-sm border border-purple-100/60'
+                                  : 'hover:bg-gray-50/80'
+                              }`}
+                            >
+                              <div className={`flex items-center justify-center w-7 h-7 rounded-lg transition-all duration-200 ${
+                                isWhatsappLocation(location)
+                                  ? 'bg-gradient-to-br from-green-500 to-emerald-600'
+                                  : 'bg-gray-100 group-hover/nav:bg-gray-200/80'
+                              }`}>
+                                <MessageSquare className={`w-3.5 h-3.5 transition-colors ${isWhatsappLocation(location) ? 'text-white' : 'text-gray-500 group-hover/nav:text-gray-700'}`} />
+                              </div>
+                              <span className="text-[14px]">WhatsApp</span>
+                              <ChevronRight className={`ml-auto w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${whatsappNavOpen ? 'rotate-90' : ''}`} />
+                            </SidebarMenuButton>
+                          </CollapsibleTrigger>
                           <CollapsibleContent>
                             <SidebarMenuSub>
                               <WhatsAppNavSections

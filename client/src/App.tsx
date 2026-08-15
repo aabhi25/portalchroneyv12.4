@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { WhatsAppSectionPanel } from "@/components/whatsapp/WhatsAppSectionPanel";
+import { getWhatsappSections } from "@/components/whatsapp/sections";
 import AdminProducts from "@/pages/AdminProducts";
 import WhatsAppCampaigns from "@/pages/WhatsAppCampaigns";
 import WhatsAppNewCampaign from "@/pages/WhatsAppNewCampaign";
@@ -345,7 +346,16 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/tickets" component={SupportTickets} />
                 <Route path="/automation-analytics" component={AutomationAnalytics} />
                 <Route path="/admin/calendar" component={Calendar} />
-                <Route path="/admin/whatsapp" component={WhatsApp} />
+                <Route path="/admin/whatsapp">
+                  {() => {
+                    const wa = user?.businessAccount;
+                    const marketingEnabled = wa?.whatsappEnabled === true && wa?.whatsappMarketingEnabled === true;
+                    // Derive from the shared section definition so this redirect can't drift
+                    // when sections are reordered.
+                    const firstHref = getWhatsappSections({ marketingEnabled })[0].items[0].href;
+                    return <Redirect to={firstHref} />;
+                  }}
+                </Route>
                 <Route path="/admin/whatsapp-hub/:sectionId" component={WhatsAppSectionHub} />
                 <Route path="/admin/whatsapp-conversations" component={WhatsApp} />
                 <Route path="/admin/whatsapp-leads" component={WhatsApp} />
