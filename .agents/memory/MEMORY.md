@@ -7,4 +7,5 @@
 - [Multi-job structured prompts](structured-output-prompts.md) — JSON key order decides what the model can condition on; a job-1 short-circuit output silently skips job 2.
 - [Voice karaoke highlight](voice-karaoke-highlight.md) — clock highlights off audio scheduling, key to the bubble not the response, and tear down on every terminal path or the highlight sticks.
 - [WhatsApp campaign engine](whatsapp-campaign-engine.md) — list and count must share one filter predicate; recording an inbound reply silently inherits the AI-enabled gate.
+- [Spreadsheet contact import](spreadsheet-import.md) — Excel exports what it displays, so long numbers reach CSV pre-corrupted; a preview and the write it promises must share one routine.
 - [Environment quirks](environment-quirks.md) — pgvector must exist before `db:push`; `.replit` is edited through the verify-and-replace flow, never directly.

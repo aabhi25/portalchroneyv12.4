@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -9,7 +9,9 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Upload, Plus, Trash2, Globe, Pencil } from "lucide-react";
+import { ArrowLeft, Upload, Plus, Trash2, Globe, Pencil, Download, FileSpreadsheet } from "lucide-react";
+import { ImportContactsDialog } from "@/components/whatsapp/ImportContactsDialog";
+import { downloadContactSampleWorkbook } from "@/lib/contactSampleWorkbook";
 
 interface Contact {
   id: string;
@@ -46,7 +48,7 @@ export default function WhatsAppContactGroupDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [newPhone, setNewPhone] = useState("");
   const [newName, setNewName] = useState("");
@@ -61,30 +63,6 @@ export default function WhatsAppContactGroupDetail() {
   const { data: group } = useQuery<any>({ queryKey: [`/api/whatsapp/contact-groups/${id}`] });
   const { data: contacts = [], isLoading } = useQuery<Contact[]>({
     queryKey: [`/api/whatsapp/contact-groups/${id}/contacts`],
-  });
-
-  const importMutation = useMutation({
-    mutationFn: async (file: File) => {
-      const fd = new FormData();
-      fd.append("file", file);
-      const r = await fetch(`/api/whatsapp/contact-groups/${id}/import-csv`, {
-        method: "POST",
-        body: fd,
-        credentials: "include",
-      });
-      if (!r.ok) throw new Error((await r.json()).error || "Import failed");
-      return await r.json();
-    },
-    onSuccess: (result: any) => {
-      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/contact-groups/${id}/contacts`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/contact-groups/${id}`] });
-      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/contact-groups"] });
-      toast({
-        title: "CSV imported",
-        description: `Imported ${result.imported} new contacts (${result.skipped} skipped of ${result.total} rows)`,
-      });
-    },
-    onError: (e: any) => toast({ title: "Import failed", description: e.message, variant: "destructive" }),
   });
 
   const addMutation = useMutation({
@@ -164,25 +142,26 @@ export default function WhatsAppContactGroupDetail() {
           <p className="text-xs text-gray-500 mt-1">{contacts.length} contacts loaded</p>
         </div>
         <div className="flex gap-2">
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".csv,text/csv"
-            className="hidden"
-            onChange={e => {
-              const f = e.target.files?.[0];
-              if (f) importMutation.mutate(f);
-              e.target.value = "";
-            }}
-          />
-          <Button variant="outline" onClick={() => fileRef.current?.click()} disabled={importMutation.isPending} data-testid="button-import-csv">
-            <Upload className="h-4 w-4 mr-1" /> {importMutation.isPending ? "Importing..." : "Import CSV"}
+          <Button variant="outline" onClick={() => setImportOpen(true)} data-testid="button-import-contacts">
+            <Upload className="h-4 w-4 mr-1" /> Import contacts
           </Button>
           <Button onClick={() => setAddOpen(true)} data-testid="button-add-contact">
             <Plus className="h-4 w-4 mr-1" /> Add Contact
           </Button>
         </div>
       </div>
+
+      <ImportContactsDialog
+        groupId={id!}
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        defaultCountryCode={currentCode || null}
+        onImported={() => {
+          queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/contact-groups/${id}/contacts`] });
+          queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/contact-groups/${id}`] });
+          queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/contact-groups"] });
+        }}
+      />
 
       <Card className="mb-4">
         <CardHeader className="pb-3">
@@ -221,14 +200,30 @@ export default function WhatsAppContactGroupDetail() {
       </Card>
 
       <Card className="mb-4">
-        <CardHeader>
-          <CardTitle className="text-sm">CSV format</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <FileSpreadsheet className="h-4 w-4 text-gray-500" /> File format
+          </CardTitle>
         </CardHeader>
-        <CardContent className="text-sm text-gray-600">
-          First row = headers. Required column: <code className="bg-gray-100 px-1 rounded">phone</code> (also accepts <code className="bg-gray-100 px-1 rounded">mobile</code>, <code className="bg-gray-100 px-1 rounded">number</code>, <code className="bg-gray-100 px-1 rounded">whatsapp</code>). Optional: <code className="bg-gray-100 px-1 rounded">name</code>. Any other columns become per-contact attributes (e.g. city, plan) usable as <code className="bg-gray-100 px-1 rounded">{`{{city}}`}</code> placeholders inside campaign template params.
-          {isMixed
-            ? " Each phone must include its country code in Mixed mode."
-            : ` Phones may be entered with or without the +${currentCode} country code.`}
+        <CardContent className="text-sm text-gray-600 space-y-3">
+          <p>
+            Upload an Excel file (<code className="bg-gray-100 px-1 rounded">.xlsx</code>) or a CSV. First row = headers.
+            Required column: <code className="bg-gray-100 px-1 rounded">phone</code> (also accepts <code className="bg-gray-100 px-1 rounded">mobile</code>, <code className="bg-gray-100 px-1 rounded">number</code>, <code className="bg-gray-100 px-1 rounded">whatsapp</code>). Optional: <code className="bg-gray-100 px-1 rounded">name</code>. Any other columns become per-contact details (e.g. city, plan) usable as <code className="bg-gray-100 px-1 rounded">{`{{city}}`}</code> placeholders in campaign templates, and readable by the AI when it replies.
+            {isMixed
+              ? " Each phone must include its country code in Mixed mode."
+              : ` Phones may be entered with or without the +${currentCode} country code.`}
+          </p>
+          <p className="text-xs text-gray-500">
+            You'll see a full review — what will be imported, what will be skipped and why — before anything is saved.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => downloadContactSampleWorkbook(currentCode || null)}
+            data-testid="button-download-sample-format"
+          >
+            <Download className="h-3.5 w-3.5 mr-1.5" /> Download sample Excel file
+          </Button>
         </CardContent>
       </Card>
 
@@ -237,7 +232,7 @@ export default function WhatsAppContactGroupDetail() {
           {isLoading ? (
             <div className="p-8 text-center text-gray-500">Loading...</div>
           ) : contacts.length === 0 ? (
-            <div className="p-8 text-center text-gray-500">No contacts yet. Import a CSV or add manually.</div>
+            <div className="p-8 text-center text-gray-500">No contacts yet. Import an Excel or CSV file, or add one manually.</div>
           ) : (
             <div className="divide-y">
               {contacts.map(c => (

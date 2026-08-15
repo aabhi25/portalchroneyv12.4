@@ -7,10 +7,21 @@ import {
   type ContactGroupContact,
 } from "@shared/schema";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-
-function normalizePhone(raw: string): string {
-  return (raw || "").replace(/\D/g, "");
-}
+import {
+  MAX_IMPORT_ROWS,
+  applyCountryCode,
+  buildSheetData,
+  decodeTextBytes,
+  detectNameColumn,
+  detectPhoneColumn,
+  evaluateImportRows,
+  normalizePhone,
+  parseDelimitedText,
+  type EvaluatedRow,
+  type ImportColumn,
+  type ImportSummary,
+  type SourceRecord,
+} from "@shared/contactImport";
 
 /**
  * Curated list of common country codes shown in the group settings picker.
@@ -41,78 +52,26 @@ export const COMMON_COUNTRY_CODES: { code: string; label: string }[] = [
 ];
 
 /**
- * Apply a contact group's default country code to a phone number for sending.
+ * The parsed-and-mapped payload the client sends for both preview and import.
  *
- * Rules:
- * - Strip non-digits and any leading zero (common in locally-typed numbers).
- * - If the group has a default country code:
- *     - If the cleaned digits are <= 10, prepend the country code (treat as
- *       a local number).
- *     - Otherwise leave as-is (treat as already international).
- * - If the group has NO default code (Mixed mode):
- *     - The number must be at least 11 digits AND not look like a 10-digit
- *       local — otherwise return an error so the recipient is marked failed
- *       instead of being silently shipped to MSG91 with a malformed `to`.
+ * Workbook decoding happens in the browser, so the server never runs the
+ * spreadsheet parser over an untrusted upload. The server still owns every
+ * decision about what is valid — this is raw material, not a verdict.
  */
-export function applyCountryCode(
-  rawPhone: string,
-  defaultCountryCode: string | null | undefined,
-): { phone: string | null; error?: string } {
-  let cleaned = (rawPhone || "").replace(/\D/g, "");
-  // Strip a single leading zero — typed local numbers often have one.
-  if (cleaned.startsWith("0")) cleaned = cleaned.replace(/^0+/, "");
-  if (!cleaned) return { phone: null, error: "Phone is empty" };
-
-  const code = (defaultCountryCode || "").replace(/\D/g, "");
-  if (code) {
-    if (cleaned.length <= 10) return { phone: code + cleaned };
-    return { phone: cleaned };
-  }
-  if (cleaned.length < 11) {
-    return {
-      phone: null,
-      error: `Missing country code — group is set to Mixed, so each phone must include its country code (e.g. 919810560800).`,
-    };
-  }
-  return { phone: cleaned };
+export interface ContactImportPayload {
+  columns: ImportColumn[];
+  rows: SourceRecord[];
+  phoneColumn?: string;
+  nameColumn?: string;
 }
 
-function parseCsv(csvText: string): { headers: string[]; rows: Record<string, string>[] } {
-  const text = csvText.replace(/^\uFEFF/, "");
-  const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-  if (lines.length === 0) return { headers: [], rows: [] };
-
-  const splitLine = (line: string): string[] => {
-    const out: string[] = [];
-    let cur = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
-        else inQuotes = !inQuotes;
-      } else if (ch === "," && !inQuotes) {
-        out.push(cur);
-        cur = "";
-      } else {
-        cur += ch;
-      }
-    }
-    out.push(cur);
-    return out.map(s => s.trim());
-  };
-
-  const headers = splitLine(lines[0]).map(h => h.toLowerCase());
-  const rows: Record<string, string>[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cells = splitLine(lines[i]);
-    const row: Record<string, string> = {};
-    headers.forEach((h, idx) => {
-      row[h] = (cells[idx] || "").trim();
-    });
-    rows.push(row);
-  }
-  return { headers, rows };
+export interface ContactImportReview {
+  columns: ImportColumn[];
+  phoneColumn: string;
+  nameColumn: string;
+  attributeColumns: ImportColumn[];
+  defaultCountryCode: string | null;
+  summary: ImportSummary;
 }
 
 export const contactGroupService = {
@@ -179,61 +138,135 @@ export const contactGroupService = {
       .limit(limit);
   },
 
-  async importFromCsv(
-    businessAccountId: string,
-    groupId: string,
-    csvText: string,
-    options?: { phoneColumn?: string; nameColumn?: string }
-  ): Promise<{ imported: number; skipped: number; total: number; sampleErrors: string[] }> {
-    const group = await this.get(businessAccountId, groupId);
-    if (!group) throw new Error("Contact group not found");
-
-    const { headers, rows } = parseCsv(csvText);
-    if (rows.length === 0) return { imported: 0, skipped: 0, total: 0, sampleErrors: ["CSV is empty"] };
-
-    const phoneCol = (options?.phoneColumn || ["phone", "mobile", "number", "whatsapp"].find(c => headers.includes(c)) || headers[0]).toLowerCase();
-    const nameCol = (options?.nameColumn || ["name", "full_name", "fullname", "first_name"].find(c => headers.includes(c)) || "").toLowerCase();
-
-    let imported = 0;
-    let skipped = 0;
-    const sampleErrors: string[] = [];
-    const seenPhones = new Set<string>();
-
+  /** Digits-only phones already stored in the group — the dedupe basis. */
+  async getExistingPhones(groupId: string): Promise<Set<string>> {
     const existingRows = await db
       .select({ phone: contactGroupContacts.phone })
       .from(contactGroupContacts)
       .where(eq(contactGroupContacts.groupId, groupId));
-    const existingSet = new Set(existingRows.map(r => r.phone));
+    return new Set(existingRows.map(r => r.phone));
+  },
 
-    const valuesToInsert: any[] = [];
-    for (const row of rows) {
-      const rawPhone = row[phoneCol] || "";
-      const phone = normalizePhone(rawPhone);
-      if (!phone || phone.length < 7) {
-        skipped++;
-        if (sampleErrors.length < 5) sampleErrors.push(`Invalid phone: "${rawPhone}"`);
-        continue;
-      }
-      if (seenPhones.has(phone) || existingSet.has(phone)) {
-        skipped++;
-        continue;
-      }
-      seenPhones.add(phone);
+  /**
+   * Resolve the column mapping and run the shared verdict over a payload.
+   *
+   * Both the review screen and the actual import go through here. Nothing else
+   * is allowed to decide whether a row is importable — if the preview and the
+   * write were computed separately they would eventually disagree, and a
+   * review that promises more contacts than it delivers is worse than none.
+   */
+  async evaluateImport(
+    businessAccountId: string,
+    groupId: string,
+    payload: ContactImportPayload,
+  ) {
+    const group = await this.get(businessAccountId, groupId);
+    if (!group) throw new Error("Contact group not found");
 
-      const attributes: Record<string, string> = {};
-      for (const h of headers) {
-        if (h === phoneCol || h === nameCol) continue;
-        if (row[h]) attributes[h] = row[h];
+    const columns = Array.isArray(payload.columns) ? payload.columns : [];
+    const rows = Array.isArray(payload.rows) ? payload.rows : [];
+    if (columns.length === 0) throw new Error("No columns found in the file");
+    if (rows.length > MAX_IMPORT_ROWS) {
+      throw new Error(
+        `That file has ${rows.length.toLocaleString()} rows. The limit is ${MAX_IMPORT_ROWS.toLocaleString()} per import — split it into smaller files.`,
+      );
+    }
+
+    const hasColumn = (key?: string) => !!key && columns.some(c => c.key === key);
+    const phoneColumn = hasColumn(payload.phoneColumn)
+      ? payload.phoneColumn!
+      : detectPhoneColumn(columns);
+    // An explicitly empty name column means "this file has no name column",
+    // which is different from not having expressed a preference at all.
+    const nameColumn = payload.nameColumn === undefined
+      ? detectNameColumn(columns)
+      : hasColumn(payload.nameColumn) ? payload.nameColumn! : "";
+
+    const existingPhones = await this.getExistingPhones(groupId);
+    const evaluation = evaluateImportRows({
+      columns,
+      rows,
+      phoneColumn,
+      nameColumn,
+      defaultCountryCode: group.defaultCountryCode,
+      existingPhones,
+    });
+
+    return { group, columns, phoneColumn, nameColumn, evaluation };
+  },
+
+  /**
+   * Build the review payload. Writes nothing.
+   *
+   * Row-level detail is capped for transport; the summary counts are always
+   * complete, so the tally the user acts on is never a sample.
+   */
+  async reviewImport(
+    businessAccountId: string,
+    groupId: string,
+    payload: ContactImportPayload,
+    limits?: { problems?: number; preview?: number },
+  ): Promise<ContactImportReview & { problemRows: EvaluatedRow[]; previewRows: EvaluatedRow[] }> {
+    const problemLimit = limits?.problems ?? 200;
+    const previewLimit = limits?.preview ?? 25;
+    const { group, columns, phoneColumn, nameColumn, evaluation } =
+      await this.evaluateImport(businessAccountId, groupId, payload);
+
+    const problemRows: EvaluatedRow[] = [];
+    const previewRows: EvaluatedRow[] = [];
+    for (const row of evaluation.rows) {
+      if (row.status === "skipped") {
+        if (problemRows.length < problemLimit) problemRows.push(row);
+      } else if (previewRows.length < previewLimit) {
+        previewRows.push(row);
       }
-      valuesToInsert.push({
+      if (problemRows.length >= problemLimit && previewRows.length >= previewLimit) break;
+    }
+
+    return {
+      columns,
+      phoneColumn,
+      nameColumn,
+      attributeColumns: columns.filter(c => c.key !== phoneColumn && c.key !== nameColumn),
+      defaultCountryCode: group.defaultCountryCode ?? null,
+      summary: evaluation.summary,
+      problemRows,
+      previewRows,
+    };
+  },
+
+  /**
+   * Apply an import, re-running the identical verdict before writing.
+   *
+   * `reviewedReady` is what the review screen told the user. If the outcome
+   * differs — someone else added contacts to the group in the meantime — say
+   * so rather than quietly reporting a different number.
+   */
+  async commitImport(
+    businessAccountId: string,
+    groupId: string,
+    payload: ContactImportPayload,
+    reviewedReady?: number,
+  ): Promise<{
+    imported: number;
+    skipped: number;
+    total: number;
+    summary: ImportSummary;
+    rows: EvaluatedRow[];
+    reviewedReady: number | null;
+    driftNote: string | null;
+  }> {
+    const { evaluation } = await this.evaluateImport(businessAccountId, groupId, payload);
+
+    const valuesToInsert = evaluation.rows
+      .filter(r => r.status === "ready")
+      .map(r => ({
         groupId,
         businessAccountId,
-        phone,
-        name: nameCol ? (row[nameCol] || "") : "",
-        attributes,
-      });
-      imported++;
-    }
+        phone: r.phone,
+        name: r.name,
+        attributes: r.attributes,
+      }));
 
     if (valuesToInsert.length > 0) {
       const CHUNK = 500;
@@ -242,6 +275,33 @@ export const contactGroupService = {
       }
     }
 
+    await this.refreshContactCount(groupId);
+
+    const summary = evaluation.summary;
+    // State only what is actually known: the two numbers, and the fact that
+    // the group's contents are the one input that can differ between the
+    // review and the confirm. Guessing at a cause would be inventing detail.
+    let driftNote: string | null = null;
+    if (typeof reviewedReady === "number" && reviewedReady !== summary.ready) {
+      driftNote =
+        `The review showed ${reviewedReady} to import, but ${summary.ready} ` +
+        `${summary.ready === 1 ? "was" : "were"} still eligible when you confirmed — ` +
+        `this group's contacts changed in between.`;
+    }
+
+    return {
+      imported: summary.ready,
+      skipped: summary.skipped,
+      total: summary.total,
+      summary,
+      rows: evaluation.rows,
+      reviewedReady: typeof reviewedReady === "number" ? reviewedReady : null,
+      driftNote,
+    };
+  },
+
+  /** Recompute the cached contact count for a group. */
+  async refreshContactCount(groupId: string): Promise<number> {
     const [{ cnt }] = await db
       .select({ cnt: sql<number>`COUNT(*)::int` })
       .from(contactGroupContacts)
@@ -251,8 +311,53 @@ export const contactGroupService = {
       .update(contactGroups)
       .set({ contactCount: cnt as number, updatedAt: new Date() })
       .where(eq(contactGroups.id, groupId));
+    return cnt as number;
+  },
 
-    return { imported, skipped, total: rows.length, sampleErrors };
+  /**
+   * Legacy entry point: import straight from CSV bytes or text.
+   *
+   * Kept so existing API callers keep working. It shares the same parsing and
+   * the same verdict as the reviewed path — only the interaction differs.
+   */
+  async importFromCsv(
+    businessAccountId: string,
+    groupId: string,
+    csvInput: string | Uint8Array,
+    options?: { phoneColumn?: string; nameColumn?: string }
+  ): Promise<{ imported: number; skipped: number; total: number; sampleErrors: string[] }> {
+    const text = typeof csvInput === "string"
+      ? csvInput.replace(/^\uFEFF/, "")
+      : decodeTextBytes(csvInput).text;
+
+    const { records } = parseDelimitedText(text);
+    const sheet = buildSheetData(records);
+    if (sheet.rows.length === 0) {
+      return { imported: 0, skipped: 0, total: 0, sampleErrors: ["CSV is empty"] };
+    }
+
+    const normalizeKey = (value?: string) => value ? value.trim().toLowerCase() : value;
+    const result = await this.commitImport(businessAccountId, groupId, {
+      columns: sheet.columns,
+      rows: sheet.rows,
+      phoneColumn: normalizeKey(options?.phoneColumn),
+      nameColumn: normalizeKey(options?.nameColumn),
+    });
+
+    // Derived from the same evaluation that drove the insert — never a second
+    // pass, which would re-run after the write and report every freshly
+    // inserted contact as "already in group".
+    const sampleErrors = result.rows
+      .filter(r => r.status === "skipped" && r.reason !== "already_in_group")
+      .slice(0, 5)
+      .map(r => `Row ${r.rowNumber}: ${r.message}`);
+
+    return {
+      imported: result.imported,
+      skipped: result.skipped,
+      total: result.total,
+      sampleErrors,
+    };
   },
 
   async addContact(businessAccountId: string, groupId: string, phone: string, name?: string, attributes?: Record<string, string>): Promise<ContactGroupContact | undefined> {
@@ -351,4 +456,6 @@ export const contactGroupService = {
   },
 };
 
-export { normalizePhone, parseCsv };
+// Re-exported so existing importers (marketingCampaignService) keep working
+// while the implementations live in the shared, isomorphic module.
+export { normalizePhone, applyCountryCode };

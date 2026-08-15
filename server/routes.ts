@@ -85,6 +85,7 @@ import topscholarRoutes from "./routes/topscholar";
 import topscholarAnalyticsRoutes from "./routes/topscholarAnalytics";
 import verificationRoutes from "./routes/verification";
 import { validatePhoneNumber } from "@shared/validation/phone";
+import { MAX_IMPORT_ROWS, normalizeColumnKeys } from "@shared/contactImport";
 
 const execAsync = promisify(exec);
 
@@ -35733,14 +35734,111 @@ Return ONLY a valid JSON object in this format:
   app.post("/api/whatsapp/contact-groups/:id/import-csv", requireAuth, requireBusinessAccount, requireWhatsappMarketing, csvUpload.single("file"), async (req: any, res) => {
     try {
       const businessAccountId = req.user!.businessAccountId!;
-      const csvText = req.file?.buffer ? req.file.buffer.toString("utf8") : (req.body?.csv || "");
-      if (!csvText) return res.status(400).json({ error: "Provide a CSV file ('file') or csv text" });
+      // Hand over the raw bytes when we have them so the shared parser can
+      // detect the encoding — Excel's plain CSV export is often not UTF-8.
+      const csvInput: string | Uint8Array = req.file?.buffer
+        ? new Uint8Array(req.file.buffer)
+        : (req.body?.csv || "");
+      if (!csvInput || (typeof csvInput === "string" && !csvInput)) {
+        return res.status(400).json({ error: "Provide a CSV file ('file') or csv text" });
+      }
       const { contactGroupService } = await import("./services/contactGroupService");
-      const result = await contactGroupService.importFromCsv(businessAccountId, req.params.id, csvText, {
+      const result = await contactGroupService.importFromCsv(businessAccountId, req.params.id, csvInput, {
         phoneColumn: req.body?.phoneColumn,
         nameColumn: req.body?.nameColumn,
       });
       res.json(result);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  /**
+   * Normalise an import payload arriving from the browser.
+   *
+   * The client parses the workbook (keeping the vulnerable spreadsheet parser
+   * away from the server and off other tenants' blast radius) but is never
+   * trusted about what the rows mean — every verdict is recomputed here.
+   */
+  const sanitizeContactImportPayload = (body: any) => {
+    const rawRows = Array.isArray(body?.rows) ? body.rows : [];
+    // Enforced before any per-row work: converting millions of cells to
+    // strings and only then rejecting the payload does the expensive part
+    // of the attack for the attacker.
+    if (rawRows.length > MAX_IMPORT_ROWS) {
+      throw new Error(
+        `That file has ${rawRows.length.toLocaleString()} rows. The limit is ${MAX_IMPORT_ROWS.toLocaleString()} per import — split it into smaller files.`,
+      );
+    }
+
+    // Column keys become object keys, so they are re-canonicalised here with
+    // the same rule the browser used rather than being taken on trust.
+    const rawColumns = Array.isArray(body?.columns) ? body.columns.slice(0, 200) : [];
+    const { keys } = normalizeColumnKeys(
+      rawColumns.map((c: any, i: number) => String(c?.key ?? `column_${i + 1}`).slice(0, 120)),
+    );
+    const columns = keys.map((key, i) => ({
+      key,
+      label: String(rawColumns[i]?.label ?? key).slice(0, 200),
+    }));
+
+    const rows = rawRows.map((r: any, i: number) => ({
+      r: Number.isFinite(r?.r) ? Number(r.r) : i + 2,
+      v: Array.isArray(r?.v)
+        ? r.v.slice(0, columns.length).map((cell: any) => (cell == null ? "" : String(cell).slice(0, 2000)))
+        : [],
+    }));
+
+    // Canonicalised the same way so a mapping chosen in the browser still
+    // resolves; anything that no longer matches falls back to auto-detection.
+    const canonical = (value: unknown) =>
+      typeof value === "string" ? value.trim().toLowerCase() : undefined;
+
+    return {
+      columns,
+      rows,
+      phoneColumn: canonical(body?.phoneColumn),
+      // An explicit empty string means "no name column"; undefined means
+      // "you decide". They must stay distinguishable.
+      nameColumn: canonical(body?.nameColumn),
+    };
+  };
+
+  // Review an import without writing anything.
+  app.post("/api/whatsapp/contact-groups/:id/import-preview", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req: any, res) => {
+    try {
+      const businessAccountId = req.user!.businessAccountId!;
+      const { contactGroupService } = await import("./services/contactGroupService");
+      const review = await contactGroupService.reviewImport(
+        businessAccountId,
+        req.params.id,
+        sanitizeContactImportPayload(req.body),
+      );
+      res.json(review);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  // Commit a reviewed import.
+  app.post("/api/whatsapp/contact-groups/:id/import", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req: any, res) => {
+    try {
+      const businessAccountId = req.user!.businessAccountId!;
+      const { contactGroupService } = await import("./services/contactGroupService");
+      const reviewedReady = Number.isFinite(req.body?.reviewedReady)
+        ? Number(req.body.reviewedReady)
+        : undefined;
+      const result = await contactGroupService.commitImport(
+        businessAccountId,
+        req.params.id,
+        sanitizeContactImportPayload(req.body),
+        reviewedReady,
+      );
+      // Deliberately omitting per-row detail — this can be tens of thousands
+      // of rows and the client already has the review.
+      res.json({
+        imported: result.imported,
+        skipped: result.skipped,
+        total: result.total,
+        summary: result.summary,
+        driftNote: result.driftNote,
+      });
     } catch (err: any) { res.status(400).json({ error: err.message }); }
   });
 
