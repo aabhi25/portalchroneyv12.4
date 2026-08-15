@@ -1534,6 +1534,11 @@ For example:
         FROM whatsapp_leads
         WHERE business_account_id = ${businessAccountId}
         AND sender_phone IS NOT NULL
+        AND sender_phone IN (
+          SELECT sender_phone FROM whatsapp_leads
+          WHERE business_account_id = ${businessAccountId}
+          AND direction = 'incoming'
+        )
       ),
       session_groups AS (
         SELECT 
@@ -1574,6 +1579,11 @@ For example:
         FROM whatsapp_leads
         WHERE business_account_id = ${businessAccountId}
         AND sender_phone IS NOT NULL
+        AND sender_phone IN (
+          SELECT sender_phone FROM whatsapp_leads
+          WHERE business_account_id = ${businessAccountId}
+          AND direction = 'incoming'
+        )
       ),
       session_groups AS (
         SELECT 
