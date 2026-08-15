@@ -1102,17 +1102,6 @@ export default function WhatsApp() {
       )}
       <header className="bg-white border-b px-4 py-3 flex items-center gap-4 relative z-10">
         <SidebarTrigger />
-        {currentPage !== "home" && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setLocation("/admin/whatsapp")}
-            data-testid="button-back-to-whatsapp-hub"
-            aria-label="Back to WhatsApp"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
-        )}
         <div className="flex items-center gap-2">
           <div className="p-1 rounded-lg bg-green-500">
             <MessageCircle className="w-4 h-4 text-white" />

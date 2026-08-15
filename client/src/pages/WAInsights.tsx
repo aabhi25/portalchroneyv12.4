@@ -60,15 +60,6 @@ export default function WAInsights() {
     <>
       <header className="bg-white border-b px-4 py-3 flex items-center gap-3">
         <SidebarTrigger />
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setLocation("/admin/whatsapp")}
-          data-testid="button-back-to-whatsapp-hub"
-          aria-label="Back to WhatsApp"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
         <div className="flex items-center gap-2">
           <MessageCircle className="h-6 w-6 text-green-600" />
           <h1 className="text-lg font-semibold">WhatsApp</h1>
