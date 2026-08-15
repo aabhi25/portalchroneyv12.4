@@ -5,7 +5,6 @@ import { MessageSquare, Users, FileText, CheckCircle, TrendingUp, ArrowUpRight, 
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { WhatsAppSectionTabs } from "@/components/whatsapp/WhatsAppSectionTabs";
 
 interface InsightsData {
   sessions: {
@@ -75,7 +74,6 @@ export default function WAInsights() {
           <h1 className="text-lg font-semibold">WhatsApp</h1>
         </div>
       </header>
-      <WhatsAppSectionTabs />
     </>
   );
 

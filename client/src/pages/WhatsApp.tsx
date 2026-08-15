@@ -79,7 +79,6 @@ const parseUTCDate = (dateString: string | Date): Date => {
 };
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import WhatsAppHub from "@/components/whatsapp/WhatsAppHub";
-import { WhatsAppSectionTabs } from "@/components/whatsapp/WhatsAppSectionTabs";
 import type { MeResponseDto } from "@shared/dto";
 
 interface WhatsappSettings {
@@ -1122,9 +1121,6 @@ export default function WhatsApp() {
         </div>
       </header>
 
-      {currentPage !== "home" && !isSingleProduct && (
-        <WhatsAppSectionTabs marketingEnabled={hasWhatsappMarketingEnabled} />
-      )}
 
       <div className="p-6 relative z-10">
         {currentPage === "home" && (
