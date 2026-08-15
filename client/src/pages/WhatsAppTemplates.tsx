@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, FileCode2, Trash2, Pencil, RefreshCw, ExternalLink } from "lucide-react";
+import { Plus, FileCode2, Trash2, RefreshCw, ExternalLink } from "lucide-react";
 
 interface Template {
   id: string;
@@ -57,7 +57,6 @@ const emptyForm: Form = {
 export default function WhatsAppTemplates() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<Form>(emptyForm);
   const [viewing, setViewing] = useState<Template | null>(null);
   const [namespaceMode, setNamespaceMode] = useState<"default" | "custom">("default");
@@ -84,16 +83,11 @@ export default function WhatsAppTemplates() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
-      if (editingId) {
-        return await apiRequest("PATCH", `/api/whatsapp/templates/${editingId}`, form);
-      }
-      return await apiRequest("POST", "/api/whatsapp/templates", form);
-    },
+    mutationFn: async () => apiRequest("POST", "/api/whatsapp/templates", form),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/templates"] });
-      setOpen(false); setEditingId(null); setForm(emptyForm);
-      toast({ title: editingId ? "Template updated" : "Template added" });
+      setOpen(false); setForm(emptyForm);
+      toast({ title: "Template added" });
     },
     onError: (e: any) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
   });
@@ -106,28 +100,7 @@ export default function WhatsAppTemplates() {
     },
   });
 
-  const startEdit = (t: Template) => {
-    setEditingId(t.id);
-    const ns = t.namespace || "";
-    const isDefault = ns === DEFAULT_NAMESPACE;
-    setNamespaceMode(isDefault ? "default" : "custom");
-    setCustomNamespace(isDefault ? "" : ns);
-    setForm({
-      name: t.name,
-      language: t.language,
-      category: t.category,
-      bodyText: t.bodyText,
-      headerType: t.headerType || "none",
-      headerText: t.headerText || "",
-      footerText: t.footerText || "",
-      msg91TemplateId: t.msg91TemplateId || "",
-      namespace: ns,
-    });
-    setOpen(true);
-  };
-
   const startNew = () => {
-    setEditingId(null);
     setNamespaceMode("default");
     setCustomNamespace("");
     setForm(emptyForm);
@@ -206,9 +179,6 @@ export default function WhatsAppTemplates() {
                     {t.rejectionReason && <div className="text-xs text-red-600 mt-1">Rejection: {t.rejectionReason}</div>}
                   </div>
                   <div className="flex flex-col gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); startEdit(t); }} data-testid={`button-edit-template-${t.id}`}>
-                      <Pencil className="h-4 w-4" />
-                    </Button>
                     <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); if (confirm(`Delete template "${t.name}"?`)) deleteMutation.mutate(t.id); }}>
                       <Trash2 className="h-4 w-4 text-red-600" />
                     </Button>
@@ -289,20 +259,14 @@ export default function WhatsAppTemplates() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setViewing(null)}>Close</Button>
-            {viewing && (
-              <Button onClick={() => { const t = viewing; setViewing(null); startEdit(t); }} data-testid="button-edit-from-details">
-                <Pencil className="h-4 w-4 mr-1" /> Edit
-              </Button>
-            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>{editingId ? "Edit template" : "Add template manually"}</DialogTitle></DialogHeader>
-          {!editingId && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 -mt-2">
+          <DialogHeader><DialogTitle>Add template manually</DialogTitle></DialogHeader>
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 -mt-2">
               <strong>Tip:</strong> Use <strong>Sync from MSG91</strong> (top-right button) to import all your approved templates automatically.
               Use this form only if you need to add a single template that didn't sync.
               The template must already be approved on MSG91 — saving here does <em>not</em> submit anything to MSG91 or Meta.{" "}
@@ -310,7 +274,6 @@ export default function WhatsAppTemplates() {
                 Open MSG91 <ExternalLink className="h-3 w-3" />
               </a>
             </div>
-          )}
           <div className="space-y-3">
             <div className="grid grid-cols-3 gap-3">
               <div className="col-span-2">
