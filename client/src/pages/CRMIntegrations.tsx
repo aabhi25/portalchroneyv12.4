@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowRight, ArrowLeft, CheckCircle2 } from "lucide-react";
 import { useLocation } from "wouter";
-import MoreFeaturesNavTabs from "@/components/MoreFeaturesNavTabs";
 
 interface CrmIntegration {
   id: string;
@@ -39,7 +38,6 @@ export default function CRMIntegrations() {
 
   return (
     <div>
-      <MoreFeaturesNavTabs />
       <div className="container mx-auto p-6 max-w-6xl">
         {cameFromWhatsApp && (
           <Button

@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import MoreFeaturesNavTabs from "@/components/MoreFeaturesNavTabs";
 import { useQuery } from "@tanstack/react-query";
 import type { MeResponseDto } from "@shared/dto";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -228,7 +227,6 @@ export default function SalesforceSettings() {
 
   return (
     <div>
-      <MoreFeaturesNavTabs />
       <div className="container mx-auto p-6 max-w-4xl">
       <div className="mb-6">
         {activeSection ? (
