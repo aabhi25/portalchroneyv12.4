@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
@@ -58,6 +59,7 @@ export default function WhatsAppTemplates() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<Form>(emptyForm);
+  const [deleteTarget, setDeleteTarget] = useState<Template | null>(null);
   const [viewing, setViewing] = useState<Template | null>(null);
   const [namespaceMode, setNamespaceMode] = useState<"default" | "custom">("default");
   const [customNamespace, setCustomNamespace] = useState("");
@@ -179,7 +181,7 @@ export default function WhatsAppTemplates() {
                     {t.rejectionReason && <div className="text-xs text-red-600 mt-1">Rejection: {t.rejectionReason}</div>}
                   </div>
                   <div className="flex flex-col gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); if (confirm(`Delete template "${t.name}"?`)) deleteMutation.mutate(t.id); }}>
+                    <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); setDeleteTarget(t); }}>
                       <Trash2 className="h-4 w-4 text-red-600" />
                     </Button>
                   </div>
@@ -394,6 +396,26 @@ export default function WhatsAppTemplates() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={open => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete template?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove <strong>{deleteTarget?.name}</strong> from Chroney. It will not be deleted from MSG91 — you can re-sync it any time.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => { if (deleteTarget) { deleteMutation.mutate(deleteTarget.id); setDeleteTarget(null); } }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
