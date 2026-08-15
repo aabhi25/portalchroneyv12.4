@@ -1398,8 +1398,17 @@ export const accountGroupExtraSettings = pgTable("account_group_extra_settings",
 export const modelPricing = pgTable("model_pricing", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   model: text("model").notNull().unique(), // 'gpt-4o-mini', 'gpt-4o', 'gpt-4o-vision', 'gpt-realtime-mini', etc
-  inputCostPer1k: numeric("input_cost_per_1k", { precision: 10, scale: 6 }).notNull(), // Cost per 1000 input tokens (in USD)
-  outputCostPer1k: numeric("output_cost_per_1k", { precision: 10, scale: 6 }).notNull(), // Cost per 1000 output tokens (in USD)
+  inputCostPer1k: numeric("input_cost_per_1k", { precision: 10, scale: 6 }).notNull(), // Cost per 1000 TEXT input tokens (in USD)
+  outputCostPer1k: numeric("output_cost_per_1k", { precision: 10, scale: 6 }).notNull(), // Cost per 1000 TEXT output tokens (in USD)
+  // Realtime/audio models bill audio tokens at a very different rate than text
+  // (audio is ~17x text on gpt-realtime-mini), and cached input is far cheaper
+  // than fresh input. These are nullable: when a model has no audio or cache
+  // rate, cost falls back to the text rates above, so text-only models behave
+  // exactly as they did before these columns existed.
+  cachedInputCostPer1k: numeric("cached_input_cost_per_1k", { precision: 10, scale: 6 }), // Cost per 1000 cached TEXT input tokens
+  audioInputCostPer1k: numeric("audio_input_cost_per_1k", { precision: 10, scale: 6 }), // Cost per 1000 AUDIO input tokens
+  audioCachedInputCostPer1k: numeric("audio_cached_input_cost_per_1k", { precision: 10, scale: 6 }), // Cost per 1000 cached AUDIO input tokens
+  audioOutputCostPer1k: numeric("audio_output_cost_per_1k", { precision: 10, scale: 6 }), // Cost per 1000 AUDIO output tokens
   effectiveDate: timestamp("effective_date").notNull().defaultNow(), // When this pricing became effective
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
@@ -1409,9 +1418,17 @@ export const aiUsageEvents = pgTable("ai_usage_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
   category: text("category").notNull(), // 'chat', 'website_analysis', 'document_analysis', 'image_search', 'voice_mode'
-  model: text("model").notNull(), // 'gpt-4o-mini', 'gpt-4o', 'gpt-4o-vision', 'gpt-realtime-mini'
-  tokensInput: numeric("tokens_input", { precision: 10, scale: 0 }).notNull().default("0"), // Input tokens used
-  tokensOutput: numeric("tokens_output", { precision: 10, scale: 0 }).notNull().default("0"), // Output tokens generated
+  model: text("model").notNull(), // 'gpt-4o-mini', 'gpt-4o', 'gpt-4o-vision', 'gpt-realtime-2.1-mini'
+  tokensInput: numeric("tokens_input", { precision: 10, scale: 0 }).notNull().default("0"), // TOTAL input tokens (text + audio, including cached)
+  tokensOutput: numeric("tokens_output", { precision: 10, scale: 0 }).notNull().default("0"), // TOTAL output tokens (text + audio)
+  // Modality/cache breakdown. These are SUBSETS of the totals above, not
+  // additions to them, so existing sums over tokens_input/tokens_output stay
+  // correct. Zero for text-only models; populated for realtime voice, where
+  // audio tokens cost ~17x text tokens and must be priced separately.
+  tokensInputAudio: numeric("tokens_input_audio", { precision: 10, scale: 0 }).notNull().default("0"), // Audio portion of tokens_input
+  tokensOutputAudio: numeric("tokens_output_audio", { precision: 10, scale: 0 }).notNull().default("0"), // Audio portion of tokens_output
+  tokensInputCached: numeric("tokens_input_cached", { precision: 10, scale: 0 }).notNull().default("0"), // Cached portion of tokens_input (text + audio)
+  tokensInputCachedAudio: numeric("tokens_input_cached_audio", { precision: 10, scale: 0 }).notNull().default("0"), // Audio portion of tokens_input_cached
   costUsd: numeric("cost_usd", { precision: 10, scale: 6 }).notNull().default("0"), // Calculated cost in USD
   metadata: jsonb("metadata"), // Additional context (conversation_id, feature, etc)
   occurredAt: timestamp("occurred_at").notNull().defaultNow(), // When this usage occurred

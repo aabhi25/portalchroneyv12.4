@@ -151,6 +151,37 @@ export async function initializeDatabase() {
       console.error('[INIT] Error adding subject columns to topscholar mapping/resolution tables:', err);
     }
 
+    // Realtime voice cost accounting: audio tokens bill at roughly 17x text
+    // tokens, so usage rows carry a modality/cache breakdown and pricing rows
+    // carry separate audio + cached rates. Expand-only ADD COLUMN IF NOT EXISTS
+    // so pre-existing databases gain them before the first usage insert or
+    // pricing upsert — production starts from the built bundle and never runs
+    // drizzle push, so without this every voice usage insert would fail and
+    // realtime spend would stay untracked.
+    //
+    // The ai_usage_events columns are SUBSETS of tokens_input/tokens_output,
+    // never additions, so backfilling existing rows with 0 is correct: those
+    // events are text-only and already fully counted by the totals.
+    try {
+      await db.execute(sql`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_output_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+    } catch (err) {
+      console.error('[INIT] Error adding token breakdown columns to ai_usage_events:', err);
+    }
+
+    // Nullable (no default): a null audio/cached rate means "fall back to the
+    // text rate", which is exactly right for text-only models.
+    try {
+      await db.execute(sql`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS cached_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_cached_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_output_cost_per_1k NUMERIC(10, 6)`);
+    } catch (err) {
+      console.error('[INIT] Error adding audio/cached rate columns to model_pricing:', err);
+    }
+
     // Resume any interrupted Vision Warehouse syncs
     try {
       await visionWarehouseSyncService.resumeInterruptedSyncs();

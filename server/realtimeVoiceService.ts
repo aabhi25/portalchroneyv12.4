@@ -9,6 +9,29 @@ import { journeyService } from './services/journeyService';
 import { isElevenLabsVoice, getElevenLabsVoiceId, synthesizeSpeechStreaming } from './services/elevenlabsService';
 import { formatVoiceTranscript } from './services/voiceFormatterService';
 import { isTopscholarAccount } from './services/topscholar/config';
+import { aiUsageLogger } from './services/aiUsageLogger';
+
+/**
+ * OpenAI Realtime model backing voice mode.
+ *
+ * gpt-realtime-2.1-mini is priced identically to gpt-realtime-mini (audio
+ * $10/$20, text $0.60/$2.40 per 1M) but has a 128k context instead of 32k,
+ * 32k max output instead of 4k, a Sep 2024 cutoff, reasoning support, and
+ * better alphanumeric recognition — which matters here because callers spell
+ * out order numbers, phone numbers and names.
+ *
+ * Keep this in sync with the pricing entry in services/aiUsageLogger.ts:
+ * an unknown model there silently falls back to gpt-4o-mini text rates and
+ * would under-report voice spend by roughly 50x.
+ */
+const REALTIME_MODEL = 'gpt-realtime-2.1-mini';
+
+/**
+ * One-shot diagnostic: the Realtime usage payload's exact field names are not
+ * published in the docs, so the first one seen after boot is logged in full to
+ * confirm the breakdown is being read correctly.
+ */
+let realtimeUsageShapeLogged = false;
 
 interface VoiceConversation {
   clientWs: WebSocket; // WebSocket to client (browser)
@@ -500,10 +523,9 @@ export class RealtimeVoiceService {
   }
 
   private async connectToOpenAI(conversationId: string, conversation: VoiceConversation) {
-    // Using gpt-realtime-mini - the most cost-effective OpenAI Realtime model (82% cheaper)
-    const url = 'wss://api.openai.com/v1/realtime?model=gpt-realtime-mini';
-    
-    console.log('[RealtimeVoice] Connecting to OpenAI Realtime API...');
+    const url = `wss://api.openai.com/v1/realtime?model=${REALTIME_MODEL}`;
+
+    console.log(`[RealtimeVoice] Connecting to OpenAI Realtime API (${REALTIME_MODEL})...`);
 
     const openaiWs = new WebSocket(url, {
       headers: {
@@ -1790,9 +1812,43 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           await this.handleToolCall(event, conversation);
           break;
 
-        case 'response.done':
+        case 'response.done': {
           console.log('[RealtimeVoice] Response complete, id:', conversation.currentResponseId);
           conversation.isProcessing = false;
+
+          // Realtime bills audio tokens at ~17x the text rate, so record the
+          // per-modality breakdown OpenAI returns rather than a flat total.
+          // Fire-and-forget: usage accounting must never block or break a turn.
+          const realtimeUsage = aiUsageLogger.extractRealtimeUsage(event.response?.usage);
+          if (realtimeUsage) {
+            if (!realtimeUsageShapeLogged) {
+              realtimeUsageShapeLogged = true;
+              console.log('[RealtimeVoice] Realtime usage payload:', JSON.stringify(event.response?.usage));
+            }
+            const { tokensInput, tokensOutput, ...breakdown } = realtimeUsage;
+            void aiUsageLogger.logVoiceModeUsage(
+              conversation.businessAccountId,
+              REALTIME_MODEL,
+              tokensInput,
+              tokensOutput,
+              {
+                feature: 'realtime_session',
+                conversationId: conversation.conversationId,
+                // Attribute to the response this event is actually for. A late
+                // done for a cancelled response must not be filed under the
+                // response that has since replaced it.
+                responseId: event.response?.id ?? conversation.currentResponseId,
+              },
+              breakdown,
+            ).catch((err) =>
+              console.warn('[RealtimeVoice] Usage logging failed:', (err as Error).message)
+            );
+          } else if (event.response?.usage) {
+            console.warn(
+              '[RealtimeVoice] Unrecognized usage payload on response.done:',
+              JSON.stringify(event.response.usage).slice(0, 300)
+            );
+          }
 
           // SAFETY NET (K12 only): if .text.done never arrived before
           // response.done, finalize here so a legitimate answer isn't lost. This
@@ -1889,6 +1945,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           
           this.sendToClient(conversation.clientWs, { type: 'ai_done' });
           break;
+        }
 
         case 'rate_limits.updated':
           // Rate limit info - can be logged if needed
