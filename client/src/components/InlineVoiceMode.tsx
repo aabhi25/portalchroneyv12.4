@@ -40,6 +40,14 @@ interface InlineVoiceModeProps {
    */
   topscholarToken?: string;
   topscholarCpId?: string;
+  /**
+   * Karaoke progress for the bubble that is currently being spoken aloud.
+   * `charOffset` is how many characters of the raw spoken transcript the
+   * audio clock says have been heard (word-snapped); `done: true` means
+   * playback for that bubble ended (finished, interrupted, or abandoned)
+   * and any highlight should be removed.
+   */
+  onSpeakingProgress?: (messageId: string, charOffset: number, done: boolean) => void;
 }
 
 export function InlineVoiceMode({
@@ -61,6 +69,7 @@ export function InlineVoiceMode({
   onAIMessageReplace,
   topscholarToken,
   topscholarCpId,
+  onSpeakingProgress,
 }: InlineVoiceModeProps) {
   const [state, setState] = useState<VoiceState>('idle');
   const [currentTranscript, setCurrentTranscript] = useState('');
@@ -147,6 +156,88 @@ export function InlineVoiceMode({
   // unaligned buffer to `new Int16Array`. For OpenAI's already-aligned base64
   // chunks this stays null forever and the new logic is a no-op.
   const pcmLeftoverByteRef = useRef<Uint8Array | null>(null);
+  // ---- Karaoke highlight timeline -----------------------------------------
+  // Maps "how far has playback actually gotten" onto "how many characters of
+  // the spoken transcript has the student heard". Transcript deltas arrive
+  // far ahead of the audio, so the highlight is clocked off the Web Audio
+  // scheduler, never off delta arrival: each *audio* chunk, as it is
+  // scheduled, records a breakpoint pairing its scheduled end time
+  // (nextPlaybackTimeRef, in AudioContext time) with the transcript length
+  // received so far. A rAF loop then interpolates AudioContext.currentTime
+  // into those breakpoints. Accuracy is phrase-level by construction (the
+  // transcript leads the audio by up to a phrase) — that is the ceiling
+  // without word timestamps from the Realtime API.
+  const karaokeRef = useRef<{
+    messageId: string | null;
+    text: string;
+    breakpoints: { charEnd: number; audioEnd: number }[];
+    lastEmitted: number;
+  }>({ messageId: null, text: '', breakpoints: [], lastEmitted: -1 });
+  const karaokeRafRef = useRef<number | null>(null);
+
+  /** Extend a raw offset to the end of the word it lands inside. */
+  const snapToWordEnd = (text: string, offset: number): number => {
+    if (offset <= 0) return 0;
+    if (offset >= text.length) return text.length;
+    let i = offset;
+    while (i < text.length && !/\s/.test(text[i])) i++;
+    return i;
+  };
+
+  const stopKaraokeLoop = () => {
+    if (karaokeRafRef.current !== null) {
+      cancelAnimationFrame(karaokeRafRef.current);
+      karaokeRafRef.current = null;
+    }
+  };
+
+  const startKaraokeLoop = () => {
+    if (karaokeRafRef.current !== null || !onSpeakingProgress) return;
+    const tick = () => {
+      karaokeRafRef.current = requestAnimationFrame(tick);
+      const k = karaokeRef.current;
+      const ctx = audioContextRef.current;
+      if (!ctx || !k.messageId || k.breakpoints.length === 0) return;
+      const t = ctx.currentTime;
+      const bps = k.breakpoints;
+      let raw: number;
+      if (t <= bps[0].audioEnd) {
+        raw = bps[0].charEnd;
+      } else if (t >= bps[bps.length - 1].audioEnd) {
+        raw = bps[bps.length - 1].charEnd;
+      } else {
+        let i = 1;
+        while (i < bps.length && bps[i].audioEnd < t) i++;
+        const a = bps[i - 1];
+        const b = bps[i];
+        raw = b.audioEnd > a.audioEnd
+          ? a.charEnd + ((b.charEnd - a.charEnd) * (t - a.audioEnd)) / (b.audioEnd - a.audioEnd)
+          : b.charEnd;
+      }
+      const snapped = snapToWordEnd(k.text, Math.floor(raw));
+      if (snapped !== k.lastEmitted) {
+        k.lastEmitted = snapped;
+        onSpeakingProgress(k.messageId, snapped, false);
+      }
+    };
+    karaokeRafRef.current = requestAnimationFrame(tick);
+  };
+
+  /**
+   * End the highlight for the current bubble (playback finished, was
+   * interrupted, or the response was abandoned) and reset the timeline
+   * for the next response.
+   */
+  const finishKaraoke = () => {
+    stopKaraokeLoop();
+    const k = karaokeRef.current;
+    if (k.messageId) {
+      onSpeakingProgress?.(k.messageId, k.text.length, true);
+    }
+    karaokeRef.current = { messageId: null, text: '', breakpoints: [], lastEmitted: -1 };
+  };
+  // --------------------------------------------------------------------------
+
   const markResponseInterrupted = (responseId: string | null | undefined) => {
     if (!responseId) return;
     interruptedResponseIdsRef.current.add(responseId);
@@ -298,9 +389,13 @@ export function InlineVoiceMode({
       setIsConnecting(false);
       setIsOnline(false);
       isOnlineRef.current = false;
+      // Transport gone mid-answer: stop the highlight loop and clear the
+      // highlight — ai_done will never arrive to do it.
+      finishKaraoke();
     };
 
     ws.onclose = () => {
+      finishKaraoke();
       setIsOnline(false);
       isOnlineRef.current = false;
       setIsConnecting(false);
@@ -404,6 +499,8 @@ export function InlineVoiceMode({
           markResponseInterrupted(data.responseId);
           if (currentResponseIdRef.current === data.responseId) {
             flushQueuedAudio();
+            // The answer was abandoned server-side — freeze/clear its highlight.
+            finishKaraoke();
           }
         }
         break;
@@ -452,11 +549,19 @@ export function InlineVoiceMode({
               setTimeout(() => onAIMessageReplace?.(messageId, buffered), 0);
             }
           }
+          // New bubble → fresh karaoke timeline, keyed to this bubble so the
+          // offsets are always relative to exactly the text it renders.
+          // finishKaraoke also clears any highlight lingering on the previous
+          // bubble whose playback never formally finished.
+          finishKaraoke();
+          karaokeRef.current.messageId = messageId;
           onAIMessageStart?.(messageId);
           onAIMessageChunk?.(messageId, data.text);
         } else {
           onAIMessageChunk?.(currentAIMessageIdRef.current, data.text);
         }
+        // Track the raw spoken transcript for the audio-clocked highlight.
+        karaokeRef.current.text += data.text;
         break;
 
       case 'ai_speaking':
@@ -503,6 +608,13 @@ export function InlineVoiceMode({
           if (isNewResponse && previousWasAbandoned && (isPlayingRef.current || activeSourcesRef.current.size > 0)) {
             flushQueuedAudio();
           }
+          // Karaoke is NOT reset here. The timeline is keyed to the bubble
+          // (messageId), not the response: a legitimate continuation appends
+          // its transcript to the same bubble and schedules its audio after
+          // the draining tail, so text and breakpoints stay monotonic and the
+          // offsets stay valid against exactly what that bubble renders. The
+          // timeline resets only when the bubble changes (first ai_chunk of a
+          // new bubble) or playback ends (finishKaraoke on done/interrupt).
           currentResponseIdRef.current = data.responseId;
         }
         break;
@@ -551,6 +663,7 @@ export function InlineVoiceMode({
 
       case 'busy':
         aiDoneReceivedRef.current = false;
+        finishKaraoke();
         setState('idle');
         setCurrentTranscript('');
         stopRecording();
@@ -564,6 +677,7 @@ export function InlineVoiceMode({
 
       case 'session_closed':
         aiDoneReceivedRef.current = false;
+        finishKaraoke();
         sessionClosedByServerRef.current = true;
         conversationIdRef.current = null;
         pcmLeftoverByteRef.current = null;
@@ -578,6 +692,7 @@ export function InlineVoiceMode({
 
       case 'error':
         aiDoneReceivedRef.current = false;
+        finishKaraoke();
         toast({ title: "Error", description: data.message || "Voice processing error", variant: "destructive" });
         setState('idle');
         stopRecording();
@@ -674,6 +789,20 @@ export function InlineVoiceMode({
       isPlayingRef.current = true;
       source.start(scheduleTime);
       nextPlaybackTimeRef.current = scheduleTime + audioBuffer.duration;
+
+      // Karaoke breakpoint: when playback reaches the end of the audio
+      // scheduled so far, the transcript received so far has been heard.
+      // (The transcript leads the audio slightly, so this over-counts by up
+      // to a phrase — the documented accuracy ceiling.)
+      const k = karaokeRef.current;
+      if (k.breakpoints.length === 0) {
+        k.breakpoints.push({ charEnd: 0, audioEnd: scheduleTime });
+      }
+      k.breakpoints.push({ charEnd: k.text.length, audioEnd: nextPlaybackTimeRef.current });
+      // Bound memory on very long answers; the loop only looks near the
+      // current playback time, so dropping the oldest half is safe.
+      if (k.breakpoints.length > 2000) k.breakpoints.splice(0, 1000);
+      startKaraokeLoop();
     } catch (error) {
       console.error('[InlineVoice] Audio chunk error:', error);
     }
@@ -773,6 +902,8 @@ export function InlineVoiceMode({
   const handleInterruption = () => {
     pendingInterruptRef.current = true;
     aiDoneReceivedRef.current = false;
+    // Clear the karaoke highlight where the audio actually stopped.
+    finishKaraoke();
     // Mark the active response as interrupted BEFORE we clear the bubble ref.
     // Any late ai_chunk / formatted_transcript events stamped with this id
     // will then be dropped, preventing a phantom second bubble.
@@ -805,6 +936,9 @@ export function InlineVoiceMode({
   const processAiDone = () => {
     aiDoneReceivedRef.current = false;
     if (pendingInterruptRef.current) return;
+    // Playback fully drained — mark the whole answer as spoken and drop the
+    // highlight so the bubble swaps back to normal (formatted) rendering.
+    finishKaraoke();
     if (currentAIMessageIdRef.current) {
       onAIMessageDone?.(currentAIMessageIdRef.current);
       if (awaitingUserTranscriptRef.current) {
@@ -998,6 +1132,7 @@ export function InlineVoiceMode({
 
   const cleanup = () => {
     shouldAutoRestartRef.current = false;
+    finishKaraoke();
     // Closing the control ends the session's history: the next open starts a
     // fresh attempt, where a failure is a genuine "never started".
     hadReadySessionRef.current = false;

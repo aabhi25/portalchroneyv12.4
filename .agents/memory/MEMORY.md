@@ -5,4 +5,5 @@
 - [TopScholar launch identity](topscholar-launch-identity.md) — signed tokens outrank URL scope; voice needs one and chat doesn't; a refused WS upgrade is invisible to the browser.
 - [Voice/chat parity](voice-chat-parity.md) — unpassed retrieval scope silently means "whole account"; anything the voice model can see, it will read aloud, so media goes around it — and then nothing is left choosing it.
 - [Multi-job structured prompts](structured-output-prompts.md) — JSON key order decides what the model can condition on; a job-1 short-circuit output silently skips job 2.
+- [Voice karaoke highlight](voice-karaoke-highlight.md) — clock highlights off audio scheduling, key to the bubble not the response, and tear down on every terminal path or the highlight sticks.
 - [Environment quirks](environment-quirks.md) — pgvector must exist before `db:push`; `.replit` is edited through the verify-and-replace flow, never directly.

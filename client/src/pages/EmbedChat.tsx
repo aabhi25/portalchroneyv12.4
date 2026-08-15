@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { ProductCard } from "@/components/ProductCard";
+import { KaraokeText } from "@/components/KaraokeText";
 import { OrderStatusCard, normalizeOrder } from "@/components/OrderStatusCard";
 import type { NormalizedOrder } from "@/components/OrderStatusCard";
 import { OrderDetailOverlay } from "@/components/OrderDetailOverlay";
@@ -436,6 +437,15 @@ export default function EmbedChat() {
   const [isVoiceModeOpen, setIsVoiceModeOpen] = useState(false);
   const [isInlineVoiceActive, setIsInlineVoiceActive] = useState(false);
   const inlineVoiceAIMessagesRef = useRef<Map<string, string>>(new Map());
+  // Karaoke highlight for the bubble currently being spoken aloud in inline
+  // voice mode: which bubble, and how many characters the audio clock says
+  // have been heard. Null when nothing is playing.
+  const [voiceHighlight, setVoiceHighlight] = useState<{ messageId: string; offset: number } | null>(null);
+  // The raw spoken transcript per voice bubble. Kept separately from
+  // inlineVoiceAIMessagesRef because formatted_transcript may overwrite the
+  // bubble's content with Markdown *while the answer is still playing* —
+  // the highlight offset is only meaningful against the raw spoken text.
+  const voiceSpokenTextRef = useRef<Map<string, string>>(new Map());
   const [selectedLanguage, setSelectedLanguage] = useState<string>('auto');
   const [isLanguageDropdownOpen, setIsLanguageDropdownOpen] = useState(false);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -5260,6 +5270,19 @@ export default function EmbedChat() {
                 )}
                 {msg.role === 'assistant' && msg.content === '.....' ? (
                   <TypingIndicator />
+                ) : msg.role === 'assistant' && voiceHighlight?.messageId === msg.id ? (
+                  // Voice karaoke: while this answer is being spoken aloud,
+                  // show the raw spoken transcript with the heard portion
+                  // highlighted, clocked off audio playback. Swaps back to
+                  // normal Markdown the moment playback ends.
+                  <div className="font-medium leading-relaxed" style={{ fontSize: chatFontSize }}>
+                    <KaraokeText
+                      text={voiceSpokenTextRef.current.get(msg.id) ?? msg.content}
+                      offset={voiceHighlight.offset}
+                      fontSize={chatFontSize}
+                      highlightColor={chatColor}
+                    />
+                  </div>
                 ) : msg.role === 'assistant' ? (
                   <div className="font-medium leading-relaxed prose prose-sm max-w-none prose-p:mb-2 prose-p:last:mb-0" style={{ fontSize: chatFontSize }}>
                     <ReactMarkdown
@@ -5963,6 +5986,8 @@ export default function EmbedChat() {
                 onClose={() => {
                   setIsInlineVoiceActive(false);
                   inlineVoiceAIMessagesRef.current.clear();
+                  voiceSpokenTextRef.current.clear();
+                  setVoiceHighlight(null);
                   setStreamingMessageId(null);
                 }}
                 userId={widgetUserIdRef.current}
@@ -6006,11 +6031,27 @@ export default function EmbedChat() {
                   const existing = inlineVoiceAIMessagesRef.current.get(messageId) || '';
                   const updated = existing + text;
                   inlineVoiceAIMessagesRef.current.set(messageId, updated);
+                  // Raw spoken transcript — the karaoke highlight's source of
+                  // truth, immune to formatted-Markdown replacement mid-answer.
+                  voiceSpokenTextRef.current.set(messageId, (voiceSpokenTextRef.current.get(messageId) || '') + text);
                   setMessages(prev => prev.map(m => m.id === messageId ? { ...m, content: updated } : m));
                 }}
                 onAIMessageDone={(messageId) => {
                   setStreamingMessageId(null);
                   inlineVoiceAIMessagesRef.current.delete(messageId);
+                  voiceSpokenTextRef.current.delete(messageId);
+                }}
+                onSpeakingProgress={(messageId, charOffset, done) => {
+                  if (done) {
+                    setVoiceHighlight(prev => (prev && prev.messageId !== messageId ? prev : null));
+                    // Playback for this bubble is over (finished, interrupted,
+                    // or abandoned) — the raw spoken transcript is no longer
+                    // needed. Covers interruption, where onAIMessageDone
+                    // never fires for the bubble.
+                    voiceSpokenTextRef.current.delete(messageId);
+                  } else {
+                    setVoiceHighlight({ messageId, offset: charOffset });
+                  }
                 }}
                 onAIMessageReplace={(messageId, formattedMarkdown) => {
                   // Final on-screen version of a spoken answer: formatted Markdown
