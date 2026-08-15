@@ -106,20 +106,137 @@ export const whatsappTemplateService = {
   },
 
   /**
-   * MSG91 does NOT expose a public REST endpoint to list WhatsApp templates.
-   * We probed 23+ endpoint variants (api.msg91.com, control.msg91.com,
-   * various /whatsapp-template/, /getTemplate, /get-templates paths) — all
-   * returned 404 even with a valid auth key. Confirmed by hitting the known
-   * outbound-message endpoint, which returned 405 (proving auth + base URL
-   * are correct).
+   * Pull approved templates from MSG91's WhatsApp API and upsert them locally.
    *
-   * Therefore templates must be entered manually via "Add Template" in the
-   * UI. This method is kept for backwards compatibility and just returns the
-   * locally stored list.
+   * Endpoint (documented at https://docs.msg91.com/whatsapp/get-templates):
+   *   GET https://control.msg91.com/api/v5/whatsapp/get-template-client/:number
+   *   Header: authkey: <msg91AuthKey>
+   *   Params: page_size=200, template_status=approved (optional filter)
+   *
+   * The `:number` path variable is the integrated WhatsApp number (digits only).
    */
-  async syncFromMsg91(businessAccountId: string, _authKey: string, _integratedNumber?: string): Promise<{ synced: number; templates: WhatsappTemplate[] }> {
+  async syncFromMsg91(businessAccountId: string, authKey: string, integratedNumber?: string): Promise<{ synced: number; templates: WhatsappTemplate[] }> {
+    let synced = 0;
+    try {
+      const num = (integratedNumber || "").replace(/\D/g, "");
+      if (!num) {
+        console.log("[WhatsappTemplateService] sync skipped — WhatsApp number not configured");
+        const templates = await this.list(businessAccountId);
+        return { synced, templates };
+      }
+
+      // Collect all templates via pagination. MSG91 requires pagination=true to
+      // enable paginated responses; without it the endpoint returns the full
+      // result regardless of page_num, which would loop forever. We cap at
+      // MAX_PAGES as an additional defensive guard.
+      // Paginate through all approved templates. MSG91 requires pagination=true
+      // together with page_num for the endpoint to advance pages; without it the
+      // endpoint returns the same result on every call, creating an infinite loop.
+      // MAX_PAGES is a hard defensive ceiling (25 × 200 = 5,000 templates).
+      const PAGE_SIZE = 200;
+      const MAX_PAGES = 25;
+      const allRemote: any[] = [];
+
+      for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
+        const url =
+          `https://control.msg91.com/api/v5/whatsapp/get-template-client/${encodeURIComponent(num)}` +
+          `?page_size=${PAGE_SIZE}&page_num=${pageNum}&pagination=true&template_status=approved`;
+        console.log(`[WhatsappTemplateService] Fetching page ${pageNum}: ${url}`);
+
+        const resp = await fetch(url, {
+          method: "GET",
+          headers: { authkey: authKey, accept: "application/json" },
+        });
+
+        const json: any = await resp.json().catch(() => ({}));
+        console.log(`[WhatsappTemplateService] Page ${pageNum}: status=${resp.status}, keys=${JSON.stringify(Object.keys(json || {}))}`);
+
+        if (!resp.ok) {
+          const msg = json?.message || json?.error || `HTTP ${resp.status}`;
+          throw new Error(`MSG91 API error: ${msg}`);
+        }
+
+        // Normalise the response envelope — MSG91 returns arrays under various keys
+        const page: any[] =
+          (Array.isArray(json?.data) && json.data) ||
+          (Array.isArray(json?.templates) && json.templates) ||
+          (Array.isArray(json?.data?.templates) && json.data.templates) ||
+          (Array.isArray(json?.result) && json.result) ||
+          (Array.isArray(json) && json) ||
+          [];
+
+        allRemote.push(...page);
+
+        // A page shorter than PAGE_SIZE means we have reached the last page.
+        if (page.length < PAGE_SIZE) break;
+      }
+
+      console.log(`[WhatsappTemplateService] Total templates fetched from MSG91: ${allRemote.length}`);
+
+      for (const remote of allRemote) {
+        const name = remote.name || remote.template_name;
+        if (!name) continue;
+
+        // Language is part of the identity: "promo_offer" in "en" and "promo_offer"
+        // in "hi" are distinct Meta-approved templates and must not overwrite each other.
+        const language = (remote.language || "en").toString().toLowerCase();
+
+        const bodyText: string =
+          remote.body ||
+          remote.bodyText ||
+          remote.components?.find?.((c: any) => c.type === "BODY")?.text ||
+          "";
+
+        const headerComp = remote.components?.find?.((c: any) => c.type === "HEADER");
+        const footerComp = remote.components?.find?.((c: any) => c.type === "FOOTER");
+
+        const payload = {
+          businessAccountId,
+          name,
+          language,
+          category: (remote.category || "MARKETING").toString().toUpperCase(),
+          bodyText,
+          headerType: headerComp?.format ? headerComp.format.toLowerCase() : "none",
+          headerText: headerComp?.text || "",
+          headerMediaUrl: "",
+          footerText: footerComp?.text || "",
+          buttons: [],
+          paramCount: countParams(bodyText),
+          status: (remote.status || "approved").toString().toLowerCase(),
+          msg91TemplateId: (remote.id || remote.template_id || null)?.toString() ?? null,
+          namespace: remote.namespace || null,
+        };
+
+        // Upsert by (businessAccountId, name, language) — not just name — so that
+        // same-name templates in different languages are stored as separate rows.
+        const existing = await db
+          .select()
+          .from(whatsappTemplates)
+          .where(
+            and(
+              eq(whatsappTemplates.businessAccountId, businessAccountId),
+              eq(whatsappTemplates.name, name),
+              eq(whatsappTemplates.language, language),
+            ),
+          )
+          .limit(1);
+
+        if (existing.length > 0) {
+          await db
+            .update(whatsappTemplates)
+            .set({ ...payload, updatedAt: new Date() })
+            .where(eq(whatsappTemplates.id, existing[0].id));
+        } else {
+          await db.insert(whatsappTemplates).values(payload);
+        }
+        synced++;
+      }
+    } catch (err) {
+      console.error("[WhatsappTemplateService] syncFromMsg91 error:", err);
+      throw err; // let the route return a proper error to the client
+    }
     const templates = await this.list(businessAccountId);
-    return { synced: 0, templates };
+    return { synced, templates };
   },
 
   /** @deprecated kept only to preserve old type — unused. */

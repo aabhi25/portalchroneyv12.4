@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, FileCode2, Trash2, Pencil } from "lucide-react";
+import { Plus, FileCode2, Trash2, Pencil, RefreshCw, ExternalLink } from "lucide-react";
 
 interface Template {
   id: string;
@@ -65,6 +65,22 @@ export default function WhatsAppTemplates() {
 
   const { data: templates = [], isLoading } = useQuery<Template[]>({
     queryKey: ["/api/whatsapp/templates"],
+  });
+
+  const syncMutation = useMutation({
+    mutationFn: async () => apiRequest("POST", "/api/whatsapp/templates/sync"),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/templates"] });
+      toast({
+        title: data?.synced > 0
+          ? `Synced ${data.synced} template${data.synced !== 1 ? "s" : ""} from MSG91`
+          : "No new templates found",
+        description: data?.synced === 0
+          ? "All your approved templates are already up to date, or none exist yet on MSG91."
+          : undefined,
+      });
+    },
+    onError: (e: any) => toast({ title: "Sync failed", description: e.message, variant: "destructive" }),
   });
 
   const saveMutation = useMutation({
@@ -135,9 +151,20 @@ export default function WhatsAppTemplates() {
             Mirror your Meta-approved MSG91 templates here so campaigns can send them. Anything you save here is immediately usable in campaigns.
           </p>
         </div>
-        <Button onClick={startNew} data-testid="button-new-template">
-          <Plus className="h-4 w-4 mr-1" /> Add Template
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => syncMutation.mutate()}
+            disabled={syncMutation.isPending}
+            data-testid="button-sync-templates"
+          >
+            <RefreshCw className={`h-4 w-4 mr-1 ${syncMutation.isPending ? "animate-spin" : ""}`} />
+            {syncMutation.isPending ? "Syncing…" : "Sync from MSG91"}
+          </Button>
+          <Button onClick={startNew} data-testid="button-new-template">
+            <Plus className="h-4 w-4 mr-1" /> Add manually
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -273,11 +300,17 @@ export default function WhatsAppTemplates() {
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>{editingId ? "Edit template" : "Add template from MSG91"}</DialogTitle></DialogHeader>
-          <p className="text-xs text-gray-500 -mt-2">
-            Copy these values from your MSG91 dashboard → Templates → click <strong>Code (JSON)</strong> on the template.
-            Once saved here, it's immediately usable in campaigns.
-          </p>
+          <DialogHeader><DialogTitle>{editingId ? "Edit template" : "Add template manually"}</DialogTitle></DialogHeader>
+          {!editingId && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 -mt-2">
+              <strong>Tip:</strong> Use <strong>Sync from MSG91</strong> (top-right button) to import all your approved templates automatically.
+              Use this form only if you need to add a single template that didn't sync.
+              The template must already be approved on MSG91 — saving here does <em>not</em> submit anything to MSG91 or Meta.{" "}
+              <a href="https://control.msg91.com" target="_blank" rel="noopener noreferrer" className="underline inline-flex items-center gap-0.5">
+                Open MSG91 <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+          )}
           <div className="space-y-3">
             <div className="grid grid-cols-3 gap-3">
               <div className="col-span-2">
