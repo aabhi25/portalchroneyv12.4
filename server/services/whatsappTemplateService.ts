@@ -120,9 +120,9 @@ export const whatsappTemplateService = {
     try {
       const num = (integratedNumber || "").replace(/\D/g, "");
       if (!num) {
-        console.log("[WhatsappTemplateService] sync skipped — WhatsApp number not configured");
-        const templates = await this.list(businessAccountId);
-        return { synced, templates };
+        // Throw so the route returns a clear 500 (route already guards for missing
+        // number before calling here, so this is a last-resort safety net).
+        throw new Error("WhatsApp number not configured — cannot reach MSG91 template API.");
       }
 
       // Collect all templates via pagination. MSG91 requires pagination=true to

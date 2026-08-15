@@ -35612,8 +35612,13 @@ Return ONLY a valid JSON object in this format:
       const { whatsappService } = await import("./services/whatsappService");
       const settings = await whatsappService.getSettings(businessAccountId);
       if (!settings?.msg91AuthKey) return res.status(400).json({ error: "MSG91 auth key not configured" });
+      // whatsappNumber is the plain phone number; msg91IntegratedNumberId is MSG91's
+      // internal ID for the same number. Either can serve as the path variable for
+      // the get-template-client endpoint — use whichever is populated.
+      const number = settings.whatsappNumber || settings.msg91IntegratedNumberId || undefined;
+      if (!number) return res.status(400).json({ error: "WhatsApp number not configured — save your number in WhatsApp → Connection settings first." });
       const { whatsappTemplateService } = await import("./services/whatsappTemplateService");
-      const result = await whatsappTemplateService.syncFromMsg91(businessAccountId, settings.msg91AuthKey, settings.whatsappNumber || undefined);
+      const result = await whatsappTemplateService.syncFromMsg91(businessAccountId, settings.msg91AuthKey, number);
       res.json(result);
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
