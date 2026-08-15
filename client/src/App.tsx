@@ -12,6 +12,7 @@ import AdminProducts from "@/pages/AdminProducts";
 import WhatsAppCampaigns from "@/pages/WhatsAppCampaigns";
 import WhatsAppNewCampaign from "@/pages/WhatsAppNewCampaign";
 import WhatsAppCampaignDetail from "@/pages/WhatsAppCampaignDetail";
+import WhatsAppCampaignConversations from "@/pages/WhatsAppCampaignConversations";
 import WhatsAppEditCampaign from "@/pages/WhatsAppEditCampaign";
 import WhatsAppTemplates from "@/pages/WhatsAppTemplates";
 import WhatsAppContactGroups from "@/pages/WhatsAppContactGroups";
@@ -367,6 +368,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/document-type-editor" component={DocumentTypeEditor} />
                 <Route path="/admin/whatsapp-config" component={WhatsApp} />
                 <Route path="/admin/whatsapp-smart-replies">{() => <SmartReplies channel="whatsapp" />}</Route>
+                <Route path="/admin/whatsapp-campaign-conversations">{() => <RequireWhatsappMarketing><WhatsAppCampaignConversations /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-campaigns/new">{() => <RequireWhatsappMarketing><WhatsAppNewCampaign /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-campaigns/:id/edit">{() => <RequireWhatsappMarketing><WhatsAppEditCampaign /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-campaigns/:id">{() => <RequireWhatsappMarketing><WhatsAppCampaignDetail /></RequireWhatsappMarketing>}</Route>

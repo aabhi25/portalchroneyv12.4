@@ -1,7 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Sparkles, Route, Zap, MessagesSquare, Contact, BarChart3, Link2,
-  UsersRound, FileCode2, Megaphone, Settings, ShieldCheck,
+  UsersRound, FileCode2, Megaphone, Settings, ShieldCheck, MessageCircle,
 } from "lucide-react";
 
 /**
@@ -196,6 +196,19 @@ const LEAD_GEN_ITEMS: WhatsappNavItem[] = [
 // Numbered on the overview page because the order is a real dependency, not a suggestion: a
 // campaign cannot be sent without an audience and an approved template already in place.
 const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
+  {
+    key: "conversations",
+    label: "Conversations",
+    hubTitle: "Conversations",
+    description: "View reply threads across all campaigns",
+    href: "/admin/whatsapp-campaign-conversations",
+    icon: MessageCircle,
+    hubTestId: "card-wa-campaign-conversations",
+    sidebarTestId: "link-wa-campaign-conversations",
+    gradient: "bg-gradient-to-br from-emerald-500 to-teal-600",
+    tone: "bg-emerald-50 group-hover:bg-emerald-100",
+    matches: l => l.startsWith("/admin/whatsapp-campaign-conversations"),
+  },
   {
     key: "contact-groups",
     label: "Audiences",
