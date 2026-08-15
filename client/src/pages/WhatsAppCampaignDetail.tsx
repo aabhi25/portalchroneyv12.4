@@ -8,11 +8,6 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Send, X, RotateCcw, Pencil, MessageSquare, Copy } from "lucide-react";
 import { interpolatePreview, type Template, type Group } from "@/components/CampaignForm";
-import {
-  CampaignConversationsPanel,
-  type Recipient,
-  type CampaignMessage,
-} from "@/components/whatsapp/CampaignConversationsPanel";
 
 const CAMPAIGN_STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   draft: "outline", scheduled: "secondary", sending: "secondary",
@@ -28,7 +23,7 @@ interface Campaign {
   aiSystemPrompt: string | null; aiUseFaqs: string; aiUseDocs: string; aiUseProducts: string;
 }
 interface RecipientsResponse {
-  recipients: Recipient[];
+  recipients: unknown[];
   counts: { total: number; pending: number; queued: number; sent: number; delivered: number; read: number; failed: number; expired: number; replied: number; opted_out: number };
   limit: number;
   offset: number;
@@ -49,7 +44,6 @@ export default function WhatsAppCampaignDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const [selectedRecipient, setSelectedRecipient] = useState<Recipient | null>(null);
 
   // Polling stops once a request has failed. Without this a campaign that can't be fetched is
   // re-requested every 5s for as long as the tab stays open.
@@ -62,13 +56,6 @@ export default function WhatsAppCampaignDetail() {
     queryKey: [`/api/whatsapp/campaigns/${id}/recipients`],
     enabled: !campaignError,
     refetchInterval: (query) => (query.state.error ? false : 5000),
-    refetchOnMount: "always",
-  });
-  const recipients = recipientsData?.recipients ?? [];
-  const { data: messages = [] } = useQuery<CampaignMessage[]>({
-    queryKey: [`/api/whatsapp/campaigns/${id}/recipients/${selectedRecipient?.id}/messages`],
-    enabled: !!selectedRecipient,
-    refetchInterval: 5000,
     refetchOnMount: "always",
   });
   // The campaign stores template and group IDs; these resolve them to names for display.
@@ -106,33 +93,6 @@ export default function WhatsAppCampaignDetail() {
       queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}`] });
       queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}/recipients`] });
       toast({ title: data?.requeued > 0 ? `Resending ${data.requeued} recipients` : "Nothing to resend" });
-    },
-    onError: (e: any) => toast({ title: "Resend failed", description: e.message, variant: "destructive" }),
-  });
-
-  const reconcileMutation = useMutation({
-    mutationFn: async () => apiRequest<{ checked: number; updated: number }>("POST", `/api/whatsapp/campaigns/${id}/reconcile`),
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}/recipients`] });
-      const checked = data?.checked ?? 0;
-      const updated = data?.updated ?? 0;
-      toast({
-        title: checked === 0
-          ? "Nothing to refresh"
-          : `Refreshed ${checked} — updated ${updated}`,
-      });
-    },
-    onError: (e: any) => toast({ title: "Refresh failed", description: e.message, variant: "destructive" }),
-  });
-
-  const resendOneMutation = useMutation({
-    mutationFn: async (recipientId: string) =>
-      apiRequest<{ requeued: number }>("POST", `/api/whatsapp/campaigns/${id}/recipients/${recipientId}/resend`),
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}/recipients`] });
-      toast({ title: data?.requeued > 0 ? "Recipient queued for resend" : "Nothing to resend" });
     },
     onError: (e: any) => toast({ title: "Resend failed", description: e.message, variant: "destructive" }),
   });
@@ -341,17 +301,6 @@ export default function WhatsAppCampaignDetail() {
         </Card>
       </div>
 
-      {/* WhatsApp-style Conversations panel */}
-      <CampaignConversationsPanel
-        campaign={campaign}
-        recipients={recipients}
-        isLoading={isLoading}
-        selectedRecipient={selectedRecipient}
-        setSelectedRecipient={setSelectedRecipient}
-        messages={messages}
-        reconcileMutation={reconcileMutation}
-        resendOneMutation={resendOneMutation}
-      />
     </div>
   );
 }
