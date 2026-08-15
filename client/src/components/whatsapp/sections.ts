@@ -194,6 +194,19 @@ const LEAD_GEN_ITEMS: WhatsappNavItem[] = [
       l === "/admin/salesforce" ||
       l === "/admin/custom-crm",
   },
+  {
+    key: "allowed-numbers",
+    label: "Allowed numbers",
+    description: "Restrict who gets a reply — affects campaigns too",
+    href: "/admin/whatsapp-whitelist",
+    icon: ShieldCheck,
+    formerly: "Whitelist",
+    sidebarTestId: "link-wa-whitelist",
+    gradient: "bg-gradient-to-br from-teal-500 to-emerald-600",
+    tone: "bg-teal-50 group-hover:bg-teal-100",
+    matches: l => l === "/admin/whatsapp-whitelist",
+    blocked: r => (r.blockingAllInbound ? "Blocking every message" : undefined),
+  },
 ];
 
 // Numbered on the overview page because the order is a real dependency, not a suggestion: a
@@ -269,19 +282,6 @@ const SETUP_ITEMS: WhatsappNavItem[] = [
     tone: "bg-slate-50 group-hover:bg-slate-100",
     matches: l => l === "/admin/whatsapp-config",
     blocked: r => (!r.credentialsConfigured ? "Not connected yet" : undefined),
-  },
-  {
-    key: "allowed-numbers",
-    label: "Allowed numbers",
-    description: "Restrict who gets a reply — affects campaigns too",
-    href: "/admin/whatsapp-whitelist",
-    icon: ShieldCheck,
-    formerly: "Whitelist",
-    sidebarTestId: "link-wa-whitelist",
-    gradient: "bg-gradient-to-br from-teal-500 to-emerald-600",
-    tone: "bg-teal-50 group-hover:bg-teal-100",
-    matches: l => l === "/admin/whatsapp-whitelist",
-    blocked: r => (r.blockingAllInbound ? "Blocking every message" : undefined),
   },
 ];
 
