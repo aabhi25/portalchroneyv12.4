@@ -154,6 +154,13 @@ interface VoiceConversation {
   ttsDraining?: boolean;
   // The responseId that currently owns the queue (used to cancel/clear it on barge-in).
   ttsResponseId?: string;
+  // ElevenLabs only: OpenAI's response.done arrived while TTS audio for this
+  // responseId was still being produced (sentence queue draining OR a direct
+  // whole-transcript synth streaming). ai_done is deferred until every
+  // producer is idle, so the client never receives PCM for a response after
+  // its ai_done (the client finalizes the bubble + karaoke highlight when the
+  // last scheduled chunk after ai_done drains).
+  pendingAiDoneResponseId?: string;
   // Per-response decision: 'pending' until the first delta, then 'stream' for a
   // normal prose answer or 'buffer' if the reply starts like a leaked tool-call
   // JSON payload (which must be validated whole before it's ever spoken).
@@ -561,6 +568,9 @@ export class RealtimeVoiceService {
     if (conversation.ttsQueue && conversation.ttsQueue.length > 0) {
       conversation.ttsQueue = [];
     }
+    // The interrupted answer will never finish draining — drop any deferred
+    // ai_done so it can't fire spuriously for a later response.
+    conversation.pendingAiDoneResponseId = undefined;
     conversation.activeElevenLabsStartedAt = undefined;
 
     if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
@@ -2073,7 +2083,20 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
             }
           }
           
-          this.sendToClient(conversation.clientWs, { type: 'ai_done' });
+          // ElevenLabs path: TTS audio for THIS response may still be in
+          // production at response.done — either sentences queued/draining or
+          // a direct whole-transcript synth streaming. Sending ai_done now
+          // would let the client finalize the bubble (and its spoken-text
+          // highlight) on drain, then receive late PCM for the same response.
+          // Defer until every producer is idle; the producers' completion
+          // paths call flushDeferredAiDone().
+          if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId &&
+              this.isTtsProducing(conversation)) {
+            conversation.pendingAiDoneResponseId = conversation.currentResponseId || 'unknown';
+            console.log('[RealtimeVoice] Deferring ai_done until ElevenLabs TTS producers finish');
+          } else {
+            this.sendToClient(conversation.clientWs, { type: 'ai_done' });
+          }
           break;
         }
 
@@ -2956,6 +2979,29 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
     }
   }
 
+  // True while ANY ElevenLabs producer may still send PCM to the client:
+  // the sentence queue (draining or non-empty) or a direct whole-transcript
+  // synth (activeElevenLabsAbort is registered for its whole streaming life).
+  private isTtsProducing(conversation: VoiceConversation): boolean {
+    return !!(
+      conversation.ttsDraining ||
+      (conversation.ttsQueue && conversation.ttsQueue.length > 0) ||
+      conversation.activeElevenLabsAbort
+    );
+  }
+
+  // Send a deferred ai_done once every TTS producer is idle. Bound to the
+  // responseId captured at deferral time: a barge-in clears it, and a
+  // cancelled response must not emit a spurious done for a later one.
+  private flushDeferredAiDone(conversation: VoiceConversation): void {
+    const pendingId = conversation.pendingAiDoneResponseId;
+    if (!pendingId || this.isTtsProducing(conversation)) return;
+    conversation.pendingAiDoneResponseId = undefined;
+    if (pendingId !== 'unknown' && conversation.cancelledResponseIds.has(pendingId)) return;
+    this.sendToClient(conversation.clientWs, { type: 'ai_done' });
+    console.log('[RealtimeVoice] Sent deferred ai_done (responseId:', pendingId, ')');
+  }
+
   // Queue a complete sentence for sequential synthesis. The drainer guarantees
   // only one synth streams PCM to the client at a time, in order.
   private enqueueSentenceForTts(conversation: VoiceConversation, text: string, responseId?: string): void {
@@ -2999,6 +3045,10 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
         conversation.activeElevenLabsStartedAt = undefined;
         conversation.ttsResponseId = undefined;
       }
+      // Deferred ai_done: OpenAI's response.done fired while TTS was still
+      // producing. Once ALL producers are idle, the client has every PCM
+      // byte for the response and can safely finalize on drain.
+      this.flushDeferredAiDone(conversation);
     }
   }
 
@@ -3149,6 +3199,9 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
         conversation.activeElevenLabsResponseId = undefined;
         conversation.activeElevenLabsStartedAt = undefined;
       }
+      // This direct synth may have been the last active TTS producer for a
+      // response whose ai_done was deferred at response.done.
+      this.flushDeferredAiDone(conversation);
     }
   }
 }

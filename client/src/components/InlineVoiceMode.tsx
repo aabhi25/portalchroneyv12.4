@@ -158,22 +158,52 @@ export function InlineVoiceMode({
   const pcmLeftoverByteRef = useRef<Uint8Array | null>(null);
   // ---- Karaoke highlight timeline -----------------------------------------
   // Maps "how far has playback actually gotten" onto "how many characters of
-  // the spoken transcript has the student heard". Transcript deltas arrive
-  // far ahead of the audio, so the highlight is clocked off the Web Audio
-  // scheduler, never off delta arrival: each *audio* chunk, as it is
-  // scheduled, records a breakpoint pairing its scheduled end time
-  // (nextPlaybackTimeRef, in AudioContext time) with the transcript length
-  // received so far. A rAF loop then interpolates AudioContext.currentTime
-  // into those breakpoints. Accuracy is phrase-level by construction (the
-  // transcript leads the audio by up to a phrase) — that is the ceiling
-  // without word timestamps from the Realtime API.
+  // the spoken transcript has the student heard", using a SPEAKING-RATE model.
+  //
+  // Transcript deltas arrive far ahead of the audio, so nothing may be keyed
+  // to delta arrival. The earlier watermark approach ("all text received so
+  // far is heard when all audio received so far finishes") carried that whole
+  // text-vs-audio gap into the highlight — it ran up to a sentence ahead.
+  //
+  // Instead: both streams arrive in generation order, so chars-received ÷
+  // audio-seconds-received estimates the true speaking rate, and
+  //   offset ≈ rate × secondsActuallyPlayed
+  // spreads any instantaneous gap proportionally instead of front-loading it.
+  // As the answer streams in, the estimate converges on the exact rate and the
+  // offset lands on the full text exactly when playback drains.
+  //
+  // secondsActuallyPlayed is derived from the Web Audio scheduler, not wall
+  // time: scheduled audio is contiguous at the tail (each chunk starts at
+  // max(now, previous end)), so played = totalScheduled − (scheduledEnd − now).
+  // This stays correct across buffering stalls and tab suspension.
   const karaokeRef = useRef<{
     messageId: string | null;
     text: string;
-    breakpoints: { charEnd: number; audioEnd: number }[];
+    /** Cumulative duration (s) of audio scheduled for this bubble. */
+    audioSeconds: number;
+    /** AudioContext time at which the last scheduled chunk ends. */
+    audioEndTime: number;
     lastEmitted: number;
-  }>({ messageId: null, text: '', breakpoints: [], lastEmitted: -1 });
+    /** Un-snapped offset from the previous frame — catch-up rate limiter. */
+    lastRaw: number;
+    /** AudioContext time of the previous rAF tick, for per-frame dt. */
+    lastTickTime: number;
+  }>({ messageId: null, text: '', audioSeconds: 0, audioEndTime: 0, lastEmitted: -1, lastRaw: 0, lastTickTime: 0 });
   const karaokeRafRef = useRef<number | null>(null);
+
+  // The highlight deliberately trails the voice: subtracting this from played
+  // seconds absorbs the residual "transcript leads audio" bias, and a slight
+  // trail reads as correct where an equal lead reads as broken.
+  const KARAOKE_LAG_SEC = 0.45;
+  // Sanity bounds on the estimated speaking rate (chars/sec). Wide on purpose:
+  // real rates range from dense Latin text (~15-20) to CJK/Indic scripts (much
+  // lower). These only guard against degenerate early-stream estimates.
+  const KARAOKE_MIN_RATE = 2;
+  const KARAOKE_MAX_RATE = 40;
+  // Catch-up ceiling: when the rate estimate corrects itself upward, advance
+  // at most this multiple of the current speaking rate so the highlight eases
+  // forward instead of jumping a phrase in one frame.
+  const KARAOKE_CATCHUP_FACTOR = 2.5;
 
   /** Extend a raw offset to the end of the word it lands inside. */
   const snapToWordEnd = (text: string, offset: number): number => {
@@ -197,25 +227,33 @@ export function InlineVoiceMode({
       karaokeRafRef.current = requestAnimationFrame(tick);
       const k = karaokeRef.current;
       const ctx = audioContextRef.current;
-      if (!ctx || !k.messageId || k.breakpoints.length === 0) return;
+      if (!ctx || !k.messageId) return;
       const t = ctx.currentTime;
-      const bps = k.breakpoints;
-      let raw: number;
-      if (t <= bps[0].audioEnd) {
-        raw = bps[0].charEnd;
-      } else if (t >= bps[bps.length - 1].audioEnd) {
-        raw = bps[bps.length - 1].charEnd;
-      } else {
-        let i = 1;
-        while (i < bps.length && bps[i].audioEnd < t) i++;
-        const a = bps[i - 1];
-        const b = bps[i];
-        raw = b.audioEnd > a.audioEnd
-          ? a.charEnd + ((b.charEnd - a.charEnd) * (t - a.audioEnd)) / (b.audioEnd - a.audioEnd)
-          : b.charEnd;
-      }
+      if (k.audioSeconds <= 0 || k.text.length === 0) return;
+
+      // Seconds of this bubble's audio actually played. Scheduled audio is
+      // contiguous at the tail, so played = total − time still ahead of now.
+      const remaining = Math.max(0, k.audioEndTime - t);
+      const played = Math.max(0, k.audioSeconds - remaining);
+
+      // Speaking-rate estimate from everything received so far, then map
+      // played seconds (minus the deliberate trailing lag) to characters.
+      const rate = Math.min(
+        KARAOKE_MAX_RATE,
+        Math.max(KARAOKE_MIN_RATE, k.text.length / k.audioSeconds),
+      );
+      let raw = rate * Math.max(0, played - KARAOKE_LAG_SEC);
+
+      // Monotonic + eased catch-up: never move backwards, and when the
+      // estimate corrects upward, approach the new target at a bounded pace.
+      const dt = k.lastTickTime > 0 ? Math.max(0, t - k.lastTickTime) : 0;
+      k.lastTickTime = t;
+      const maxStep = Math.max(1, rate * dt * KARAOKE_CATCHUP_FACTOR);
+      raw = Math.max(k.lastRaw, Math.min(raw, k.lastRaw + maxStep));
+      k.lastRaw = raw;
+
       const snapped = snapToWordEnd(k.text, Math.floor(raw));
-      if (snapped !== k.lastEmitted) {
+      if (snapped > k.lastEmitted) {
         k.lastEmitted = snapped;
         onSpeakingProgress(k.messageId, snapped, false);
       }
@@ -234,7 +272,7 @@ export function InlineVoiceMode({
     if (k.messageId) {
       onSpeakingProgress?.(k.messageId, k.text.length, true);
     }
-    karaokeRef.current = { messageId: null, text: '', breakpoints: [], lastEmitted: -1 };
+    karaokeRef.current = { messageId: null, text: '', audioSeconds: 0, audioEndTime: 0, lastEmitted: -1, lastRaw: 0, lastTickTime: 0 };
   };
   // --------------------------------------------------------------------------
 
@@ -611,7 +649,7 @@ export function InlineVoiceMode({
           // Karaoke is NOT reset here. The timeline is keyed to the bubble
           // (messageId), not the response: a legitimate continuation appends
           // its transcript to the same bubble and schedules its audio after
-          // the draining tail, so text and breakpoints stay monotonic and the
+          // the draining tail, so text and audio accounting stay monotonic and the
           // offsets stay valid against exactly what that bubble renders. The
           // timeline resets only when the bubble changes (first ai_chunk of a
           // new bubble) or playback ends (finishKaraoke on done/interrupt).
@@ -790,18 +828,12 @@ export function InlineVoiceMode({
       source.start(scheduleTime);
       nextPlaybackTimeRef.current = scheduleTime + audioBuffer.duration;
 
-      // Karaoke breakpoint: when playback reaches the end of the audio
-      // scheduled so far, the transcript received so far has been heard.
-      // (The transcript leads the audio slightly, so this over-counts by up
-      // to a phrase — the documented accuracy ceiling.)
+      // Karaoke bookkeeping: accumulate this bubble's scheduled audio duration
+      // and its scheduled end time. The rAF loop derives seconds-played from
+      // these and maps them to characters via the speaking-rate estimate.
       const k = karaokeRef.current;
-      if (k.breakpoints.length === 0) {
-        k.breakpoints.push({ charEnd: 0, audioEnd: scheduleTime });
-      }
-      k.breakpoints.push({ charEnd: k.text.length, audioEnd: nextPlaybackTimeRef.current });
-      // Bound memory on very long answers; the loop only looks near the
-      // current playback time, so dropping the oldest half is safe.
-      if (k.breakpoints.length > 2000) k.breakpoints.splice(0, 1000);
+      k.audioSeconds += audioBuffer.duration;
+      k.audioEndTime = nextPlaybackTimeRef.current;
       startKaraokeLoop();
     } catch (error) {
       console.error('[InlineVoice] Audio chunk error:', error);
