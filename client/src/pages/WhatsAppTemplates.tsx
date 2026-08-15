@@ -389,7 +389,7 @@ export default function WhatsAppTemplates() {
               onClick={() => saveMutation.mutate()}
               data-testid="button-save-template"
             >
-              {editingId ? "Save changes" : "Add template"}
+              Add template
             </Button>
           </DialogFooter>
         </DialogContent>
