@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
+import { WhatsAppSectionPanel } from "@/components/whatsapp/WhatsAppSectionPanel";
 import AdminProducts from "@/pages/AdminProducts";
 import WhatsAppCampaigns from "@/pages/WhatsAppCampaigns";
 import WhatsAppNewCampaign from "@/pages/WhatsAppNewCampaign";
@@ -215,6 +216,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
           </div>
         </header>
         <div className="flex-1 overflow-auto">
+          <WhatsAppSectionPanel user={user}>
           <Switch>
             {user?.role === "super_admin" && !isSuperAdminImpersonating ? (
               <>
@@ -398,6 +400,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
             )}
             <Route component={NotFound} />
           </Switch>
+          </WhatsAppSectionPanel>
         </div>
       </SidebarInset>
     </>

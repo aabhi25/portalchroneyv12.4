@@ -322,11 +322,33 @@ export function getWhatsappSections(opts: { marketingEnabled: boolean }): Whatsa
 }
 
 /**
- * Where a section's in-screen picker lives. Marketing-enabled accounts collapse the sidebar to
- * one row per section; the row navigates here and the cards on this page do the real navigation.
+ * Where a sidebar section row should land. Marketing-enabled accounts collapse the sidebar to
+ * one row per section; clicking it opens the last screen used in that section (falling back to
+ * the first), with the section panel alongside.
  */
-export function whatsappSectionHubHref(id: WhatsappSectionId): string {
-  return `/admin/whatsapp-hub/${id}`;
+export function whatsappSectionEntryHref(section: WhatsappSection): string {
+  try {
+    const last = sessionStorage.getItem(`waSectionLast:${section.id}`);
+    if (last && section.items.some(i => i.href === last)) return last;
+  } catch {
+    // sessionStorage unavailable (privacy mode) — first item is a fine default.
+  }
+  return section.items[0].href;
+}
+
+/** Record which screen of a section the user is on, so the section row returns there. */
+export function rememberWhatsappSectionLocation(location: string, sections: WhatsappSection[]): void {
+  for (const s of sections) {
+    const item = s.items.find(i => i.matches(location));
+    if (item) {
+      try {
+        sessionStorage.setItem(`waSectionLast:${s.id}`, item.href);
+      } catch {
+        // best-effort only
+      }
+      return;
+    }
+  }
 }
 
 /** True when the given location belongs to any WhatsApp screen in any section. */

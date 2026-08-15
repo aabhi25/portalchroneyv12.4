@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronRight } from "lucide-react";
-import { getWhatsappSections, whatsappSectionHubHref, type WhatsappSection } from "./sections";
+import { getWhatsappSections, whatsappSectionEntryHref, type WhatsappSection } from "./sections";
 
 /**
  * The three WhatsApp sections, rendered as expandable sidebar rows.
@@ -121,17 +121,17 @@ export function WhatsAppNavSections({
 
   // Marketing-enabled accounts have the most sections and sub-items, and nesting them all made
   // the sidebar cramped enough to truncate labels. For those accounts each section is a single
-  // row that opens an in-screen picker page; other accounts keep the expandable list.
+  // row that opens the section's last-used screen with an in-screen panel of the sub-options
+  // alongside; other accounts keep the expandable list.
   if (marketingEnabled) {
     return (
       <>
         {sections.map(section => {
-          const hubHref = whatsappSectionHubHref(section.id);
-          const isActive = location === hubHref || section.items.some(i => i.matches(location));
+          const isActive = section.items.some(i => i.matches(location));
           return (
             <SidebarMenuItem key={section.id}>
               <SidebarMenuButton
-                onClick={() => onNavigate(hubHref)}
+                onClick={() => onNavigate(whatsappSectionEntryHref(section))}
                 data-testid={`nav-section-${section.id}`}
                 aria-label={`${section.label} section`}
                 className={`group/nav transition-all duration-200 ${
