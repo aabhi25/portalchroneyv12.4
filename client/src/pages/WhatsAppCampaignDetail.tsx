@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -5,13 +6,37 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Send, X, RotateCcw, Pencil, MessageSquare, Copy } from "lucide-react";
+import { ArrowLeft, Send, X, RotateCcw, Pencil, MessageSquare, Copy, Users, ChevronLeft, ChevronRight } from "lucide-react";
 import { interpolatePreview, type Template, type Group } from "@/components/CampaignForm";
+import {
+  type Recipient,
+  RECIPIENT_STATUS_VARIANT,
+  RecipientAvatar,
+} from "@/components/whatsapp/CampaignConversationsPanel";
 
 const CAMPAIGN_STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   draft: "outline", scheduled: "secondary", sending: "secondary",
   completed: "default", cancelled: "destructive", failed: "destructive",
 };
+
+/** All filterable statuses. "all" fetches paginated; each specific status fetches up to 1 000. */
+const STATUS_FILTERS = [
+  { key: "all",       label: "All" },
+  { key: "pending",   label: "Pending" },
+  { key: "queued",    label: "Queued" },
+  { key: "sent",      label: "Sent" },
+  { key: "delivered", label: "Delivered" },
+  { key: "read",      label: "Read" },
+  { key: "replied",   label: "Replied" },
+  { key: "failed",    label: "Failed" },
+  { key: "expired",   label: "Expired" },
+  { key: "opted_out", label: "Opted out" },
+] as const;
+
+type StatusKey = (typeof STATUS_FILTERS)[number]["key"];
+
+/** Rows per page — applies to every status filter including "all". */
+const PAGE_SIZE = 100;
 
 interface Campaign {
   id: string; name: string; status: string;
@@ -22,8 +47,12 @@ interface Campaign {
   aiSystemPrompt: string | null; aiUseFaqs: string; aiUseDocs: string; aiUseProducts: string;
 }
 interface RecipientsResponse {
-  recipients: unknown[];
-  counts: { total: number; pending: number; queued: number; sent: number; delivered: number; read: number; failed: number; expired: number; replied: number; opted_out: number };
+  recipients: Recipient[];
+  counts: {
+    total: number; pending: number; queued: number; sent: number;
+    delivered: number; read: number; failed: number; expired: number;
+    replied: number; opted_out: number;
+  };
   limit: number;
   offset: number;
 }
@@ -37,6 +66,11 @@ function ConfigRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
+/** Pick the most informative timestamp for a recipient row. */
+function bestTimestamp(r: Recipient): string | null {
+  return r.firstReplyAt ?? r.readAt ?? r.deliveredAt ?? r.sentAt ?? null;
+}
+
 const NOT_SET = <span className="text-gray-400 font-normal">—</span>;
 
 export default function WhatsAppCampaignDetail() {
@@ -44,20 +78,53 @@ export default function WhatsAppCampaignDetail() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
-  // Polling stops once a request has failed. Without this a campaign that can't be fetched is
-  // re-requested every 5s for as long as the tab stays open.
+  const [statusFilter, setStatusFilter] = useState<StatusKey>("all");
+  const [page, setPage] = useState(0);
+
+  const changeFilter = (key: StatusKey) => {
+    setStatusFilter(key);
+    setPage(0);
+  };
+
+  // ── Campaign & static data ─────────────────────────────────────────────────
   const { data: campaign, error: campaignError } = useQuery<Campaign>({
     queryKey: [`/api/whatsapp/campaigns/${id}`],
     refetchInterval: (query) => (query.state.error ? false : 5000),
     refetchOnMount: "always",
   });
-  const { data: recipientsData, isLoading } = useQuery<RecipientsResponse>({
-    queryKey: [`/api/whatsapp/campaigns/${id}/recipients`],
+
+  // Counts-only query — no status filter, no pagination.
+  // countRecipients on the server always returns totals for every status
+  // regardless of what list filter is applied, so this query is the
+  // authoritative source for the stat tiles and filter-tab badges.
+  const { data: countsData } = useQuery<RecipientsResponse>({
+    queryKey: [`/api/whatsapp/campaigns/${id}/recipients`, "counts"],
+    queryFn: () =>
+      apiRequest<RecipientsResponse>("GET", `/api/whatsapp/campaigns/${id}/recipients?limit=1`),
     enabled: !campaignError,
     refetchInterval: (query) => (query.state.error ? false : 5000),
     refetchOnMount: "always",
   });
-  // The campaign stores template and group IDs; these resolve them to names for display.
+
+  // Filtered list query — paginated consistently for every filter tab.
+  // The same PAGE_SIZE / offset model applies whether "all" or a specific
+  // status is selected, ensuring every recipient is reachable regardless of
+  // how many rows a status bucket contains.
+  const listParams =
+    statusFilter === "all"
+      ? `?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`
+      : `?status=${statusFilter}&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`;
+
+  const { data: listData, isLoading: listLoading } = useQuery<RecipientsResponse>({
+    queryKey: [`/api/whatsapp/campaigns/${id}/recipients`, "list", statusFilter, page],
+    queryFn: () =>
+      apiRequest<RecipientsResponse>("GET", `/api/whatsapp/campaigns/${id}/recipients${listParams}`),
+    enabled: !campaignError,
+    refetchInterval: (query) => (query.state.error ? false : 5000),
+    refetchOnMount: "always",
+    placeholderData: (prev) => prev,  // keep old rows visible while new page loads
+  });
+
   const { data: templates = [] } = useQuery<Template[]>({
     queryKey: ["/api/whatsapp/templates"],
     enabled: !campaignError,
@@ -67,11 +134,17 @@ export default function WhatsAppCampaignDetail() {
     enabled: !campaignError,
   });
 
+  // ── Mutations ──────────────────────────────────────────────────────────────
+  // Invalidate both the counts query and all list pages.
+  const invalidateRecipients = () => {
+    queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}/recipients`] });
+  };
+
   const sendMutation = useMutation({
     mutationFn: async () => apiRequest("POST", `/api/whatsapp/campaigns/${id}/send`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}/recipients`] });
+      invalidateRecipients();
       toast({ title: "Send started" });
     },
     onError: (e: any) => toast({ title: "Send failed", description: e.message, variant: "destructive" }),
@@ -86,20 +159,38 @@ export default function WhatsAppCampaignDetail() {
   });
 
   const resendAllMutation = useMutation({
-    // apiRequest already parses JSON and returns the body — do NOT call .json() on it
     mutationFn: async () => apiRequest<{ requeued: number }>("POST", `/api/whatsapp/campaigns/${id}/resend-failed`),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}/recipients`] });
+      invalidateRecipients();
       toast({ title: data?.requeued > 0 ? `Resending ${data.requeued} recipients` : "Nothing to resend" });
     },
     onError: (e: any) => toast({ title: "Resend failed", description: e.message, variant: "destructive" }),
   });
 
-  const failedCount = (recipientsData?.counts.failed ?? 0) + (recipientsData?.counts.expired ?? 0);
+  const resendOneMutation = useMutation({
+    mutationFn: async (recipientId: string) =>
+      apiRequest<{ requeued: number }>("POST", `/api/whatsapp/campaigns/${id}/recipients/${recipientId}/resend`),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}`] });
+      invalidateRecipients();
+      toast({ title: data?.requeued > 0 ? "Recipient queued for resend" : "Nothing to resend" });
+    },
+    onError: (e: any) => toast({ title: "Resend failed", description: e.message, variant: "destructive" }),
+  });
 
-  // Recipients are snapshotted from the contact groups when the send starts, so configuration
-  // is only meaningful to change before that. After it, this is the record of what went out.
+  // ── Derived values ─────────────────────────────────────────────────────────
+  const counts = countsData?.counts;
+  const failedCount = (counts?.failed ?? 0) + (counts?.expired ?? 0);
+  const displayedRecipients = listData?.recipients ?? [];
+  // Total rows for the active filter — used for pagination across all tabs.
+  const filterTotal =
+    statusFilter === "all"
+      ? (counts?.total ?? 0)
+      : (counts?.[statusFilter as keyof typeof counts] as number | undefined) ?? 0;
+  const totalPages = Math.ceil(filterTotal / PAGE_SIZE);
+  const hasMore = (page + 1) * PAGE_SIZE < filterTotal;
+
   const canEditConfig = campaign?.status === "draft" || campaign?.status === "scheduled";
   const template = templates.find(t => t.id === campaign?.templateId);
   const templateParams: string[] = campaign && Array.isArray(campaign.templateParams) ? campaign.templateParams : [];
@@ -112,6 +203,7 @@ export default function WhatsAppCampaignDetail() {
     campaign?.aiUseProducts !== "false" && "Products",
   ].filter(Boolean).join(", ");
 
+  // ── Error / loading states ─────────────────────────────────────────────────
   if (campaignError) {
     const notFound = (campaignError as Error & { status?: number }).status === 404;
     return (
@@ -140,12 +232,14 @@ export default function WhatsAppCampaignDetail() {
 
   if (!campaign) return <div className="p-6">Loading...</div>;
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <Button variant="ghost" size="sm" className="mb-4" onClick={() => setLocation("/admin/whatsapp-campaigns")}>
         <ArrowLeft className="h-4 w-4 mr-1" /> Back
       </Button>
 
+      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -159,7 +253,6 @@ export default function WhatsAppCampaignDetail() {
           </div>
         </div>
         <div className="flex gap-2">
-          {/* Offered in every state — this is how a completed campaign gets run again. */}
           <Button
             variant="outline"
             onClick={() => setLocation(`/admin/whatsapp-campaigns/new?from=${campaign.id}`)}
@@ -199,20 +292,18 @@ export default function WhatsAppCampaignDetail() {
         </div>
       </div>
 
+      {/* Stat tiles */}
       <div className="grid grid-cols-7 gap-3 mb-6">
         <Card><CardContent className="p-4"><div className="text-xs text-gray-500">Recipients</div><div className="text-2xl font-bold">{campaign.totalRecipients}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Provider accepted but Meta has not yet confirmed">Queued</div><div className="text-2xl font-bold text-slate-600" data-testid="counter-queued">{recipientsData?.counts.queued ?? 0}</div></CardContent></Card>
-        {/* Tiles below prefer the recipient-derived live counts (counts.*) over
-            the persisted campaign counters, which can lag by up to one
-            scheduler tick when many webhooks arrive in close succession. */}
-        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Accepted by Meta, awaiting delivery confirmation">Sent</div><div className="text-2xl font-bold text-emerald-600" data-testid="counter-sent">{((recipientsData?.counts.sent ?? 0) + (recipientsData?.counts.delivered ?? 0) + (recipientsData?.counts.read ?? 0) + (recipientsData?.counts.replied ?? 0)) || campaign.sentCount}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Confirmed delivered to recipient's device">Delivered</div><div className="text-2xl font-bold text-teal-600" data-testid="counter-delivered">{(recipientsData?.counts.delivered ?? 0) + (recipientsData?.counts.read ?? 0) + (recipientsData?.counts.replied ?? 0)}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-gray-500">Replied</div><div className="text-2xl font-bold text-blue-600" data-testid="counter-replied">{recipientsData?.counts.replied ?? campaign.repliedCount}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Includes provider-reported failures and queued rows that timed out">Failed</div><div className="text-2xl font-bold text-red-600" data-testid="counter-failed">{((recipientsData?.counts.failed ?? 0) + (recipientsData?.counts.expired ?? 0)) || campaign.failedCount}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-gray-500">Opted out</div><div className="text-2xl font-bold text-amber-600" data-testid="counter-opted-out">{recipientsData?.counts.opted_out ?? campaign.optedOutCount}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Provider accepted but Meta has not yet confirmed">Queued</div><div className="text-2xl font-bold text-slate-600" data-testid="counter-queued">{counts?.queued ?? 0}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Accepted by Meta, awaiting delivery confirmation">Sent</div><div className="text-2xl font-bold text-emerald-600" data-testid="counter-sent">{((counts?.sent ?? 0) + (counts?.delivered ?? 0) + (counts?.read ?? 0) + (counts?.replied ?? 0)) || campaign.sentCount}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Confirmed delivered to recipient's device">Delivered</div><div className="text-2xl font-bold text-teal-600" data-testid="counter-delivered">{(counts?.delivered ?? 0) + (counts?.read ?? 0) + (counts?.replied ?? 0)}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-gray-500">Replied</div><div className="text-2xl font-bold text-blue-600" data-testid="counter-replied">{counts?.replied ?? campaign.repliedCount}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Includes provider-reported failures and queued rows that timed out">Failed</div><div className="text-2xl font-bold text-red-600" data-testid="counter-failed">{failedCount || campaign.failedCount}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-gray-500">Opted out</div><div className="text-2xl font-bold text-amber-600" data-testid="counter-opted-out">{counts?.opted_out ?? campaign.optedOutCount}</div></CardContent></Card>
       </div>
 
-      {/* How this campaign is configured — what it sends, to whom, and when. */}
+      {/* Config + preview */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 mb-6" data-testid="campaign-config">
         <Card>
           <CardHeader className="pb-2 flex-row items-center justify-between">
@@ -300,6 +391,176 @@ export default function WhatsAppCampaignDetail() {
         </Card>
       </div>
 
+      {/* Recipients table */}
+      <Card data-testid="recipients-table">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Users className="h-4 w-4 text-gray-500" />
+              Recipients
+              {counts && (
+                <span className="text-sm font-normal text-gray-500">
+                  ({counts.total} total)
+                </span>
+              )}
+            </CardTitle>
+            {/* Pagination controls — only shown in "all" tab */}
+            {statusFilter === "all" && totalPages > 1 && (
+              <div className="flex items-center gap-2 text-sm text-gray-600">
+                <Button
+                  variant="ghost" size="sm"
+                  onClick={() => setPage(p => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  className="h-7 w-7 p-0"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <span>Page {page + 1} / {totalPages}</span>
+                <Button
+                  variant="ghost" size="sm"
+                  onClick={() => setPage(p => p + 1)}
+                  disabled={!hasMore}
+                  className="h-7 w-7 p-0"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {/* Status filter pills */}
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {STATUS_FILTERS.map(f => {
+              // Resolve count for badge display
+              const count: number =
+                f.key === "all"
+                  ? (counts?.total ?? 0)
+                  : (counts?.[f.key as keyof typeof counts] as number | undefined) ?? 0;
+              const isActive = statusFilter === f.key;
+              // Hide zero-count statuses (except "all") to keep the pill row lean
+              if (f.key !== "all" && count === 0) return null;
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => changeFilter(f.key)}
+                  data-testid={`filter-${f.key}`}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                    isActive
+                      ? "bg-emerald-600 text-white border-emerald-600"
+                      : "bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                  }`}
+                >
+                  {f.label}
+                  {count > 0 && (
+                    <span className={`text-[10px] font-semibold ${isActive ? "text-white/80" : "text-gray-400"}`}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </CardHeader>
+
+        <CardContent className="p-0">
+          {listLoading && displayedRecipients.length === 0 ? (
+            <div className="py-10 text-center text-sm text-gray-400">Loading recipients…</div>
+          ) : displayedRecipients.length === 0 ? (
+            <div className="py-10 text-center text-sm text-gray-400">
+              {(counts?.total ?? 0) === 0
+                ? "No recipients yet — they're snapshotted when the send starts."
+                : `No recipients with status "${statusFilter}".`}
+            </div>
+          ) : (
+            <div className="divide-y max-h-[520px] overflow-y-auto">
+              {displayedRecipients.map(r => {
+                const canResend = r.status === "failed" || r.status === "expired";
+                const ts = bestTimestamp(r);
+                return (
+                  <div
+                    key={r.id}
+                    className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors"
+                    data-testid={`recipient-row-${r.id}`}
+                  >
+                    <RecipientAvatar r={r} />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-sm truncate">{r.name || r.phone}</div>
+                      {r.name && <div className="text-xs text-gray-400">{r.phone}</div>}
+                      {r.errorMessage && (
+                        <div className="text-xs text-red-500 mt-0.5 line-clamp-1" title={r.errorMessage}>
+                          {r.errorMessage}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      {ts && (
+                        <span className="text-xs text-gray-400 hidden sm:block">
+                          {new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      )}
+                      {r.replyCount > 0 && (
+                        <span className="bg-emerald-600 text-white text-[10px] font-semibold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
+                          {r.replyCount}
+                        </span>
+                      )}
+                      <Badge
+                        variant={RECIPIENT_STATUS_VARIANT[r.status] || "outline"}
+                        className="text-xs"
+                        data-testid={`status-${r.id}`}
+                      >
+                        {r.status}
+                      </Badge>
+                      {canResend && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs text-gray-500 hover:text-gray-800"
+                          onClick={() => resendOneMutation.mutate(r.id)}
+                          disabled={resendOneMutation.isPending}
+                          data-testid={`button-resend-${r.id}`}
+                        >
+                          <RotateCcw className="h-3 w-3 mr-1" /> Resend
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Unified footer — consistent range + pagination for every filter tab */}
+          {displayedRecipients.length > 0 && filterTotal > 0 && (
+            <div className="px-4 py-2.5 border-t bg-gray-50 text-xs text-gray-500 flex justify-between items-center">
+              <span>
+                Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filterTotal)} of {filterTotal}{" "}
+                {statusFilter === "all" ? "recipients" : `${statusFilter} recipients`}
+              </span>
+              {totalPages > 1 && (
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost" size="sm"
+                    onClick={() => setPage(p => Math.max(0, p - 1))}
+                    disabled={page === 0}
+                    className="h-6 w-6 p-0"
+                  >
+                    <ChevronLeft className="h-3 w-3" />
+                  </Button>
+                  <span className="px-1">Page {page + 1} / {totalPages}</span>
+                  <Button
+                    variant="ghost" size="sm"
+                    onClick={() => setPage(p => p + 1)}
+                    disabled={!hasMore}
+                    className="h-6 w-6 p-0"
+                  >
+                    <ChevronRight className="h-3 w-3" />
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

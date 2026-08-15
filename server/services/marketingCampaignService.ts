@@ -420,16 +420,18 @@ export const marketingCampaignService = {
   async listRecipients(businessAccountId: string, campaignId: string, opts?: { limit?: number; offset?: number; status?: string }): Promise<MarketingCampaignRecipient[]> {
     const limit = Math.min(Math.max(opts?.limit ?? 200, 1), 1000);
     const offset = Math.max(opts?.offset ?? 0, 0);
-    const where = opts?.status
-      ? and(
-          eq(marketingCampaignRecipients.campaignId, campaignId),
-          eq(marketingCampaignRecipients.businessAccountId, businessAccountId),
-          eq(marketingCampaignRecipients.status, opts.status),
-        )
-      : and(
-          eq(marketingCampaignRecipients.campaignId, campaignId),
-          eq(marketingCampaignRecipients.businessAccountId, businessAccountId),
-        );
+    // "pending" is presented as a combined bucket in dashboards — claimed rows
+    // are folded into pending in countRecipients, so the list must match.
+    const statusCondition = opts?.status
+      ? opts.status === "pending"
+        ? inArray(marketingCampaignRecipients.status, ["pending", "claimed"])
+        : eq(marketingCampaignRecipients.status, opts.status)
+      : undefined;
+    const where = and(
+      eq(marketingCampaignRecipients.campaignId, campaignId),
+      eq(marketingCampaignRecipients.businessAccountId, businessAccountId),
+      statusCondition,
+    );
     return db
       .select()
       .from(marketingCampaignRecipients)
