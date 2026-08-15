@@ -173,63 +173,87 @@ export const whatsappTemplateService = {
 
       console.log(`[WhatsappTemplateService] Total templates fetched from MSG91: ${allRemote.length}`);
 
+      // MSG91 response shape (discovered from live API):
+      //   { name, category, namespace, languages: [ { language, status, code: [ {type, text}, ... ] } ] }
+      // Each top-level item represents one template name; "languages" holds one
+      // entry per language variant. Components (BODY, HEADER, FOOTER, BUTTONS)
+      // live inside variant.code[], NOT variant.components[].
       for (const remote of allRemote) {
         const name = remote.name || remote.template_name;
         if (!name) continue;
 
-        // Language is part of the identity: "promo_offer" in "en" and "promo_offer"
-        // in "hi" are distinct Meta-approved templates and must not overwrite each other.
-        const language = (remote.language || "en").toString().toLowerCase();
+        // Collect language variants. Fall back to treating the remote object itself
+        // as a single variant for any alternative envelope shapes.
+        const variants: any[] = Array.isArray(remote.languages) ? remote.languages : [remote];
 
-        const bodyText: string =
-          remote.body ||
-          remote.bodyText ||
-          remote.components?.find?.((c: any) => c.type === "BODY")?.text ||
-          "";
+        for (const variant of variants) {
+          // Language is part of the identity: "promo_offer" in "en" and "hi" are
+          // distinct Meta-approved templates and must not overwrite each other.
+          const language = (variant.language || remote.language || "en").toString().toLowerCase();
 
-        const headerComp = remote.components?.find?.((c: any) => c.type === "HEADER");
-        const footerComp = remote.components?.find?.((c: any) => c.type === "FOOTER");
+          // Helper: find a component from either variant.code (MSG91) or
+          // variant.components (Meta Graph API fallback), case-insensitively.
+          const findComp = (type: string): any =>
+            variant.code?.find?.((c: any) => c.type?.toUpperCase() === type.toUpperCase()) ||
+            variant.components?.find?.((c: any) => c.type?.toUpperCase() === type.toUpperCase()) ||
+            remote.components?.find?.((c: any) => c.type?.toUpperCase() === type.toUpperCase());
 
-        const payload = {
-          businessAccountId,
-          name,
-          language,
-          category: (remote.category || "MARKETING").toString().toUpperCase(),
-          bodyText,
-          headerType: headerComp?.format ? headerComp.format.toLowerCase() : "none",
-          headerText: headerComp?.text || "",
-          headerMediaUrl: "",
-          footerText: footerComp?.text || "",
-          buttons: [],
-          paramCount: countParams(bodyText),
-          status: (remote.status || "approved").toString().toLowerCase(),
-          msg91TemplateId: (remote.id || remote.template_id || null)?.toString() ?? null,
-          namespace: remote.namespace || null,
-        };
+          const bodyComp   = findComp("BODY");
+          const headerComp = findComp("HEADER");
+          const footerComp = findComp("FOOTER");
+          const buttonsComp = findComp("BUTTONS");
 
-        // Upsert by (businessAccountId, name, language) — not just name — so that
-        // same-name templates in different languages are stored as separate rows.
-        const existing = await db
-          .select()
-          .from(whatsappTemplates)
-          .where(
-            and(
-              eq(whatsappTemplates.businessAccountId, businessAccountId),
-              eq(whatsappTemplates.name, name),
-              eq(whatsappTemplates.language, language),
-            ),
-          )
-          .limit(1);
+          const bodyText: string =
+            bodyComp?.text ||
+            variant.body || variant.body_text || variant.bodyText ||
+            remote.body  || remote.body_text  || remote.bodyText  ||
+            "";
 
-        if (existing.length > 0) {
-          await db
-            .update(whatsappTemplates)
-            .set({ ...payload, updatedAt: new Date() })
-            .where(eq(whatsappTemplates.id, existing[0].id));
-        } else {
-          await db.insert(whatsappTemplates).values(payload);
+          // Buttons: extract quick-reply / CTA labels if present
+          const buttons: any[] = buttonsComp?.buttons || remote.buttons || variant.buttons || [];
+
+          const payload = {
+            businessAccountId,
+            name,
+            language,
+            category: (remote.category || variant.category || "MARKETING").toString().toUpperCase(),
+            bodyText,
+            headerType: headerComp?.format ? headerComp.format.toLowerCase() : "none",
+            headerText: headerComp?.text || "",
+            headerMediaUrl: "",
+            footerText: footerComp?.text || "",
+            buttons,
+            paramCount: countParams(bodyText),
+            status: (variant.status || remote.status || "approved").toString().toLowerCase(),
+            msg91TemplateId:
+              (variant.msg91_template_id ?? variant.id ?? remote.id ?? remote.template_id ?? null)
+                ?.toString() ?? null,
+            namespace: remote.namespace || variant.namespace || null,
+          };
+
+          // Upsert by (businessAccountId, name, language)
+          const existing = await db
+            .select()
+            .from(whatsappTemplates)
+            .where(
+              and(
+                eq(whatsappTemplates.businessAccountId, businessAccountId),
+                eq(whatsappTemplates.name, name),
+                eq(whatsappTemplates.language, language),
+              ),
+            )
+            .limit(1);
+
+          if (existing.length > 0) {
+            await db
+              .update(whatsappTemplates)
+              .set({ ...payload, updatedAt: new Date() })
+              .where(eq(whatsappTemplates.id, existing[0].id));
+          } else {
+            await db.insert(whatsappTemplates).values(payload);
+          }
+          synced++;
         }
-        synced++;
       }
     } catch (err) {
       console.error("[WhatsappTemplateService] syncFromMsg91 error:", err);
