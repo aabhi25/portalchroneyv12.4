@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { ProductCard } from "@/components/ProductCard";
 import { KaraokeText } from "@/components/KaraokeText";
+import { KaraokeMarkdown } from "@/components/KaraokeMarkdown";
 import { OrderStatusCard, normalizeOrder } from "@/components/OrderStatusCard";
 import type { NormalizedOrder } from "@/components/OrderStatusCard";
 import { OrderDetailOverlay } from "@/components/OrderDetailOverlay";
@@ -446,6 +447,68 @@ export default function EmbedChat() {
   // bubble's content with Markdown *while the answer is still playing* —
   // the highlight offset is only meaningful against the raw spoken text.
   const voiceSpokenTextRef = useRef<Map<string, string>>(new Map());
+  // Voice bubbles whose formatted Markdown (LaTeX + diagrams) has already
+  // arrived. While such a bubble is still being spoken, we upgrade the
+  // karaoke from word-level plain text to block-level formatted Markdown.
+  // useState (not a ref) because arrival must trigger a re-render mid-speech.
+  const [voiceFormattedIds, setVoiceFormattedIds] = useState<Set<string>>(new Set());
+  // Ref mirror of voiceFormattedIds for synchronous reads inside voice
+  // callbacks (a raw chunk arriving after the formatted replace must not
+  // overwrite the formatted bubble content).
+  const voiceFormattedIdsRef = useRef<Set<string>>(new Set());
+  // Shared assistant-Markdown renderer (KaTeX math, curriculum images, safe
+  // links). Used by both the normal assistant bubble and the block-level
+  // voice karaoke so the two are visually identical.
+  const renderAssistantMarkdown = (content: string) => (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={{
+        p: ({ children }) => <p className="mb-2 last:mb-0 font-medium">{children}</p>,
+        ul: ({ children }) => <ul className="mb-2 pl-4 list-disc">{children}</ul>,
+        ol: ({ children }) => <ol className="mb-2 pl-4 list-decimal">{children}</ol>,
+        li: ({ children }) => <li className="mb-1">{children}</li>,
+        strong: ({ children }) => <strong className="font-bold">{children}</strong>,
+        em: ({ children }) => <em className="italic">{children}</em>,
+        img: ({ src, alt }) => (
+          <img
+            src={typeof src === 'string' ? src : ''}
+            alt={alt || 'curriculum image'}
+            loading="lazy"
+            className="my-2 max-w-full h-auto rounded-lg border border-border"
+          />
+        ),
+        a: ({ href, children }) => {
+          const handleClick = (e: React.MouseEvent) => {
+            e.preventDefault();
+            if (!href || href === 'null' || href === 'undefined') return;
+            const url = href.startsWith('http') ? href : `https://${href}`;
+            try {
+              if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'OPEN_URL', url }, '*');
+              } else {
+                window.open(url, '_blank', 'noopener,noreferrer');
+              }
+            } catch {
+              window.open(url, '_blank', 'noopener,noreferrer');
+            }
+          };
+          return (
+            <a
+              href={href || '#'}
+              onClick={handleClick}
+              className="text-primary underline hover:opacity-80 cursor-pointer"
+              rel="noopener noreferrer"
+            >
+              {children}
+            </a>
+          );
+        },
+      }}
+    >
+      {convertLatexDelimiters(content)}
+    </ReactMarkdown>
+  );
   const [selectedLanguage, setSelectedLanguage] = useState<string>('auto');
   const [isLanguageDropdownOpen, setIsLanguageDropdownOpen] = useState(false);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -5270,11 +5333,28 @@ export default function EmbedChat() {
                 )}
                 {msg.role === 'assistant' && msg.content === '.....' ? (
                   <TypingIndicator />
+                ) : msg.role === 'assistant' && voiceHighlight?.messageId === msg.id && voiceFormattedIds.has(msg.id) ? (
+                  // Hybrid voice karaoke: the formatted version (LaTeX math,
+                  // diagrams) already arrived while the answer is still being
+                  // spoken. Show the rich rendering immediately and highlight
+                  // at block granularity — the paragraph/list-item currently
+                  // being spoken is tinted, upcoming blocks are dimmed.
+                  <div className="font-medium leading-relaxed prose prose-sm max-w-none prose-p:mb-2 prose-p:last:mb-0" style={{ fontSize: chatFontSize }}>
+                    <KaraokeMarkdown
+                      markdown={msg.content}
+                      rawTextLength={(voiceSpokenTextRef.current.get(msg.id) ?? msg.content).length}
+                      offset={voiceHighlight.offset}
+                      highlightColor={chatColor}
+                      renderBlock={renderAssistantMarkdown}
+                    />
+                  </div>
                 ) : msg.role === 'assistant' && voiceHighlight?.messageId === msg.id ? (
                   // Voice karaoke: while this answer is being spoken aloud,
                   // show the raw spoken transcript with the heard portion
-                  // highlighted, clocked off audio playback. Swaps back to
-                  // normal Markdown the moment playback ends.
+                  // highlighted, clocked off audio playback. Upgrades to the
+                  // formatted block-level view above if the formatted version
+                  // arrives mid-speech; swaps to normal Markdown when playback
+                  // ends.
                   <div className="font-medium leading-relaxed" style={{ fontSize: chatFontSize }}>
                     <KaraokeText
                       text={voiceSpokenTextRef.current.get(msg.id) ?? msg.content}
@@ -5285,54 +5365,7 @@ export default function EmbedChat() {
                   </div>
                 ) : msg.role === 'assistant' ? (
                   <div className="font-medium leading-relaxed prose prose-sm max-w-none prose-p:mb-2 prose-p:last:mb-0" style={{ fontSize: chatFontSize }}>
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm, remarkMath]}
-                      rehypePlugins={[rehypeKatex]}
-                      components={{
-                        p: ({ children }) => <p className="mb-2 last:mb-0 font-medium">{children}</p>,
-                        ul: ({ children }) => <ul className="mb-2 pl-4 list-disc">{children}</ul>,
-                        ol: ({ children }) => <ol className="mb-2 pl-4 list-decimal">{children}</ol>,
-                        li: ({ children }) => <li className="mb-1">{children}</li>,
-                        strong: ({ children }) => <strong className="font-bold">{children}</strong>,
-                        em: ({ children }) => <em className="italic">{children}</em>,
-                        img: ({ src, alt }) => (
-                          <img
-                            src={typeof src === 'string' ? src : ''}
-                            alt={alt || 'curriculum image'}
-                            loading="lazy"
-                            className="my-2 max-w-full h-auto rounded-lg border border-border"
-                          />
-                        ),
-                        a: ({ href, children }) => {
-                          const handleClick = (e: React.MouseEvent) => {
-                            e.preventDefault();
-                            if (!href || href === 'null' || href === 'undefined') return;
-                            const url = href.startsWith('http') ? href : `https://${href}`;
-                            try {
-                              if (window.parent && window.parent !== window) {
-                                window.parent.postMessage({ type: 'OPEN_URL', url }, '*');
-                              } else {
-                                window.open(url, '_blank', 'noopener,noreferrer');
-                              }
-                            } catch {
-                              window.open(url, '_blank', 'noopener,noreferrer');
-                            }
-                          };
-                          return (
-                            <a
-                              href={href || '#'}
-                              onClick={handleClick}
-                              className="text-primary underline hover:opacity-80 cursor-pointer"
-                              rel="noopener noreferrer"
-                            >
-                              {children}
-                            </a>
-                          );
-                        },
-                      }}
-                    >
-                      {convertLatexDelimiters(msg.content)}
-                    </ReactMarkdown>
+                    {renderAssistantMarkdown(msg.content)}
                   </div>
                 ) : msg.role === 'user' && msg.content.startsWith('[RESUME_UPLOAD]') ? (
                   <div className="flex items-center gap-2 text-sm">
@@ -5988,6 +6021,8 @@ export default function EmbedChat() {
                   inlineVoiceAIMessagesRef.current.clear();
                   voiceSpokenTextRef.current.clear();
                   setVoiceHighlight(null);
+                  voiceFormattedIdsRef.current.clear();
+                  setVoiceFormattedIds(new Set());
                   setStreamingMessageId(null);
                 }}
                 userId={widgetUserIdRef.current}
@@ -6028,12 +6063,16 @@ export default function EmbedChat() {
                   setStreamingMessageId(messageId);
                 }}
                 onAIMessageChunk={(messageId, text) => {
-                  const existing = inlineVoiceAIMessagesRef.current.get(messageId) || '';
-                  const updated = existing + text;
-                  inlineVoiceAIMessagesRef.current.set(messageId, updated);
                   // Raw spoken transcript — the karaoke highlight's source of
                   // truth, immune to formatted-Markdown replacement mid-answer.
                   voiceSpokenTextRef.current.set(messageId, (voiceSpokenTextRef.current.get(messageId) || '') + text);
+                  // Once the formatted version has replaced this bubble, the
+                  // formatted Markdown is authoritative — a late raw chunk
+                  // (formatter-before-first-chunk race) must not overwrite it.
+                  if (voiceFormattedIdsRef.current.has(messageId)) return;
+                  const existing = inlineVoiceAIMessagesRef.current.get(messageId) || '';
+                  const updated = existing + text;
+                  inlineVoiceAIMessagesRef.current.set(messageId, updated);
                   setMessages(prev => prev.map(m => m.id === messageId ? { ...m, content: updated } : m));
                 }}
                 onAIMessageDone={(messageId) => {
@@ -6049,6 +6088,13 @@ export default function EmbedChat() {
                     // needed. Covers interruption, where onAIMessageDone
                     // never fires for the bubble.
                     voiceSpokenTextRef.current.delete(messageId);
+                    voiceFormattedIdsRef.current.delete(messageId);
+                    setVoiceFormattedIds(prev => {
+                      if (!prev.has(messageId)) return prev;
+                      const next = new Set(prev);
+                      next.delete(messageId);
+                      return next;
+                    });
                   } else {
                     setVoiceHighlight({ messageId, offset: charOffset });
                   }
@@ -6062,6 +6108,19 @@ export default function EmbedChat() {
                   setMessages(prev => prev.map(m =>
                     m.id === messageId ? { ...m, content: formattedMarkdown } : m
                   ));
+                  // Upgrade the karaoke to the block-level formatted view only
+                  // while this bubble is still being spoken (its raw spoken
+                  // transcript exists only until playback ends). A formatted
+                  // replace after playback needs no karaoke state at all.
+                  if (voiceSpokenTextRef.current.has(messageId)) {
+                    voiceFormattedIdsRef.current.add(messageId);
+                    setVoiceFormattedIds(prev => {
+                      if (prev.has(messageId)) return prev;
+                      const next = new Set(prev);
+                      next.add(messageId);
+                      return next;
+                    });
+                  }
                 }}
               />
             </Suspense>
