@@ -1400,34 +1400,50 @@ router.post("/api/topscholar/tester/mint-launch-token", ...topscholarGuards, asy
   const studentIdV = str(body.studentId);
   const planIdV = str(body.planId);
   const doubtIdV = str(body.doubtId);
-  const nameV = str(body.name) || "Live Test Student";
+  // Preview mode mints a scope-only token for the Tester's own widget preview.
+  // It claims no student and binds to no doubt, so it writes nothing to the
+  // client's system — it exists so the preview carries a real signed identity
+  // instead of unsigned scope params, which voice refuses.
+  const isPreview = str(body.mode) === "preview";
+  const nameV = str(body.name) || (isPreview ? "Preview Student" : "Live Test Student");
 
   if (!boardV || !mediumV || !gradeV || !subjectV) {
     return res.status(400).json({ error: "board, medium, grade and subject are all required." });
   }
-  if (!studentIdV || !doubtIdV) {
+  // A live session drives the real doubt path against the client's platform, so
+  // it must say which student and doubt it is acting as. A preview has neither.
+  if (!isPreview && (!studentIdV || !doubtIdV)) {
     return res.status(400).json({ error: "studentId and doubtId are required for a live doubt session." });
   }
 
   const { signLaunchToken } = await import("../services/topscholar/tokenService");
   const nowSec = Math.floor(Date.now() / 1000);
-  const exp = nowSec + 2 * 60 * 60; // 2h — long enough for a test session, short enough to limit misuse.
+  // Long enough for a test session, short enough to limit misuse. A preview
+  // token authorizes anonymous scoped voice and rides in an iframe URL, so it
+  // gets a shorter life than a live session token; reloading the Tester mints
+  // a fresh one.
+  const exp = nowSec + (isPreview ? 60 * 60 : 2 * 60 * 60);
   const token = signLaunchToken(cfg.tokenSecret, {
     board: boardV,
     medium: mediumV,
     grade: gradeV,
     subject: subjectV,
     chapter: chapterV || null,
-    studentId: studentIdV,
+    // A preview must not carry a student or doubt identity: a doubt id would
+    // bind the preview to a real doubt's lock state and let it mirror messages
+    // onto the client's platform.
+    studentId: isPreview ? null : studentIdV,
     name: nameV,
-    doubtId: doubtIdV,
-    planId: planIdV || null,
+    doubtId: isPreview ? null : doubtIdV,
+    planId: isPreview ? null : planIdV || null,
     exp,
   });
 
   const actor = (req as any).user;
   console.log(
-    `[TopScholar][Tester] Live-test launch token minted by user=${actor?.id || "?"} account=${businessAccountId} for doubt=${doubtIdV} student=${studentIdV} plan=${planIdV || "-"} at ${new Date().toISOString()}`,
+    isPreview
+      ? `[TopScholar][Tester] Preview launch token minted by user=${actor?.id || "?"} account=${businessAccountId} scope=${boardV}/${mediumV}/${gradeV}/${subjectV}${chapterV ? `/${chapterV}` : ""} at ${new Date().toISOString()}`
+      : `[TopScholar][Tester] Live-test launch token minted by user=${actor?.id || "?"} account=${businessAccountId} for doubt=${doubtIdV} student=${studentIdV} plan=${planIdV || "-"} at ${new Date().toISOString()}`,
   );
   res.json({ token, expiresAt: new Date(exp * 1000).toISOString() });
 });

@@ -61,8 +61,18 @@ export function InlineVoiceMode({
   const [isConnecting, setIsConnecting] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [audioVolume, setAudioVolume] = useState(0);
+  // Why voice could not start. Shown in the control itself rather than only as
+  // a toast: a failure before the session is ready leaves the button looking
+  // identical to an idle one, so without this it reads as simply not clicking.
+  const [voiceError, setVoiceError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  // Whether voice has had a working session at any point since this control was
+  // opened. Distinguishes "never started" (tell the user — they are waiting on a
+  // click that did nothing) from "dropped mid-session" (reconnect quietly).
+  // Deliberately NOT reset per connection attempt, or a flaky reconnect would
+  // stop retrying and report a failure the user never saw start.
+  const hadReadySessionRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioQueueRef = useRef<AudioBuffer[]>([]);
   const isPlayingRef = useRef(false);
@@ -219,6 +229,7 @@ export function InlineVoiceMode({
       reconnectTimeoutRef.current = null;
     }
     setIsConnecting(true);
+    setVoiceError(null);
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
     let wsUrl = `${protocol}//${host}/ws/voice?businessAccountId=${businessAccountId}&userId=${userId}`;
@@ -278,11 +289,25 @@ export function InlineVoiceMode({
         heartbeatTimeoutRef.current = null;
       }
       if (sessionClosedByServerRef.current) return;
+      // Closed without ever having had a session: the server refused the
+      // upgrade. A rejected upgrade carries no close reason the browser can
+      // read, so the wording stays general. Say something and let them retry —
+      // going quietly offline is what made this look like a dead button.
+      if (!hadReadySessionRef.current) {
+        console.warn('[InlineVoice] Voice socket closed before the session was ready');
+        setState('idle');
+        setVoiceError("Voice couldn't start. Tap to retry.");
+        return;
+      }
       if (shouldAutoRestartRef.current && reconnectAttemptsRef.current < maxReconnectAttempts) {
         const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 10000);
         reconnectAttemptsRef.current++;
         reconnectTimeoutRef.current = setTimeout(() => connectWebSocket(), delay);
+        return;
       }
+      // Had a session, then lost it and ran out of retries.
+      setState('idle');
+      setVoiceError('Voice disconnected. Tap to reconnect.');
     };
   };
 
@@ -290,6 +315,8 @@ export function InlineVoiceMode({
     switch (data.type) {
       case 'ready':
         if (data.conversationId) conversationIdRef.current = data.conversationId;
+        hadReadySessionRef.current = true;
+        setVoiceError(null);
         sessionClosedByServerRef.current = false;
         aiDoneReceivedRef.current = false;
         // Fresh session / reconnect — discard any stale PCM carry byte from
@@ -925,6 +952,9 @@ export function InlineVoiceMode({
 
   const cleanup = () => {
     shouldAutoRestartRef.current = false;
+    // Closing the control ends the session's history: the next open starts a
+    // fresh attempt, where a failure is a genuine "never started".
+    hadReadySessionRef.current = false;
     if (currentAIMessageIdRef.current) {
       onAIMessageDone?.(currentAIMessageIdRef.current);
       currentAIMessageIdRef.current = null;
@@ -954,6 +984,7 @@ export function InlineVoiceMode({
       }
       setState('idle');
       setCurrentTranscript('');
+      setVoiceError(null);
       setIsOnline(false);
       isOnlineRef.current = false;
       setIsConnecting(false);
@@ -977,7 +1008,8 @@ export function InlineVoiceMode({
   const stateLabel = state === 'listening' ? (currentTranscript || 'Listening...') :
     state === 'thinking' ? 'Thinking...' :
     state === 'speaking' ? 'Speaking...' :
-    isConnecting ? 'Connecting...' : 'Tap to start';
+    isConnecting ? 'Connecting...' :
+    voiceError ? voiceError : 'Tap to start';
 
   return (
     <div className="flex items-center gap-3 px-3 py-2 min-h-[56px]">
@@ -992,7 +1024,16 @@ export function InlineVoiceMode({
       <div className="flex-1 flex items-center gap-3 min-w-0">
         <button
           onClick={async () => {
-            if (state === 'idle' && isOnline && !isConnecting) {
+            if (isConnecting) return;
+            // Offline covers both a refused session and a dropped one. Retry on
+            // click instead of ignoring it — silently swallowing the click is
+            // what made this read as an unresponsive button.
+            if (!isOnline) {
+              reconnectAttemptsRef.current = 0;
+              connectWebSocket();
+              return;
+            }
+            if (state === 'idle') {
               shouldAutoRestartRef.current = true;
               try { await startRecording(); } catch {}
             }
@@ -1078,7 +1119,7 @@ export function InlineVoiceMode({
                 </div>
               )}
               {state === 'thinking' && <Loader2 className="w-4 h-4 animate-spin" style={{ color: chatColor }} />}
-              <span className="text-sm text-gray-500">{stateLabel}</span>
+              <span className={`text-sm ${voiceError && state === 'idle' && !isConnecting ? 'text-red-600' : 'text-gray-500'}`}>{stateLabel}</span>
             </div>
           )}
         </div>

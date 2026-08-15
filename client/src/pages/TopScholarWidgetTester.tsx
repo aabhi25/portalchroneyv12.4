@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -197,6 +197,60 @@ export default function TopScholarWidgetTester() {
   // mandatory in the tester) so answers are scoped down to a single chapter.
   const hasFullSelection = hasBaseSelection && !!subject && !!chapter;
 
+  // Preview launch identity. Voice refuses an unsigned widget session on a
+  // TopScholar account, so the preview needs a genuinely signed token rather
+  // than the plain scope params it used to load with — chat never went through
+  // that check, which is why only voice was dead. Scope-only: it names no
+  // student and binds to no doubt, so nothing reaches the client's system.
+  // The result is stored WITH the scope it was signed for, and read back only
+  // when that still matches the current selection. A signed token outranks the
+  // URL's scope params on the server, so mounting the preview while a previous
+  // scope's token sat in state would silently preview the wrong chapter. Keying
+  // it invalidates the token during the same render as the scope change —
+  // before the iframe can remount with it — which an effect cannot do, since
+  // effects run after that render has already committed.
+  const scopeKey = `${board}|${medium}|${grade}|${subject}|${chapter}`;
+  const [signedPreview, setSignedPreview] = useState<{
+    scopeKey: string;
+    token: string;
+    error: string;
+  } | null>(null);
+  const currentPreview = signedPreview?.scopeKey === scopeKey ? signedPreview : null;
+  const previewToken = currentPreview?.token ?? "";
+  const previewTokenError = currentPreview?.error ?? "";
+
+  useEffect(() => {
+    // Live mode brings its own token and wins.
+    if (!hasFullSelection || !businessAccountId || liveToken) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/topscholar/tester/mint-launch-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ mode: "preview", board, medium, grade, subject, chapter }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) throw new Error(json?.error || "Could not sign this preview session.");
+        setSignedPreview({ scopeKey, token: json.token || "", error: "" });
+      } catch (err) {
+        if (cancelled) return;
+        // Non-fatal: the preview still loads with unsigned scope params, so chat
+        // behaves exactly as before. Only voice needs the signature.
+        setSignedPreview({
+          scopeKey,
+          token: "",
+          error: err instanceof Error ? err.message : "Could not sign this preview session.",
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasFullSelection, businessAccountId, liveToken, scopeKey, board, medium, grade, subject, chapter]);
+
   // Match count for the selected subject's content pack.
   const selectedSubject = useMemo(
     () => (subject ? subjects.find((s) => s.name === subject) ?? null : null),
@@ -209,22 +263,30 @@ export default function TopScholarWidgetTester() {
   // token, when present, wins over the simulation: the widget is loaded exactly
   // as the client portal would launch it (signed token, no preview flags).
   const isLive = !!liveToken;
-  const previewKey = `${board}|${medium}|${grade}|${subject}|${chapter}|${isLive ? `live:${liveToken.slice(-12)}` : simulateDoubt ? "doubt" : "plain"}`;
-  const previewUrl = hasFullSelection
-    ? isLive
-      ? `/embed/chat?businessAccountId=${encodeURIComponent(businessAccountId)}&token=${encodeURIComponent(liveToken)}`
-      : `/embed/chat?businessAccountId=${encodeURIComponent(
-          businessAccountId,
-        )}&board=${encodeURIComponent(board)}&medium=${encodeURIComponent(
-          medium,
-        )}&grade=${encodeURIComponent(grade)}&subject=${encodeURIComponent(
-          subject,
-        )}&chapter=${encodeURIComponent(chapter)}${
-          simulateDoubt
-            ? `&previewDoubt=1&previewDoubtCooldown=${encodeURIComponent(String(doubtCooldownSeconds))}`
-            : ""
-        }`
-    : "";
+  const previewKey = `${board}|${medium}|${grade}|${subject}|${chapter}|${isLive ? `live:${liveToken.slice(-12)}` : simulateDoubt ? "doubt" : "plain"}|${previewToken.slice(-12)}`;
+  // Hold the preview back until this scope's signing attempt has settled, so
+  // the iframe mounts once with its final URL — never with a stale token, and
+  // never reloading mid-conversation when the token lands.
+  const previewUrl =
+    !hasFullSelection || (!isLive && !currentPreview)
+      ? ""
+      : isLive
+        ? `/embed/chat?businessAccountId=${encodeURIComponent(businessAccountId)}&token=${encodeURIComponent(liveToken)}`
+        : `/embed/chat?businessAccountId=${encodeURIComponent(
+            businessAccountId,
+          )}&board=${encodeURIComponent(board)}&medium=${encodeURIComponent(
+            medium,
+          )}&grade=${encodeURIComponent(grade)}&subject=${encodeURIComponent(
+            subject,
+          )}&chapter=${encodeURIComponent(chapter)}${
+            // The scope params stay for the widget's own client-side use; the
+            // token is what authorizes voice.
+            previewToken ? `&token=${encodeURIComponent(previewToken)}` : ""
+          }${
+            simulateDoubt
+              ? `&previewDoubt=1&previewDoubtCooldown=${encodeURIComponent(String(doubtCooldownSeconds))}`
+              : ""
+          }`;
 
   // Poll the outbound sync activity while a live session is running so the admin
   // can watch messages / close / escalation email land on the client's system.
@@ -843,7 +905,18 @@ export default function TopScholarWidgetTester() {
             </CardTitle>
           </CardHeader>
           <CardContent className="flex-1">
-            {hasFullSelection ? (
+            {!hasFullSelection ? (
+              <div className="h-[720px] w-full rounded-lg border border-dashed flex items-center justify-center text-sm text-muted-foreground text-center px-6">
+                Select a board, medium, grade, subject, and chapter to load the live widget preview.
+              </div>
+            ) : !previewUrl ? (
+              <div
+                className="h-[720px] w-full rounded-lg border border-dashed flex items-center justify-center text-sm text-muted-foreground text-center px-6"
+                data-testid="preview-signing"
+              >
+                Preparing the preview session...
+              </div>
+            ) : (
               <div className="h-[720px] w-full rounded-lg overflow-hidden border bg-background">
                 <iframe
                   ref={previewIframeRef}
@@ -854,10 +927,11 @@ export default function TopScholarWidgetTester() {
                   data-testid="iframe-widget-preview"
                 />
               </div>
-            ) : (
-              <div className="h-[720px] w-full rounded-lg border border-dashed flex items-center justify-center text-sm text-muted-foreground text-center px-6">
-                Select a board, medium, grade, subject, and chapter to load the live widget preview.
-              </div>
+            )}
+            {!isLive && previewTokenError && (
+              <p className="mt-2 text-xs text-red-600" data-testid="text-preview-token-error">
+                Voice is unavailable in this preview: {previewTokenError} Chat is unaffected.
+              </p>
             )}
           </CardContent>
         </Card>
