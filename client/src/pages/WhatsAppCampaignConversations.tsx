@@ -9,7 +9,10 @@ import {
   CampaignConversationsPanel,
   type Recipient,
   type CampaignMessage,
+  type StatusKey,
 } from "@/components/whatsapp/CampaignConversationsPanel";
+
+const PAGE_SIZE = 100;
 
 interface CampaignSummary {
   id: string; name: string; status: string;
@@ -22,6 +25,13 @@ interface CampaignDetail {
 }
 interface RecipientsResponse {
   recipients: Recipient[];
+  counts: {
+    total: number; pending: number; queued: number; sent: number;
+    delivered: number; read: number; failed: number; expired: number;
+    replied: number; opted_out: number;
+  };
+  limit: number;
+  offset: number;
 }
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -33,6 +43,8 @@ export default function WhatsAppCampaignConversations() {
   const { toast } = useToast();
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
   const [selectedRecipient, setSelectedRecipient] = useState<Recipient | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusKey>("all");
+  const [page, setPage] = useState(0);
 
   const { data: campaigns = [], isLoading: campaignsLoading } = useQuery<CampaignSummary[]>({
     queryKey: ["/api/whatsapp/campaigns"],
@@ -46,10 +58,12 @@ export default function WhatsAppCampaignConversations() {
     }
   }, [campaigns, selectedCampaignId]);
 
-  // Reset selected recipient when campaign changes
+  // Reset selected recipient and filter when campaign changes
   const handleCampaignChange = (id: string) => {
     setSelectedCampaignId(id);
     setSelectedRecipient(null);
+    setStatusFilter("all");
+    setPage(0);
   };
 
   const { data: campaignDetail } = useQuery<CampaignDetail>({
@@ -58,13 +72,46 @@ export default function WhatsAppCampaignConversations() {
     refetchInterval: (q) => (q.state.error ? false : 10000),
   });
 
-  const { data: recipientsData, isLoading: recipientsLoading } = useQuery<RecipientsResponse>({
-    queryKey: [`/api/whatsapp/campaigns/${selectedCampaignId}/recipients`],
+  // Counts-only query — always fetches full cross-status totals for tab badges.
+  const { data: countsData } = useQuery<RecipientsResponse>({
+    queryKey: [`/api/whatsapp/campaigns/${selectedCampaignId}/recipients`, "counts"],
+    queryFn: () =>
+      apiRequest<RecipientsResponse>("GET", `/api/whatsapp/campaigns/${selectedCampaignId}/recipients?limit=1`),
     enabled: !!selectedCampaignId,
     refetchInterval: (q) => (q.state.error ? false : 10000),
     refetchOnMount: "always",
   });
+
+  // Filtered + paginated list query — same model for every status tab.
+  const listParams =
+    statusFilter === "all"
+      ? `?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`
+      : `?status=${statusFilter}&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`;
+
+  const { data: recipientsData, isLoading: recipientsLoading } = useQuery<RecipientsResponse>({
+    queryKey: [`/api/whatsapp/campaigns/${selectedCampaignId}/recipients`, "list", statusFilter, page],
+    queryFn: () =>
+      apiRequest<RecipientsResponse>("GET", `/api/whatsapp/campaigns/${selectedCampaignId}/recipients${listParams}`),
+    enabled: !!selectedCampaignId,
+    refetchInterval: (q) => (q.state.error ? false : 10000),
+    refetchOnMount: "always",
+    placeholderData: (prev) => prev,
+  });
   const recipients = recipientsData?.recipients ?? [];
+
+  const counts = countsData?.counts;
+  const filterTotal =
+    statusFilter === "all"
+      ? (counts?.total ?? 0)
+      : (counts?.[statusFilter as keyof typeof counts] as number | undefined) ?? 0;
+  const totalPages = Math.max(1, Math.ceil(filterTotal / PAGE_SIZE));
+
+  // Clamp page whenever filterTotal shrinks (e.g. recipients changing status
+  // during an active send while the counts query polls for updates).
+  useEffect(() => {
+    const maxPage = Math.max(0, totalPages - 1);
+    if (page > maxPage) setPage(maxPage);
+  }, [filterTotal, totalPages, page]);
 
   const { data: messages = [] } = useQuery<CampaignMessage[]>({
     queryKey: [`/api/whatsapp/campaigns/${selectedCampaignId}/recipients/${selectedRecipient?.id}/messages`],
@@ -152,6 +199,13 @@ export default function WhatsAppCampaignConversations() {
         messages={messages}
         reconcileMutation={reconcileMutation}
         resendOneMutation={resendOneMutation}
+        statusFilter={statusFilter}
+        setStatusFilter={(key) => { setStatusFilter(key); setPage(0); }}
+        page={page}
+        setPage={setPage}
+        filterTotal={filterTotal}
+        totalPages={totalPages}
+        counts={counts}
       />
     </div>
   );

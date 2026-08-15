@@ -7,8 +7,23 @@ import { useEffect, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { RefreshCw, MessageCircle, RotateCcw, Info } from "lucide-react";
+import { RefreshCw, MessageCircle, RotateCcw, Info, ChevronLeft, ChevronRight } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+
+export const STATUS_FILTERS = [
+  { key: "all",       label: "All" },
+  { key: "pending",   label: "Pending" },
+  { key: "queued",    label: "Queued" },
+  { key: "sent",      label: "Sent" },
+  { key: "delivered", label: "Delivered" },
+  { key: "read",      label: "Read" },
+  { key: "replied",   label: "Replied" },
+  { key: "failed",    label: "Failed" },
+  { key: "expired",   label: "Expired" },
+  { key: "opted_out", label: "Opted out" },
+] as const;
+
+export type StatusKey = (typeof STATUS_FILTERS)[number]["key"];
 
 export interface Recipient {
   id: string; phone: string; name: string;
@@ -48,6 +63,10 @@ export function CampaignConversationsPanel({
   campaign, recipients, isLoading,
   selectedRecipient, setSelectedRecipient,
   messages, reconcileMutation, resendOneMutation,
+  statusFilter = "all", setStatusFilter,
+  page = 0, setPage,
+  filterTotal = 0, totalPages = 1,
+  counts,
 }: {
   campaign: { status: string; aiAgentName?: string } | null;
   recipients: Recipient[];
@@ -57,6 +76,14 @@ export function CampaignConversationsPanel({
   messages: CampaignMessage[];
   reconcileMutation: { mutate: () => void; isPending: boolean };
   resendOneMutation: { mutate: (id: string) => void; isPending: boolean };
+  // Filter / pagination (optional — omitting them hides the filter UI)
+  statusFilter?: StatusKey;
+  setStatusFilter?: (key: StatusKey) => void;
+  page?: number;
+  setPage?: (fn: (p: number) => number) => void;
+  filterTotal?: number;
+  totalPages?: number;
+  counts?: Record<string, number>;
 }) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -74,7 +101,7 @@ export function CampaignConversationsPanel({
           <MessageCircle className="h-4 w-4" />
           Conversations
           <span className="bg-white/20 text-white text-xs px-2 py-0.5 rounded-full">
-            {recipients.length}
+            {setStatusFilter && filterTotal > 0 ? filterTotal : recipients.length}
           </span>
         </div>
         {canRefresh && (
@@ -94,6 +121,39 @@ export function CampaignConversationsPanel({
       <div className="flex h-[540px]">
         {/* Left — recipient list */}
         <div className="w-72 shrink-0 border-r flex flex-col">
+
+          {/* Status filter pills — only rendered when filter control is wired up */}
+          {setStatusFilter && counts !== undefined && (
+            <div className="px-2 pt-2 pb-1 border-b flex flex-wrap gap-1">
+              {STATUS_FILTERS.map(f => {
+                const count: number =
+                  f.key === "all"
+                    ? (counts?.total ?? 0)
+                    : (counts?.[f.key] ?? 0);
+                const isActive = statusFilter === f.key;
+                if (f.key !== "all" && count === 0) return null;
+                return (
+                  <button
+                    key={f.key}
+                    onClick={() => setStatusFilter(f.key)}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors ${
+                      isActive
+                        ? "bg-emerald-600 text-white border-emerald-600"
+                        : "bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    {f.label}
+                    {count > 0 && (
+                      <span className={`font-semibold ${isActive ? "text-white/80" : "text-gray-400"}`}>
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <div className="flex-1 overflow-y-auto divide-y">
             {isLoading ? (
               <div className="p-6 text-center text-gray-400 text-sm">Loading…</div>
@@ -167,6 +227,34 @@ export function CampaignConversationsPanel({
               );
             })}
           </div>
+
+          {/* Pagination footer — shown when there's more than one page */}
+          {setPage && totalPages > 1 && (
+            <div className="border-t px-2 py-1.5 flex items-center justify-between bg-gray-50 shrink-0">
+              <span className="text-[10px] text-gray-500">
+                {page * 100 + 1}–{Math.min((page + 1) * 100, filterTotal)} of {filterTotal}
+              </span>
+              <div className="flex items-center gap-0.5">
+                <Button
+                  variant="ghost" size="sm"
+                  onClick={() => setPage(p => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  className="h-5 w-5 p-0"
+                >
+                  <ChevronLeft className="h-3 w-3" />
+                </Button>
+                <span className="text-[10px] text-gray-500 px-1">{page + 1}/{totalPages}</span>
+                <Button
+                  variant="ghost" size="sm"
+                  onClick={() => setPage(p => p + 1)}
+                  disabled={(page + 1) * 100 >= filterTotal}
+                  className="h-5 w-5 p-0"
+                >
+                  <ChevronRight className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right — chat thread */}
