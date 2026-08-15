@@ -29,11 +29,13 @@ export function WhatsAppSectionPanel({
   const [location, setLocation] = useLocation();
   const [collapsed, setCollapsed] = useState(false);
 
+  const whatsappEnabled = user?.businessAccount?.whatsappEnabled === true;
   const marketingEnabled =
-    user?.businessAccount?.whatsappEnabled === true &&
-    user?.businessAccount?.whatsappMarketingEnabled === true;
+    whatsappEnabled && user?.businessAccount?.whatsappMarketingEnabled === true;
 
-  const sections = marketingEnabled ? getWhatsappSections({ marketingEnabled: true }) : [];
+  // Show the panel for every WhatsApp-enabled account, not just marketing ones.
+  // marketingEnabled is still passed through so Campaigns only appears when purchased.
+  const sections = whatsappEnabled ? getWhatsappSections({ marketingEnabled }) : [];
   const activeSection = sections.find(s => s.items.some(i => i.matches(location)));
 
   const { data: readiness } = useQuery<WhatsappReadiness>({
