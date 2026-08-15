@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zen Diamond — Widget Embed Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f8f5f0;
+      color: #1a1a1a;
+    }
+
+    /* ── Header ── */
+    header {
+      background: #fff;
+      border-bottom: 1px solid #e5e0d8;
+      padding: 0 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 64px;
+    }
+    .logo {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #1a1a1a;
+    }
+    nav a {
+      margin-left: 24px;
+      text-decoration: none;
+      color: #555;
+      font-size: 14px;
+    }
+    nav a:hover { color: #1a1a1a; }
+
+    /* ── Hero ── */
+    .hero {
+      background: linear-gradient(135deg, #1a1a1a 0%, #3d2b1f 100%);
+      color: #fff;
+      text-align: center;
+      padding: 80px 32px;
+    }
+    .hero h1 {
+      font-size: clamp(28px, 5vw, 52px);
+      font-weight: 300;
+      letter-spacing: 0.12em;
+      margin-bottom: 16px;
+    }
+    .hero p {
+      font-size: 16px;
+      color: #c8b99a;
+      letter-spacing: 0.06em;
+      max-width: 480px;
+      margin: 0 auto 32px;
+    }
+    .hero-cta {
+      display: inline-block;
+      background: #c8a96e;
+      color: #fff;
+      padding: 14px 36px;
+      border-radius: 2px;
+      text-decoration: none;
+      font-size: 13px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    /* ── Categories ── */
+    .categories {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1px;
+      background: #e5e0d8;
+      margin: 48px 32px;
+      border: 1px solid #e5e0d8;
+    }
+    .category {
+      background: #fff;
+      padding: 32px 24px;
+      text-align: center;
+    }
+    .category-icon { font-size: 32px; margin-bottom: 12px; }
+    .category h3 { font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; color: #1a1a1a; }
+
+    /* ── Products ── */
+    .section-title {
+      text-align: center;
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #888;
+      margin: 48px 32px 24px;
+    }
+    .products {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 24px;
+      margin: 0 32px 48px;
+    }
+    .product {
+      background: #fff;
+      border: 1px solid #e5e0d8;
+      overflow: hidden;
+    }
+    .product-img {
+      width: 100%;
+      aspect-ratio: 1;
+      background: linear-gradient(135deg, #f0ece6 0%, #e8e0d4 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 48px;
+    }
+    .product-info { padding: 16px; }
+    .product-name { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+    .product-price { font-size: 13px; color: #888; margin-bottom: 12px; }
+    .product-btn {
+      width: 100%;
+      background: #1a1a1a;
+      color: #fff;
+      border: none;
+      padding: 10px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .product-btn:hover { background: #333; }
+
+    /* ── Debug banner ── */
+    .debug-bar {
+      background: #1e3a5f;
+      color: #7ec8f0;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 10px 32px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .debug-bar strong { color: #fff; }
+    #base-url-display { color: #a8e6a3; }
+
+    /* ── Footer ── */
+    footer {
+      background: #1a1a1a;
+      color: #888;
+      text-align: center;
+      padding: 32px;
+      font-size: 13px;
+      margin-top: 48px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Debug bar: shows where the widget iframe will point -->
+  <div class="debug-bar">
+    <strong>🧪 Widget embed test page</strong>
+    &nbsp;|&nbsp;
+    Business ID: <strong>729c4c3d-c748-4f91-b7eb-d1d4232d25d2</strong>
+    &nbsp;|&nbsp;
+    <code>window.__chroneyBaseUrl</code>: <span id="base-url-display">waiting…</span>
+  </div>
+
+  <header>
+    <div class="logo">ZEN DIAMOND</div>
+    <nav>
+      <a href="#">Collections</a>
+      <a href="#">Gifting</a>
+      <a href="#">Men's</a>
+      <a href="#">About</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <h1>Natural Diamond Jewellery</h1>
+    <p>For Everyday Luxury — Crafted with Precision, Worn with Pride</p>
+    <a href="#" class="hero-cta">Explore Collections</a>
+  </section>
+
+  <div class="categories">
+    <div class="category"><div class="category-icon">💍</div><h3>Rings</h3></div>
+    <div class="category"><div class="category-icon">✨</div><h3>Earrings</h3></div>
+    <div class="category"><div class="category-icon">📿</div><h3>Necklaces</h3></div>
+    <div class="category"><div class="category-icon">⌚</div><h3>Bracelets</h3></div>
+  </div>
+
+  <div class="section-title">Featured Collection</div>
+  <div class="products">
+    <div class="product">
+      <div class="product-img">💎</div>
+      <div class="product-info">
+        <div class="product-name">Zen Brilliance Solitaire Ring</div>
+        <div class="product-price">₹45,000</div>
+        <button class="product-btn">Shop Now</button>
+      </div>
+    </div>
+    <div class="product">
+      <div class="product-img">💍</div>
+      <div class="product-info">
+        <div class="product-name">Eternity Diamond Band</div>
+        <div class="product-price">₹38,500</div>
+        <button class="product-btn">Shop Now</button>
+      </div>
+    </div>
+    <div class="product">
+      <div class="product-img">✨</div>
+      <div class="product-info">
+        <div class="product-name">Diamond Drop Earrings</div>
+        <div class="product-price">₹28,000</div>
+        <button class="product-btn">Shop Now</button>
+      </div>
+    </div>
+    <div class="product">
+      <div class="product-img">📿</div>
+      <div class="product-info">
+        <div class="product-name">Natural Diamond Pendant</div>
+        <div class="product-price">₹52,000</div>
+        <button class="product-btn">Shop Now</button>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <p>© 2026 Zen Diamond · Natural Diamond Jewellery for Everyday Luxury · <a href="https://india.zendiamond.com" style="color:#888">india.zendiamond.com</a></p>
+  </footer>
+
+  <!--
+    AI Chroney Widget — using LOCAL widget-loader.js to test our fix.
+    In production this src would be: https://portal.aichroney.com/widget-loader.js
+    Here we use a relative URL so the request goes to THIS server, serving our
+    patched public/widget-loader.js and public/widget.min.js.
+  -->
+  <script src="/widget-loader.js" data-business-id="729c4c3d-c748-4f91-b7eb-d1d4232d25d2"></script>
+
+  <!-- Show the resolved base URL in the debug bar after the widget loads -->
+  <script>
+    setTimeout(function() {
+      var el = document.getElementById('base-url-display');
+      if (el) {
+        var base = window.__chroneyBaseUrl || '(not set — fallback to origin)';
+        el.textContent = base;
+        el.style.color = window.__chroneyBaseUrl ? '#a8e6a3' : '#f5a623';
+      }
+    }, 500);
+  </script>
+
+</body>
+</html>

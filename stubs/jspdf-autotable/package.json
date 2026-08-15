@@ -1,0 +1,10 @@
+{
+  "name": "jspdf-autotable",
+  "version": "0.0.1",
+  "description": "Stub for blocked jspdf-autotable package",
+  "main": "index.js",
+  "module": "index.js",
+  "exports": {
+    ".": "./index.js"
+  }
+}

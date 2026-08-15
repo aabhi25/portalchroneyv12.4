@@ -1,0 +1,2723 @@
+import WebSocket from 'ws';
+import OpenAI from 'openai';
+import { storage } from './storage';
+import { conversationMemory } from './conversationMemory';
+import { aiTools } from './aiTools';
+import { ToolExecutionService } from './services/toolExecutionService';
+import { journeyOrchestrator } from './services/journeyOrchestrator';
+import { journeyService } from './services/journeyService';
+import { isElevenLabsVoice, getElevenLabsVoiceId, synthesizeSpeechStreaming } from './services/elevenlabsService';
+import { formatVoiceTranscript } from './services/voiceFormatterService';
+import { isTopscholarAccount } from './services/topscholar/config';
+
+interface VoiceConversation {
+  clientWs: WebSocket; // WebSocket to client (browser)
+  openaiWs: WebSocket | null; // WebSocket to OpenAI Realtime API
+  businessAccountId: string;
+  userId: string;
+  openaiApiKey: string;
+  sessionId: string | null;
+  conversationId: string; // Database conversation ID - now required and used as key
+  personality?: string;
+  companyDescription?: string;
+  currency?: string;
+  currencySymbol?: string;
+  customInstructions?: string;
+  isProcessing: boolean;
+  currentUserTranscript?: string; // Track current user message
+  currentAITranscript?: string; // Accumulate AI response chunks
+  lastHeartbeat: number; // Timestamp of last heartbeat
+  heartbeatInterval?: NodeJS.Timeout; // Heartbeat timer
+  // CRITICAL FIX BUG 4: Track journey responses per journey stepId to prevent race conditions
+  // Maps journeyStepId -> {original: template question, responseId: OpenAI response.id, timestamp: when set}
+  journeyResponseTracking: Map<string, {original: string, responseId: string, timestamp: number}>;
+  currentResponseId?: string; // Track current OpenAI response.id
+  // Response IDs the user interrupted. Late deltas from OpenAI for these IDs
+  // must NOT be forwarded as ai_chunk (otherwise the client creates a phantom
+  // second bubble). Capped FIFO to avoid growth.
+  cancelledResponseIds: Set<string>;
+  // Last response.id whose transcript was already handed to ElevenLabs. Guards
+  // against double synthesis if a single response ever emits BOTH an audio
+  // transcript-done AND a text output-done event.
+  lastSynthesizedResponseId?: string;
+  // Buffer for text-modality output. We accumulate the whole text reply here and
+  // only forward/save/synthesize it at done-time, AFTER confirming it isn't a
+  // leaked tool-call JSON payload.
+  pendingTextOutput?: string;
+  pendingJourneyStepId?: string; // Temporary: next response will be journey with this stepId
+  // OpenAI reconnection tracking
+  reconnectAttempts: number; // Number of reconnection attempts
+  reconnectTimeout?: NodeJS.Timeout; // Reconnection timer
+  isReconnecting: boolean; // Flag to indicate if currently reconnecting
+  selectedLanguage?: string;
+  detectedLanguage?: string;
+  textConversationId?: string;
+  textHistoryInjected?: boolean;
+  /**
+   * TopScholar doubt this voice session belongs to, verified from the signed
+   * launch token at upgrade time. Present only for doubt-scoped widget voice.
+   * Used to tear the session down if the doubt is resolved/escalated elsewhere.
+   */
+  topscholarDoubtId?: string;
+  // K12 content-only mode (TopScholar or k12ContentOnlyMode). When true, academic
+  // turns must force fetch_k12_topic so answers are curriculum-grounded (mirrors
+  // the text-chat path). Cached during buildSystemInstructions to avoid per-turn DB hits.
+  k12ContentOnly?: boolean;
+  elevenlabsApiKey?: string;
+  elevenlabsVoiceId?: string;
+  openaiAudioFallbackBuffer?: Buffer[];
+  // In-flight ElevenLabs synth tracking. Only one synth may be streaming
+  // PCM bytes to the client at any time — overlapping streams interleave
+  // their bytes on the same WebSocket and decode as garbled audio.
+  activeElevenLabsAbort?: AbortController;
+  activeElevenLabsResponseId?: string;
+  // Timestamp (ms) when the current answer's audio started streaming to the
+  // client. Used as a short barge-in grace window: a VAD/interrupt that fires
+  // within BARGE_IN_GRACE_MS of playback start is treated as the AI's own
+  // opening syllables / echo and is ignored, so the answer can't self-cancel.
+  activeElevenLabsStartedAt?: number;
+  // --- Incremental (sentence-by-sentence) TTS for the K12 text-modality path ---
+  // K12 answers stream in as text deltas; instead of waiting for the whole
+  // answer before speaking, we emit complete sentences as they arrive and
+  // synthesize them through an ordered, single-flight queue so audio starts
+  // almost immediately.
+  // Pending sentence chunks waiting to be spoken, in order.
+  ttsQueue?: Array<{ text: string; responseId: string }>;
+  // True while the queue drainer is actively synthesizing.
+  ttsDraining?: boolean;
+  // The responseId that currently owns the queue (used to cancel/clear it on barge-in).
+  ttsResponseId?: string;
+  // Per-response decision: 'pending' until the first delta, then 'stream' for a
+  // normal prose answer or 'buffer' if the reply starts like a leaked tool-call
+  // JSON payload (which must be validated whole before it's ever spoken).
+  textStreamMode?: 'pending' | 'stream' | 'buffer';
+  // How many chars of pendingTextOutput have already been emitted as sentences.
+  streamedTextCursor?: number;
+  // Guards finalize() from running twice (text.done AND the response.done safety net).
+  k12TextFinalized?: boolean;
+  // AUDIO-MODALITY path only: how many chars of currentAITranscript have already
+  // been enqueued for incremental ElevenLabs TTS. (When ElevenLabs is configured,
+  // OpenAI's own audio is suppressed and we re-speak the transcript through
+  // ElevenLabs — this cursor lets us stream it sentence-by-sentence instead of
+  // waiting for the whole transcript.)
+  ttsTranscriptCursor?: number;
+}
+
+export class RealtimeVoiceService {
+  private conversations: Map<string, VoiceConversation> = new Map(); // Now keyed by conversationId
+  private readonly HEARTBEAT_INTERVAL = 30000; // 30 seconds
+  private readonly HEARTBEAT_TIMEOUT = 180000; // 180 seconds - extended to handle mobile backgrounding and long AI responses
+  // Barge-in grace window (ms). A barge-in (server VAD speech_started or a
+  // client interrupt) that arrives within this window of the answer's audio
+  // starting is ignored — it is almost always the AI's own opening audio /
+  // echo bleeding into the mic, which previously self-cancelled the answer.
+  private readonly BARGE_IN_GRACE_MS = 700;
+  // Minimum chars before a complete-sentence chunk is sent for incremental TTS.
+  // Keeps very short fragments ("Sure!") from becoming their own tiny clips,
+  // while still letting the first real sentence start playing quickly.
+  private readonly MIN_TTS_CHARS = 40;
+  private readonly MAX_RECONNECT_ATTEMPTS = 5; // Maximum reconnection attempts
+  private readonly BASE_RECONNECT_DELAY = 1000; // Base delay for exponential backoff (1 second)
+  private readonly MAX_RECONNECT_DELAY = 30000; // Maximum reconnection delay (30 seconds)
+
+  constructor() {
+    console.log('[RealtimeVoice] Service initialized with OpenAI Realtime API');
+    // Start heartbeat monitor
+    this.startHeartbeatMonitor();
+  }
+
+  isConfigured(): boolean {
+    // Always configured since we only need OpenAI API key (no Deepgram needed)
+    return true;
+  }
+
+  /**
+   * Ends every live voice session bound to a TopScholar doubt. Called the moment
+   * a resolve/escalate claim succeeds, so a student who already had the mic open
+   * (or has it open on another device) cannot keep talking to the model after
+   * the doubt is closed. The upgrade-time check only covers NEW connections.
+   */
+  closeSessionsForDoubt(businessAccountId: string, doubtId: string, outcome: string): number {
+    let closed = 0;
+    for (const [conversationId, conversation] of Array.from(this.conversations.entries())) {
+      if (conversation.businessAccountId !== businessAccountId) continue;
+      if (conversation.topscholarDoubtId !== doubtId) continue;
+      try {
+        if (conversation.clientWs && conversation.clientWs.readyState === WebSocket.OPEN) {
+          this.sendToClient(conversation.clientWs, { type: 'doubt_locked', outcome, conversationId });
+        }
+      } catch (err) {
+        console.warn('[RealtimeVoice] Failed to notify client of doubt lock:', err instanceof Error ? err.message : err);
+      }
+      this.cleanupConversation(conversationId, `doubt_${outcome}`);
+      closed++;
+    }
+    if (closed > 0) {
+      console.log(`[RealtimeVoice] Closed ${closed} voice session(s) for ended doubt=${doubtId} outcome=${outcome}`);
+    }
+    return closed;
+  }
+
+  async handleConnection(clientWs: WebSocket, businessAccountId: string, userId: string, existingConversationId?: string, selectedLanguage?: string, textConversationId?: string, topscholarDoubtId?: string) {
+    console.log('[RealtimeVoice] New connection:', { businessAccountId, userId, existingConversationId });
+
+    try {
+      // CRITICAL FIX: Check if this is a reconnection with existing conversationId
+      if (existingConversationId && this.conversations.has(existingConversationId)) {
+        const conversation = this.conversations.get(existingConversationId)!;
+        
+        console.log('[RealtimeVoice] RECONNECTION detected - reusing existing session:', existingConversationId);
+        
+        // CRITICAL FIX BUG 1: Mark old socket as superseded BEFORE closing
+        // This prevents the old socket's close handler from calling cleanupConversation()
+        // which would send session_closed to the NEW socket and tear down the session
+        if (conversation.clientWs && conversation.clientWs.readyState === WebSocket.OPEN) {
+          (conversation.clientWs as any)._superseded = true;
+          console.log('[RealtimeVoice] Marked old socket as superseded before closing');
+          conversation.clientWs.close();
+        }
+        
+        // Reattach new client WebSocket to existing conversation
+        conversation.clientWs = clientWs;
+        conversation.lastHeartbeat = Date.now(); // Update heartbeat
+        // Re-bind the doubt identity verified for THIS upgrade, so a resumed
+        // session stays attached to the doubt that can terminate it.
+        if (topscholarDoubtId) {
+          conversation.topscholarDoubtId = topscholarDoubtId;
+        }
+        if (selectedLanguage !== undefined) {
+          conversation.selectedLanguage = selectedLanguage;
+        }
+        
+        // Setup client handlers for new WebSocket
+        this.setupClientHandlers(existingConversationId, conversation);
+        
+        // Restart heartbeat for this conversation
+        this.startConversationHeartbeat(existingConversationId);
+        
+        // Send ready signal to client with same conversationId
+        this.sendToClient(clientWs, { 
+          type: 'ready',
+          conversationId: existingConversationId,
+          reconnected: true // Flag to indicate this was a reconnection
+        });
+        
+        console.log('[RealtimeVoice] Reconnection successful - session resumed:', existingConversationId);
+        return;
+      }
+      
+      // NOT a reconnection OR conversation not found - create new session
+      if (existingConversationId) {
+        console.warn('[RealtimeVoice] Conversation not found for reconnection, creating new session:', existingConversationId);
+      }
+      
+      const settings = await storage.getWidgetSettings(businessAccountId);
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const openaiApiKey = await storage.getBusinessAccountOpenAIKey(businessAccountId);
+
+      if (!openaiApiKey) {
+        this.sendError(clientWs, 'OpenAI API key not configured for this business account');
+        clientWs.close();
+        return;
+      }
+
+      if (!businessAccount) {
+        this.sendError(clientWs, 'Business account not found');
+        clientWs.close();
+        return;
+      }
+
+      const selectedVoice = settings?.voiceSelection || 'shimmer';
+      let elevenlabsApiKey: string | undefined;
+      let elevenlabsVoiceId: string | undefined;
+
+      if (isElevenLabsVoice(selectedVoice)) {
+        elevenlabsApiKey = businessAccount.elevenlabsApiKey || undefined;
+        elevenlabsVoiceId = getElevenLabsVoiceId(selectedVoice) || undefined;
+        if (!elevenlabsApiKey || !elevenlabsVoiceId) {
+          console.warn('[RealtimeVoice] ElevenLabs voice selected but API key or voice ID missing, falling back to OpenAI shimmer');
+        }
+      }
+
+      // Create database conversation record FIRST to get stable conversationId
+      const dbConversation = await storage.createConversation({
+        businessAccountId,
+        title: 'Voice Chat'
+      });
+
+      const conversationId = dbConversation.id; // Stable identifier for entire session
+
+      // Create conversation object (OpenAI WebSocket will be created when needed)
+      const conversation: VoiceConversation = {
+        clientWs,
+        openaiWs: null,
+        businessAccountId,
+        userId,
+        openaiApiKey,
+        sessionId: null,
+        conversationId: conversationId,
+        personality: settings?.personality || 'friendly',
+        companyDescription: businessAccount.description || '',
+        currency: settings?.currency || 'USD',
+        currencySymbol: settings?.currency === 'USD' ? '$' : '€',
+        customInstructions: settings?.customInstructions || undefined,
+        isProcessing: false,
+        currentUserTranscript: '',
+        currentAITranscript: '',
+        lastHeartbeat: Date.now(),
+        journeyResponseTracking: new Map(),
+        cancelledResponseIds: new Set<string>(),
+        reconnectAttempts: 0,
+        isReconnecting: false,
+        selectedLanguage,
+        textConversationId,
+        topscholarDoubtId,
+        elevenlabsApiKey: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsApiKey : undefined,
+        elevenlabsVoiceId: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsVoiceId : undefined,
+      };
+
+      // Use conversationId as the key (stable across reconnections)
+      this.conversations.set(conversationId, conversation);
+      
+      console.log('[RealtimeVoice] Created conversation record:', conversationId);
+
+      // Connect to OpenAI Realtime API
+      await this.connectToOpenAI(conversationId, conversation);
+
+      // Setup client WebSocket handlers
+      this.setupClientHandlers(conversationId, conversation);
+
+      // Start heartbeat for this conversation
+      this.startConversationHeartbeat(conversationId);
+
+      // Send ready signal to client WITH conversationId for reconnection
+      this.sendToClient(clientWs, { 
+        type: 'ready',
+        conversationId: conversationId 
+      });
+
+      console.log('[RealtimeVoice] Connection established:', conversationId);
+
+    } catch (error: any) {
+      console.error('[RealtimeVoice] Connection error:', error);
+      this.sendError(clientWs, error.message || 'Failed to initialize voice conversation');
+      clientWs.close();
+    }
+  }
+
+  private touchActivity(conversation: VoiceConversation) {
+    conversation.lastHeartbeat = Date.now();
+  }
+
+  private startHeartbeatMonitor() {
+    setInterval(() => {
+      const now = Date.now();
+      this.conversations.forEach((conversation, conversationId) => {
+        const timeSinceLastActivity = now - conversation.lastHeartbeat;
+        
+        if (timeSinceLastActivity > this.HEARTBEAT_TIMEOUT) {
+          console.log(`[RealtimeVoice] Heartbeat timeout for conversation ${conversationId} (${Math.round(timeSinceLastActivity/1000)}s idle), cleaning up...`);
+          this.cleanupConversation(conversationId, 'heartbeat_timeout');
+        }
+      });
+    }, this.HEARTBEAT_INTERVAL);
+  }
+
+  // Start heartbeat for a specific conversation
+  private startConversationHeartbeat(conversationId: string) {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) return;
+
+    // Clear any existing heartbeat interval
+    if (conversation.heartbeatInterval) {
+      clearInterval(conversation.heartbeatInterval);
+    }
+
+    // Send ping every 30 seconds
+    conversation.heartbeatInterval = setInterval(() => {
+      if (conversation.clientWs && conversation.clientWs.readyState === WebSocket.OPEN) {
+        this.sendToClient(conversation.clientWs, { type: 'ping', timestamp: Date.now() });
+        console.log(`[RealtimeVoice] Sent ping to conversation ${conversationId}`);
+      }
+    }, this.HEARTBEAT_INTERVAL);
+
+    console.log(`[RealtimeVoice] Started heartbeat for conversation ${conversationId}`);
+  }
+
+  // Comprehensive cleanup for a conversation
+  private cleanupConversation(conversationId: string, reason: string = 'unknown') {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) return;
+
+    console.log('[RealtimeVoice] Cleaning up conversation:', conversationId, 'reason:', reason);
+
+    try {
+      // CRITICAL FIX: Send session_closed message to client BEFORE cleanup
+      // This prevents client from retrying with stale conversationId
+      if (conversation.clientWs && conversation.clientWs.readyState === WebSocket.OPEN) {
+        this.sendToClient(conversation.clientWs, {
+          type: 'session_closed',
+          reason: reason,
+          conversationId: conversationId
+        });
+        console.log('[RealtimeVoice] Sent session_closed notification to client');
+      }
+      
+      // Clear heartbeat interval
+      if (conversation.heartbeatInterval) {
+        clearInterval(conversation.heartbeatInterval);
+        conversation.heartbeatInterval = undefined;
+      }
+
+      // Clear reconnection timeout
+      if (conversation.reconnectTimeout) {
+        clearTimeout(conversation.reconnectTimeout);
+        conversation.reconnectTimeout = undefined;
+      }
+
+      // Abort any in-flight ElevenLabs synth so it stops sending PCM to the
+      // (about-to-be-closed) client WebSocket.
+      if (conversation.activeElevenLabsAbort) {
+        try { conversation.activeElevenLabsAbort.abort(); } catch {}
+        conversation.activeElevenLabsAbort = undefined;
+        conversation.activeElevenLabsResponseId = undefined;
+        conversation.activeElevenLabsStartedAt = undefined;
+      }
+      // Drop any queued sentence TTS so the drainer stops.
+      conversation.ttsQueue = [];
+
+      // Close OpenAI WebSocket
+      if (conversation.openaiWs) {
+        if (conversation.openaiWs.readyState === WebSocket.OPEN || conversation.openaiWs.readyState === WebSocket.CONNECTING) {
+          conversation.openaiWs.close();
+        }
+        conversation.openaiWs = null;
+      }
+
+      // Close client WebSocket if still open (after notification sent)
+      if (conversation.clientWs && conversation.clientWs.readyState === WebSocket.OPEN) {
+        conversation.clientWs.close();
+      }
+
+      // Clean up journey state for this conversation
+      journeyService.resetJourney(conversationId).catch(err => {
+        console.error('[RealtimeVoice] Error resetting journey:', err);
+      });
+
+      // Remove from map
+      this.conversations.delete(conversationId);
+
+      // Atomically delete voice conversation if it has 0 messages
+      const businessAccId = conversation.businessAccountId;
+      storage.deleteConversationIfEmpty(conversationId, businessAccId).then(deleted => {
+        if (deleted) {
+          console.log('[RealtimeVoice] Deleted empty voice conversation:', conversationId);
+        }
+      }).catch(err => {
+        console.error('[RealtimeVoice] Error cleaning up empty conversation:', err);
+      });
+      
+      console.log('[RealtimeVoice] Conversation cleanup complete:', conversationId);
+    } catch (error) {
+      console.error('[RealtimeVoice] Cleanup error:', error);
+    }
+  }
+
+  // Cancel ongoing AI response (for interruptions)
+  // respectGrace: when true (real barge-in paths — server VAD speech_started and
+  // client interrupt), skip cancellation if the answer's audio only just started
+  // playing. This stops the AI's own opening audio / mic echo from killing the
+  // answer. Deliberate cancellations (post-transcript "smart interruption",
+  // full cleanup) pass respectGrace=false and always cancel.
+  private cancelResponse(conversation: VoiceConversation, respectGrace = false) {
+    if (respectGrace && conversation.activeElevenLabsStartedAt) {
+      const sincePlaybackStart = Date.now() - conversation.activeElevenLabsStartedAt;
+      if (sincePlaybackStart < this.BARGE_IN_GRACE_MS) {
+        console.log('[RealtimeVoice] Ignoring barge-in within grace window (', sincePlaybackStart, 'ms < ', this.BARGE_IN_GRACE_MS, 'ms) — likely AI self-echo, keeping answer');
+        return;
+      }
+    }
+    // ALWAYS abort any in-flight ElevenLabs synth on user interrupt — even
+    // when OpenAI has already finished (`isProcessing === false`). The exact
+    // bug this task fixes is the window where OpenAI's response.done has
+    // fired but ElevenLabs is still streaming the tail PCM; without this,
+    // the user barges in and keeps hearing the previous answer's audio.
+    // We also mark the responseId as cancelled so any in-flight chunks the
+    // synth emits before the abort fully propagates are dropped.
+    if (conversation.activeElevenLabsAbort) {
+      const abortedResponseId = conversation.activeElevenLabsResponseId;
+      console.log('[RealtimeVoice] Aborting in-flight ElevenLabs synth due to user interrupt, responseId:', abortedResponseId, 'openaiActive:', conversation.isProcessing);
+      if (abortedResponseId) {
+        conversation.cancelledResponseIds.add(abortedResponseId);
+        if (conversation.cancelledResponseIds.size > 20) {
+          const first = conversation.cancelledResponseIds.values().next().value;
+          if (first) conversation.cancelledResponseIds.delete(first);
+        }
+      }
+      try { conversation.activeElevenLabsAbort.abort(); } catch {}
+      conversation.activeElevenLabsAbort = undefined;
+      conversation.activeElevenLabsResponseId = undefined;
+      conversation.activeElevenLabsStartedAt = undefined;
+    }
+
+    // Drop any sentences still queued for the interrupted answer so no late
+    // audio plays after the barge-in. Mark the queue's response cancelled so a
+    // chunk caught mid-flight (between sentences, when there's no active abort)
+    // is suppressed too.
+    if (conversation.ttsResponseId) {
+      conversation.cancelledResponseIds.add(conversation.ttsResponseId);
+      if (conversation.cancelledResponseIds.size > 20) {
+        const first = conversation.cancelledResponseIds.values().next().value;
+        if (first) conversation.cancelledResponseIds.delete(first);
+      }
+    }
+    if (conversation.ttsQueue && conversation.ttsQueue.length > 0) {
+      conversation.ttsQueue = [];
+    }
+    conversation.activeElevenLabsStartedAt = undefined;
+
+    if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+      if (!conversation.isProcessing) {
+        console.log('[RealtimeVoice] No active OpenAI response to cancel, skipping response.cancel (any ElevenLabs synth has been aborted above)');
+        return;
+      }
+      // Mark this response as cancelled BEFORE sending response.cancel — late deltas
+      // from OpenAI for this id must be suppressed so the client doesn't render a
+      // phantom second bubble after the interrupt.
+      if (conversation.currentResponseId) {
+        conversation.cancelledResponseIds.add(conversation.currentResponseId);
+        if (conversation.cancelledResponseIds.size > 20) {
+          const first = conversation.cancelledResponseIds.values().next().value;
+          if (first) conversation.cancelledResponseIds.delete(first);
+        }
+      }
+      conversation.openaiWs.send(JSON.stringify({
+        type: 'response.cancel'
+      }));
+      conversation.isProcessing = false;
+      console.log('[RealtimeVoice] Cancelled ongoing AI response, id:', conversation.currentResponseId);
+    }
+  }
+
+  private async connectToOpenAI(conversationId: string, conversation: VoiceConversation) {
+    // Using gpt-realtime-mini - the most cost-effective OpenAI Realtime model (82% cheaper)
+    const url = 'wss://api.openai.com/v1/realtime?model=gpt-realtime-mini';
+    
+    console.log('[RealtimeVoice] Connecting to OpenAI Realtime API...');
+
+    const openaiWs = new WebSocket(url, {
+      headers: {
+        'Authorization': `Bearer ${conversation.openaiApiKey}`
+      }
+    });
+
+    conversation.openaiWs = openaiWs;
+
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('OpenAI connection timeout'));
+      }, 10000);
+
+      let connectionEstablished = false;
+
+      openaiWs.on('open', async () => {
+        clearTimeout(timeout);
+        console.log('[RealtimeVoice] Connected to OpenAI Realtime API');
+        connectionEstablished = true;
+
+        await this.injectTextChatHistory(conversation);
+
+        const systemInstructions = await this.buildSystemInstructions(conversation);
+        
+        const settings = await storage.getWidgetSettings(conversation.businessAccountId);
+        const selectedVoice = settings?.voiceSelection || 'shimmer';
+        const businessAccount = await storage.getBusinessAccount(conversation.businessAccountId);
+        const appointmentsEnabled = businessAccount?.appointmentsEnabled || false;
+
+        const useElevenLabs = !!conversation.elevenlabsApiKey && !!conversation.elevenlabsVoiceId;
+        const openaiVoice = (useElevenLabs || isElevenLabsVoice(selectedVoice)) ? 'shimmer' : selectedVoice;
+        if (useElevenLabs) {
+          console.log('[RealtimeVoice] ElevenLabs TTS active - voice:', selectedVoice, 'voiceId:', conversation.elevenlabsVoiceId);
+        }
+
+        const sessionConfig = {
+          type: 'session.update',
+          session: {
+            type: 'realtime',
+            instructions: systemInstructions,
+            output_modalities: ['audio'],
+            audio: {
+              input: {
+                format: { type: 'audio/pcm', rate: 24000 },
+                transcription: {
+                  model: 'gpt-4o-mini-transcribe',
+                  ...(conversation.selectedLanguage && conversation.selectedLanguage !== 'auto'
+                    ? { language: this.toTranscriptionLangCode(conversation.selectedLanguage) }
+                    : {})
+                },
+                noise_reduction: {
+                  type: 'far_field'
+                },
+                turn_detection: {
+                  type: 'server_vad',
+                  threshold: 0.8,
+                  prefix_padding_ms: 300,
+                  silence_duration_ms: 800,
+                  create_response: false
+                }
+              },
+              output: {
+                format: { type: 'audio/pcm', rate: 24000 },
+                voice: openaiVoice
+              }
+            },
+            tools: this.convertToRealtimeTools(aiTools),
+            tool_choice: 'auto',
+            max_output_tokens: 4096
+          }
+        };
+
+        openaiWs.send(JSON.stringify(sessionConfig));
+        console.log('[RealtimeVoice] Session configured with voice:', selectedVoice);
+
+        resolve();
+      });
+
+      openaiWs.on('message', (data: any) => {
+        this.handleOpenAIMessage(conversationId, conversation, data);
+      });
+
+      openaiWs.on('error', (error) => {
+        clearTimeout(timeout);
+        console.error('[RealtimeVoice] OpenAI WebSocket error:', error);
+        
+        // If connection was never established, reject the Promise
+        if (!connectionEstablished) {
+          reject(error);
+        } else {
+          // Connection was established but error occurred later - trigger reconnection
+          this.handleOpenAIDisconnection(conversationId, 'error');
+        }
+      });
+
+      openaiWs.on('close', (code, reason) => {
+        console.log('[RealtimeVoice] OpenAI WebSocket closed for conversation:', conversationId, 'Code:', code, 'Reason:', reason.toString());
+        conversation.openaiWs = null;
+        
+        // If connection was never established, reject the Promise
+        if (!connectionEstablished) {
+          reject(new Error(`OpenAI connection closed before establishing: ${code} ${reason.toString()}`));
+        } else {
+          // Connection was established but closed later - trigger reconnection
+          this.handleOpenAIDisconnection(conversationId, 'close');
+        }
+      });
+    });
+  }
+
+  // Handle OpenAI disconnection with reconnection logic
+  private handleOpenAIDisconnection(conversationId: string, reason: 'error' | 'close') {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) {
+      console.log('[RealtimeVoice] Conversation already cleaned up:', conversationId);
+      return;
+    }
+
+    // If already reconnecting, don't trigger another reconnection
+    if (conversation.isReconnecting) {
+      console.log('[RealtimeVoice] Already reconnecting, skipping duplicate reconnection attempt');
+      return;
+    }
+
+    // If client disconnected, clean up instead of reconnecting
+    if (conversation.clientWs.readyState !== WebSocket.OPEN) {
+      console.log('[RealtimeVoice] Client disconnected, cleaning up instead of reconnecting');
+      this.cleanupConversation(conversationId, 'client_disconnected');
+      return;
+    }
+
+    // If max reconnect attempts reached, cleanup and notify client
+    if (conversation.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
+      console.error('[RealtimeVoice] Max reconnection attempts reached, giving up');
+      this.sendError(conversation.clientWs, 'Voice connection lost. Please refresh and try again.');
+      this.cleanupConversation(conversationId, 'max_reconnect_attempts');
+      return;
+    }
+
+    // Calculate exponential backoff delay
+    const delay = Math.min(
+      this.BASE_RECONNECT_DELAY * Math.pow(2, conversation.reconnectAttempts),
+      this.MAX_RECONNECT_DELAY
+    );
+
+    console.log(`[RealtimeVoice] OpenAI disconnected (${reason}), reconnecting in ${delay}ms (attempt ${conversation.reconnectAttempts + 1}/${this.MAX_RECONNECT_ATTEMPTS})`);
+
+    // Clear any existing reconnect timeout
+    if (conversation.reconnectTimeout) {
+      clearTimeout(conversation.reconnectTimeout);
+    }
+
+    // Mark as reconnecting
+    conversation.isReconnecting = true;
+    conversation.reconnectAttempts++;
+
+    // Schedule reconnection with exponential backoff
+    conversation.reconnectTimeout = setTimeout(async () => {
+      await this.reconnectToOpenAI(conversationId);
+    }, delay);
+  }
+
+  // Reconnect to OpenAI Realtime API
+  private async reconnectToOpenAI(conversationId: string) {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) {
+      console.log('[RealtimeVoice] Conversation no longer exists, skipping reconnection');
+      return;
+    }
+
+    // Check if client is still connected
+    if (conversation.clientWs.readyState !== WebSocket.OPEN) {
+      console.log('[RealtimeVoice] Client disconnected during reconnection, cleaning up');
+      this.cleanupConversation(conversationId, 'client_disconnected_during_reconnect');
+      return;
+    }
+
+    console.log(`[RealtimeVoice] Attempting to reconnect to OpenAI (attempt ${conversation.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})`);
+
+    try {
+      // Close existing OpenAI WebSocket if still open
+      if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+        conversation.openaiWs.close();
+        conversation.openaiWs = null;
+      }
+
+      // Attempt to reconnect
+      await this.connectToOpenAI(conversationId, conversation);
+      
+      // Success! Reset reconnection state
+      console.log('[RealtimeVoice] Successfully reconnected to OpenAI');
+      conversation.reconnectAttempts = 0;
+      conversation.isReconnecting = false;
+      conversation.reconnectTimeout = undefined; // Clear the timeout handle
+      
+      // Notify client of successful reconnection
+      this.sendToClient(conversation.clientWs, {
+        type: 'reconnected',
+        message: 'Voice connection restored'
+      });
+      
+    } catch (error) {
+      console.error('[RealtimeVoice] Reconnection failed:', error);
+      
+      // Clear the reconnection state before triggering next attempt
+      conversation.isReconnecting = false;
+      conversation.reconnectTimeout = undefined;
+      
+      // Trigger another reconnection attempt (will check max attempts)
+      this.handleOpenAIDisconnection(conversationId, 'error');
+    }
+  }
+
+  private detectLanguageFromText(text: string): { language: string; languageName: string } {
+    if (!text || text.trim().length === 0) {
+      return { language: 'en', languageName: 'English' };
+    }
+
+    const devanagariCount = (text.match(/[\u0900-\u097F]/g) || []).length;
+    const arabicUrduCount = (text.match(/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/g) || []).length;
+    const tamilCount = (text.match(/[\u0B80-\u0BFF]/g) || []).length;
+    const teluguCount = (text.match(/[\u0C00-\u0C7F]/g) || []).length;
+    const kannadaCount = (text.match(/[\u0C80-\u0CFF]/g) || []).length;
+    const malayalamCount = (text.match(/[\u0D00-\u0D7F]/g) || []).length;
+    const bengaliCount = (text.match(/[\u0980-\u09FF]/g) || []).length;
+    const gujaratiCount = (text.match(/[\u0A80-\u0AFF]/g) || []).length;
+    const gurmukhiCount = (text.match(/[\u0A00-\u0A7F]/g) || []).length;
+    const odiaCount = (text.match(/[\u0B00-\u0B7F]/g) || []).length;
+    const marathiCount = devanagariCount;
+
+    const scriptCounts: [number, string, string][] = [
+      [devanagariCount, 'hi', 'Hindi'],
+      [arabicUrduCount, 'hi', 'Hindi'],
+      [tamilCount, 'ta', 'Tamil'],
+      [teluguCount, 'te', 'Telugu'],
+      [kannadaCount, 'kn', 'Kannada'],
+      [malayalamCount, 'ml', 'Malayalam'],
+      [bengaliCount, 'bn', 'Bengali'],
+      [gujaratiCount, 'gu', 'Gujarati'],
+      [gurmukhiCount, 'pa', 'Punjabi'],
+      [odiaCount, 'or', 'Odia'],
+    ];
+
+    const maxScript = scriptCounts.reduce((max, curr) => curr[0] > max[0] ? curr : max, [0, 'en', 'English'] as [number, string, string]);
+
+    if (maxScript[0] > 0) {
+      return { language: maxScript[1], languageName: maxScript[2] };
+    }
+
+    return { language: 'en', languageName: 'English' };
+  }
+
+  private toTranscriptionLangCode(code: string): string {
+    const nonStandardMap: Record<string, string> = {
+      hinglish: 'hi',
+    };
+    return nonStandardMap[code] || code;
+  }
+
+  private getLanguageNameForCode(code: string): string {
+    const map: Record<string, string> = {
+      hi: 'Hindi', en: 'English', hinglish: 'Hinglish', ta: 'Tamil', te: 'Telugu',
+      kn: 'Kannada', mr: 'Marathi', bn: 'Bengali', gu: 'Gujarati', ml: 'Malayalam',
+      pa: 'Punjabi', or: 'Odia', ur: 'Urdu', as: 'Assamese', ne: 'Nepali',
+      sa: 'Sanskrit', es: 'Spanish', fr: 'French', de: 'German', pt: 'Portuguese',
+      it: 'Italian', ja: 'Japanese', ko: 'Korean', zh: 'Chinese', ar: 'Arabic',
+      ru: 'Russian', th: 'Thai', vi: 'Vietnamese', id: 'Indonesian', ms: 'Malay', tr: 'Turkish',
+    };
+    return map[code] || 'English';
+  }
+
+  private isPrimarilyLatinScript(text: string): boolean {
+    let latinCount = 0;
+    let nonLatinCount = 0;
+    for (const char of text) {
+      const code = char.codePointAt(0)!;
+      if ((code >= 0x0041 && code <= 0x005A) || (code >= 0x0061 && code <= 0x007A) ||
+          (code >= 0x00C0 && code <= 0x024F)) {
+        latinCount++;
+      } else if (code > 0x024F && !(/\s|\d|[.,!?;:'"()\-–—…\/\\@#$%^&*+=\[\]{}|<>~`]/.test(char))) {
+        nonLatinCount++;
+      }
+    }
+    const total = latinCount + nonLatinCount;
+    if (total === 0) return true;
+    return (latinCount / total) > 0.7;
+  }
+
+  private async correctTranscriptScript(
+    rawTranscript: string,
+    targetLanguage: string,
+    conversation: VoiceConversation
+  ): Promise<void> {
+    try {
+      const langName = this.getLanguageNameForCode(targetLanguage);
+      
+      if (targetLanguage === 'en' || !rawTranscript || rawTranscript.trim().length < 2) {
+        return;
+      }
+
+      if (this.isPrimarilyLatinScript(rawTranscript)) {
+        console.log('[RealtimeVoice] Transcript is primarily Latin script, skipping correction');
+        return;
+      }
+
+      const openai = new OpenAI({ apiKey: conversation.openaiApiKey });
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a transcription script corrector. The user's speech was transcribed but may be in the wrong writing system/script. For example, Hindi text might appear in Urdu/Arabic script instead of Devanagari, or in Cyrillic instead of the correct script. Your ONLY job is to convert the text to the correct script for ${langName}. CRITICAL RULES: 1) NEVER translate between languages. If the text is in English or any other language, return it EXACTLY as-is. 2) Only fix the writing system — e.g., convert Arabic/Nastaliq script to Devanagari for Hindi. 3) If the text is already in the correct script, return it as-is. 4) Output only the corrected text. No quotes, no explanations.`
+          },
+          {
+            role: 'user',
+            content: rawTranscript
+          }
+        ],
+        max_tokens: 500,
+        temperature: 0,
+      });
+
+      const corrected = response.choices[0]?.message?.content?.trim();
+      
+      if (corrected && corrected !== rawTranscript) {
+        console.log(`[RealtimeVoice] Transcript corrected: "${rawTranscript}" → "${corrected}"`);
+        
+        this.sendToClient(conversation.clientWs, {
+          type: 'transcript_correction',
+          original: rawTranscript,
+          corrected: corrected
+        });
+
+        if (conversation.conversationId) {
+          await this.updateMessageInDB(conversation.conversationId, rawTranscript, corrected);
+        }
+      } else {
+        console.log('[RealtimeVoice] Transcript script already correct, no correction needed');
+      }
+    } catch (error) {
+      console.error('[RealtimeVoice] Transcript correction error:', error);
+    }
+  }
+
+  private async updateMessageInDB(conversationId: string, originalText: string, correctedText: string): Promise<void> {
+    try {
+      const { db } = await import('./db');
+      const { messages } = await import('../shared/schema');
+      const { eq, and, desc } = await import('drizzle-orm');
+      
+      const recentMessages = await db.select()
+        .from(messages)
+        .where(and(
+          eq(messages.conversationId, conversationId),
+          eq(messages.role, 'user')
+        ))
+        .orderBy(desc(messages.createdAt))
+        .limit(5);
+      
+      const matchingMsg = recentMessages.find(m => m.content === originalText);
+      if (matchingMsg) {
+        await db.update(messages)
+          .set({ content: correctedText })
+          .where(eq(messages.id, matchingMsg.id));
+        console.log('[RealtimeVoice] Updated message in DB with corrected transcript');
+      }
+    } catch (error) {
+      console.error('[RealtimeVoice] Error updating message in DB:', error);
+    }
+  }
+
+  private async buildSystemInstructions(conversation: VoiceConversation): Promise<string> {
+    const { personality, companyDescription, customInstructions, currencySymbol, currency, businessAccountId, conversationId } = conversation;
+
+    // Determine voice gender from voice selection for proper pronouns
+    const settings = await storage.getWidgetSettings(businessAccountId);
+    const selectedVoice = (settings?.voiceSelection || 'shimmer').toLowerCase();
+    const maleVoices = ['ash', 'ballad', 'echo', 'fable', 'onyx', 'verse'];
+    const femaleVoices = ['coral', 'nova', 'sage', 'shimmer'];
+    const voiceGender = maleVoices.includes(selectedVoice) ? 'male' : femaleVoices.includes(selectedVoice) ? 'female' : 'neutral';
+
+    let instructions = `You are Chroney, an AI assistant for ${companyDescription || 'a business'}. `;
+
+    if (voiceGender === 'male') {
+      instructions += 'You are a MALE assistant. In English use "he/him" if referring to yourself in third person. In languages with grammatical gender, always use masculine forms. ';
+    } else if (voiceGender === 'female') {
+      instructions += 'You are a FEMALE assistant. In English use "she/her" if referring to yourself in third person. In languages with grammatical gender, always use feminine forms. ';
+    }
+
+    const selectedLang = conversation.selectedLanguage;
+    const hasExplicitLanguageSelection = selectedLang && selectedLang !== 'auto';
+
+    if (hasExplicitLanguageSelection) {
+      const LANGUAGE_NAMES: Record<string, string> = {
+        'en': 'English', 'hi': 'Hindi', 'hinglish': 'Hinglish',
+        'ta': 'Tamil', 'te': 'Telugu', 'kn': 'Kannada', 'mr': 'Marathi', 'bn': 'Bengali',
+        'gu': 'Gujarati', 'ml': 'Malayalam', 'pa': 'Punjabi', 'or': 'Odia', 'ur': 'Urdu',
+        'es': 'Spanish', 'fr': 'French', 'de': 'German', 'pt': 'Portuguese', 'it': 'Italian',
+        'ja': 'Japanese', 'ko': 'Korean', 'zh': 'Chinese', 'ar': 'Arabic', 'ru': 'Russian',
+        'th': 'Thai', 'vi': 'Vietnamese', 'id': 'Indonesian', 'ms': 'Malay', 'tr': 'Turkish'
+      };
+      const langName = LANGUAGE_NAMES[selectedLang] || selectedLang;
+
+      instructions += `\n\n🚨 CRITICAL RULE #1 - LANGUAGE (OVERRIDES EVERYTHING):\n`;
+      instructions += `The user has selected ${langName} from the language dropdown. You MUST respond ONLY in ${langName}.\n`;
+      instructions += `Even if the user speaks a different language, ALWAYS respond in ${langName}.\n`;
+      instructions += `THIS RULE OVERRIDES ALL CUSTOM BUSINESS INSTRUCTIONS BELOW.\n`;
+    } else if (conversation.detectedLanguage) {
+      const LANGUAGE_NAMES: Record<string, string> = {
+        'en': 'English', 'hi': 'Hindi (Devanagari script)', 'hinglish': 'Hinglish',
+        'ta': 'Tamil', 'te': 'Telugu', 'kn': 'Kannada', 'mr': 'Marathi', 'bn': 'Bengali',
+        'gu': 'Gujarati', 'ml': 'Malayalam', 'pa': 'Punjabi', 'or': 'Odia', 'ur': 'Hindi (Devanagari script)'
+      };
+      const detectedLangName = LANGUAGE_NAMES[conversation.detectedLanguage] || 'English';
+
+      instructions += `\n\n🚨 CRITICAL RULE #1 - LANGUAGE (OVERRIDES EVERYTHING):\n`;
+      instructions += `The user is speaking in ${detectedLangName}. You MUST respond ONLY in ${detectedLangName}.\n`;
+      instructions += `Both your spoken audio AND written text MUST be in ${detectedLangName}.\n`;
+      instructions += `THIS RULE OVERRIDES ALL CUSTOM BUSINESS INSTRUCTIONS BELOW.\n`;
+    } else {
+      instructions += '\n\n🚨 CRITICAL RULE #1 - LANGUAGE MATCHING (OVERRIDES EVERYTHING):\n';
+      instructions += 'YOU MUST RESPOND IN THE EXACT SAME LANGUAGE AS THE USER\'S LAST MESSAGE.\n';
+      instructions += 'Detect language ONLY from the user\'s latest message. Ignore previous conversation history.\n';
+      instructions += 'If the user speaks English → respond 100% in English.\n';
+      instructions += 'If the user speaks Hindi → respond 100% in Hindi (Devanagari script).\n';
+      instructions += 'If the user code-switches between languages → code-switch the same way.\n';
+      instructions += 'Language can change between messages - always match the MOST RECENT input.\n';
+      instructions += 'THIS RULE OVERRIDES ALL CUSTOM BUSINESS INSTRUCTIONS BELOW.\n';
+    }
+    
+    // Add personality
+    if (personality === 'friendly') {
+      instructions += '\nBe warm, conversational, and helpful. ';
+    } else if (personality === 'professional') {
+      instructions += '\nBe professional, clear, and concise. ';
+    } else if (personality === 'casual') {
+      instructions += '\nBe casual, fun, and engaging. ';
+    }
+
+    // Add custom business instructions (HIGH PRIORITY - but AFTER language matching)
+    if (customInstructions && customInstructions.trim()) {
+      try {
+        // Try to parse as JSON array (new format from Train Chroney page)
+        const instructionsArray = JSON.parse(customInstructions);
+        if (Array.isArray(instructionsArray) && instructionsArray.length > 0) {
+          const formattedInstructions = instructionsArray
+            .map((instr: any, index: number) => `${index + 1}. ${instr.text}`)
+            .join('\n');
+          instructions += `\n\n🎯 CUSTOM BUSINESS INSTRUCTIONS (MUST FOLLOW - but respect language matching above):\nFollow these specific instructions for this business:\n${formattedInstructions}\n`;
+        }
+      } catch {
+        // Fallback to plain text format (legacy)
+        instructions += `\n\n🎯 CUSTOM BUSINESS INSTRUCTIONS (MUST FOLLOW - but respect language matching above):\nFollow these specific instructions for this business:\n${customInstructions}\n`;
+      }
+    }
+
+    // CRITICAL GUARDRAILS
+    instructions += '\n\nGUARDRAILS (MUST FOLLOW):\n';
+    instructions += '- ONLY answer questions related to this business\'s products, services, pricing, FAQs, and company information\n';
+    instructions += '- DECLINE politely if asked about unrelated topics (world events, general knowledge, entertainment, sports, history, science, politics, health advice, financial advice)\n';
+    instructions += '- When declining, keep it SHORT (1 sentence), friendly, and redirect to what you CAN help with\n';
+    instructions += '- Example decline: "I focus on helping with our products and services. What can I tell you about what we offer?"\n';
+    instructions += '- NEVER provide medical, legal, or financial advice\n';
+    instructions += '- NEVER expose internal operations or backend processes\n';
+
+    // K12 GUARDRAILS — mirror the text-chat tutor guardrails for voice mode
+    try {
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const k12Enabled = businessAccount?.k12EducationEnabled === 'true';
+      // TopScholar is external-content-only by identity — never silently disabled.
+      const contentOnly = isTopscholarAccount(businessAccountId) || businessAccount?.k12ContentOnlyMode === 'true';
+      const verbatim = businessAccount?.k12VerbatimContentMode === 'true';
+
+      // Cache content-only flag so the per-turn handler can force fetch_k12_topic
+      // for academic questions (mirrors the text-chat forced-tool behavior).
+      conversation.k12ContentOnly = k12Enabled && contentOnly;
+
+      if (k12Enabled && contentOnly) {
+        instructions += '\n\n🛡️ K12 CONTENT-ONLY GUARDRAIL (MUST FOLLOW):\n';
+        instructions += '- For any academic or study-related question, your ONLY allowed sources are the curriculum content returned by your tools, the uploaded FAQs, and the uploaded documents/notes.\n';
+        instructions += '- You are FORBIDDEN from answering academic questions using your general knowledge or training data.\n';
+        instructions += '- If the sources do not contain the answer, say something like: "Great question! That topic isn\'t in our curriculum yet — would you like me to look up something else?" Do NOT attempt the answer.\n';
+        instructions += '- Greetings and small talk are still allowed without a curriculum lookup.\n';
+        instructions += '\n📚 K12 RESPONSE LENGTH OVERRIDE (overrides the general "2–4 sentences" rule for academic turns):\n';
+        instructions += '- When explaining a curriculum topic or answering an academic question, give a THOROUGH, COMPLETE explanation that matches the depth of a full written lesson — do NOT summarize or shorten it.\n';
+        instructions += '- Cover EVERY key point from the retrieved curriculum: definitions, examples, sub-concepts, and any important distinctions. Do not drop points just because you are speaking.\n';
+        instructions += '- Convey structure out loud with spoken signposting ("First…", "Next…", "Another important point…", "For example…") instead of reading bullet symbols or markdown. The spoken answer should contain the SAME information a student would read in the text chat.\n';
+        instructions += '- Think of yourself as a teacher giving a proper, complete lesson, not a quick assistant giving a brief hint. Err on the side of covering more, not less.\n';
+        instructions += '- The brevity guideline applies ONLY to greetings, small talk, and non-academic queries — NOT to curriculum explanations.\n';
+      }
+
+      if (k12Enabled && verbatim) {
+        instructions += '\n\n📖 K12 VERBATIM CONTENT GUARDRAIL (MUST FOLLOW):\n';
+        instructions += '- When your tools or the uploaded FAQs/documents return content that answers the student\'s question, you MUST speak that content WORD-FOR-WORD.\n';
+        instructions += '- Do NOT paraphrase, summarize, rewrite, or "simplify" the source wording. Read it out exactly as written.\n';
+        instructions += '- You may add a short friendly intro (e.g. "Here\'s what your curriculum says:") and a short closer (e.g. "Want to try a practice question on this?"), but the substantive academic content must remain verbatim.\n';
+      }
+
+      if (k12Enabled) {
+        console.log(`[RealtimeVoice] K12 guardrails applied (contentOnly=${contentOnly}, verbatim=${verbatim})`);
+      }
+    } catch (err) {
+      console.error('[RealtimeVoice] Failed to load K12 guardrail flags:', err);
+    }
+
+    if (conversation.textHistoryInjected) {
+      instructions += '\n\nCONVERSATION CONTINUITY:\n';
+      instructions += 'The user was chatting with you via text before switching to voice mode. ';
+      instructions += 'The previous text messages have been loaded into this conversation. ';
+      instructions += 'When the user refers to "the question I asked", "what we discussed", "the previous topic", or similar references, ';
+      instructions += 'look at the earlier messages in this conversation to understand the context. ';
+      instructions += 'Do NOT call tools to look up information that was already discussed in the text chat — use the conversation history instead.\n';
+    }
+
+    // Add voice-specific instructions for emotional, human-like speech
+    instructions += '\n\nVOICE MODE GUIDELINES - SPEAK LIKE A REAL HUMAN:\n';
+    instructions += '- Speak naturally with genuine emotion and warmth, as if having a real conversation with a friend\n';
+    instructions += '- Use natural speech patterns: pauses for thinking ("hmm...", "let me see..."), excitement when appropriate ("oh!", "that\'s great!")\n';
+    instructions += '- Express emotions authentically: happiness, enthusiasm, empathy, curiosity - let your voice reflect your feelings\n';
+    instructions += '- Include conversational fillers: "you know", "I mean", "actually", "so", "well"\n';
+    instructions += '- Take natural breaks in your speech - don\'t rush, speak at a comfortable human pace\n';
+    instructions += '- Laugh or chuckle when something is funny or delightful\n';
+    instructions += '- Show empathy and understanding when appropriate - adjust your tone to match the situation\n';
+    // K12 tutors give lessons, not quick hints — skip the brevity cap for them.
+    if (!conversation.k12ContentOnly) {
+      instructions += '- Keep responses concise (2-4 sentences) but make every word count with personality\n';
+    } else {
+      instructions += '- Speak warmly and naturally, BUT for any academic/curriculum question give a complete, thorough lesson that covers every key point — the "speak naturally / keep it conversational" guidance above must NOT make you shorten or summarize academic answers. Keep greetings and small talk brief; make study explanations full and complete.\n';
+    }
+    instructions += '- Never use emojis or special characters - let your voice convey the emotion instead\n';
+    instructions += '- If asked about products, share them enthusiastically like you\'re recommending to a friend\n';
+    instructions += '\n\nVOICE INPUT QUALITY RULES:\n';
+    instructions += '- Only respond to clear, intentional speech from the user directly speaking into their microphone\n';
+    instructions += '- If you detect unclear, fragmented, or mixed speech with background noise, politely ask: "I didn\'t quite catch that. Could you repeat?"\n';
+    instructions += '- Never respond to background voices, TV sounds, or distant speech - only direct user input\n';
+    instructions += '- If the audio seems to be from your own previous response echoing back, completely ignore it\n';
+    instructions += '- Wait for complete, coherent questions before answering - don\'t guess or fill in missing words\n';
+
+    // Add currency information
+    if (currency && currencySymbol) {
+      instructions += `\n\nCURRENCY SETTINGS:\nAll prices should be referenced in ${currency} (${currencySymbol}). When discussing prices, always use ${currencySymbol} as the currency symbol.`;
+    }
+
+    // Load business context (FAQs, products, website analysis, training docs)
+    try {
+      const businessContext = await this.loadBusinessContext(businessAccountId);
+      if (businessContext) {
+        instructions += `\n\n${businessContext}`;
+      }
+    } catch (error) {
+      console.error('[RealtimeVoice] Error loading business context:', error);
+    }
+
+    // Auto-inject journey conversational guidelines if journey is active
+    try {
+      const activeJourneyState = await journeyService.getJourneyState(conversationId);
+      if (activeJourneyState && !activeJourneyState.completed) {
+        const journey = await storage.getJourney(activeJourneyState.journeyId, businessAccountId);
+        if (journey && journey.conversationalGuidelines) {
+          instructions += `\n\n🎯 JOURNEY-SPECIFIC CONVERSATIONAL GUIDELINES (HIGHEST PRIORITY - MUST FOLLOW):\n${journey.conversationalGuidelines}\n`;
+          console.log('[RealtimeVoice] Injected journey conversational guidelines for journey:', journey.name);
+        }
+      }
+    } catch (error) {
+      console.error('[RealtimeVoice] Error injecting journey guidelines:', error);
+    }
+
+    return instructions;
+  }
+
+  private async injectTextChatHistory(conversation: VoiceConversation): Promise<boolean> {
+    if (!conversation.textConversationId || !conversation.openaiWs) {
+      return false;
+    }
+
+    try {
+      const textConversation = await storage.getConversation(
+        conversation.textConversationId,
+        conversation.businessAccountId
+      );
+
+      if (!textConversation) {
+        console.warn('[RealtimeVoice] Text conversation not found or access denied:', conversation.textConversationId);
+        conversation.textConversationId = undefined;
+        return false;
+      }
+
+      const messages = await storage.getMessagesByConversation(
+        conversation.textConversationId,
+        conversation.businessAccountId
+      );
+
+      if (!messages || messages.length === 0) {
+        console.log('[RealtimeVoice] No text chat history to inject');
+        return false;
+      }
+
+      const recentMessages = messages.slice(-20);
+
+      console.log(`[RealtimeVoice] Injecting ${recentMessages.length} text chat messages into voice session`);
+
+      let injectedCount = 0;
+      for (const msg of recentMessages) {
+        if (!msg.content || msg.content.trim() === '') continue;
+
+        const item: any = {
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: msg.role === 'user' ? 'user' : 'assistant',
+            content: [{
+              type: msg.role === 'user' ? 'input_text' : 'output_text',
+              text: msg.content.substring(0, 2000)
+            }]
+          }
+        };
+
+        conversation.openaiWs!.send(JSON.stringify(item));
+        injectedCount++;
+      }
+
+      console.log(`[RealtimeVoice] Text chat history injected successfully (${injectedCount} messages)`);
+      if (injectedCount > 0) {
+        conversation.textHistoryInjected = true;
+      }
+      return injectedCount > 0;
+    } catch (error) {
+      console.error('[RealtimeVoice] Error injecting text chat history:', error);
+      conversation.textConversationId = undefined;
+      return false;
+    }
+  }
+
+  private async loadBusinessContext(businessAccountId: string): Promise<string> {
+    let context = '';
+
+    // Load FAQs
+    try {
+      const faqs = await storage.getAllFaqs(businessAccountId);
+      if (faqs.length > 0) {
+        context += `KNOWLEDGE BASE (FAQs):\nYou have complete knowledge of the following frequently asked questions. Answer these questions directly from your knowledge without mentioning FAQs:\n\n`;
+        faqs.forEach((faq, index) => {
+          context += `${index + 1}. Q: ${faq.question}\n   A: ${faq.answer}\n\n`;
+        });
+        context += `IMPORTANT: When customers ask questions related to the above topics, answer directly and naturally from your knowledge. DO NOT mention that you're checking FAQs - just provide the answer as if you know it by heart.\n\n`;
+      }
+    } catch (error) {
+      console.error('[RealtimeVoice] Error loading FAQs:', error);
+    }
+
+    // Load comprehensive product catalog (both Shopify and custom products)
+    try {
+      const products = await storage.getAllProducts(businessAccountId);
+      
+      // Get widget settings for currency symbol
+      const widgetSettings = await storage.getWidgetSettings(businessAccountId);
+      const currencySymbol = widgetSettings?.currency ? 
+        (widgetSettings.currency === 'INR' ? '₹' : 
+         widgetSettings.currency === 'EUR' ? '€' : 
+         widgetSettings.currency === 'GBP' ? '£' : '$') : '$';
+      
+      if (products.length > 0) {
+        context += `PRODUCT CATALOG:\nYou have complete knowledge of all ${products.length} products in the catalog. Use this information to intelligently recommend products based on customer requirements:\n\n`;
+        
+        products.forEach((product, index) => {
+          context += `${index + 1}. ${product.name}`;
+          
+          // Add price information
+          if (product.price) {
+            context += ` - ${currencySymbol}${product.price}`;
+          }
+          
+          // Add source information (Shopify or Custom)
+          context += ` [Source: ${product.source === 'shopify' ? 'Shopify' : 'Custom'}]`;
+          
+          // Add full description
+          if (product.description) {
+            context += `\n   Description: ${product.description}`;
+          }
+          
+          // Add image availability
+          if (product.imageUrl) {
+            context += `\n   Image: Available`;
+          }
+          
+          context += `\n\n`;
+        });
+        
+        context += `PRODUCT RECOMMENDATION GUIDELINES:\n`;
+        context += `- When customers ask about products or their needs, analyze their requirements and suggest the most suitable products from the catalog above\n`;
+        context += `- Consider price, description, and customer's specific needs when making recommendations\n`;
+        context += `- You can recommend multiple products if they meet different aspects of the customer's requirements\n`;
+        context += `- Be enthusiastic and natural when discussing products - you know them by heart\n`;
+        context += `- Both Shopify products and custom products are equally valuable - recommend based on fit, not source\n\n`;
+      }
+    } catch (error) {
+      console.error('[RealtimeVoice] Error loading products:', error);
+    }
+
+    // Load website analysis (match text chat's full context)
+    try {
+      const { websiteAnalysisService } = await import("./websiteAnalysisService");
+      const websiteContent = await websiteAnalysisService.getAnalyzedContent(businessAccountId);
+      if (websiteContent) {
+        context += `BUSINESS KNOWLEDGE (from website analysis):\nYou have comprehensive knowledge about this business extracted from their website.\n\n`;
+        
+        if (websiteContent.businessName) {
+          context += `Business Name: ${websiteContent.businessName}\n\n`;
+        }
+        
+        if (websiteContent.businessDescription) {
+          context += `About: ${websiteContent.businessDescription}\n\n`;
+        }
+        
+        if (websiteContent.targetAudience) {
+          context += `Target Audience: ${websiteContent.targetAudience}\n\n`;
+        }
+        
+        if (websiteContent.mainProducts && websiteContent.mainProducts.length > 0) {
+          context += `Main Products:\n${websiteContent.mainProducts.map(p => `- ${p}`).join('\n')}\n\n`;
+        }
+        
+        if (websiteContent.mainServices && websiteContent.mainServices.length > 0) {
+          context += `Main Services:\n${websiteContent.mainServices.map(s => `- ${s}`).join('\n')}\n\n`;
+        }
+        
+        if (websiteContent.keyFeatures && websiteContent.keyFeatures.length > 0) {
+          context += `Key Features:\n${websiteContent.keyFeatures.map(f => `- ${f}`).join('\n')}\n\n`;
+        }
+        
+        if (websiteContent.uniqueSellingPoints && websiteContent.uniqueSellingPoints.length > 0) {
+          context += `Unique Selling Points:\n${websiteContent.uniqueSellingPoints.map(u => `- ${u}`).join('\n')}\n\n`;
+        }
+        
+        if (websiteContent.contactInfo && (websiteContent.contactInfo.email || websiteContent.contactInfo.phone || websiteContent.contactInfo.address)) {
+          context += `Contact Information:\n`;
+          if (websiteContent.contactInfo.email) context += `- Email: ${websiteContent.contactInfo.email}\n`;
+          if (websiteContent.contactInfo.phone) context += `- Phone: ${websiteContent.contactInfo.phone}\n`;
+          if (websiteContent.contactInfo.address) context += `- Address: ${websiteContent.contactInfo.address}\n`;
+          context += '\n';
+        }
+        
+        if (websiteContent.businessHours) {
+          context += `Business Hours: ${websiteContent.businessHours}\n\n`;
+        }
+        
+        if (websiteContent.pricingInfo) {
+          context += `Pricing: ${websiteContent.pricingInfo}\n\n`;
+        }
+        
+        if (websiteContent.additionalInfo) {
+          context += `Additional Information: ${websiteContent.additionalInfo}\n\n`;
+        }
+        
+        context += `IMPORTANT: Use this website knowledge to provide accurate, context-aware responses about the business. Answer naturally without mentioning that you analyzed their website.\n\n`;
+      }
+    } catch (error) {
+      console.error('[RealtimeVoice] Error loading website analysis:', error);
+    }
+
+    // Load analyzed pages (limit to avoid token overflow)
+    try {
+      const analyzedPages = await storage.getAnalyzedPages(businessAccountId);
+      if (analyzedPages && analyzedPages.length > 0) {
+        const validPages = analyzedPages.filter(page => 
+          page.extractedContent && 
+          page.extractedContent.trim() !== '' && 
+          page.extractedContent !== 'No relevant business information found on this page.'
+        );
+        
+        if (validPages.length > 0) {
+          context += `DETAILED WEBSITE CONTENT:\n`;
+          // Limit to first 3 pages to avoid token overflow in voice mode
+          const pagesToLoad = validPages.slice(0, 3);
+          for (const page of pagesToLoad) {
+            try {
+              let pageName = 'Page';
+              try {
+                const url = new URL(page.pageUrl);
+                const pathParts = url.pathname.split('/').filter(Boolean);
+                pageName = pathParts[pathParts.length - 1] || 'Homepage';
+              } catch {
+                const pathParts = page.pageUrl.split('/').filter(Boolean);
+                pageName = pathParts[pathParts.length - 1] || 'Homepage';
+              }
+              context += `--- ${pageName.toUpperCase()} ---\n${page.extractedContent}\n\n`;
+            } catch (error) {
+              console.error('[RealtimeVoice] Error processing page:', error);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[RealtimeVoice] Error loading analyzed pages:', error);
+    }
+
+    // Load training documents
+    try {
+      const trainingDocs = await storage.getTrainingDocuments(businessAccountId);
+      const completedDocs = trainingDocs.filter(doc => doc.uploadStatus === 'completed');
+      if (completedDocs.length > 0) {
+        context += `TRAINING DOCUMENTS KNOWLEDGE:\n`;
+        for (const doc of completedDocs) {
+          if (doc.summary || doc.keyPoints) {
+            context += `--- ${doc.originalFilename} ---\n`;
+            if (doc.summary) {
+              context += `Summary: ${doc.summary}\n`;
+            }
+            if (doc.keyPoints) {
+              try {
+                const keyPoints = JSON.parse(doc.keyPoints);
+                if (Array.isArray(keyPoints) && keyPoints.length > 0) {
+                  context += `Key Points:\n`;
+                  keyPoints.forEach((point: string, index: number) => {
+                    context += `${index + 1}. ${point}\n`;
+                  });
+                }
+              } catch (error) {
+                console.error('[RealtimeVoice] Error parsing key points:', error);
+              }
+            }
+            context += `\n`;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[RealtimeVoice] Error loading training documents:', error);
+    }
+
+    return context;
+  }
+
+  private async handleOpenAIMessage(conversationId: string, conversation: VoiceConversation, data: any) {
+    try {
+      const event = JSON.parse(data.toString());
+      console.log('[RealtimeVoice] OpenAI event:', event.type);
+
+      switch (event.type) {
+        case 'session.created':
+          console.log('[RealtimeVoice] Session created:', event.session.id);
+          conversation.sessionId = event.session.id;
+          break;
+
+        case 'session.updated':
+          console.log('[RealtimeVoice] Session updated');
+          break;
+
+        case 'input_audio_buffer.speech_started':
+          console.log('[RealtimeVoice] User started speaking');
+          this.touchActivity(conversation);
+          
+          // Cancel ongoing AI response if one is active (isProcessing check inside cancelResponse).
+          // We must NOT send response.cancel when no response is active — doing so
+          // causes OpenAI to return an error that corrupts the VAD state machine,
+          // preventing speech_stopped from ever firing and leaving the session stuck.
+          // respectGrace=true: ignore speech_started that lands in the first
+          // BARGE_IN_GRACE_MS of the answer's audio — that's the AI's own opening
+          // audio / mic echo, not a real interruption.
+          this.cancelResponse(conversation, true);
+          
+          this.sendToClient(conversation.clientWs, { type: 'speech_started' });
+          break;
+
+        case 'input_audio_buffer.speech_stopped':
+          console.log('[RealtimeVoice] User stopped speaking');
+          break;
+
+        case 'input_audio_buffer.committed':
+          console.log('[RealtimeVoice] Audio buffer committed');
+          this.sendToClient(conversation.clientWs, { 
+            type: 'transcript',
+            text: '',
+            isFinal: false
+          });
+          break;
+
+        case 'conversation.item.input_audio_transcription.completed':
+          // User's speech transcribed
+          const userTranscript = event.transcript;
+          console.log('[RealtimeVoice] User transcript:', userTranscript);
+          
+          // Save user transcript to conversation
+          conversation.currentUserTranscript = userTranscript;
+          
+          // Save to database and conversation memory
+          if (conversation.conversationId && userTranscript) {
+            await this.saveMessageToDB(conversation.conversationId, 'user', userTranscript);
+            conversationMemory.storeMessage(conversation.userId, 'user', userTranscript);
+            console.log('[RealtimeVoice] Saved user message to DB');
+          }
+          
+          this.sendToClient(conversation.clientWs, {
+            type: 'transcript',
+            text: userTranscript,
+            isFinal: true
+          });
+          
+          // GPT TRANSCRIPT CORRECTION: Run in background (non-blocking)
+          // Always detect the language of THIS specific transcript, not the previously detected language.
+          // This prevents English text from being "corrected" (translated) into Hindi when the user
+          // switches languages mid-conversation.
+          const thisTranscriptLang = this.detectLanguageFromText(userTranscript.trim());
+          if (thisTranscriptLang.language !== 'en') {
+            const correctionLang = conversation.selectedLanguage && conversation.selectedLanguage !== 'auto'
+              ? conversation.selectedLanguage
+              : thisTranscriptLang.language;
+            this.correctTranscriptScript(userTranscript, correctionLang, conversation).catch(() => {});
+          }
+          
+          // CRITICAL: Filter out very short/empty transcripts (likely background noise)
+          // Only process transcripts with at least 2 meaningful characters
+          const trimmedTranscript = userTranscript.trim();
+          if (trimmedTranscript.length < 2) {
+            console.log('[RealtimeVoice] Ignoring short/empty transcript (likely noise):', userTranscript);
+            break; // Skip processing this noise
+          }
+          
+          // AUTO LANGUAGE DETECTION: Detect language from transcribed text and update session
+          if (!conversation.selectedLanguage || conversation.selectedLanguage === 'auto') {
+            const detected = this.detectLanguageFromText(trimmedTranscript);
+            if (detected.language !== conversation.detectedLanguage) {
+              conversation.detectedLanguage = detected.language;
+              console.log(`[RealtimeVoice] Language detected from transcript: ${detected.languageName} (${detected.language})`);
+              
+              // Rebuild instructions with detected language and send session.update
+              // Also update input_audio_transcription with language hint for correct script
+              const updatedInstructions = await this.buildSystemInstructions(conversation);
+              if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+                conversation.openaiWs.send(JSON.stringify({
+                  type: 'session.update',
+                  session: {
+                    type: 'realtime',
+                    instructions: updatedInstructions,
+                    audio: {
+                      input: {
+                        transcription: {
+                          model: 'gpt-4o-mini-transcribe',
+                          language: this.toTranscriptionLangCode(detected.language)
+                        }
+                      }
+                    }
+                  }
+                }));
+                console.log(`[RealtimeVoice] Session updated with detected language: ${detected.languageName} (transcription + instructions)`);
+              }
+            }
+          }
+          
+          // Check if a journey should be activated or is already active
+          // CRITICAL: Only process journey if explicitly triggered or already in progress for THIS conversation
+          let journeyResult: any = null;
+          if (conversation.conversationId && conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+            journeyResult = await journeyOrchestrator.processUserMessage(
+              conversation.conversationId,
+              conversation.userId,
+              conversation.businessAccountId,
+              userTranscript
+            );
+            
+            // CRITICAL: Only inject journey questions if:
+            // 1. Journey was just triggered by keyword (wasTriggeredByKeyword === true), OR
+            // 2. Journey is active for THIS specific conversation (not a stale journey from another session)
+            // This prevents false triggers from old journey sessions in different conversations
+            if (journeyResult.journeyResponse && !journeyResult.shouldContinueNormalFlow) {
+              const isJourneyForThisConversation = journeyService.isJourneyForConversation(
+                conversation.conversationId
+              );
+              
+              if (!journeyResult.wasTriggeredByKeyword && !isJourneyForThisConversation) {
+                console.log('[RealtimeVoice] Ignoring stale journey from different conversation - not injecting question');
+                // Fall through to normal OpenAI response (don't inject journey question)
+              } else {
+                console.log('[RealtimeVoice] Journey active for THIS conversation - forcing AI to ask journey question:', journeyResult.journeyResponse);
+              
+              // SMART INTERRUPTION: Cancel any ongoing response BEFORE injecting journey prompts
+              // This prevents the AI from continuing its previous response before the journey question
+              if (conversation.isProcessing) {
+                console.log('[RealtimeVoice] 🎯 Smart interruption: Cancelling active response before journey question');
+                this.cancelResponse(conversation);
+                conversation.isProcessing = false;
+                
+                // Add small delay to allow cancellation to complete
+                await new Promise(resolve => setTimeout(resolve, 100));
+              }
+              
+              // CRITICAL FIX BUG 4: Track pending journey step ID (will be added to Map when response.created arrives)
+              if (journeyResult.journeyStepId) {
+                conversation.pendingJourneyStepId = journeyResult.journeyStepId;
+                console.log('[RealtimeVoice] Set pending journey stepId:', journeyResult.journeyStepId, 'for next response.created event');
+              } else {
+                console.warn('[RealtimeVoice] Journey result missing stepId - cannot track properly!');
+              }
+              
+              // Create a strong system-level instruction that the AI MUST follow
+              // Use the SAME strong rephrasing instruction as text chat mode for consistency
+              const journeyInstruction = {
+                type: 'conversation.item.create',
+                item: {
+                  type: 'message',
+                  role: 'system',
+                  content: [
+                    {
+                      type: 'input_text',
+                      text: `═══════════════════════════════════════════════════════════════
+CRITICAL JOURNEY INSTRUCTION - HIGHEST PRIORITY - READ CAREFULLY
+═══════════════════════════════════════════════════════════════
+
+You are currently in a GUIDED CONVERSATION FLOW. This overrides your normal conversational behavior.
+
+YOUR ONLY TASK RIGHT NOW:
+Ask the user this question: "${journeyResult.journeyResponse}"
+
+STRICT REQUIREMENTS:
+1. ✓ Rephrase the question naturally to sound warm, friendly, and conversational
+2. ✓ Keep it concise - ONLY ask this one question
+3. ✗ Do NOT add any other information, explanations, or suggestions
+4. ✗ Do NOT call any tools or functions
+5. ✗ Do NOT provide product recommendations or capture leads
+
+Remember: You're in a structured flow. Just ask the question naturally, then wait for their answer.
+═══════════════════════════════════════════════════════════════`
+                    }
+                  ]
+                }
+              };
+              
+              conversation.openaiWs.send(JSON.stringify(journeyInstruction));
+              
+              // Trigger response generation - AI will ask the journey question
+              const responseCreate = {
+                type: 'response.create',
+                response: {
+                  output_modalities: ['audio'],
+                  instructions: `You MUST rephrase this question naturally and conversationally: "${journeyResult.journeyResponse}". Make it sound warm and friendly, but keep the same intent. Do NOT add any extra information - ONLY ask the rephrased question.`
+                }
+              };
+              conversation.openaiWs.send(JSON.stringify(responseCreate));
+              
+              console.log('[RealtimeVoice] Sent FORCED journey question to OpenAI');
+              
+              // Clear the keyword flag if this was triggered by keyword
+              if (journeyResult.wasTriggeredByKeyword) {
+                await journeyService.clearKeywordTriggerFlag(conversation.conversationId);
+              }
+              }
+            } else {
+              // No active journey - send normal response
+              // SMART INTERRUPTION: Check if there's already an active response
+              if (conversation.isProcessing) {
+                console.log('[RealtimeVoice] 🎯 Smart interruption: Cancelling active response before creating new one');
+                this.cancelResponse(conversation);
+                conversation.isProcessing = false;
+                
+                // Add small delay to allow cancellation to complete
+                await new Promise(resolve => setTimeout(resolve, 100));
+              }
+              
+              // No journey active - create normal response
+              console.log('[RealtimeVoice] Creating normal OpenAI response (no active journey)');
+              await this.sendNormalResponse(conversation);
+            }
+          } else {
+            // CRITICAL FIX: If journey check couldn't be performed (conversationId missing or WebSocket not ready),
+            // we still need to send a response! Otherwise AI will be silent.
+            // SMART INTERRUPTION: Check if there's already an active response
+            if (conversation.isProcessing) {
+              console.log('[RealtimeVoice] 🎯 Smart interruption: Cancelling active response before creating new one');
+              this.cancelResponse(conversation);
+              conversation.isProcessing = false;
+              
+              // Add small delay to allow cancellation to complete
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            // Send normal response when journey check couldn't be performed
+            console.log('[RealtimeVoice] Creating normal OpenAI response (journey check skipped)');
+            if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+              await this.sendNormalResponse(conversation);
+            }
+          }
+          break;
+
+        case 'response.created':
+          console.log('[RealtimeVoice] Response created, id:', event.response?.id);
+          conversation.isProcessing = true;
+          conversation.currentAITranscript = '';
+          conversation.pendingTextOutput = '';
+          conversation.openaiAudioFallbackBuffer = [];
+          // Reset incremental-TTS state for the new answer.
+          conversation.textStreamMode = 'pending';
+          conversation.streamedTextCursor = 0;
+          conversation.k12TextFinalized = false;
+          conversation.ttsTranscriptCursor = 0;
+          // Track current response ID
+          conversation.currentResponseId = event.response?.id;
+
+          // Tell the client which OpenAI responseId is about to start, so it can
+          // map this to the local message bubble it creates on the first ai_chunk.
+          // Used by the formatted_transcript event to find the correct bubble.
+          if (conversation.currentResponseId) {
+            this.sendToClient(conversation.clientWs, {
+              type: 'voice_message_start',
+              responseId: conversation.currentResponseId
+            });
+          }
+          
+          // CRITICAL FIX BUG 4: If we have a pending journey step ID, add it to the Map keyed by stepId
+          if (conversation.pendingJourneyStepId && conversation.currentResponseId) {
+            // We need the original question text for logging - get it from journeyResult
+            const stepId = conversation.pendingJourneyStepId;
+            conversation.journeyResponseTracking.set(stepId, {
+              original: '', // Will be set in response.done when we have the full transcript
+              responseId: conversation.currentResponseId,
+              timestamp: Date.now()
+            });
+            console.log('[RealtimeVoice] Tracked journey by STEP ID:', stepId, 'responseId:', conversation.currentResponseId);
+            conversation.pendingJourneyStepId = undefined; // Clear pending
+          }
+          break;
+
+        case 'response.output_item.added':
+          console.log('[RealtimeVoice] Output item added');
+          break;
+
+        case 'response.content_part.added':
+          console.log('[RealtimeVoice] Content part added');
+          break;
+
+        case 'response.output_audio_transcript.delta':
+        case 'response.audio_transcript.delta':
+          // AI's speech transcript chunk
+          const transcriptDelta = event.delta;
+          console.log('[RealtimeVoice] AI transcript delta:', transcriptDelta);
+          
+          // Accumulate AI transcript (we still keep the partial in case we need to
+          // save it for the cancelled response — the user heard part of it).
+          conversation.currentAITranscript = (conversation.currentAITranscript || '') + transcriptDelta;
+
+          // Suppress forwarding for cancelled responses — OpenAI keeps emitting
+          // a few late deltas after response.cancel, and forwarding them would
+          // create a phantom second bubble in the client.
+          if (conversation.currentResponseId &&
+              conversation.cancelledResponseIds.has(conversation.currentResponseId)) {
+            break;
+          }
+
+          this.sendToClient(conversation.clientWs, {
+            type: 'ai_chunk',
+            text: transcriptDelta,
+            // Stamp every chunk with its responseId so the client can bind a
+            // bubble to a specific response without relying on a separate
+            // pending-ref (which races on rapid back-to-back turns).
+            responseId: conversation.currentResponseId
+          });
+
+          // INCREMENTAL VOICE (audio modality): when ElevenLabs is the active
+          // voice, OpenAI's own audio is suppressed (see audio.delta handler)
+          // and we re-speak the transcript through ElevenLabs. Instead of
+          // waiting for the WHOLE transcript at .done, queue each complete
+          // sentence for synthesis the moment it lands, so the student hears
+          // the answer begin almost immediately.
+          if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
+            this.streamTranscriptTts(conversation, false);
+          }
+          break;
+
+        case 'response.output_text.delta':
+        case 'response.text.delta': {
+          // SILENCE BREAKER: the model answered in TEXT modality (no audio).
+          // Without this handler the deltas fall through to "Unknown event type"
+          // and the visitor hears (and sees) nothing.
+          const textDelta = event.delta || '';
+          if (!textDelta) break;
+
+          // K12 CONTENT-ONLY: stream the answer sentence-by-sentence so the
+          // student hears it almost immediately instead of waiting for the whole
+          // reply. We still accumulate the full text in pendingTextOutput (for the
+          // DB save + done-time validation). On the FIRST delta we decide:
+          //  - starts with '{' or '[' → could be a leaked tool-call payload
+          //    (e.g. {"query":"proteins"}); fall back to buffer-until-done and
+          //    validate the whole thing before it's ever spoken.
+          //  - otherwise → stream complete sentences as they arrive.
+          // The non-K12 path is intentionally LEFT UNCHANGED below.
+          if (conversation.k12ContentOnly) {
+            conversation.pendingTextOutput = (conversation.pendingTextOutput || '') + textDelta;
+            if (!conversation.textStreamMode || conversation.textStreamMode === 'pending') {
+              const trimmedSoFar = (conversation.pendingTextOutput || '').replace(/^\s+/, '');
+              if (trimmedSoFar.length > 0) {
+                const first = trimmedSoFar[0];
+                conversation.textStreamMode = (first === '{' || first === '[') ? 'buffer' : 'stream';
+              }
+            }
+            if (conversation.textStreamMode === 'stream') {
+              this.emitReadyK12Text(conversation, false);
+            }
+            break;
+          }
+
+          console.log('[RealtimeVoice] AI text delta (text-modality turn):', textDelta);
+          conversation.currentAITranscript = (conversation.currentAITranscript || '') + textDelta;
+          if (conversation.currentResponseId &&
+              conversation.cancelledResponseIds.has(conversation.currentResponseId)) {
+            break;
+          }
+          this.sendToClient(conversation.clientWs, {
+            type: 'ai_chunk',
+            text: textDelta,
+            responseId: conversation.currentResponseId
+          });
+          break;
+        }
+
+        case 'response.output_text.done':
+        case 'response.text.done': {
+          // Non-K12 path UNCHANGED: deltas were already forwarded; just speak the
+          // accumulated transcript via ElevenLabs when active.
+          if (!conversation.k12ContentOnly) {
+            console.log('[RealtimeVoice] AI text output complete (text-modality turn)');
+            if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId && conversation.currentAITranscript &&
+                conversation.lastSynthesizedResponseId !== conversation.currentResponseId) {
+              conversation.lastSynthesizedResponseId = conversation.currentResponseId;
+              await this.synthesizeWithElevenLabs(conversation, conversation.currentAITranscript);
+            }
+            conversation.openaiAudioFallbackBuffer = [];
+            break;
+          }
+
+          // K12 content-only: finalize the streamed/buffered text. In 'stream'
+          // mode the sentences were already forwarded and spoken during the
+          // deltas; this flushes the trailing partial sentence. In 'buffer' mode
+          // (reply started like JSON) it validates the whole reply and drops a
+          // leaked tool-call payload before anything is spoken.
+          console.log('[RealtimeVoice] AI text output complete (K12 text-modality turn)');
+          this.finalizeK12TextOutput(conversation);
+          conversation.openaiAudioFallbackBuffer = [];
+          break;
+        }
+
+        case 'response.output_audio.delta':
+        case 'response.audio.delta':
+          this.touchActivity(conversation);
+          const audioDelta = event.delta;
+          const audioBuffer = Buffer.from(audioDelta, 'base64');
+          
+          if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
+            if (!conversation.openaiAudioFallbackBuffer) {
+              conversation.openaiAudioFallbackBuffer = [];
+            }
+            conversation.openaiAudioFallbackBuffer.push(audioBuffer);
+            break;
+          }
+          
+          if (conversation.clientWs.readyState === WebSocket.OPEN) {
+            conversation.clientWs.send(audioBuffer);
+          }
+          break;
+
+        case 'response.output_audio_transcript.done':
+        case 'response.audio_transcript.done':
+          console.log('[RealtimeVoice] AI transcript complete');
+          // Sentences were already streamed to ElevenLabs during the deltas
+          // (see transcript.delta handler). Flush the trailing partial sentence
+          // — unless the user barged in, in which case keep only what was spoken.
+          if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId && conversation.currentAITranscript &&
+              conversation.lastSynthesizedResponseId !== conversation.currentResponseId) {
+            conversation.lastSynthesizedResponseId = conversation.currentResponseId;
+            const cancelled = !!(conversation.currentResponseId &&
+              conversation.cancelledResponseIds.has(conversation.currentResponseId));
+            if (!cancelled) {
+              this.streamTranscriptTts(conversation, true);
+            }
+          }
+          conversation.openaiAudioFallbackBuffer = [];
+          break;
+
+        case 'response.output_audio.done':
+        case 'response.audio.done':
+          console.log('[RealtimeVoice] AI audio complete');
+          break;
+
+        case 'response.function_call_arguments.done':
+          // AI wants to call a tool (lead capture, appointments, etc.)
+          await this.handleToolCall(event, conversation);
+          break;
+
+        case 'response.done':
+          console.log('[RealtimeVoice] Response complete, id:', conversation.currentResponseId);
+          conversation.isProcessing = false;
+
+          // SAFETY NET (K12 only): if .text.done never arrived before
+          // response.done, finalize here so a legitimate answer isn't lost. This
+          // is idempotent — finalize() no-ops if .text.done already ran.
+          if (conversation.k12ContentOnly && !conversation.k12TextFinalized) {
+            this.finalizeK12TextOutput(conversation);
+          }
+
+          // Save complete AI response to database and conversation memory
+          if (conversation.conversationId && conversation.currentAITranscript) {
+            const savedMessageId = await this.saveMessageToDB(conversation.conversationId, 'assistant', conversation.currentAITranscript);
+            conversationMemory.storeMessage(conversation.userId, 'assistant', conversation.currentAITranscript);
+            console.log('[RealtimeVoice] Saved AI message to DB:', conversation.currentAITranscript.substring(0, 50) + '...');
+
+            // STEM formatter: fire-and-forget background pass that converts the spoken
+            // transcript into properly formatted Markdown + LaTeX for math/science answers.
+            // Audio playback is unaffected — only the on-screen bubble is updated.
+            const transcriptSnapshot = conversation.currentAITranscript;
+            const responseIdSnapshot = conversation.currentResponseId;
+            const conversationIdSnapshot = conversation.conversationId;
+            const businessAccountIdSnapshot = conversation.businessAccountId;
+            const apiKeySnapshot = conversation.openaiApiKey;
+            const clientWsSnapshot = conversation.clientWs;
+            // Skip the STEM formatter for cancelled responses — the user
+            // interrupted, so the partial transcript isn't a real "answer".
+            // Saves a gpt-4o-mini call AND prevents the client from rendering
+            // a phantom formatted bubble for content the user cut off.
+            const wasCancelled = !!(responseIdSnapshot && conversation.cancelledResponseIds.has(responseIdSnapshot));
+            if (wasCancelled) {
+              console.log('[RealtimeVoice] Skipping STEM formatter for cancelled response:', responseIdSnapshot);
+            }
+            if (!wasCancelled && responseIdSnapshot && apiKeySnapshot) {
+              (async () => {
+                try {
+                  const result = await formatVoiceTranscript(
+                    transcriptSnapshot,
+                    apiKeySnapshot,
+                    businessAccountIdSnapshot,
+                    conversationIdSnapshot
+                  );
+                  if (!result || !result.isStem || !result.formattedMarkdown) {
+                    return;
+                  }
+                  // Persist formatted variant on the message row for replays
+                  if (savedMessageId) {
+                    try {
+                      await storage.updateMessageMetadata(savedMessageId, {
+                        formattedContent: result.formattedMarkdown,
+                        formatSubject: result.subject
+                      });
+                    } catch (err) {
+                      console.warn('[RealtimeVoice] Could not persist formatted content:', (err as Error).message);
+                    }
+                  }
+                  // Push to live client if still connected
+                  if (clientWsSnapshot && clientWsSnapshot.readyState === WebSocket.OPEN) {
+                    this.sendToClient(clientWsSnapshot, {
+                      type: 'formatted_transcript',
+                      responseId: responseIdSnapshot,
+                      messageId: savedMessageId,
+                      subject: result.subject,
+                      formattedMarkdown: result.formattedMarkdown
+                    });
+                    console.log('[RealtimeVoice] Sent formatted_transcript for', result.subject, 'responseId:', responseIdSnapshot);
+                  }
+                } catch (err) {
+                  console.warn('[RealtimeVoice] Formatter pipeline failed:', (err as Error).message);
+                }
+              })();
+            }
+            
+            // CRITICAL FIX BUG 4: Check Map for journey response tracking by stepId
+            // This prevents race conditions when multiple journey prompts are triggered rapidly
+            // Find stepId by matching responseId
+            let foundStepId: string | null = null;
+            conversation.journeyResponseTracking.forEach((journeyData, stepId) => {
+              if (journeyData.responseId === conversation.currentResponseId) {
+                foundStepId = stepId;
+              }
+            });
+            
+            if (foundStepId) {
+              const rephrasedQuestion = conversation.currentAITranscript.trim();
+              console.log('[RealtimeVoice] ✅ Journey question persisted to chat history (stepId:', foundStepId, ')');
+              console.log('[RealtimeVoice]    OpenAI responseId:', conversation.currentResponseId);
+              console.log('[RealtimeVoice]    AI-rephrased:', rephrasedQuestion);
+              console.log('[RealtimeVoice]    This ensures analytics/chat history show refined text instead of raw template');
+              
+              // Clear this specific journey step from Map (per-step cleanup)
+              conversation.journeyResponseTracking.delete(foundStepId);
+              console.log('[RealtimeVoice] Cleared journey tracking for stepId:', foundStepId);
+            }
+          }
+          
+          this.sendToClient(conversation.clientWs, { type: 'ai_done' });
+          break;
+
+        case 'rate_limits.updated':
+          // Rate limit info - can be logged if needed
+          break;
+
+        case 'error':
+          // CRITICAL FIX: Ignore harmless race condition where response finishes before cancellation
+          // This happens when AI completes speaking just as user starts interrupting
+          if (event.error?.code === 'response_cancel_not_active') {
+            console.log('[RealtimeVoice] ℹ️  Response already completed before cancellation (harmless)');
+            break; // Don't send to client - this is not an actual error
+          }
+          
+          console.error('[RealtimeVoice] OpenAI error:', event.error);
+          this.sendError(conversation.clientWs, event.error.message || 'Voice processing error');
+          break;
+
+        default:
+          // Log unknown events for debugging
+          console.log('[RealtimeVoice] Unknown event type:', event.type);
+      }
+    } catch (error) {
+      console.error('[RealtimeVoice] Error handling OpenAI message:', error);
+    }
+  }
+
+  // Helper method to save messages to database
+  private async saveMessageToDB(conversationId: string, role: 'user' | 'assistant', content: string): Promise<string | undefined> {
+    try {
+      const created = await storage.createMessage({
+        conversationId,
+        role,
+        content
+      });
+
+      // Update conversation timestamp
+      await storage.updateConversationTimestamp(conversationId);
+      return created?.id;
+    } catch (error) {
+      console.error('[RealtimeVoice] Error saving message to DB:', error);
+      return undefined;
+    }
+  }
+
+  // Convert aiTools to OpenAI Realtime API format
+  private convertToRealtimeTools(tools: any[]): any[] {
+    return tools.map(tool => ({
+      type: 'function',
+      name: tool.function.name,
+      description: tool.function.description,
+      parameters: tool.function.parameters
+    }));
+  }
+
+  /**
+   * Decide whether a user's spoken turn should force the curriculum lookup
+   * (fetch_k12_topic) in content-only K12 mode. This is DEFAULT-FORCE with
+   * narrow exclusions — we ground EVERY substantive turn in the curriculum and
+   * only skip clearly non-academic turns. This mirrors the text-chat path, which
+   * forces fetch_k12_topic for nearly every non-greeting turn. We deliberately do
+   * NOT use a positive academic-keyword allowlist: it silently missed natural
+   * phrasings like "tell me about proteins" and bypassed RAG. The order is:
+   *   1. too-short (< 3 chars)                      -> never force
+   *   2. exact-match small talk                     -> never force
+   *   3. presence checks / greeting-only utterances -> never force
+   *   4. lead-capture / contact-info turns          -> never force (capture_lead)
+   *   5. operational intents (booking, pricing,
+   *      support, location, timings, …)             -> never force
+   *   6. everything else                            -> FORCE the curriculum lookup
+   * Journey turns never reach this helper: while a journey is active the caller
+   * sends its own forced journey question instead of a normal response, so guided
+   * flows are already unaffected.
+   */
+  private shouldForceK12Fetch(transcript?: string): boolean {
+    const raw = (transcript || '').trim();
+    const msg = raw.toLowerCase().replace(/[!.?,]+$/g, '').trim();
+    if (msg.length < 3) return false;
+    if (RealtimeVoiceService.SMALL_TALK.has(msg)) return false;
+    if (this.looksLikePresenceOrGreeting(msg)) return false;
+    if (this.looksLikeContactInfo(raw)) return false;
+    if (this.looksLikeOperationalIntent(msg)) return false;
+    // Default-force: any remaining substantive turn grounds in the curriculum,
+    // mirroring the text-chat path (which forces fetch_k12_topic for every
+    // non-greeting turn and passes the raw message as the query). We do NOT use a
+    // positive academic-keyword allowlist — it missed natural phrasings like
+    // "tell me about proteins" and silently bypassed RAG.
+    return true;
+  }
+
+  private static readonly SMALL_TALK = new Set<string>([
+    'hi', 'hii', 'hiii', 'hey', 'heyy', 'heyyy', 'hello', 'helo', 'yo', 'sup',
+    'hi there', 'hello there', 'hey there', 'good morning', 'good afternoon',
+    'good evening', 'how are you', 'how r u', 'whats up', "what's up",
+    'thanks', 'thank you', 'thank you so much', 'thx', 'ty', 'ok', 'okay', 'okk',
+    'cool', 'great', 'nice', 'got it', 'alright', 'bye', 'goodbye', 'see you',
+    'yes', 'no', 'yeah', 'yep', 'nope', 'sure'
+  ]);
+
+  /**
+   * Heuristic: does this turn look like the visitor sharing (or offering) their
+   * contact details — i.e. a lead-capture turn rather than an academic question?
+   * Catches written emails, phone-number-like digit runs, and explicit
+   * "my name/number/email is …" style intros.
+   */
+  private looksLikeContactInfo(text: string): boolean {
+    if (/[^\s@]+@[^\s@]+\.[^\s@]+/.test(text)) return true; // email address
+    const digits = text.replace(/\D/g, '');
+    if (digits.length >= 7 && digits.length <= 15 && /\d[\d\s().+-]{5,}\d/.test(text)) return true; // phone-like run
+    const t = text.toLowerCase();
+    if (/\b(my name is|i am called|i'?m called|call me at|call me on|my mobile|my phone|my number|my contact|my email|my mail|reach me|contact me)\b/.test(t)) return true;
+    return false;
+  }
+
+  /**
+   * Heuristic: non-academic operational/business intents (appointments, pricing,
+   * payments, support, location/timings). These must route normally so the model
+   * can use the appropriate tool (or answer conversationally) instead of being
+   * forced into a curriculum lookup. Checked BEFORE academic intent so phrases
+   * like "how much does it cost" / "what are your timings" are treated as
+   * operational despite containing question words.
+   */
+  private looksLikeOperationalIntent(msg: string): boolean {
+    return /\b(appointment|book a|booking|re-?schedul|cancel (my|the)|slot|demo|how much|price|pricing|cost|costs?|fees?|charges?|payment|pay (for|now)|buy |purchase|order|discount|offer|refund|invoice|subscription|location|address|timings?|opening hours|business hours|talk to|speak to|human|agent|representative|customer (care|support)|support team|complaint)\b/.test(msg);
+  }
+
+  /**
+   * Heuristic: presence checks and greeting-only utterances that the exact-match
+   * SMALL_TALK set misses because of internal punctuation or word repetition
+   * (e.g. "are you there?", "can you hear me?", "hey, hi", "hi hello there").
+   * These are conversational, not academic, so they must NOT force a curriculum
+   * lookup — the model answers them normally.
+   */
+  private looksLikePresenceOrGreeting(msg: string): boolean {
+    // Normalize internal punctuation/whitespace so "hey, hi" -> "hey hi".
+    const m = msg.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!m) return true;
+    // Presence / can-you-hear-me checks.
+    if (/^(are you (there|here|listening|online|present|awake)|can you hear me|do you hear me|you there|still there|are you online|is anyone there|hello are you there)\b/.test(m)) return true;
+    // "how are you", "how's it going" style social openers.
+    if (/^(how are you|how r u|how are u|how s it going|hows it going|whats up|what s up|how do you do)\b/.test(m)) return true;
+    // Greeting-only utterances (possibly combined/repeated): "hey hi", "hi hello there".
+    const greetingWords = new Set([
+      'hi', 'hii', 'hiii', 'hey', 'heyy', 'heyyy', 'hello', 'helo', 'yo', 'sup',
+      'hiya', 'howdy', 'there', 'good', 'morning', 'afternoon', 'evening', 'day',
+      'namaste', 'hola', 'greetings'
+    ]);
+    const tokens = m.split(' ');
+    if (tokens.length <= 4 && tokens.every(t => greetingWords.has(t))) return true;
+    return false;
+  }
+
+  /**
+   * Send the response.create for a normal (non-journey) assistant turn.
+   *
+   * In content-only K12 mode we DO NOT force the model to call fetch_k12_topic
+   * via tool_choice anymore: on the Realtime API a forced tool call is emitted
+   * as a TEXT content part (e.g. {"query":"proteins"}) rather than a real
+   * function_call, which then leaked into the chat bubble and was read aloud.
+   * Instead we run the curriculum lookup SERVER-SIDE here (mirroring the text
+   * path's "K12 Fast Path"), inject the grounded content as a context item, and
+   * then ask for a normal audio response that speaks the grounded answer.
+   *
+   * The non-K12 path is unchanged: a plain response.create.
+   */
+  private async sendNormalResponse(conversation: VoiceConversation): Promise<void> {
+    if (!conversation.openaiWs || conversation.openaiWs.readyState !== WebSocket.OPEN) return;
+
+    if (conversation.k12ContentOnly && this.shouldForceK12Fetch(conversation.currentUserTranscript)) {
+      await this.injectK12CurriculumContext(conversation);
+    }
+
+    if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+      conversation.openaiWs.send(JSON.stringify({ type: 'response.create' }));
+    }
+  }
+
+  /**
+   * K12 content-only: retrieve curriculum for the student's question server-side
+   * and inject it as a system context item so the next response is grounded.
+   * Best-effort — on any failure we simply skip injection and let the normal
+   * response proceed (never break the turn).
+   */
+  private async injectK12CurriculumContext(conversation: VoiceConversation): Promise<void> {
+    const query = (conversation.currentUserTranscript || '').trim();
+    if (!query || !conversation.conversationId) return;
+
+    try {
+      console.log('[RealtimeVoice] K12 content-only: retrieving curriculum server-side for query:', query.slice(0, 80));
+      const result = await ToolExecutionService.executeTool(
+        'fetch_k12_topic',
+        { query },
+        {
+          businessAccountId: conversation.businessAccountId,
+          userId: conversation.userId,
+          conversationId: conversation.conversationId,
+          userMessage: query
+        },
+        query,
+        false
+      );
+
+      const curriculum = this.compactK12Curriculum(result);
+      const instruction = curriculum
+        ? `CURRICULUM CONTEXT for the student's question "${query}". Answer the student's question using ONLY the curriculum content below. If it does not contain the answer, tell the student you don't have that in the curriculum yet — do NOT use outside knowledge. Give a THOROUGH, COMPLETE spoken lesson that covers EVERY key point in this content (definitions, examples, sub-concepts, distinctions) — match the depth of a full written answer, do not summarize or shorten it. Convey structure out loud with spoken signposting ("First…", "Next…", "For example…") rather than reading bullet symbols or markdown. Do NOT read this context aloud verbatim and do NOT mention tools or JSON; answer in a natural, warm teaching voice.\n\n${curriculum}`
+        : `No curriculum content was found for the student's question "${query}". Tell the student you don't have that topic in the curriculum yet and invite them to ask about another topic. Do NOT answer from outside knowledge and do NOT mention tools or JSON.`;
+
+      if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+        conversation.openaiWs.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'system',
+            content: [{ type: 'input_text', text: instruction }]
+          }
+        }));
+        console.log('[RealtimeVoice] Injected K12 curriculum context (' + curriculum.length + ' chars)');
+      }
+    } catch (err) {
+      console.error('[RealtimeVoice] K12 curriculum retrieval failed, proceeding without injection:', err);
+    }
+  }
+
+  /**
+   * Flatten a fetch_k12_topic ToolResponse into a rich, speakable curriculum
+   * string for voice injection. Includes revisionNotes, description, and the
+   * structured notes array so the model has enough source material to give a
+   * thorough spoken explanation — matching the depth of the text-mode answer.
+   */
+  private compactK12Curriculum(result: any): string {
+    try {
+      if (!result || result.success === false) return '';
+      const data = Array.isArray(result.data) ? result.data : [];
+      if (data.length === 0) {
+        return typeof result.message === 'string' ? result.message.slice(0, 500) : '';
+      }
+      // Give voice the same depth of source material the text path gets so the
+      // spoken answer can match the written answer. Bounded only to avoid
+      // flooding a single realtime turn.
+      const MAX_PASSAGES = 4;
+      const MAX_REVISION_CHARS = 6000;
+      const MAX_NOTE_CHARS = 2500;
+
+      const parts = data.slice(0, MAX_PASSAGES).map((r: any) => {
+        const header = [r?.subjectName, r?.chapterName, r?.name].filter(Boolean).join(' › ');
+        const lines: string[] = [];
+
+        if (header) lines.push(`### ${header}`);
+
+        // Description (brief overview of the topic)
+        if (typeof r?.description === 'string' && r.description.trim()) {
+          lines.push(`**Overview:** ${r.description.trim()}`);
+        }
+
+        // Main revision notes (primary content)
+        if (typeof r?.revisionNotes === 'string' && r.revisionNotes.trim()) {
+          lines.push(r.revisionNotes.trim().slice(0, MAX_REVISION_CHARS));
+        }
+
+        // Structured sub-topic notes (title + content pairs — often the richest content)
+        if (Array.isArray(r?.notes) && r.notes.length > 0) {
+          const noteSections = r.notes
+            .filter((n: any) => n?.title || n?.content)
+            .slice(0, 10)
+            .map((n: any) => {
+              const title = typeof n?.title === 'string' ? n.title.trim() : '';
+              const content = typeof n?.content === 'string' ? n.content.trim().slice(0, MAX_NOTE_CHARS) : '';
+              return title && content ? `**${title}:** ${content}` : (content || title);
+            })
+            .filter(Boolean);
+          if (noteSections.length > 0) {
+            lines.push('\n**Key Points:**\n' + noteSections.join('\n'));
+          }
+        }
+
+        return lines.join('\n').trim();
+      }).filter(Boolean);
+
+      return parts.join('\n\n---\n\n');
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Detect a K12 tool-call argument payload that the Realtime model emitted as
+   * plain text instead of a proper function_call (e.g. {"query":"proteins"}).
+   * Such a payload must never be forwarded to the client, saved, or synthesized.
+   *
+   * Deliberately narrow: it only matches a bare JSON object whose keys are ALL
+   * fetch_k12_topic / fetch_k12_questions argument names — the only tools forced
+   * on K12 content-only academic turns. This avoids ever dropping a genuine
+   * answer that merely happens to be JSON. Only consulted on the K12 path.
+   */
+  private looksLikeToolCallPayload(text: string): boolean {
+    const t = (text || '').trim();
+    if (!(t.startsWith('{') && t.endsWith('}'))) return false;
+    try {
+      const obj = JSON.parse(t);
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+      const keys = Object.keys(obj);
+      if (keys.length === 0) return false;
+      // Argument keys of the K12 content tools (fetch_k12_topic: {query};
+      // fetch_k12_questions: {query, difficulty}).
+      const k12ToolArgKeys = new Set(['query', 'difficulty']);
+      return keys.every(k => k12ToolArgKeys.has(k));
+    } catch {
+      return false;
+    }
+  }
+
+  // Handle tool calls from OpenAI Realtime API (lead capture, appointments, etc.)
+  private async handleToolCall(event: any, conversation: VoiceConversation) {
+    const { call_id, name, arguments: argsString } = event;
+    
+    console.log('[RealtimeVoice] Tool call:', name, argsString);
+
+    try {
+      const args = JSON.parse(argsString);
+      
+      if (!conversation.conversationId) {
+        throw new Error('No conversation ID available');
+      }
+
+      // Check if appointments are enabled for this business
+      const businessAccount = await storage.getBusinessAccount(conversation.businessAccountId);
+      const appointmentsEnabled = businessAccount?.appointmentsEnabled === 'true';
+
+      // Execute the tool using ToolExecutionService
+      const result = await ToolExecutionService.executeTool(
+        name,
+        args,
+        {
+          businessAccountId: conversation.businessAccountId,
+          userId: conversation.userId,
+          conversationId: conversation.conversationId,
+          userMessage: conversation.currentUserTranscript
+        },
+        conversation.currentUserTranscript,
+        appointmentsEnabled
+      );
+
+      console.log('[RealtimeVoice] Tool execution result:', result);
+
+      // Send tool result back to OpenAI
+      const toolOutput = {
+        type: 'conversation.item.create',
+        item: {
+          type: 'function_call_output',
+          call_id: call_id,
+          output: JSON.stringify(result)
+        }
+      };
+
+      if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+        conversation.openaiWs.send(JSON.stringify(toolOutput));
+        
+        // Trigger AI to continue with the tool result
+        const responseCreate = {
+          type: 'response.create'
+        };
+        conversation.openaiWs.send(JSON.stringify(responseCreate));
+        
+        console.log('[RealtimeVoice] Sent tool result back to AI');
+      }
+    } catch (error) {
+      console.error('[RealtimeVoice] Error handling tool call:', error);
+      
+      // Send error back to OpenAI
+      const errorOutput = {
+        type: 'conversation.item.create',
+        item: {
+          type: 'function_call_output',
+          call_id: event.call_id,
+          output: JSON.stringify({ success: false, error: 'Tool execution failed' })
+        }
+      };
+      
+      if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+        conversation.openaiWs.send(JSON.stringify(errorOutput));
+      }
+    }
+  }
+
+  private setupClientHandlers(conversationId: string, conversation: VoiceConversation) {
+    const { clientWs, openaiWs } = conversation;
+
+    clientWs.on('message', async (data: any, isBinary: boolean) => {
+      this.touchActivity(conversation);
+      
+      if (isBinary) {
+        if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+          const buf = data instanceof Buffer ? data : Buffer.from(data);
+          
+          if (buf.length === 0 || buf.length < 100) {
+            return;
+          }
+          
+          if (buf.length % 2 !== 0) {
+            return;
+          }
+          
+          const base64Audio = buf.toString('base64');
+          openaiWs.send(JSON.stringify({
+            type: 'input_audio_buffer.append',
+            audio: base64Audio
+          }));
+        }
+      } else {
+        try {
+          const message = JSON.parse(data.toString());
+          await this.handleClientMessage(conversationId, conversation, message);
+        } catch (error) {
+          console.error('[RealtimeVoice] Error parsing client message:', error);
+        }
+      }
+    });
+
+    clientWs.on('close', () => {
+      // CRITICAL FIX BUG 1: Check if this socket was superseded by reconnection
+      // If superseded, skip cleanup - the conversation is being reconnected with a new socket
+      if ((clientWs as any)._superseded) {
+        console.log('[RealtimeVoice] Superseded socket closed, skipping cleanup (reconnection in progress)');
+        return; // DON'T cleanup if superseded
+      }
+      
+      console.log('[RealtimeVoice] Client disconnected for conversation:', conversationId);
+      // Cleanup entire conversation when client disconnects
+      this.cleanupConversation(conversationId, 'client_disconnected');
+    });
+
+    clientWs.on('error', (error) => {
+      console.error('[RealtimeVoice] Client WebSocket error:', error);
+      this.cleanupConversation(conversationId, 'client_error');
+    });
+  }
+
+  private async handleClientMessage(
+    conversationId: string,
+    conversation: VoiceConversation,
+    message: any
+  ) {
+    const { openaiWs } = conversation;
+
+    console.log('[RealtimeVoice] Client message:', message.type);
+
+    switch (message.type) {
+      case 'interrupt':
+        // User interrupted AI - cancel current response using helper.
+        // respectGrace=true: a client interrupt that lands in the first
+        // BARGE_IN_GRACE_MS of the answer's audio is almost always the client
+        // VAD firing on the AI's own playback echo, not a real interruption.
+        console.log('[RealtimeVoice] User interrupted AI');
+        this.cancelResponse(conversation, true);
+        
+        // Send acknowledgment to client
+        this.sendToClient(conversation.clientWs, { type: 'interrupt_ack' });
+        break;
+
+      case 'pong':
+        // Client responded to ping - update heartbeat timestamp
+        conversation.lastHeartbeat = Date.now();
+        console.log('[RealtimeVoice] Received pong from conversation:', conversationId);
+        break;
+
+      case 'keepalive':
+        break;
+
+      default:
+        console.log('[RealtimeVoice] Unknown client message type:', message.type);
+    }
+  }
+
+  private sendToClient(ws: WebSocket, message: any) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(message));
+    }
+  }
+
+  private sendError(ws: WebSocket, message: string) {
+    this.sendToClient(ws, { type: 'error', message });
+  }
+
+  // --- Incremental (sentence-by-sentence) TTS for the K12 text path ---
+
+  // Find the longest prefix of `unsent` that ends on a sentence boundary. When
+  // `force` is true (final flush), return everything that's left. Returns null
+  // when there's nothing speakable yet (no boundary, or shorter than the min).
+  private extractSpeakableChunk(unsent: string, force: boolean): { chunk: string; consumed: number } | null {
+    if (!unsent) return null;
+    if (force) {
+      return unsent.trim().length > 0 ? { chunk: unsent, consumed: unsent.length } : null;
+    }
+    // Sentence-ending punctuation (optionally followed by closing quote/bracket)
+    // before whitespace/end, OR a newline. Linear scan, no backtracking.
+    const re = /[.!?…]["'’”)\]]*(?=\s|$)|\n+/g;
+    let lastEnd = -1;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(unsent)) !== null) {
+      lastEnd = m.index + m[0].length;
+    }
+    if (lastEnd <= 0) return null;
+    const candidate = unsent.slice(0, lastEnd);
+    if (candidate.trim().length < this.MIN_TTS_CHARS) return null;
+    return { chunk: candidate, consumed: lastEnd };
+  }
+
+  // Emit any complete sentences accumulated in pendingTextOutput beyond the
+  // cursor: forward them to the client for incremental on-screen text, append to
+  // the saved transcript, and queue them for speech. `force` flushes the
+  // trailing partial sentence at done-time.
+  private emitReadyK12Text(conversation: VoiceConversation, force: boolean): void {
+    const full = conversation.pendingTextOutput || '';
+    let cursor = conversation.streamedTextCursor || 0;
+    const cancelled = !!(conversation.currentResponseId &&
+      conversation.cancelledResponseIds.has(conversation.currentResponseId));
+
+    while (cursor < full.length) {
+      const unsent = full.slice(cursor);
+      const next = this.extractSpeakableChunk(unsent, force);
+      if (!next) break;
+      cursor += next.consumed;
+      const chunkText = next.chunk;
+      if (chunkText.trim()) {
+        // Per-chunk guard: even though buffer mode catches replies that START
+        // as JSON, a stream-mode reply can still carry a tool-call-shaped tail
+        // (e.g. "Let me check.\n{"query":"x"}"). looksLikeToolCallPayload is
+        // strict (pure JSON, only the K12 tool-arg keys) so this never false-
+        // positives on natural prose — drop the fragment without speaking it.
+        if (this.looksLikeToolCallPayload(chunkText.trim())) {
+          console.warn('[RealtimeVoice] Dropping leaked tool-call payload from streamed K12 text:', chunkText.trim().slice(0, 120));
+          continue;
+        }
+        // Accumulate into the transcript regardless so a barge-in mid-answer
+        // still saves what was actually spoken/shown.
+        conversation.currentAITranscript = (conversation.currentAITranscript || '') + chunkText;
+        if (!cancelled) {
+          this.sendToClient(conversation.clientWs, {
+            type: 'ai_chunk',
+            text: chunkText,
+            responseId: conversation.currentResponseId
+          });
+          this.enqueueSentenceForTts(conversation, chunkText.trim(), conversation.currentResponseId);
+        }
+      }
+      // A non-force pass only ever yields one chunk (up to the last boundary);
+      // a force pass consumes everything in one go.
+      if (force) break;
+    }
+    conversation.streamedTextCursor = cursor;
+  }
+
+  // AUDIO-MODALITY path: enqueue complete sentences from currentAITranscript for
+  // incremental ElevenLabs TTS as the transcript streams in. Unlike
+  // emitReadyK12Text this does NOT forward ai_chunk to the client or append to
+  // the transcript — the transcript.delta handler already did both per-delta.
+  // It only feeds the sentence-by-sentence speech queue. `force` flushes the
+  // trailing partial sentence at transcript.done.
+  private streamTranscriptTts(conversation: VoiceConversation, force: boolean): void {
+    if (!conversation.elevenlabsApiKey || !conversation.elevenlabsVoiceId) return;
+    const full = conversation.currentAITranscript || '';
+    let cursor = conversation.ttsTranscriptCursor || 0;
+    const cancelled = !!(conversation.currentResponseId &&
+      conversation.cancelledResponseIds.has(conversation.currentResponseId));
+    if (cancelled) {
+      conversation.ttsTranscriptCursor = full.length;
+      return;
+    }
+
+    while (cursor < full.length) {
+      const unsent = full.slice(cursor);
+      const next = this.extractSpeakableChunk(unsent, force);
+      if (!next) break;
+      cursor += next.consumed;
+      const chunkText = next.chunk.trim();
+      if (chunkText) {
+        this.enqueueSentenceForTts(conversation, chunkText, conversation.currentResponseId);
+      }
+      // A non-force pass yields one chunk (up to the last boundary); a force
+      // pass consumes everything remaining in one go.
+      if (force) break;
+    }
+    conversation.ttsTranscriptCursor = cursor;
+  }
+
+  // Decide what to do with the full K12 reply at done-time. Idempotent.
+  private finalizeK12TextOutput(conversation: VoiceConversation): void {
+    if (conversation.k12TextFinalized) return;
+    conversation.k12TextFinalized = true;
+
+    const full = conversation.pendingTextOutput || '';
+    conversation.pendingTextOutput = '';
+    const trimmedFull = full.trim();
+    if (!trimmedFull) return;
+
+    // The whole reply may have arrived in a single delta — decide mode now.
+    if (!conversation.textStreamMode || conversation.textStreamMode === 'pending') {
+      const first = trimmedFull[0];
+      conversation.textStreamMode = (first === '{' || first === '[') ? 'buffer' : 'stream';
+    }
+
+    const cancelled = !!(conversation.currentResponseId &&
+      conversation.cancelledResponseIds.has(conversation.currentResponseId));
+
+    if (conversation.textStreamMode === 'buffer') {
+      // Reply started like JSON — validate the whole thing before it's ever
+      // spoken/shown, and drop a leaked tool-call payload.
+      if (this.looksLikeToolCallPayload(trimmedFull)) {
+        console.warn('[RealtimeVoice] Dropping leaked tool-call payload from text output:', trimmedFull.slice(0, 120));
+        return;
+      }
+      if (cancelled) return;
+      conversation.currentAITranscript = (conversation.currentAITranscript || '') + trimmedFull;
+      this.sendToClient(conversation.clientWs, {
+        type: 'ai_chunk',
+        text: trimmedFull,
+        responseId: conversation.currentResponseId
+      });
+      if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId &&
+          conversation.lastSynthesizedResponseId !== conversation.currentResponseId) {
+        conversation.lastSynthesizedResponseId = conversation.currentResponseId;
+        void this.synthesizeWithElevenLabs(conversation, trimmedFull);
+      }
+      return;
+    }
+
+    // Stream mode: sentences already went out during the deltas. If the user
+    // barged in, keep only what was already spoken (don't flush the tail).
+    if (cancelled) return;
+    this.emitReadyK12Text(conversation, true);
+    if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
+      conversation.lastSynthesizedResponseId = conversation.currentResponseId;
+    }
+  }
+
+  // Queue a complete sentence for sequential synthesis. The drainer guarantees
+  // only one synth streams PCM to the client at a time, in order.
+  private enqueueSentenceForTts(conversation: VoiceConversation, text: string, responseId?: string): void {
+    if (!conversation.elevenlabsApiKey || !conversation.elevenlabsVoiceId) return;
+    const t = (text || '').trim();
+    if (!t) return;
+    if (!conversation.ttsQueue) conversation.ttsQueue = [];
+    conversation.ttsQueue.push({ text: t, responseId: responseId || '' });
+    conversation.ttsResponseId = responseId || conversation.ttsResponseId;
+    if (!conversation.ttsDraining) {
+      void this.drainTtsQueue(conversation);
+    }
+  }
+
+  // Synthesize queued sentences one at a time, in order. The barge-in grace
+  // timestamp is set ONCE on the first spoken sentence so the grace window
+  // covers only the opening of the answer, not every sentence.
+  private async drainTtsQueue(conversation: VoiceConversation): Promise<void> {
+    if (conversation.ttsDraining) return;
+    conversation.ttsDraining = true;
+    try {
+      while (conversation.ttsQueue && conversation.ttsQueue.length > 0) {
+        const item = conversation.ttsQueue.shift()!;
+        if (item.responseId && conversation.cancelledResponseIds.has(item.responseId)) continue;
+        if (item.responseId && conversation.currentResponseId &&
+            item.responseId !== conversation.currentResponseId) continue;
+        if (conversation.clientWs.readyState !== WebSocket.OPEN) {
+          conversation.ttsQueue = [];
+          break;
+        }
+        if (!conversation.activeElevenLabsStartedAt) {
+          conversation.activeElevenLabsStartedAt = Date.now();
+        }
+        await this.streamSentenceTts(conversation, item.text, item.responseId);
+      }
+    } finally {
+      conversation.ttsDraining = false;
+      // Answer finished playing; clear the grace timestamp so the NEXT answer
+      // re-arms it (unless a newer answer already set its own).
+      if (!conversation.ttsQueue || conversation.ttsQueue.length === 0) {
+        conversation.activeElevenLabsStartedAt = undefined;
+        conversation.ttsResponseId = undefined;
+      }
+    }
+  }
+
+  // Stream one sentence's PCM to the client. Unlike synthesizeWithElevenLabs
+  // this does NOT abort a previous synth (the drainer already serialized them),
+  // but it registers its abort controller so a barge-in can stop it instantly.
+  private async streamSentenceTts(conversation: VoiceConversation, text: string, responseId: string): Promise<void> {
+    if (!conversation.elevenlabsApiKey || !conversation.elevenlabsVoiceId) return;
+    const abortController = new AbortController();
+    conversation.activeElevenLabsAbort = abortController;
+    conversation.activeElevenLabsResponseId = responseId;
+    try {
+      let leftover: Buffer | null = null;
+      await synthesizeSpeechStreaming(
+        {
+          apiKey: conversation.elevenlabsApiKey,
+          voiceId: conversation.elevenlabsVoiceId,
+          text,
+          outputFormat: 'pcm_24000',
+          signal: abortController.signal,
+        },
+        (chunk: Buffer) => {
+          if (responseId && conversation.cancelledResponseIds.has(responseId)) return;
+          if (responseId && conversation.currentResponseId &&
+              responseId !== conversation.currentResponseId) return;
+          if (conversation.clientWs.readyState !== WebSocket.OPEN) return;
+          const merged = leftover ? Buffer.concat([leftover, chunk]) : chunk;
+          const evenLen = merged.length & ~1;
+          if (evenLen > 0) {
+            conversation.clientWs.send(merged.subarray(0, evenLen));
+          }
+          leftover = evenLen < merged.length ? Buffer.from(merged.subarray(evenLen)) : null;
+        }
+      );
+    } catch (error: unknown) {
+      const errName = (error as { name?: string })?.name;
+      if (errName === 'AbortError' || abortController.signal.aborted) return;
+      // Per-sentence failure: log and let the queue continue with the next
+      // sentence. (No OpenAI fallback — that buffer is whole-response audio,
+      // which doesn't exist for K12 text turns.)
+      console.error('[RealtimeVoice] ElevenLabs sentence synth failed:', error instanceof Error ? error.message : String(error));
+    } finally {
+      if (conversation.activeElevenLabsAbort === abortController) {
+        conversation.activeElevenLabsAbort = undefined;
+        conversation.activeElevenLabsResponseId = undefined;
+      }
+    }
+  }
+
+  private async synthesizeWithElevenLabs(conversation: VoiceConversation, text: string): Promise<void> {
+    if (!conversation.elevenlabsApiKey || !conversation.elevenlabsVoiceId) return;
+
+    // Single-flight guarantee: if a previous synth is still streaming bytes
+    // to the client, abort it now. Two concurrent synths would interleave
+    // their PCM on the same WebSocket and decode as garbled audio.
+    if (conversation.activeElevenLabsAbort) {
+      console.log('[RealtimeVoice] Aborting previous ElevenLabs synth (responseId:', conversation.activeElevenLabsResponseId, ') before starting new one');
+      try { conversation.activeElevenLabsAbort.abort(); } catch {}
+    }
+
+    const abortController = new AbortController();
+    // Snapshot the responseId at synth start. Any chunk produced by THIS
+    // synth call will be tagged with this id; if the user later cancels it,
+    // we drop late chunks even before the abort propagates.
+    const synthResponseId = conversation.currentResponseId;
+    conversation.activeElevenLabsAbort = abortController;
+    conversation.activeElevenLabsResponseId = synthResponseId;
+    conversation.activeElevenLabsStartedAt = Date.now();
+
+    try {
+      console.log('[RealtimeVoice] Streaming ElevenLabs TTS, text length:', text.length, 'responseId:', synthResponseId);
+
+      // PCM16 alignment guard — defense-in-depth from prior task. Cheap, harmless.
+      let leftover: Buffer | null = null;
+      let totalBytesIn = 0;
+      let totalBytesOut = 0;
+      let droppedDueToCancel = 0;
+
+      await synthesizeSpeechStreaming(
+        {
+          apiKey: conversation.elevenlabsApiKey,
+          voiceId: conversation.elevenlabsVoiceId,
+          text,
+          outputFormat: 'pcm_24000',
+          signal: abortController.signal,
+        },
+        (chunk: Buffer) => {
+          totalBytesIn += chunk.length;
+
+          // Drop chunks for cancelled or superseded responses. Belt-and-suspenders
+          // for the case where abort hasn't fully propagated through the fetch
+          // pipeline yet, AND for the case where a brand-new response started
+          // after this synth (so currentResponseId moved on).
+          if (synthResponseId && conversation.cancelledResponseIds.has(synthResponseId)) {
+            droppedDueToCancel += chunk.length;
+            return;
+          }
+          if (synthResponseId && conversation.currentResponseId &&
+              synthResponseId !== conversation.currentResponseId) {
+            droppedDueToCancel += chunk.length;
+            return;
+          }
+          if (conversation.clientWs.readyState !== WebSocket.OPEN) return;
+
+          const merged = leftover ? Buffer.concat([leftover, chunk]) : chunk;
+          const evenLen = merged.length & ~1; // round down to multiple of 2
+          if (evenLen > 0) {
+            const aligned = merged.subarray(0, evenLen);
+            conversation.clientWs.send(aligned);
+            totalBytesOut += aligned.length;
+          }
+          leftover = evenLen < merged.length ? Buffer.from(merged.subarray(evenLen)) : null;
+        }
+      );
+
+      if (leftover) {
+        console.log('[RealtimeVoice] ElevenLabs stream had trailing odd byte (dropped, harmless)');
+      }
+
+      console.log('[RealtimeVoice] ElevenLabs stream complete, bytesIn:', totalBytesIn, 'bytesOut:', totalBytesOut, 'droppedCancelled:', droppedDueToCancel);
+    } catch (error: unknown) {
+      // AbortError is a clean exit — a newer answer superseded this synth.
+      // Do NOT fall back to OpenAI audio (that would actually re-create the
+      // overlap problem we just fixed).
+      const errName = (error as { name?: string })?.name;
+      if (errName === 'AbortError' || abortController.signal.aborted) {
+        console.log('[RealtimeVoice] ElevenLabs synth aborted (responseId:', synthResponseId, ') — superseded or cancelled, no fallback');
+        return;
+      }
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error('[RealtimeVoice] ElevenLabs TTS failed, sending OpenAI fallback audio:', errMsg);
+
+      const fallbackChunks = conversation.openaiAudioFallbackBuffer || [];
+      if (fallbackChunks.length > 0) {
+        for (const chunk of fallbackChunks) {
+          if (conversation.clientWs.readyState === WebSocket.OPEN) {
+            conversation.clientWs.send(chunk);
+          }
+        }
+        console.log('[RealtimeVoice] Sent OpenAI fallback audio, chunks:', fallbackChunks.length);
+      }
+    } finally {
+      // Only clear the active-synth slot if WE still own it. A newer synth
+      // may have started and replaced our controller while we were running;
+      // in that case the newer synth owns the slot and must not be cleared.
+      if (conversation.activeElevenLabsAbort === abortController) {
+        conversation.activeElevenLabsAbort = undefined;
+        conversation.activeElevenLabsResponseId = undefined;
+        conversation.activeElevenLabsStartedAt = undefined;
+      }
+    }
+  }
+}
+
+export const realtimeVoiceService = new RealtimeVoiceService();

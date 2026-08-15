@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lead Capture & URL Extraction Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 40px 20px;
+      color: #333;
+    }
+    .container { max-width: 860px; margin: 0 auto; }
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 28px 32px;
+      margin-bottom: 24px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    }
+    h1 { color: #1a1a2e; margin-bottom: 6px; font-size: 26px; }
+    h2 { color: #1a1a2e; margin-bottom: 16px; font-size: 18px; }
+    .subtitle { color: #666; margin-bottom: 0; font-size: 14px; }
+    .badge {
+      display: inline-block;
+      background: #667eea;
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 12px;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    .row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 4px; }
+    .field { flex: 1; min-width: 200px; }
+    label { display: block; font-size: 12px; color: #555; font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.4px; }
+    input[type="text"], select {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus, select:focus { border-color: #667eea; }
+    button {
+      padding: 10px 22px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    button:hover { opacity: 0.9; transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+    button.secondary {
+      background: #f0f0f0;
+      color: #555;
+    }
+    button.secondary:hover { opacity: 0.8; }
+    .info-box {
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-top: 12px;
+    }
+    .info-box label { margin-bottom: 4px; }
+    .info-box .value {
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 13px;
+      color: #1a1a2e;
+      word-break: break-all;
+    }
+    .status-box {
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      margin-top: 12px;
+      display: none;
+    }
+    .status-box.success { background: #e8f5e9; border: 1px solid #c8e6c9; color: #2e7d32; display: block; }
+    .status-box.error { background: #fdecea; border: 1px solid #f5c6cb; color: #c62828; display: block; }
+    .status-box.info { background: #e3f2fd; border: 1px solid #bbdefb; color: #1565c0; display: block; }
+
+    .steps { counter-reset: step; }
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 14px 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .step:last-child { border-bottom: none; }
+    .step-num {
+      min-width: 30px;
+      height: 30px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+    .step-body h3 { font-size: 15px; margin-bottom: 4px; color: #1a1a2e; }
+    .step-body p { font-size: 13px; color: #666; line-height: 1.5; }
+    code {
+      background: #f0f0f0;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      color: #764ba2;
+    }
+
+    #debug-log {
+      background: #1a1a2e;
+      color: #a8ff78;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 12px;
+      border-radius: 8px;
+      padding: 16px;
+      height: 220px;
+      overflow-y: auto;
+      line-height: 1.6;
+      margin-top: 12px;
+    }
+    #debug-log .log-entry { border-bottom: 1px solid rgba(255,255,255,0.05); padding: 2px 0; }
+    #debug-log .log-entry .ts { color: #667eea; margin-right: 8px; }
+    #debug-log .log-entry.sent { color: #ffd700; }
+    #debug-log .log-entry.recv { color: #a8ff78; }
+    #debug-log .log-entry.sys { color: #aaa; }
+
+    .url-preview {
+      background: #fff8e1;
+      border: 1px solid #ffe082;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-top: 10px;
+      font-size: 13px;
+      color: #5d4037;
+      display: none;
+    }
+    .url-preview strong { color: #e65100; }
+
+    .expected-tag {
+      display: inline-block;
+      background: #e3f2fd;
+      color: #1565c0;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-left: 8px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Header -->
+    <div class="card">
+      <h1>Lead Capture &amp; URL Extraction Test</h1>
+      <p class="subtitle" style="margin-top:6px">
+        Simulates the chatbot being on different university/course pages. Captures a lead and verifies that the correct university and product/course are extracted from the URL and sent to the CRM.
+      </p>
+    </div>
+
+    <!-- Step 1: Setup -->
+    <div class="card">
+      <h2><span class="badge">1</span> Load the Widget</h2>
+      <div class="row">
+        <div class="field">
+          <label>Business Account ID</label>
+          <input type="text" id="businessId" placeholder="e.g. acc_abc123xyz" />
+        </div>
+        <button onclick="loadWidget()">Load Widget</button>
+      </div>
+      <div id="widget-status" class="status-box"></div>
+    </div>
+
+    <!-- Step 2: URL Simulation -->
+    <div class="card">
+      <h2><span class="badge">2</span> Simulate a Page URL</h2>
+      <p style="font-size:13px;color:#666;margin-bottom:16px">
+        Pick a URL to simulate. The widget will behave as if the visitor is on that page — the server will run AI URL extraction on it when a lead is captured.
+      </p>
+
+      <div class="row">
+        <div class="field">
+          <label>Preset URL Patterns</label>
+          <select id="urlPreset" onchange="handlePresetChange()">
+            <option value="">— choose a preset —</option>
+            <optgroup label="Homepages (expect fallbacks)">
+              <option value="https://www.jaroeducation.com/" data-univ="Any" data-prod="All Product">Homepage — jaroeducation.com/</option>
+            </optgroup>
+            <optgroup label="MBA">
+              <option value="https://www.jaroeducation.com/mba/iim-ahmedabad/" data-univ="IIM Ahmedabad" data-prod="MBA">MBA at IIM Ahmedabad</option>
+              <option value="https://www.jaroeducation.com/mba/iim-kozhikode/" data-univ="IIM Kozhikode" data-prod="MBA">MBA at IIM Kozhikode</option>
+              <option value="https://www.jaroeducation.com/mba/iim-nagpur/" data-univ="IIM Nagpur" data-prod="MBA">MBA at IIM Nagpur</option>
+              <option value="https://www.jaroeducation.com/mba/iit-delhi/" data-univ="IIT Delhi" data-prod="MBA">MBA at IIT Delhi</option>
+              <option value="https://www.jaroeducation.com/mba/amity-university/" data-univ="Amity University" data-prod="MBA">MBA at Amity University</option>
+            </optgroup>
+            <optgroup label="Online MBA">
+              <option value="https://www.jaroeducation.com/online-mba/amity-university/" data-univ="Amity University" data-prod="Online MBA">Online MBA — Amity University</option>
+              <option value="https://www.jaroeducation.com/online-mba/amrita-vishwa-vidyapeetham/" data-univ="Amrita Vishwa Vidyapeetham" data-prod="Online MBA">Online MBA — Amrita Vishwa Vidyapeetham</option>
+              <option value="https://www.jaroeducation.com/online-mba/dr-mgr-university/" data-univ="Dr. M.G.R. University" data-prod="Online MBA">Online MBA — Dr. M.G.R. University</option>
+            </optgroup>
+            <optgroup label="Executive MBA">
+              <option value="https://www.jaroeducation.com/executive-mba/iim-kozhikode/" data-univ="IIM Kozhikode" data-prod="Executive MBA">Executive MBA — IIM Kozhikode</option>
+              <option value="https://www.jaroeducation.com/executive-mba/iim-ahmedabad/" data-univ="IIM Ahmedabad" data-prod="Executive MBA">Executive MBA — IIM Ahmedabad</option>
+            </optgroup>
+            <optgroup label="BBA / BCA">
+              <option value="https://www.jaroeducation.com/bba/amity-university/" data-univ="Amity University" data-prod="BBA">BBA — Amity University</option>
+              <option value="https://www.jaroeducation.com/online-bba/amrita-vishwa-vidyapeetham/" data-univ="Amrita Vishwa Vidyapeetham" data-prod="Online BBA">Online BBA — Amrita Vishwa Vidyapeetham</option>
+              <option value="https://www.jaroeducation.com/bca/dr-mgr-university/" data-univ="Dr. M.G.R. University" data-prod="BCA">BCA — Dr. M.G.R. University</option>
+            </optgroup>
+          </select>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <div class="field">
+          <label>URL (editable)</label>
+          <input type="text" id="simulatedUrl" placeholder="https://www.jaroeducation.com/mba/iim-ahmedabad/" />
+        </div>
+        <button onclick="simulateUrl()">Simulate This URL</button>
+      </div>
+
+      <div id="url-preview" class="url-preview"></div>
+      <div id="sim-status" class="status-box"></div>
+    </div>
+
+    <!-- Step 3: Instructions -->
+    <div class="card">
+      <h2><span class="badge">3</span> Chat, Capture a Lead &amp; Verify</h2>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <h3>Open the chat widget</h3>
+            <p>Click the chat bubble that appeared in the bottom-right corner after loading the widget.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <h3>Simulate a URL first</h3>
+            <p>Pick a preset from Section 2 above and click <strong>Simulate This URL</strong> before or during the conversation. The widget immediately starts using it.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <h3>Provide your contact details in chat</h3>
+            <p>Share your name and phone number (and optionally email). The bot will capture these as a lead.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-body">
+            <h3>Watch the server logs</h3>
+            <p>In the Replit console, look for lines like:<br>
+            <code>[URL Extraction] AI extracted: university="IIM Ahmedabad" product="MBA"</code><br>
+            or <code>[URL Extraction] Cache HIT for: ...</code> if the URL was already processed before.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">5</div>
+          <div class="step-body">
+            <h3>Verify in LeadSquared</h3>
+            <p>Open LeadSquared and find the new lead. Check that the university and product/course fields contain the expected values for the URL you simulated.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">6</div>
+          <div class="step-body">
+            <h3>Test cache vs. fresh AI extraction</h3>
+            <p>The first time a URL is processed, AI is called. After that, results are cached in the database. To force a fresh AI call, use a slightly different URL (e.g. add a trailing slash or query param) or clear the cache table <code>leadsquared_url_extraction_cache</code>.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Debug Log -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <h2 style="margin-bottom:0"><span class="badge">4</span> PostMessage Debug Log</h2>
+        <button class="secondary" onclick="clearLog()" style="padding:6px 14px;font-size:12px">Clear</button>
+      </div>
+      <p style="font-size:13px;color:#666;margin-bottom:0">
+        Shows all messages sent to the widget iframe (yellow) and all messages received from it (green).
+      </p>
+      <div id="debug-log"><div class="log-entry sys"><span class="ts">--:--:--</span>Waiting for widget to load...</div></div>
+    </div>
+
+  </div>
+
+  <script>
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    function ts() {
+      return new Date().toLocaleTimeString('en-US', { hour12: false });
+    }
+
+    function logDebug(msg, type = 'sys') {
+      const log = document.getElementById('debug-log');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry ' + type;
+      entry.innerHTML = `<span class="ts">${ts()}</span>${escHtml(msg)}`;
+      log.appendChild(entry);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function clearLog() {
+      document.getElementById('debug-log').innerHTML = '';
+      logDebug('Log cleared.', 'sys');
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function setStatus(id, msg, type) {
+      const el = document.getElementById(id);
+      el.className = 'status-box ' + type;
+      el.textContent = msg;
+    }
+
+    function setStatusHtml(id, html, type) {
+      const el = document.getElementById(id);
+      el.className = 'status-box ' + type;
+      el.innerHTML = html;
+    }
+
+    // ── Simulation state ──────────────────────────────────────────────────────
+    let simulationInterval = null;
+    let currentSimulatedUrl = null;
+
+    // ── Read business ID from URL param ───────────────────────────────────────
+
+    (function() {
+      const params = new URLSearchParams(window.location.search);
+      const biz = params.get('business') || params.get('businessAccountId');
+      if (biz) {
+        document.getElementById('businessId').value = biz;
+        logDebug('Business ID pre-filled from URL param: ' + biz, 'sys');
+      }
+    })();
+
+    // ── Load Widget ───────────────────────────────────────────────────────────
+
+    function loadWidget() {
+      const businessId = document.getElementById('businessId').value.trim();
+      if (!businessId) {
+        setStatus('widget-status', 'Please enter a Business Account ID.', 'error');
+        return;
+      }
+
+      // Remove any previously loaded widget
+      const existingContainer = document.getElementById('hichroney-widget-container');
+      if (existingContainer) existingContainer.remove();
+      const existingScript = document.querySelector('script[src*="widget.js"]');
+      if (existingScript) existingScript.remove();
+      if (window.HiChroneyWidget) delete window.HiChroneyWidget;
+
+      setStatus('widget-status', 'Loading widget...', 'info');
+      logDebug('Loading widget for business: ' + businessId, 'sys');
+
+      const script = document.createElement('script');
+      script.src = '/widget.js';
+      script.onload = function() {
+        if (window.HiChroneyWidget) {
+          window.HiChroneyWidget.init({ businessAccountId: businessId });
+          setStatus('widget-status', 'Widget loaded. Look for the chat icon in the bottom-right corner.', 'success');
+          logDebug('HiChroneyWidget.init() called — widget ready.', 'sys');
+        } else {
+          setStatus('widget-status', 'Widget script loaded but HiChroneyWidget not found. Check the business ID.', 'error');
+          logDebug('ERROR: HiChroneyWidget not defined after script load.', 'sys');
+        }
+      };
+      script.onerror = function() {
+        setStatus('widget-status', 'Failed to load widget.js. Is the server running?', 'error');
+        logDebug('ERROR: Failed to load /widget.js', 'sys');
+      };
+      document.body.appendChild(script);
+    }
+
+    // ── URL Simulation ────────────────────────────────────────────────────────
+
+    function handlePresetChange() {
+      const sel = document.getElementById('urlPreset');
+      const opt = sel.options[sel.selectedIndex];
+      const url = opt.value;
+      if (url) {
+        document.getElementById('simulatedUrl').value = url;
+        const univ = opt.getAttribute('data-univ');
+        const prod = opt.getAttribute('data-prod');
+        const preview = document.getElementById('url-preview');
+        preview.style.display = 'block';
+        preview.innerHTML = `
+          Expected extraction: <strong>University</strong> = "${escHtml(univ)}" &nbsp;|&nbsp; <strong>Product</strong> = "${escHtml(prod)}"
+        `;
+      }
+    }
+
+    function findWidgetIframe() {
+      // widget.js sets id="hichroney-widget-iframe"; fallback to src pattern for /embed/chat
+      return document.getElementById('hichroney-widget-iframe') ||
+             document.querySelector('iframe[src*="embed/chat"]') ||
+             document.querySelector('iframe[src*="widget/chat"]');
+    }
+
+    function simulateUrl() {
+      const url = document.getElementById('simulatedUrl').value.trim();
+      if (!url) {
+        setStatus('sim-status', 'Please enter or select a URL to simulate.', 'error');
+        return;
+      }
+      // Clear any existing simulation before starting a new one
+      stopSimulation(true);
+      currentSimulatedUrl = url;
+      attemptSimulate(url, 0);
+    }
+
+    function attemptSimulate(url, attempt) {
+      const iframe = findWidgetIframe();
+      if (!iframe) {
+        if (attempt < 8) {
+          setStatus('sim-status', 'Waiting for widget iframe to initialize...', 'info');
+          setTimeout(() => attemptSimulate(url, attempt + 1), 600);
+        } else {
+          setStatus('sim-status', 'Widget iframe not found. Please load the widget first (Section 1).', 'error');
+          currentSimulatedUrl = null;
+        }
+        return;
+      }
+
+      // Send immediately — must include type:'PARENT_URL' so EmbedChat's listener accepts it
+      const msg = { type: 'PARENT_URL', pageUrl: url };
+      iframe.contentWindow.postMessage(msg, '*');
+      logDebug('SENT → ' + JSON.stringify(msg), 'sent');
+
+      // Keep re-sending every 800ms so widget.js cannot overwrite it when chat is opened
+      simulationInterval = setInterval(function() {
+        const f = findWidgetIframe();
+        if (f) f.contentWindow.postMessage({ type: 'PARENT_URL', pageUrl: currentSimulatedUrl }, '*');
+      }, 800);
+
+      setStatusHtml('sim-status',
+        `<strong>Simulation active:</strong> ${escHtml(url)}<br>
+         <span style="font-size:12px;opacity:0.85">Widget will keep using this URL. Open chat and capture a lead.</span>
+         &nbsp; <button onclick="stopSimulation(false)" style="margin-top:6px;padding:4px 12px;font-size:12px;background:#c62828;color:white;border:none;border-radius:6px;cursor:pointer;">Stop</button>`,
+        'success'
+      );
+    }
+
+    function stopSimulation(silent) {
+      if (simulationInterval) {
+        clearInterval(simulationInterval);
+        simulationInterval = null;
+      }
+      currentSimulatedUrl = null;
+      if (!silent) {
+        setStatus('sim-status', 'Simulation stopped. Widget will use the real page URL again.', 'info');
+        logDebug('Simulation stopped.', 'sys');
+      }
+    }
+
+    // ── Listen for messages FROM widget iframe ────────────────────────────────
+
+    window.addEventListener('message', function(event) {
+      // Skip messages we sent ourselves
+      if (event.data && event.data.pageUrl) return;
+      if (!event.data || typeof event.data !== 'object') return;
+
+      const type = event.data.type || event.data.event || Object.keys(event.data)[0] || '?';
+      const preview = JSON.stringify(event.data).substring(0, 120);
+      logDebug('RECV ← ' + preview, 'recv');
+    });
+
+    logDebug('Test page ready. Enter your Business ID and click "Load Widget".', 'sys');
+  </script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Widget Pill Style Test</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 40px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .info {
+      max-width: 600px;
+      margin: 0 auto;
+      text-align: center;
+      color: white;
+      padding: 20px;
+    }
+    h1 {
+      font-size: 32px;
+      margin-bottom: 16px;
+    }
+    p {
+      font-size: 18px;
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div class="info">
+    <h1>Interactive Pill Widget Test</h1>
+    <p>Look at the bottom-right corner! You can now type your question directly in the white input field and click the arrow to send it.</p>
+    <p>The white background makes it clear that it's an interactive text field.</p>
+  </div>
+
+  <!-- Initialize widget with pill style -->
+  <script 
+    src="/widget.js" 
+    data-business-id="0c32a807-3994-4d59-88d8-c557eed787b6" 
+    data-button-style="pill" 
+    data-button-animation="none"
+  ></script>
+</body>
+</html>

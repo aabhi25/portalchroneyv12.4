@@ -1,0 +1,9 @@
+{
+  "name": "fast-xml-parser",
+  "version": "4.4.1",
+  "description": "Compatibility stub",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  }
+}

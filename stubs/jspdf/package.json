@@ -1,0 +1,10 @@
+{
+  "name": "jspdf",
+  "version": "0.0.1",
+  "description": "Stub for blocked jspdf package",
+  "main": "index.js",
+  "module": "index.js",
+  "exports": {
+    ".": "./index.js"
+  }
+}
