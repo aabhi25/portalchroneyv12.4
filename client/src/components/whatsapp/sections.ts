@@ -105,6 +105,41 @@ export interface WhatsappSection {
 
 const LEAD_GEN_ITEMS: WhatsappNavItem[] = [
   {
+    key: "leads",
+    label: "Leads",
+    description: "People whose details were captured",
+    href: "/admin/whatsapp-leads",
+    icon: Contact,
+    sidebarTestId: "link-wa-leads",
+    gradient: "bg-gradient-to-br from-blue-500 to-indigo-600",
+    tone: "bg-green-50 group-hover:bg-green-100",
+    matches: l => l === "/admin/whatsapp-leads" || l === "/admin/whatsapp-lead-capture-settings",
+  },
+  {
+    key: "conversations",
+    label: "Conversations",
+    description: "Every chat, and what was said",
+    href: "/admin/whatsapp-conversations",
+    icon: MessagesSquare,
+    sidebarTestId: "link-wa-conversations",
+    gradient: "bg-gradient-to-br from-green-500 to-emerald-600",
+    tone: "bg-blue-50 group-hover:bg-blue-100",
+    matches: l => l === "/admin/whatsapp-conversations",
+  },
+  {
+    key: "insights",
+    label: "Insights",
+    // Deliberately explicit. This screen contains no campaign metrics whatsoever, and sitting in
+    // a neutral position previously implied it covered everything.
+    description: "Volumes and trends for incoming messages",
+    href: "/admin/wa-insights",
+    icon: BarChart3,
+    sidebarTestId: "link-wa-insights",
+    gradient: "bg-gradient-to-br from-orange-500 to-amber-600",
+    tone: "bg-orange-50 group-hover:bg-orange-100",
+    matches: l => l === "/admin/wa-insights",
+  },
+  {
     key: "ai-setup",
     label: "AI replies",
     description: "How messages get answered, and what the AI knows",
@@ -142,41 +177,6 @@ const LEAD_GEN_ITEMS: WhatsappNavItem[] = [
     gradient: "bg-gradient-to-br from-amber-500 to-orange-600",
     tone: "bg-amber-50 group-hover:bg-amber-100",
     matches: l => l === "/admin/whatsapp-smart-replies",
-  },
-  {
-    key: "conversations",
-    label: "Conversations",
-    description: "Every chat, and what was said",
-    href: "/admin/whatsapp-conversations",
-    icon: MessagesSquare,
-    sidebarTestId: "link-wa-conversations",
-    gradient: "bg-gradient-to-br from-green-500 to-emerald-600",
-    tone: "bg-blue-50 group-hover:bg-blue-100",
-    matches: l => l === "/admin/whatsapp-conversations",
-  },
-  {
-    key: "leads",
-    label: "Leads",
-    description: "People whose details were captured",
-    href: "/admin/whatsapp-leads",
-    icon: Contact,
-    sidebarTestId: "link-wa-leads",
-    gradient: "bg-gradient-to-br from-blue-500 to-indigo-600",
-    tone: "bg-green-50 group-hover:bg-green-100",
-    matches: l => l === "/admin/whatsapp-leads" || l === "/admin/whatsapp-lead-capture-settings",
-  },
-  {
-    key: "insights",
-    label: "Insights",
-    // Deliberately explicit. This screen contains no campaign metrics whatsoever, and sitting in
-    // a neutral position previously implied it covered everything.
-    description: "Volumes and trends for incoming messages",
-    href: "/admin/wa-insights",
-    icon: BarChart3,
-    sidebarTestId: "link-wa-insights",
-    gradient: "bg-gradient-to-br from-orange-500 to-amber-600",
-    tone: "bg-orange-50 group-hover:bg-orange-100",
-    matches: l => l === "/admin/wa-insights",
   },
   {
     key: "crm",
