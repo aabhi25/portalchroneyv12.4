@@ -81,6 +81,7 @@ import GroupAdminInsights from "@/pages/GroupAdminInsights";
 import GroupAnalytics from "@/pages/GroupAnalytics";
 import RazorpayRizeDemo from "@/pages/RazorpayRizeDemo";
 import WhatsApp from "@/pages/WhatsApp";
+import WhatsAppSectionHub from "@/pages/WhatsAppSectionHub";
 import WhatsAppFlowSettings from "@/pages/WhatsAppFlowSettings";
 import WhatsAppAISetup from "@/pages/WhatsAppAISetup";
 import DocumentTypeEditor from "@/pages/DocumentTypeEditor";
@@ -343,6 +344,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/automation-analytics" component={AutomationAnalytics} />
                 <Route path="/admin/calendar" component={Calendar} />
                 <Route path="/admin/whatsapp" component={WhatsApp} />
+                <Route path="/admin/whatsapp-hub/:sectionId" component={WhatsAppSectionHub} />
                 <Route path="/admin/whatsapp-conversations" component={WhatsApp} />
                 <Route path="/admin/whatsapp-leads" component={WhatsApp} />
                 <Route path="/admin/whatsapp-lead-capture-settings" component={WhatsApp} />

@@ -82,7 +82,7 @@ function TileCard({
  * problem against every group is how users conclude the wrong thing is broken. The status panel
  * at the top still lists everything, so nothing is only visible after scrolling.
  */
-function SectionBlock({
+export function SectionBlock({
   section,
   readiness,
   onOpen,

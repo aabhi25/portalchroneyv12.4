@@ -321,6 +321,14 @@ export function getWhatsappSections(opts: { marketingEnabled: boolean }): Whatsa
   return sections;
 }
 
+/**
+ * Where a section's in-screen picker lives. Marketing-enabled accounts collapse the sidebar to
+ * one row per section; the row navigates here and the cards on this page do the real navigation.
+ */
+export function whatsappSectionHubHref(id: WhatsappSectionId): string {
+  return `/admin/whatsapp-hub/${id}`;
+}
+
 /** True when the given location belongs to any WhatsApp screen in any section. */
 export function isWhatsappLocation(location: string): boolean {
   return (

@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronRight } from "lucide-react";
-import { getWhatsappSections, type WhatsappSection } from "./sections";
+import { getWhatsappSections, whatsappSectionHubHref, type WhatsappSection } from "./sections";
 
 /**
  * The three WhatsApp sections, rendered as expandable sidebar rows.
@@ -118,6 +118,39 @@ export function WhatsAppNavSections({
     if (!activeSectionId) return;
     setOpenIds(prev => (prev.has(activeSectionId) ? prev : new Set(prev).add(activeSectionId)));
   }, [activeSectionId]);
+
+  // Marketing-enabled accounts have the most sections and sub-items, and nesting them all made
+  // the sidebar cramped enough to truncate labels. For those accounts each section is a single
+  // row that opens an in-screen picker page; other accounts keep the expandable list.
+  if (marketingEnabled) {
+    return (
+      <>
+        {sections.map(section => {
+          const hubHref = whatsappSectionHubHref(section.id);
+          const isActive = location === hubHref || section.items.some(i => i.matches(location));
+          return (
+            <SidebarMenuItem key={section.id}>
+              <SidebarMenuButton
+                onClick={() => onNavigate(hubHref)}
+                data-testid={`nav-section-${section.id}`}
+                aria-label={`${section.label} section`}
+                className={`group/nav transition-all duration-200 ${
+                  isActive
+                    ? "text-purple-700 font-medium bg-purple-50/50"
+                    : "hover:bg-gray-50/80"
+                }`}
+              >
+                <ChevronRight className="w-3.5 h-3.5 shrink-0 text-gray-400" />
+                <span className="text-[13px] font-medium uppercase tracking-wide text-gray-600">
+                  {section.label}
+                </span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          );
+        })}
+      </>
+    );
+  }
 
   return (
     <>
