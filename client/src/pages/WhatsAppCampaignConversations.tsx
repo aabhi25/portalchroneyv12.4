@@ -11,6 +11,7 @@ import {
   type CampaignMessage,
   type StatusKey,
 } from "@/components/whatsapp/CampaignConversationsPanel";
+import type { ReplyClassification } from "@shared/schema";
 
 const PAGE_SIZE = 100;
 
@@ -22,6 +23,7 @@ interface CampaignSummary {
 interface CampaignDetail {
   id: string; name: string; status: string;
   aiEnabled: string; aiAgentName: string;
+  replyClassifications?: ReplyClassification[] | null;
 }
 interface RecipientsResponse {
   recipients: Recipient[];
@@ -142,6 +144,20 @@ export default function WhatsAppCampaignConversations() {
     onError: (e: any) => toast({ title: "Resend failed", description: e.message, variant: "destructive" }),
   });
 
+  // Outcome badges render the operator's own labels; the raw key is the fallback
+  // for outcomes recorded under a category that was since renamed or removed.
+  const campaignClassifications = Array.isArray(campaignDetail?.replyClassifications)
+    ? campaignDetail!.replyClassifications!
+    : [];
+  const classificationLabels = Object.fromEntries(
+    campaignClassifications.map(c => [c.key, c.label || c.key])
+  );
+  const captureFieldLabels = Object.fromEntries(
+    campaignClassifications.flatMap(c =>
+      (c.captureFields || []).map(f => [f.fieldKey, f.fieldLabel || f.fieldKey])
+    )
+  );
+
   if (campaignsLoading) {
     return <div className="p-6 text-center text-gray-500">Loading campaigns…</div>;
   }
@@ -206,6 +222,8 @@ export default function WhatsAppCampaignConversations() {
         filterTotal={filterTotal}
         totalPages={totalPages}
         counts={counts}
+        classificationLabels={classificationLabels}
+        captureFieldLabels={captureFieldLabels}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -13,6 +13,8 @@ import {
   RECIPIENT_STATUS_VARIANT,
   RecipientAvatar,
 } from "@/components/whatsapp/CampaignConversationsPanel";
+import { CampaignOutcomesCard } from "@/components/whatsapp/CampaignOutcomesCard";
+import type { ReplyClassification } from "@shared/schema";
 
 const CAMPAIGN_STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   draft: "outline", scheduled: "secondary", sending: "secondary",
@@ -45,6 +47,7 @@ interface Campaign {
   scheduledAt: string | null; startedAt: string | null; completedAt: string | null;
   aiEnabled: string; aiAgentName: string;
   aiSystemPrompt: string | null; aiUseFaqs: string; aiUseDocs: string; aiUseProducts: string;
+  replyClassifications?: ReplyClassification[] | null;
 }
 interface RecipientsResponse {
   recipients: Recipient[];
@@ -80,9 +83,17 @@ export default function WhatsAppCampaignDetail() {
 
   const [statusFilter, setStatusFilter] = useState<StatusKey>("all");
   const [page, setPage] = useState(0);
+  // Outcome filter, driven by clicking a row in the outcomes card. Orthogonal to
+  // the status tabs — both narrow the same list and both feed the same counts.
+  const [classificationFilter, setClassificationFilter] = useState<string | null>(null);
 
   const changeFilter = (key: StatusKey) => {
     setStatusFilter(key);
+    setPage(0);
+  };
+
+  const changeClassification = (key: string | null) => {
+    setClassificationFilter(key);
     setPage(0);
   };
 
@@ -97,10 +108,18 @@ export default function WhatsAppCampaignDetail() {
   // countRecipients on the server always returns totals for every status
   // regardless of what list filter is applied, so this query is the
   // authoritative source for the stat tiles and filter-tab badges.
+  // The outcome filter is included here as well as in the list query. Both must
+  // narrow by the same thing: filterTotal below is read from these counts and
+  // drives pagination over the list, so a mismatch would strand the user on
+  // pages that return no rows.
+  const classificationParam = classificationFilter
+    ? `&classification=${encodeURIComponent(classificationFilter)}`
+    : "";
+
   const { data: countsData } = useQuery<RecipientsResponse>({
-    queryKey: [`/api/whatsapp/campaigns/${id}/recipients`, "counts"],
+    queryKey: [`/api/whatsapp/campaigns/${id}/recipients`, "counts", classificationFilter],
     queryFn: () =>
-      apiRequest<RecipientsResponse>("GET", `/api/whatsapp/campaigns/${id}/recipients?limit=1`),
+      apiRequest<RecipientsResponse>("GET", `/api/whatsapp/campaigns/${id}/recipients?limit=1${classificationParam}`),
     enabled: !campaignError,
     refetchInterval: (query) => (query.state.error ? false : 5000),
     refetchOnMount: "always",
@@ -111,12 +130,12 @@ export default function WhatsAppCampaignDetail() {
   // status is selected, ensuring every recipient is reachable regardless of
   // how many rows a status bucket contains.
   const listParams =
-    statusFilter === "all"
+    (statusFilter === "all"
       ? `?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`
-      : `?status=${statusFilter}&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`;
+      : `?status=${statusFilter}&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`) + classificationParam;
 
   const { data: listData, isLoading: listLoading } = useQuery<RecipientsResponse>({
-    queryKey: [`/api/whatsapp/campaigns/${id}/recipients`, "list", statusFilter, page],
+    queryKey: [`/api/whatsapp/campaigns/${id}/recipients`, "list", statusFilter, page, classificationFilter],
     queryFn: () =>
       apiRequest<RecipientsResponse>("GET", `/api/whatsapp/campaigns/${id}/recipients${listParams}`),
     enabled: !campaignError,
@@ -188,8 +207,30 @@ export default function WhatsAppCampaignDetail() {
     statusFilter === "all"
       ? (counts?.total ?? 0)
       : (counts?.[statusFilter as keyof typeof counts] as number | undefined) ?? 0;
-  const totalPages = Math.ceil(filterTotal / PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(filterTotal / PAGE_SIZE));
   const hasMore = (page + 1) * PAGE_SIZE < filterTotal;
+
+  // Clamp the page whenever filterTotal shrinks under us. Recipients change
+  // status while this view polls, and an outcome filter can empty out a page
+  // the user is already sitting on — without this the footer advertises a range
+  // that no longer exists and the table renders blank.
+  useEffect(() => {
+    const maxPage = Math.max(0, totalPages - 1);
+    if (page > maxPage) setPage(maxPage);
+  }, [filterTotal, totalPages, page]);
+
+  // Label lookups built from the campaign's own config, so badges read as the
+  // operator named them rather than as raw keys.
+  const campaignClassifications = Array.isArray(campaign?.replyClassifications)
+    ? campaign!.replyClassifications!
+    : [];
+  const classificationLabels = Object.fromEntries(
+    campaignClassifications.map(c => [c.key, c.label || c.key])
+  );
+  const captureFieldLabels = Object.fromEntries(
+    campaignClassifications.flatMap(c => (c.captureFields || []).map(f => [f.fieldKey, f.fieldLabel || f.fieldKey]))
+  );
+  const isLive = campaign?.status === "sending" || campaign?.status === "completed";
 
   const canEditConfig = campaign?.status === "draft" || campaign?.status === "scheduled";
   const template = templates.find(t => t.id === campaign?.templateId);
@@ -301,6 +342,16 @@ export default function WhatsAppCampaignDetail() {
         <Card><CardContent className="p-4"><div className="text-xs text-gray-500">Replied</div><div className="text-2xl font-bold text-blue-600" data-testid="counter-replied">{counts?.replied ?? campaign.repliedCount}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Includes provider-reported failures and queued rows that timed out">Failed</div><div className="text-2xl font-bold text-red-600" data-testid="counter-failed">{failedCount || campaign.failedCount}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-gray-500">Opted out</div><div className="text-2xl font-bold text-amber-600" data-testid="counter-opted-out">{counts?.opted_out ?? campaign.optedOutCount}</div></CardContent></Card>
+      </div>
+
+      {/* Reply outcomes — categories come from this campaign's own config */}
+      <div className="mb-6">
+        <CampaignOutcomesCard
+          campaignId={id!}
+          isLive={isLive}
+          activeClassification={classificationFilter}
+          onSelectClassification={changeClassification}
+        />
       </div>
 
       {/* Config + preview */}

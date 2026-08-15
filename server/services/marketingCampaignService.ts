@@ -8,6 +8,7 @@ import {
   type MarketingCampaign,
   type MarketingCampaignRecipient,
   type WhatsappTemplate,
+  type ReplyClassification,
 } from "@shared/schema";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { contactGroupService, normalizePhone, applyCountryCode } from "./contactGroupService";
@@ -190,6 +191,99 @@ interface CreatePayload {
   aiKnowledgeDocIds?: string[];
   aiDailyTokenBudget?: number;
   aiMaxRepliesPerRecipient?: number;
+  replyClassifications?: ReplyClassification[];
+}
+
+/** Sentinel filter value for "replied, but the classifier matched no category". */
+export const UNCLASSIFIED_FILTER = "__unclassified__";
+
+/**
+ * Build the outcome filter shared by listRecipients and countRecipients.
+ *
+ * Kept as one helper precisely because those two must never disagree — a filter
+ * applied to the rows but not the tallies produces a footer promising pages that
+ * return nothing.
+ */
+function classificationCondition(classification?: string) {
+  if (!classification) return undefined;
+  if (classification === UNCLASSIFIED_FILTER) {
+    return sql`first_reply_at IS NOT NULL AND primary_classification IS NULL`;
+  }
+  return eq(marketingCampaignRecipients.primaryClassification, classification);
+}
+
+/**
+ * Escape one CSV cell.
+ *
+ * The leading-character guard is deliberate: customer feedback and imported
+ * attributes are free text that lands in a file operators open in Excel, and a
+ * value starting with = + - or @ is executed as a formula there. Prefixing a
+ * tab neutralises that without altering the visible value.
+ */
+function csvCell(value: unknown): string {
+  const s = value === null || value === undefined ? "" : String(value);
+  const guarded = /^[=+\-@\t\r]/.test(s) ? `\t${s}` : s;
+  return `"${guarded.replace(/"/g, '""')}"`;
+}
+
+/** Caps on the classification config. These bound the classifier prompt, which is
+ *  rebuilt from this config on every inbound message — an unbounded list would
+ *  quietly multiply per-reply token cost across the whole campaign. */
+const MAX_CLASSIFICATIONS = 25;
+const MAX_CAPTURE_FIELDS = 8;
+const VALID_FIELD_TYPES = new Set(["text", "date", "boolean"]);
+
+/**
+ * Validate and normalise operator-supplied classification config.
+ *
+ * This is user input that ends up inside an LLM system prompt and whose `key`
+ * becomes the value every dashboard tally groups by, so it is checked rather
+ * than trusted: keys must be unique and non-empty, and the shape must be exact.
+ * Throws on malformed input so the API surfaces a 400 instead of saving config
+ * that would fail at classification time.
+ */
+function normalizeClassifications(input: unknown): ReplyClassification[] {
+  if (input === null || input === undefined) return [];
+  if (!Array.isArray(input)) throw new Error("replyClassifications must be an array");
+  if (input.length > MAX_CLASSIFICATIONS) {
+    throw new Error(`A campaign can define at most ${MAX_CLASSIFICATIONS} reply categories`);
+  }
+
+  const seen = new Set<string>();
+  return input.map((raw: any, i: number) => {
+    const key = String(raw?.key ?? "").trim().toUpperCase().replace(/\s+/g, "_");
+    if (!key) throw new Error(`Reply category ${i + 1} is missing a key`);
+    if (!/^[A-Z0-9_]+$/.test(key)) {
+      throw new Error(`Reply category key "${key}" may only contain letters, numbers and underscores`);
+    }
+    if (seen.has(key)) throw new Error(`Duplicate reply category key "${key}"`);
+    seen.add(key);
+
+    const captureRaw = raw?.captureFields;
+    if (captureRaw !== undefined && captureRaw !== null && !Array.isArray(captureRaw)) {
+      throw new Error(`captureFields for "${key}" must be an array`);
+    }
+    const fieldKeys = new Set<string>();
+    const captureFields = ((captureRaw as any[]) || []).slice(0, MAX_CAPTURE_FIELDS).map((f: any) => {
+      const fieldKey = String(f?.fieldKey ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+      if (!fieldKey) throw new Error(`A capture field on "${key}" is missing a field key`);
+      if (fieldKeys.has(fieldKey)) throw new Error(`Duplicate capture field "${fieldKey}" on "${key}"`);
+      fieldKeys.add(fieldKey);
+      const fieldType = String(f?.fieldType ?? "text");
+      return {
+        fieldKey,
+        fieldLabel: String(f?.fieldLabel ?? fieldKey).trim().substring(0, 120),
+        fieldType: (VALID_FIELD_TYPES.has(fieldType) ? fieldType : "text") as "text" | "date" | "boolean",
+      };
+    });
+
+    return {
+      key,
+      label: String(raw?.label ?? key).trim().substring(0, 120),
+      description: String(raw?.description ?? "").trim().substring(0, 500),
+      captureFields,
+    };
+  });
 }
 
 function toFlag(v: boolean | undefined, fallback = "true"): string {
@@ -344,6 +438,7 @@ export const marketingCampaignService = {
         aiKnowledgeDocIds: payload.aiKnowledgeDocIds || [],
         aiDailyTokenBudget: payload.aiDailyTokenBudget ?? 50000,
         aiMaxRepliesPerRecipient: payload.aiMaxRepliesPerRecipient ?? 20,
+        replyClassifications: normalizeClassifications(payload.replyClassifications),
       })
       .returning();
     return row;
@@ -396,6 +491,9 @@ export const marketingCampaignService = {
     if (payload.aiUseFaqs !== undefined) set.aiUseFaqs = toFlag(payload.aiUseFaqs, "true");
     if (payload.aiUseDocs !== undefined) set.aiUseDocs = toFlag(payload.aiUseDocs, "true");
     if (payload.aiUseProducts !== undefined) set.aiUseProducts = toFlag(payload.aiUseProducts, "true");
+    if (payload.replyClassifications !== undefined) {
+      set.replyClassifications = normalizeClassifications(payload.replyClassifications);
+    }
     if (payload.status !== undefined) set.status = payload.status;
     const [row] = await db
       .update(marketingCampaigns)
@@ -417,7 +515,11 @@ export const marketingCampaignService = {
     return result.length > 0;
   },
 
-  async listRecipients(businessAccountId: string, campaignId: string, opts?: { limit?: number; offset?: number; status?: string }): Promise<MarketingCampaignRecipient[]> {
+  async listRecipients(
+    businessAccountId: string,
+    campaignId: string,
+    opts?: { limit?: number; offset?: number; status?: string; classification?: string },
+  ): Promise<MarketingCampaignRecipient[]> {
     const limit = Math.min(Math.max(opts?.limit ?? 200, 1), 1000);
     const offset = Math.max(opts?.offset ?? 0, 0);
     // "pending" is presented as a combined bucket in dashboards — claimed rows
@@ -431,6 +533,7 @@ export const marketingCampaignService = {
       eq(marketingCampaignRecipients.campaignId, campaignId),
       eq(marketingCampaignRecipients.businessAccountId, businessAccountId),
       statusCondition,
+      classificationCondition(opts?.classification),
     );
     return db
       .select()
@@ -441,7 +544,18 @@ export const marketingCampaignService = {
       .offset(offset);
   },
 
-  async countRecipients(businessAccountId: string, campaignId: string): Promise<{ total: number; pending: number; queued: number; sent: number; delivered: number; read: number; failed: number; expired: number; replied: number; opted_out: number }> {
+  /**
+   * Status tallies for the recipient table's filter tabs.
+   *
+   * Takes the same `classification` filter as listRecipients on purpose: the tab
+   * counts and the rows behind them are rendered together, so if only one of the
+   * two narrowed by outcome the footer would advertise pages that don't exist.
+   */
+  async countRecipients(
+    businessAccountId: string,
+    campaignId: string,
+    opts?: { classification?: string },
+  ): Promise<{ total: number; pending: number; queued: number; sent: number; delivered: number; read: number; failed: number; expired: number; replied: number; opted_out: number }> {
     const rows = await db
       .select({
         status: marketingCampaignRecipients.status,
@@ -451,6 +565,7 @@ export const marketingCampaignService = {
       .where(and(
         eq(marketingCampaignRecipients.campaignId, campaignId),
         eq(marketingCampaignRecipients.businessAccountId, businessAccountId),
+        classificationCondition(opts?.classification),
       ))
       .groupBy(marketingCampaignRecipients.status);
     const out: any = { total: 0, pending: 0, queued: 0, sent: 0, delivered: 0, read: 0, failed: 0, expired: 0, replied: 0, opted_out: 0 };
@@ -1158,6 +1273,255 @@ export const marketingCampaignService = {
         updatedAt: new Date(),
       })
       .where(eq(marketingCampaigns.id, campaignId));
+
+    // Fire-and-forget classification. Deliberately outside the AI-reply branch:
+    // dispositions are an operational record of what the customer said, so they
+    // must still be captured for campaigns that have AI replies switched off.
+    void (async () => {
+      try {
+        const { campaignAiService } = await import("./campaignAiService");
+        await campaignAiService.classifyAndStore(campaignId, recipientId, body);
+      } catch (err) {
+        console.error(`[Campaign] classification failed for recipient ${recipientId}:`, err);
+      }
+    })();
+  },
+
+  /**
+   * Budget gate for the classification pass.
+   *
+   * Separate from checkAiBudget because that one refuses whenever AI *replies*
+   * are disabled, and refuses again once a recipient hits their reply cap —
+   * neither of which should stop us recording what a customer said. This checks
+   * only the campaign's shared daily token budget.
+   */
+  async checkClassificationBudget(campaignId: string): Promise<{ allowed: boolean; reason?: string }> {
+    const [campaign] = await db
+      .select()
+      .from(marketingCampaigns)
+      .where(eq(marketingCampaigns.id, campaignId))
+      .limit(1);
+    if (!campaign) return { allowed: false, reason: "campaign_missing" };
+
+    const today = todayBucket();
+    if (campaign.aiUsageDate !== today) {
+      await db.update(marketingCampaigns)
+        .set({ aiUsageDate: today, aiTokensUsedToday: 0 })
+        .where(eq(marketingCampaigns.id, campaignId));
+      campaign.aiTokensUsedToday = 0;
+    }
+    if ((campaign.aiTokensUsedToday ?? 0) >= (campaign.aiDailyTokenBudget ?? 0)) {
+      return { allowed: false, reason: "daily_token_budget_exhausted" };
+    }
+    return { allowed: true };
+  },
+
+  /**
+   * Persist a classification result onto the recipient row.
+   *
+   * Merge semantics matter here because conversations are multi-turn:
+   *  - A null classification ("ok thanks", an emoji) must NOT wipe the real
+   *    disposition captured from an earlier message.
+   *  - dispositionData merges rather than replaces, so a promised date captured
+   *    two messages ago survives a later reclassification and stays auditable.
+   *  - callbackRequired is sticky-true: nothing in this flow resolves a callback,
+   *    so a later neutral message must not silently clear a pending human handoff.
+   */
+  async applyClassification(
+    recipientId: string,
+    result: {
+      primaryClassification: string | null;
+      dispositionData: Record<string, string>;
+      callbackRequired: boolean;
+      callbackReason: string | null;
+      customerFeedback: string | null;
+    },
+  ): Promise<void> {
+    // Done as ONE atomic statement rather than read-modify-write. Classification
+    // is fired per inbound message, so a customer sending two messages in quick
+    // succession runs two of these concurrently; a JS-side merge would let the
+    // slower one overwrite the newer outcome or drop a sticky callback flag.
+    // Expressing the merge in SQL means each update reads the freshest row.
+    const newData = JSON.stringify(result.dispositionData || {});
+    await db
+      .update(marketingCampaignRecipients)
+      .set({
+        primaryClassification: sql`COALESCE(${result.primaryClassification}, ${marketingCampaignRecipients.primaryClassification})`,
+        dispositionData: sql`COALESCE(${marketingCampaignRecipients.dispositionData}, '{}'::jsonb) || ${newData}::jsonb`,
+        callbackRequired: sql`${marketingCampaignRecipients.callbackRequired} OR ${result.callbackRequired}`,
+        callbackReason: result.callbackRequired
+          ? (result.callbackReason as any)
+          : sql`${marketingCampaignRecipients.callbackReason}`,
+        customerFeedback: sql`COALESCE(${result.customerFeedback}, ${marketingCampaignRecipients.customerFeedback})`,
+        classifiedAt: new Date(),
+      })
+      .where(eq(marketingCampaignRecipients.id, recipientId));
+  },
+
+  /**
+   * Aggregate campaign outcomes for the dashboard and the CSV export.
+   *
+   * Rows are driven by the campaign's own classification config, so the shape of
+   * this response follows the vertical the operator configured. Two details are
+   * deliberate:
+   *
+   *  - Categories with zero hits are still returned. A collections manager needs
+   *    to see "Refusal: 0", and dropping empty rows would make the dashboard
+   *    silently change shape as data arrives.
+   *  - Keys found in recipient data but no longer in the config (a category that
+   *    was renamed or deleted after replies landed) are returned as `orphaned`
+   *    rows rather than discarded, so the counts still reconcile against the
+   *    reply total instead of quietly losing recipients.
+   */
+  async getOutcomeSummary(businessAccountId: string, campaignId: string) {
+    const campaign = await this.get(businessAccountId, campaignId);
+    if (!campaign) return null;
+
+    const configured = (campaign.replyClassifications || []) as ReplyClassification[];
+
+    const [totals] = await db
+      .select({
+        totalRecipients: sql<number>`COUNT(*)::int`,
+        replied: sql<number>`COUNT(*) FILTER (WHERE first_reply_at IS NOT NULL)::int`,
+        classified: sql<number>`COUNT(*) FILTER (WHERE primary_classification IS NOT NULL)::int`,
+        unclassifiedReplies: sql<number>`COUNT(*) FILTER (WHERE first_reply_at IS NOT NULL AND primary_classification IS NULL)::int`,
+        callbacksPending: sql<number>`COUNT(*) FILTER (WHERE callback_required = true)::int`,
+      })
+      .from(marketingCampaignRecipients)
+      .where(and(
+        eq(marketingCampaignRecipients.campaignId, campaignId),
+        eq(marketingCampaignRecipients.businessAccountId, businessAccountId),
+      ));
+
+    const grouped = await db
+      .select({
+        key: marketingCampaignRecipients.primaryClassification,
+        count: sql<number>`COUNT(*)::int`,
+      })
+      .from(marketingCampaignRecipients)
+      .where(and(
+        eq(marketingCampaignRecipients.campaignId, campaignId),
+        eq(marketingCampaignRecipients.businessAccountId, businessAccountId),
+        sql`primary_classification IS NOT NULL`,
+      ))
+      .groupBy(marketingCampaignRecipients.primaryClassification);
+
+    const counts = new Map(grouped.map(g => [g.key as string, g.count]));
+
+    const rows = configured.map(c => ({
+      key: c.key,
+      label: c.label || c.key,
+      count: counts.get(c.key) ?? 0,
+      orphaned: false,
+    }));
+    const configuredKeys = new Set(configured.map(c => c.key));
+    for (const [key, count] of Array.from(counts.entries())) {
+      if (!configuredKeys.has(key)) {
+        rows.push({ key, label: key, count, orphaned: true });
+      }
+    }
+
+    return {
+      campaignId,
+      configured: configured.length > 0,
+      totalRecipients: totals?.totalRecipients ?? 0,
+      replied: totals?.replied ?? 0,
+      classified: totals?.classified ?? 0,
+      unclassifiedReplies: totals?.unclassifiedReplies ?? 0,
+      callbacksPending: totals?.callbacksPending ?? 0,
+      rows,
+    };
+  },
+
+  /**
+   * Stream every recipient with their outcome as CSV.
+   *
+   * Columns are the fixed identity/delivery set, then one column per capture
+   * field declared anywhere in the campaign's config — so a collections export
+   * carries ptp_date and a scheduling export carries preferred_date, without
+   * either being hardcoded. Batched to keep a large campaign off the heap.
+   */
+  async *streamOutcomeCsv(businessAccountId: string, campaignId: string): AsyncGenerator<string> {
+    const campaign = await this.get(businessAccountId, campaignId);
+    if (!campaign) return;
+
+    const configured = (campaign.replyClassifications || []) as ReplyClassification[];
+    const labelByKey = new Map(configured.map(c => [c.key, c.label || c.key]));
+
+    // Union of capture fields across all categories, de-duplicated but order-stable.
+    const fieldKeys: string[] = [];
+    for (const c of configured) {
+      for (const f of c.captureFields || []) {
+        if (!fieldKeys.includes(f.fieldKey)) fieldKeys.push(f.fieldKey);
+      }
+    }
+
+    // Attribute columns come from imported data (loan_id, emi_amount, ...).
+    // The full key union is resolved in the database rather than sampled from
+    // the first page: audiences can be assembled from several sources or
+    // topped up later, so a key that only appears on row 900 must still get a
+    // column instead of having its values silently dropped from the export.
+    const BATCH = 500;
+    const keyRows = await db.execute(sql`
+      SELECT DISTINCT k
+      FROM ${marketingCampaignRecipients} r,
+           LATERAL jsonb_object_keys(COALESCE(r.attributes, '{}'::jsonb)) AS k
+      WHERE r.campaign_id = ${campaignId}
+        AND r.business_account_id = ${businessAccountId}
+      ORDER BY k
+    `);
+    const attrKeys: string[] = (keyRows.rows as { k: string }[]).map(r => r.k);
+
+    const header = [
+      "name", "phone", "status",
+      ...attrKeys,
+      "classification", "classification_label",
+      ...fieldKeys,
+      "callback_required", "callback_reason", "customer_feedback",
+      "reply_count", "first_reply_at", "classified_at", "sent_at",
+    ];
+    yield header.map(csvCell).join(",") + "\n";
+
+    const fetchBatch = (offset: number) =>
+      db
+        .select()
+        .from(marketingCampaignRecipients)
+        .where(and(
+          eq(marketingCampaignRecipients.campaignId, campaignId),
+          eq(marketingCampaignRecipients.businessAccountId, businessAccountId),
+        ))
+        .orderBy(marketingCampaignRecipients.createdAt)
+        .limit(BATCH)
+        .offset(offset);
+
+    let offset = 0;
+    let batch = await fetchBatch(offset);
+    while (batch.length > 0) {
+      for (const r of batch) {
+        const attrs = r.attributes || {};
+        const disp = r.dispositionData || {};
+        const key = r.primaryClassification || "";
+        yield [
+          r.name || "",
+          r.phone,
+          r.status,
+          ...attrKeys.map(k => attrs[k] ?? ""),
+          key,
+          key ? (labelByKey.get(key) || key) : "",
+          ...fieldKeys.map(k => disp[k] ?? ""),
+          r.callbackRequired ? "yes" : "no",
+          r.callbackReason || "",
+          r.customerFeedback || "",
+          String(r.replyCount ?? 0),
+          r.firstReplyAt ? new Date(r.firstReplyAt).toISOString() : "",
+          r.classifiedAt ? new Date(r.classifiedAt).toISOString() : "",
+          r.sentAt ? new Date(r.sentAt).toISOString() : "",
+        ].map(csvCell).join(",") + "\n";
+      }
+      if (batch.length < BATCH) break;
+      offset += BATCH;
+      batch = await fetchBatch(offset);
+    }
   },
 
   async recordOutboundAi(campaignId: string, recipientId: string, businessAccountId: string, body: string, metadata?: Record<string, any>): Promise<void> {

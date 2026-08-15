@@ -2968,6 +2968,27 @@ export const insertWhatsappTemplateSchema = createInsertSchema(whatsappTemplates
   updatedAt: true,
 });
 
+/**
+ * Reply classification config — defined PER CAMPAIGN, not hardcoded.
+ *
+ * This is what makes the campaign engine industry-agnostic. A debt-collection
+ * campaign defines PTP / Can't Pay / Callback; an event campaign defines
+ * Confirmed / Declined / Tentative. The AI classifier, the outcomes dashboard
+ * and the CSV export all read this config at runtime, so supporting a new
+ * vertical requires campaign config only — never a code change.
+ */
+export interface ClassificationCaptureField {
+  fieldKey: string;                       // machine key, e.g. "ptp_date"
+  fieldLabel: string;                     // human label, e.g. "Promised Payment Date"
+  fieldType: "text" | "date" | "boolean"; // drives extraction hint + dashboard formatting
+}
+export interface ReplyClassification {
+  key: string;          // stable machine key stored on the recipient row, e.g. "PTP"
+  label: string;        // display label, e.g. "Promise to Pay"
+  description: string;  // shown to the LLM classifier to disambiguate categories
+  captureFields?: ClassificationCaptureField[]; // extra structured fields to extract
+}
+
 // Marketing campaign — a planned send to one or more groups
 export const marketingCampaigns = pgTable("marketing_campaigns", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -2993,6 +3014,9 @@ export const marketingCampaigns = pgTable("marketing_campaigns", {
   aiUseDocs: text("ai_use_docs").notNull().default("true"),
   aiUseProducts: text("ai_use_products").notNull().default("true"),
   aiKnowledgeDocIds: jsonb("ai_knowledge_doc_ids").$type<string[]>().default([]), // Optional: scope to specific training docs
+  // Reply classification — campaign-defined outcome categories. Empty array =
+  // broadcast-only campaign, classification step is skipped entirely.
+  replyClassifications: jsonb("reply_classifications").$type<ReplyClassification[]>().default([]),
   // Cost controls
   aiDailyTokenBudget: integer("ai_daily_token_budget").notNull().default(50000), // Per-day token cap for this campaign's AI replies
   aiMaxRepliesPerRecipient: integer("ai_max_replies_per_recipient").notNull().default(20), // Hard cap on AI turns per contact
@@ -3053,6 +3077,18 @@ export const marketingCampaignRecipients = pgTable("marketing_campaign_recipient
   replyCount: integer("reply_count").notNull().default(0),
   aiReplyCount: integer("ai_reply_count").notNull().default(0), // # AI replies sent to this recipient
   claimedAt: timestamp("claimed_at"), // When a worker claimed this row for sending; powers stale-claim recovery
+  // ── Outcome tracking ──────────────────────────────────────────────────────
+  // Populated by the AI classifier after each inbound reply. `primaryClassification`
+  // holds a `key` from the owning campaign's replyClassifications list; `dispositionData`
+  // holds that classification's captureFields (e.g. { ptp_date: "2026-09-05" }).
+  // callbackRequired is promoted to a first-class column because "this person needs
+  // a human" is universal across every vertical and drives an operational queue.
+  primaryClassification: text("primary_classification"),
+  dispositionData: jsonb("disposition_data").$type<Record<string, string>>().default({}),
+  callbackRequired: boolean("callback_required").notNull().default(false),
+  callbackReason: text("callback_reason"),
+  customerFeedback: text("customer_feedback"), // verbatim customer statement, captured regardless of classification
+  classifiedAt: timestamp("classified_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   campaignIdx: index("mkt_recipients_campaign_idx").on(table.campaignId),

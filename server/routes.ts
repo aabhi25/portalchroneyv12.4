@@ -31089,6 +31089,23 @@ Return ONLY a valid JSON object in this format:
                 return res.json({ status: "received", note: "marketing_stop" });
               }
 
+              // Record the reply for ANY campaign-owned conversation, not just one
+              // with AI replies switched on. Outcome classification hangs off
+              // recordInbound, and a collections team that answers manually still
+              // needs the transcript and the disposition — previously those
+              // campaigns produced no record at all.
+              if (recipientCtx && recipientCtx.campaign.aiEnabled !== "true") {
+                console.log(`[MSG91 Webhook] Campaign ${recipientCtx.campaign.id} owns conversation with ${senderPhone} (AI replies off) — recording reply, falling through to normal flow`);
+                await marketingCampaignService.recordInbound(
+                  recipientCtx.campaign.id,
+                  recipientCtx.recipient.id,
+                  businessId,
+                  text,
+                );
+                // Deliberately no early return: with AI replies off the journey /
+                // auto-reply path stays in charge of what the customer receives.
+              }
+
               if (recipientCtx && recipientCtx.campaign.aiEnabled === "true") {
                 console.log(`[MSG91 Webhook] Campaign ${recipientCtx.campaign.id} owns conversation with ${senderPhone}; suppressing journey + auto-reply`);
                 await marketingCampaignService.recordInbound(
@@ -35891,15 +35908,52 @@ Return ONLY a valid JSON object in this format:
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
+  app.get("/api/whatsapp/campaigns/:id/outcomes", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { marketingCampaignService } = await import("./services/marketingCampaignService");
+      const summary = await marketingCampaignService.getOutcomeSummary(req.user!.businessAccountId!, req.params.id);
+      if (!summary) return res.status(404).json({ error: "Campaign not found" });
+      res.json(summary);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/whatsapp/campaigns/:id/outcomes.csv", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { marketingCampaignService } = await import("./services/marketingCampaignService");
+      const campaign = await marketingCampaignService.get(req.user!.businessAccountId!, req.params.id);
+      if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+
+      const safeName = (campaign.name || "campaign").replace(/[^a-zA-Z0-9-_]+/g, "_").substring(0, 60);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeName}_outcomes.csv"`);
+      // BOM so Excel reads UTF-8 names correctly rather than mangling them.
+      res.write("\uFEFF");
+      for await (const chunk of marketingCampaignService.streamOutcomeCsv(req.user!.businessAccountId!, req.params.id)) {
+        res.write(chunk);
+      }
+      res.end();
+    } catch (err: any) {
+      // Headers are already sent once streaming starts, so a mid-stream failure
+      // can only be signalled by destroying the connection — a truncated download
+      // is far safer than a silently complete-looking partial export.
+      console.error("[Campaign] CSV export failed:", err);
+      if (res.headersSent) res.destroy();
+      else res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/whatsapp/campaigns/:id/recipients", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
       const { marketingCampaignService } = await import("./services/marketingCampaignService");
       const limit = Math.min(Math.max(parseInt((req.query.limit as string) || "200", 10) || 200, 1), 1000);
       const offset = Math.max(parseInt((req.query.offset as string) || "0", 10) || 0, 0);
       const status = typeof req.query.status === "string" ? (req.query.status as string) : undefined;
+      // Both calls take the same outcome filter so the tab counts always describe
+      // the rows actually being listed.
+      const classification = typeof req.query.classification === "string" ? (req.query.classification as string) : undefined;
       const [rows, counts] = await Promise.all([
-        marketingCampaignService.listRecipients(req.user!.businessAccountId!, req.params.id, { limit, offset, status }),
-        marketingCampaignService.countRecipients(req.user!.businessAccountId!, req.params.id),
+        marketingCampaignService.listRecipients(req.user!.businessAccountId!, req.params.id, { limit, offset, status, classification }),
+        marketingCampaignService.countRecipients(req.user!.businessAccountId!, req.params.id, { classification }),
       ]);
       res.json({ recipients: rows, counts, limit, offset });
     } catch (err: any) { res.status(500).json({ error: err.message }); }

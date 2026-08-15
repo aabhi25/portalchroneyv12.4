@@ -12,9 +12,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import {
   ArrowLeft, Megaphone, FileCode2, Users, Calendar, Bot,
-  MessageSquare, Clock, Sparkles, AlertTriangle,
+  MessageSquare, Clock, Sparkles, AlertTriangle, Tags,
 } from "lucide-react";
 import { useLocation } from "wouter";
+import { ReplyClassificationEditor } from "@/components/whatsapp/ReplyClassificationEditor";
+import type { ReplyClassification } from "@shared/schema";
 
 /**
  * Shared campaign configuration form, used by both the create and edit pages so the two
@@ -57,6 +59,8 @@ export interface CampaignFormValues {
   aiUseFaqs: boolean;
   aiUseDocs: boolean;
   aiUseProducts: boolean;
+  /** Outcome categories the AI sorts inbound replies into. Empty = broadcast only. */
+  replyClassifications: ReplyClassification[];
 }
 
 export const EMPTY_CAMPAIGN_FORM: CampaignFormValues = {
@@ -71,6 +75,7 @@ export const EMPTY_CAMPAIGN_FORM: CampaignFormValues = {
   aiUseFaqs: true,
   aiUseDocs: true,
   aiUseProducts: true,
+  replyClassifications: [],
 };
 
 /**
@@ -89,6 +94,7 @@ export interface StoredCampaignConfig {
   aiUseFaqs: string;
   aiUseDocs: string;
   aiUseProducts: string;
+  replyClassifications?: ReplyClassification[] | null;
 }
 
 /** Convert a stored ISO timestamp into the local-time string a datetime-local input expects. */
@@ -114,6 +120,7 @@ export function campaignToFormValues(campaign: StoredCampaignConfig): CampaignFo
     aiUseFaqs: campaign.aiUseFaqs !== "false",
     aiUseDocs: campaign.aiUseDocs !== "false",
     aiUseProducts: campaign.aiUseProducts !== "false",
+    replyClassifications: Array.isArray(campaign.replyClassifications) ? campaign.replyClassifications : [],
   };
 }
 
@@ -226,6 +233,9 @@ export default function CampaignForm({
   const [aiEnabled, setAiEnabled] = useState(initialValues.aiEnabled);
   const [aiAgentName, setAiAgentName] = useState(initialValues.aiAgentName);
   const [aiSystemPrompt, setAiSystemPrompt] = useState(initialValues.aiSystemPrompt);
+  const [replyClassifications, setReplyClassifications] = useState<ReplyClassification[]>(
+    initialValues.replyClassifications || []
+  );
   const [aiUseFaqs, setAiUseFaqs] = useState(initialValues.aiUseFaqs);
   const [aiUseDocs, setAiUseDocs] = useState(initialValues.aiUseDocs);
   const [aiUseProducts, setAiUseProducts] = useState(initialValues.aiUseProducts);
@@ -332,6 +342,7 @@ export default function CampaignForm({
       aiUseFaqs,
       aiUseDocs,
       aiUseProducts,
+      replyClassifications,
     });
   };
 
@@ -589,6 +600,19 @@ export default function CampaignForm({
                   </div>
                 </>
               )}
+            </SectionCard>
+
+            {/* Reply classification — intentionally outside the AI-replies toggle:
+                outcomes are still recorded for campaigns that don't auto-reply. */}
+            <SectionCard icon={<Tags className="h-4 w-4 text-violet-600" />} title="Reply outcomes">
+              <p className="text-xs text-gray-500 -mt-1">
+                Sort every inbound reply into your own outcome categories and pull out the details you
+                care about. Works whether or not AI replies are switched on.
+              </p>
+              <ReplyClassificationEditor
+                value={replyClassifications}
+                onChange={setReplyClassifications}
+              />
             </SectionCard>
 
           </div>

@@ -7,7 +7,7 @@ import { useEffect, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { RefreshCw, MessageCircle, RotateCcw, Info, ChevronLeft, ChevronRight } from "lucide-react";
+import { RefreshCw, MessageCircle, RotateCcw, Info, ChevronLeft, ChevronRight, PhoneCall } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 export const STATUS_FILTERS = [
@@ -30,6 +30,12 @@ export interface Recipient {
   status: string; errorMessage: string | null;
   sentAt: string | null; deliveredAt: string | null; readAt: string | null;
   firstReplyAt: string | null; replyCount: number; aiReplyCount: number;
+  // Outcome tracking — present once the campaign defines reply classifications.
+  primaryClassification?: string | null;
+  dispositionData?: Record<string, string> | null;
+  callbackRequired?: boolean | null;
+  callbackReason?: string | null;
+  customerFeedback?: string | null;
 }
 
 export interface CampaignMessage {
@@ -67,6 +73,7 @@ export function CampaignConversationsPanel({
   page = 0, setPage,
   filterTotal = 0, totalPages = 1,
   counts,
+  classificationLabels, captureFieldLabels,
 }: {
   campaign: { status: string; aiAgentName?: string } | null;
   recipients: Recipient[];
@@ -84,6 +91,11 @@ export function CampaignConversationsPanel({
   filterTotal?: number;
   totalPages?: number;
   counts?: Record<string, number>;
+  /** key -> human label, derived from the campaign's own classification config.
+   *  Absent labels fall back to the raw key, so an outcome recorded under a
+   *  category that was later renamed or deleted still renders. */
+  classificationLabels?: Record<string, string>;
+  captureFieldLabels?: Record<string, string>;
 }) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -209,6 +221,51 @@ export function CampaignConversationsPanel({
                           )}
                         </div>
                       </div>
+
+                      {/* Outcome row. The label comes from the campaign's own
+                          classification config, so it reads correctly whatever
+                          the vertical; the raw key is the fallback. */}
+                      {(r.primaryClassification || r.callbackRequired) && (
+                        <div className="flex items-center gap-1 mt-1 flex-wrap">
+                          {r.primaryClassification && (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] px-1.5 py-0 h-4 bg-violet-50 text-violet-700 border-violet-200"
+                              data-testid={`badge-disposition-${r.id}`}
+                            >
+                              {classificationLabels?.[r.primaryClassification] || r.primaryClassification}
+                            </Badge>
+                          )}
+                          {r.callbackRequired && (
+                            <TooltipProvider delayDuration={100}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[10px] px-1.5 py-0 h-4 bg-amber-50 text-amber-700 border-amber-200 cursor-help"
+                                    data-testid={`badge-callback-${r.id}`}
+                                  >
+                                    <PhoneCall className="h-2.5 w-2.5 mr-0.5" /> Callback
+                                  </Badge>
+                                </TooltipTrigger>
+                                <TooltipContent side="right" className="max-w-xs text-xs">
+                                  {r.callbackReason || "This customer asked for a human."}
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+                          {Object.entries(r.dispositionData || {}).map(([k, v]) => (
+                            <Badge
+                              key={k}
+                              variant="outline"
+                              className="text-[10px] px-1.5 py-0 h-4 bg-gray-50 text-gray-600 border-gray-200"
+                              data-testid={`badge-disposition-field-${r.id}-${k}`}
+                            >
+                              {(captureFieldLabels?.[k] || k.replace(/_/g, " "))}: {v}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
                       {canResend && (
                         <Button
                           variant="ghost"
