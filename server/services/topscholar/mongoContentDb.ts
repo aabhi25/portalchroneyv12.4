@@ -80,6 +80,14 @@ function getDb(client: MongoClient, dbName: string | null): Db {
   return dbName ? client.db(dbName) : client.db();
 }
 
+export async function getMongoCollection(
+  connectionString: string,
+  dbName: string | null,
+  collection: string | null,
+): Promise<Collection<MongoChunkDoc>> {
+  return getCollection(connectionString, dbName, collection);
+}
+
 async function getCollection(
   connectionString: string,
   dbName: string | null,

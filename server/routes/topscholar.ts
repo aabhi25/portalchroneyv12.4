@@ -22,6 +22,7 @@ import { encrypt } from "../services/encryptionService";
 import { ingestPlanIds, ingestSingleCp, resolvePlans, curriculumLabel, DEFAULT_SAMPLE_LIMIT } from "../services/topscholar/ingestionService";
 import { testMongoConnection } from "../services/topscholar/mongoContentDb";
 import { getContentOverview, getChapters, getChunks, getChapterNamesForCpIds, getCpIdsWithContent } from "../services/topscholar/contentReader";
+import { getMongoContentOverview, getMongoChapters, getMongoChunks } from "../services/topscholar/mongoContentReader";
 import { getMongoChapterNames, getMongoCpIdsWithContent } from "../services/topscholar/mongoContentDb";
 import { resolveCpIdsForScope } from "../services/topscholar/scopeResolver";
 import { testContentBundleConnection } from "../services/topscholar/cmsConnector";
@@ -1083,12 +1084,11 @@ router.get("/api/topscholar/content/overview", ...topscholarGuards, async (req: 
   if (!account) return res.status(404).json({ error: "Business account not found" });
 
   const cfg = getTopscholarConfig(account);
-  if (cfg.storeType === "mongodb") {
-    return res.status(501).json({ error: "The content viewer is not available for MongoDB content stores yet." });
-  }
 
   try {
-    const packs = await getContentOverview(cfg, businessAccountId);
+    const packs = cfg.storeType === "mongodb"
+      ? await getMongoContentOverview(cfg, businessAccountId)
+      : await getContentOverview(cfg, businessAccountId);
     res.json({ packs });
   } catch (error: any) {
     console.error("[TopScholar Content] overview failed:", error);
@@ -1107,12 +1107,11 @@ router.get("/api/topscholar/content/chapters", ...topscholarGuards, async (req: 
   if (!account) return res.status(404).json({ error: "Business account not found" });
 
   const cfg = getTopscholarConfig(account);
-  if (cfg.storeType === "mongodb") {
-    return res.status(501).json({ error: "The content viewer is not available for MongoDB content stores yet." });
-  }
 
   try {
-    const chapters = await getChapters(cfg, businessAccountId, cpId);
+    const chapters = cfg.storeType === "mongodb"
+      ? await getMongoChapters(cfg, businessAccountId, cpId)
+      : await getChapters(cfg, businessAccountId, cpId);
     res.json({ chapters });
   } catch (error: any) {
     console.error("[TopScholar Content] chapters failed:", error);
@@ -1131,9 +1130,6 @@ router.get("/api/topscholar/content/chunks", ...topscholarGuards, async (req: Re
   if (!account) return res.status(404).json({ error: "Business account not found" });
 
   const cfg = getTopscholarConfig(account);
-  if (cfg.storeType === "mongodb") {
-    return res.status(501).json({ error: "The content viewer is not available for MongoDB content stores yet." });
-  }
 
   const contentType = String(req.query.contentType || "").trim() || undefined;
   const chapterRaw = req.query.chapter;
@@ -1143,7 +1139,9 @@ router.get("/api/topscholar/content/chunks", ...topscholarGuards, async (req: Re
   const pageSize = Number(req.query.pageSize) || 50;
 
   try {
-    const result = await getChunks(cfg, businessAccountId, { cpId, contentType, chapter, q, page, pageSize });
+    const result = cfg.storeType === "mongodb"
+      ? await getMongoChunks(cfg, businessAccountId, { cpId, contentType, chapter, q, page, pageSize })
+      : await getChunks(cfg, businessAccountId, { cpId, contentType, chapter, q, page, pageSize });
     res.json(result);
   } catch (error: any) {
     console.error("[TopScholar Content] chunks failed:", error);

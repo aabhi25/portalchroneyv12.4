@@ -89,21 +89,15 @@ async function safeQuery(
   }
 }
 
-export async function getContentOverview(
-  cfg: TopscholarConfig,
+/**
+ * Merges raw per-(cpId, contentType) chunk counts with cp mapping + sync metadata
+ * from the app DB into the pack overview shape. Store-agnostic: used by both the
+ * pgvector reader (below) and the MongoDB reader (mongoContentReader.ts).
+ */
+export async function assemblePackOverview(
+  rows: Array<{ cp_id: string; content_type: string; n: number }>,
   businessAccountId: string,
 ): Promise<ContentPackOverview[]> {
-  const pool = getContentPool(cfg.contentDbUrl);
-
-  const { rows } = await safeQuery(
-    pool,
-    `SELECT cp_id, content_type, count(*)::int AS n
-       FROM topscholar_content_chunks
-      WHERE business_account_id = $1
-      GROUP BY cp_id, content_type`,
-    [businessAccountId],
-  );
-
   const mappings = await db
     .select()
     .from(topscholarCpMappings)
@@ -157,6 +151,24 @@ export async function getContentOverview(
 
   packs.sort((a, b) => a.label.localeCompare(b.label));
   return packs;
+}
+
+export async function getContentOverview(
+  cfg: TopscholarConfig,
+  businessAccountId: string,
+): Promise<ContentPackOverview[]> {
+  const pool = getContentPool(cfg.contentDbUrl);
+
+  const { rows } = await safeQuery(
+    pool,
+    `SELECT cp_id, content_type, count(*)::int AS n
+       FROM topscholar_content_chunks
+      WHERE business_account_id = $1
+      GROUP BY cp_id, content_type`,
+    [businessAccountId],
+  );
+
+  return assemblePackOverview(rows, businessAccountId);
 }
 
 export async function getChapters(
