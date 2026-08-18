@@ -5,6 +5,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Library,
   FileQuestion,
   Video,
@@ -36,6 +43,7 @@ interface Pack {
   board: string | null;
   medium: string | null;
   grade: string | null;
+  subject: string | null;
   status: string | null;
   lastSyncedAt: string | null;
   counts: Record<ContentTypeKey, number>;
@@ -322,17 +330,104 @@ export default function TopScholarContent() {
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
-  const filterActive = filter.trim().length > 0;
+  // Curriculum scope — cascading Board → Medium → Grade → Subject selects
+  // (same behavior as the Testing page: each level narrows the next, changing
+  // an upstream select resets everything below it). Vocabulary is derived from
+  // the already-fetched packs, so it works for both pgvector and Mongo stores.
+  const [scopeBoard, setScopeBoard] = useState("");
+  const [scopeMedium, setScopeMedium] = useState("");
+  const [scopeGrade, setScopeGrade] = useState("");
+  const [scopeSubject, setScopeSubject] = useState("");
+
+  const handleScopeBoardChange = (v: string) => {
+    setScopeBoard(v);
+    setScopeMedium("");
+    setScopeGrade("");
+    setScopeSubject("");
+  };
+  const handleScopeMediumChange = (v: string) => {
+    setScopeMedium(v);
+    setScopeGrade("");
+    setScopeSubject("");
+  };
+  const handleScopeGradeChange = (v: string) => {
+    setScopeGrade(v);
+    setScopeSubject("");
+  };
+  const clearScope = () => {
+    setScopeBoard("");
+    setScopeMedium("");
+    setScopeGrade("");
+    setScopeSubject("");
+  };
+
+  const boardOptions = useMemo(
+    () => Array.from(new Set(packs.map((p) => p.board).filter((v): v is string => !!v))).sort(),
+    [packs],
+  );
+  const mediumOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          packs
+            .filter((p) => !scopeBoard || p.board === scopeBoard)
+            .map((p) => p.medium)
+            .filter((v): v is string => !!v),
+        ),
+      ).sort(),
+    [packs, scopeBoard],
+  );
+  const gradeOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          packs
+            .filter(
+              (p) =>
+                (!scopeBoard || p.board === scopeBoard) &&
+                (!scopeMedium || p.medium === scopeMedium),
+            )
+            .map((p) => p.grade)
+            .filter((v): v is string => !!v),
+        ),
+      ).sort((a, b) => gradeSortValue(a) - gradeSortValue(b) || a.localeCompare(b)),
+    [packs, scopeBoard, scopeMedium],
+  );
+  const subjectOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          packs
+            .filter(
+              (p) =>
+                (!scopeBoard || p.board === scopeBoard) &&
+                (!scopeMedium || p.medium === scopeMedium) &&
+                (!scopeGrade || p.grade === scopeGrade),
+            )
+            .map((p) => p.subject)
+            .filter((v): v is string => !!v),
+        ),
+      ).sort(),
+    [packs, scopeBoard, scopeMedium, scopeGrade],
+  );
+
+  const scopeActive = !!(scopeBoard || scopeMedium || scopeGrade || scopeSubject);
+  const filterActive = filter.trim().length > 0 || scopeActive;
 
   const filteredPacks = useMemo(() => {
+    let list = packs;
+    if (scopeBoard) list = list.filter((p) => p.board === scopeBoard);
+    if (scopeMedium) list = list.filter((p) => p.medium === scopeMedium);
+    if (scopeGrade) list = list.filter((p) => p.grade === scopeGrade);
+    if (scopeSubject) list = list.filter((p) => p.subject === scopeSubject);
     const q = filter.trim().toLowerCase();
-    if (!q) return packs;
-    return packs.filter((p) =>
-      [p.label, p.board, p.medium, p.grade].some(
+    if (!q) return list;
+    return list.filter((p) =>
+      [p.label, p.board, p.medium, p.grade, p.subject].some(
         (v) => typeof v === "string" && v.toLowerCase().includes(q),
       ),
     );
-  }, [packs, filter]);
+  }, [packs, filter, scopeBoard, scopeMedium, scopeGrade, scopeSubject]);
 
   const { boards, unclassified } = useMemo(
     () => buildContentTree(filteredPacks),
@@ -454,6 +549,105 @@ export default function TopScholarContent() {
         </Card>
       ) : (
         <>
+          {boardOptions.length > 0 && (
+            <Card>
+              <CardContent className="py-4 px-5">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-semibold text-gray-700">Curriculum scope</span>
+                  {scopeActive && (
+                    <button
+                      onClick={clearScope}
+                      className="text-xs font-medium text-cyan-600 hover:text-cyan-700 flex items-center gap-1"
+                      data-testid="button-clear-scope"
+                    >
+                      <X className="w-3.5 h-3.5" /> Clear
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Board</label>
+                    <Select value={scopeBoard} onValueChange={handleScopeBoardChange}>
+                      <SelectTrigger data-testid="select-scope-board">
+                        <SelectValue placeholder="Select a board" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {boardOptions.map((b) => (
+                          <SelectItem key={b} value={b}>
+                            {b}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Medium</label>
+                    <Select
+                      value={scopeMedium}
+                      onValueChange={handleScopeMediumChange}
+                      disabled={!scopeBoard}
+                    >
+                      <SelectTrigger data-testid="select-scope-medium">
+                        <SelectValue placeholder="Select a medium" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {mediumOptions.map((m) => (
+                          <SelectItem key={m} value={m}>
+                            {m}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Grade</label>
+                    <Select
+                      value={scopeGrade}
+                      onValueChange={handleScopeGradeChange}
+                      disabled={!scopeBoard || !scopeMedium}
+                    >
+                      <SelectTrigger data-testid="select-scope-grade">
+                        <SelectValue placeholder="Select a grade" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {gradeOptions.map((g) => (
+                          <SelectItem key={g} value={g}>
+                            {g}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Subject</label>
+                    <Select
+                      value={scopeSubject}
+                      onValueChange={setScopeSubject}
+                      disabled={!scopeBoard || !scopeMedium || !scopeGrade || subjectOptions.length === 0}
+                    >
+                      <SelectTrigger data-testid="select-scope-subject">
+                        <SelectValue
+                          placeholder={
+                            scopeBoard && scopeMedium && scopeGrade && subjectOptions.length === 0
+                              ? "No subjects available"
+                              : "Select a subject"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {subjectOptions.map((s) => (
+                          <SelectItem key={s} value={s}>
+                            {s}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           <div className="flex flex-col sm:flex-row sm:items-center gap-2">
             <div className="relative flex-1">
               <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />

@@ -24,6 +24,7 @@ export interface ContentPackOverview {
   board: string | null;
   medium: string | null;
   grade: string | null;
+  subject: string | null;
   status: string | null;
   lastSyncedAt: Date | null;
   counts: Record<ContentTypeKey, number>;
@@ -142,6 +143,9 @@ export async function assemblePackOverview(
       board: m?.board ?? null,
       medium: m?.medium ?? null,
       grade: m?.grade ?? null,
+      // Subject mirrors the scope-options endpoint: prefer the CMS subject name,
+      // fall back to the legacy cp_name for rows that predate the subject column.
+      subject: ((m?.subject ?? '').trim() || (m?.cpName ?? '').trim()) || null,
       status: s?.status ?? null,
       lastSyncedAt: s?.lastSyncedAt ?? null,
       counts,
