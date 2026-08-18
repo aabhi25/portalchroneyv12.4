@@ -99,3 +99,8 @@ Persist the chosen result on the *display* variant of the message rather than
 appending images to the stored content, so a reload replays exactly what the
 student saw and a failed selection degrades to a plain answer instead of the old
 attach-everything behaviour.
+
+## Answering-policy parity, not just retrieval parity
+- Chat and voice can retrieve identically and still diverge: chat carries a "solve step-by-step, NEVER refuse academic questions" final override while voice's guardrail demanded EVERY value be present in retrieved content — one missing routine constant (a molar mass) made voice refuse what chat computed.
+- The strict wording lived in THREE places on the voice side: the session guardrail, the per-turn injected curriculum instruction, and the verbatim-mode guardrail. Any one of them alone re-creates the refusal — a policy change must sweep all prompt sites, and grep for the contradicting phrase ("every concept, formula, and value/constant") to find them.
+- The boundary that stays strict: uncovered TOPICS are still declined and the empty-retrieval branch still forbids outside knowledge; the exception is only routine supporting values for a covered concept/formula.
