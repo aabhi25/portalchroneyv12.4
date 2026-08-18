@@ -418,6 +418,12 @@ export function VoiceMode({
         }
         break;
 
+      case 'thinking':
+        // Server is retrieving curriculum / preparing the answer — show the
+        // Thinking… state even if the transcript event raced past us.
+        setState('thinking');
+        break;
+
       case 'ai_chunk':
         // Clear interrupt flag when AI starts responding to a new query
         // This ensures we don't block the new response after an interruption

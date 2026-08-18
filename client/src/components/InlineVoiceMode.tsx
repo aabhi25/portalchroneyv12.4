@@ -527,6 +527,12 @@ export function InlineVoiceMode({
         }
         break;
 
+      case 'thinking':
+        // Server is retrieving curriculum / preparing the answer — show the
+        // Thinking… state even if the transcript event raced past us.
+        setState('thinking');
+        break;
+
       case 'response_cancelled':
         // The server abandoned this answer — typically a barge-in it detected
         // while we were still inside our own grace window, so we never ran

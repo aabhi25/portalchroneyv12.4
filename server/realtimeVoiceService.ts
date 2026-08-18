@@ -133,6 +133,10 @@ interface VoiceConversation {
    * then interrupted would be attached to whatever they asked next.
    */
   pendingCurriculumMediaResponseId?: string | null;
+  // Monotonically increasing token for K12 turns. The rewrite + retrieval in
+  // sendNormalResponse spans multiple awaits; a newer utterance bumps this so
+  // the stale in-flight turn can detect it was superseded and inject nothing.
+  k12TurnSeq?: number;
   // K12 content-only mode (TopScholar or k12ContentOnlyMode). When true, academic
   // turns must force fetch_k12_topic so answers are curriculum-grounded (mirrors
   // the text-chat path). Cached during buildSystemInstructions to avoid per-turn DB hits.
@@ -1160,6 +1164,8 @@ export class RealtimeVoiceService {
         instructions += '\n\n🛡️ K12 CONTENT-ONLY GUARDRAIL (MUST FOLLOW):\n';
         instructions += '- For any academic or study-related question, your ONLY allowed sources are the curriculum content returned by your tools, the uploaded FAQs, and the uploaded documents/notes.\n';
         instructions += '- You are FORBIDDEN from answering academic questions using your general knowledge or training data.\n';
+        instructions += '- You ARE allowed (and expected) to REASON, CALCULATE, and work through problems step by step, but ONLY when EVERY concept, formula, and value the working needs is present in the retrieved curriculum content — solving a numerical problem with a formula from the curriculum is answering FROM the curriculum, not from outside knowledge. The text-chat tutor does this; you must too.\n';
+        instructions += '- If the retrieved content covers the topic but is MISSING a fact, formula, or value the question needs, answer the supported part and say plainly that the curriculum doesn\'t cover the rest — do NOT fill the gap from your own knowledge.\n';
         instructions += '- If the sources do not contain the answer, say something like: "Great question! That topic isn\'t in our curriculum yet — would you like me to look up something else?" Do NOT attempt the answer.\n';
         instructions += '- Greetings and small talk are still allowed without a curriculum lookup.\n';
         instructions += '\n📚 K12 RESPONSE LENGTH OVERRIDE (overrides the general "2–4 sentences" rule for academic turns):\n';
@@ -1174,6 +1180,7 @@ export class RealtimeVoiceService {
         instructions += '\n\n📖 K12 VERBATIM CONTENT GUARDRAIL (MUST FOLLOW):\n';
         instructions += '- When your tools or the uploaded FAQs/documents return content that answers the student\'s question, you MUST speak that content WORD-FOR-WORD.\n';
         instructions += '- Do NOT paraphrase, summarize, rewrite, or "simplify" the source wording. Read it out exactly as written.\n';
+        instructions += '- Verbatim applies to explanations of curriculum content. When the student asks you to SOLVE a problem, work it out step by step using the formulas and values from the curriculum — the working is yours, but every concept, formula, and constant you use must come from the curriculum content.\n';
         instructions += '- You may add a short friendly intro (e.g. "Here\'s what your curriculum says:") and a short closer (e.g. "Want to try a practice question on this?"), but the substantive academic content must remain verbatim.\n';
       }
 
@@ -1568,6 +1575,10 @@ export class RealtimeVoiceService {
           
           // Save user transcript to conversation
           conversation.currentUserTranscript = userTranscript;
+          // Invalidate any in-flight K12 rewrite/retrieval for the PREVIOUS
+          // utterance immediately — before any await — so a stale turn can
+          // never inject its context or create a response after this point.
+          conversation.k12TurnSeq = (conversation.k12TurnSeq ?? 0) + 1;
           
           // Save to database and conversation memory
           if (conversation.conversationId && userTranscript) {
@@ -2341,9 +2352,26 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
   private async sendNormalResponse(conversation: VoiceConversation): Promise<void> {
     if (!conversation.openaiWs || conversation.openaiWs.readyState !== WebSocket.OPEN) return;
 
+    // Snapshot this turn's token and transcript. The token is bumped at the
+    // moment each new final user transcript ARRIVES (before any await), so if
+    // the student speaks again while we're rewriting/retrieving below, the
+    // sequence moves on and this in-flight turn must abandon itself instead of
+    // injecting stale context or racing a second response.create. The
+    // transcript snapshot keeps this turn answering ITS question even though a
+    // newer transcription overwrites conversation.currentUserTranscript.
+    const turnId = conversation.k12TurnSeq ?? 0;
+    const turnTranscript = conversation.currentUserTranscript;
+
     let curriculumInjected = false;
-    if (conversation.k12ContentOnly && this.shouldForceK12Fetch(conversation.currentUserTranscript)) {
-      curriculumInjected = await this.injectK12CurriculumContext(conversation);
+    if (conversation.k12ContentOnly && this.shouldForceK12Fetch(turnTranscript)) {
+      // The server-side lookup + injection takes a few seconds; tell the widget
+      // we're working so it shows its "Thinking…" state instead of dead air.
+      this.sendToClient(conversation.clientWs, { type: 'thinking' });
+      curriculumInjected = await this.injectK12CurriculumContext(conversation, turnId, turnTranscript);
+      if (conversation.k12TurnSeq !== turnId) {
+        console.log('[RealtimeVoice] Turn superseded during curriculum retrieval — abandoning stale response');
+        return;
+      }
     }
 
     if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
@@ -2456,9 +2484,84 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
    * so the greeting sentence becomes one finished reply and the real answer
    * becomes a second one, which is heard as the tutor cutting itself off.
    */
-  private async injectK12CurriculumContext(conversation: VoiceConversation): Promise<boolean> {
-    const query = (conversation.currentUserTranscript || '').trim();
-    if (!query || !conversation.conversationId) return false;
+  /**
+   * Rewrite the raw spoken utterance into a standalone curriculum-search query.
+   *
+   * Voice transcripts make poor embedding queries in two ways the typed path
+   * never hits: numbers arrive spelled out ("sixty-six gram" vs "66g"), and
+   * follow-ups arrive context-free ("let's get this again" says nothing about
+   * the mole concept the student is actually revisiting). A small text-model
+   * pass rewrites the utterance using the recent conversation, so retrieval
+   * sees the same kind of query chat does. Best-effort: any failure, timeout,
+   * or empty output falls back to the raw transcript — never FAILS the turn.
+   * It does add serial latency (bounded by the 4s timeout) before the response
+   * is created; the client shows "Thinking…" during this window, and the turn
+   * token in sendNormalResponse guards against a newer utterance racing it.
+   */
+  private async buildK12RetrievalQuery(conversation: VoiceConversation, rawQuery: string): Promise<string> {
+    try {
+      const history = conversationMemory.getConversationHistory(conversation.userId)
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-6);
+
+      const historyText = history.length
+        ? history.map((m) => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${m.content.slice(0, 400)}`).join('\n')
+        : '(no earlier messages)';
+
+      const client = new OpenAI({ apiKey: conversation.openaiApiKey });
+      const completion = await client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        temperature: 0,
+        max_tokens: 60,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You rewrite a student\'s spoken utterance into ONE standalone search query for a curriculum content database. Rules:\n' +
+              '- Convert spelled-out numbers and units to digits/symbols ("sixty-six gram" → "66g").\n' +
+              '- If the utterance is a follow-up that refers to the earlier discussion ("explain again", "let\'s get this again", "what about the second one"), rewrite it as a full standalone question using the conversation context.\n' +
+              '- If the utterance is already a complete, self-contained question, return it with only number/unit normalization.\n' +
+              '- Output ONLY the rewritten query text. No quotes, no explanations.',
+          },
+          {
+            role: 'user',
+            content: `Recent conversation:\n${historyText}\n\nStudent's new spoken utterance: ${rawQuery}`,
+          },
+        ],
+      }, { timeout: 4000 });
+
+      try {
+        await aiUsageLogger.logUsage({
+          businessAccountId: conversation.businessAccountId,
+          category: 'voice_mode',
+          model: 'gpt-4o-mini',
+          tokensInput: completion.usage?.prompt_tokens || 0,
+          tokensOutput: completion.usage?.completion_tokens || 0,
+          metadata: { feature: 'voice_k12_query_rewrite', conversationId: conversation.conversationId },
+        });
+      } catch { /* non-fatal */ }
+
+      const rewritten = (completion.choices[0]?.message?.content || '').trim().replace(/^["']|["']$/g, '');
+      // Sanity bounds: an empty or absurdly long rewrite means the model went off
+      // script — fall back to the raw transcript rather than search for garbage.
+      if (rewritten && rewritten.length <= 300) {
+        if (rewritten.toLowerCase() !== rawQuery.toLowerCase()) {
+          console.log(`[RealtimeVoice] K12 retrieval query rewritten: "${rawQuery.slice(0, 60)}" → "${rewritten.slice(0, 60)}"`);
+        }
+        return rewritten;
+      }
+    } catch (err) {
+      console.warn('[RealtimeVoice] K12 query rewrite failed — using raw transcript:', (err as Error).message);
+    }
+    return rawQuery;
+  }
+
+  private async injectK12CurriculumContext(conversation: VoiceConversation, turnId?: number, turnTranscript?: string): Promise<boolean> {
+    const rawQuery = (turnTranscript ?? conversation.currentUserTranscript ?? '').trim();
+    if (!rawQuery || !conversation.conversationId) return false;
+    const query = await this.buildK12RetrievalQuery(conversation, rawQuery);
+    // Superseded while rewriting? Skip the retrieval entirely.
+    if (turnId !== undefined && conversation.k12TurnSeq !== turnId) return false;
 
     try {
       console.log('[RealtimeVoice] K12 content-only: retrieving curriculum server-side for query:', query.slice(0, 80));
@@ -2485,6 +2588,10 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
       // the student the topic doesn't exist AND close tool calling, leaving the
       // model no way to recover. So on failure we inject nothing and return
       // false, which keeps the lookup available for the model to try itself.
+      // Superseded while retrieving? The result belongs to an abandoned turn —
+      // inject nothing and leave no pending media behind for the next turn.
+      if (turnId !== undefined && conversation.k12TurnSeq !== turnId) return false;
+
       if (this.looksLikeRetrievalFailure(result)) {
         console.warn('[RealtimeVoice] Curriculum retrieval failed this turn — skipping injection and leaving the lookup available:', typeof result?.message === 'string' ? result.message.slice(0, 120) : result?.error);
         return false;
@@ -2503,7 +2610,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
       // back empty, so it refuses a topic it was already holding the answer to.
       const provenance = `The curriculum lookup for this question has ALREADY BEEN RUN for you and its result is below. This is the complete result — there is nothing further to look up and no tool to call. Answer from it directly, in this same reply.`;
       const instruction = curriculum
-        ? `${provenance}\n\nCURRICULUM CONTEXT for the student's question "${query}". Answer the student's question using ONLY the curriculum content below. If it does not contain the answer, tell the student you don't have that in the curriculum yet — do NOT use outside knowledge. Give a THOROUGH, COMPLETE spoken lesson that covers EVERY key point in this content (definitions, examples, sub-concepts, distinctions) — match the depth of a full written answer, do not summarize or shorten it. Convey structure out loud with spoken signposting ("First…", "Next…", "For example…") rather than reading bullet symbols or markdown. Do NOT read this context aloud verbatim and do NOT mention tools or JSON; answer in a natural, warm teaching voice.\n\n${curriculum}`
+        ? `${provenance}\n\nCURRICULUM CONTEXT for the student's question "${query}". Answer the student's question using ONLY the curriculum content below. You ARE allowed to reason, calculate, and work through numerical problems step by step, but ONLY using concepts, formulas, and values that appear in this content — that counts as answering from the curriculum. If the content covers the topic but lacks a fact, formula, or value the question needs, answer the supported part and say the curriculum doesn't cover the rest — do NOT fill gaps from outside knowledge. If it does not contain the answer at all, tell the student you don't have that in the curriculum yet. Give a THOROUGH, COMPLETE spoken lesson that covers EVERY key point in this content (definitions, examples, sub-concepts, distinctions) — match the depth of a full written answer, do not summarize or shorten it. Convey structure out loud with spoken signposting ("First…", "Next…", "For example…") rather than reading bullet symbols or markdown. Do NOT read this context aloud verbatim and do NOT mention tools or JSON; answer in a natural, warm teaching voice.\n\n${curriculum}`
         : `The curriculum lookup for the student's question "${query}" has ALREADY BEEN RUN for you and it found nothing. That is the final answer — there is nothing further to look up and no tool to call. Tell the student, in this same reply, that you don't have that topic in the curriculum yet and invite them to ask about another topic. Do NOT answer from outside knowledge and do NOT mention tools or JSON.`;
 
       if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {

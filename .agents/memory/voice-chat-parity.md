@@ -55,6 +55,26 @@ Because retrieval happens *before* the response that will speak it exists, pendi
 media has to be bound to a response id and discarded on interruption; otherwise
 images from an abandoned question attach to whatever the student asks next.
 
+## The spoken utterance is a bad retrieval query; the realtime model is a literal one
+
+Voice differs from chat in two more ways that surfaced as "voice refuses what chat
+answers": the raw transcript is embedded verbatim (so "let's get this again" or
+"sixty-six gram" retrieves nothing useful), and the realtime model applies a
+"content-only" guardrail literally, refusing to *compute* (e.g. a molar mass)
+from passages it was handed.
+
+**Why:** chat runs a tool loop where a strong text model reasons over passages in
+a second turn; voice is a single forced turn over server-injected context, so
+everything the query and prompt don't carry is lost.
+
+**How to apply:** rewrite the spoken utterance into a standalone query with a
+cheap text-model pass over recent history (fall back to the raw transcript, never
+block the turn), and word guardrails to explicitly allow step-by-step calculation
+*using only* concepts/formulas/values present in the retrieved content — while
+keeping answer-level fail-closed wording: missing facts are named as missing, not
+filled from general knowledge. A blanket "only refuse when nothing is relevant"
+threshold reopens the general-knowledge leak.
+
 ## Routing media around the model means nothing is choosing it
 
 Taking the URLs away from the speaking model removes the thing that made the text
