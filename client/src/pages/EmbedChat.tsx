@@ -509,6 +509,22 @@ export default function EmbedChat() {
       {convertLatexDelimiters(content)}
     </ReactMarkdown>
   );
+  // Inline variant for sentence-level voice karaoke: paragraphs render as
+  // spans so a sentence-split paragraph still flows as ONE paragraph, with
+  // each sentence independently highlightable. Math/bold/em render as usual.
+  const renderAssistantMarkdownInline = (content: string) => (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={{
+        p: ({ children }) => <span className="font-medium">{children}</span>,
+        strong: ({ children }) => <strong className="font-bold">{children}</strong>,
+        em: ({ children }) => <em className="italic">{children}</em>,
+      }}
+    >
+      {convertLatexDelimiters(content)}
+    </ReactMarkdown>
+  );
   const [selectedLanguage, setSelectedLanguage] = useState<string>('auto');
   const [isLanguageDropdownOpen, setIsLanguageDropdownOpen] = useState(false);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -5346,6 +5362,7 @@ export default function EmbedChat() {
                       offset={voiceHighlight.offset}
                       highlightColor={chatColor}
                       renderBlock={renderAssistantMarkdown}
+                      renderInline={renderAssistantMarkdownInline}
                     />
                   </div>
                 ) : msg.role === 'assistant' && voiceHighlight?.messageId === msg.id ? (

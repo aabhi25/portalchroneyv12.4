@@ -21,3 +21,7 @@ description: Why spoken-text highlighting must be clocked off Web Audio scheduli
 - When the whole transcript arrives before any audio, chars-received ÷ audio-received is an upper bound, not a speaking rate — cap the karaoke rate at a typical prior (~14 chars/s) until the server-deferred ai_done says all PCM arrived, then the exact ratio takes over.
 - Any await inside a response.done handler can lose ownership: snapshot transcript/responseId before the first await, re-check cancellation/ownership after every await, and never send/defer ai_done once a newer response owns the conversation.
 - A barge-in after response.done (isProcessing already false) must still mark the releasing response cancelled — keep the hold id addressable during the release await so cancelResponse can find it.
+
+## Sentence-level units over formatted markdown
+- Block-level highlight degrades to "whole answer lights up" when the formatter emits one big paragraph. Fix on both sides: prompt the formatter to lay out chat-like structure (short paragraphs, numbered steps, display math on own lines — structure only, bold/labels must be the tutor's spoken words verbatim or the fidelity promise breaks), AND sentence-split plain paragraphs into inline span units (needs a p→span renderer so the paragraph still flows as one).
+- spokenWeight gotcha: replacing math spans with a SPACE run collapses a display-math-only block's weight to 1 after trim — use a non-space placeholder.

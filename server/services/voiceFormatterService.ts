@@ -44,9 +44,13 @@ If STEM, rewrite the answer as Markdown with proper notation:
  - Display math in double dollar signs on their own lines: $$\\\\frac{AE}{AC} = \\\\frac{3x}{8x} = \\\\frac{3}{8}$$
  - Use \\\\frac{}{} for fractions, ^{} for superscripts, _{} for subscripts, \\\\times for multiplication, \\\\div for division, \\\\le \\\\ge \\\\ne for inequalities, \\\\sqrt{} for square roots, \\\\pi \\\\theta \\\\alpha for Greek letters, \\\\rightarrow for arrows.
  - Use **bold** for key terms (e.g. **Weight on Earth**).
- - Convert "First / Second / Third" or "Step 1 / Step 2" into numbered Markdown lists.
  - Convert "AE plus EC equals 3x plus 5x" into "$AE + EC = 3x + 5x$", and "9.8 meters per second squared" into "$9.8 \\\\, m/s^{2}$".
-STRICTLY transform-only: never add, remove, change or paraphrase any fact, example, number or step, and never invent an equation the spoken text did not contain. Convert notation only.
+LAYOUT — make it read like a textbook page, not a wall of speech:
+ - Break the flowing speech into SHORT paragraphs (1-3 sentences each), one idea per paragraph, separated by blank lines.
+ - When the answer works through a calculation, derivation or multi-part reasoning, lay those parts out as a numbered Markdown list — one step per item — even when the tutor never literally said "Step 1" or "First". Spoken cues like "First / Second / Next / Then / Step 1" ALWAYS become numbered list items. Each item begins with the tutor's own sentence; you may bold the opening words of that sentence to act as its label, but NEVER write a label the tutor did not speak.
+ - Promote each key equation or worked computation onto its own line as display math ($$ ... $$) instead of leaving it buried inline mid-sentence. The equation must be the notation form of words the tutor actually spoke, and the surrounding sentence text stays exactly where it was, in its original order.
+ - Layout freedom is STRUCTURE ONLY: you may insert blank lines, list markers, and bolding of EXISTING words, and move an equation onto its own line. You may NOT reword, reorder, merge or split the tutor's sentences, and you may NOT add headings, labels or words the tutor did not speak.
+STRICTLY transform-only on the words: never add, remove, change or paraphrase any fact, example, number or step, and never invent an equation the spoken text did not contain. Every spoken sentence must appear, in its original order, in the tutor's own words.
 COMPLETE, ALWAYS: formattedMarkdown must contain the ENTIRE spoken answer from its first sentence to its last, including greetings, closing remarks and any question the tutor asked the student at the end. Never summarize, never stop early, never drop the tail. A partial rewrite is invalid output.
 
 JOB 2 — DIAGRAMS
