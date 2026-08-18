@@ -188,7 +188,16 @@ export function InlineVoiceMode({
     lastRaw: number;
     /** AudioContext time of the previous rAF tick, for per-frame dt. */
     lastTickTime: number;
-  }>({ messageId: null, text: '', audioSeconds: 0, audioEndTime: 0, lastEmitted: -1, lastRaw: 0, lastTickTime: 0 });
+    /**
+     * Show-then-speak: the FULL transcript arrived in one final chunk before
+     * any audio. chars-received ÷ audio-received is then an upper bound, not
+     * an estimate — until all audio has arrived, cap the rate at a typical
+     * speaking rate instead so the highlight can't sprint ahead.
+     */
+    textFinal: boolean;
+    /** ai_done received ⇒ every PCM byte for this bubble has arrived. */
+    audioComplete: boolean;
+  }>({ messageId: null, text: '', audioSeconds: 0, audioEndTime: 0, lastEmitted: -1, lastRaw: 0, lastTickTime: 0, textFinal: false, audioComplete: false });
   const karaokeRafRef = useRef<number | null>(null);
 
   // The highlight deliberately trails the voice: subtracting this from played
@@ -204,6 +213,13 @@ export function InlineVoiceMode({
   // at most this multiple of the current speaking rate so the highlight eases
   // forward instead of jumping a phrase in one frame.
   const KARAOKE_CATCHUP_FACTOR = 2.5;
+  // Show-then-speak turns deliver the WHOLE transcript before the first PCM
+  // byte, so text ÷ audio-received massively overestimates the rate while
+  // audio is still streaming in. Until ai_done says all audio has arrived,
+  // cap at a typical speaking rate — trailing slightly reads as correct,
+  // sprinting ahead reads as broken. Once audio is complete, text ÷ audio is
+  // the EXACT rate and the cap is lifted (eased catch-up absorbs the step).
+  const KARAOKE_PRELOADED_RATE = 14;
 
   /** Extend a raw offset to the end of the word it lands inside. */
   const snapToWordEnd = (text: string, offset: number): number => {
@@ -238,8 +254,11 @@ export function InlineVoiceMode({
 
       // Speaking-rate estimate from everything received so far, then map
       // played seconds (minus the deliberate trailing lag) to characters.
+      const rateCeiling = (k.textFinal && !k.audioComplete)
+        ? KARAOKE_PRELOADED_RATE
+        : KARAOKE_MAX_RATE;
       const rate = Math.min(
-        KARAOKE_MAX_RATE,
+        rateCeiling,
         Math.max(KARAOKE_MIN_RATE, k.text.length / k.audioSeconds),
       );
       let raw = rate * Math.max(0, played - KARAOKE_LAG_SEC);
@@ -272,7 +291,7 @@ export function InlineVoiceMode({
     if (k.messageId) {
       onSpeakingProgress?.(k.messageId, k.text.length, true);
     }
-    karaokeRef.current = { messageId: null, text: '', audioSeconds: 0, audioEndTime: 0, lastEmitted: -1, lastRaw: 0, lastTickTime: 0 };
+    karaokeRef.current = { messageId: null, text: '', audioSeconds: 0, audioEndTime: 0, lastEmitted: -1, lastRaw: 0, lastTickTime: 0, textFinal: false, audioComplete: false };
   };
   // --------------------------------------------------------------------------
 
@@ -606,6 +625,9 @@ export function InlineVoiceMode({
         }
         // Track the raw spoken transcript for the audio-clocked highlight.
         karaokeRef.current.text += data.text;
+        // Show-then-speak: the server marks the one-shot full-transcript chunk
+        // so the rate model knows text is complete ahead of the audio.
+        if (data.final) karaokeRef.current.textFinal = true;
         break;
 
       case 'ai_speaking':
@@ -618,6 +640,10 @@ export function InlineVoiceMode({
 
       case 'ai_done':
         if (pendingInterruptRef.current) return;
+        // The server defers ai_done until every TTS producer is idle, so all
+        // PCM for this bubble has been sent: chars ÷ audio-seconds is now the
+        // exact speaking rate and the preloaded-text rate cap can lift.
+        karaokeRef.current.audioComplete = true;
         if (isPlayingRef.current || audioQueueRef.current.length > 0) {
           aiDoneReceivedRef.current = true;
         } else {

@@ -15,3 +15,9 @@ description: Why spoken-text highlighting must be clocked off Web Audio scheduli
 - Key the timeline to the *bubble* (messageId), not the responseId — a continuation response appends to the same bubble and schedules audio after the draining tail, so text/breakpoints stay monotonic. Reset only when the bubble changes or playback ends.
 - Highlight the raw spoken transcript, never Markdown; the background formatter can replace bubble content mid-playback, so keep the raw text in a separate map.
 - Tear down (stop rAF, emit done, clear maps) on EVERY terminal path: ai-done drain, barge-in, response_cancelled, busy/session_closed/error, ws onclose/onerror, unmount. A missed path leaves a stuck highlight and a leaked rAF loop.
+
+## Show-then-speak (finalize content before speech)
+- Curriculum voice answers now HOLD all incremental display + ElevenLabs TTS during generation and release at response.done: format → persist → one final ai_chunk (flagged `final:true`) → formatted_transcript → enqueue TTS. Greetings and OpenAI-voice sessions keep the streaming path.
+- When the whole transcript arrives before any audio, chars-received ÷ audio-received is an upper bound, not a speaking rate — cap the karaoke rate at a typical prior (~14 chars/s) until the server-deferred ai_done says all PCM arrived, then the exact ratio takes over.
+- Any await inside a response.done handler can lose ownership: snapshot transcript/responseId before the first await, re-check cancellation/ownership after every await, and never send/defer ai_done once a newer response owns the conversation.
+- A barge-in after response.done (isProcessing already false) must still mark the releasing response cancelled — keep the hold id addressable during the release await so cancelResponse can find it.

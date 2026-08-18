@@ -47,6 +47,7 @@ If STEM, rewrite the answer as Markdown with proper notation:
  - Convert "First / Second / Third" or "Step 1 / Step 2" into numbered Markdown lists.
  - Convert "AE plus EC equals 3x plus 5x" into "$AE + EC = 3x + 5x$", and "9.8 meters per second squared" into "$9.8 \\\\, m/s^{2}$".
 STRICTLY transform-only: never add, remove, change or paraphrase any fact, example, number or step, and never invent an equation the spoken text did not contain. Convert notation only.
+COMPLETE, ALWAYS: formattedMarkdown must contain the ENTIRE spoken answer from its first sentence to its last, including greetings, closing remarks and any question the tutor asked the student at the end. Never summarize, never stop early, never drop the tail. A partial rewrite is invalid output.
 
 JOB 2 — DIAGRAMS
 This job applies to EVERY answer, whether or not it is STEM. An English, History, geography or grammar answer earns its diagram on exactly the same terms as a maths one — never skip this job just because isStem is false.
@@ -95,7 +96,7 @@ function tokenize(text: string): string[] {
  * skipped entirely though: claiming STEM would otherwise be a way around the
  * check, and this pass decides that flag itself.
  */
-function looksFaithful(original: string, produced: string, isStem: boolean): boolean {
+export function looksFaithful(original: string, produced: string, isStem: boolean): boolean {
   const originalTokens = tokenize(original);
   if (originalTokens.length === 0) return true;
   const producedSet = new Set(tokenize(produced));
@@ -109,8 +110,24 @@ function looksFaithful(original: string, produced: string, isStem: boolean): boo
   // Word overlap is only meaningful when no notation conversion was expected.
   // A STEM answer legitimately shares almost no tokens with its spoken form —
   // "nine point eight meters per second squared" becomes "$9.8 \, m/s^{2}$" —
-  // so applying a coverage floor there would suppress correct formatting.
-  if (isStem) return true;
+  // so a per-word coverage floor there would suppress correct formatting. But
+  // skipping ALL completeness checks for STEM let a silently truncated rewrite
+  // become the on-screen answer (a fraction of the transcript, missing its
+  // tail), so STEM gets bulk + tail checks instead of word coverage.
+  if (isStem) {
+    // Bulk check: notation compresses ("nine point eight meters per second
+    // squared" → "$9.8\,m/s^{2}$"), but a faithful transform of the WHOLE
+    // answer never shrinks to less than half the spoken token count.
+    const producedTokens = tokenize(produced);
+    if (producedTokens.length / originalTokens.length < 0.5) return false;
+
+    // Tail check: truncation eats the END of the answer (closing remarks,
+    // the final step, the follow-up question). The tail is usually prose that
+    // notation conversion keeps, so require some of its words to survive.
+    const tail = Array.from(new Set(originalTokens.slice(-25)));
+    const tailKept = tail.filter(t => producedSet.has(t)).length;
+    return tail.length === 0 || tailKept / tail.length >= 0.4;
+  }
 
   const kept = unique.filter(t => producedSet.has(t)).length;
   return kept / unique.length >= 0.7;
