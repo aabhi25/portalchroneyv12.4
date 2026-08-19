@@ -35311,6 +35311,7 @@ Return ONLY a valid JSON object in this format:
         // 1. Authenticated users (have session cookie) - must match their user ID
         // 2. Anonymous widget users (no session) - allowed for embedded chat
         
+        let voiceIsInternalTest = false;
         if (sessionToken) {
           // AUTHENTICATED USER PATH
           const user = await validateSession(sessionToken);
