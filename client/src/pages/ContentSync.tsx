@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -14,7 +14,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import {
   GraduationCap, Loader2, RefreshCw, BookOpen, CloudDownload, X,
-  ChevronRight, Search, Plus, Trash2,
+  ChevronRight, Search, Plus, Trash2, Database,
 } from "lucide-react";
 
 interface TopScholarConfig {
@@ -28,6 +28,24 @@ interface TopScholarConfig {
   hasApiToken: boolean;
   syncMode: "sample" | "full";
   hasTokenSecret: boolean;
+}
+
+interface ClientDbPack {
+  cpId: string;
+  label: string;
+  cpName: string | null;
+  board: string | null;
+  medium: string | null;
+  grade: string | null;
+  subject: string | null;
+  status: string | null;
+  lastSyncedAt: string | null;
+  counts: Record<string, number>;
+  total: number;
+}
+
+interface ClientDbOverview {
+  packs: ClientDbPack[];
 }
 
 interface ResolutionRow {
@@ -219,10 +237,45 @@ export default function ContentSync() {
   });
   const anyInProgress = (summary?.overall?.syncing ?? 0) > 0;
 
+  const {
+    data: clientDbOverview,
+    isLoading: clientDbLoading,
+    isError: clientDbError,
+    error: clientDbErrorObject,
+  } = useQuery<ClientDbOverview>({
+    queryKey: ["/api/topscholar/content/overview"],
+    queryFn: () => getJson("/api/topscholar/content/overview"),
+    enabled: !configError,
+    refetchInterval: configError ? false : anyInProgress ? 5000 : false,
+  });
+  // The shared overview also includes zero-chunk sync rows so the content
+  // viewer can show an in-progress pack. This card is specifically an
+  // inventory of data physically present in the client DB.
+  const clientDbPacks = useMemo(
+    () => (clientDbOverview?.packs ?? []).filter((pack) => pack.total > 0),
+    [clientDbOverview?.packs],
+  );
+  const [clientDbSearch, setClientDbSearch] = useState("");
+  const [selectedClientDbCpIds, setSelectedClientDbCpIds] = useState<string[]>([]);
+  const normalizedClientDbSearch = clientDbSearch.trim().toLowerCase();
+  const visibleClientDbPacks = clientDbPacks.filter((pack) => {
+    if (!normalizedClientDbSearch) return true;
+    return `${pack.cpId} ${pack.label} ${pack.subject || ""}`.toLowerCase().includes(normalizedClientDbSearch);
+  });
+
+  useEffect(() => {
+    const present = new Set(clientDbPacks.map((pack) => pack.cpId));
+    setSelectedClientDbCpIds((selected) => {
+      const remaining = selected.filter((cpId) => present.has(cpId));
+      return remaining.length === selected.length ? selected : remaining;
+    });
+  }, [clientDbPacks]);
+
   function invalidateSyncViews() {
     queryClient.invalidateQueries({ queryKey: ["/api/topscholar/sync"] });
     queryClient.invalidateQueries({ queryKey: ["/api/topscholar/sync/summary"] });
     queryClient.invalidateQueries({ queryKey: ["/api/topscholar/plan-ids"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/topscholar/content/overview"] });
   }
 
   function syncToast(data: any) {
@@ -277,6 +330,42 @@ export default function ContentSync() {
     },
     onError: (e: any) => toast({ title: "Sync failed", description: e.message, variant: "destructive" }),
     onSettled: () => setSyncingPlan(null),
+  });
+
+  const resyncSelectedClientDb = useMutation({
+    mutationFn: async (cpIds: string[]) => {
+      const results: Array<{ cpId: string; success: boolean; error?: string }> = [];
+      // Keep requests sequential so a large inventory does not launch many
+      // concurrent full embedding jobs against the same client database.
+      for (const cpId of cpIds) {
+        try {
+          await sendJson("/api/topscholar/sync", "POST", {
+            cpId,
+            mode: "full",
+            sampleLimit,
+          });
+          results.push({ cpId, success: true });
+        } catch (error: any) {
+          results.push({ cpId, success: false, error: error?.message || "Request failed" });
+        }
+      }
+      return results;
+    },
+    onSuccess: (results) => {
+      invalidateSyncViews();
+      const failed = results.filter((result) => !result.success);
+      setSelectedClientDbCpIds(failed.map((result) => result.cpId));
+      const started = results.length - failed.length;
+      toast({
+        title: failed.length > 0
+          ? `Started ${started}; ${failed.length} need retry`
+          : `Resync started for ${started} cp_id(s)`,
+        description: failed.length > 0
+          ? `Only failed cp_ids remain selected: ${failed.map((result) => result.cpId).join(", ")}`
+          : "The selected client-database packs are being refreshed with the current embedding and media metadata.",
+        variant: failed.length > 0 ? "destructive" : undefined,
+      });
+    },
   });
 
   // Resolve: fetch-only — lists every cp_id under the given plans with counts.
@@ -438,6 +527,140 @@ export default function ContentSync() {
           <p className="text-sm text-gray-500">Resolve Plan IDs and sync curriculum content into the chatbot's database</p>
         </div>
       </div>
+
+      {/* Client database inventory */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database className="w-5 h-5 text-emerald-600" /> Client DB Inventory
+            <span className="ml-1 text-sm font-normal text-gray-400">({clientDbPacks.length})</span>
+          </CardTitle>
+          <CardDescription>
+            These are the <strong>cp_id</strong> values actually found in the configured {config?.storeType === "mongodb" ? "MongoDB" : "PostgreSQL"} content database.
+            Select only the packs that need new embeddings and media metadata.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <Input
+                value={clientDbSearch}
+                onChange={(e) => setClientDbSearch(e.target.value)}
+                placeholder="Search stored cp_id / curriculum…"
+                className="h-9 pl-8"
+              />
+            </div>
+            <Button
+              variant="outline"
+              className="h-9 gap-2"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["/api/topscholar/content/overview"] })}
+              disabled={clientDbLoading}
+            >
+              {clientDbLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              Refresh
+            </Button>
+            <Button
+              variant="outline"
+              className="h-9"
+              onClick={() => setSelectedClientDbCpIds((selected) => {
+                const visibleIds = visibleClientDbPacks.map((pack) => pack.cpId);
+                const allVisible = visibleIds.length > 0 && visibleIds.every((cpId) => selected.includes(cpId));
+                return allVisible
+                  ? selected.filter((cpId) => !visibleIds.includes(cpId))
+                  : Array.from(new Set([...selected, ...visibleIds]));
+              })}
+              disabled={visibleClientDbPacks.length === 0}
+            >
+              {visibleClientDbPacks.length > 0 && visibleClientDbPacks.every((pack) => selectedClientDbCpIds.includes(pack.cpId))
+                ? "Clear visible"
+                : "Select visible"}
+            </Button>
+            <Button
+              className="h-9 gap-2 bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => resyncSelectedClientDb.mutate(selectedClientDbCpIds)}
+              disabled={selectedClientDbCpIds.length === 0 || resyncSelectedClientDb.isPending}
+            >
+              {resyncSelectedClientDb.isPending
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <RefreshCw className="w-4 h-4" />}
+              Resync selected ({selectedClientDbCpIds.length})
+            </Button>
+          </div>
+
+          {clientDbError ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+              Couldn’t read the configured client content database.{" "}
+              {(clientDbErrorObject as Error | null)?.message || "Check the connection settings and try again."}
+            </div>
+          ) : clientDbLoading ? (
+            <div className="flex items-center justify-center py-8 text-gray-400">
+              <Loader2 className="w-5 h-5 animate-spin mr-2" /> Reading client database…
+            </div>
+          ) : clientDbPacks.length === 0 ? (
+            <div className="rounded-lg border border-dashed px-3 py-5 text-sm text-gray-500">
+              No stored content packs were found in the configured client database.
+            </div>
+          ) : visibleClientDbPacks.length === 0 ? (
+            <div className="rounded-lg border border-dashed px-3 py-5 text-sm text-gray-500">
+              No stored cp_ids match this search.
+            </div>
+          ) : (
+            <div className="max-h-80 overflow-auto rounded-lg border">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-gray-50 text-gray-500">
+                  <tr>
+                    <th className="w-10 p-2" />
+                    <th className="text-left p-2">Stored cp_id / curriculum</th>
+                    <th className="text-left p-2">Chunks</th>
+                    <th className="text-left p-2">Sync record</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleClientDbPacks.map((pack) => {
+                    const selected = selectedClientDbCpIds.includes(pack.cpId);
+                    return (
+                      <tr key={pack.cpId} className={`border-t ${selected ? "bg-emerald-50/60" : ""}`}>
+                        <td className="p-2 align-top">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => setSelectedClientDbCpIds((current) =>
+                              selected
+                                ? current.filter((cpId) => cpId !== pack.cpId)
+                                : [...current, pack.cpId],
+                            )}
+                            aria-label={`Select ${pack.cpId} for resync`}
+                            className="h-4 w-4 accent-emerald-600"
+                          />
+                        </td>
+                        <td className="p-2">
+                          <div className="text-gray-700">{pack.label || pack.cpId}</div>
+                          <div className="font-mono text-gray-400">{pack.cpId}</div>
+                        </td>
+                        <td className="p-2 text-gray-600">
+                          <div>{pack.total} total</div>
+                          <div className="text-[11px] text-gray-400">
+                            {pack.counts.note || 0}n / {pack.counts.transcript || 0}t / {pack.counts.question || 0}q / {pack.counts.ebook_page || 0}p
+                          </div>
+                        </td>
+                        <td className="p-2">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 ${statusColor(pack.status || "idle")}`}>
+                            {pack.status || "not tracked"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="text-xs text-gray-400">
+            The inventory is read from the configured content store, not inferred from CMS resolution. Targeted resync resolves each selected cp_id to its owning Plan ID automatically.
+          </p>
+        </CardContent>
+      </Card>
 
       {/* Plan IDs master list */}
       <Card>
