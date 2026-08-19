@@ -1,0 +1,22 @@
+Dear Team,
+
+As discussed in our recent meeting regarding content rendering issues in AI Bot conversations, we reviewed the challenges faced while displaying AI-generated responses on the WebApp UI.
+
+Currently, the response content stored in the database contains raw formatting characters, mathematical/chemical notation syntax, escape characters, and image references that do not render correctly on the frontend. This results in a poor user experience, especially with mathematical/chemical equations, scientific formulas, tables, images and other rich content responses.
+
+Based on the discussion and Mahesh's suggestion, the AI Chroney team should convert all content into MathML format before storing the response in the database. Storing the content in a render-ready format will allow the WebApp to display equations and structured content correctly without additional parsing or transformation at the UI layer.
+
+From the frontend, we evaluated handling this conversion at the application layer using the existing rendering library wrapper. However, implementing such changes on our side may impact the current rendering library, its workflow and other existing functionalities across the application. Due to these dependencies and potential side effects, we do not recommend this approach.
+
+We request the AI Chroney team to evaluate and implement the following approach:
+
+Convert mathematical expressions and equations to MathML before persisting responses to the database.
+Ensure stored content is in a UI-renderable format to avoid display issues caused by raw escape characters, markdown syntax, and mathematical notation.
+Standardize the handling of images, tables, images and other rich content elements so that they can be rendered consistently across platforms.
+Validate the generated output against WebApp rendering requirements before storage.
+Also, in parallel, @Mahesh Deshmukh and @Aditya Yambal please re-check with the rendering of the current database content to show on frontend apps.
+Please review the proposed approach and share the feasibility, effort estimation, and any dependencies from either team.
+
+
+
+Regards,
