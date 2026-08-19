@@ -29,16 +29,21 @@ function linearizeMathml(html: string): string {
 export interface ExtractedHtml {
   text: string;
   images: string[];
+  imageDetails: Array<{ url: string; alt: string | null }>;
 }
 
 export function htmlToText(html: string | null | undefined): ExtractedHtml {
-  if (!html) return { text: '', images: [] };
+  if (!html) return { text: '', images: [], imageDetails: [] };
 
   const images: string[] = [];
+  const imageDetails: Array<{ url: string; alt: string | null }> = [];
   const imgRe = /<img[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi;
   let m: RegExpExecArray | null;
   while ((m = imgRe.exec(html)) !== null) {
-    if (m[1]) images.push(m[1]);
+    if (!m[1]) continue;
+    const altMatch = /\balt=["']([^"']*)["']/i.exec(m[0]);
+    images.push(m[1]);
+    imageDetails.push({ url: m[1], alt: altMatch?.[1]?.trim() || null });
   }
 
   let text = linearizeMathml(html);
@@ -57,7 +62,7 @@ export function htmlToText(html: string | null | undefined): ExtractedHtml {
   // collapse whitespace
   text = text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 
-  return { text, images };
+  return { text, images, imageDetails };
 }
 
 /**

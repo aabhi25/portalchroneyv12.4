@@ -9,6 +9,7 @@ import { replaceCpChunks, deleteCpChunks, appendCpChunks, type StoreChunk } from
 import { submitEmbeddingBatches, cancelBatch } from './embeddingBatchService';
 import { withCpLock } from './cpLock';
 import type { TopscholarConfig } from './config';
+import { createMediaMetadata } from './mediaMetadata';
 
 interface ChunkRecord {
   contentType: 'note' | 'transcript' | 'ebook_page' | 'question';
@@ -96,10 +97,20 @@ function buildRecords(bundle: CpContentBundle): ChunkRecord[] {
 
   // Revision notes (HTML + MathML) -> linearized text, chunked.
   for (const note of bundle.notes) {
-    const { text, images } = htmlToText(note.html);
+    const { text, images, imageDetails } = htmlToText(note.html);
     if (!text) continue;
     const baseTitle = note.title || note.subConcept || note.concept || 'Revision Notes';
     const pieces = chunkText(text);
+    const media = imageDetails
+      .map((image, order) => createMediaMetadata(image.url, 'image', {
+        sourceRef: note.contentId,
+        topic: baseTitle,
+        concept: note.concept,
+        subConcept: note.subConcept,
+        chapter: note.chapter,
+        subject,
+      }, order, { alt: image.alt, caption: note.subConcept || note.concept || baseTitle }))
+      .filter((item): item is NonNullable<typeof item> => item !== null);
     pieces.forEach((piece, idx) => {
       records.push({
         contentType: 'note',
@@ -111,7 +122,7 @@ function buildRecords(bundle: CpContentBundle): ChunkRecord[] {
         contentText: piece,
         sourceRef: note.contentId,
         mediaUrl: images[0] || null,
-        metadata: { concept: note.concept, subConcept: note.subConcept, images },
+        metadata: { concept: note.concept, subConcept: note.subConcept, images, media },
       });
     });
   }
@@ -136,6 +147,16 @@ function buildRecords(bundle: CpContentBundle): ChunkRecord[] {
           subConcept: transcript.subConcept,
           videoId: transcript.videoId,
           duration: transcript.duration,
+          media: [
+            createMediaMetadata(transcript.videoUrl || '', 'video', {
+              sourceRef: transcript.contentId || transcript.videoId,
+              topic: baseTitle,
+              concept: transcript.concept,
+              subConcept: transcript.subConcept,
+              chapter: transcript.chapter,
+              subject,
+            }, 0, { caption: baseTitle }),
+          ].filter((item): item is NonNullable<typeof item> => item !== null),
         },
       });
     });
@@ -153,7 +174,28 @@ function buildRecords(bundle: CpContentBundle): ChunkRecord[] {
       contentText: pdf.name,
       sourceRef: pdf.id,
       mediaUrl: pdf.url,
-      metadata: { concept: pdf.concept, subConcept: pdf.subConcept },
+      metadata: {
+        concept: pdf.concept,
+        subConcept: pdf.subConcept,
+        media: [
+          createMediaMetadata(pdf.url || '', 'document', {
+            sourceRef: pdf.id,
+            topic: pdf.name,
+            concept: pdf.concept,
+            subConcept: pdf.subConcept,
+            chapter: pdf.chapter,
+            subject,
+          }, 0, { caption: pdf.name }),
+          createMediaMetadata(pdf.imageUrl || '', 'image', {
+            sourceRef: pdf.id,
+            topic: pdf.name,
+            concept: pdf.concept,
+            subConcept: pdf.subConcept,
+            chapter: pdf.chapter,
+            subject,
+          }, 1, { caption: pdf.name }),
+        ].filter((item): item is NonNullable<typeof item> => item !== null),
+      },
     });
   }
 
@@ -176,6 +218,57 @@ function buildRecords(bundle: CpContentBundle): ChunkRecord[] {
         options: q.options,
         solution: q.solution,
         difficulty: q.difficulty,
+      },
+    });
+  }
+
+  // Some CMS payloads keep illustrations beside a sub-concept instead of inside
+  // the note HTML. Attach those to every text chunk from the same lesson; when
+  // there is no text source at all, make a small source-bound chunk so the image
+  // remains retrievable and never gets assigned to a neighbouring lesson.
+  for (const image of bundle.images) {
+    const topic = image.caption || image.alt || image.subConcept || image.concept || 'Curriculum image';
+    const media = createMediaMetadata(image.url, 'image', {
+      sourceRef: image.id,
+      topic,
+      concept: image.concept,
+      subConcept: image.subConcept,
+      chapter: image.chapter,
+      subject,
+    }, 0, { alt: image.alt, caption: image.caption || topic });
+    if (!media) continue;
+    const sameLesson = records.filter((record) =>
+      record.chapter === image.chapter &&
+      record.metadata.concept === image.concept &&
+      record.metadata.subConcept === image.subConcept,
+    );
+    if (sameLesson.length > 0) {
+      for (const record of sameLesson) {
+        const existingMedia = Array.isArray(record.metadata.media) ? record.metadata.media : [];
+        const existingImages = Array.isArray(record.metadata.images) ? record.metadata.images : [];
+        record.metadata = {
+          ...record.metadata,
+          images: Array.from(new Set([...existingImages, image.url])),
+          media: [...existingMedia, media],
+        };
+      }
+      continue;
+    }
+    records.push({
+      contentType: 'note',
+      subject,
+      subjectId,
+      chapter: image.chapter,
+      title: topic,
+      contentHtml: null,
+      contentText: topic,
+      sourceRef: image.id,
+      mediaUrl: image.url,
+      metadata: {
+        concept: image.concept,
+        subConcept: image.subConcept,
+        images: [image.url],
+        media: [media],
       },
     });
   }

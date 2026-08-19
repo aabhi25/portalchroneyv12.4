@@ -305,7 +305,6 @@ export function placeDiagrams(
 
   const urls: string[] = [];
   const seenUrl = new Set<string>();
-  const unplaced: VoiceDiagramCandidate[] = [];
   for (const idx of indexes) {
     const candidate = candidates[idx - 1];
     if (!candidate || seenUrl.has(candidate.url)) {
@@ -316,16 +315,9 @@ export function placeDiagrams(
     const alt = (candidate.topic || 'curriculum diagram').replace(/[[\]]/g, '');
     const tag = `![${alt}](${candidate.url})`;
     if (!out.includes(marker)) {
-      // The diagram was chosen but the model forgot to write its marker. The
-      // selection itself is still valid — an in-range index it picked on
-      // purpose — so keep ONE and settle for the end of the answer rather than
-      // dropping the figure. Only one: several unplaced diagrams landing
-      // together is the gallery this change exists to remove.
-      if (unplaced.length === 0) {
-        unplaced.push(candidate);
-        seenUrl.add(candidate.url);
-        urls.push(candidate.url);
-      }
+      // Relevance without placement evidence is not enough. Showing an asset
+      // that the formatter could not attach to the explanation is worse than
+      // showing no asset at all.
       continue;
     }
     seenUrl.add(candidate.url);
@@ -336,11 +328,6 @@ export function placeDiagrams(
     // repeat is left as a marker and swept up by the cleanup below.
     out = out.replace(marker, () => `\n\n${tag}\n\n`);
   }
-  for (const candidate of unplaced) {
-    const alt = (candidate.topic || 'curriculum diagram').replace(/[[\]]/g, '');
-    out = `${out}\n\n![${alt}](${candidate.url})`;
-  }
-
   // Any marker left over (unchosen, out of range, duplicated) must not reach
   // the student as literal text.
   out = out.replace(/\[\[IMAGE:\s*\d+\s*\]\]/g, '');

@@ -86,15 +86,15 @@ function countImages(md: string): number {
   expect(urls.length === 1 && urls[0] === candidates[1].url, "reported url is the selected candidate");
 }
 
-// 5. Selected but never placed: keep one, at the end, rather than losing it.
+// 5. Selected but never placed: fail closed instead of appending an unrelated figure.
 {
   const { markdown, urls } = placeDiagrams(
     "A full explanation with no markers at all in it.",
     [1, 2],
     candidates
   );
-  expect(countImages(markdown) === 1, "unplaced selections collapse to a single trailing diagram");
-  expect(urls.length === 1, "only the diagram actually shown is reported");
+  expect(countImages(markdown) === 0, "unplaced selections render no trailing diagram");
+  expect(urls.length === 0, "unplaced selections report no rendered url");
   expect(markdown.startsWith("A full explanation"), "the answer text is left intact");
 }
 

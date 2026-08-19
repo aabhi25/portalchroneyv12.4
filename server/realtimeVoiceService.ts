@@ -10,6 +10,7 @@ import { isElevenLabsVoice, getElevenLabsVoiceId, synthesizeSpeechStreaming } fr
 import { createVoiceDisplayFallback, createVoiceSpeechText, formatVoiceTranscript, type VoiceDiagramCandidate } from './services/voiceFormatterService';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { resolveCpIdsForScope } from './services/topscholar/scopeResolver';
+import { selectRelevantImages, type CurriculumMediaCandidate } from './services/topscholar/mediaMetadata';
 import { aiUsageLogger } from './services/aiUsageLogger';
 import { chatService, type ChatContext } from './chatService';
 
@@ -3067,7 +3068,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
 
       // Capture any curriculum images for this turn BEFORE compaction strips
       // them out of the model-facing text.
-      conversation.pendingCurriculumMedia = this.extractCurriculumMedia(result);
+      conversation.pendingCurriculumMedia = this.extractCurriculumMedia(result, query);
       // Unbound until the response that will speak this answer is created.
       conversation.pendingCurriculumMediaResponseId = null;
 
@@ -3208,7 +3209,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
       const out: any = {};
       for (const [key, v] of Object.entries(value)) {
         // Media collections are for the on-screen bubble only — never the model.
-        if (key === 'mediaUrls' || key === 'imageUrl' || key === 'imageUrls' || key === 'thumbnailUrl') continue;
+        if (key === 'mediaUrls' || key === 'mediaCandidates' || key === 'imageUrl' || key === 'imageUrls' || key === 'thumbnailUrl') continue;
         out[key] = this.sanitizeToolResultForVoice(v, depth + 1);
       }
       return out;
@@ -3230,33 +3231,68 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
    * The cap here is only to bound the choosing prompt, NOT a display limit; at
    * most two ever reach the student.
    */
-  private extractCurriculumMedia(result: any): VoiceDiagramCandidate[] {
+  private extractCurriculumMedia(result: any, query: string): VoiceDiagramCandidate[] {
     try {
       const data = Array.isArray(result?.data) ? result.data : [];
-      const candidates: VoiceDiagramCandidate[] = [];
-      const seen = new Set<string>();
-      const MAX_CANDIDATES = 8;
+      const candidates: CurriculumMediaCandidate[] = [];
 
-      for (const passage of data) {
-        const media = Array.isArray(passage?.mediaUrls) ? passage.mediaUrls : [];
+      for (let rank = 0; rank < data.length; rank++) {
+        const passage = data[rank];
+        const structured = Array.isArray(passage?.mediaCandidates) ? passage.mediaCandidates : [];
+        for (const raw of structured) {
+          const url = typeof raw?.url === 'string' ? raw.url.trim() : '';
+          if (!/^https?:\/\//i.test(url)) continue;
+          if (raw?.kind && raw.kind !== 'image') continue;
+          candidates.push({
+            url,
+            kind: 'image',
+            topic: typeof raw?.topic === 'string' ? raw.topic : (typeof passage?.name === 'string' ? passage.name : ''),
+            concept: typeof raw?.concept === 'string' ? raw.concept : null,
+            subConcept: typeof raw?.subConcept === 'string' ? raw.subConcept : null,
+            caption: typeof raw?.caption === 'string' ? raw.caption : null,
+            alt: typeof raw?.alt === 'string' ? raw.alt : null,
+            sourceRef: typeof raw?.sourceRef === 'string' ? raw.sourceRef : null,
+            order: typeof raw?.order === 'number' ? raw.order : 0,
+            chapter: typeof raw?.chapter === 'string' ? raw.chapter : (typeof passage?.chapterName === 'string' ? passage.chapterName : ''),
+            subject: typeof raw?.subject === 'string' ? raw.subject : (typeof passage?.subjectName === 'string' ? passage.subjectName : ''),
+            retrievalRank: typeof raw?.retrievalRank === 'number' ? raw.retrievalRank : rank,
+          });
+        }
+
+        // Legacy resolver results only have URL strings. Keep them compatible, but
+        // still route them through the same deterministic topic gate.
+        const media = structured.length === 0 && Array.isArray(passage?.mediaUrls) ? passage.mediaUrls : [];
         for (const raw of media) {
           const url = typeof raw === 'string' ? raw.trim() : '';
           // Only http(s) — never let a data: or javascript: URI reach an <img>.
           if (!/^https?:\/\//i.test(url)) continue;
-          // The same picture is often listed twice inside one passage, and again
-          // by a neighbouring passage from the same chapter.
-          if (seen.has(url)) continue;
-          seen.add(url);
           candidates.push({
             url,
+            kind: 'image',
             topic: typeof passage?.name === 'string' ? passage.name : '',
+            concept: null,
+            subConcept: null,
+            caption: null,
+            alt: null,
+            sourceRef: null,
+            order: 0,
             chapter: typeof passage?.chapterName === 'string' ? passage.chapterName : '',
             subject: typeof passage?.subjectName === 'string' ? passage.subjectName : '',
+            retrievalRank: rank,
           });
-          if (candidates.length >= MAX_CANDIDATES) return candidates;
         }
       }
-      return candidates;
+      const approved = selectRelevantImages(query, candidates);
+      console.log(
+        `[RealtimeVoice] Curriculum media gate: ${candidates.length} candidate(s), ${approved.length} approved`,
+        approved.map((candidate) => candidate.topic || candidate.concept || 'untitled').slice(0, 2),
+      );
+      return approved.map((candidate) => ({
+        url: candidate.url,
+        topic: candidate.topic || candidate.concept || candidate.subConcept || '',
+        chapter: candidate.chapter || '',
+        subject: candidate.subject || '',
+      }));
     } catch {
       return [];
     }
@@ -3328,7 +3364,8 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
 
       // Curriculum images from a model-invoked lookup ride the same out-of-band
       // channel as the server-side path (never through the spoken answer).
-      const toolMedia = this.extractCurriculumMedia(result);
+      const toolQuery = typeof args?.query === 'string' ? args.query : (conversation.currentUserTranscript || '');
+      const toolMedia = this.extractCurriculumMedia(result, toolQuery);
       if (toolMedia.length > 0) {
         conversation.pendingCurriculumMedia = toolMedia;
         // Unbound: the model answers on the NEXT response, not this one.

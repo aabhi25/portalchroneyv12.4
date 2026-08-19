@@ -8,6 +8,11 @@ import { embeddingService } from '../embeddingService';
 import { getContentPool, ensureContentSchema, toVectorLiteral } from './contentDb';
 import { isMongoConnectionString } from './config';
 import { mongoVectorSearch } from './mongoContentDb';
+import {
+  readCurriculumMedia,
+  selectRelevantImages,
+  type CurriculumMediaCandidate,
+} from './mediaMetadata';
 
 /**
  * Account-wide retrieval resolver for the TopScholar curriculum chatbot.
@@ -94,6 +99,7 @@ export class RagK12ContentResolver implements K12ContentResolver {
         title: d.title,
         content_html: d.content_html,
         content_text: d.chunk_text,
+        source_ref: d.source_ref,
         media_url: d.media_url,
         metadata: d.metadata,
       }));
@@ -120,7 +126,7 @@ export class RagK12ContentResolver implements K12ContentResolver {
       }
 
       const result = await pool.query(
-        `SELECT content_type, subject, chapter, title, content_html, content_text,
+        `SELECT content_type, subject, chapter, title, content_html, content_text, source_ref,
                 media_url, metadata, embedding <=> $2::vector AS distance
            FROM topscholar_content_chunks
           WHERE business_account_id = $1 AND content_type = ANY($3)
@@ -147,15 +153,40 @@ export class RagK12ContentResolver implements K12ContentResolver {
         return { message: `No curriculum content found in your syllabus for "${query}".`, results: [] };
       }
 
-      const results: TopicResult[] = rows.map((r) => {
+      const prepared = rows.map((r, retrievalRank) => {
         const isVideo = r.content_type === 'transcript';
         const meta = (r.metadata || {}) as Record<string, unknown>;
-        const metaImages = Array.isArray(meta.images) ? (meta.images as string[]) : [];
-        const mediaUrls = [r.media_url, ...metaImages].filter(Boolean) as string[];
+        const media = readCurriculumMedia(
+          meta,
+          r.media_url,
+          isVideo ? 'video' : r.content_type === 'ebook_page' ? 'document' : 'image',
+          {
+            sourceRef: r.source_ref,
+            topic: r.title || null,
+            concept: typeof meta.concept === 'string' ? meta.concept : null,
+            subConcept: typeof meta.subConcept === 'string' ? meta.subConcept : null,
+            chapter: r.chapter || null,
+            subject: r.subject || null,
+          },
+        ).map((item) => ({ ...item, retrievalRank }));
+        return { r, isVideo, media };
+      });
 
-        // Embed image URLs directly into the content text as Markdown image tags.
-        // This ensures the AI sees and includes them as part of the curriculum
-        // content rather than relying on it to notice a separate mediaUrls field.
+      // This is the shared text/voice eligibility boundary. A retrieved passage
+      // may still be useful prose while its illustration is for a neighbouring
+      // topic, so only a clearly evidenced image is allowed past this point.
+      const approvedImages = selectRelevantImages(
+        query,
+        prepared.flatMap(({ media }) => media) as CurriculumMediaCandidate[],
+      );
+      const approvedUrls = new Set(approvedImages.map((item) => item.url));
+
+      const results: TopicResult[] = prepared.map(({ r, isVideo, media }) => {
+        const mediaCandidates = media.filter((item) => approvedUrls.has(item.url) && item.kind === 'image');
+        const mediaUrls = mediaCandidates.map((item) => item.url);
+
+        // Only approved image URLs enter the text context. This keeps a nearby
+        // passage's media from becoming an attractive but incorrect illustration.
         const imageMarkdown = mediaUrls.length > 0
           ? '\n\n' + mediaUrls.map((url) => `![image](${url})`).join('\n')
           : '';
@@ -174,6 +205,7 @@ export class RagK12ContentResolver implements K12ContentResolver {
           subjectName: r.subject || 'Curriculum',
           contentHtml: r.content_html || null,
           mediaUrls,
+          mediaCandidates,
         };
       });
 

@@ -10,3 +10,4 @@
 - [Spreadsheet contact import](spreadsheet-import.md) — Excel exports what it displays, so long numbers reach CSV pre-corrupted; a preview and the write it promises must share one routine.
 - [Environment quirks](environment-quirks.md) — pgvector must exist before `db:push`; `.replit` is edited through the verify-and-replace flow, never directly.
 - [Mongo/pgvector reader parity](mongo-pgvector-viewer-parity.md) — aggregation expressions treat missing ≠ null; `$ifNull`-normalize before sorting, and never spawn a second MongoClient cache.
+- [TopScholar media relevance](topscholar-media-relevance.md) — images need source-bound lesson metadata and the shared exact-token gate; uncertainty or a missing placement marker means no image.

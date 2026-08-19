@@ -163,6 +163,14 @@ export interface PdfItem extends ItemContext {
   id: string | null;
   name: string;
   url: string | null;
+  imageUrl: string | null;
+}
+
+export interface StandaloneImageItem extends ItemContext {
+  id: string | null;
+  url: string;
+  alt: string | null;
+  caption: string | null;
 }
 
 export interface CpContentBundle {
@@ -179,6 +187,7 @@ export interface CpContentBundle {
   transcripts: TranscriptItem[];
   questions: QuestionItem[];
   pdfs: PdfItem[];
+  images: StandaloneImageItem[];
   source: 'cms' | 'fixture';
 }
 
@@ -221,6 +230,32 @@ function transcriptVideoUrl(v: RawVideoTranscript['videoUrl']): string | null {
   return null;
 }
 
+function imageText(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null;
+  if (value && typeof value === 'object' && typeof (value as { en?: unknown }).en === 'string') {
+    return ((value as { en: string }).en || '').trim() || null;
+  }
+  return null;
+}
+
+/** Accept the common CMS image shapes without trusting arbitrary nested fields. */
+function standaloneImage(value: unknown): { id: string | null; url: string; alt: string | null; caption: string | null } | null {
+  if (typeof value === 'string') {
+    const url = value.trim();
+    return url ? { id: null, url, alt: null, caption: null } : null;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const url = [raw.url, raw.imageUrl, raw.src, raw.image].map(imageText).find(Boolean);
+  if (!url) return null;
+  return {
+    id: imageText(raw.id) || imageText(raw.imageId),
+    url,
+    alt: imageText(raw.alt),
+    caption: imageText(raw.caption) || imageText(raw.title) || imageText(raw.name),
+  };
+}
+
 /**
  * Flattens one raw plan into a normalized bundle keyed by cp_id, carrying
  * chapter/concept/subConcept context onto every leaf item.
@@ -244,6 +279,7 @@ export function parsePlan(raw: RawPlan, source: 'cms' | 'fixture'): CpContentBun
     transcripts: [],
     questions: [],
     pdfs: [],
+    images: [],
     source,
   };
 
@@ -297,8 +333,14 @@ export function parsePlan(raw: RawPlan, source: 'cms' | 'fixture'): CpContentBun
 
         for (const p of content.pdfs || []) {
           const name = pickStr(p.name) || 'document';
-          const url = (p.url || p.imageUrl || '').trim() || null;
-          bundle.pdfs.push({ ...ctx, id: p.id || null, name, url });
+          const url = (p.url || '').trim() || null;
+          const imageUrl = (p.imageUrl || '').trim() || null;
+          bundle.pdfs.push({ ...ctx, id: p.id || null, name, url, imageUrl });
+        }
+
+        for (const rawImage of content.images || []) {
+          const image = standaloneImage(rawImage);
+          if (image) bundle.images.push({ ...ctx, ...image });
         }
       }
     }
@@ -320,6 +362,7 @@ function mergeByCpId(bundles: CpContentBundle[]): CpContentBundle[] {
     existing.transcripts.push(...b.transcripts);
     existing.questions.push(...b.questions);
     existing.pdfs.push(...b.pdfs);
+    existing.images.push(...b.images);
     existing.cpName = existing.cpName || b.cpName;
     existing.board = existing.board || b.board;
     existing.grade = existing.grade || b.grade;

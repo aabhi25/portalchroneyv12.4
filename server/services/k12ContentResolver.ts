@@ -2,6 +2,7 @@ import { db } from '../db';
 import { k12Subjects, k12Chapters, k12Topics, k12Questions, k12TopicNotes, k12TopicVideos, businessAccounts } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 import { TopScholarApiService } from './topscholarApiService';
+import type { CurriculumMediaCandidate } from './topscholar/mediaMetadata';
 
 export interface TopicVideoResult {
   title: string;
@@ -21,6 +22,8 @@ export interface TopicResult {
   // Optional rich fields used by the TopScholar RAG resolver for MathML + media rendering.
   contentHtml?: string | null;
   mediaUrls?: string[];
+  /** Structured, source-bound media for clients that need relevance-aware rendering. */
+  mediaCandidates?: CurriculumMediaCandidate[];
 }
 
 export interface QuestionOption {
