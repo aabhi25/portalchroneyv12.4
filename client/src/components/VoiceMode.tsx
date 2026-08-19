@@ -78,6 +78,7 @@ export function VoiceMode({
   const hasPermissionRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentAIMessageIdRef = useRef<string | null>(null);
+  const currentResponseIdRef = useRef<string | null>(null);
   const vadAnalyserRef = useRef<AnalyserNode | null>(null);
   const vadIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pendingInterruptRef = useRef(false); // Track interrupt state to ignore late chunks
@@ -438,6 +439,9 @@ export function VoiceMode({
           return;
         }
         
+        if (data.responseId) {
+          currentResponseIdRef.current = data.responseId;
+        }
         // AI streaming chunk - accumulate text for real-time display
         setState('speaking');
         
@@ -494,6 +498,11 @@ export function VoiceMode({
         // Ignore if we're pending an interrupt
         if (pendingInterruptRef.current) {
           console.log('[VoiceMode] Ignoring ai_done after interrupt');
+          return;
+        }
+        if (data.responseId && currentResponseIdRef.current &&
+            data.responseId !== currentResponseIdRef.current) {
+          console.log('[VoiceMode] Ignoring ai_done for superseded response:', data.responseId);
           return;
         }
         

@@ -620,8 +620,17 @@ export function InlineVoiceMode({
           karaokeRef.current.messageId = messageId;
           onAIMessageStart?.(messageId);
           onAIMessageChunk?.(messageId, data.text);
+          // A show-then-speak response carries its final display Markdown with
+          // the raw speech transcript. Apply it in the same event turn so the
+          // student never sees TeX/Markdown intended only for internal speech.
+          if (typeof data.displayMarkdown === 'string' && data.displayMarkdown.trim()) {
+            onAIMessageReplace?.(messageId, data.displayMarkdown);
+          }
         } else {
           onAIMessageChunk?.(currentAIMessageIdRef.current, data.text);
+          if (typeof data.displayMarkdown === 'string' && data.displayMarkdown.trim()) {
+            onAIMessageReplace?.(currentAIMessageIdRef.current, data.displayMarkdown);
+          }
         }
         // Track the raw spoken transcript for the audio-clocked highlight.
         karaokeRef.current.text += data.text;
@@ -640,6 +649,12 @@ export function InlineVoiceMode({
 
       case 'ai_done':
         if (pendingInterruptRef.current) return;
+        // A deferred completion for an older response must not finalize the
+        // bubble that belongs to a newer response.
+        if (data.responseId && currentResponseIdRef.current &&
+            data.responseId !== currentResponseIdRef.current) {
+          break;
+        }
         // The server defers ai_done until every TTS producer is idle, so all
         // PCM for this bubble has been sent: chars ÷ audio-seconds is now the
         // exact speaking rate and the preloaded-text rate cap can lift.

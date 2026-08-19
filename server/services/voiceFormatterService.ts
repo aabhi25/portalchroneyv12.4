@@ -28,6 +28,46 @@ export interface VoiceFormatResult {
   imageUrls?: string[];
 }
 
+/**
+ * Last-resort display text for a voice answer when the richer formatter is
+ * unavailable. Voice transcripts occasionally contain unwrapped TeX commands
+ * (for example `\frac{3}{2}`); ReactMarkdown deliberately treats those as
+ * ordinary text. Keep the answer readable without asking the TTS model to
+ * pronounce display-only syntax.
+ */
+export function createVoiceDisplayFallback(transcript: string): string {
+  let output = transcript.trim();
+
+  // Resolve innermost fractions repeatedly so a simple nested fraction does not
+  // leave brace syntax behind in the final on-screen answer.
+  for (let i = 0; i < 4; i++) {
+    const next = output.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '$1/$2');
+    if (next === output) break;
+    output = next;
+  }
+
+  return output
+    .replace(/\\sqrt\s*\{([^{}]*)\}/g, '√($1)')
+    .replace(/\\times/g, '×')
+    .replace(/\\div/g, '÷')
+    .replace(/\\leq?|\\le/g, '≤')
+    .replace(/\\geq?|\\ge/g, '≥')
+    .replace(/\\neq?|\\ne/g, '≠')
+    .replace(/\\pm/g, '±')
+    .replace(/\\pi/g, 'π')
+    .replace(/\\theta/g, 'θ')
+    .replace(/\\alpha/g, 'α')
+    .replace(/\\beta/g, 'β')
+    // Preserve the content of common display wrappers while removing their
+    // non-speakable command names.
+    .replace(/\\(?:text|mathrm|mathbf|left|right)\s*\{([^{}]*)\}/g, '$1')
+    .replace(/\\([A-Za-z]+)/g, '$1')
+    .replace(/[{}]/g, '')
+    .replace(/\$+/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 const FORMAT_TIMEOUT_MS = 8000;
 
 /** Never show more than this many diagrams on one answer, whatever the model says. */
@@ -37,9 +77,10 @@ const SYSTEM_PROMPT = `You post-process a spoken answer from a K12 voice tutor f
 
 You have two jobs.
 
-JOB 1 — NOTATION
+JOB 1 — DISPLAY FORMAT
 Decide if the answer's subject is STEM (math, physics, chemistry, biology, computer science).
-If STEM, rewrite the answer as Markdown with proper notation:
+For EVERY answer, produce formatted Markdown that preserves every fact and the
+original sentence order. If STEM, also rewrite notation correctly:
  - Inline math in single dollar signs: $W = m \\\\times g$
  - Display math in double dollar signs on their own lines: $$\\\\frac{AE}{AC} = \\\\frac{3x}{8x} = \\\\frac{3}{8}$$
  - Use \\\\frac{}{} for fractions, ^{} for superscripts, _{} for subscripts, \\\\times for multiplication, \\\\div for division, \\\\le \\\\ge \\\\ne for inequalities, \\\\sqrt{} for square roots, \\\\pi \\\\theta \\\\alpha for Greek letters, \\\\rightarrow for arrows.
@@ -50,6 +91,8 @@ LAYOUT — make it read like a textbook page, not a wall of speech:
  - When the answer works through a calculation, derivation or multi-part reasoning, lay those parts out as a numbered Markdown list — one step per item — even when the tutor never literally said "Step 1" or "First". Spoken cues like "First / Second / Next / Then / Step 1" ALWAYS become numbered list items. Each item begins with the tutor's own sentence; you may bold the opening words of that sentence to act as its label, but NEVER write a label the tutor did not speak.
  - Promote each key equation or worked computation onto its own line as display math ($$ ... $$) instead of leaving it buried inline mid-sentence. The equation must be the notation form of words the tutor actually spoke, and the surrounding sentence text stays exactly where it was, in its original order.
  - Layout freedom is STRUCTURE ONLY: you may insert blank lines, list markers, and bolding of EXISTING words, and move an equation onto its own line. You may NOT reword, reorder, merge or split the tutor's sentences, and you may NOT add headings, labels or words the tutor did not speak.
+For non-STEM answers, use the same short paragraphs and Markdown lists where the
+spoken answer contains clear steps. Do not invent headings or labels.
 STRICTLY transform-only on the words: never add, remove, change or paraphrase any fact, example, number or step, and never invent an equation the spoken text did not contain. Every spoken sentence must appear, in its original order, in the tutor's own words.
 COMPLETE, ALWAYS: formattedMarkdown must contain the ENTIRE spoken answer from its first sentence to its last, including greetings, closing remarks and any question the tutor asked the student at the end. Never summarize, never stop early, never drop the tail. A partial rewrite is invalid output.
 
@@ -73,12 +116,13 @@ STEP 2 — If it DID teach, pick the diagram that illustrates what it taught.
 OUTPUT — strict JSON only, no prose outside it, with the keys in EXACTLY this order:
 {"isStem": boolean, "subject": "math"|"physics"|"chemistry"|"biology"|"cs"|"other", "imageIndexes": number[], "formattedMarkdown"?: string}
  - imageIndexes comes BEFORE formattedMarkdown deliberately: commit to your diagrams first, then write the answer and drop each chosen marker in as you reach the point it illustrates. Use [] when you are placing none.
- - Include formattedMarkdown whenever isStem is true OR imageIndexes is non-empty.
+ - Include formattedMarkdown for EVERY non-empty spoken answer.
  - EVERY index in imageIndexes MUST also appear as its [[IMAGE:n]] marker inside formattedMarkdown. Listing an index without writing its marker is invalid output — the diagram then has nowhere to go and gets dumped at the bottom of the answer.
  - Correct example, marker sitting inside the text rather than at the end:
    {"isStem":true,"subject":"math","imageIndexes":[2],"formattedMarkdown":"Two triangles are **similar** when their corresponding angles are equal.\\n\\n[[IMAGE:2]]\\n\\nFor example, if $AB = 3$ and $PQ = 6$, the ratio is $1:2$."}
  - If isStem is false and you are placing diagrams, reproduce the spoken answer WORD FOR WORD and insert only the markers — no rewording, no reformatting.
- - If isStem is false and you place no diagrams, return {"isStem": false, "subject": "other"} and nothing else.`;
+ - If isStem is false and you place no diagrams, still return the complete
+   formattedMarkdown with only structure added.`;
 
 /**
  * Tokenise for the fidelity check. Splits on punctuation and whitespace while
@@ -279,12 +323,8 @@ export async function formatVoiceTranscript(
 
     const hasMarkdown = typeof parsed.formattedMarkdown === 'string' && parsed.formattedMarkdown.trim().length > 0;
 
-    // Nothing to improve: not STEM and no diagram earned its place.
-    if (!parsed.isStem && indexes.length === 0) {
-      return { isStem: false, subject: 'other' };
-    }
-    // It asked for something but gave us nothing to show it in. Fail closed
-    // rather than falling back to appending diagrams blindly.
+    // Every voice response needs a display-ready answer. If the formatting model
+    // does not return one, the caller uses a safe readable fallback instead.
     if (!hasMarkdown) return null;
 
     const produced = parsed.formattedMarkdown as string;
@@ -297,12 +337,6 @@ export async function formatVoiceTranscript(
 
     const { markdown, urls } = placeDiagrams(produced, indexes, candidates);
     if (!markdown) return null;
-
-    // Diagram placement was the only reason to replace the bubble, and it
-    // produced no diagram — leave the spoken transcript alone.
-    if (!parsed.isStem && urls.length === 0) {
-      return { isStem: false, subject: 'other' };
-    }
 
     return {
       isStem: parsed.isStem,

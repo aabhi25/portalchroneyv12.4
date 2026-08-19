@@ -7,7 +7,7 @@ import { ToolExecutionService } from './services/toolExecutionService';
 import { journeyOrchestrator } from './services/journeyOrchestrator';
 import { journeyService } from './services/journeyService';
 import { isElevenLabsVoice, getElevenLabsVoiceId, synthesizeSpeechStreaming } from './services/elevenlabsService';
-import { formatVoiceTranscript, type VoiceDiagramCandidate } from './services/voiceFormatterService';
+import { createVoiceDisplayFallback, formatVoiceTranscript, type VoiceDiagramCandidate } from './services/voiceFormatterService';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { resolveCpIdsForScope } from './services/topscholar/scopeResolver';
 import { aiUsageLogger } from './services/aiUsageLogger';
@@ -186,13 +186,10 @@ interface VoiceConversation {
   // ElevenLabs — this cursor lets us stream it sentence-by-sentence instead of
   // waiting for the whole transcript.)
   ttsTranscriptCursor?: number;
-  // SHOW-THEN-SPEAK (curriculum turns with ElevenLabs): set when the next
-  // response.create is for an injected-curriculum answer. On response.created it
-  // binds to that responseId; while bound, incremental ai_chunk forwarding and
-  // incremental TTS are suppressed, and at response.done the finalized (formatted)
-  // content is pushed to the screen FIRST, then speech starts. Greetings/small
-  // talk never set this, so their low-latency streaming path is unchanged.
-  holdSpeechPending?: boolean;
+  // SHOW-THEN-SPEAK: every voice turn is held from response.created until its
+  // complete display representation is available. The raw transcript remains
+  // internal for speech and interruption handling; users only receive the
+  // display-ready answer and its audio after this gate releases.
   holdSpeechResponseId?: string;
 }
 
@@ -212,6 +209,16 @@ export class RealtimeVoiceService {
   private readonly MAX_RECONNECT_ATTEMPTS = 5; // Maximum reconnection attempts
   private readonly BASE_RECONNECT_DELAY = 1000; // Base delay for exponential backoff (1 second)
   private readonly MAX_RECONNECT_DELAY = 30000; // Maximum reconnection delay (30 seconds)
+
+  /**
+   * Realtime can deliver terminal or delta events for an older response after a
+   * tool continuation has already created the next response. Never let those
+   * late events append to, release, or finalize the current answer.
+   */
+  private isCurrentResponseEvent(conversation: VoiceConversation, event: any): boolean {
+    const eventResponseId = event.response_id || event.response?.id;
+    return !eventResponseId || !conversation.currentResponseId || eventResponseId === conversation.currentResponseId;
+  }
 
   constructor() {
     console.log('[RealtimeVoice] Service initialized with OpenAI Realtime API');
@@ -620,7 +627,6 @@ export class RealtimeVoiceService {
     // cancelled matters even after response.done (isProcessing already false):
     // releaseHeldAnswer may be mid-formatting, and its post-await abandoned()
     // checks are the only thing stopping it from surfacing a dead answer.
-    conversation.holdSpeechPending = false;
     if (conversation.holdSpeechResponseId) {
       this.markResponseCancelled(conversation, conversation.holdSpeechResponseId);
       conversation.holdSpeechResponseId = undefined;
@@ -1810,16 +1816,11 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           // Track current response ID
           conversation.currentResponseId = event.response?.id;
 
-          // Bind (or clear) the show-then-speak hold. A pending hold belongs to
-          // exactly this response; a leftover binding from an earlier response
-          // must never leak onto a new one.
-          if (conversation.holdSpeechPending) {
-            conversation.holdSpeechPending = false;
-            conversation.holdSpeechResponseId = conversation.currentResponseId;
-            console.log('[RealtimeVoice] Show-then-speak hold bound to response:', conversation.currentResponseId);
-          } else {
-            conversation.holdSpeechResponseId = undefined;
-          }
+          // Every response follows the same show-then-speak gate. A response
+          // cannot expose raw streamed text or native audio before its complete
+          // display version is prepared at response.done.
+          conversation.holdSpeechResponseId = conversation.currentResponseId;
+          console.log('[RealtimeVoice] Show-then-speak hold bound to response:', conversation.currentResponseId);
 
           // Bind (or discard) curriculum images to the response that will speak
           // them. Images retrieved for a turn the student interrupted must not
@@ -1867,6 +1868,10 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
 
         case 'response.output_audio_transcript.delta':
         case 'response.audio_transcript.delta':
+          if (!this.isCurrentResponseEvent(conversation, event)) {
+            console.log('[RealtimeVoice] Ignoring transcript delta for superseded response:', event.response_id);
+            break;
+          }
           // AI's speech transcript chunk
           const transcriptDelta = event.delta;
           console.log('[RealtimeVoice] AI transcript delta:', transcriptDelta);
@@ -1883,7 +1888,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
             break;
           }
 
-          // SHOW-THEN-SPEAK: for a held curriculum answer, nothing is shown or
+          // SHOW-THEN-SPEAK: for a held answer, nothing is shown or
           // spoken incrementally — the finalized content lands first at
           // response.done, then speech starts. The transcript still accumulated
           // above, so the release path has the full answer.
@@ -1913,6 +1918,10 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
 
         case 'response.output_text.delta':
         case 'response.text.delta': {
+          if (!this.isCurrentResponseEvent(conversation, event)) {
+            console.log('[RealtimeVoice] Ignoring text delta for superseded response:', event.response_id);
+            break;
+          }
           // SILENCE BREAKER: the model answered in TEXT modality (no audio).
           // Without this handler the deltas fall through to "Unknown event type"
           // and the visitor hears (and sees) nothing.
@@ -1949,6 +1958,9 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
               conversation.cancelledResponseIds.has(conversation.currentResponseId)) {
             break;
           }
+          if (this.isSpeechHeld(conversation)) {
+            break;
+          }
           this.sendToClient(conversation.clientWs, {
             type: 'ai_chunk',
             text: textDelta,
@@ -1959,16 +1971,23 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
 
         case 'response.output_text.done':
         case 'response.text.done': {
-          // Non-K12 path UNCHANGED: deltas were already forwarded; just speak the
-          // accumulated transcript via ElevenLabs when active.
+          if (!this.isCurrentResponseEvent(conversation, event)) {
+            console.log('[RealtimeVoice] Ignoring text completion for superseded response:', event.response_id);
+            break;
+          }
+          // A held non-K12 response releases once at response.done; do not
+          // synthesize it here or it would speak before its display is ready.
           if (!conversation.k12ContentOnly) {
             console.log('[RealtimeVoice] AI text output complete (text-modality turn)');
-            if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId && conversation.currentAITranscript &&
+            if (!this.isSpeechHeld(conversation) &&
+                conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId && conversation.currentAITranscript &&
                 conversation.lastSynthesizedResponseId !== conversation.currentResponseId) {
               conversation.lastSynthesizedResponseId = conversation.currentResponseId;
               await this.synthesizeWithElevenLabs(conversation, conversation.currentAITranscript);
             }
-            conversation.openaiAudioFallbackBuffer = [];
+            if (!this.isSpeechHeld(conversation)) {
+              conversation.openaiAudioFallbackBuffer = [];
+            }
             break;
           }
 
@@ -1979,17 +1998,23 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           // leaked tool-call payload before anything is spoken.
           console.log('[RealtimeVoice] AI text output complete (K12 text-modality turn)');
           this.finalizeK12TextOutput(conversation);
-          conversation.openaiAudioFallbackBuffer = [];
+          if (!this.isSpeechHeld(conversation)) {
+            conversation.openaiAudioFallbackBuffer = [];
+          }
           break;
         }
 
         case 'response.output_audio.delta':
         case 'response.audio.delta':
+          if (!this.isCurrentResponseEvent(conversation, event)) {
+            console.log('[RealtimeVoice] Ignoring audio delta for superseded response:', event.response_id);
+            break;
+          }
           this.touchActivity(conversation);
           const audioDelta = event.delta;
           const audioBuffer = Buffer.from(audioDelta, 'base64');
           
-          if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
+          if ((conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) || this.isSpeechHeld(conversation)) {
             if (!conversation.openaiAudioFallbackBuffer) {
               conversation.openaiAudioFallbackBuffer = [];
             }
@@ -2004,6 +2029,10 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
 
         case 'response.output_audio_transcript.done':
         case 'response.audio_transcript.done':
+          if (!this.isCurrentResponseEvent(conversation, event)) {
+            console.log('[RealtimeVoice] Ignoring transcript completion for superseded response:', event.response_id);
+            break;
+          }
           console.log('[RealtimeVoice] AI transcript complete');
           // Sentences were already streamed to ElevenLabs during the deltas
           // (see transcript.delta handler). Flush the trailing partial sentence
@@ -2018,7 +2047,9 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
               this.streamTranscriptTts(conversation, true);
             }
           }
-          conversation.openaiAudioFallbackBuffer = [];
+          if (!this.isSpeechHeld(conversation)) {
+            conversation.openaiAudioFallbackBuffer = [];
+          }
           break;
 
         case 'response.output_audio.done':
@@ -2032,7 +2063,13 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           break;
 
         case 'response.done': {
-          console.log('[RealtimeVoice] Response complete, id:', conversation.currentResponseId);
+          const completedResponseId = event.response?.id;
+          if (completedResponseId && conversation.currentResponseId &&
+              completedResponseId !== conversation.currentResponseId) {
+            console.log('[RealtimeVoice] Ignoring completion for superseded response:', completedResponseId);
+            break;
+          }
+          console.log('[RealtimeVoice] Response complete, id:', completedResponseId || conversation.currentResponseId);
           conversation.isProcessing = false;
 
           // Realtime bills audio tokens at ~17x the text rate, so record the
@@ -2082,8 +2119,26 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           // currentResponseId, and this handler must keep operating on ITS
           // response, not whatever replaced it mid-await.
           const doneTranscript = conversation.currentAITranscript;
-          const doneResponseId = conversation.currentResponseId;
-          if (conversation.conversationId && doneTranscript) {
+          const doneResponseId = completedResponseId || conversation.currentResponseId;
+          const wasCancelled = !!doneResponseId && conversation.cancelledResponseIds.has(doneResponseId);
+
+          // Native OpenAI audio cannot be made display-safe without its matching
+          // transcript. Do not play an answer the student cannot also read; end
+          // the turn cleanly instead of leaking a raw/no-bubble response.
+          if (!doneTranscript) {
+            if ((conversation.openaiAudioFallbackBuffer?.length || 0) > 0) {
+              console.warn('[RealtimeVoice] Discarding buffered audio without a transcript, responseId:', doneResponseId);
+            }
+            conversation.openaiAudioFallbackBuffer = [];
+          }
+
+          // An interrupted response may have produced more server-side deltas
+          // than reached the student. Do not preserve it as a complete answer in
+          // memory or history, and never release it after the formatter awaits.
+          if (wasCancelled) {
+            conversation.openaiAudioFallbackBuffer = [];
+            console.log('[RealtimeVoice] Skipping persistence and release for cancelled response:', doneResponseId);
+          } else if (conversation.conversationId && doneTranscript) {
             // Curriculum diagrams retrieved for this turn. They were kept out of
             // everything the model saw, so the spoken answer is identical whether or
             // not a diagram exists. They are only CANDIDATES here — nothing is shown
@@ -2105,16 +2160,6 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
               conversation.pendingCurriculumMediaResponseId = undefined;
             }
 
-            // The stored message is the spoken answer, nothing else. Diagrams live
-            // on the formatted variant written below, which is what history replays
-            // — so the live bubble and the reloaded one cannot disagree, and a
-            // failed selection simply means no diagrams rather than all of them.
-            const savedMessageId = await this.saveMessageToDB(conversation.conversationId, 'assistant', doneTranscript);
-            // Memory keeps the SPOKEN text only. Image tags here would come back as
-            // conversation history on a later turn and get read aloud.
-            conversationMemory.storeMessage(conversation.userId, 'assistant', doneTranscript);
-            console.log('[RealtimeVoice] Saved AI message to DB:', doneTranscript.substring(0, 50) + '...');
-
             // Display pass: fire-and-forget background call that decides what the
             // student SEES for this answer — proper Markdown + LaTeX for math and
             // science, and which curriculum diagrams (at most two, only when the
@@ -2129,15 +2174,15 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
             const apiKeySnapshot = conversation.openaiApiKey;
             const clientWsSnapshot = conversation.clientWs;
             const diagramCandidates = curriculumMedia;
+            // Every response is held, so this legacy asynchronous branch is not
+            // expected to run. Keep its variable explicit while retaining the
+            // defensive fallback path for an unexpected provider event.
+            const savedMessageId: string | undefined = undefined;
             // Skip the display pass for cancelled responses — the user
             // interrupted, so the partial transcript isn't a real "answer".
             // Saves a gpt-4o-mini call AND prevents the client from rendering
             // a phantom formatted bubble for content the user cut off.
-            const wasCancelled = !!(responseIdSnapshot && conversation.cancelledResponseIds.has(responseIdSnapshot));
-            if (wasCancelled) {
-              console.log('[RealtimeVoice] Skipping display pass for cancelled response:', responseIdSnapshot);
-            }
-            // SHOW-THEN-SPEAK: a held curriculum answer was neither shown nor
+            // SHOW-THEN-SPEAK: a held answer was neither shown nor
             // spoken during streaming. Release it now: format FIRST (bounded by
             // the formatter's own timeout), push the finalized content to the
             // screen, THEN start speech. Awaited so isTtsProducing() is already
@@ -2148,13 +2193,13 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
             const wasHeld = !!responseIdSnapshot && conversation.holdSpeechResponseId === responseIdSnapshot;
             if (wasHeld) {
               if (!wasCancelled) {
-                await this.releaseHeldAnswer(conversation, transcriptSnapshot, responseIdSnapshot!, savedMessageId, curriculumMedia);
+                await this.releaseHeldAnswer(conversation, transcriptSnapshot, responseIdSnapshot!, curriculumMedia);
               }
               if (conversation.holdSpeechResponseId === responseIdSnapshot) {
                 conversation.holdSpeechResponseId = undefined;
               }
             }
-            if (!wasHeld && !wasCancelled && responseIdSnapshot && apiKeySnapshot) {
+            if (!wasHeld && responseIdSnapshot && apiKeySnapshot) {
               (async () => {
                 try {
                   const result = await formatVoiceTranscript(
@@ -2252,7 +2297,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
             conversation.pendingAiDoneResponseId = doneResponseId || 'unknown';
             console.log('[RealtimeVoice] Deferring ai_done until ElevenLabs TTS producers finish');
           } else {
-            this.sendToClient(conversation.clientWs, { type: 'ai_done' });
+            this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId: doneResponseId });
           }
           break;
         }
@@ -2456,13 +2501,6 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
       const payload = curriculumInjected
         ? { type: 'response.create', response: { tool_choice: 'none' } }
         : { type: 'response.create' };
-      // SHOW-THEN-SPEAK: curriculum answers with ElevenLabs hold all display and
-      // speech until the finalized content is on screen (released at
-      // response.done). Greetings/small talk keep the low-latency streaming
-      // path; OpenAI-voice sessions can't hold (audio streams with generation).
-      if (curriculumInjected && conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
-        conversation.holdSpeechPending = true;
-      }
       conversation.openaiWs.send(JSON.stringify(payload));
       if (curriculumInjected) {
         console.log('[RealtimeVoice] Answering from injected curriculum in a single turn (tool_choice=none)');
@@ -3140,7 +3178,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
         // Accumulate into the transcript regardless so a barge-in mid-answer
         // still saves what was actually spoken/shown.
         conversation.currentAITranscript = (conversation.currentAITranscript || '') + chunkText;
-        // SHOW-THEN-SPEAK: a held curriculum answer shows and speaks nothing
+        // SHOW-THEN-SPEAK: a held answer shows and speaks nothing
         // incrementally; the release path at response.done handles both.
         if (!cancelled && !this.isSpeechHeld(conversation)) {
           this.sendToClient(conversation.clientWs, {
@@ -3251,23 +3289,19 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
   }
 
   /**
-   * SHOW-THEN-SPEAK release for a held curriculum answer.
+   * SHOW-THEN-SPEAK release for any held voice answer.
    *
    * Order is the whole point: (1) run the display formatter on the COMPLETE
-   * transcript (its own bounded timeout — on failure the raw transcript is the
-   * fallback, the tutor is never left silent), (2) persist the formatted
-   * variant so a reload matches the live bubble, (3) push the full raw
-   * transcript as one ai_chunk (creates the bubble) followed immediately by
-   * formatted_transcript (upgrades it) — both BEFORE any audio exists, so the
-   * bubble never changes once speech starts, (4) enqueue the transcript for
-   * ElevenLabs TTS. Every await re-checks cancellation so a barge-in during
-   * formatting shows and speaks nothing.
+   * transcript, (2) derive a readable plain-text fallback when it cannot
+   * format, (3) persist the display version, (4) push the display version and
+   * raw speech transcript together before ANY audio, and (5) release either
+   * buffered OpenAI audio or ElevenLabs TTS. Every await re-checks cancellation
+   * so a barge-in during formatting shows and speaks nothing.
    */
   private async releaseHeldAnswer(
     conversation: VoiceConversation,
     transcript: string,
     responseId: string,
-    savedMessageId: string | undefined,
     diagramCandidates: VoiceDiagramCandidate[],
   ): Promise<void> {
     const abandoned = () =>
@@ -3286,7 +3320,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           diagramCandidates
         );
       } catch (err) {
-        console.warn('[RealtimeVoice] Held-answer formatter failed, falling back to raw transcript:', (err as Error).message);
+        console.warn('[RealtimeVoice] Held-answer formatter failed, using readable display fallback:', (err as Error).message);
       }
     }
     if (abandoned()) {
@@ -3294,55 +3328,99 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
       return;
     }
 
-    // Persist the display variant BEFORE the live bubble is patched, so history
-    // replays exactly what the student saw. If persistence fails, show the raw
-    // transcript — that is what a reload would show.
-    if (result?.formattedMarkdown && savedMessageId) {
+    const displayMarkdown = result?.formattedMarkdown || createVoiceDisplayFallback(transcript);
+
+    let savedMessageId: string | undefined;
+    const discardPersistedAnswer = async (stage: string) => {
+      if (!savedMessageId) return;
       try {
-        await storage.updateMessageMetadata(savedMessageId, {
-          formattedContent: result.formattedMarkdown,
-          formatSubject: result.subject
-        });
+        await storage.deleteMessage(savedMessageId, conversation.businessAccountId);
       } catch (err) {
-        console.warn('[RealtimeVoice] Could not persist formatted content for held answer, showing raw transcript:', (err as Error).message);
-        result = null;
+        console.warn('[RealtimeVoice] Could not remove abandoned voice message:', (err as Error).message);
+      }
+      savedMessageId = undefined;
+      console.log('[RealtimeVoice] Discarded held answer abandoned during', stage, 'responseId:', responseId);
+    };
+
+    // Persist only after formatting completes and the response still belongs to
+    // this turn. The message row retains the spoken text; its metadata retains
+    // the display-only Markdown and diagrams that history should replay.
+    if (conversation.conversationId) {
+      try {
+        savedMessageId = await this.saveMessageToDB(conversation.conversationId, 'assistant', transcript);
+      } catch (err) {
+        // A database hiccup must not leave an otherwise valid live voice turn
+        // silent. It simply cannot be replayed in history.
+        console.warn('[RealtimeVoice] Could not save held answer before release:', (err as Error).message);
       }
       if (abandoned()) {
-        console.log('[RealtimeVoice] Held answer abandoned during persistence, responseId:', responseId);
+        await discardPersistedAnswer('message persistence');
         return;
+      }
+
+      if (savedMessageId) {
+        try {
+          await storage.updateMessageMetadata(savedMessageId, {
+            formattedContent: displayMarkdown,
+            formatSubject: result?.subject || 'other'
+          });
+        } catch (err) {
+          // The live answer remains readable even if its later history replay
+          // must fall back to the stored speech text.
+          console.warn('[RealtimeVoice] Could not persist display content for held answer:', (err as Error).message);
+        }
+        if (abandoned()) {
+          await discardPersistedAnswer('display persistence');
+          return;
+        }
       }
     }
 
-    // Show: the full raw transcript in one chunk creates and fills the bubble.
-    // `final: true` tells the karaoke clock the text is COMPLETE before any
-    // audio exists, so it must not read chars-received ÷ audio-received as a
-    // speaking rate (that ratio is meaningless when text arrives up front).
+    // Memory must retain only what will actually be spoken. Store it after all
+    // awaits so an abandoned response can never appear in a later prompt.
+    conversationMemory.storeMessage(conversation.userId, 'assistant', transcript);
+
+    // Show: one final event carries both representations. The client uses
+    // displayMarkdown for the bubble and retains text only for audio-synchronised
+    // karaoke/highlighting. Raw spoken text is never a visible intermediate.
     this.sendToClient(conversation.clientWs, {
       type: 'ai_chunk',
       text: transcript,
+      displayMarkdown,
       responseId,
       final: true
     });
-    // …and the formatted variant (when it exists) upgrades it immediately,
-    // before any audio is scheduled.
-    if (result?.formattedMarkdown) {
-      this.sendToClient(conversation.clientWs, {
-        type: 'formatted_transcript',
-        responseId,
-        messageId: savedMessageId,
-        subject: result.subject,
-        formattedMarkdown: result.formattedMarkdown
-      });
-      console.log('[RealtimeVoice] Held answer released with formatted content (', result.imageUrls?.length ?? 0, 'diagram(s)), responseId:', responseId);
+    console.log(
+      `[RealtimeVoice] Held answer released with ${result?.formattedMarkdown ? 'formatted' : 'fallback'} display content`,
+      `(${result?.imageUrls?.length ?? 0} diagram(s)), responseId:`,
+      responseId
+    );
+
+    // Then speak the original natural-language transcript. The display version
+    // can contain visual-only Markdown, LaTex, and diagrams that must never be
+    // read aloud.
+    if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
+      conversation.lastSynthesizedResponseId = responseId;
+      this.enqueueSentenceForTts(conversation, transcript, responseId);
     } else {
-      console.log('[RealtimeVoice] Held answer released with raw transcript, responseId:', responseId);
+      this.releaseBufferedOpenAIAudio(conversation, responseId);
+    }
+  }
+
+  private releaseBufferedOpenAIAudio(conversation: VoiceConversation, responseId: string): void {
+    const audioChunks = conversation.openaiAudioFallbackBuffer || [];
+    conversation.openaiAudioFallbackBuffer = [];
+
+    if (conversation.cancelledResponseIds.has(responseId) ||
+        conversation.currentResponseId !== responseId ||
+        conversation.clientWs.readyState !== WebSocket.OPEN) {
+      return;
     }
 
-    // Then speak. Guard other synth paths from double-speaking this response,
-    // and go through the sentence queue so ai_done stays deferred until every
-    // PCM byte has been produced.
-    conversation.lastSynthesizedResponseId = responseId;
-    this.enqueueSentenceForTts(conversation, transcript, responseId);
+    for (const chunk of audioChunks) {
+      conversation.clientWs.send(chunk);
+    }
+    console.log('[RealtimeVoice] Released buffered OpenAI audio chunks:', audioChunks.length, 'responseId:', responseId);
   }
 
   // True while ANY ElevenLabs producer may still send PCM to the client:
@@ -3364,7 +3442,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
     if (!pendingId || this.isTtsProducing(conversation)) return;
     conversation.pendingAiDoneResponseId = undefined;
     if (pendingId !== 'unknown' && conversation.cancelledResponseIds.has(pendingId)) return;
-    this.sendToClient(conversation.clientWs, { type: 'ai_done' });
+    this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId: pendingId });
     console.log('[RealtimeVoice] Sent deferred ai_done (responseId:', pendingId, ')');
   }
 
