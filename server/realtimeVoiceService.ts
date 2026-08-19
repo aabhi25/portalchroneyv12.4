@@ -7,10 +7,11 @@ import { ToolExecutionService } from './services/toolExecutionService';
 import { journeyOrchestrator } from './services/journeyOrchestrator';
 import { journeyService } from './services/journeyService';
 import { isElevenLabsVoice, getElevenLabsVoiceId, synthesizeSpeechStreaming } from './services/elevenlabsService';
-import { createVoiceDisplayFallback, formatVoiceTranscript, type VoiceDiagramCandidate } from './services/voiceFormatterService';
+import { createVoiceDisplayFallback, createVoiceSpeechText, formatVoiceTranscript, type VoiceDiagramCandidate } from './services/voiceFormatterService';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { resolveCpIdsForScope } from './services/topscholar/scopeResolver';
 import { aiUsageLogger } from './services/aiUsageLogger';
+import { chatService, type ChatContext } from './chatService';
 
 /**
  * OpenAI Realtime model backing voice mode.
@@ -47,6 +48,11 @@ export interface TopscholarVoiceScope {
   grade?: string | null;
   subject?: string | null;
   chapter?: string | null;
+  studentId?: string | null;
+  studentName?: string | null;
+  studentPlanMappingId?: string | null;
+  planId?: string | null;
+  doubtSyncBaseUrl?: string | null;
 }
 
 interface VoiceConversation {
@@ -58,10 +64,17 @@ interface VoiceConversation {
   sessionId: string | null;
   conversationId: string; // Database conversation ID - now required and used as key
   personality?: string;
+  responseLength?: string;
   companyDescription?: string;
   currency?: string;
   currencySymbol?: string;
   customInstructions?: string;
+  systemMode?: string;
+  k12EducationEnabled?: boolean;
+  k12VerbatimContentMode?: boolean;
+  jobPortalEnabled?: boolean;
+  demoOrdersEnabled?: boolean;
+  skipLeadTraining?: boolean;
   isProcessing: boolean;
   currentUserTranscript?: string; // Track current user message
   currentAITranscript?: string; // Accumulate AI response chunks
@@ -71,6 +84,10 @@ interface VoiceConversation {
   // Maps journeyStepId -> {original: template question, responseId: OpenAI response.id, timestamp: when set}
   journeyResponseTracking: Map<string, {original: string, responseId: string, timestamp: number}>;
   currentResponseId?: string; // Track current OpenAI response.id
+  currentResponseKind?: 'realtime' | 'canonical';
+  canonicalPersistedMessageId?: string;
+  canonicalPersistedResponseId?: string;
+  canonicalPersistedContent?: string;
   // Response IDs the user interrupted. Late deltas from OpenAI for these IDs
   // must NOT be forwarded as ai_chunk (otherwise the client creates a phantom
   // second bubble). Capped FIFO to avoid growth.
@@ -89,6 +106,8 @@ interface VoiceConversation {
   reconnectTimeout?: NodeJS.Timeout; // Reconnection timer
   isReconnecting: boolean; // Flag to indicate if currently reconnecting
   selectedLanguage?: string;
+  selectedVoice?: string;
+  isInternalTest?: boolean;
   detectedLanguage?: string;
   textConversationId?: string;
   textHistoryInjected?: boolean;
@@ -149,6 +168,8 @@ interface VoiceConversation {
   // their bytes on the same WebSocket and decode as garbled audio.
   activeElevenLabsAbort?: AbortController;
   activeElevenLabsResponseId?: string;
+  activeOpenAITtsAbort?: AbortController;
+  activeOpenAITtsResponseId?: string;
   // Timestamp (ms) when the current answer's audio started streaming to the
   // client. Used as a short barge-in grace window: a VAD/interrupt that fires
   // within BARGE_IN_GRACE_MS of playback start is treated as the AI's own
@@ -258,7 +279,7 @@ export class RealtimeVoiceService {
     return closed;
   }
 
-  async handleConnection(clientWs: WebSocket, businessAccountId: string, userId: string, existingConversationId?: string, selectedLanguage?: string, textConversationId?: string, topscholarDoubtId?: string, topscholarScope?: TopscholarVoiceScope) {
+  async handleConnection(clientWs: WebSocket, businessAccountId: string, userId: string, existingConversationId?: string, selectedLanguage?: string, textConversationId?: string, topscholarDoubtId?: string, topscholarScope?: TopscholarVoiceScope, isInternalTest = false) {
     console.log('[RealtimeVoice] New connection:', { businessAccountId, userId, existingConversationId });
 
     try {
@@ -373,11 +394,47 @@ export class RealtimeVoiceService {
         }
       }
 
-      // Create database conversation record FIRST to get stable conversationId
-      const dbConversation = await storage.createConversation({
-        businessAccountId,
-        title: 'Voice Chat'
-      });
+      // Reuse the already-authorized text/doubt thread when voice was launched
+      // from one. This keeps canonical text and voice turns in one history and
+      // preserves TopScholar doubt identity/sync instead of creating a parallel
+      // voice-only conversation.
+      let dbConversation = textConversationId
+        ? await storage.getConversation(textConversationId, businessAccountId)
+        : null;
+      if (dbConversation) {
+        const signedStudentId = topscholarScope?.studentId || null;
+        const reusable = signedStudentId
+          ? dbConversation.studentId === signedStudentId &&
+            (!topscholarDoubtId || dbConversation.topscholarDoubtId === topscholarDoubtId)
+          : isInternalTest || dbConversation.visitorToken === userId;
+        if (!reusable) {
+          console.warn('[RealtimeVoice] Refusing unowned text conversation reuse:', textConversationId);
+          dbConversation = null;
+        }
+      }
+      if (!dbConversation && topscholarDoubtId) {
+        const doubtConversation = await storage.getLatestConversationByDoubtId(
+          businessAccountId,
+          topscholarDoubtId,
+        );
+        if (
+          doubtConversation &&
+          (!topscholarScope?.studentId || doubtConversation.studentId === topscholarScope.studentId)
+        ) {
+          dbConversation = doubtConversation;
+        }
+      }
+      if (!dbConversation) {
+        dbConversation = await storage.createConversation({
+          businessAccountId,
+          title: 'Voice Chat',
+          visitorToken: userId,
+          studentId: topscholarScope?.studentId || null,
+          topscholarDoubtId: topscholarDoubtId || null,
+          topscholarStudentPlanMappingId: topscholarScope?.studentPlanMappingId || null,
+          topscholarPlanId: topscholarScope?.planId || null,
+        });
+      }
 
       const conversationId = dbConversation.id; // Stable identifier for entire session
 
@@ -391,10 +448,18 @@ export class RealtimeVoiceService {
         sessionId: null,
         conversationId: conversationId,
         personality: settings?.personality || 'friendly',
+        responseLength: settings?.responseLength || 'balanced',
         companyDescription: businessAccount.description || '',
         currency: settings?.currency || 'USD',
         currencySymbol: settings?.currency === 'USD' ? '$' : '€',
         customInstructions: settings?.customInstructions || undefined,
+        systemMode: (settings as any)?.systemMode || 'full',
+        k12EducationEnabled: (businessAccount as any).k12EducationEnabled === 'true',
+        k12ContentOnly: (businessAccount as any).k12ContentOnlyMode === 'true',
+        k12VerbatimContentMode: (businessAccount as any).k12VerbatimContentMode === 'true',
+        jobPortalEnabled: (businessAccount as any).jobPortalEnabled === true,
+        demoOrdersEnabled: (businessAccount as any).demoOrdersEnabled === true,
+        skipLeadTraining: (businessAccount as any).skipLeadTraining === true,
         isProcessing: false,
         currentUserTranscript: '',
         currentAITranscript: '',
@@ -404,6 +469,8 @@ export class RealtimeVoiceService {
         reconnectAttempts: 0,
         isReconnecting: false,
         selectedLanguage,
+        selectedVoice: isElevenLabsVoice(selectedVoice) ? 'shimmer' : selectedVoice,
+        isInternalTest,
         textConversationId,
         topscholarDoubtId,
         topscholarCpIds: scopedCpIds,
@@ -489,6 +556,11 @@ export class RealtimeVoiceService {
     console.log('[RealtimeVoice] Cleaning up conversation:', conversationId, 'reason:', reason);
 
     try {
+      // A canonical answer remains response-owned until browser playback
+      // completes. Disconnect/timeout/forced-close abandons that playback, so
+      // roll back the assistant row before dropping the session state.
+      this.abandonCanonicalResponse(conversation, false);
+
       // CRITICAL FIX: Send session_closed message to client BEFORE cleanup
       // This prevents client from retrying with stale conversationId
       if (conversation.clientWs && conversation.clientWs.readyState === WebSocket.OPEN) {
@@ -518,6 +590,12 @@ export class RealtimeVoiceService {
         try { conversation.activeElevenLabsAbort.abort(); } catch {}
         conversation.activeElevenLabsAbort = undefined;
         conversation.activeElevenLabsResponseId = undefined;
+        conversation.activeElevenLabsStartedAt = undefined;
+      }
+      if (conversation.activeOpenAITtsAbort) {
+        try { conversation.activeOpenAITtsAbort.abort(); } catch {}
+        conversation.activeOpenAITtsAbort = undefined;
+        conversation.activeOpenAITtsResponseId = undefined;
         conversation.activeElevenLabsStartedAt = undefined;
       }
       // Drop any queued sentence TTS so the drainer stops.
@@ -585,14 +663,47 @@ export class RealtimeVoiceService {
     this.sendToClient(conversation.clientWs, { type: 'response_cancelled', responseId });
   }
 
-  private cancelResponse(conversation: VoiceConversation, respectGrace = false) {
+  private abandonCanonicalResponse(
+    conversation: VoiceConversation,
+    notifyClient = true,
+  ): boolean {
+    if (conversation.currentResponseKind !== 'canonical') return false;
+
+    const responseId = conversation.currentResponseId;
+    if (notifyClient) this.markResponseCancelled(conversation, responseId);
+    if (
+      conversation.canonicalPersistedMessageId &&
+      conversation.canonicalPersistedResponseId === responseId &&
+      conversation.canonicalPersistedContent
+    ) {
+      const messageId = conversation.canonicalPersistedMessageId;
+      const content = conversation.canonicalPersistedContent;
+      conversation.canonicalPersistedMessageId = undefined;
+      conversation.canonicalPersistedResponseId = undefined;
+      conversation.canonicalPersistedContent = undefined;
+      void chatService.rollbackDeferredAssistantMessage({
+        userId: conversation.userId,
+        businessAccountId: conversation.businessAccountId,
+        existingConversationId: conversation.conversationId,
+      }, messageId, content).catch(error => {
+        console.error('[RealtimeVoice] Failed to roll back abandoned canonical answer:', error);
+      });
+    }
+    conversation.isProcessing = false;
+    conversation.currentResponseKind = undefined;
+    conversation.activeElevenLabsStartedAt = undefined;
+    return true;
+  }
+
+  private cancelResponse(conversation: VoiceConversation, respectGrace = false): boolean {
     if (respectGrace && conversation.activeElevenLabsStartedAt) {
       const sincePlaybackStart = Date.now() - conversation.activeElevenLabsStartedAt;
       if (sincePlaybackStart < this.BARGE_IN_GRACE_MS) {
         console.log('[RealtimeVoice] Ignoring barge-in within grace window (', sincePlaybackStart, 'ms < ', this.BARGE_IN_GRACE_MS, 'ms) — likely AI self-echo, keeping answer');
-        return;
+        return false;
       }
     }
+    let cancelled = false;
     // ALWAYS abort any in-flight ElevenLabs synth on user interrupt — even
     // when OpenAI has already finished (`isProcessing === false`). The exact
     // bug this task fixes is the window where OpenAI's response.done has
@@ -608,6 +719,17 @@ export class RealtimeVoiceService {
       conversation.activeElevenLabsAbort = undefined;
       conversation.activeElevenLabsResponseId = undefined;
       conversation.activeElevenLabsStartedAt = undefined;
+      cancelled = true;
+    }
+    if (conversation.activeOpenAITtsAbort) {
+      const abortedResponseId = conversation.activeOpenAITtsResponseId;
+      console.log('[RealtimeVoice] Aborting in-flight OpenAI TTS due to user interrupt, responseId:', abortedResponseId);
+      this.markResponseCancelled(conversation, abortedResponseId);
+      try { conversation.activeOpenAITtsAbort.abort(); } catch {}
+      conversation.activeOpenAITtsAbort = undefined;
+      conversation.activeOpenAITtsResponseId = undefined;
+      conversation.activeElevenLabsStartedAt = undefined;
+      cancelled = true;
     }
 
     // Drop any sentences still queued for the interrupted answer so no late
@@ -617,6 +739,7 @@ export class RealtimeVoiceService {
     this.markResponseCancelled(conversation, conversation.ttsResponseId);
     if (conversation.ttsQueue && conversation.ttsQueue.length > 0) {
       conversation.ttsQueue = [];
+      cancelled = true;
     }
     // The interrupted answer will never finish draining — drop any deferred
     // ai_done so it can't fire spuriously for a later response.
@@ -630,12 +753,22 @@ export class RealtimeVoiceService {
     if (conversation.holdSpeechResponseId) {
       this.markResponseCancelled(conversation, conversation.holdSpeechResponseId);
       conversation.holdSpeechResponseId = undefined;
+      cancelled = true;
+    }
+
+    // Canonical turns are generated through ChatService rather than a Realtime
+    // response. The upstream completion cannot currently be transport-aborted,
+    // so mark it abandoned and let its post-await ownership checks suppress all
+    // display/audio. Never send response.cancel for a response that does not
+    // exist on the Realtime socket.
+    if (conversation.currentResponseKind === 'canonical') {
+      return this.abandonCanonicalResponse(conversation, true);
     }
 
     if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
       if (!conversation.isProcessing) {
         console.log('[RealtimeVoice] No active OpenAI response to cancel, skipping response.cancel (any ElevenLabs synth has been aborted above)');
-        return;
+        return cancelled;
       }
       // Mark this response as cancelled BEFORE sending response.cancel — late deltas
       // from OpenAI for this id must be suppressed so the client doesn't render a
@@ -655,7 +788,9 @@ export class RealtimeVoiceService {
       }));
       conversation.isProcessing = false;
       console.log('[RealtimeVoice] Cancelled ongoing AI response, id:', conversation.currentResponseId);
+      return true;
     }
+    return cancelled;
   }
 
   private async connectToOpenAI(conversationId: string, conversation: VoiceConversation) {
@@ -1604,13 +1739,6 @@ export class RealtimeVoiceService {
           // never inject its context or create a response after this point.
           conversation.k12TurnSeq = (conversation.k12TurnSeq ?? 0) + 1;
           
-          // Save to database and conversation memory
-          if (conversation.conversationId && userTranscript) {
-            await this.saveMessageToDB(conversation.conversationId, 'user', userTranscript);
-            conversationMemory.storeMessage(conversation.userId, 'user', userTranscript);
-            console.log('[RealtimeVoice] Saved user message to DB');
-          }
-          
           this.sendToClient(conversation.clientWs, {
             type: 'transcript',
             text: userTranscript,
@@ -1667,11 +1795,18 @@ export class RealtimeVoiceService {
               }
             }
           }
+
+          // Voice uses Realtime for speech-to-text only. The shared text-chat
+          // pipeline authors and persists the completed canonical Markdown; TTS
+          // is derived from that exact answer after it is ready for display.
+          console.log('[RealtimeVoice] Canonical voice turn: generating ChatService Markdown before TTS');
+          await this.generateCanonicalVoiceAnswer(conversation, trimmedTranscript);
+          break;
           
           // Check if a journey should be activated or is already active
           // CRITICAL: Only process journey if explicitly triggered or already in progress for THIS conversation
           let journeyResult: any = null;
-          if (conversation.conversationId && conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+          if (conversation.conversationId && conversation.openaiWs?.readyState === WebSocket.OPEN) {
             journeyResult = await journeyOrchestrator.processUserMessage(
               conversation.conversationId,
               conversation.userId,
@@ -1746,7 +1881,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
                 }
               };
               
-              conversation.openaiWs.send(JSON.stringify(journeyInstruction));
+              conversation.openaiWs!.send(JSON.stringify(journeyInstruction));
               
               // Trigger response generation - AI will ask the journey question
               const responseCreate = {
@@ -1756,7 +1891,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
                   instructions: `You MUST rephrase this question naturally and conversationally: "${journeyResult.journeyResponse}". Make it sound warm and friendly, but keep the same intent. Do NOT add any extra information - ONLY ask the rephrased question.`
                 }
               };
-              conversation.openaiWs.send(JSON.stringify(responseCreate));
+              conversation.openaiWs!.send(JSON.stringify(responseCreate));
               
               console.log('[RealtimeVoice] Sent FORCED journey question to OpenAI');
               
@@ -1796,13 +1931,24 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
             
             // Send normal response when journey check couldn't be performed
             console.log('[RealtimeVoice] Creating normal OpenAI response (journey check skipped)');
-            if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+            if (conversation.openaiWs?.readyState === WebSocket.OPEN) {
               await this.sendNormalResponse(conversation);
             }
           }
           break;
 
         case 'response.created':
+          // Realtime is intentionally transcription-only for normal voice
+          // turns. An assistant response here would be authored by Realtime,
+          // not by ChatService, and therefore cannot be the canonical Markdown
+          // answer displayed by text chat. Reject it rather than allowing a
+          // legacy transcript/display path to race the canonical turn.
+          console.error('[RealtimeVoice] Rejected unexpected Realtime-authored response:', event.response?.id);
+          if (conversation.openaiWs?.readyState === WebSocket.OPEN) {
+            conversation.openaiWs.send(JSON.stringify({ type: 'response.cancel' }));
+          }
+          break;
+
           console.log('[RealtimeVoice] Response created, id:', event.response?.id);
           conversation.isProcessing = true;
           conversation.currentAITranscript = '';
@@ -1815,6 +1961,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           conversation.ttsTranscriptCursor = 0;
           // Track current response ID
           conversation.currentResponseId = event.response?.id;
+          conversation.currentResponseKind = 'realtime';
 
           // Every response follows the same show-then-speak gate. A response
           // cannot expose raw streamed text or native audio before its complete
@@ -1845,15 +1992,17 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           }
           
           // CRITICAL FIX BUG 4: If we have a pending journey step ID, add it to the Map keyed by stepId
-          if (conversation.pendingJourneyStepId && conversation.currentResponseId) {
+          const legacyResponseId = conversation.currentResponseId;
+          const legacyStepId = conversation.pendingJourneyStepId;
+          if (legacyStepId && legacyResponseId) {
             // We need the original question text for logging - get it from journeyResult
-            const stepId = conversation.pendingJourneyStepId;
+            const stepId = legacyStepId as string;
             conversation.journeyResponseTracking.set(stepId, {
               original: '', // Will be set in response.done when we have the full transcript
-              responseId: conversation.currentResponseId,
+              responseId: legacyResponseId as string,
               timestamp: Date.now()
             });
-            console.log('[RealtimeVoice] Tracked journey by STEP ID:', stepId, 'responseId:', conversation.currentResponseId);
+            console.log('[RealtimeVoice] Tracked journey by STEP ID:', stepId, 'responseId:', legacyResponseId);
             conversation.pendingJourneyStepId = undefined; // Clear pending
           }
           break;
@@ -2450,6 +2599,173 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
     const tokens = m.split(' ');
     if (tokens.length <= 4 && tokens.every(t => greetingWords.has(t))) return true;
     return false;
+  }
+
+  /**
+   * Generate the voice turn through the same authoritative completed-answer
+   * pipeline used by text chat. Realtime remains the STT transport only.
+   */
+  private async generateCanonicalVoiceAnswer(
+    conversation: VoiceConversation,
+    userTranscript: string,
+  ): Promise<void> {
+    const responseId = `voice_${conversation.conversationId}_${conversation.k12TurnSeq ?? Date.now()}`;
+    const turnSeq = conversation.k12TurnSeq ?? 0;
+    let persistedMessageId: string | null = null;
+    let persistedContent = '';
+
+    conversation.currentResponseId = responseId;
+    conversation.currentResponseKind = 'canonical';
+    conversation.currentAITranscript = '';
+    conversation.isProcessing = true;
+    this.sendToClient(conversation.clientWs, { type: 'thinking' });
+    this.sendToClient(conversation.clientWs, { type: 'voice_message_start', responseId });
+
+    const abandoned = () =>
+      conversation.cancelledResponseIds.has(responseId) ||
+      conversation.currentResponseId !== responseId ||
+      conversation.currentResponseKind !== 'canonical' ||
+      (conversation.k12TurnSeq ?? 0) !== turnSeq;
+
+    const scope = conversation.topscholarScope;
+    const topScholar = isTopscholarAccount(conversation.businessAccountId);
+    const chatContext: ChatContext = {
+      userId: conversation.userId,
+      businessAccountId: conversation.businessAccountId,
+      existingConversationId: conversation.conversationId,
+      personality: conversation.personality,
+      responseLength: conversation.responseLength,
+      companyDescription: conversation.companyDescription,
+      openaiApiKey: conversation.openaiApiKey,
+      currency: conversation.currency,
+      currencySymbol: conversation.currencySymbol,
+      customInstructions: conversation.customInstructions,
+      preferredLanguage: conversation.selectedLanguage || conversation.detectedLanguage,
+      visitorToken: conversation.userId,
+      isInternalTest: conversation.isInternalTest,
+      supportsCalendarUI: false,
+      channel: 'widget',
+      systemMode: conversation.systemMode,
+      k12EducationEnabled: conversation.k12EducationEnabled === true || topScholar,
+      k12ContentOnlyMode: conversation.k12ContentOnly === true,
+      k12VerbatimContentMode: conversation.k12VerbatimContentMode === true,
+      jobPortalEnabled: conversation.jobPortalEnabled === true,
+      demoOrdersEnabled: conversation.demoOrdersEnabled === true,
+      skipLeadTraining: conversation.skipLeadTraining === true,
+      topscholarCpId: scope?.cpId ?? null,
+      topscholarStudentId: scope?.studentId ?? null,
+      studentName: scope?.studentName ?? null,
+      topscholarCpIds: conversation.topscholarCpIds,
+      topscholarDoubtId: conversation.topscholarDoubtId ?? null,
+      topscholarStudentPlanMappingId: scope?.studentPlanMappingId ?? null,
+      topscholarPlanId: scope?.planId ?? null,
+      topscholarDoubtSyncBaseUrl: scope?.doubtSyncBaseUrl ?? null,
+      studentBoard: scope?.board ?? null,
+      studentMedium: scope?.medium ?? null,
+      studentGrade: scope?.grade ?? null,
+      studentSubject: scope?.subject ?? null,
+      studentChapter: conversation.topscholarChapter ?? scope?.chapter ?? null,
+      topscholarSubjectScoping: topScholar,
+      deferAssistantPersistence: true,
+    };
+
+    try {
+      let streamedMarkdown = '';
+      let finalMarkdown = '';
+      for await (const event of chatService.streamMessage(userTranscript, chatContext)) {
+        if (abandoned()) return;
+        if (event.type === 'content' && typeof event.data === 'string') {
+          streamedMarkdown += event.data;
+        } else if (event.type === 'final' && typeof event.data === 'string' && event.data.trim()) {
+          finalMarkdown = event.data;
+        }
+      }
+      if (abandoned()) return;
+
+      const displayMarkdown = (finalMarkdown || streamedMarkdown).trim();
+      if (!displayMarkdown) {
+        throw new Error('Canonical chat pipeline returned an empty answer');
+      }
+
+      const speechText = await createVoiceSpeechText(
+        displayMarkdown,
+        conversation.openaiApiKey,
+        conversation.businessAccountId,
+        conversation.conversationId,
+      );
+      if (abandoned()) return;
+
+      persistedContent = displayMarkdown;
+      persistedMessageId = await chatService.commitDeferredAssistantMessage(
+        chatContext,
+        displayMarkdown,
+        () => !abandoned(),
+      );
+      if (!persistedMessageId) {
+        if (abandoned()) return;
+        throw new Error('Canonical assistant answer could not be persisted');
+      }
+      conversation.canonicalPersistedMessageId = persistedMessageId;
+      conversation.canonicalPersistedResponseId = responseId;
+      conversation.canonicalPersistedContent = displayMarkdown;
+      if (abandoned()) {
+        await chatService.rollbackDeferredAssistantMessage(
+          chatContext,
+          persistedMessageId,
+          displayMarkdown,
+        );
+        persistedMessageId = null;
+        conversation.canonicalPersistedMessageId = undefined;
+        conversation.canonicalPersistedResponseId = undefined;
+        conversation.canonicalPersistedContent = undefined;
+        return;
+      }
+
+      conversation.currentAITranscript = speechText;
+      // WebSocket frame ordering is the show-before-speak gate: this complete
+      // display contract is enqueued before either TTS provider can emit PCM.
+      this.sendToClient(conversation.clientWs, {
+        type: 'answer_ready',
+        responseId,
+        displayMarkdown,
+        speechText,
+      });
+
+      if (speechText) {
+        if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
+          await this.synthesizeWithElevenLabs(conversation, speechText);
+        } else {
+          await this.synthesizeWithOpenAI(conversation, speechText, responseId);
+        }
+      }
+      if (abandoned()) return;
+
+      conversation.isProcessing = false;
+      // Keep response ownership and the rollback handle until the browser says
+      // its scheduled PCM has actually finished playing.
+      this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId });
+    } catch (error) {
+      if (abandoned()) return;
+      if (persistedMessageId && persistedContent) {
+        try {
+          await chatService.rollbackDeferredAssistantMessage(
+            chatContext,
+            persistedMessageId,
+            persistedContent,
+          );
+        } catch (rollbackError) {
+          console.error('[RealtimeVoice] Failed to roll back failed canonical answer:', rollbackError);
+        }
+        conversation.canonicalPersistedMessageId = undefined;
+        conversation.canonicalPersistedResponseId = undefined;
+        conversation.canonicalPersistedContent = undefined;
+      }
+      conversation.isProcessing = false;
+      conversation.currentResponseKind = undefined;
+      console.error('[RealtimeVoice] Canonical answer failed:', error);
+      this.sendError(conversation.clientWs, 'I could not complete that answer. Please try again.');
+      this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId });
+    }
   }
 
   /**
@@ -3095,10 +3411,29 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
         // BARGE_IN_GRACE_MS of the answer's audio is almost always the client
         // VAD firing on the AI's own playback echo, not a real interruption.
         console.log('[RealtimeVoice] User interrupted AI');
-        this.cancelResponse(conversation, true);
+        const cancelled = this.cancelResponse(conversation, false);
         
-        // Send acknowledgment to client
-        this.sendToClient(conversation.clientWs, { type: 'interrupt_ack' });
+        // Explicit client interrupts are already protected by the client's
+        // playback grace window. Tell the client whether response ownership was
+        // actually abandoned so its local state cannot diverge from the server.
+        this.sendToClient(conversation.clientWs, {
+          type: cancelled ? 'interrupt_ack' : 'interrupt_ignored',
+        });
+        break;
+
+      case 'playback_complete':
+        if (
+          message.responseId &&
+          message.responseId === conversation.currentResponseId &&
+          conversation.currentResponseKind === 'canonical'
+        ) {
+          conversation.currentResponseKind = undefined;
+          conversation.canonicalPersistedMessageId = undefined;
+          conversation.canonicalPersistedResponseId = undefined;
+          conversation.canonicalPersistedContent = undefined;
+          conversation.activeElevenLabsStartedAt = undefined;
+          console.log('[RealtimeVoice] Canonical playback completed:', message.responseId);
+        }
         break;
 
       case 'pong':
@@ -3430,7 +3765,8 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
     return !!(
       conversation.ttsDraining ||
       (conversation.ttsQueue && conversation.ttsQueue.length > 0) ||
-      conversation.activeElevenLabsAbort
+      conversation.activeElevenLabsAbort ||
+      conversation.activeOpenAITtsAbort
     );
   }
 
@@ -3542,6 +3878,102 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
     }
   }
 
+  /**
+   * Speak a canonical answer with OpenAI's text-to-speech endpoint. Realtime is
+   * deliberately not asked to author or restate the answer: the exact
+   * speech-safe script is the TTS input.
+   */
+  private async synthesizeWithOpenAI(
+    conversation: VoiceConversation,
+    text: string,
+    responseId: string,
+  ): Promise<void> {
+    if (!text.trim()) return;
+
+    if (conversation.activeOpenAITtsAbort) {
+      try { conversation.activeOpenAITtsAbort.abort(); } catch {}
+    }
+    const abortController = new AbortController();
+    conversation.activeOpenAITtsAbort = abortController;
+    conversation.activeOpenAITtsResponseId = responseId;
+
+    const supportedVoices = new Set([
+      'alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'marin',
+      'nova', 'onyx', 'sage', 'shimmer', 'verse',
+    ]);
+    const voice = supportedVoices.has(conversation.selectedVoice || '')
+      ? conversation.selectedVoice!
+      : 'shimmer';
+
+    // The speech endpoint has an input-size limit. Preserve order and break at
+    // sentence/whitespace boundaries without changing the script.
+    const chunks: string[] = [];
+    let remaining = text.trim();
+    while (remaining.length > 3500) {
+      const window = remaining.slice(0, 3500);
+      const sentenceBreak = Math.max(
+        window.lastIndexOf('. '),
+        window.lastIndexOf('? '),
+        window.lastIndexOf('! '),
+        window.lastIndexOf('\n'),
+      );
+      const splitAt = sentenceBreak > 1000 ? sentenceBreak + 1 : window.lastIndexOf(' ');
+      const safeSplit = splitAt > 0 ? splitAt : 3500;
+      chunks.push(remaining.slice(0, safeSplit).trim());
+      remaining = remaining.slice(safeSplit).trim();
+    }
+    if (remaining) chunks.push(remaining);
+
+    try {
+      const client = new OpenAI({ apiKey: conversation.openaiApiKey });
+      for (const chunk of chunks) {
+        if (
+          abortController.signal.aborted ||
+          conversation.cancelledResponseIds.has(responseId) ||
+          conversation.currentResponseId !== responseId
+        ) return;
+
+        const audioResponse = await client.audio.speech.create({
+          model: 'gpt-4o-mini-tts',
+          voice: voice as any,
+          input: chunk,
+          response_format: 'pcm',
+        }, { signal: abortController.signal });
+        const pcm = Buffer.from(await audioResponse.arrayBuffer());
+
+        if (
+          abortController.signal.aborted ||
+          conversation.cancelledResponseIds.has(responseId) ||
+          conversation.currentResponseId !== responseId ||
+          conversation.clientWs.readyState !== WebSocket.OPEN
+        ) return;
+
+        conversation.activeElevenLabsStartedAt ||= Date.now();
+        const evenLength = pcm.length & ~1;
+        for (let offset = 0; offset < evenLength; offset += 32 * 1024) {
+          if (
+            abortController.signal.aborted ||
+            conversation.cancelledResponseIds.has(responseId) ||
+            conversation.currentResponseId !== responseId
+          ) return;
+          conversation.clientWs.send(pcm.subarray(offset, Math.min(offset + 32 * 1024, evenLength)));
+        }
+      }
+    } catch (error) {
+      const errName = (error as { name?: string })?.name;
+      if (errName === 'AbortError' || abortController.signal.aborted) return;
+      console.error('[RealtimeVoice] OpenAI TTS failed:', error instanceof Error ? error.message : String(error));
+    } finally {
+      if (conversation.activeOpenAITtsAbort === abortController) {
+        conversation.activeOpenAITtsAbort = undefined;
+        conversation.activeOpenAITtsResponseId = undefined;
+        if (conversation.currentResponseKind !== 'canonical') {
+          conversation.activeElevenLabsStartedAt = undefined;
+        }
+      }
+    }
+  }
+
   private async synthesizeWithElevenLabs(conversation: VoiceConversation, text: string): Promise<void> {
     if (!conversation.elevenlabsApiKey || !conversation.elevenlabsVoiceId) return;
 
@@ -3560,7 +3992,6 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
     const synthResponseId = conversation.currentResponseId;
     conversation.activeElevenLabsAbort = abortController;
     conversation.activeElevenLabsResponseId = synthResponseId;
-    conversation.activeElevenLabsStartedAt = Date.now();
 
     try {
       console.log('[RealtimeVoice] Streaming ElevenLabs TTS, text length:', text.length, 'responseId:', synthResponseId);
@@ -3596,6 +4027,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
             return;
           }
           if (conversation.clientWs.readyState !== WebSocket.OPEN) return;
+          conversation.activeElevenLabsStartedAt ||= Date.now();
 
           const merged = leftover ? Buffer.concat([leftover, chunk]) : chunk;
           const evenLen = merged.length & ~1; // round down to multiple of 2
@@ -3641,7 +4073,9 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
       if (conversation.activeElevenLabsAbort === abortController) {
         conversation.activeElevenLabsAbort = undefined;
         conversation.activeElevenLabsResponseId = undefined;
-        conversation.activeElevenLabsStartedAt = undefined;
+        if (conversation.currentResponseKind !== 'canonical') {
+          conversation.activeElevenLabsStartedAt = undefined;
+        }
       }
       // This direct synth may have been the last active TTS producer for a
       // response whose ai_done was deferred at response.done.

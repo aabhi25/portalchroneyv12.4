@@ -15,7 +15,11 @@
  * Whether the model *chooses* sensibly (zero on filler, one on a real lesson)
  * needs a live call and is covered separately.
  */
-import { placeDiagrams, type VoiceDiagramCandidate } from "../voiceFormatterService";
+import {
+  createVoiceSpeechFallback,
+  placeDiagrams,
+  type VoiceDiagramCandidate,
+} from "../voiceFormatterService";
 
 let failed = 0;
 function expect(cond: any, label: string) {
@@ -124,6 +128,17 @@ function countImages(md: string): number {
     { url: "https://cdn.test/x.png", topic: "Tricky [bracket] topic", chapter: "C", subject: "S" },
   ]);
   expect(countImages(markdown) === 1, "bracketed topic still produces one valid image tag");
+}
+
+// 9. Speech is derived from canonical Markdown without exposing formatting or URLs.
+{
+  const speech = createVoiceSpeechFallback(
+    "## Step 1\n\nThe ratio is $3:1$.\n\n$$x = \\frac{12}{4}$$\n\n![diagram](https://cdn.test/ratio.png)"
+  );
+  expect(!speech.includes("##") && !speech.includes("$"), "speech fallback removes Markdown and math delimiters");
+  expect(!speech.includes("https://"), "speech fallback never reads an image URL");
+  expect(speech.includes("3 to 1"), "speech fallback verbalizes a numeric ratio");
+  expect(speech.includes("x equals 12 over 4"), "speech fallback verbalizes equations and fractions");
 }
 
 console.log(failed === 0 ? "\nAll voice diagram placement tests passed" : `\n${failed} test(s) FAILED`);

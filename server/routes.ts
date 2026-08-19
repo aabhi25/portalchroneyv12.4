@@ -3606,6 +3606,7 @@ Return JSON:
         // already serializes per (business, visitor, phone), and
         // OtpService.issueChallenge is idempotent for the same (conv, phone),
         // so a relaxed lookup is both correct and sufficient.
+        let voiceIsInternalTest = false;
         if (sessionToken) {
           const existing = await tx.execute(sql`
             SELECT c.id
@@ -35321,6 +35322,11 @@ Return ONLY a valid JSON object in this format:
             return;
           }
 
+          const userActiveAccountId = (user as any).activeBusinessAccountId || user.businessAccountId;
+          voiceIsInternalTest =
+            user.role === 'super_admin' ||
+            userActiveAccountId === businessAccountId;
+
           // SECURITY: Check if this is a widget connection first
           // Widget connections should be treated as customer-facing and bypass account ownership checks
           const isWidgetId = userId.startsWith('widget_');
@@ -35330,8 +35336,6 @@ Return ONLY a valid JSON object in this format:
             // Super admins can access any business account
             // Regular users can access their base account OR any account they've switched to via multi-account linking
             // Use activeBusinessAccountId if available (set when user switches accounts)
-            const userActiveAccountId = (user as any).activeBusinessAccountId || user.businessAccountId;
-            
             if (user.role !== 'super_admin' && userActiveAccountId !== businessAccountId) {
               console.warn('[WebSocket] User does not have access to business account:', {
                 userId: user.id,
@@ -35460,6 +35464,11 @@ Return ONLY a valid JSON object in this format:
                 grade: voiceHandoff.grade,
                 subject: voiceHandoff.subject,
                 chapter: voiceHandoff.chapter,
+                studentId: voiceHandoff.studentId,
+                studentName: voiceHandoff.studentName,
+                studentPlanMappingId: voiceHandoff.studentPlanMappingId,
+                planId: voiceHandoff.planId,
+                doubtSyncBaseUrl: voiceCfg.doubtSyncBaseUrl,
               };
               if (voiceDoubtId) {
                 const voiceConv = await storage.getLatestConversationByDoubtId(businessAccountId, voiceDoubtId);
@@ -35486,7 +35495,7 @@ Return ONLY a valid JSON object in this format:
 
         wss.handleUpgrade(request, socket, head, (ws) => {
           console.log('[WebSocket] Voice connection established');
-          realtimeVoiceService.handleConnection(ws, businessAccountId, userId, conversationId || undefined, selectedLanguage, textConversationId, voiceDoubtId || undefined, voiceScope);
+          realtimeVoiceService.handleConnection(ws, businessAccountId, userId, conversationId || undefined, selectedLanguage, textConversationId, voiceDoubtId || undefined, voiceScope, voiceIsInternalTest);
         });
       } catch (error: any) {
         console.error('[WebSocket] Upgrade error:', error);

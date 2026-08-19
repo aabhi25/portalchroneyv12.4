@@ -39,6 +39,28 @@ export class ConversationMemoryService {
     }
   }
 
+  /**
+   * Remove the newest matching message. Used when a response-owned persistence
+   * write loses an interruption race after the database insert completed.
+   */
+  removeLastMatchingMessage(userId: string, role: 'user' | 'assistant', content: string): void {
+    const conversation = this.conversations.get(userId);
+    if (!conversation) return;
+
+    for (let i = conversation.messages.length - 1; i >= 0; i--) {
+      const message = conversation.messages[i];
+      if (message.role === role && message.content === content) {
+        conversation.messages.splice(i, 1);
+        conversation.lastActivity = new Date();
+        if (conversation.messages.length === 0) {
+          this.conversations.delete(userId);
+          this.messageCounters.delete(userId);
+        }
+        return;
+      }
+    }
+  }
+
   getConversationHistory(userId: string): Array<{ role: 'user' | 'assistant' | 'system'; content: string }> {
     this.cleanupExpiredConversations();
     const conversation = this.conversations.get(userId);

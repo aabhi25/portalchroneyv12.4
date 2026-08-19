@@ -104,3 +104,19 @@ attach-everything behaviour.
 - Chat and voice can retrieve identically and still diverge: chat carries a "solve step-by-step, NEVER refuse academic questions" final override while voice's guardrail demanded EVERY value be present in retrieved content — one missing routine constant (a molar mass) made voice refuse what chat computed.
 - The strict wording lived in THREE places on the voice side: the session guardrail, the per-turn injected curriculum instruction, and the verbatim-mode guardrail. Any one of them alone re-creates the refusal — a policy change must sweep all prompt sites, and grep for the contradicting phrase ("every concept, formula, and value/constant") to find them.
 - The boundary that stays strict: uncovered TOPICS are still declined and the empty-retrieval branch still forbids outside knowledge; the exception is only routine supporting values for a covered concept/formula.
+
+## Canonical display must be a hard protocol boundary
+
+Realtime transcription and ChatService answer generation are separate capabilities.
+Even when Realtime is configured with `create_response: false`, an unexpected
+Realtime-authored response must never be allowed to populate a voice bubble.
+
+**Why:** a Realtime audio transcript is optimized for speech and does not carry
+the structured derivation, Markdown hierarchy, or LaTeX that the text pipeline
+produces. Letting it through creates visibly different answers for the same
+question.
+
+**How to apply:** use Realtime for speech-to-text only; generate the answer
+through ChatService; display only the completed `answer_ready` Markdown; derive
+speech separately. Reject unexpected Realtime assistant responses, and use the
+canonical-turn log marker when verifying a live voice turn.

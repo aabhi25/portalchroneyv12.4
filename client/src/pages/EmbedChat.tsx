@@ -6092,6 +6092,41 @@ export default function EmbedChat() {
                   inlineVoiceAIMessagesRef.current.set(messageId, updated);
                   setMessages(prev => prev.map(m => m.id === messageId ? { ...m, content: updated } : m));
                 }}
+                onAIMessageReady={(messageId, displayMarkdown, spokenText) => {
+                  // Canonical voice answer: insert the same Markdown produced by
+                  // text chat in one state update. The speech derivative never
+                  // becomes visible or authoritative history content.
+                  inlineVoiceAIMessagesRef.current.set(messageId, displayMarkdown);
+                  voiceSpokenTextRef.current.set(messageId, spokenText);
+                  voiceFormattedIdsRef.current.add(messageId);
+                  setVoiceFormattedIds(prev => {
+                    const next = new Set(prev);
+                    next.add(messageId);
+                    return next;
+                  });
+                  const aiMsg: ChatMessage = {
+                    id: messageId,
+                    role: 'assistant',
+                    content: displayMarkdown,
+                    timestamp: new Date(),
+                  };
+                  setMessages(prev => [...prev, aiMsg]);
+                  setStreamingMessageId(messageId);
+                }}
+                onAIMessageCancelled={(messageId) => {
+                  inlineVoiceAIMessagesRef.current.delete(messageId);
+                  voiceSpokenTextRef.current.delete(messageId);
+                  voiceFormattedIdsRef.current.delete(messageId);
+                  setMessages(prev => prev.filter(message => message.id !== messageId));
+                  setVoiceFormattedIds(prev => {
+                    if (!prev.has(messageId)) return prev;
+                    const next = new Set(prev);
+                    next.delete(messageId);
+                    return next;
+                  });
+                  setVoiceHighlight(prev => prev?.messageId === messageId ? null : prev);
+                  setStreamingMessageId(prev => prev === messageId ? null : prev);
+                }}
                 onAIMessageDone={(messageId) => {
                   setStreamingMessageId(null);
                   inlineVoiceAIMessagesRef.current.delete(messageId);

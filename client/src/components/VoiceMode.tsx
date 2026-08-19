@@ -36,6 +36,8 @@ interface VoiceModeProps {
   topscholarCpId?: string;
 }
 
+const BARGE_IN_GRACE_MS = 700;
+
 export type { VoiceState };
 
 export function VoiceMode({
@@ -79,6 +81,9 @@ export function VoiceMode({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentAIMessageIdRef = useRef<string | null>(null);
   const currentResponseIdRef = useRef<string | null>(null);
+  const pendingPlaybackCompleteResponseIdRef = useRef<string | null>(null);
+  const pendingInterruptedMessageIdRef = useRef<string | null>(null);
+  const playbackStartedAtRef = useRef(0);
   const vadAnalyserRef = useRef<AnalyserNode | null>(null);
   const vadIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pendingInterruptRef = useRef(false); // Track interrupt state to ignore late chunks
@@ -365,6 +370,18 @@ export function VoiceMode({
         startHeartbeatMonitoring();
         break;
 
+      case 'speech_started':
+        if (
+          playbackStartedAtRef.current &&
+          Date.now() - playbackStartedAtRef.current < BARGE_IN_GRACE_MS
+        ) {
+          break;
+        }
+        if (stateRef.current === 'speaking' || isPlayingRef.current || audioQueueRef.current.length > 0) {
+          handleInterruption();
+        }
+        break;
+
       case 'transcript':
         // Clear interrupt flag when we get a new user transcript
         // This handles both client-side and server-side interruptions
@@ -424,6 +441,30 @@ export function VoiceMode({
         // Thinking… state even if the transcript event raced past us.
         setState('thinking');
         break;
+
+      case 'answer_ready': {
+        if (pendingInterruptRef.current) return;
+        if (data.responseId) {
+          currentResponseIdRef.current = data.responseId;
+        }
+        setState('speaking');
+        if (!vadIntervalRef.current && mediaStreamRef.current) {
+          startVoiceActivityDetection();
+        }
+
+        const messageId = Date.now().toString();
+        currentAIMessageIdRef.current = messageId;
+        awaitingUserTranscriptRef.current = true;
+        const aiMessage: Message = {
+          id: messageId,
+          role: 'assistant',
+          text: typeof data.displayMarkdown === 'string' ? data.displayMarkdown : '',
+          timestamp: new Date(),
+          isFinal: true,
+        };
+        setMessages(prev => [...prev, aiMessage]);
+        break;
+      }
 
       case 'ai_chunk':
         // Clear interrupt flag when AI starts responding to a new query
@@ -507,6 +548,15 @@ export function VoiceMode({
         }
         
         console.log('[VoiceMode] ✅ AI done, message ID:', currentAIMessageIdRef.current);
+        const completedResponseId = data.responseId || currentResponseIdRef.current;
+        if (completedResponseId) {
+          if (isPlayingRef.current || audioQueueRef.current.length > 0) {
+            pendingPlaybackCompleteResponseIdRef.current = completedResponseId;
+          } else {
+            safeSend(JSON.stringify({ type: 'playback_complete', responseId: completedResponseId }));
+            currentResponseIdRef.current = null;
+          }
+        }
         
         // AI finished speaking
         // Save message ID for potential late transcript reconciliation
@@ -536,6 +586,11 @@ export function VoiceMode({
         // Server acknowledged interrupt - clear pending flag and replay buffered transcript
         console.log('[VoiceMode] Interrupt acknowledged by server');
         pendingInterruptRef.current = false;
+        if (pendingInterruptedMessageIdRef.current) {
+          const interruptedMessageId = pendingInterruptedMessageIdRef.current;
+          setMessages(prev => prev.filter(msg => msg.id !== interruptedMessageId));
+          pendingInterruptedMessageIdRef.current = null;
+        }
         currentAIMessageIdRef.current = null;
         
         // Replay buffered transcript if any
@@ -553,6 +608,26 @@ export function VoiceMode({
           setState('thinking');
         } else {
           setState('listening');
+        }
+        break;
+
+      case 'interrupt_ignored':
+        pendingInterruptRef.current = false;
+        pendingInterruptedMessageIdRef.current = null;
+        bufferedTranscriptRef.current = null;
+        setState('listening');
+        break;
+
+      case 'response_cancelled':
+        {
+          const interruptedMessageId =
+            pendingInterruptedMessageIdRef.current || currentAIMessageIdRef.current;
+          if (interruptedMessageId) {
+          setMessages(prev => prev.filter(msg => msg.id !== interruptedMessageId));
+          }
+          pendingInterruptedMessageIdRef.current = null;
+          currentAIMessageIdRef.current = null;
+          currentResponseIdRef.current = null;
         }
         break;
 
@@ -783,6 +858,13 @@ export function VoiceMode({
         console.log('[VoiceMode] 🎤 VAD check - level:', average.toFixed(1), 'state:', stateRef.current);
         
         if (average > VOICE_THRESHOLD) {
+          if (
+            playbackStartedAtRef.current &&
+            Date.now() - playbackStartedAtRef.current < BARGE_IN_GRACE_MS
+          ) {
+            speechFrames = 0;
+            return;
+          }
           // Speech detected - increment counter and reset silence
           speechFrames++;
           silenceFrames = 0;
@@ -879,12 +961,13 @@ export function VoiceMode({
     
     // Set pending interrupt flag to ignore late chunks
     pendingInterruptRef.current = true;
+    pendingPlaybackCompleteResponseIdRef.current = null;
     
-    // Remove the interrupted AI message from the chat
+    // Defer removing the interrupted AI message until the server confirms it
+    // abandoned response ownership.
     if (currentAIMessageIdRef.current) {
       const interruptedMessageId = currentAIMessageIdRef.current;
-      console.log('[VoiceMode] Removing interrupted AI message:', interruptedMessageId);
-      setMessages(prev => prev.filter(msg => msg.id !== interruptedMessageId));
+      pendingInterruptedMessageIdRef.current = interruptedMessageId;
     }
     
     // Reset buffered transcript to prepare for new user speech
@@ -912,6 +995,8 @@ export function VoiceMode({
     isPlayingRef.current = false;
     nextPlaybackTimeRef.current = 0;
     currentAIMessageIdRef.current = null;
+    currentResponseIdRef.current = null;
+    playbackStartedAtRef.current = 0;
     
     // Clear playback analyser
     if (playbackAnalyserRef.current) {
@@ -949,6 +1034,15 @@ export function VoiceMode({
     if (audioQueueRef.current.length === 0) {
       isPlayingRef.current = false;
       currentAudioSourceRef.current = null;
+      playbackStartedAtRef.current = 0;
+      const completedResponseId = pendingPlaybackCompleteResponseIdRef.current;
+      if (completedResponseId) {
+        pendingPlaybackCompleteResponseIdRef.current = null;
+        safeSend(JSON.stringify({ type: 'playback_complete', responseId: completedResponseId }));
+        if (currentResponseIdRef.current === completedResponseId) {
+          currentResponseIdRef.current = null;
+        }
+      }
       
       // Stop volume monitoring and clean up analyser when playback completes naturally
       stopVolumeMonitoring();
@@ -997,6 +1091,9 @@ export function VoiceMode({
       playNextAudioChunk();
     };
 
+    if (!playbackStartedAtRef.current) {
+      playbackStartedAtRef.current = Date.now();
+    }
     source.start(scheduleTime);
     
     // Advance playback time for next chunk

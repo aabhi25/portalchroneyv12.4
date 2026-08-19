@@ -27,6 +27,12 @@ interface InlineVoiceModeProps {
   onAIMessageStart?: (messageId: string) => void;
   onAIMessageChunk?: (messageId: string, text: string) => void;
   onAIMessageDone?: (messageId: string) => void;
+  onAIMessageCancelled?: (messageId: string) => void;
+  /**
+   * Atomic canonical answer contract. The display Markdown is inserted directly
+   * into message state; spokenText is retained only for karaoke timing.
+   */
+  onAIMessageReady?: (messageId: string, displayMarkdown: string, spokenText: string) => void;
   /**
    * Final on-screen version of a spoken answer: formatted Markdown, with any
    * curriculum diagrams already placed inline. Diagrams travel around the model
@@ -66,6 +72,8 @@ export function InlineVoiceMode({
   onAIMessageStart,
   onAIMessageChunk,
   onAIMessageDone,
+  onAIMessageCancelled,
+  onAIMessageReady,
   onAIMessageReplace,
   topscholarToken,
   topscholarCpId,
@@ -559,18 +567,65 @@ export function InlineVoiceMode({
         // ahead of the student's ears, so it would otherwise be heard on top of
         // whatever comes next.
         if (data.responseId) {
+          const cancelledMessageId =
+            responseIdToMessageIdRef.current.get(data.responseId) ||
+            (currentResponseIdRef.current === data.responseId ? currentAIMessageIdRef.current : null);
           markResponseInterrupted(data.responseId);
           if (currentResponseIdRef.current === data.responseId) {
             flushQueuedAudio();
             // The answer was abandoned server-side — freeze/clear its highlight.
             finishKaraoke();
+            currentAIMessageIdRef.current = null;
+            currentResponseIdRef.current = null;
           }
+          if (cancelledMessageId) onAIMessageCancelled?.(cancelledMessageId);
+          responseIdToMessageIdRef.current.delete(data.responseId);
         }
         break;
 
       case 'transcript_correction':
         onTranscriptCorrection?.(data.original, data.corrected);
         break;
+
+      case 'answer_ready': {
+        if (data.responseId && interruptedResponseIdsRef.current.has(data.responseId)) return;
+        if (pendingInterruptRef.current) return;
+        if (data.responseId) currentResponseIdRef.current = data.responseId;
+
+        setState('speaking');
+        if (!vadIntervalRef.current && mediaStreamRef.current) {
+          startVoiceActivityDetection();
+        }
+
+        const messageId = 'voice-ai-' + Date.now().toString();
+        currentAIMessageIdRef.current = messageId;
+        awaitingUserTranscriptRef.current = true;
+        if (data.responseId) {
+          responseIdToMessageIdRef.current.set(data.responseId, messageId);
+          if (responseIdToMessageIdRef.current.size > 20) {
+            const oldest = responseIdToMessageIdRef.current.keys().next().value;
+            if (oldest) responseIdToMessageIdRef.current.delete(oldest);
+          }
+        }
+
+        const displayMarkdown = typeof data.displayMarkdown === 'string'
+          ? data.displayMarkdown
+          : '';
+        const spokenText = typeof data.speechText === 'string' ? data.speechText : '';
+
+        finishKaraoke();
+        karaokeRef.current.messageId = messageId;
+        karaokeRef.current.text = spokenText;
+        karaokeRef.current.textFinal = true;
+
+        if (onAIMessageReady) {
+          onAIMessageReady(messageId, displayMarkdown, spokenText);
+        } else {
+          onAIMessageStart?.(messageId);
+          onAIMessageReplace?.(messageId, displayMarkdown);
+        }
+        break;
+      }
 
       case 'ai_chunk':
         // Drop late chunks for responses the user already interrupted —
@@ -744,6 +799,12 @@ export function InlineVoiceMode({
         } else {
           setState('listening');
         }
+        break;
+
+      case 'interrupt_ignored':
+        pendingInterruptRef.current = false;
+        bufferedTranscriptRef.current = null;
+        setState('listening');
         break;
 
       case 'busy':
@@ -992,7 +1053,6 @@ export function InlineVoiceMode({
     // pair with the first byte of the NEXT answer's audio.
     pcmLeftoverByteRef.current = null;
     if (currentAIMessageIdRef.current) {
-      onAIMessageDone?.(currentAIMessageIdRef.current);
       currentAIMessageIdRef.current = null;
     }
     bufferedTranscriptRef.current = null;
@@ -1015,6 +1075,7 @@ export function InlineVoiceMode({
   const processAiDone = () => {
     aiDoneReceivedRef.current = false;
     if (pendingInterruptRef.current) return;
+    const completedResponseId = currentResponseIdRef.current;
     // Playback fully drained — mark the whole answer as spoken and drop the
     // highlight so the bubble swaps back to normal (formatted) rendering.
     finishKaraoke();
@@ -1025,6 +1086,9 @@ export function InlineVoiceMode({
       }
     }
     currentAIMessageIdRef.current = null;
+    if (completedResponseId) {
+      safeSend(JSON.stringify({ type: 'playback_complete', responseId: completedResponseId }));
+    }
     // Response fully completed — clear the active responseId so a future
     // interrupt before the next response's first chunk doesn't tag this one.
     currentResponseIdRef.current = null;

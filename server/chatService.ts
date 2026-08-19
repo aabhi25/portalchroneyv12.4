@@ -26,6 +26,12 @@ import { pushTextMessage, type DoubtSyncSender } from './services/topscholar/dou
 export interface ChatContext {
   userId: string;
   businessAccountId: string;
+  /**
+   * Server-owned conversation binding for non-HTTP transports such as voice.
+   * When supplied, the chat pipeline must use this already-authorized thread
+   * instead of resolving or creating another conversation.
+   */
+  existingConversationId?: string;
   personality?: string;
   responseLength?: string;
   companyDescription?: string;
@@ -102,6 +108,11 @@ export interface ChatContext {
   // one was supplied. When present, the stream emits this message and refuses to
   // invoke the model. Only ever set for the gated TopScholar account.
   topscholarRefusalMessage?: string | null;
+  /**
+   * Generate normally but leave assistant persistence to the response-owning
+   * transport. Voice uses this so interruption can cancel before commit.
+   */
+  deferAssistantPersistence?: boolean;
 }
 
 // Track active conversation IDs for each user session
@@ -282,6 +293,27 @@ export class ChatService {
   
   // Get or create a conversation for the current session
   private async getOrCreateConversation(context: ChatContext): Promise<string> {
+    if (context.existingConversationId) {
+      const existing = await storage.getConversation(
+        context.existingConversationId,
+        context.businessAccountId,
+      );
+      if (!existing) {
+        throw new Error('Existing conversation not found or access denied');
+      }
+      if (
+        isTopscholarAccount(context.businessAccountId) &&
+        context.topscholarDoubtId &&
+        context.topscholarDoubtSyncBaseUrl
+      ) {
+        doubtSyncTargets.set(existing.id, {
+          baseUrl: context.topscholarDoubtSyncBaseUrl,
+          doubtId: context.topscholarDoubtId,
+        });
+      }
+      return existing.id;
+    }
+
     // TopScholar secure mode (Task #17): the active-conversation cache and the
     // visitor-token reuse are both bound to the signed-token student so two
     // different students on the SAME device (same userId/visitor token) never
@@ -491,6 +523,66 @@ export class ChatService {
       this.mirrorMessageToDoubt(conversationId, role, content);
     } catch (error) {
       console.error('[Chat] Error storing message in DB:', error);
+    }
+  }
+
+  async commitDeferredAssistantMessage(
+    context: ChatContext,
+    content: string,
+    stillCurrent: () => boolean,
+  ): Promise<string | null> {
+    const conversationId = context.existingConversationId;
+    if (!conversationId || !stillCurrent()) return null;
+
+    const existing = await storage.getConversation(conversationId, context.businessAccountId);
+    if (!existing || !stillCurrent()) return null;
+
+    let messageId: string | null = null;
+    try {
+      const message = await storage.createMessage({
+        conversationId,
+        role: 'assistant',
+        content,
+        interactionSource: 'chat',
+      });
+      messageId = message.id;
+
+      if (!stillCurrent()) {
+        await storage.deleteMessage(message.id, context.businessAccountId);
+        return null;
+      }
+
+      await storage.updateConversationTimestamp(conversationId);
+      if (!stillCurrent()) {
+        await storage.deleteMessage(message.id, context.businessAccountId);
+        return null;
+      }
+
+      conversationMemory.storeMessage(context.userId, 'assistant', content);
+      this.mirrorMessageToDoubt(conversationId, 'assistant', content);
+      return message.id;
+    } catch (error) {
+      if (messageId && !stillCurrent()) {
+        try {
+          await storage.deleteMessage(messageId, context.businessAccountId);
+        } catch (rollbackError) {
+          console.error('[Chat] Failed to roll back abandoned deferred assistant message:', rollbackError);
+        }
+      }
+      console.error('[Chat] Error committing deferred assistant message:', error);
+      throw error;
+    }
+  }
+
+  async rollbackDeferredAssistantMessage(
+    context: ChatContext,
+    messageId: string,
+    content: string,
+  ): Promise<void> {
+    try {
+      await storage.deleteMessage(messageId, context.businessAccountId);
+    } finally {
+      conversationMemory.removeLastMatchingMessage(context.userId, 'assistant', content);
     }
   }
 
@@ -1946,7 +2038,9 @@ Response:`;
           
           // Call AI directly with minimal context - let it respond naturally
           const response = await this.getSimpleAIResponse(userMessage, context);
-          conversationMemory.storeMessage(context.userId, 'assistant', response);
+          if (!context.deferAssistantPersistence) {
+            conversationMemory.storeMessage(context.userId, 'assistant', response);
+          }
           
           return response;
         }
@@ -2034,20 +2128,26 @@ Response:`;
             const reply = result.success
               ? `Your application for **${serverTitle}** has been submitted successfully! The hiring team will review your profile and get back to you soon.`
               : `Sorry, I couldn't submit your application. ${result.message || 'Please try again.'}`;
-            conversationMemory.storeMessage(context.userId, 'assistant', reply);
-            await this.storeMessageInDB(conversationId, 'assistant', reply);
+            if (!context.deferAssistantPersistence) {
+              conversationMemory.storeMessage(context.userId, 'assistant', reply);
+              await this.storeMessageInDB(conversationId, 'assistant', reply);
+            }
             return reply;
           } catch (err) {
             console.error('[Chat] JOB_APPLY error:', err);
             const errReply = `Sorry, something went wrong while submitting your application. Please try again.`;
-            conversationMemory.storeMessage(context.userId, 'assistant', errReply);
-            await this.storeMessageInDB(conversationId, 'assistant', errReply);
+            if (!context.deferAssistantPersistence) {
+              conversationMemory.storeMessage(context.userId, 'assistant', errReply);
+              await this.storeMessageInDB(conversationId, 'assistant', errReply);
+            }
             return errReply;
           }
         } else {
           const errReply = 'Sorry, the application request was malformed. Please try clicking Apply Now again.';
-          conversationMemory.storeMessage(context.userId, 'assistant', errReply);
-          await this.storeMessageInDB(conversationId, 'assistant', errReply);
+          if (!context.deferAssistantPersistence) {
+            conversationMemory.storeMessage(context.userId, 'assistant', errReply);
+            await this.storeMessageInDB(conversationId, 'assistant', errReply);
+          }
           return errReply;
         }
       }
@@ -2071,8 +2171,10 @@ Response:`;
         const smartReply = await getSmartReplyResponse(context.businessAccountId, "website", userMessage);
         if (smartReply) {
           console.log(`[Chat] Smart reply matched: "${smartReply.matchedKeyword}" — returning configured response directly (skipping AI)`);
-          conversationMemory.storeMessage(context.userId, 'assistant', smartReply.text);
-          await this.storeMessageInDB(conversationId, 'assistant', smartReply.text);
+          if (!context.deferAssistantPersistence) {
+            conversationMemory.storeMessage(context.userId, 'assistant', smartReply.text);
+            await this.storeMessageInDB(conversationId, 'assistant', smartReply.text);
+          }
           return smartReply.text;
         }
       } catch (err) {
@@ -2094,8 +2196,10 @@ Response:`;
           console.log('[Chat] Engine-driven journey handled message - bypassing AI');
           
           // Store engine's response
-          conversationMemory.storeMessage(context.userId, 'assistant', engineResult.response);
-          await this.storeMessageInDB(conversationId, 'assistant', engineResult.response);
+          if (!context.deferAssistantPersistence) {
+            conversationMemory.storeMessage(context.userId, 'assistant', engineResult.response);
+            await this.storeMessageInDB(conversationId, 'assistant', engineResult.response);
+          }
           
           return engineResult.response;
         }
@@ -3470,8 +3574,10 @@ Response:`;
           
           // Store a brief acknowledgment as AI response (not the question itself)
           const acknowledgment = "Great! Let me help you with that. Please select from the options below:";
-          conversationMemory.storeMessage(context.userId, 'assistant', acknowledgment);
-          await this.storeMessageInDB(conversationId, 'assistant', acknowledgment);
+          if (!context.deferAssistantPersistence) {
+            conversationMemory.storeMessage(context.userId, 'assistant', acknowledgment);
+            await this.storeMessageInDB(conversationId, 'assistant', acknowledgment);
+          }
           
           // Stream the acknowledgment and return - form UI handles the question
           yield { type: 'content' as const, data: acknowledgment };
@@ -3765,7 +3871,9 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         }
 
         console.log(`[DemoOrders] Lookup bypass — lang: ${detectedLang ?? 'en'}, sentence: "${lookupSentence}"`);
-        await this.storeMessageInDB(conversationId, 'assistant', lookupSentence);
+        if (!context.deferAssistantPersistence) {
+          await this.storeMessageInDB(conversationId, 'assistant', lookupSentence);
+        }
         yield { type: 'content', data: lookupSentence };
         yield { type: 'order_lookup_options', data: JSON.stringify({ mode: serverSideReturnExchange ? 'return_exchange' : 'track', returnExchange: serverSideReturnExchange }) };
         return;
@@ -4528,14 +4636,15 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         // SAFETY: Always strip [[FALLBACK]] marker before yielding (in case it leaked through)
         finalContent = this.stripFallbackMarker(finalContent);
         
-        conversationMemory.storeMessage(context.userId, 'assistant', finalContent);
-        
         // Extract product IDs for metadata storage
         const productIds = productData && Array.isArray(productData) 
           ? productData.map((p: any) => p.id).filter(Boolean) 
           : undefined;
-        await this.storeMessageInDB(conversationId, 'assistant', finalContent, 
-          productIds && productIds.length > 0 ? { productIds } : undefined);
+        if (!context.deferAssistantPersistence) {
+          conversationMemory.storeMessage(context.userId, 'assistant', finalContent);
+          await this.storeMessageInDB(conversationId, 'assistant', finalContent,
+            productIds && productIds.length > 0 ? { productIds } : undefined);
+        }
         yield { type: 'final', data: finalContent };
       } else {
         // No tool calls, store the response
@@ -4654,9 +4763,11 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                 }
                 
                 // Store message with product IDs in metadata
-                conversationMemory.storeMessage(context.userId, 'assistant', finalAnswer);
-                await this.storeMessageInDB(conversationId, 'assistant', finalAnswer,
-                  refusalProductIds && refusalProductIds.length > 0 ? { productIds: refusalProductIds } : undefined);
+                if (!context.deferAssistantPersistence) {
+                  conversationMemory.storeMessage(context.userId, 'assistant', finalAnswer);
+                  await this.storeMessageInDB(conversationId, 'assistant', finalAnswer,
+                    refusalProductIds && refusalProductIds.length > 0 ? { productIds: refusalProductIds } : undefined);
+                }
                 yield { type: 'final', data: finalAnswer };
                 
                 // Skip the normal flow since we handled it
@@ -4688,8 +4799,10 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                 }
               }
               
-              conversationMemory.storeMessage(context.userId, 'assistant', finalAnswer);
-              await this.storeMessageInDB(conversationId, 'assistant', finalAnswer);
+              if (!context.deferAssistantPersistence) {
+                conversationMemory.storeMessage(context.userId, 'assistant', finalAnswer);
+                await this.storeMessageInDB(conversationId, 'assistant', finalAnswer);
+              }
               yield { type: 'final', data: finalAnswer };
               
               // Skip the normal flow since we handled it
@@ -4738,8 +4851,10 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         // SAFETY: Always strip [[FALLBACK]] marker before storing (in case it leaked through)
         finalResponse = this.stripFallbackMarker(finalResponse);
         
-        conversationMemory.storeMessage(context.userId, 'assistant', finalResponse);
-        await this.storeMessageInDB(conversationId, 'assistant', finalResponse);
+        if (!context.deferAssistantPersistence) {
+          conversationMemory.storeMessage(context.userId, 'assistant', finalResponse);
+          await this.storeMessageInDB(conversationId, 'assistant', finalResponse);
+        }
 
         // If content was never streamed to the frontend (e.g. Gemini signaled tool calls but
         // sent no arguments, so buffered content was discarded), send the finalResponse now.

@@ -69,6 +69,110 @@ export function createVoiceDisplayFallback(transcript: string): string {
 }
 
 const FORMAT_TIMEOUT_MS = 8000;
+const SPEECH_TIMEOUT_MS = 8000;
+
+/**
+ * Deterministic fallback for speaking the canonical Markdown answer. The
+ * displayed/stored Markdown remains untouched; this representation exists only
+ * for TTS and karaoke timing.
+ */
+export function createVoiceSpeechFallback(markdown: string): string {
+  let output = markdown
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/```[\s\S]*?```/g, block => block.replace(/```[^\n]*\n?/g, ''))
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+[.)]\s+/gm, '')
+    .replace(/[*_~`>]/g, '')
+    .replace(/\$\$?([\s\S]*?)\$\$?/g, '$1');
+
+  for (let i = 0; i < 4; i++) {
+    const next = output.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '$1 over $2');
+    if (next === output) break;
+    output = next;
+  }
+
+  return output
+    .replace(/\\sqrt\s*\{([^{}]*)\}/g, 'the square root of $1')
+    .replace(/\\times/g, ' times ')
+    .replace(/\\div/g, ' divided by ')
+    .replace(/\\leq?|\\le/g, ' less than or equal to ')
+    .replace(/\\geq?|\\ge/g, ' greater than or equal to ')
+    .replace(/\\neq?|\\ne/g, ' not equal to ')
+    .replace(/\\rightarrow/g, ' leads to ')
+    .replace(/\\pm/g, ' plus or minus ')
+    .replace(/\\pi/g, ' pi ')
+    .replace(/\\theta/g, ' theta ')
+    .replace(/\\alpha/g, ' alpha ')
+    .replace(/\\beta/g, ' beta ')
+    .replace(/\\(?:text|mathrm|mathbf|left|right)\s*\{([^{}]*)\}/g, '$1')
+    .replace(/\b(\d+)\s*:\s*(\d+)\b/g, '$1 to $2')
+    .replace(/\s*=\s*/g, ' equals ')
+    .replace(/[{}\\]/g, '')
+    .replace(/\n{2,}/g, '. ')
+    .replace(/\n/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/**
+ * Derive a natural speech script from the canonical text-chat Markdown.
+ * The model may verbalize notation but must not change, add, or omit content.
+ */
+export async function createVoiceSpeechText(
+  displayMarkdown: string,
+  apiKey: string,
+  businessAccountId?: string,
+  conversationId?: string,
+): Promise<string> {
+  const fallback = createVoiceSpeechFallback(displayMarkdown);
+  if (!displayMarkdown.trim() || !apiKey) return fallback;
+
+  const client = new OpenAI({ apiKey });
+  try {
+    const completion = await Promise.race([
+      client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        temperature: 0,
+        messages: [
+          {
+            role: 'system',
+            content: `Convert the supplied Markdown answer into a natural voice script.
+Preserve every fact, sentence, step, number, and their order. Do not summarize,
+explain further, add labels, or answer again. Read mathematical notation in
+natural words. Omit Markdown symbols, image URLs, and formatting syntax.
+Return only the complete plain-text speech script.`,
+          },
+          { role: 'user', content: displayMarkdown },
+        ],
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('voice speech conversion timeout')), SPEECH_TIMEOUT_MS)
+      ),
+    ]);
+    const speechText = completion.choices?.[0]?.message?.content?.trim() || '';
+
+    if (businessAccountId) {
+      void aiUsageLogger.logUsage({
+        businessAccountId,
+        category: 'voice_mode',
+        model: 'gpt-4o-mini',
+        tokensInput: completion.usage?.prompt_tokens || 0,
+        tokensOutput: completion.usage?.completion_tokens || 0,
+        metadata: {
+          feature: 'canonical_answer_speech',
+          conversationId,
+        },
+      }).catch(() => {});
+    }
+
+    return speechText || fallback;
+  } catch (err) {
+    console.warn('[VoiceFormatter] Speech conversion failed, using deterministic fallback:', (err as Error).message);
+    return fallback;
+  }
+}
 
 /** Never show more than this many diagrams on one answer, whatever the model says. */
 const MAX_DIAGRAMS = 2;
