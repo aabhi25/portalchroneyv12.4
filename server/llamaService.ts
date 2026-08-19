@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { aiUsageLogger } from './services/aiUsageLogger';
+import { isTopscholarAccount } from './services/topscholar/config';
 
 // Using GPT-4o-mini for customer-facing chat to ensure reliable:
 // - Language matching (English/Hindi/Hinglish)
@@ -2732,7 +2733,12 @@ EXAMPLE FORMAT:
       /\bask\s+(your\s+)?(team|people)\s+to\s+call\b/i
     ];
     
-    const hasCallbackIntent = callbackPhrases.some(pattern => pattern.test(userMessage));
+    // TopScholar is a student tutoring surface with a signed launch identity,
+    // not a lead funnel. Do not turn an academic conversation into a callback
+    // or phone-collection prompt there.
+    const hasCallbackIntent =
+      !isTopscholarAccount(businessAccountId || '') &&
+      callbackPhrases.some(pattern => pattern.test(userMessage));
     
     if (hasCallbackIntent) {
       const phoneAlreadyCaptured = !!(existingLead?.phone);

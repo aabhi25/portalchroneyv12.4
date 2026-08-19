@@ -412,9 +412,10 @@ export class ChatService {
       //        /api/chat/widget/stream call could create a conversation
       //        without awaitingVerification when pre-chat OTP is configured
       //        but otpRequiredForCounting is off.
-      // Internal tests bypass the gate. Fail-open on any error.
+      // Internal tests and TopScholar tutoring bypass the gate. Fail-open on
+      // any error.
       let awaitingVerification = false;
-      if (!context.isInternalTest) {
+      if (!context.isInternalTest && !context.skipLeadTraining) {
         try {
           const ws = await storage.getWidgetSettings(context.businessAccountId);
           const cfg = ws?.leadTrainingConfig as any;
@@ -2022,6 +2023,14 @@ Response:`;
 
   async processMessage(userMessage: string, context: ChatContext): Promise<string> {
     try {
+      // Keep the non-streaming endpoint aligned with streamMessage. A signed
+      // TopScholar student is already identified for tutoring and must never
+      // enter the generic sales/lead funnel.
+      if (isTopscholarAccount(context.businessAccountId) && !context.skipLeadTraining) {
+        context = { ...context, skipLeadTraining: true };
+        console.log('[TopScholar] Lead capture and verification flow disabled for tutoring conversation');
+      }
+
       // Get conversation history to check if this is a new conversation
       const existingHistory = conversationMemory.getConversationHistory(context.userId);
       const isFirstMessage = existingHistory.length === 0;
@@ -2066,11 +2075,14 @@ Response:`;
       
       // Auto-detect and capture contact information from user message
       // This ensures leads are captured even if AI doesn't call the capture_lead tool
-      await this.autoDetectAndCaptureLead(userMessage, conversationId, context.businessAccountId, lastAIMessage, context.visitorCity, context.visitorSessionId, context.pageUrl, context.channel);
+      if (!context.skipLeadTraining) {
+        await this.autoDetectAndCaptureLead(userMessage, conversationId, context.businessAccountId, lastAIMessage, context.visitorCity, context.visitorSessionId, context.pageUrl, context.channel);
+      }
       
       // PERFORMANCE: Early check if business has any active journeys
       // Skip all journey processing if no journeys exist for this account
-      const hasActiveJourneys = await journeyService.hasActiveJourneys(context.businessAccountId);
+      const hasActiveJourneys = !context.skipLeadTraining &&
+        await journeyService.hasActiveJourneys(context.businessAccountId);
       let isJourneyActive = false;
       
       if (hasActiveJourneys) {
@@ -2270,7 +2282,7 @@ Response:`;
       }
 
       // Appointments are enabled only if BOTH business account AND widget settings allow it
-      const appointmentsEnabled = 
+      const appointmentsEnabled = !context.skipLeadTraining &&
         businessAccount?.appointmentsEnabled === 'true' && 
         widgetSettings?.appointmentBookingEnabled === 'true';
 
@@ -2280,7 +2292,9 @@ Response:`;
       // PHONE VALIDATION GATE (non-streaming path) — uses shared utility
       let phoneValidationFailedNS = false;
       let phoneValidationContextNS = '';
-      const leadTrainingConfigNonStream = widgetSettings?.leadTrainingConfig as any;
+      const leadTrainingConfigNonStream = context.skipLeadTraining
+        ? null
+        : widgetSettings?.leadTrainingConfig as any;
       if (leadTrainingConfigNonStream) {
         const validationOverrideNS = buildPhoneValidationOverride(userMessage, leadTrainingConfigNonStream);
         if (validationOverrideNS) {
@@ -2294,13 +2308,16 @@ Response:`;
       // Pass conversation history to detect ongoing appointment context
       // Pass API key for AI-based product intent classification fallback
       let relevantTools = await selectRelevantTools(userMessage, appointmentsEnabled, isJourneyActive, hasProducts, history, context.openaiApiKey || undefined, context.systemMode, context.k12EducationEnabled, context.jobPortalEnabled, context.demoOrdersEnabled);
+      if (context.skipLeadTraining) {
+        relevantTools = relevantTools.filter((tool: any) => tool.function.name !== 'capture_lead');
+      }
 
       // ─── OTP gating (non-stream parity with streamMessage, Task #14) ────────
       // Mirror the OTP strict-mode behavior here so /api/chat/widget (non-stream)
       // behaves identically to /api/chat/widget/stream when a challenge is
       // pending or locked. Without this, the non-stream fallback would let the
       // model call unrelated tools or skip the gating override entirely.
-      if (context.channel === 'widget') {
+      if (context.channel === 'widget' && !context.skipLeadTraining) {
         try {
           const otpStateNS = await OtpService.getLatestStateForConversation(context.businessAccountId, conversationId);
           if (otpStateNS.locked) {
@@ -2666,6 +2683,7 @@ Response:`;
           userMessage: userMessage,
           selectedLanguage: context.preferredLanguage,
           channel: context.channel,
+          skipLeadTraining: context.skipLeadTraining,
           cpId: context.topscholarCpId,
           cpIds: context.topscholarCpIds,
           chapter: context.studentChapter,
@@ -3113,6 +3131,15 @@ Response:`;
 
   async *streamMessage(userMessage: string, context: ChatContext) {
     try {
+      // TopScholar is a signed student tutoring surface, not a sales widget.
+      // Never run generic widget lead capture, OTP, or contact-gating there:
+      // the launch identity already supplies the student context and asking for
+      // a name/phone breaks the educational flow.
+      if (isTopscholarAccount(context.businessAccountId) && !context.skipLeadTraining) {
+        context = { ...context, skipLeadTraining: true };
+        console.log('[TopScholar] Lead capture and verification flow disabled for tutoring conversation');
+      }
+
       // Get conversation history to check if this is a new conversation
       const existingHistory = conversationMemory.getConversationHistory(context.userId);
       const isFirstMessage = existingHistory.length === 0;
@@ -3183,7 +3210,7 @@ Response:`;
       // assistant "I've sent a code…" message — the OTP dialog is the only surface.
       let awaitingOtpBefore = false;
       let otpChallengeJustIssued = false;
-      if (context.channel === 'widget') {
+      if (context.channel === 'widget' && !context.skipLeadTraining) {
         // Task #23: If the user message likely contains a phone number, await
         // auto-detect synchronously BEFORE sampling OTP state — otherwise the
         // fire-and-forget at line ~2643 would issue the OTP challenge AFTER we
@@ -3395,7 +3422,8 @@ Response:`;
       
       // PERFORMANCE: Early check if business has any active journeys
       // Skip all journey processing if no journeys exist for this account
-      const hasActiveJourneys = await journeyService.hasActiveJourneys(context.businessAccountId);
+      const hasActiveJourneys = !context.skipLeadTraining &&
+        await journeyService.hasActiveJourneys(context.businessAccountId);
       let isJourneyActive = false;
       
       if (hasActiveJourneys) {
@@ -3711,7 +3739,7 @@ Example: "Great! Is there anything else I can help you with?"
       }
 
       // Appointments are enabled only if BOTH business account AND widget settings allow it
-      const appointmentsEnabled = 
+      const appointmentsEnabled = !context.skipLeadTraining &&
         businessAccount?.appointmentsEnabled === 'true' && 
         widgetSettings?.appointmentBookingEnabled === 'true';
 
@@ -3725,7 +3753,7 @@ Example: "Great! Is there anything else I can help you with?"
       // Pass API key for AI-based product intent classification fallback
       //
       // Run selectRelevantTools and both intent checks in parallel to reduce latency.
-      const [relevantTools, orderLookupIntent, returnExchangeIntent] = await Promise.all([
+      const [selectedTools, orderLookupIntent, returnExchangeIntent] = await Promise.all([
         skipToolsForHandoff
           ? Promise.resolve([] as typeof import('./aiTools').aiTools)
           : selectRelevantTools(context.resumeText ? `[RESUME_UPLOAD] Please analyze my resume and find matching jobs` : userMessage, appointmentsEnabled, isJourneyActive, hasProducts, history, context.openaiApiKey || undefined, context.systemMode, context.k12EducationEnabled, context.jobPortalEnabled, context.demoOrdersEnabled),
@@ -3736,6 +3764,9 @@ Example: "Great! Is there anything else I can help you with?"
           ? classifyReturnExchangeIntent(userMessage, history, context.openaiApiKey || undefined)
           : Promise.resolve(false),
       ]);
+      let relevantTools = context.skipLeadTraining
+        ? selectedTools.filter((tool: any) => tool.function.name !== 'capture_lead')
+        : selectedTools;
 
       if (skipToolsForHandoff) {
         console.log(`[Handoff Guardrail] Tools disabled for this request - AI will respond conversationally`);
@@ -3757,7 +3788,7 @@ Example: "Great! Is there anything else I can help you with?"
       }
 
       // Extract enabled appointment trigger rules
-      const appointmentTriggerRules = widgetSettings?.appointmentSuggestRules 
+      const appointmentTriggerRules = !context.skipLeadTraining && widgetSettings?.appointmentSuggestRules
         ? (widgetSettings.appointmentSuggestRules as Array<{ id: string; keywords: string[]; prompt: string; enabled: boolean }>).filter(r => r.enabled)
         : null;
 
@@ -4118,6 +4149,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
               userMessage: userMessage,
               selectedLanguage: context.preferredLanguage,
               channel: context.channel,
+              skipLeadTraining: context.skipLeadTraining,
               cpId: context.topscholarCpId,
               cpIds: context.topscholarCpIds,
               chapter: context.studentChapter,

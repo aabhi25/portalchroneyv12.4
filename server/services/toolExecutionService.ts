@@ -200,6 +200,7 @@ interface ToolExecutionContext {
   userMessage?: string; // For detecting language and translating product fields
   selectedLanguage?: string; // Explicitly selected language from picker (overrides auto-detection)
   channel?: 'widget' | 'whatsapp' | 'instagram' | 'facebook' | 'other'; // Source channel — OTP gating only runs on 'widget' in v1
+  skipLeadTraining?: boolean; // Signed student/guidance surfaces must not create sales leads
   cpId?: string | null; // TopScholar: content-package id bound to this conversation; scopes curriculum retrieval
   cpIds?: string[] | null; // TopScholar grade-scoped widget: cp_id set resolved from student board/medium/grade (empty array = refuse, null = whole-account)
   chapter?: string | null; // TopScholar: optional chapter narrowing on top of cpIds; blank/undefined = whole-subject
@@ -230,6 +231,13 @@ export class ToolExecutionService {
           return await this.handleGetFaqs(parameters, context);
         
         case 'capture_lead':
+          if (context.skipLeadTraining) {
+            console.warn('[ToolExecution] Blocked capture_lead on a lead-free tutoring/guidance surface');
+            return {
+              success: false,
+              message: 'Contact capture is unavailable in this tutoring conversation.',
+            };
+          }
           return await this.handleCaptureLead(parameters, context, userMessage, appointmentsEnabled);
 
         case 'verify_phone_otp':
@@ -239,9 +247,23 @@ export class ToolExecutionService {
           return await this.handleResendPhoneOtp(parameters, context);
         
         case 'list_available_slots':
+          if (context.skipLeadTraining) {
+            console.warn('[ToolExecution] Blocked generic appointment flow on a lead-free tutoring/guidance surface');
+            return {
+              success: false,
+              message: 'Appointment booking is unavailable in this tutoring conversation.',
+            };
+          }
           return await this.handleListAvailableSlots(parameters, context);
         
         case 'book_appointment':
+          if (context.skipLeadTraining) {
+            console.warn('[ToolExecution] Blocked generic appointment flow on a lead-free tutoring/guidance surface');
+            return {
+              success: false,
+              message: 'Appointment booking is unavailable in this tutoring conversation.',
+            };
+          }
           return await this.handleBookAppointment(parameters, context);
         
         case 'get_journey_progress':

@@ -88,6 +88,9 @@ interface VoiceConversation {
   canonicalPersistedMessageId?: string;
   canonicalPersistedResponseId?: string;
   canonicalPersistedContent?: string;
+  // Set only once the complete Markdown answer has been sent to the browser.
+  // Audio can then be interrupted without erasing this completed lesson.
+  canonicalDisplayReadyResponseId?: string;
   // Response IDs the user interrupted. Late deltas from OpenAI for these IDs
   // must NOT be forwarded as ai_chunk (otherwise the client creates a phantom
   // second bubble). Capped FIFO to avoid growth.
@@ -653,14 +656,32 @@ export class RealtimeVoiceService {
    * is still inside its own grace window — left the abandoned answer's queued
    * speech playing, so it ran on into the next answer.
    */
-  private markResponseCancelled(conversation: VoiceConversation, responseId?: string) {
+  private hasDisplayedCanonicalAnswer(conversation: VoiceConversation, responseId?: string): boolean {
+    return (
+      conversation.currentResponseKind === 'canonical' &&
+      !!responseId &&
+      conversation.currentResponseId === responseId &&
+      conversation.canonicalDisplayReadyResponseId === responseId
+    );
+  }
+
+  private markResponseCancelled(
+    conversation: VoiceConversation,
+    responseId?: string,
+    notifyClient = true,
+  ) {
     if (!responseId) return;
     conversation.cancelledResponseIds.add(responseId);
     if (conversation.cancelledResponseIds.size > 20) {
       const first = conversation.cancelledResponseIds.values().next().value;
       if (first) conversation.cancelledResponseIds.delete(first);
     }
-    this.sendToClient(conversation.clientWs, { type: 'response_cancelled', responseId });
+    // A display-ready canonical answer is already complete and persisted. It
+    // remains visible when the student only stops its audio, while this marker
+    // still prevents late synthesis or stale events from reaching the client.
+    if (notifyClient && !this.hasDisplayedCanonicalAnswer(conversation, responseId)) {
+      this.sendToClient(conversation.clientWs, { type: 'response_cancelled', responseId });
+    }
   }
 
   private abandonCanonicalResponse(
@@ -670,7 +691,19 @@ export class RealtimeVoiceService {
     if (conversation.currentResponseKind !== 'canonical') return false;
 
     const responseId = conversation.currentResponseId;
+    const preserveDisplayedAnswer = this.hasDisplayedCanonicalAnswer(conversation, responseId);
     if (notifyClient) this.markResponseCancelled(conversation, responseId);
+    if (preserveDisplayedAnswer) {
+      conversation.canonicalPersistedMessageId = undefined;
+      conversation.canonicalPersistedResponseId = undefined;
+      conversation.canonicalPersistedContent = undefined;
+      conversation.canonicalDisplayReadyResponseId = undefined;
+      conversation.isProcessing = false;
+      conversation.currentResponseKind = undefined;
+      conversation.activeElevenLabsStartedAt = undefined;
+      console.log('[RealtimeVoice] Preserved completed canonical answer after audio interruption:', responseId);
+      return true;
+    }
     if (
       conversation.canonicalPersistedMessageId &&
       conversation.canonicalPersistedResponseId === responseId &&
@@ -691,6 +724,7 @@ export class RealtimeVoiceService {
     }
     conversation.isProcessing = false;
     conversation.currentResponseKind = undefined;
+    conversation.canonicalDisplayReadyResponseId = undefined;
     conversation.activeElevenLabsStartedAt = undefined;
     return true;
   }
@@ -2724,6 +2758,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
       conversation.currentAITranscript = speechText;
       // WebSocket frame ordering is the show-before-speak gate: this complete
       // display contract is enqueued before either TTS provider can emit PCM.
+      conversation.canonicalDisplayReadyResponseId = responseId;
       this.sendToClient(conversation.clientWs, {
         type: 'answer_ready',
         responseId,
@@ -2759,6 +2794,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
         conversation.canonicalPersistedMessageId = undefined;
         conversation.canonicalPersistedResponseId = undefined;
         conversation.canonicalPersistedContent = undefined;
+        conversation.canonicalDisplayReadyResponseId = undefined;
       }
       conversation.isProcessing = false;
       conversation.currentResponseKind = undefined;
@@ -3411,6 +3447,10 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
         // BARGE_IN_GRACE_MS of the answer's audio is almost always the client
         // VAD firing on the AI's own playback echo, not a real interruption.
         console.log('[RealtimeVoice] User interrupted AI');
+        const preservedDisplay = this.hasDisplayedCanonicalAnswer(
+          conversation,
+          conversation.currentResponseId,
+        );
         const cancelled = this.cancelResponse(conversation, false);
         
         // Explicit client interrupts are already protected by the client's
@@ -3418,6 +3458,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
         // actually abandoned so its local state cannot diverge from the server.
         this.sendToClient(conversation.clientWs, {
           type: cancelled ? 'interrupt_ack' : 'interrupt_ignored',
+          preservedDisplay,
         });
         break;
 
@@ -3431,6 +3472,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           conversation.canonicalPersistedMessageId = undefined;
           conversation.canonicalPersistedResponseId = undefined;
           conversation.canonicalPersistedContent = undefined;
+          conversation.canonicalDisplayReadyResponseId = undefined;
           conversation.activeElevenLabsStartedAt = undefined;
           console.log('[RealtimeVoice] Canonical playback completed:', message.responseId);
         }

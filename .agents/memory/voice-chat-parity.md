@@ -120,3 +120,21 @@ question.
 through ChatService; display only the completed `answer_ready` Markdown; derive
 speech separately. Reject unexpected Realtime assistant responses, and use the
 canonical-turn log marker when verifying a live voice turn.
+
+## Signed tutoring sessions are lead-free at the pipeline boundary
+
+TopScholar students arrive through a signed launch with their identity and
+curriculum already resolved. They must never be diverted into the generic
+customer-widget lead funnel, even when an account has that funnel configured.
+
+**Why:** disabling only the name prompt leaves independent paths alive:
+automatic contact detection, OTP, form journeys, callback prompts, appointment
+tools, and an unexpected `capture_lead` model call can each still ask for or
+store student contact information.
+
+**How to apply:** derive the lead-free policy from the TopScholar account in
+both streaming and non-streaming chat entry points before creating a
+conversation. Skip lead/OTP setup, auto-capture, and generic journeys; omit
+lead and appointment tools/prompts; and reject those operations again in the
+tool executor as a defense in depth. A prompt instruction alone is never a
+security or routing boundary.

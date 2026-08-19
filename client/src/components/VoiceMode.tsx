@@ -586,11 +586,13 @@ export function VoiceMode({
         // Server acknowledged interrupt - clear pending flag and replay buffered transcript
         console.log('[VoiceMode] Interrupt acknowledged by server');
         pendingInterruptRef.current = false;
-        if (pendingInterruptedMessageIdRef.current) {
+        // A canonical answer that was already visible is complete and stays in
+        // chat/history when the student only interrupts its audio.
+        if (pendingInterruptedMessageIdRef.current && !data.preservedDisplay) {
           const interruptedMessageId = pendingInterruptedMessageIdRef.current;
           setMessages(prev => prev.filter(msg => msg.id !== interruptedMessageId));
-          pendingInterruptedMessageIdRef.current = null;
         }
+        pendingInterruptedMessageIdRef.current = null;
         currentAIMessageIdRef.current = null;
         
         // Replay buffered transcript if any
