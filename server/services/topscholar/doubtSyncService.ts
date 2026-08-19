@@ -29,7 +29,87 @@
  *   4. Escalation email (bot → human support handoff)
  *      POST {baseUrl}/api/doubt/trigger-escalation-email   (application/json)
  *        - { query_details, conversation_summary, plan_id, student_id, doubt_id }
+ *
+ * Message rendering:
+ *   AI (sme) messages are converted from Markdown+LaTeX to HTML with MathML math
+ *   before being pushed to the client's API, so their WebApp can render equations
+ *   and rich content directly without additional parsing. Student messages are sent
+ *   as-is (plain text). Our own database is never affected — the conversion is
+ *   purely in-flight, just before the POST.
  */
+
+// ---------------------------------------------------------------------------
+// Markdown → HTML (MathML) renderer
+// ---------------------------------------------------------------------------
+// Lazy-initialised pipeline: built once on first call, reused for all pushes.
+// Uses the unified ecosystem packages that are already in this project's
+// dependencies (remark-gfm, remark-math, rehype-katex) plus the pipeline
+// glue packages (unified, remark, remark-rehype, rehype-raw, rehype-stringify)
+// that were added alongside this feature.
+//
+// KaTeX is configured with output:'mathml' so every $ … $ / $$ … $$ block
+// becomes a <math> element instead of KaTeX's default HTML+CSS span soup.
+// That makes the stored content portable across rendering engines and readable
+// by screen readers without any client-side JS dependency.
+// ---------------------------------------------------------------------------
+
+type ProcessorFn = (md: string) => Promise<string>;
+let _rendererPromise: Promise<ProcessorFn> | null = null;
+
+function getRenderer(): Promise<ProcessorFn> {
+  if (_rendererPromise) return _rendererPromise;
+  _rendererPromise = (async (): Promise<ProcessorFn> => {
+    // `remark` is a unified() processor with remark-parse already attached —
+    // use it as the base instead of unified() + a separate remark-parse plugin.
+    const { remark } = await import('remark');
+    const { default: remarkGfm } = await import('remark-gfm');
+    const { default: remarkMath } = await import('remark-math');
+    const { default: remarkRehype } = await import('remark-rehype');
+    const { default: rehypeRaw } = await import('rehype-raw');
+    const { default: rehypeKatex } = await import('rehype-katex');
+    const { default: rehypeStringify } = await import('rehype-stringify');
+
+    const processor = remark()
+      .use(remarkGfm)
+      .use(remarkMath)
+      .use(remarkRehype, { allowDangerousHtml: true })
+      .use(rehypeRaw)
+      .use(rehypeKatex, { output: 'mathml' as const })
+      .use(rehypeStringify);
+
+    return async (md: string) => {
+      const result = await processor.process(md);
+      return String(result);
+    };
+  })().catch((err) => {
+    // If the pipeline fails to initialise (missing package, bad import), fall
+    // back gracefully so the sync path is never blocked.
+    console.warn('[DoubtSync] renderer init failed, falling back to plain text:', err instanceof Error ? err.message : err);
+    _rendererPromise = null; // allow a retry next call
+    return (md: string) => Promise.resolve(md);
+  });
+  return _rendererPromise;
+}
+
+/**
+ * Convert a Markdown+LaTeX AI answer to HTML with MathML equations for
+ * storage in the client's database via the doubt-sync API.
+ *
+ * - Math blocks ($…$ and $$…$$) become <math> MathML elements.
+ * - Tables, bold, italic, lists, code blocks → standard HTML.
+ * - Images: ![alt](url) → <img> tags (client renders them inline).
+ * - Falls back to the original text on any conversion error so the
+ *   doubt-sync push is never blocked by a rendering failure.
+ */
+async function toRenderable(markdown: string): Promise<string> {
+  try {
+    const render = await getRenderer();
+    return await render(markdown);
+  } catch (err) {
+    console.warn('[DoubtSync] toRenderable failed, using plain text:', err instanceof Error ? err.message : err);
+    return markdown;
+  }
+}
 
 // Fixed S3 upload endpoint (per the client's Image Upload API doc). Not tenant
 // configurable — the client hosts a single AI-bot upload bucket.
@@ -147,10 +227,14 @@ export async function pushTextMessageDetailed(
 
   try {
     assertSafeBaseUrl(baseUrl);
+    // AI answers are converted to HTML+MathML so the client's WebApp can render
+    // equations and rich content without additional parsing. Student messages are
+    // plain text and sent as-is.
+    const payload = from === 'sme' ? await toRenderable(trimmed) : trimmed;
     const form = new FormData();
     form.append('doubt', doubtId);
     form.append('from_user', from);
-    form.append('messages', trimmed);
+    form.append('messages', payload);
     const res = await withTimeout((signal) => fetch(url, { method: 'POST', body: form, signal }));
     const bodyText = await res.text().catch(() => '');
     const latencyMs = Date.now() - started;
@@ -184,11 +268,14 @@ export async function pushTextMessage(
   if (!baseUrl || !doubtId || !trimmed) return false;
   try {
     assertSafeBaseUrl(baseUrl);
+    // AI answers are converted to HTML+MathML for rich rendering on the client's
+    // WebApp. Student messages are plain text and sent as-is.
+    const payload = from === 'sme' ? await toRenderable(trimmed) : trimmed;
     const url = joinUrl(baseUrl, '/api/conversation/save-message-ai-bot');
     const form = new FormData();
     form.append('doubt', doubtId);
     form.append('from_user', from);
-    form.append('messages', trimmed);
+    form.append('messages', payload);
     const res = await withTimeout((signal) =>
       fetch(url, { method: 'POST', body: form, signal }),
     );
