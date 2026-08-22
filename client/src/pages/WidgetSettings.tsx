@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import { getPublicDeploymentName, getPublicWidgetOrigin } from "@/lib/deploymentUrls";
 import { 
   Loader2, 
   Save, 
@@ -500,9 +501,6 @@ export default function WidgetSettings() {
   const [k12Copied, setK12Copied] = useState(false);
   const [k12SecureCopied, setK12SecureCopied] = useState(false);
   const [k12DevSecureCopied, setK12DevSecureCopied] = useState(false);
-  const [devServerUrl, setDevServerUrl] = useState(() =>
-    typeof window !== "undefined" ? window.location.origin : ""
-  );
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [playingVoice, setPlayingVoice] = useState<string | null>(null);
   const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
@@ -1114,7 +1112,8 @@ export default function WidgetSettings() {
     },
   });
 
-  const widgetDomain = 'https://portal.aichroney.com';
+  const widgetDomain = getPublicWidgetOrigin();
+  const isStagingDeployment = getPublicDeploymentName() === "staging";
   const businessId = settings?.businessAccountId || 'YOUR_BUSINESS_ID';
   const businessName = settings?.businessName || '';
   const businessWebsite = settings?.businessWebsite || '';
@@ -1167,14 +1166,14 @@ export default function WidgetSettings() {
         data-mode="inline"
         data-container="ai-tutor"></script>`;
 
-  // Dev / staging embed: identical to the secure embed but loads widget-loader.js from
-  // the configurable dev server URL instead of production. Embed this on your dev portal
+  // Staging embed: identical to the secure embed but loads widget-loader.js from
+  // the configured staging origin instead of production. Embed this on your staging portal
   // so every chat request hits the dev server — logs, doubt sync, and token issues can
   // all be diagnosed in real time before switching to the production snippet.
-  const k12DevSecureEmbedCode = `<!-- AI Chroney Widget — DEVELOPMENT / STAGING ONLY -->
-<!-- Use on your dev portal — swap for the Secure Embed Code above in production -->
+  const k12DevSecureEmbedCode = `<!-- AI Chroney Widget — STAGING ONLY -->
+ <!-- Use on your staging portal — swap for the Secure Embed Code above in production -->
 <!-- Build the signed token on your server exactly as you would for production -->
-<script src="${devServerUrl}/widget-loader.js" data-business-id="${businessId}"
+ <script src="${widgetDomain}/widget-loader.js" data-business-id="${businessId}"
         data-token="{{ signedLaunchToken }}"
         data-mode="inline"
         data-container="ai-tutor"></script>`;
@@ -4945,7 +4944,14 @@ export default function WidgetSettings() {
                     </div>
 
                     <div className="space-y-3">
-                      <Label className="text-sm font-semibold text-gray-700">Embed Code</Label>
+                      <div className="flex items-center justify-between gap-3">
+                        <Label className="text-sm font-semibold text-gray-700">
+                          {isStagingDeployment ? "Staging" : "Production"} Embed Code
+                        </Label>
+                        <span className="text-xs font-mono text-gray-500 truncate" title={widgetDomain}>
+                          {widgetDomain}
+                        </span>
+                      </div>
                       <div className="relative">
                         <Textarea
                           value={embedCode}
@@ -5048,14 +5054,14 @@ export default function WidgetSettings() {
                           </div>
                         </div>
 
-                        {/* Dev / Staging Embed Code */}
+                        {isStagingDeployment && (
                         <div className="space-y-2 pt-6 mt-6 border-t border-dashed border-amber-200">
                           <div className="flex items-center gap-2">
                             <Label className="text-sm font-semibold text-amber-700">
-                              Dev / Staging Embed Code
+                              Staging Embed Code
                             </Label>
                             <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
-                              Dev only
+                              Staging only
                             </span>
                             <Button
                               size="sm"
@@ -5067,26 +5073,11 @@ export default function WidgetSettings() {
                               Open Widget Tester
                             </Button>
                           </div>
-                          <p className="text-xs text-gray-500">
-                            The Widget Tester lets you paste a signed launch token and load the widget from this
-                            dev server — no embed needed.
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            Same as the secure embed above but loads the widget from your dev server. Embed this on
-                            your <strong>dev portal</strong> to test conversation sync, doubt escalation, and token
-                            signing end-to-end before switching your production portal to the snippet above. Sign the
-                            token exactly as you would for production — the same secret and format apply.
-                          </p>
-                          <div className="flex items-center gap-2">
-                            <label className="text-xs text-gray-500 shrink-0">Dev server URL</label>
-                            <input
-                              type="text"
-                              value={devServerUrl}
-                              onChange={(e) => setDevServerUrl(e.target.value)}
-                              placeholder="https://your-dev-server.example.com"
-                              className="flex-1 text-xs font-mono border border-amber-200 rounded px-2 py-1 bg-amber-50 focus:outline-none focus:ring-1 focus:ring-amber-400"
-                            />
-                          </div>
+                           <p className="text-xs text-gray-500">
+                             This staging snippet loads the widget from <strong>{widgetDomain}</strong>. Use it on
+                             your staging portal to test conversation sync, doubt escalation, and token signing
+                             without changing your production portal.
+                           </p>
                           <div className="relative">
                             <Textarea
                               value={k12DevSecureEmbedCode}
@@ -5112,6 +5103,7 @@ export default function WidgetSettings() {
                             </Button>
                           </div>
                         </div>
+                        )}
                       </div>
                     )}
                   </CardContent>

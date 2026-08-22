@@ -38,3 +38,9 @@ externalPort = 3000
 deploymentTarget = "autoscale"
 run = ["npm", "run", "start"]
 build = ["npm", "run", "build"]
+
+[userenv]
+
+[userenv.production]
+VITE_PUBLIC_WIDGET_URL = "https://demo.aichroney.com"
+VITE_DEPLOYMENT_ENV = "staging"

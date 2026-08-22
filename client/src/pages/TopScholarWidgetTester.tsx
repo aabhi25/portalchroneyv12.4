@@ -30,6 +30,7 @@ import {
   Unplug,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { getPublicWidgetOrigin } from "@/lib/deploymentUrls";
 
 // One distinct board/medium/grade combination the admin has configured, plus how
 // many content packs (cp_ids) it resolves to. Sourced from the TopScholar-guarded
@@ -48,8 +49,9 @@ interface ScopeOption {
   subjects: SubjectOption[];
 }
 
-// Production widget host (matches the snippet shown on the Widget settings page).
-const WIDGET_DOMAIN = "https://portal.aichroney.com";
+// Uses the current deployment host unless an explicit public widget origin is
+// configured for the build.
+const WIDGET_DOMAIN = getPublicWidgetOrigin();
 
 export default function TopScholarWidgetTester() {
   const { toast } = useToast();
@@ -86,7 +88,7 @@ export default function TopScholarWidgetTester() {
   const [liveActiveDoubtId, setLiveActiveDoubtId] = useState("");
   const [isMinting, setIsMinting] = useState(false);
 
-  // Raw-token tester: paste any token from the client, load the production widget
+  // Raw-token tester: paste any token from the client, load this deployment's widget
   const [rawToken, setRawToken] = useState("");
   const [widgetInjected, setWidgetInjected] = useState(false);
   const widgetScriptRef = useRef<HTMLScriptElement | null>(null);
@@ -94,7 +96,7 @@ export default function TopScholarWidgetTester() {
   const handleLoadWidget = () => {
     handleRemoveWidget();
     const script = document.createElement("script");
-    script.src = "https://portal.aichroney.com/widget-loader.js";
+    script.src = `${WIDGET_DOMAIN}/widget-loader.js`;
     script.setAttribute("data-business-id", businessAccountId || "1e80bae7-e219-4769-824d-ee027770cd7d");
     script.setAttribute("data-token", rawToken.trim());
     script.setAttribute("data-aichroney-tester", "1");
@@ -110,7 +112,7 @@ export default function TopScholarWidgetTester() {
     }
     // Remove any elements widget.js injected into the page
     document.querySelectorAll(
-      '[id^="aichroney-"], [class*="aichroney-widget"], [data-aichroney-tester], iframe[src*="portal.aichroney.com/embed"]'
+      '[id^="aichroney-"], [class*="aichroney-widget"], [data-aichroney-tester]'
     ).forEach((el) => el.remove());
     setWidgetInjected(false);
   };

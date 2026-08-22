@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Settings, PanelTop, Code, Copy, Check, Save, Maximize2, Minimize2, Mic } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { getPublicWidgetOrigin } from "@/lib/deploymentUrls";
 
 interface GuidanceCampaign {
   id: string;
@@ -57,7 +58,7 @@ export default function GuidanceCampaignSettings() {
   
   const isVoiceModeAvailable = widgetSettings?.voiceModeEnabled === true || widgetSettings?.voiceModeEnabled === 'true';
   
-  const hiChroneyDomain = 'https://portal.aichroney.com';
+  const hiChroneyDomain = getPublicWidgetOrigin();
   
   const campaignEmbedCode = useMemo(() => {
     if (!campaign?.businessAccountId) return '';
