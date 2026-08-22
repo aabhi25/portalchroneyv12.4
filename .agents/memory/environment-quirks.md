@@ -18,6 +18,24 @@ The `vector` extension must exist before a push that touches an embedding
 column. The server initializes it on boot, so a fresh database needs one
 successful boot first.
 
+**Why:** Drizzle introspection fails before the server can reach its own
+startup initializer when the development database has no `vector` extension.
+
+**How to apply:** on a fresh import, create the extension first, then run
+`npm run db:push`; restart the app afterward so database initialization can
+complete.
+
+# Local dependency stubs
+
+The repository's `file:stubs/*` npm overrides may leave dangling or missing
+top-level packages after a clean dependency install.
+
+**Why:** npm can resolve the file override relative to the dependent package,
+while runtime resolution expects the package at `node_modules/<name>`.
+
+**How to apply:** run the existing `npm run install:stubs` script after
+dependency installation and before starting or building the app.
+
 # .replit
 
 Never edit `.replit` directly — it goes through the verify-and-replace flow.
