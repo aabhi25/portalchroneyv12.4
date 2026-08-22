@@ -1114,6 +1114,65 @@ router.post("/api/topscholar/sync-now", ...topscholarGuards, async (req: Request
   }
 });
 
+// Bulk Plan sync: choose the scope on the server, then enqueue one durable full
+// run per selected Plan. This intentionally returns after queuing only; resolving
+// and embedding run under the worker's account lease instead of in the HTTP request.
+router.post("/api/topscholar/plan-bulk-sync", ...topscholarGuards, async (req: Request, res: Response) => {
+  const businessAccountId = getBusinessAccountId(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+
+  const account = await loadAccount(businessAccountId);
+  if (!account) return res.status(404).json({ error: "Business account not found" });
+
+  const cfg = getTopscholarConfig(account);
+  if (!cfg.ragEnabled) {
+    return res.status(400).json({ error: "TopScholar RAG mode is not enabled for this account." });
+  }
+  if (!account.openaiApiKey) {
+    return res.status(400).json({ error: "An OpenAI API key must be configured for this account before syncing." });
+  }
+
+  const scope = req.body?.scope;
+  if (scope !== "pending" && scope !== "all") {
+    return res.status(400).json({ error: "Bulk sync scope must be 'pending' or 'all'." });
+  }
+  const baseWhere = and(
+    eq(topscholarPlanIds.businessAccountId, businessAccountId),
+    eq(topscholarPlanIds.enabled, "true"),
+  );
+  const where = scope === "pending"
+    ? and(baseWhere, sql`NOT (${completedPlanEmbeddingCondition(businessAccountId)})`)
+    : baseWhere;
+  const selectedPlans = await db
+    .select({ planId: topscholarPlanIds.planId })
+    .from(topscholarPlanIds)
+    .where(where);
+  const planIds = selectedPlans.map((plan) => plan.planId);
+
+  if (planIds.length === 0) {
+    return res.status(400).json({
+      error: scope === "pending"
+        ? "There are no pending Plan IDs to sync."
+        : "No enabled Plan IDs are available to sync.",
+    });
+  }
+
+  try {
+    const runs = await enqueuePlanSyncRuns({ businessAccountId, planIds });
+    res.status(202).json({
+      success: true,
+      queued: true,
+      mode: "full",
+      scope,
+      planCount: planIds.length,
+      runs,
+    });
+  } catch (error: any) {
+    console.error("[TopScholar BulkPlanSync] Failed:", error);
+    res.status(500).json({ error: error?.message || "Couldn't queue the Plan sync." });
+  }
+});
+
 // ---- Plan -> cp_id resolution ---------------------------------------------
 
 // Saved plan->cp resolution snapshot (one row per plan/cp_id pair) so the admin

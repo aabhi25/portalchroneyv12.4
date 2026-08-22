@@ -482,6 +482,11 @@ export default function ContentSync() {
   const plans = planPageData?.rows ?? [];
   const planTotal = planPageData?.total ?? 0;
   const planCounts = planPageData?.counts ?? { pending: 0, completed: 0, all: 0 };
+  const bulkPlanSyncScope: "pending" | "all" = planEmbeddingFilter === "pending" ? "pending" : "all";
+  const bulkPlanSyncCount = bulkPlanSyncScope === "pending" ? planCounts.pending : planCounts.all;
+  const bulkPlanSyncLabel = bulkPlanSyncScope === "pending"
+    ? `Sync All Pending (${bulkPlanSyncCount})`
+    : `Sync All Plans (${bulkPlanSyncCount})`;
 
   const [addOpen, setAddOpen] = useState(false);
   const [addText, setAddText] = useState("");
@@ -525,6 +530,20 @@ export default function ContentSync() {
     },
     onError: (e: any) => toast({ title: "Couldn't remove", description: e.message, variant: "destructive" }),
     onSettled: () => setRemovingPlan(null),
+  });
+
+  const [confirmBulkPlanSync, setConfirmBulkPlanSync] = useState<"pending" | "all" | null>(null);
+  const bulkPlanSync = useMutation({
+    mutationFn: (scope: "pending" | "all") => sendJson("/api/topscholar/plan-bulk-sync", "POST", { scope }),
+    onSuccess: (data) => {
+      invalidateSyncViews();
+      toast({
+        title: `Plan sync queued for ${data.planCount} plan(s)`,
+        description: "Each Plan will resolve its current cp_ids, then the protected worker will embed them in the background.",
+      });
+    },
+    onError: (e: any) => toast({ title: "Couldn't queue Plan sync", description: e.message, variant: "destructive" }),
+    onSettled: () => setConfirmBulkPlanSync(null),
   });
 
 
@@ -777,13 +796,12 @@ export default function ContentSync() {
               <Plus className="w-4 h-4" /> Add plans
             </Button>
             <Button
-              variant="outline"
-              className="h-9 gap-2"
-              onClick={() => { setResolvingPlan(null); resolve.mutate({}); }}
-              disabled={resolve.isPending}
+              className="h-9 gap-2 bg-violet-600 hover:bg-violet-700"
+              onClick={() => setConfirmBulkPlanSync(bulkPlanSyncScope)}
+              disabled={bulkPlanSync.isPending || bulkPlanSyncCount === 0}
             >
-              {resolve.isPending && resolvingPlan === null ? <Loader2 className="w-4 h-4 animate-spin" /> : <CloudDownload className="w-4 h-4" />}
-              Resolve all
+              {bulkPlanSync.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              {bulkPlanSyncLabel}
             </Button>
             <div className="flex items-center gap-2">
               <Label className="text-xs text-gray-500 whitespace-nowrap">Sample chunks</Label>
@@ -969,6 +987,35 @@ export default function ContentSync() {
               }}
             >
               Delete plan
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!confirmBulkPlanSync} onOpenChange={(open) => { if (!open && !bulkPlanSync.isPending) setConfirmBulkPlanSync(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmBulkPlanSync === "pending" ? "Sync all pending Plans?" : "Sync all Plans?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This will resolve the latest cp_ids and queue a full embedding sync for{" "}
+              <strong>{confirmBulkPlanSync === "pending" ? planCounts.pending : planCounts.all}</strong>{" "}
+              {confirmBulkPlanSync === "pending" ? "pending Plan ID(s)." : "saved Plan ID(s)."}{" "}
+              The work runs safely in the background with one protected queue, so you can keep using this page.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkPlanSync.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-violet-600 hover:bg-violet-700 text-white"
+              disabled={bulkPlanSync.isPending}
+              onClick={() => {
+                if (confirmBulkPlanSync) bulkPlanSync.mutate(confirmBulkPlanSync);
+              }}
+            >
+              {bulkPlanSync.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Start full sync
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
