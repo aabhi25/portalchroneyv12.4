@@ -151,6 +151,68 @@ export async function initializeDatabase() {
       console.error('[INIT] Error adding subject columns to topscholar mapping/resolution tables:', err);
     }
 
+    // Durable Plan-level curriculum sync queue. These tables contain progress
+    // only—never the client curriculum text—and are created on boot as well as
+    // through db:push so production upgrades do not depend on a manual schema
+    // migration.
+    try {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS topscholar_plan_runs (
+          id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+          business_account_id VARCHAR NOT NULL REFERENCES business_accounts(id) ON DELETE CASCADE,
+          plan_id TEXT NOT NULL,
+          requested_cp_id TEXT,
+          mode TEXT NOT NULL DEFAULT 'full',
+          status TEXT NOT NULL DEFAULT 'queued',
+          total_cp_ids INTEGER NOT NULL DEFAULT 0,
+          completed_cp_ids INTEGER NOT NULL DEFAULT 0,
+          failed_cp_ids INTEGER NOT NULL DEFAULT 0,
+          active_cp_id TEXT,
+          error TEXT,
+          started_at TIMESTAMP,
+          completed_at TIMESTAMP,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `);
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS topscholar_plan_run_items (
+          id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+          run_id VARCHAR NOT NULL REFERENCES topscholar_plan_runs(id) ON DELETE CASCADE,
+          business_account_id VARCHAR NOT NULL REFERENCES business_accounts(id) ON DELETE CASCADE,
+          plan_id TEXT NOT NULL,
+          cp_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued',
+          attempts INTEGER NOT NULL DEFAULT 0,
+          error TEXT,
+          started_at TIMESTAMP,
+          completed_at TIMESTAMP,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          CONSTRAINT topscholar_plan_run_items_run_cp_key UNIQUE (run_id, cp_id)
+        )
+      `);
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS topscholar_plan_sync_leases (
+          business_account_id VARCHAR PRIMARY KEY REFERENCES business_accounts(id) ON DELETE CASCADE,
+          owner TEXT NOT NULL,
+          expires_at TIMESTAMP NOT NULL,
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `);
+      await db.execute(sql`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS lease_owner TEXT`);
+      await db.execute(sql`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMP`);
+      await db.execute(sql`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS requested_cp_id TEXT`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_plan_updated_idx ON topscholar_plan_runs (business_account_id, plan_id, updated_at)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_status_idx ON topscholar_plan_runs (business_account_id, status)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_run_status_idx ON topscholar_plan_run_items (run_id, status)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_account_cp_idx ON topscholar_plan_run_items (business_account_id, cp_id)`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_plan_unique ON topscholar_plan_runs (business_account_id, plan_id) WHERE requested_cp_id IS NULL AND status IN ('queued', 'resolving', 'running')`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_cp_unique ON topscholar_plan_runs (business_account_id, plan_id, requested_cp_id) WHERE requested_cp_id IS NOT NULL AND status IN ('queued', 'resolving', 'running')`);
+    } catch (err) {
+      console.error('[INIT] Error creating TopScholar Plan sync queue tables:', err);
+    }
+
     // Realtime voice cost accounting: audio tokens bill at roughly 17x text
     // tokens, so usage rows carry a modality/cache breakdown and pricing rows
     // carry separate audio + cached rates. Expand-only ADD COLUMN IF NOT EXISTS

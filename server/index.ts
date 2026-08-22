@@ -222,8 +222,15 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     console.error('[TopScholar] Embed job poller failed to start:', err);
   }
 
-  // TopScholar syncing is manual-only (triggered from the admin); there is no
-  // scheduled/automatic sync worker.
+  // Plan-level full syncs are admin-triggered, but their CP IDs are processed
+  // by one durable worker after the request has returned. This prevents a
+  // Plan click from starting an unbounded number of in-process MongoDB jobs.
+  try {
+    const { startPlanSyncWorker } = await import('./services/topscholar/planSyncWorker');
+    startPlanSyncWorker();
+  } catch (err) {
+    console.error('[TopScholar] Plan sync worker failed to start:', err);
+  }
 
   // Initialize AI usage pricing
   await aiUsageLogger.initializePricing();

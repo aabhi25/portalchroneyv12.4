@@ -96,6 +96,18 @@ interface PlanIdRow {
   resolvedCpCount: number;
 }
 
+interface PlanRun {
+  id: string;
+  planId: string;
+  status: "queued" | "resolving" | "running" | "completed" | "failed" | "cancelled";
+  totalCpIds: number;
+  completedCpIds: number;
+  failedCpIds: number;
+  activeCpId: string | null;
+  error: string | null;
+  updatedAt: string;
+}
+
 interface SyncRow {
   cpId: string;
   status: string;
@@ -235,7 +247,24 @@ export default function ContentSync() {
     enabled: !configError,
     refetchInterval: (query) => ((query.state.data?.overall?.syncing ?? 0) > 0 ? 5000 : false),
   });
-  const anyInProgress = (summary?.overall?.syncing ?? 0) > 0;
+  const { data: planRunsData } = useQuery<{ runs: PlanRun[] }>({
+    queryKey: ["/api/topscholar/plan-runs"],
+    queryFn: () => getJson("/api/topscholar/plan-runs"),
+    enabled: !configError,
+    refetchInterval: (query) => query.state.data?.runs.some((run) =>
+      ["queued", "resolving", "running"].includes(run.status),
+    ) ? 5000 : false,
+  });
+  const planRunsByPlan = useMemo(() => {
+    const latest = new Map<string, PlanRun>();
+    for (const run of planRunsData?.runs ?? []) {
+      if (!latest.has(run.planId)) latest.set(run.planId, run);
+    }
+    return latest;
+  }, [planRunsData?.runs]);
+  const anyInProgress =
+    (summary?.overall?.syncing ?? 0) > 0 ||
+    (planRunsData?.runs.some((run) => ["queued", "resolving", "running"].includes(run.status)) ?? false);
 
   const {
     data: clientDbOverview,
@@ -276,9 +305,17 @@ export default function ContentSync() {
     queryClient.invalidateQueries({ queryKey: ["/api/topscholar/sync/summary"] });
     queryClient.invalidateQueries({ queryKey: ["/api/topscholar/plan-ids"] });
     queryClient.invalidateQueries({ queryKey: ["/api/topscholar/content/overview"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/topscholar/plan-runs"] });
   }
 
   function syncToast(data: any) {
+    if (data.queued) {
+      toast({
+        title: "Full sync queued",
+        description: "This cp_id will run through the same protected queue as Plan syncs.",
+      });
+      return;
+    }
     if (data.result?.mode === "full") {
       toast({
         title: "Full sync started",
@@ -321,6 +358,13 @@ export default function ContentSync() {
       sendJson("/api/topscholar/sync-now", "POST", { planIds: [vars.planId], mode: vars.mode, sampleLimit }),
     onSuccess: (data) => {
       invalidateSyncViews();
+      if (data.queued) {
+        toast({
+          title: `Plan sync queued for ${data.planCount} plan(s)`,
+          description: "The worker will resolve the current cp_ids, then embed them one at a time. Track progress on the Plan row.",
+        });
+        return;
+      }
       const failed = (data.results || []).filter((r: any) => r.status === "failed").length;
       toast({
         title: `Sync started for ${data.planCount} plan(s)`,
@@ -330,6 +374,24 @@ export default function ContentSync() {
     },
     onError: (e: any) => toast({ title: "Sync failed", description: e.message, variant: "destructive" }),
     onSettled: () => setSyncingPlan(null),
+  });
+
+  const cancelPlanRun = useMutation({
+    mutationFn: (runId: string) => sendJson(`/api/topscholar/plan-runs/${runId}/cancel`, "POST", {}),
+    onSuccess: () => {
+      invalidateSyncViews();
+      toast({ title: "Plan sync cancelled", description: "Queued CP IDs will not start. An already active CP ID may finish its current page." });
+    },
+    onError: (e: any) => toast({ title: "Couldn't cancel Plan sync", description: e.message, variant: "destructive" }),
+  });
+
+  const retryPlanRun = useMutation({
+    mutationFn: (runId: string) => sendJson(`/api/topscholar/plan-runs/${runId}/retry-failed`, "POST", {}),
+    onSuccess: () => {
+      invalidateSyncViews();
+      toast({ title: "Failed CP IDs re-queued", description: "Only the failed CP IDs will be attempted again." });
+    },
+    onError: (e: any) => toast({ title: "Couldn't retry Plan sync", description: e.message, variant: "destructive" }),
   });
 
   const resyncSelectedClientDb = useMutation({
@@ -752,6 +814,7 @@ export default function ContentSync() {
                 <PlanRow
                   key={plan.id}
                   plan={plan}
+                  planRun={planRunsByPlan.get(plan.planId)}
                   sampleLimit={sampleLimit}
                   cpPageSize={CP_PAGE_SIZE}
                   onSyncCp={(cpId, planId, mode) => { setSyncingCp(`${planId}:${cpId}`); syncCp.mutate({ cpId, planId, mode }); }}
@@ -760,6 +823,10 @@ export default function ContentSync() {
                   onSyncPlan={(planId, mode) => { setSyncingPlan(planId); syncPlan.mutate({ planId, mode }); }}
                   syncingPlan={syncingPlan}
                   syncPlanPending={syncPlan.isPending}
+                  onCancelPlanRun={(runId) => cancelPlanRun.mutate(runId)}
+                  cancelPlanRunPending={cancelPlanRun.isPending}
+                  onRetryPlanRun={(runId) => retryPlanRun.mutate(runId)}
+                  retryPlanRunPending={retryPlanRun.isPending}
                   onResolvePlan={(planId) => { setResolvingPlan(planId); resolve.mutate({ planIds: [planId] }); }}
                   resolvingPlan={resolvingPlan}
                   resolvePending={resolve.isPending}
@@ -887,6 +954,7 @@ function SummaryChip({ label, value, className }: { label: string; value: number
 
 interface PlanRowProps {
   plan: PlanIdRow;
+  planRun?: PlanRun;
   sampleLimit: number;
   cpPageSize: number;
   onSyncCp: (cpId: string, planId: string, mode: "sample" | "full") => void;
@@ -895,6 +963,10 @@ interface PlanRowProps {
   onSyncPlan: (planId: string, mode: "sample" | "full") => void;
   syncingPlan: string | null;
   syncPlanPending: boolean;
+  onCancelPlanRun: (runId: string) => void;
+  cancelPlanRunPending: boolean;
+  onRetryPlanRun: (runId: string) => void;
+  retryPlanRunPending: boolean;
   onResolvePlan: (planId: string) => void;
   resolvingPlan: string | null;
   resolvePending: boolean;
@@ -906,7 +978,12 @@ interface PlanRowProps {
 // One plan in the master list. Collapsed by default; expanding lazy-loads (and
 // paginates/searches) its resolved cp_ids so we never mount thousands of rows.
 function PlanRow(props: PlanRowProps) {
-  const { plan, sampleLimit, cpPageSize, onSyncCp, syncingCp, syncCpPending, onSyncPlan, syncingPlan, syncPlanPending, onResolvePlan, resolvingPlan, resolvePending, onRemovePlan, removingPlan, removePending } = props;
+  const {
+    plan, planRun, sampleLimit, cpPageSize, onSyncCp, syncingCp, syncCpPending,
+    onSyncPlan, syncingPlan, syncPlanPending, onCancelPlanRun, cancelPlanRunPending,
+    onRetryPlanRun, retryPlanRunPending, onResolvePlan, resolvingPlan, resolvePending,
+    onRemovePlan, removingPlan, removePending,
+  } = props;
   const [open, setOpen] = useState(false);
   const [cpSearch, setCpSearch] = useState("");
   const debouncedCpSearch = useDebounced(cpSearch);
@@ -924,6 +1001,7 @@ function PlanRow(props: PlanRowProps) {
   const planSyncing = syncPlanPending && syncingPlan === plan.planId;
   const planResolving = resolvePending && resolvingPlan === plan.planId;
   const planRemoving = removePending && removingPlan === plan.planId;
+  const planRunActive = !!planRun && ["queued", "resolving", "running"].includes(planRun.status);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="border rounded-lg overflow-hidden">
@@ -932,7 +1010,7 @@ function PlanRow(props: PlanRowProps) {
           <CollapsibleTrigger className="flex items-center gap-2 text-left min-w-0">
             <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform shrink-0 ${open ? "rotate-90" : ""}`} />
             <span className="font-mono text-xs text-gray-700 truncate">{plan.planId}</span>
-            <span className={`px-2 py-0.5 rounded-full text-[11px] shrink-0 ${statusColor(plan.lastStatus)}`}>{plan.lastStatus}</span>
+            <span className={`px-2 py-0.5 rounded-full text-[11px] shrink-0 ${statusColor(planRun?.status || plan.lastStatus)}`}>{planRun?.status || plan.lastStatus}</span>
             <span className="text-gray-400 text-xs shrink-0">{plan.resolvedCpCount} cp_id(s)</span>
           </CollapsibleTrigger>
           <div className="pl-6">
@@ -954,7 +1032,7 @@ function PlanRow(props: PlanRowProps) {
             variant="ghost"
             className="h-7 gap-1 text-violet-700 hover:bg-violet-100"
             onClick={() => onSyncPlan(plan.planId, "sample")}
-            disabled={planSyncing}
+              disabled={planSyncing || planRunActive}
           >
             {planSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             Sync all (sample)
@@ -963,7 +1041,7 @@ function PlanRow(props: PlanRowProps) {
             size="sm"
             className="h-7 gap-1 bg-violet-600"
             onClick={() => onSyncPlan(plan.planId, "full")}
-            disabled={planSyncing}
+              disabled={planSyncing || planRunActive}
           >
             {planSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             Sync all (full)
@@ -981,6 +1059,41 @@ function PlanRow(props: PlanRowProps) {
             {planRemoving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
           </Button>
         </div>
+        {planRun && (
+          <div className="w-full border-t border-violet-100 pt-2 text-xs text-gray-600 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded-full px-2 py-0.5 ${statusColor(planRun.status)}`}>
+                {planRun.status === "resolving" ? "resolving cp_ids" : planRun.status}
+              </span>
+              <span>{planRun.completedCpIds}/{planRun.totalCpIds} cp_id(s) complete</span>
+              {planRun.failedCpIds > 0 && <span className="text-red-600">{planRun.failedCpIds} failed</span>}
+              {planRun.activeCpId && <span className="font-mono text-gray-500">Current: {planRun.activeCpId}</span>}
+              {planRunActive && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-amber-700 hover:bg-amber-50"
+                  onClick={() => onCancelPlanRun(planRun.id)}
+                  disabled={cancelPlanRunPending}
+                >
+                  Cancel remaining
+                </Button>
+              )}
+              {planRun.status === "failed" && planRun.failedCpIds > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-violet-700 hover:bg-violet-100"
+                  onClick={() => onRetryPlanRun(planRun.id)}
+                  disabled={retryPlanRunPending}
+                >
+                  Retry failed
+                </Button>
+              )}
+            </div>
+            {planRun.error && <p className="text-red-600 break-words">{planRun.error}</p>}
+          </div>
+        )}
       </div>
       <CollapsibleContent>
         <div className="border-t p-2 space-y-2">

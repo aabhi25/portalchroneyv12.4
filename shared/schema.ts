@@ -4372,6 +4372,70 @@ export const topscholarEmbedStaging = pgTable("topscholar_embed_staging", {
   stagingCustomIdx: index("topscholar_embed_staging_custom_idx").on(table.jobId, table.customId),
 }));
 
+// A durable, admin-triggered Plan-level full-sync run. The worker resolves the
+// current CP IDs for a plan before creating the child work records below, so the
+// UI can show stable progress and safely resume after a process restart.
+export const topscholarPlanRuns = pgTable("topscholar_plan_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  planId: text("plan_id").notNull(),
+  requestedCpId: text("requested_cp_id"), // null = complete Plan; set = targeted CP maintenance run
+  mode: text("mode").notNull().default("full"),
+  status: text("status").notNull().default("queued"), // 'queued' | 'resolving' | 'running' | 'completed' | 'failed' | 'cancelled'
+  totalCpIds: integer("total_cp_ids").notNull().default(0),
+  completedCpIds: integer("completed_cp_ids").notNull().default(0),
+  failedCpIds: integer("failed_cp_ids").notNull().default(0),
+  activeCpId: text("active_cp_id"),
+  error: text("error"),
+  leaseOwner: text("lease_owner"),
+  leaseExpiresAt: timestamp("lease_expires_at"),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  accountPlanUpdatedIdx: index("topscholar_plan_runs_account_plan_updated_idx").on(table.businessAccountId, table.planId, table.updatedAt),
+  accountStatusIdx: index("topscholar_plan_runs_account_status_idx").on(table.businessAccountId, table.status),
+  activePlanUnique: uniqueIndex("topscholar_plan_runs_active_plan_unique")
+    .on(table.businessAccountId, table.planId)
+    .where(sql`${table.requestedCpId} IS NULL AND ${table.status} IN ('queued', 'resolving', 'running')`),
+  activeCpUnique: uniqueIndex("topscholar_plan_runs_active_cp_unique")
+    .on(table.businessAccountId, table.planId, table.requestedCpId)
+    .where(sql`${table.requestedCpId} IS NOT NULL AND ${table.status} IN ('queued', 'resolving', 'running')`),
+}));
+
+// One durable work item per resolved CP ID inside a Plan run. Raw curriculum
+// content deliberately never lives here: the worker fetches it only when it is
+// ready to process the CP ID, preserving the client-data isolation guarantee.
+export const topscholarPlanRunItems = pgTable("topscholar_plan_run_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  runId: varchar("run_id").notNull().references(() => topscholarPlanRuns.id, { onDelete: "cascade" }),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  planId: text("plan_id").notNull(),
+  cpId: text("cp_id").notNull(),
+  status: text("status").notNull().default("queued"), // 'queued' | 'running' | 'submitted' | 'completed' | 'failed' | 'cancelled'
+  attempts: integer("attempts").notNull().default(0),
+  error: text("error"),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  runCpUnique: uniqueIndex("topscholar_plan_run_items_run_cp_idx").on(table.runId, table.cpId),
+  runStatusIdx: index("topscholar_plan_run_items_run_status_idx").on(table.runId, table.status),
+  accountCpIdx: index("topscholar_plan_run_items_account_cp_idx").on(table.businessAccountId, table.cpId),
+}));
+
+// One short-lived worker lease per account. It ensures a horizontally scaled
+// app cannot process two direct client-database CP IDs for the same tenant at
+// once, while allowing unrelated accounts to make progress independently.
+export const topscholarPlanSyncLeases = pgTable("topscholar_plan_sync_leases", {
+  businessAccountId: varchar("business_account_id").primaryKey().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  owner: text("owner").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 export const insertTopscholarPlanIdSchema = createInsertSchema(topscholarPlanIds).omit({ id: true, createdAt: true, updatedAt: true });
 export type TopscholarPlanId = typeof topscholarPlanIds.$inferSelect;
 export type InsertTopscholarPlanId = typeof topscholarPlanIds.$inferInsert;
@@ -4394,3 +4458,7 @@ export type TopscholarEmbedJob = typeof topscholarEmbedJobs.$inferSelect;
 export type InsertTopscholarEmbedJob = typeof topscholarEmbedJobs.$inferInsert;
 export type TopscholarEmbedStaging = typeof topscholarEmbedStaging.$inferSelect;
 export type InsertTopscholarEmbedStaging = typeof topscholarEmbedStaging.$inferInsert;
+export type TopscholarPlanRun = typeof topscholarPlanRuns.$inferSelect;
+export type InsertTopscholarPlanRun = typeof topscholarPlanRuns.$inferInsert;
+export type TopscholarPlanRunItem = typeof topscholarPlanRunItems.$inferSelect;
+export type InsertTopscholarPlanRunItem = typeof topscholarPlanRunItems.$inferInsert;

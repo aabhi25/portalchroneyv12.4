@@ -29,6 +29,13 @@ import { testContentBundleConnection } from "../services/topscholar/cmsConnector
 import { cancelBatch } from "../services/topscholar/embeddingBatchService";
 import { withCpLock } from "../services/topscholar/cpLock";
 import { deleteCpChunks } from "../services/topscholar/chunkStore";
+import {
+  cancelPlanSyncRun,
+  enqueuePlanSyncRuns,
+  enqueueSingleCpSyncRun,
+  listPlanSyncRuns,
+  retryFailedPlanSyncItems,
+} from "../services/topscholar/planSyncWorker";
 
 const router = Router();
 
@@ -557,6 +564,13 @@ router.post("/api/topscholar/sync", ...topscholarGuards, async (req: Request, re
   }
 
   try {
+    // External client-store writes use the same durable, account-wide-limited
+    // worker as Plan syncs. This prevents a rapid series of manual Full clicks
+    // (or "Resync selected") from creating fire-and-forget MongoDB workers.
+    if (mode === "full" && cfg.contentDbUrl) {
+      const run = await enqueueSingleCpSyncRun({ businessAccountId, planId, cpId });
+      return res.status(202).json({ success: true, queued: true, run });
+    }
     const result = await ingestSingleCp({ businessAccountId, cpId, planId, cfg, mode, sampleLimit });
     res.json({ success: true, result });
   } catch (error: any) {
@@ -943,8 +957,50 @@ router.post("/api/topscholar/plan-ids/remove", ...topscholarGuards, async (req: 
   res.json({ success: true, purgedCpCount: cpIds.length });
 });
 
-// Sync now: run plan-driven ingestion for the saved master list (or an explicit
-// subset passed as { planIds }). Uses the configured sync mode by default.
+// Recent durable Plan runs. The UI uses this instead of keeping a full Plan
+// request open while the CMS resolves and CP IDs embed in the client database.
+router.get("/api/topscholar/plan-runs", ...topscholarGuards, async (req: Request, res: Response) => {
+  const businessAccountId = getBusinessAccountId(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+  const planId = typeof req.query?.planId === "string" ? req.query.planId.trim() : undefined;
+  try {
+    const runs = await listPlanSyncRuns(businessAccountId, planId);
+    res.json({ runs });
+  } catch (error: any) {
+    console.error("[TopScholar PlanRuns] Failed:", error);
+    res.status(500).json({ error: error?.message || "Couldn't load Plan sync runs." });
+  }
+});
+
+router.post("/api/topscholar/plan-runs/:runId/cancel", ...topscholarGuards, async (req: Request, res: Response) => {
+  const businessAccountId = getBusinessAccountId(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const run = await cancelPlanSyncRun(businessAccountId, req.params.runId);
+    if (!run) return res.status(404).json({ error: "Plan sync run not found." });
+    res.json({ success: true, run });
+  } catch (error: any) {
+    console.error("[TopScholar PlanRuns] Cancel failed:", error);
+    res.status(500).json({ error: error?.message || "Couldn't cancel Plan sync." });
+  }
+});
+
+router.post("/api/topscholar/plan-runs/:runId/retry-failed", ...topscholarGuards, async (req: Request, res: Response) => {
+  const businessAccountId = getBusinessAccountId(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const run = await retryFailedPlanSyncItems(businessAccountId, req.params.runId);
+    if (!run) return res.status(404).json({ error: "Plan sync run not found." });
+    res.json({ success: true, run });
+  } catch (error: any) {
+    console.error("[TopScholar PlanRuns] Retry failed:", error);
+    res.status(500).json({ error: error?.message || "Couldn't retry failed CP IDs." });
+  }
+});
+
+// Sync now: a full Plan sync is a durable run. It resolves the Plan's current
+// CP IDs first, then processes them under the worker's bounded concurrency. A
+// sample sync stays request-driven because it is intentionally small and fast.
 router.post("/api/topscholar/sync-now", ...topscholarGuards, async (req: Request, res: Response) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
@@ -982,6 +1038,16 @@ router.post("/api/topscholar/sync-now", ...topscholarGuards, async (req: Request
   }
 
   try {
+    if (mode === "full") {
+      const runs = await enqueuePlanSyncRuns({ businessAccountId, planIds });
+      return res.status(202).json({
+        success: true,
+        queued: true,
+        mode,
+        planCount: planIds.length,
+        runs,
+      });
+    }
     const results = await ingestPlanIds({ businessAccountId, planIds, cfg, mode, sampleLimit });
     res.json({ success: true, mode, planCount: planIds.length, results });
   } catch (error: any) {

@@ -39,6 +39,7 @@ export interface IngestResult {
   jobId?: string; // present for full (async) sync
   batchCount?: number; // number of OpenAI batches submitted (full sync)
   async?: boolean; // true when the full sync is still running in the background (direct-to-client-DB path, no Batch job)
+  cancelled?: boolean; // direct client-store work observed a cancellation at a page boundary
 }
 
 export const DEFAULT_SAMPLE_LIMIT = 50;
@@ -302,8 +303,17 @@ async function ingestBundle(
   bundle: CpContentBundle,
   mode: 'sample' | 'full',
   sampleLimit: number,
+  options: { awaitDirect?: boolean; isCancelled?: () => Promise<boolean> } = {},
 ): Promise<IngestResult> {
   const cpId = bundle.cpId;
+
+  if (await options.isCancelled?.()) {
+    return {
+      cpId, source: bundle.source, mode, storeType: cfg.storeType,
+      chunkCount: 0, noteCount: 0, transcriptCount: 0, ebookPageCount: 0, questionCount: 0, mediaCount: 0,
+      cancelled: true,
+    };
+  }
 
   await upsertSync(businessAccountId, cpId, {
     status: 'syncing',
@@ -352,7 +362,16 @@ async function ingestBundle(
     //  - Blank URL (local pgvector stand-in): keep the cheaper OpenAI Batch-API path, which
     //    stages in our DB (acceptable — the local store IS our DB).
     if (cfg.contentDbUrl) {
-      return ingestFullDirect(businessAccountId, cpId, cfg, bundle.source, records, counts);
+      return ingestFullDirect(
+        businessAccountId,
+        cpId,
+        cfg,
+        bundle.source,
+        records,
+        counts,
+        !!options.awaitDirect,
+        options.isCancelled,
+      );
     }
     return ingestFullBatch(businessAccountId, cpId, cfg, bundle.source, records, counts);
   } catch (error: any) {
@@ -671,6 +690,12 @@ export async function ingestSingleCp(params: {
   cfg: TopscholarConfig;
   mode?: 'sample' | 'full';
   sampleLimit?: number;
+  // Plan-run workers await direct client-store work so one Plan never creates a
+  // fire-and-forget worker per CP ID. The targeted admin button remains async.
+  awaitDirect?: boolean;
+  // Durable Plan-run cancellation token. It is checked before the direct path
+  // creates/revives a sync row and at every page boundary.
+  isCancelled?: () => Promise<boolean>;
 }): Promise<IngestResult> {
   const { businessAccountId, cpId, planId, cfg } = params;
   const mode = params.mode || 'full';
@@ -683,7 +708,10 @@ export async function ingestSingleCp(params: {
   }
 
   await upsertMappingFromBundle(businessAccountId, bundle);
-  return ingestBundle(businessAccountId, cfg, bundle, mode, sampleLimit);
+  return ingestBundle(businessAccountId, cfg, bundle, mode, sampleLimit, {
+    awaitDirect: !!params.awaitDirect,
+    isCancelled: params.isCancelled,
+  });
 }
 
 /** SAMPLE: synchronous embeddings + immediate store write. */
@@ -890,7 +918,15 @@ async function ingestFullDirect(
   source: 'cms' | 'fixture',
   records: ChunkRecord[],
   counts: ReturnType<typeof countByType>,
+  awaitCompletion = false,
+  isRunCancelled?: () => Promise<boolean>,
 ): Promise<IngestResult> {
+  const cancelledResult = (): IngestResult => ({
+    cpId, source, mode: 'full', storeType: cfg.storeType,
+    chunkCount: 0, ...counts, async: false, cancelled: true,
+  });
+  if (await isRunCancelled?.()) return cancelledResult();
+
   // Mark syncing with the full totals up front (the run-initiating write stays unguarded so
   // a fresh sync can restart a previously-cancelled cp_id).
   await upsertSync(businessAccountId, cpId, {
@@ -904,6 +940,13 @@ async function ingestFullDirect(
     lastError: null,
     embedJobId: null,
   });
+  // Cancellation can race the startup write above. Check again before a single
+  // embedding request or client-store mutation; the plan worker's durable item
+  // status is the authority, while the sync row is the visible signal.
+  if (await isRunCancelled?.()) {
+    await upsertSync(businessAccountId, cpId, { status: 'cancelled', lastError: 'Cancelled from the Plan sync queue.', embedJobId: null }, true);
+    return cancelledResult();
+  }
 
   // Returns true if the sync row was meanwhile flipped to 'cancelled' (cancel endpoint).
   const wasCancelled = async (): Promise<boolean> => {
@@ -911,16 +954,16 @@ async function ingestFullDirect(
       .select({ status: topscholarContentSync.status })
       .from(topscholarContentSync)
       .where(and(eq(topscholarContentSync.businessAccountId, businessAccountId), eq(topscholarContentSync.cpId, cpId)));
-    return row?.status === 'cancelled';
+    return !!(await isRunCancelled?.()) || row?.status === 'cancelled';
   };
 
   // Background worker — intentionally not awaited by the caller.
-  const run = async () => {
-    await withCpLock(businessAccountId, cpId, async () => {
+  const run = async (): Promise<boolean> => {
+    return withCpLock(businessAccountId, cpId, async () => {
       let written = 0;
       let deleted = false;
       for (let i = 0; i < records.length; i += DIRECT_SYNC_PAGE) {
-        if (await wasCancelled()) return; // stop appending; leave partial content for re-sync
+        if (await wasCancelled()) return false; // stop appending; leave partial content for re-sync
         const page = records.slice(i, i + DIRECT_SYNC_PAGE);
         const embeddings = await embeddingService.generateBatchEmbeddings(
           page.map((r) => r.contentText),
@@ -967,10 +1010,11 @@ async function ingestFullDirect(
         lastSyncedAt: new Date(),
         embedJobId: null,
       }, true);
+      return true;
     });
   };
 
-  run().catch(async (error: any) => {
+  const completion = run().catch(async (error: any) => {
     console.error('[TopScholar Sync] Direct full sync failed:', error);
     await upsertSync(
       businessAccountId,
@@ -978,7 +1022,22 @@ async function ingestFullDirect(
       { status: 'failed', lastError: error?.message || String(error), embedJobId: null },
       true,
     ).catch(() => {});
+    throw error;
   });
+
+  if (awaitCompletion) {
+    const completed = await completion;
+    return {
+      cpId, source, mode: 'full', storeType: cfg.storeType,
+      chunkCount: records.length, ...counts,
+      async: false,
+      cancelled: !completed,
+    };
+  }
+
+  // The targeted per-CP control deliberately stays non-blocking. Consume the
+  // rejection here because the sync row above is the user-visible error channel.
+  void completion.catch(() => {});
 
   // Return immediately — the run continues in the background; the UI polls the sync row.
   return {
