@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -905,15 +904,28 @@ export default function ContentSync() {
           <CardDescription>Live status of every cp_id sync, grouped by plan. Start syncs from the Plan IDs panel above; expand a plan to see rows and cancel an in-progress run.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {summary && (
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <SummaryChip label="syncing" value={summary.overall.syncing} className="bg-blue-100 text-blue-700" />
-              <SummaryChip label="completed" value={summary.overall.completed} className="bg-green-100 text-green-700" />
-              <SummaryChip label="failed" value={summary.overall.failed} className="bg-red-100 text-red-700" />
-              <SummaryChip label="cancelled" value={summary.overall.cancelled} className="bg-amber-100 text-amber-700" />
-              <SummaryChip label="total" value={summary.overall.total} className="bg-gray-100 text-gray-600" />
-            </div>
-          )}
+          <Tabs value={statusFilter} onValueChange={setStatusFilter} className="w-full">
+            <TabsList className="h-auto w-full justify-start overflow-x-auto bg-violet-50/80 p-1">
+              <TabsTrigger value="all" className="shrink-0 gap-1.5 text-xs">
+                All <span className="text-muted-foreground">({summary?.overall.total ?? 0})</span>
+              </TabsTrigger>
+              <TabsTrigger value="syncing" className="shrink-0 gap-1.5 text-xs">
+                Syncing <span className="text-muted-foreground">({summary?.overall.syncing ?? 0})</span>
+              </TabsTrigger>
+              <TabsTrigger value="completed" className="shrink-0 gap-1.5 text-xs">
+                Completed <span className="text-muted-foreground">({summary?.overall.completed ?? 0})</span>
+              </TabsTrigger>
+              <TabsTrigger value="failed" className="shrink-0 gap-1.5 text-xs">
+                Failed <span className="text-muted-foreground">({summary?.overall.failed ?? 0})</span>
+              </TabsTrigger>
+              <TabsTrigger value="cancelled" className="shrink-0 gap-1.5 text-xs">
+                Cancelled <span className="text-muted-foreground">({summary?.overall.cancelled ?? 0})</span>
+              </TabsTrigger>
+              <TabsTrigger value="idle" className="shrink-0 gap-1.5 text-xs">
+                Idle <span className="text-muted-foreground">({summary?.overall.idle ?? 0})</span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
 
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative flex-1 min-w-[180px]">
@@ -925,17 +937,6 @@ export default function ContentSync() {
                 className="h-9 pl-8"
               />
             </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="h-9 w-[160px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="syncing">Syncing</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
-                <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="cancelled">Cancelled</SelectItem>
-                <SelectItem value="idle">Idle</SelectItem>
-              </SelectContent>
-            </Select>
           </div>
 
           {filteredBuckets.length > 0 ? (
@@ -1021,14 +1022,6 @@ export default function ContentSync() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
-}
-
-function SummaryChip({ label, value, className }: { label: string; value: number; className: string }) {
-  return (
-    <span className={`px-2 py-1 rounded-full ${className}`}>
-      <span className="font-semibold">{value}</span> {label}
-    </span>
   );
 }
 
