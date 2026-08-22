@@ -1857,9 +1857,22 @@ var init_schema = __esm({
       model: text("model").notNull().unique(),
       // 'gpt-4o-mini', 'gpt-4o', 'gpt-4o-vision', 'gpt-realtime-mini', etc
       inputCostPer1k: numeric("input_cost_per_1k", { precision: 10, scale: 6 }).notNull(),
-      // Cost per 1000 input tokens (in USD)
+      // Cost per 1000 TEXT input tokens (in USD)
       outputCostPer1k: numeric("output_cost_per_1k", { precision: 10, scale: 6 }).notNull(),
-      // Cost per 1000 output tokens (in USD)
+      // Cost per 1000 TEXT output tokens (in USD)
+      // Realtime/audio models bill audio tokens at a very different rate than text
+      // (audio is ~17x text on gpt-realtime-mini), and cached input is far cheaper
+      // than fresh input. These are nullable: when a model has no audio or cache
+      // rate, cost falls back to the text rates above, so text-only models behave
+      // exactly as they did before these columns existed.
+      cachedInputCostPer1k: numeric("cached_input_cost_per_1k", { precision: 10, scale: 6 }),
+      // Cost per 1000 cached TEXT input tokens
+      audioInputCostPer1k: numeric("audio_input_cost_per_1k", { precision: 10, scale: 6 }),
+      // Cost per 1000 AUDIO input tokens
+      audioCachedInputCostPer1k: numeric("audio_cached_input_cost_per_1k", { precision: 10, scale: 6 }),
+      // Cost per 1000 cached AUDIO input tokens
+      audioOutputCostPer1k: numeric("audio_output_cost_per_1k", { precision: 10, scale: 6 }),
+      // Cost per 1000 AUDIO output tokens
       effectiveDate: timestamp("effective_date").notNull().defaultNow(),
       // When this pricing became effective
       createdAt: timestamp("created_at").notNull().defaultNow()
@@ -1870,11 +1883,23 @@ var init_schema = __esm({
       category: text("category").notNull(),
       // 'chat', 'website_analysis', 'document_analysis', 'image_search', 'voice_mode'
       model: text("model").notNull(),
-      // 'gpt-4o-mini', 'gpt-4o', 'gpt-4o-vision', 'gpt-realtime-mini'
+      // 'gpt-4o-mini', 'gpt-4o', 'gpt-4o-vision', 'gpt-realtime-2.1-mini'
       tokensInput: numeric("tokens_input", { precision: 10, scale: 0 }).notNull().default("0"),
-      // Input tokens used
+      // TOTAL input tokens (text + audio, including cached)
       tokensOutput: numeric("tokens_output", { precision: 10, scale: 0 }).notNull().default("0"),
-      // Output tokens generated
+      // TOTAL output tokens (text + audio)
+      // Modality/cache breakdown. These are SUBSETS of the totals above, not
+      // additions to them, so existing sums over tokens_input/tokens_output stay
+      // correct. Zero for text-only models; populated for realtime voice, where
+      // audio tokens cost ~17x text tokens and must be priced separately.
+      tokensInputAudio: numeric("tokens_input_audio", { precision: 10, scale: 0 }).notNull().default("0"),
+      // Audio portion of tokens_input
+      tokensOutputAudio: numeric("tokens_output_audio", { precision: 10, scale: 0 }).notNull().default("0"),
+      // Audio portion of tokens_output
+      tokensInputCached: numeric("tokens_input_cached", { precision: 10, scale: 0 }).notNull().default("0"),
+      // Cached portion of tokens_input (text + audio)
+      tokensInputCachedAudio: numeric("tokens_input_cached_audio", { precision: 10, scale: 0 }).notNull().default("0"),
+      // Audio portion of tokens_input_cached
       costUsd: numeric("cost_usd", { precision: 10, scale: 6 }).notNull().default("0"),
       // Calculated cost in USD
       metadata: jsonb("metadata"),
@@ -3233,6 +3258,9 @@ var init_schema = __esm({
       aiUseProducts: text("ai_use_products").notNull().default("true"),
       aiKnowledgeDocIds: jsonb("ai_knowledge_doc_ids").$type().default([]),
       // Optional: scope to specific training docs
+      // Reply classification — campaign-defined outcome categories. Empty array =
+      // broadcast-only campaign, classification step is skipped entirely.
+      replyClassifications: jsonb("reply_classifications").$type().default([]),
       // Cost controls
       aiDailyTokenBudget: integer("ai_daily_token_budget").notNull().default(5e4),
       // Per-day token cap for this campaign's AI replies
@@ -3298,6 +3326,19 @@ var init_schema = __esm({
       // # AI replies sent to this recipient
       claimedAt: timestamp("claimed_at"),
       // When a worker claimed this row for sending; powers stale-claim recovery
+      // ── Outcome tracking ──────────────────────────────────────────────────────
+      // Populated by the AI classifier after each inbound reply. `primaryClassification`
+      // holds a `key` from the owning campaign's replyClassifications list; `dispositionData`
+      // holds that classification's captureFields (e.g. { ptp_date: "2026-09-05" }).
+      // callbackRequired is promoted to a first-class column because "this person needs
+      // a human" is universal across every vertical and drives an operational queue.
+      primaryClassification: text("primary_classification"),
+      dispositionData: jsonb("disposition_data").$type().default({}),
+      callbackRequired: boolean("callback_required").notNull().default(false),
+      callbackReason: text("callback_reason"),
+      customerFeedback: text("customer_feedback"),
+      // verbatim customer statement, captured regardless of classification
+      classifiedAt: timestamp("classified_at"),
       createdAt: timestamp("created_at").notNull().defaultNow()
     }, (table) => ({
       campaignIdx: index("mkt_recipients_campaign_idx").on(table.campaignId),
@@ -4654,6 +4695,37 @@ __export(doubtSyncService_exports, {
   triggerEscalationEmail: () => triggerEscalationEmail,
   uploadImage: () => uploadImage
 });
+function getRenderer() {
+  if (_rendererPromise) return _rendererPromise;
+  _rendererPromise = (async () => {
+    const { remark } = await import("remark");
+    const { default: remarkGfm } = await import("remark-gfm");
+    const { default: remarkMath } = await import("remark-math");
+    const { default: remarkRehype } = await import("remark-rehype");
+    const { default: rehypeRaw } = await import("rehype-raw");
+    const { default: rehypeKatex } = await import("rehype-katex");
+    const { default: rehypeStringify } = await import("rehype-stringify");
+    const processor = remark().use(remarkGfm).use(remarkMath).use(remarkRehype, { allowDangerousHtml: true }).use(rehypeRaw).use(rehypeKatex, { output: "mathml" }).use(rehypeStringify);
+    return async (md) => {
+      const result = await processor.process(md);
+      return String(result);
+    };
+  })().catch((err) => {
+    console.warn("[DoubtSync] renderer init failed, falling back to plain text:", err instanceof Error ? err.message : err);
+    _rendererPromise = null;
+    return (md) => Promise.resolve(md);
+  });
+  return _rendererPromise;
+}
+async function toRenderable(markdown) {
+  try {
+    const render = await getRenderer();
+    return await render(markdown);
+  } catch (err) {
+    console.warn("[DoubtSync] toRenderable failed, using plain text:", err instanceof Error ? err.message : err);
+    return markdown;
+  }
+}
 function assertSafeBaseUrl(raw) {
   let url;
   try {
@@ -4704,10 +4776,11 @@ async function pushTextMessageDetailed(baseUrl, doubtId, from, text2) {
   if (!doubtId || !trimmed) return { ok: false, request, response: null, latencyMs: 0, error: "doubtId and a non-empty message are both required." };
   try {
     assertSafeBaseUrl(baseUrl);
+    const payload = from === "sme" ? await toRenderable(trimmed) : trimmed;
     const form = new FormData();
     form.append("doubt", doubtId);
     form.append("from_user", from);
-    form.append("messages", trimmed);
+    form.append("messages", payload);
     const res = await withTimeout((signal) => fetch(url, { method: "POST", body: form, signal }));
     const bodyText = await res.text().catch(() => "");
     const latencyMs = Date.now() - started;
@@ -4731,11 +4804,12 @@ async function pushTextMessage(baseUrl, doubtId, from, text2) {
   if (!baseUrl || !doubtId || !trimmed) return false;
   try {
     assertSafeBaseUrl(baseUrl);
+    const payload = from === "sme" ? await toRenderable(trimmed) : trimmed;
     const url = joinUrl(baseUrl, "/api/conversation/save-message-ai-bot");
     const form = new FormData();
     form.append("doubt", doubtId);
     form.append("from_user", from);
-    form.append("messages", trimmed);
+    form.append("messages", payload);
     const res = await withTimeout(
       (signal) => fetch(url, { method: "POST", body: form, signal })
     );
@@ -4862,10 +4936,11 @@ async function uploadImage(file, filename, contentType) {
     return null;
   }
 }
-var IMAGE_UPLOAD_URL, REQUEST_TIMEOUT_MS, MAX_SYNC_EVENTS, syncEvents;
+var _rendererPromise, IMAGE_UPLOAD_URL, REQUEST_TIMEOUT_MS, MAX_SYNC_EVENTS, syncEvents;
 var init_doubtSyncService = __esm({
   "server/services/topscholar/doubtSyncService.ts"() {
     "use strict";
+    _rendererPromise = null;
     IMAGE_UPLOAD_URL = "https://api.toppscholars.com/cp/api/ai-bot/upload-img";
     REQUEST_TIMEOUT_MS = 1e4;
     MAX_SYNC_EVENTS = 200;
@@ -4875,7 +4950,29 @@ var init_doubtSyncService = __esm({
 
 // server/services/aiUsageLogger.ts
 import { eq } from "drizzle-orm";
-var DEFAULT_MODEL_PRICING, AIUsageLogger, aiUsageLogger;
+function normalizeUsage(tokensInput, tokensOutput, breakdown) {
+  const nn = (v) => {
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  };
+  const total = nn(tokensInput);
+  const output = nn(tokensOutput);
+  const audio = Math.min(nn(breakdown?.tokensInputAudio), total);
+  const cached = Math.min(nn(breakdown?.tokensInputCached), total);
+  const outputAudio = Math.min(nn(breakdown?.tokensOutputAudio), output);
+  const lo = Math.max(0, cached + audio - total);
+  const hi = Math.min(cached, audio);
+  const cachedAudio = Math.min(Math.max(nn(breakdown?.tokensInputCachedAudio), lo), hi);
+  return {
+    tokensInput: total,
+    tokensOutput: output,
+    tokensInputAudio: audio,
+    tokensOutputAudio: outputAudio,
+    tokensInputCached: cached,
+    tokensInputCachedAudio: cachedAudio
+  };
+}
+var DEFAULT_MODEL_PRICING, rate, AIUsageLogger, aiUsageLogger;
 var init_aiUsageLogger = __esm({
   "server/services/aiUsageLogger.ts"() {
     "use strict";
@@ -4885,8 +4982,10 @@ var init_aiUsageLogger = __esm({
       "gpt-4o-mini": {
         inputCostPer1k: 15e-5,
         // $0.15 per 1M tokens
-        outputCostPer1k: 6e-4
+        outputCostPer1k: 6e-4,
         // $0.60 per 1M tokens
+        cachedInputCostPer1k: 75e-6
+        // $0.075 per 1M tokens
       },
       "gpt-4o": {
         inputCostPer1k: 25e-4,
@@ -4900,11 +4999,37 @@ var init_aiUsageLogger = __esm({
         outputCostPer1k: 0.01
         // $10.00 per 1M tokens
       },
+      // Realtime voice models. Audio tokens cost ~17x text tokens, so the two must
+      // be priced separately — pricing the whole session at the text rate
+      // understates real spend by roughly an order of magnitude.
+      // gpt-realtime-mini and gpt-realtime-2.1-mini are priced identically.
       "gpt-realtime-mini": {
-        inputCostPer1k: 0.06,
-        // $60 per 1M tokens ($0.06 per 1k)
-        outputCostPer1k: 0.24
-        // $240 per 1M tokens ($0.24 per 1k)
+        inputCostPer1k: 6e-4,
+        // text      $0.60 per 1M
+        outputCostPer1k: 24e-4,
+        // text out  $2.40 per 1M
+        cachedInputCostPer1k: 6e-5,
+        // text cached $0.06 per 1M
+        audioInputCostPer1k: 0.01,
+        // audio     $10.00 per 1M
+        audioCachedInputCostPer1k: 3e-4,
+        // audio cached $0.30 per 1M
+        audioOutputCostPer1k: 0.02
+        // audio out $20.00 per 1M
+      },
+      "gpt-realtime-2.1-mini": {
+        inputCostPer1k: 6e-4,
+        // text      $0.60 per 1M
+        outputCostPer1k: 24e-4,
+        // text out  $2.40 per 1M
+        cachedInputCostPer1k: 6e-5,
+        // text cached $0.06 per 1M
+        audioInputCostPer1k: 0.01,
+        // audio     $10.00 per 1M
+        audioCachedInputCostPer1k: 3e-4,
+        // audio cached $0.30 per 1M
+        audioOutputCostPer1k: 0.02
+        // audio out $20.00 per 1M
       },
       "text-embedding-3-small": {
         inputCostPer1k: 2e-5,
@@ -4913,29 +5038,37 @@ var init_aiUsageLogger = __esm({
         // Embeddings have no output tokens
       }
     };
+    rate = (v) => v === void 0 ? null : v.toString();
     AIUsageLogger = class {
       pricingCache = /* @__PURE__ */ new Map();
       cacheExpiry = 0;
       CACHE_TTL_MS = 5 * 60 * 1e3;
       // 5 minutes
       /**
-       * Initialize model pricing in database (run once on startup)
+       * Initialize model pricing in database (run once on startup).
+       *
+       * This upserts every rate on every boot, so the constants above are the
+       * source of truth and a stale or wrong row in the database is corrected
+       * automatically rather than persisting silently.
        */
       async initializePricing() {
         try {
           for (const [model, pricing] of Object.entries(DEFAULT_MODEL_PRICING)) {
-            await db.insert(modelPricing).values({
-              model,
+            const values = {
               inputCostPer1k: pricing.inputCostPer1k.toString(),
-              outputCostPer1k: pricing.outputCostPer1k.toString()
-            }).onConflictDoUpdate({
+              outputCostPer1k: pricing.outputCostPer1k.toString(),
+              cachedInputCostPer1k: rate(pricing.cachedInputCostPer1k),
+              audioInputCostPer1k: rate(pricing.audioInputCostPer1k),
+              audioCachedInputCostPer1k: rate(pricing.audioCachedInputCostPer1k),
+              audioOutputCostPer1k: rate(pricing.audioOutputCostPer1k)
+            };
+            await db.insert(modelPricing).values({ model, ...values }).onConflictDoUpdate({
               target: modelPricing.model,
-              set: {
-                inputCostPer1k: pricing.inputCostPer1k.toString(),
-                outputCostPer1k: pricing.outputCostPer1k.toString()
-              }
+              set: values
             });
           }
+          this.pricingCache.clear();
+          this.cacheExpiry = 0;
           console.log("[AIUsageLogger] Model pricing initialized");
         } catch (error) {
           console.error("[AIUsageLogger] Error initializing pricing:", error);
@@ -4956,9 +5089,19 @@ var init_aiUsageLogger = __esm({
         try {
           const pricing = await db.select().from(modelPricing).where(eq(modelPricing.model, model)).limit(1);
           if (pricing.length > 0) {
+            const row = pricing[0];
+            const opt = (v) => {
+              if (v === null || v === void 0) return void 0;
+              const n = parseFloat(v);
+              return Number.isFinite(n) ? n : void 0;
+            };
             const result = {
-              inputCostPer1k: parseFloat(pricing[0].inputCostPer1k),
-              outputCostPer1k: parseFloat(pricing[0].outputCostPer1k)
+              inputCostPer1k: parseFloat(row.inputCostPer1k),
+              outputCostPer1k: parseFloat(row.outputCostPer1k),
+              cachedInputCostPer1k: opt(row.cachedInputCostPer1k),
+              audioInputCostPer1k: opt(row.audioInputCostPer1k),
+              audioCachedInputCostPer1k: opt(row.audioCachedInputCostPer1k),
+              audioOutputCostPer1k: opt(row.audioOutputCostPer1k)
             };
             this.pricingCache.set(model, result);
             return result;
@@ -4975,12 +5118,28 @@ var init_aiUsageLogger = __esm({
         return DEFAULT_MODEL_PRICING["gpt-4o-mini"];
       }
       /**
-       * Calculate cost based on tokens and pricing
+       * Calculate cost from token totals plus an optional modality/cache breakdown.
+       *
+       * The breakdown fields are subsets of the totals, so the text portion is
+       * derived by subtraction. When a model defines no audio or cached rate, the
+       * corresponding tokens fall back to the plain text rate — which reduces to
+       * the original `input * inRate + output * outRate` for text-only models.
        */
-      calculateCost(tokensInput, tokensOutput, pricing) {
-        const inputCost = tokensInput / 1e3 * pricing.inputCostPer1k;
-        const outputCost = tokensOutput / 1e3 * pricing.outputCostPer1k;
-        return inputCost + outputCost;
+      calculateCost(usage, pricing) {
+        const textInRate = pricing.inputCostPer1k;
+        const textOutRate = pricing.outputCostPer1k;
+        const cachedTextRate = pricing.cachedInputCostPer1k ?? textInRate;
+        const audioInRate = pricing.audioInputCostPer1k ?? textInRate;
+        const audioOutRate = pricing.audioOutputCostPer1k ?? textOutRate;
+        const cachedAudioRate = pricing.audioCachedInputCostPer1k ?? audioInRate;
+        const cachedAudioIn = usage.tokensInputCachedAudio;
+        const cachedTextIn = usage.tokensInputCached - cachedAudioIn;
+        const freshAudioIn = usage.tokensInputAudio - cachedAudioIn;
+        const freshTextIn = usage.tokensInput - usage.tokensInputAudio - cachedTextIn;
+        const audioOut = usage.tokensOutputAudio;
+        const textOut = usage.tokensOutput - audioOut;
+        const cost = freshTextIn * textInRate + cachedTextIn * cachedTextRate + freshAudioIn * audioInRate + cachedAudioIn * cachedAudioRate + textOut * textOutRate + audioOut * audioOutRate;
+        return cost / 1e3;
       }
       /**
        * Log AI usage event
@@ -4988,17 +5147,23 @@ var init_aiUsageLogger = __esm({
       async logUsage(params) {
         try {
           const pricing = await this.getPricing(params.model);
-          const costUsd = this.calculateCost(params.tokensInput, params.tokensOutput, pricing);
+          const usage = normalizeUsage(params.tokensInput, params.tokensOutput, params);
+          const costUsd = this.calculateCost(usage, pricing);
           await db.insert(aiUsageEvents).values({
             businessAccountId: params.businessAccountId,
             category: params.category,
             model: params.model,
-            tokensInput: params.tokensInput.toString(),
-            tokensOutput: params.tokensOutput.toString(),
+            tokensInput: usage.tokensInput.toString(),
+            tokensOutput: usage.tokensOutput.toString(),
+            tokensInputAudio: usage.tokensInputAudio.toString(),
+            tokensOutputAudio: usage.tokensOutputAudio.toString(),
+            tokensInputCached: usage.tokensInputCached.toString(),
+            tokensInputCachedAudio: usage.tokensInputCachedAudio.toString(),
             costUsd: costUsd.toFixed(6),
             metadata: params.metadata || null
           });
-          console.log(`[AIUsageLogger] Logged usage: ${params.category} | ${params.model} | in:${params.tokensInput} out:${params.tokensOutput} | $${costUsd.toFixed(6)}`);
+          const audioNote = usage.tokensInputAudio || usage.tokensOutputAudio ? ` (audio in:${usage.tokensInputAudio} out:${usage.tokensOutputAudio})` : "";
+          console.log(`[AIUsageLogger] Logged usage: ${params.category} | ${params.model} | in:${usage.tokensInput} out:${usage.tokensOutput}${audioNote} | $${costUsd.toFixed(6)}`);
         } catch (error) {
           console.error("[AIUsageLogger] Error logging usage:", error);
         }
@@ -5072,15 +5237,53 @@ var init_aiUsageLogger = __esm({
       /**
        * Helper: Log voice mode usage
        */
-      async logVoiceModeUsage(businessAccountId, model, tokensInput, tokensOutput, metadata) {
+      async logVoiceModeUsage(businessAccountId, model, tokensInput, tokensOutput, metadata, breakdown) {
         await this.logUsage({
           businessAccountId,
           category: "voice_mode",
           model,
           tokensInput,
           tokensOutput,
-          metadata
+          metadata,
+          ...breakdown
         });
+      }
+      /**
+       * Helper: Extract token usage from an OpenAI Realtime `response.done` payload.
+       *
+       * The Realtime API reports totals plus a per-modality breakdown, e.g.
+       *
+       *   usage: {
+       *     input_tokens, output_tokens, total_tokens,
+       *     input_token_details:  { cached_tokens, text_tokens, audio_tokens,
+       *                             cached_tokens_details: { text_tokens, audio_tokens } },
+       *     output_token_details: { text_tokens, audio_tokens }
+       *   }
+       *
+       * Field names are read defensively: any missing detail degrades to zero,
+       * which prices those tokens at the text rate rather than throwing away the
+       * event entirely. Returns null when there is no usable usage object.
+       */
+      extractRealtimeUsage(usage) {
+        if (!usage || typeof usage !== "object") return null;
+        const n = (v) => {
+          const parsed = typeof v === "number" ? v : Number(v);
+          return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 0;
+        };
+        const inDetails = usage.input_token_details ?? {};
+        const outDetails = usage.output_token_details ?? {};
+        const cachedDetails = inDetails.cached_tokens_details ?? {};
+        const tokensInput = n(usage.input_tokens);
+        const tokensOutput = n(usage.output_tokens);
+        if (tokensInput === 0 && tokensOutput === 0) return null;
+        return {
+          tokensInput,
+          tokensOutput,
+          tokensInputAudio: n(inDetails.audio_tokens),
+          tokensOutputAudio: n(outDetails.audio_tokens),
+          tokensInputCached: n(inDetails.cached_tokens),
+          tokensInputCachedAudio: n(cachedDetails.audio_tokens)
+        };
       }
       /**
        * Helper: Log embedding usage (RAG)
@@ -10866,6 +11069,7 @@ var init_llamaService = __esm({
   "server/llamaService.ts"() {
     "use strict";
     init_aiUsageLogger();
+    init_config();
     DEFAULT_MODEL = "gpt-4o-mini";
     REFUSAL_WORDS = [
       "no",
@@ -12636,8 +12840,8 @@ ${rawCustomInstructions}`;
         });
         const userMessageLower = userMessage.toLowerCase();
         const keywordMatchedFields = [...missingRequiredKeywordFields, ...missingOptionalKeywordFields].filter((f) => {
-          const keywords = f.captureKeywords || [];
-          return keywords.some((kw) => userMessageLower.includes(kw.toLowerCase()));
+          const keywords2 = f.captureKeywords || [];
+          return keywords2.some((kw) => userMessageLower.includes(kw.toLowerCase()));
         });
         const hasKeywordMatch = keywordMatchedFields.length > 0;
         console.log(`[Keyword Timing] Keyword fields: ${keywordFieldsList.map((f) => `${f.id}(${(f.captureKeywords || []).join("|")})`).join(",")}, Matched: ${keywordMatchedFields.map((f) => f.id).join(",")}, hasMatch: ${hasKeywordMatch}`);
@@ -12941,7 +13145,7 @@ EXAMPLE FORMAT:
           /\bneed\s+a\s+call\b/i,
           /\bask\s+(your\s+)?(team|people)\s+to\s+call\b/i
         ];
-        const hasCallbackIntent = callbackPhrases.some((pattern) => pattern.test(userMessage));
+        const hasCallbackIntent = !isTopscholarAccount(businessAccountId || "") && callbackPhrases.some((pattern) => pattern.test(userMessage));
         if (hasCallbackIntent) {
           const phoneAlreadyCaptured = !!existingLead?.phone;
           if (phoneAlreadyCaptured) {
@@ -14301,7 +14505,7 @@ var init_aiTools = __esm({
         type: "function",
         function: {
           name: "fetch_k12_questions",
-          description: "Fetch practice questions/MCQs for a topic from the curriculum question bank. ALWAYS call this after fetch_k12_topic to offer practice questions. Also call directly when students ask to practice, test knowledge, solve MCQs, or take a quiz. Returns multiple-choice questions with options, correct answers, and solutions.",
+          description: "Fetch practice questions/MCQs for a topic from the curriculum question bank. Call this when students explicitly ask to practice, test their knowledge, solve MCQs, or take a quiz. Returns multiple-choice questions with options, correct answers, and solutions.",
           parameters: {
             type: "object",
             properties: {
@@ -14772,6 +14976,9 @@ async function getClient(connectionString) {
 function getDb(client, dbName) {
   return dbName ? client.db(dbName) : client.db();
 }
+async function getMongoCollection(connectionString, dbName, collection) {
+  return getCollection(connectionString, dbName, collection);
+}
 async function getCollection(connectionString, dbName, collection) {
   const client = await getClient(connectionString);
   const db2 = getDb(client, dbName);
@@ -14933,6 +15140,180 @@ var init_mongoContentDb = __esm({
   }
 });
 
+// server/services/topscholar/mediaMetadata.ts
+function isHttpUrl(value) {
+  return typeof value === "string" && /^https?:\/\//i.test(value.trim());
+}
+function asText(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+function mediaKind(value, fallback) {
+  return value === "image" || value === "video" || value === "document" || value === "other" ? value : fallback;
+}
+function createMediaMetadata(url, kind, context, order, extras = {}) {
+  if (!isHttpUrl(url)) return null;
+  return {
+    url: url.trim(),
+    kind,
+    alt: asText(extras.alt),
+    caption: asText(extras.caption),
+    sourceRef: asText(context.sourceRef),
+    order,
+    topic: asText(context.topic),
+    concept: asText(context.concept),
+    subConcept: asText(context.subConcept),
+    chapter: asText(context.chapter),
+    subject: asText(context.subject)
+  };
+}
+function readCurriculumMedia(metadata, fallbackMediaUrl, fallbackKind, context) {
+  const meta = metadata || {};
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (value, order, fallback) => {
+    const raw = value && typeof value === "object" && !Array.isArray(value) ? value : { url: value };
+    const item = createMediaMetadata(
+      String(raw.url || ""),
+      mediaKind(raw.kind, fallback),
+      {
+        sourceRef: asText(raw.sourceRef) ?? context.sourceRef,
+        topic: asText(raw.topic) ?? context.topic,
+        concept: asText(raw.concept) ?? context.concept,
+        subConcept: asText(raw.subConcept) ?? context.subConcept,
+        chapter: asText(raw.chapter) ?? context.chapter,
+        subject: asText(raw.subject) ?? context.subject
+      },
+      typeof raw.order === "number" && Number.isFinite(raw.order) ? raw.order : order,
+      { alt: asText(raw.alt), caption: asText(raw.caption) }
+    );
+    if (!item || seen.has(item.url)) return;
+    seen.add(item.url);
+    out.push(item);
+  };
+  if (Array.isArray(meta.media)) {
+    meta.media.forEach((item, index2) => add(item, index2, fallbackKind));
+  }
+  if (Array.isArray(meta.images)) {
+    meta.images.forEach((item, index2) => add(item, out.length + index2, "image"));
+  }
+  if (isHttpUrl(fallbackMediaUrl)) add(fallbackMediaUrl, out.length, fallbackKind);
+  return out;
+}
+function keywords(text2) {
+  return Array.from(new Set(
+    text2.toLowerCase().replace(/[^0-9a-z\u00C0-\u0963\u0966-\u1FFF\u2C00-\uD7FF\s]/g, " ").split(/\s+/).filter((word) => word.length > 2 && !STOP_WORDS.has(word))
+  ));
+}
+function candidateEvidence(candidate) {
+  return [
+    candidate.topic,
+    candidate.concept,
+    candidate.subConcept,
+    candidate.caption,
+    candidate.alt
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+function selectRelevantImages(query, candidates, answerText = "") {
+  const queryTerms = keywords(query);
+  const answerTerms = new Set(keywords(answerText));
+  if (queryTerms.length === 0) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const scored = candidates.filter((candidate) => candidate.kind === "image" && isHttpUrl(candidate.url)).filter((candidate) => {
+    if (seen.has(candidate.url)) return false;
+    seen.add(candidate.url);
+    return true;
+  }).map((candidate) => {
+    const evidence = candidateEvidence(candidate);
+    const evidenceTerms = new Set(keywords(evidence));
+    let score = 0;
+    let matches = 0;
+    for (const term of queryTerms) {
+      if (evidenceTerms.has(term)) {
+        matches++;
+        score += 4;
+        if (answerTerms.has(term)) score += 1;
+      }
+    }
+    const fullQuery = queryTerms.join(" ");
+    if (fullQuery.length >= 5 && evidenceTerms.size > 1 && evidence.includes(fullQuery)) score += 6;
+    return { candidate, score, matches };
+  }).filter(({ score, matches }) => score >= 4 && matches >= 1).sort(
+    (a, b) => b.score - a.score || (a.candidate.retrievalRank ?? Number.MAX_SAFE_INTEGER) - (b.candidate.retrievalRank ?? Number.MAX_SAFE_INTEGER)
+  );
+  if (scored.length === 0) return [];
+  const [best, next] = scored;
+  if (next && best.score === next.score && best.matches === next.matches) return [];
+  return [best.candidate];
+}
+var STOP_WORDS;
+var init_mediaMetadata = __esm({
+  "server/services/topscholar/mediaMetadata.ts"() {
+    "use strict";
+    STOP_WORDS = /* @__PURE__ */ new Set([
+      "what",
+      "is",
+      "the",
+      "a",
+      "an",
+      "of",
+      "in",
+      "on",
+      "for",
+      "to",
+      "and",
+      "or",
+      "but",
+      "how",
+      "why",
+      "when",
+      "where",
+      "which",
+      "who",
+      "are",
+      "was",
+      "were",
+      "be",
+      "been",
+      "being",
+      "have",
+      "has",
+      "had",
+      "do",
+      "does",
+      "did",
+      "will",
+      "would",
+      "could",
+      "should",
+      "can",
+      "about",
+      "with",
+      "from",
+      "into",
+      "through",
+      "give",
+      "me",
+      "tell",
+      "explain",
+      "describe",
+      "define",
+      "show",
+      "please",
+      "help",
+      "need",
+      "want",
+      "know",
+      "learn",
+      "study",
+      "understand",
+      "formula",
+      "definition",
+      "meaning",
+      "paper"
+    ]);
+  }
+});
+
 // server/services/topscholar/ragResolver.ts
 var ragResolver_exports = {};
 __export(ragResolver_exports, {
@@ -14946,6 +15327,7 @@ var init_ragResolver = __esm({
     init_contentDb();
     init_config();
     init_mongoContentDb();
+    init_mediaMetadata();
     RagK12ContentResolver = class {
       constructor(cfg) {
         this.cfg = cfg;
@@ -14990,6 +15372,7 @@ var init_ragResolver = __esm({
             title: d.title,
             content_html: d.content_html,
             content_text: d.chunk_text,
+            source_ref: d.source_ref,
             media_url: d.media_url,
             metadata: d.metadata
           }));
@@ -15008,7 +15391,7 @@ var init_ragResolver = __esm({
             chapterClause = `AND lower(btrim(chapter)) = lower($${params.length})`;
           }
           const result = await pool2.query(
-            `SELECT content_type, subject, chapter, title, content_html, content_text,
+            `SELECT content_type, subject, chapter, title, content_html, content_text, source_ref,
                 media_url, metadata, embedding <=> $2::vector AS distance
            FROM topscholar_content_chunks
           WHERE business_account_id = $1 AND content_type = ANY($3)
@@ -15028,11 +15411,32 @@ var init_ragResolver = __esm({
           if (rows.length === 0) {
             return { message: `No curriculum content found in your syllabus for "${query}".`, results: [] };
           }
-          const results = rows.map((r) => {
+          const prepared = rows.map((r, retrievalRank) => {
             const isVideo = r.content_type === "transcript";
             const meta = r.metadata || {};
-            const metaImages = Array.isArray(meta.images) ? meta.images : [];
-            const mediaUrls = [r.media_url, ...metaImages].filter(Boolean);
+            const media = readCurriculumMedia(
+              meta,
+              r.media_url,
+              isVideo ? "video" : r.content_type === "ebook_page" ? "document" : "image",
+              {
+                sourceRef: r.source_ref,
+                topic: r.title || null,
+                concept: typeof meta.concept === "string" ? meta.concept : null,
+                subConcept: typeof meta.subConcept === "string" ? meta.subConcept : null,
+                chapter: r.chapter || null,
+                subject: r.subject || null
+              }
+            ).map((item) => ({ ...item, retrievalRank }));
+            return { r, isVideo, media };
+          });
+          const approvedImages = selectRelevantImages(
+            query,
+            prepared.flatMap(({ media }) => media)
+          );
+          const approvedUrls = new Set(approvedImages.map((item) => item.url));
+          const results = prepared.map(({ r, isVideo, media }) => {
+            const mediaCandidates = media.filter((item) => approvedUrls.has(item.url) && item.kind === "image");
+            const mediaUrls = mediaCandidates.map((item) => item.url);
             const imageMarkdown = mediaUrls.length > 0 ? "\n\n" + mediaUrls.map((url) => `![image](${url})`).join("\n") : "";
             const enrichedText = (r.content_text || "") + imageMarkdown;
             return {
@@ -15045,7 +15449,8 @@ var init_ragResolver = __esm({
               chapterName: r.chapter || "Curriculum",
               subjectName: r.subject || "Curriculum",
               contentHtml: r.content_html || null,
-              mediaUrls
+              mediaUrls,
+              mediaCandidates
             };
           });
           return { message: `Found ${results.length} relevant passage(s) from your syllabus.`, results };
@@ -15266,10 +15671,10 @@ function extractKeywords(query) {
   ]);
   return query.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((w) => w.length > 1 && !stopWords.has(w) && !hindiStopWords.has(w));
 }
-function scoreMatch(text2, keywords) {
+function scoreMatch(text2, keywords2) {
   const lower = text2.toLowerCase();
   let score = 0;
-  for (const kw of keywords) {
+  for (const kw of keywords2) {
     if (lower.includes(kw)) score++;
   }
   return score;
@@ -15348,7 +15753,7 @@ var init_k12ContentResolver = __esm({
           videos.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
         }
         const queryLower = query.toLowerCase();
-        const keywords = extractKeywords(query);
+        const keywords2 = extractKeywords(query);
         const scored = [];
         for (const t of allTopics) {
           let score = 0;
@@ -15369,21 +15774,21 @@ var init_k12ContentResolver = __esm({
           if (subject && subject.name.toLowerCase().includes(queryLower)) {
             score += 5;
           }
-          if (score === 0 && keywords.length > 0) {
-            score += scoreMatch(t.name, keywords) * 3;
+          if (score === 0 && keywords2.length > 0) {
+            score += scoreMatch(t.name, keywords2) * 3;
             if (t.description) {
-              score += scoreMatch(t.description, keywords) * 2;
+              score += scoreMatch(t.description, keywords2) * 2;
             }
             if (t.tags) {
               for (const tag of t.tags) {
-                score += scoreMatch(tag, keywords) * 2;
+                score += scoreMatch(tag, keywords2) * 2;
               }
             }
             if (chapter) {
-              score += scoreMatch(chapter.name, keywords) * 2;
+              score += scoreMatch(chapter.name, keywords2) * 2;
             }
             if (subject) {
-              score += scoreMatch(subject.name, keywords);
+              score += scoreMatch(subject.name, keywords2);
             }
           }
           if (score > 0) {
@@ -15434,7 +15839,7 @@ var init_k12ContentResolver = __esm({
         const chapterMap = new Map(allChapters.map((c) => [c.id, c]));
         const subjectMap = new Map(allSubjects.map((s) => [s.id, s]));
         const queryLower = query.toLowerCase();
-        const keywords = extractKeywords(query);
+        const keywords2 = extractKeywords(query);
         const matchedTopicIds = /* @__PURE__ */ new Set();
         for (const t of allTopics) {
           let score = 0;
@@ -15444,15 +15849,15 @@ var init_k12ContentResolver = __esm({
           if (t.tags && t.tags.some((tag) => tag.toLowerCase().includes(queryLower))) score += 7;
           if (chapter && chapter.name.toLowerCase().includes(queryLower)) score += 6;
           if (subject && subject.name.toLowerCase().includes(queryLower)) score += 5;
-          if (score === 0 && keywords.length > 0) {
-            score += scoreMatch(t.name, keywords) * 3;
+          if (score === 0 && keywords2.length > 0) {
+            score += scoreMatch(t.name, keywords2) * 3;
             if (t.tags) {
               for (const tag of t.tags) {
-                score += scoreMatch(tag, keywords) * 2;
+                score += scoreMatch(tag, keywords2) * 2;
               }
             }
-            if (chapter) score += scoreMatch(chapter.name, keywords) * 2;
-            if (subject) score += scoreMatch(subject.name, keywords);
+            if (chapter) score += scoreMatch(chapter.name, keywords2) * 2;
+            if (subject) score += scoreMatch(subject.name, keywords2);
           }
           if (score > 0) {
             matchedTopicIds.add(t.id);
@@ -17387,9 +17792,9 @@ var init_journeyService = __esm({
             console.log("[Journey] Checking journey:", journey.name, "triggerKeywords:", journey.triggerKeywords);
             if (journey.triggerKeywords) {
               try {
-                const keywords = JSON.parse(journey.triggerKeywords);
-                console.log("[Journey] Parsed keywords for", journey.name, ":", keywords);
-                const matched = keywords.some((keyword) => {
+                const keywords2 = JSON.parse(journey.triggerKeywords);
+                console.log("[Journey] Parsed keywords for", journey.name, ":", keywords2);
+                const matched = keywords2.some((keyword) => {
                   const lowerKeyword = keyword.toLowerCase().trim();
                   const keywordWords = lowerKeyword.split(/\s+/);
                   const allWordsPresent = keywordWords.every(
@@ -17847,14 +18252,35 @@ var init_toolExecutionService = __esm({
             case "get_faqs":
               return await this.handleGetFaqs(parameters, context);
             case "capture_lead":
+              if (context.skipLeadTraining) {
+                console.warn("[ToolExecution] Blocked capture_lead on a lead-free tutoring/guidance surface");
+                return {
+                  success: false,
+                  message: "Contact capture is unavailable in this tutoring conversation."
+                };
+              }
               return await this.handleCaptureLead(parameters, context, userMessage, appointmentsEnabled);
             case "verify_phone_otp":
               return await this.handleVerifyPhoneOtp(parameters, context);
             case "resend_phone_otp":
               return await this.handleResendPhoneOtp(parameters, context);
             case "list_available_slots":
+              if (context.skipLeadTraining) {
+                console.warn("[ToolExecution] Blocked generic appointment flow on a lead-free tutoring/guidance surface");
+                return {
+                  success: false,
+                  message: "Appointment booking is unavailable in this tutoring conversation."
+                };
+              }
               return await this.handleListAvailableSlots(parameters, context);
             case "book_appointment":
+              if (context.skipLeadTraining) {
+                console.warn("[ToolExecution] Blocked generic appointment flow on a lead-free tutoring/guidance surface");
+                return {
+                  success: false,
+                  message: "Appointment booking is unavailable in this tutoring conversation."
+                };
+              }
               return await this.handleBookAppointment(parameters, context);
             case "get_journey_progress":
               return await this.handleGetJourneyProgress(context);
@@ -17956,9 +18382,9 @@ var init_toolExecutionService = __esm({
           const wordsMatch = (searchTerm, targetName) => {
             const searchLower = searchTerm.toLowerCase().trim();
             const targetLower = targetName.toLowerCase().trim();
-            const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const escapeRegex2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             const searchBase = searchLower.endsWith("s") ? searchLower.slice(0, -1) : searchLower;
-            const pattern = new RegExp(`\\b${escapeRegex(searchBase)}s?\\b`, "i");
+            const pattern = new RegExp(`\\b${escapeRegex2(searchBase)}s?\\b`, "i");
             return pattern.test(targetLower);
           };
           const matchingProducts = productsWithMeta.filter(({ categories: categories2, tags: tags2 }) => {
@@ -18380,9 +18806,9 @@ ${JSON.stringify(productsToTranslate)}`;
             if (questionLower.includes(searchLower)) {
               score += 100;
             }
-            for (const [category, keywords] of Object.entries(highPriorityKeywords)) {
-              const searchHasCategory = searchKeywords.some((sk) => keywords.includes(sk));
-              const questionHasCategory = keywords.some((hpk) => questionLower.includes(hpk));
+            for (const [category, keywords2] of Object.entries(highPriorityKeywords)) {
+              const searchHasCategory = searchKeywords.some((sk) => keywords2.includes(sk));
+              const questionHasCategory = keywords2.some((hpk) => questionLower.includes(hpk));
               if (searchHasCategory && questionHasCategory) {
                 score += 10;
               }
@@ -20999,11 +21425,11 @@ var init_vectorSearchService = __esm({
       async keywordFallbackSearch(query, businessAccountId, topK = 5) {
         try {
           const commonWords = ["tell", "me", "about", "what", "is", "who", "where", "when", "how", "the", "a", "an"];
-          const keywords = query.toLowerCase().split(/\s+/).filter((word) => word.length > 2 && !commonWords.includes(word));
-          if (keywords.length === 0) {
+          const keywords2 = query.toLowerCase().split(/\s+/).filter((word) => word.length > 2 && !commonWords.includes(word));
+          if (keywords2.length === 0) {
             return [];
           }
-          console.log(`[VectorSearch] Keyword fallback searching for: ${keywords.join(", ")}`);
+          console.log(`[VectorSearch] Keyword fallback searching for: ${keywords2.join(", ")}`);
           const [pdfResults, urlResults] = await Promise.all([
             // Search PDF document chunks
             db.select({
@@ -21020,7 +21446,7 @@ var init_vectorSearchService = __esm({
                 eq11(documentChunks.businessAccountId, businessAccountId),
                 eq11(trainingDocuments.uploadStatus, "completed"),
                 sql6`LOWER(${documentChunks.chunkText}) LIKE ANY(ARRAY[${sql6.join(
-                  keywords.map((kw) => sql6`${"%" + kw + "%"}`),
+                  keywords2.map((kw) => sql6`${"%" + kw + "%"}`),
                   sql6`, `
                 )}])`
               )
@@ -21042,7 +21468,7 @@ var init_vectorSearchService = __esm({
                 eq11(trainedUrls.status, "completed"),
                 eq11(trainedUrls.embeddingStatus, "completed"),
                 sql6`LOWER(${urlContentChunks.chunkText}) LIKE ANY(ARRAY[${sql6.join(
-                  keywords.map((kw) => sql6`${"%" + kw + "%"}`),
+                  keywords2.map((kw) => sql6`${"%" + kw + "%"}`),
                   sql6`, `
                 )}])`
               )
@@ -22075,9 +22501,9 @@ Optional Contact Information (ask in this order):
     prompt += `Fields with KEYWORD timing:
 `;
     keywordFields.forEach((f) => {
-      const keywords = (f.captureKeywords || []).join(", ");
+      const keywords2 = (f.captureKeywords || []).join(", ");
       const requirement = f.required ? "MANDATORY" : "OPTIONAL";
-      prompt += `  - ${f.id}: ${requirement}, Keywords: [${keywords}]
+      prompt += `  - ${f.id}: ${requirement}, Keywords: [${keywords2}]
 `;
     });
     prompt += `
@@ -23126,8 +23552,8 @@ async function matchSmartReplies(businessAccountId, channel, userMessage) {
   const messageLower = userMessage.toLowerCase();
   const matches = [];
   for (const rule of rules) {
-    const keywords = rule.keywords.split(",").map((k) => k.trim().toLowerCase()).filter(Boolean);
-    for (const keyword of keywords) {
+    const keywords2 = rule.keywords.split(",").map((k) => k.trim().toLowerCase()).filter(Boolean);
+    for (const keyword of keywords2) {
       if (messageLower.includes(keyword)) {
         matches.push({
           id: rule.id,
@@ -24969,12 +25395,105 @@ var init_elevenlabsService = __esm({
   }
 });
 
+// server/services/topscholar/scopeResolver.ts
+var scopeResolver_exports = {};
+__export(scopeResolver_exports, {
+  hasScope: () => hasScope,
+  listAvailableScopes: () => listAvailableScopes,
+  resolveCpIdsForScope: () => resolveCpIdsForScope,
+  resolveScopeDetailed: () => resolveScopeDetailed
+});
+import { sql as sql14, eq as eq21, and as and17 } from "drizzle-orm";
+function norm(v) {
+  return (v ?? "").trim();
+}
+function hasScope(scope) {
+  return !!(norm(scope.board) || norm(scope.medium) || norm(scope.grade) || norm(scope.subject));
+}
+async function resolveCpIdsForScope(businessAccountId, scope) {
+  const board = norm(scope.board);
+  const medium = norm(scope.medium);
+  const grade = norm(scope.grade);
+  const subject = norm(scope.subject);
+  const conditions = [eq21(topscholarCpMappings.businessAccountId, businessAccountId)];
+  if (board) conditions.push(sql14`lower(trim(${topscholarCpMappings.board})) = lower(${board})`);
+  if (medium) conditions.push(sql14`lower(trim(${topscholarCpMappings.medium})) = lower(${medium})`);
+  if (grade) conditions.push(sql14`lower(trim(${topscholarCpMappings.grade})) = lower(${grade})`);
+  if (subject) {
+    conditions.push(
+      sql14`(lower(trim(${topscholarCpMappings.subject})) = lower(${subject}) OR lower(trim(${topscholarCpMappings.cpName})) = lower(${subject}))`
+    );
+  }
+  const rows = await db.select({ cpId: topscholarCpMappings.cpId }).from(topscholarCpMappings).where(and17(...conditions));
+  return Array.from(new Set(rows.map((r) => r.cpId).filter(Boolean)));
+}
+async function resolveScopeDetailed(businessAccountId, scope) {
+  const board = norm(scope.board);
+  const medium = norm(scope.medium);
+  const grade = norm(scope.grade);
+  const subject = norm(scope.subject);
+  const baseConditions = [eq21(topscholarCpMappings.businessAccountId, businessAccountId)];
+  if (board) baseConditions.push(sql14`lower(trim(${topscholarCpMappings.board})) = lower(${board})`);
+  if (medium) baseConditions.push(sql14`lower(trim(${topscholarCpMappings.medium})) = lower(${medium})`);
+  if (grade) baseConditions.push(sql14`lower(trim(${topscholarCpMappings.grade})) = lower(${grade})`);
+  const fullConditions = [...baseConditions];
+  if (subject) {
+    fullConditions.push(
+      sql14`(lower(trim(${topscholarCpMappings.subject})) = lower(${subject}) OR lower(trim(${topscholarCpMappings.cpName})) = lower(${subject}))`
+    );
+  }
+  const cols = {
+    cpId: topscholarCpMappings.cpId,
+    board: topscholarCpMappings.board,
+    medium: topscholarCpMappings.medium,
+    grade: topscholarCpMappings.grade,
+    subject: topscholarCpMappings.subject,
+    cpName: topscholarCpMappings.cpName
+  };
+  const matchedRows = await db.select(cols).from(topscholarCpMappings).where(and17(...fullConditions));
+  const cpIds = Array.from(new Set(matchedRows.map((r) => r.cpId).filter(Boolean)));
+  const scopeLabel = [board, medium, grade, subject].filter(Boolean).join(" / ") || "(no scope supplied)";
+  let explanation;
+  let availableForBroaderScope = [];
+  if (cpIds.length > 0) {
+    explanation = `${cpIds.length} content pack(s) matched for ${scopeLabel}. The AI will answer ONLY from these packs.`;
+  } else {
+    availableForBroaderScope = await db.select(cols).from(topscholarCpMappings).where(and17(...baseConditions)).limit(50);
+    if (availableForBroaderScope.length > 0) {
+      const subjects = Array.from(
+        new Set(availableForBroaderScope.map((r) => (r.subject || r.cpName || "").trim()).filter(Boolean))
+      );
+      explanation = `NO content pack matched ${scopeLabel}. ${subject ? `Subject "${subject}" has no uploaded content for this board/grade.` : ""} Available subject(s) at this level: ${subjects.length > 0 ? subjects.join(", ") : "(rows exist but have blank subject names)"}. Until content is uploaded, the AI has NOTHING curriculum-specific to answer from for this subject.`;
+    } else {
+      explanation = `NO content pack matched ${scopeLabel}, and nothing exists for this board/medium/grade at all. Upload content for this curriculum first.`;
+    }
+  }
+  return { cpIds, matchedRows, explanation, availableForBroaderScope };
+}
+async function listAvailableScopes(businessAccountId) {
+  return db.select({
+    cpId: topscholarCpMappings.cpId,
+    board: topscholarCpMappings.board,
+    medium: topscholarCpMappings.medium,
+    grade: topscholarCpMappings.grade,
+    subject: topscholarCpMappings.subject,
+    cpName: topscholarCpMappings.cpName
+  }).from(topscholarCpMappings).where(eq21(topscholarCpMappings.businessAccountId, businessAccountId)).orderBy(topscholarCpMappings.board, topscholarCpMappings.grade, topscholarCpMappings.subject).limit(500);
+}
+var init_scopeResolver = __esm({
+  "server/services/topscholar/scopeResolver.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+  }
+});
+
 // server/services/systemSettingsService.ts
 var systemSettingsService_exports = {};
 __export(systemSettingsService_exports, {
   systemSettingsService: () => systemSettingsService
 });
-import { eq as eq21 } from "drizzle-orm";
+import { eq as eq22 } from "drizzle-orm";
 var R2_CONFIG_KEY, SystemSettingsService, systemSettingsService;
 var init_systemSettingsService = __esm({
   "server/services/systemSettingsService.ts"() {
@@ -24992,7 +25511,7 @@ var init_systemSettingsService = __esm({
           return cached.value;
         }
         try {
-          const [setting] = await db.select().from(systemSettings).where(eq21(systemSettings.key, key)).limit(1);
+          const [setting] = await db.select().from(systemSettings).where(eq22(systemSettings.key, key)).limit(1);
           if (!setting) return null;
           let value;
           if (setting.isEncrypted === "true") {
@@ -25015,14 +25534,14 @@ var init_systemSettingsService = __esm({
       async setSetting(key, value, isEncrypted = true, description) {
         try {
           const storedValue = isEncrypted ? encrypt(value) : value;
-          const existing = await db.select().from(systemSettings).where(eq21(systemSettings.key, key)).limit(1);
+          const existing = await db.select().from(systemSettings).where(eq22(systemSettings.key, key)).limit(1);
           if (existing.length > 0) {
             await db.update(systemSettings).set({
               value: storedValue,
               isEncrypted: isEncrypted ? "true" : "false",
               description,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq21(systemSettings.key, key));
+            }).where(eq22(systemSettings.key, key));
           } else {
             await db.insert(systemSettings).values({
               key,
@@ -25041,7 +25560,7 @@ var init_systemSettingsService = __esm({
       }
       async deleteSetting(key) {
         try {
-          await db.delete(systemSettings).where(eq21(systemSettings.key, key));
+          await db.delete(systemSettings).where(eq22(systemSettings.key, key));
           this.cache.delete(key);
           console.log(`[SystemSettings] Setting deleted: ${key}`);
           return true;
@@ -25056,7 +25575,7 @@ var init_systemSettingsService = __esm({
           return cached.value;
         }
         try {
-          const [setting] = await db.select().from(systemSettings).where(eq21(systemSettings.key, R2_CONFIG_KEY)).limit(1);
+          const [setting] = await db.select().from(systemSettings).where(eq22(systemSettings.key, R2_CONFIG_KEY)).limit(1);
           if (!setting) return null;
           const config = decryptJSON(setting.value);
           this.cache.set(R2_CONFIG_KEY, { value: config, expiresAt: Date.now() + this.CACHE_TTL });
@@ -25076,12 +25595,12 @@ var init_systemSettingsService = __esm({
             publicUrl: config.publicUrl?.trim().replace(/[\n\r\s]/g, "") || void 0
           };
           const encryptedValue = encryptJSON(sanitizedConfig);
-          const existing = await db.select().from(systemSettings).where(eq21(systemSettings.key, R2_CONFIG_KEY)).limit(1);
+          const existing = await db.select().from(systemSettings).where(eq22(systemSettings.key, R2_CONFIG_KEY)).limit(1);
           if (existing.length > 0) {
             await db.update(systemSettings).set({
               value: encryptedValue,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq21(systemSettings.key, R2_CONFIG_KEY));
+            }).where(eq22(systemSettings.key, R2_CONFIG_KEY));
           } else {
             await db.insert(systemSettings).values({
               key: R2_CONFIG_KEY,
@@ -25103,7 +25622,7 @@ var init_systemSettingsService = __esm({
       }
       async hasR2Config() {
         try {
-          const [setting] = await db.select({ id: systemSettings.id }).from(systemSettings).where(eq21(systemSettings.key, R2_CONFIG_KEY)).limit(1);
+          const [setting] = await db.select({ id: systemSettings.id }).from(systemSettings).where(eq22(systemSettings.key, R2_CONFIG_KEY)).limit(1);
           return !!setting;
         } catch {
           return false;
@@ -27384,7 +27903,7 @@ var productImageEmbeddingService_exports = {};
 __export(productImageEmbeddingService_exports, {
   productImageEmbeddingService: () => productImageEmbeddingService
 });
-import { eq as eq22, sql as sql14, and as and17, isNotNull as isNotNull2 } from "drizzle-orm";
+import { eq as eq23, sql as sql15, and as and18, isNotNull as isNotNull2 } from "drizzle-orm";
 var getBackgroundRemovalService, ProductImageEmbeddingService, productImageEmbeddingService;
 var init_productImageEmbeddingService = __esm({
   "server/services/productImageEmbeddingService.ts"() {
@@ -27482,21 +28001,21 @@ var init_productImageEmbeddingService = __esm({
               productId: productJewelryEmbeddings.productId,
               jewelryType: productJewelryEmbeddings.jewelryType,
               croppedImageUrl: productJewelryEmbeddings.croppedImageUrl,
-              distance: sql14`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`,
+              distance: sql15`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`,
               productName: products.name,
               productDescription: products.description,
               productPrice: products.price,
               productImageUrl: products.imageUrl
-            }).from(productJewelryEmbeddings).innerJoin(products, eq22(productJewelryEmbeddings.productId, products.id)).where(
-              jewelryTypeFilter ? and17(
-                eq22(productJewelryEmbeddings.businessAccountId, businessAccountId),
-                sql14`${productJewelryEmbeddings.embedding} IS NOT NULL`,
-                sql14`(${productJewelryEmbeddings.jewelryType} = ${jewelryTypeFilter} OR LOWER(${productJewelryEmbeddings.jewelryType}) = 'others')`
-              ) : and17(
-                eq22(productJewelryEmbeddings.businessAccountId, businessAccountId),
-                sql14`${productJewelryEmbeddings.embedding} IS NOT NULL`
+            }).from(productJewelryEmbeddings).innerJoin(products, eq23(productJewelryEmbeddings.productId, products.id)).where(
+              jewelryTypeFilter ? and18(
+                eq23(productJewelryEmbeddings.businessAccountId, businessAccountId),
+                sql15`${productJewelryEmbeddings.embedding} IS NOT NULL`,
+                sql15`(${productJewelryEmbeddings.jewelryType} = ${jewelryTypeFilter} OR LOWER(${productJewelryEmbeddings.jewelryType}) = 'others')`
+              ) : and18(
+                eq23(productJewelryEmbeddings.businessAccountId, businessAccountId),
+                sql15`${productJewelryEmbeddings.embedding} IS NOT NULL`
               )
-            ).orderBy(sql14`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`).limit(topK * 2);
+            ).orderBy(sql15`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`).limit(topK * 2);
             for (const jResult of jewelryResults) {
               const similarity = Math.max(0, 1 - jResult.distance);
               if (similarity >= similarityThreshold && !seenProductIds.has(jResult.productId)) {
@@ -27525,17 +28044,17 @@ var init_productImageEmbeddingService = __esm({
             imageUrl: products.imageUrl,
             visualDescription: products.visualDescription,
             detectedJewelryType: products.detectedJewelryType,
-            distance: sql14`${products.imageEmbedding} <=> ${JSON.stringify(queryEmbedding)}::vector`
+            distance: sql15`${products.imageEmbedding} <=> ${JSON.stringify(queryEmbedding)}::vector`
           }).from(products).where(
-            jewelryTypeFilter ? and17(
-              eq22(products.businessAccountId, businessAccountId),
-              sql14`${products.imageEmbedding} IS NOT NULL`,
-              sql14`(${products.detectedJewelryType} = ${jewelryTypeFilter} OR LOWER(${products.detectedJewelryType}) = 'others')`
-            ) : and17(
-              eq22(products.businessAccountId, businessAccountId),
-              sql14`${products.imageEmbedding} IS NOT NULL`
+            jewelryTypeFilter ? and18(
+              eq23(products.businessAccountId, businessAccountId),
+              sql15`${products.imageEmbedding} IS NOT NULL`,
+              sql15`(${products.detectedJewelryType} = ${jewelryTypeFilter} OR LOWER(${products.detectedJewelryType}) = 'others')`
+            ) : and18(
+              eq23(products.businessAccountId, businessAccountId),
+              sql15`${products.imageEmbedding} IS NOT NULL`
             )
-          ).orderBy(sql14`${products.imageEmbedding} <=> ${JSON.stringify(queryEmbedding)}::vector`).limit(topK);
+          ).orderBy(sql15`${products.imageEmbedding} <=> ${JSON.stringify(queryEmbedding)}::vector`).limit(topK);
           for (const result of localResults) {
             const similarity = Math.max(0, 1 - result.distance);
             if (similarity >= similarityThreshold && !seenProductIds.has(result.id)) {
@@ -27561,13 +28080,13 @@ var init_productImageEmbeddingService = __esm({
                 visualDescription: productEmbeddings.visualDescription,
                 cachedName: productEmbeddings.cachedName,
                 cachedPrice: productEmbeddings.cachedPrice,
-                distance: sql14`${productEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`
+                distance: sql15`${productEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`
               }).from(productEmbeddings).where(
-                and17(
-                  eq22(productEmbeddings.businessAccountId, businessAccountId),
-                  sql14`${productEmbeddings.embedding} IS NOT NULL`
+                and18(
+                  eq23(productEmbeddings.businessAccountId, businessAccountId),
+                  sql15`${productEmbeddings.embedding} IS NOT NULL`
                 )
-              ).orderBy(sql14`${productEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`).limit(topK);
+              ).orderBy(sql15`${productEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`).limit(topK);
               for (const result of erpResults) {
                 const similarity = Math.max(0, 1 - result.distance);
                 if (similarity >= similarityThreshold) {
@@ -27612,21 +28131,21 @@ var init_productImageEmbeddingService = __esm({
             croppedImageUrl: productJewelryEmbeddings.croppedImageUrl,
             boundingBox: productJewelryEmbeddings.boundingBox,
             isPrimary: productJewelryEmbeddings.isPrimary,
-            distance: sql14`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`,
+            distance: sql15`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`,
             productName: products.name,
             productDescription: products.description,
             productPrice: products.price,
             productImageUrl: products.imageUrl
-          }).from(productJewelryEmbeddings).innerJoin(products, eq22(productJewelryEmbeddings.productId, products.id)).where(
-            jewelryTypeFilter ? and17(
-              eq22(productJewelryEmbeddings.businessAccountId, businessAccountId),
-              eq22(productJewelryEmbeddings.jewelryType, jewelryTypeFilter),
-              sql14`${productJewelryEmbeddings.embedding} IS NOT NULL`
-            ) : and17(
-              eq22(productJewelryEmbeddings.businessAccountId, businessAccountId),
-              sql14`${productJewelryEmbeddings.embedding} IS NOT NULL`
+          }).from(productJewelryEmbeddings).innerJoin(products, eq23(productJewelryEmbeddings.productId, products.id)).where(
+            jewelryTypeFilter ? and18(
+              eq23(productJewelryEmbeddings.businessAccountId, businessAccountId),
+              eq23(productJewelryEmbeddings.jewelryType, jewelryTypeFilter),
+              sql15`${productJewelryEmbeddings.embedding} IS NOT NULL`
+            ) : and18(
+              eq23(productJewelryEmbeddings.businessAccountId, businessAccountId),
+              sql15`${productJewelryEmbeddings.embedding} IS NOT NULL`
             )
-          ).orderBy(sql14`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`).limit(topK);
+          ).orderBy(sql15`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`).limit(topK);
           for (const result of jewelryResults) {
             const similarity = Math.max(0, 1 - result.distance);
             if (similarity >= similarityThreshold) {
@@ -27658,13 +28177,13 @@ var init_productImageEmbeddingService = __esm({
        */
       async getEmbeddingStats(businessAccountId) {
         try {
-          const allProducts = await db.select({ id: products.id, hasEmbedding: sql14`${products.imageEmbedding} IS NOT NULL` }).from(products).where(eq22(products.businessAccountId, businessAccountId));
+          const allProducts = await db.select({ id: products.id, hasEmbedding: sql15`${products.imageEmbedding} IS NOT NULL` }).from(products).where(eq23(products.businessAccountId, businessAccountId));
           const total = allProducts.length;
           const withEmbedding = allProducts.filter((p) => p.hasEmbedding).length;
           const withoutEmbedding = total - withEmbedding;
           let erpEmbeddings = 0;
           try {
-            const [erpCount] = await db.select({ count: sql14`count(*)::int` }).from(productEmbeddings).where(eq22(productEmbeddings.businessAccountId, businessAccountId));
+            const [erpCount] = await db.select({ count: sql15`count(*)::int` }).from(productEmbeddings).where(eq23(productEmbeddings.businessAccountId, businessAccountId));
             erpEmbeddings = erpCount?.count || 0;
           } catch (e) {
           }
@@ -27723,7 +28242,7 @@ var init_productImageEmbeddingService = __esm({
             boundingBox: productJewelryEmbeddings.boundingBox,
             processedImageUrl: productJewelryEmbeddings.processedImageUrl,
             croppedImageUrl: productJewelryEmbeddings.croppedImageUrl
-          }).from(productJewelryEmbeddings).where(eq22(productJewelryEmbeddings.productId, productId));
+          }).from(productJewelryEmbeddings).where(eq23(productJewelryEmbeddings.productId, productId));
           const processedImageCache = /* @__PURE__ */ new Map();
           for (const existing of existingEmbeddings) {
             if (existing.processedImageUrl && existing.boundingBox) {
@@ -27733,7 +28252,7 @@ var init_productImageEmbeddingService = __esm({
             }
           }
           console.log(`[Jewelry Detection] Found ${processedImageCache.size} cached processed images for ${productName}`);
-          await db.delete(productJewelryEmbeddings).where(eq22(productJewelryEmbeddings.productId, productId));
+          await db.delete(productJewelryEmbeddings).where(eq23(productJewelryEmbeddings.productId, productId));
           const croppedWithItems = croppedImages.map((cropped) => {
             const matchedItem = detection.detectedItems.find(
               (item) => item.boundingBox.x === cropped.originalBoundingBox.x && item.boundingBox.y === cropped.originalBoundingBox.y
@@ -27889,7 +28408,7 @@ var init_productImageEmbeddingService = __esm({
             // pHash for exact image verification
             croppedJewelryUrl: primaryResult.croppedDataUrl,
             detectedJewelryType: primaryResult.type
-          }).where(eq22(products.id, productId));
+          }).where(eq23(products.id, productId));
           console.log(`[Jewelry Detection] Successfully processed: ${productName} - ${deduplicatedResults.length} items (primary: ${primaryType})`);
           return {
             success: true,
@@ -27930,7 +28449,7 @@ var init_productImageEmbeddingService = __esm({
           } catch (e) {
             console.error(`[Custom Crop] Failed to generate pHash for ${productName}:`, e);
           }
-          await db.delete(productJewelryEmbeddings).where(eq22(productJewelryEmbeddings.productId, productId));
+          await db.delete(productJewelryEmbeddings).where(eq23(productJewelryEmbeddings.productId, productId));
           const croppedImages = await imageCroppingService.cropJewelryFromUrl(
             imageUrl,
             customBoundingBoxes.map((b) => ({
@@ -28007,7 +28526,7 @@ var init_productImageEmbeddingService = __esm({
             imageHash,
             croppedJewelryUrl: primaryItem.croppedImageUrl,
             detectedJewelryType: primaryType
-          }).where(eq22(products.id, productId));
+          }).where(eq23(products.id, productId));
           console.log(`[Custom Crop] Successfully processed: ${productName} - ${insertValues.length} items`);
           return { success: true };
         } catch (error) {
@@ -28080,8 +28599,8 @@ var init_productImageEmbeddingService = __esm({
         const CONCURRENCY_LIMIT = 2;
         try {
           const allProducts = await db.select().from(products).where(
-            and17(
-              eq22(products.businessAccountId, businessAccountId),
+            and18(
+              eq23(products.businessAccountId, businessAccountId),
               isNotNull2(products.imageUrl)
             )
           );
@@ -28495,99 +29014,6 @@ var init_cpLock = __esm({
     BACKOFF_START_MS = 50;
     BACKOFF_MAX_MS = 2e3;
     sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
-  }
-});
-
-// server/services/topscholar/scopeResolver.ts
-var scopeResolver_exports = {};
-__export(scopeResolver_exports, {
-  hasScope: () => hasScope,
-  listAvailableScopes: () => listAvailableScopes,
-  resolveCpIdsForScope: () => resolveCpIdsForScope,
-  resolveScopeDetailed: () => resolveScopeDetailed
-});
-import { sql as sql19, eq as eq32, and as and24 } from "drizzle-orm";
-function norm(v) {
-  return (v ?? "").trim();
-}
-function hasScope(scope) {
-  return !!(norm(scope.board) || norm(scope.medium) || norm(scope.grade) || norm(scope.subject));
-}
-async function resolveCpIdsForScope(businessAccountId, scope) {
-  const board = norm(scope.board);
-  const medium = norm(scope.medium);
-  const grade = norm(scope.grade);
-  const subject = norm(scope.subject);
-  const conditions = [eq32(topscholarCpMappings.businessAccountId, businessAccountId)];
-  if (board) conditions.push(sql19`lower(trim(${topscholarCpMappings.board})) = lower(${board})`);
-  if (medium) conditions.push(sql19`lower(trim(${topscholarCpMappings.medium})) = lower(${medium})`);
-  if (grade) conditions.push(sql19`lower(trim(${topscholarCpMappings.grade})) = lower(${grade})`);
-  if (subject) {
-    conditions.push(
-      sql19`(lower(trim(${topscholarCpMappings.subject})) = lower(${subject}) OR lower(trim(${topscholarCpMappings.cpName})) = lower(${subject}))`
-    );
-  }
-  const rows = await db.select({ cpId: topscholarCpMappings.cpId }).from(topscholarCpMappings).where(and24(...conditions));
-  return Array.from(new Set(rows.map((r) => r.cpId).filter(Boolean)));
-}
-async function resolveScopeDetailed(businessAccountId, scope) {
-  const board = norm(scope.board);
-  const medium = norm(scope.medium);
-  const grade = norm(scope.grade);
-  const subject = norm(scope.subject);
-  const baseConditions = [eq32(topscholarCpMappings.businessAccountId, businessAccountId)];
-  if (board) baseConditions.push(sql19`lower(trim(${topscholarCpMappings.board})) = lower(${board})`);
-  if (medium) baseConditions.push(sql19`lower(trim(${topscholarCpMappings.medium})) = lower(${medium})`);
-  if (grade) baseConditions.push(sql19`lower(trim(${topscholarCpMappings.grade})) = lower(${grade})`);
-  const fullConditions = [...baseConditions];
-  if (subject) {
-    fullConditions.push(
-      sql19`(lower(trim(${topscholarCpMappings.subject})) = lower(${subject}) OR lower(trim(${topscholarCpMappings.cpName})) = lower(${subject}))`
-    );
-  }
-  const cols = {
-    cpId: topscholarCpMappings.cpId,
-    board: topscholarCpMappings.board,
-    medium: topscholarCpMappings.medium,
-    grade: topscholarCpMappings.grade,
-    subject: topscholarCpMappings.subject,
-    cpName: topscholarCpMappings.cpName
-  };
-  const matchedRows = await db.select(cols).from(topscholarCpMappings).where(and24(...fullConditions));
-  const cpIds = Array.from(new Set(matchedRows.map((r) => r.cpId).filter(Boolean)));
-  const scopeLabel = [board, medium, grade, subject].filter(Boolean).join(" / ") || "(no scope supplied)";
-  let explanation;
-  let availableForBroaderScope = [];
-  if (cpIds.length > 0) {
-    explanation = `${cpIds.length} content pack(s) matched for ${scopeLabel}. The AI will answer ONLY from these packs.`;
-  } else {
-    availableForBroaderScope = await db.select(cols).from(topscholarCpMappings).where(and24(...baseConditions)).limit(50);
-    if (availableForBroaderScope.length > 0) {
-      const subjects = Array.from(
-        new Set(availableForBroaderScope.map((r) => (r.subject || r.cpName || "").trim()).filter(Boolean))
-      );
-      explanation = `NO content pack matched ${scopeLabel}. ${subject ? `Subject "${subject}" has no uploaded content for this board/grade.` : ""} Available subject(s) at this level: ${subjects.length > 0 ? subjects.join(", ") : "(rows exist but have blank subject names)"}. Until content is uploaded, the AI has NOTHING curriculum-specific to answer from for this subject.`;
-    } else {
-      explanation = `NO content pack matched ${scopeLabel}, and nothing exists for this board/medium/grade at all. Upload content for this curriculum first.`;
-    }
-  }
-  return { cpIds, matchedRows, explanation, availableForBroaderScope };
-}
-async function listAvailableScopes(businessAccountId) {
-  return db.select({
-    cpId: topscholarCpMappings.cpId,
-    board: topscholarCpMappings.board,
-    medium: topscholarCpMappings.medium,
-    grade: topscholarCpMappings.grade,
-    subject: topscholarCpMappings.subject,
-    cpName: topscholarCpMappings.cpName
-  }).from(topscholarCpMappings).where(eq32(topscholarCpMappings.businessAccountId, businessAccountId)).orderBy(topscholarCpMappings.board, topscholarCpMappings.grade, topscholarCpMappings.subject).limit(500);
-}
-var init_scopeResolver = __esm({
-  "server/services/topscholar/scopeResolver.ts"() {
-    "use strict";
-    init_db();
-    init_schema();
   }
 });
 
@@ -30389,6 +30815,11 @@ For example:
         FROM whatsapp_leads
         WHERE business_account_id = ${businessAccountId}
         AND sender_phone IS NOT NULL
+        AND sender_phone IN (
+          SELECT sender_phone FROM whatsapp_leads
+          WHERE business_account_id = ${businessAccountId}
+          AND direction = 'incoming'
+        )
       ),
       session_groups AS (
         SELECT 
@@ -30428,6 +30859,11 @@ For example:
         FROM whatsapp_leads
         WHERE business_account_id = ${businessAccountId}
         AND sender_phone IS NOT NULL
+        AND sender_phone IN (
+          SELECT sender_phone FROM whatsapp_leads
+          WHERE business_account_id = ${businessAccountId}
+          AND direction = 'incoming'
+        )
       ),
       session_groups AS (
         SELECT 
@@ -40156,6 +40592,301 @@ var init_notifier = __esm({
   }
 });
 
+// shared/contactImport.ts
+function normalizePhone5(raw) {
+  return (raw || "").replace(/\D/g, "");
+}
+function applyCountryCode(rawPhone, defaultCountryCode) {
+  let cleaned = (rawPhone || "").replace(/\D/g, "");
+  if (cleaned.startsWith("0")) cleaned = cleaned.replace(/^0+/, "");
+  if (!cleaned) return { phone: null, error: "Phone is empty" };
+  const code = (defaultCountryCode || "").replace(/\D/g, "");
+  if (code) {
+    if (cleaned.length <= 10) return { phone: code + cleaned };
+    return { phone: cleaned };
+  }
+  if (cleaned.length < 11) {
+    return {
+      phone: null,
+      error: `Missing country code \u2014 group is set to Mixed, so each phone must include its country code (e.g. 919810560800).`
+    };
+  }
+  return { phone: cleaned };
+}
+function decodeTextBytes(bytes) {
+  if (bytes.length >= 2 && bytes[0] === 255 && bytes[1] === 254) {
+    return { text: decodeWith("utf-16le", bytes.subarray(2)), encoding: "utf-16le" };
+  }
+  if (bytes.length >= 2 && bytes[0] === 254 && bytes[1] === 255) {
+    return { text: decodeWith("utf-16be", bytes.subarray(2)), encoding: "utf-16be" };
+  }
+  if (bytes.length >= 3 && bytes[0] === 239 && bytes[1] === 187 && bytes[2] === 191) {
+    return { text: decodeWith("utf-8", bytes.subarray(3)), encoding: "utf-8" };
+  }
+  const utf8 = decodeWith("utf-8", bytes);
+  if (utf8.includes("\uFFFD")) {
+    const fallback = tryDecode("windows-1252", bytes);
+    if (fallback !== null) return { text: fallback, encoding: "windows-1252" };
+  }
+  return { text: utf8, encoding: "utf-8" };
+}
+function decodeWith(encoding, bytes) {
+  return new TextDecoder(encoding).decode(bytes);
+}
+function tryDecode(encoding, bytes) {
+  try {
+    return new TextDecoder(encoding).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+function detectDelimiter(text2) {
+  const counts = new Map(DELIMITER_CANDIDATES.map((d) => [d, 0]));
+  let inQuotes = false;
+  for (let i = 0; i < text2.length; i++) {
+    const ch = text2[i];
+    if (ch === '"') {
+      if (inQuotes && text2[i + 1] === '"') {
+        i++;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (inQuotes) continue;
+    if (ch === "\n" || ch === "\r") break;
+    if (counts.has(ch)) counts.set(ch, (counts.get(ch) || 0) + 1);
+  }
+  let best = ",";
+  let bestCount = 0;
+  for (const d of DELIMITER_CANDIDATES) {
+    const c = counts.get(d) || 0;
+    if (c > bestCount) {
+      best = d;
+      bestCount = c;
+    }
+  }
+  return best;
+}
+function parseDelimitedText(text2, delimiterHint) {
+  const delimiter = delimiterHint || detectDelimiter(text2);
+  const records = [];
+  let field = "";
+  let current = [];
+  let inQuotes = false;
+  let started = false;
+  let rowNumber = 1;
+  const endField = () => {
+    current.push(field);
+    field = "";
+    started = true;
+  };
+  const endRecord = () => {
+    endField();
+    records.push({ r: rowNumber, v: current });
+    rowNumber++;
+    current = [];
+    started = false;
+  };
+  for (let i = 0; i < text2.length; i++) {
+    const ch = text2[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text2[i + 1] === '"') {
+          field += '"';
+          i++;
+          continue;
+        }
+        inQuotes = false;
+        continue;
+      }
+      field += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+      started = true;
+      continue;
+    }
+    if (ch === delimiter) {
+      endField();
+      continue;
+    }
+    if (ch === "\r") {
+      if (text2[i + 1] === "\n") i++;
+      endRecord();
+      continue;
+    }
+    if (ch === "\n") {
+      endRecord();
+      continue;
+    }
+    field += ch;
+    started = true;
+  }
+  if (started || field.length > 0 || current.length > 0) {
+    current.push(field);
+    records.push({ r: rowNumber, v: current });
+  }
+  return { records, delimiter };
+}
+function isBlankRecord(record) {
+  return !record.v.some((cell) => (cell ?? "").trim() !== "");
+}
+function detectHeaderRow(records) {
+  for (const rec of records) {
+    const filled = rec.v.filter((c) => (c ?? "").trim() !== "").length;
+    if (filled >= 2) return rec.r;
+  }
+  for (const rec of records) {
+    if (!isBlankRecord(rec)) return rec.r;
+  }
+  return records[0]?.r ?? 1;
+}
+function normalizeColumnKeys(rawKeys) {
+  const seen = /* @__PURE__ */ new Map();
+  const keys = [];
+  const renamedIndexes = [];
+  rawKeys.forEach((raw, idx) => {
+    let base = (raw ?? "").trim().toLowerCase() || `column_${idx + 1}`;
+    if (UNSAFE_COLUMN_KEYS.has(base)) base = `${base}_field`;
+    const count5 = seen.get(base) ?? 0;
+    seen.set(base, count5 + 1);
+    if (count5 === 0) {
+      keys.push(base);
+    } else {
+      keys.push(`${base}_${count5 + 1}`);
+      renamedIndexes.push(idx);
+    }
+  });
+  return { keys, renamedIndexes };
+}
+function buildColumns(headerCells) {
+  const { keys, renamedIndexes } = normalizeColumnKeys(headerCells);
+  const wasRenamed = new Set(renamedIndexes);
+  const renamed = [];
+  const columns = headerCells.map((raw, idx) => {
+    const label = (raw ?? "").trim();
+    const column = { key: keys[idx], label: label || `Column ${idx + 1}` };
+    if (wasRenamed.has(idx)) renamed.push(column);
+    return column;
+  });
+  return { columns, renamed };
+}
+function buildSheetData(records, headerRowOverride) {
+  if (records.length === 0) {
+    return { columns: [], rows: [], headerRow: 1, blankRowsSkipped: 0, renamedColumns: [] };
+  }
+  const headerRow = headerRowOverride && headerRowOverride > 0 ? headerRowOverride : detectHeaderRow(records);
+  const headerRecord = records.find((r) => r.r === headerRow);
+  const { columns, renamed } = buildColumns(headerRecord?.v ?? []);
+  const after = records.filter((r) => r.r > headerRow);
+  const rows = after.filter((r) => !isBlankRecord(r));
+  return {
+    columns,
+    rows,
+    headerRow,
+    blankRowsSkipped: after.length - rows.length,
+    renamedColumns: renamed
+  };
+}
+function detectPhoneColumn(columns) {
+  for (const candidate of PHONE_COLUMN_CANDIDATES) {
+    const hit = columns.find((c) => c.key === candidate);
+    if (hit) return hit.key;
+  }
+  const loose = columns.find((c) => PHONE_COLUMN_CANDIDATES.some((p) => c.key.includes(p)));
+  if (loose) return loose.key;
+  return columns[0]?.key ?? "";
+}
+function detectNameColumn(columns) {
+  for (const candidate of NAME_COLUMN_CANDIDATES) {
+    const hit = columns.find((c) => c.key === candidate);
+    if (hit) return hit.key;
+  }
+  return "";
+}
+function evaluateImportRows(input) {
+  const { columns, rows, phoneColumn, nameColumn, defaultCountryCode, existingPhones } = input;
+  const phoneIdx = columns.findIndex((c) => c.key === phoneColumn);
+  const nameIdx = nameColumn ? columns.findIndex((c) => c.key === nameColumn) : -1;
+  const seen = /* @__PURE__ */ new Set();
+  const evaluated = [];
+  const byReason = {
+    missing_phone: 0,
+    too_short: 0,
+    duplicate_in_file: 0,
+    already_in_group: 0
+  };
+  let ready = 0;
+  let warnings = 0;
+  for (const row of rows) {
+    const cell = (idx) => idx >= 0 ? (row.v[idx] ?? "").trim() : "";
+    const rawPhone = cell(phoneIdx);
+    const phone = normalizePhone5(rawPhone);
+    const name = cell(nameIdx);
+    const attributes = {};
+    columns.forEach((col, idx) => {
+      if (idx === phoneIdx || idx === nameIdx) return;
+      const value = cell(idx);
+      if (value) attributes[col.key] = value;
+    });
+    const base = { rowNumber: row.r, rawPhone, phone, name, attributes };
+    const skip = (reason, message) => {
+      byReason[reason]++;
+      evaluated.push({ ...base, sendPhone: null, status: "skipped", reason, message });
+    };
+    if (!phone) {
+      skip("missing_phone", rawPhone ? `No digits in "${rawPhone}"` : "Phone is blank");
+      continue;
+    }
+    if (phone.length < MIN_PHONE_DIGITS) {
+      skip("too_short", `Only ${phone.length} digit${phone.length === 1 ? "" : "s"}: "${rawPhone}"`);
+      continue;
+    }
+    if (seen.has(phone)) {
+      skip("duplicate_in_file", `${phone} appears earlier in this file`);
+      continue;
+    }
+    if (existingPhones.has(phone)) {
+      skip("already_in_group", `${phone} is already a contact in this group`);
+      continue;
+    }
+    seen.add(phone);
+    const applied = applyCountryCode(phone, defaultCountryCode);
+    if (applied.error) warnings++;
+    ready++;
+    evaluated.push({
+      ...base,
+      sendPhone: applied.phone,
+      status: "ready",
+      warning: applied.error
+    });
+  }
+  return {
+    rows: evaluated,
+    summary: {
+      total: rows.length,
+      ready,
+      skipped: rows.length - ready,
+      warnings,
+      byReason
+    }
+  };
+}
+var MAX_IMPORT_ROWS, MIN_PHONE_DIGITS, PHONE_COLUMN_CANDIDATES, NAME_COLUMN_CANDIDATES, DELIMITER_CANDIDATES, UNSAFE_COLUMN_KEYS;
+var init_contactImport = __esm({
+  "shared/contactImport.ts"() {
+    "use strict";
+    MAX_IMPORT_ROWS = 5e4;
+    MIN_PHONE_DIGITS = 7;
+    PHONE_COLUMN_CANDIDATES = ["phone", "mobile", "number", "whatsapp"];
+    NAME_COLUMN_CANDIDATES = ["name", "full_name", "fullname", "first_name"];
+    DELIMITER_CANDIDATES = [",", ";", "	", "|"];
+    UNSAFE_COLUMN_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
+  }
+});
+
 // server/services/topscholar/doubtStatus.ts
 var doubtStatus_exports = {};
 __export(doubtStatus_exports, {
@@ -40682,8 +41413,8 @@ var init_attributeMatchingService = __esm({
         const getAllCategories = (silhouette) => {
           const lower = silhouette.toLowerCase();
           const categories2 = /* @__PURE__ */ new Set();
-          for (const [category, keywords] of Object.entries(SILHOUETTE_TYPES)) {
-            if (keywords.some((kw) => lower.includes(kw))) {
+          for (const [category, keywords2] of Object.entries(SILHOUETTE_TYPES)) {
+            if (keywords2.some((kw) => lower.includes(kw))) {
               categories2.add(category);
             }
           }
@@ -40882,8 +41613,8 @@ var init_attributeMatchingService = __esm({
         }
         const getMotifCategory = (motif) => {
           const lower = motif.toLowerCase();
-          for (const [category, keywords] of Object.entries(MOTIF_GROUPS)) {
-            if (keywords.some((kw) => lower.includes(kw))) {
+          for (const [category, keywords2] of Object.entries(MOTIF_GROUPS)) {
+            if (keywords2.some((kw) => lower.includes(kw))) {
               return category;
             }
           }
@@ -40978,8 +41709,8 @@ var init_attributeMatchingService = __esm({
           const getAllCategories = (silhouette) => {
             const lower = silhouette.toLowerCase();
             const categories2 = /* @__PURE__ */ new Set();
-            for (const [category, keywords] of Object.entries(SILHOUETTE_TYPES)) {
-              if (keywords.some((kw) => lower.includes(kw))) {
+            for (const [category, keywords2] of Object.entries(SILHOUETTE_TYPES)) {
+              if (keywords2.some((kw) => lower.includes(kw))) {
                 categories2.add(category);
               }
             }
@@ -42561,15 +43292,15 @@ async function checkAndTriggerUrgencyOffer(businessAccountId, visitorToken, conv
       }
     }
     if (campaign.triggerMode === "keyword") {
-      const keywords = (campaign.triggerKeywords || "").split(",").map((k) => k.trim().toLowerCase()).filter((k) => k.length > 0);
-      if (keywords.length === 0) {
+      const keywords2 = (campaign.triggerKeywords || "").split(",").map((k) => k.trim().toLowerCase()).filter((k) => k.length > 0);
+      if (keywords2.length === 0) {
         continue;
       }
       const userMessages = messageHistory.filter((m) => m.role === "user");
       const latestUserMessage = userMessages[userMessages.length - 1];
       if (!latestUserMessage) continue;
       const msgLower = latestUserMessage.content.toLowerCase();
-      const matchedKeyword = keywords.find((kw) => msgLower.includes(kw));
+      const matchedKeyword = keywords2.find((kw) => msgLower.includes(kw));
       if (!matchedKeyword) {
         continue;
       }
@@ -43971,73 +44702,16 @@ __export(contactGroupService_exports, {
   COMMON_COUNTRY_CODES: () => COMMON_COUNTRY_CODES,
   applyCountryCode: () => applyCountryCode,
   contactGroupService: () => contactGroupService,
-  normalizePhone: () => normalizePhone5,
-  parseCsv: () => parseCsv
+  normalizePhone: () => normalizePhone5
 });
 import { and as and40, desc as desc17, eq as eq50, inArray as inArray6, sql as sql28 } from "drizzle-orm";
-function normalizePhone5(raw) {
-  return (raw || "").replace(/\D/g, "");
-}
-function applyCountryCode(rawPhone, defaultCountryCode) {
-  let cleaned = (rawPhone || "").replace(/\D/g, "");
-  if (cleaned.startsWith("0")) cleaned = cleaned.replace(/^0+/, "");
-  if (!cleaned) return { phone: null, error: "Phone is empty" };
-  const code = (defaultCountryCode || "").replace(/\D/g, "");
-  if (code) {
-    if (cleaned.length <= 10) return { phone: code + cleaned };
-    return { phone: cleaned };
-  }
-  if (cleaned.length < 11) {
-    return {
-      phone: null,
-      error: `Missing country code \u2014 group is set to Mixed, so each phone must include its country code (e.g. 919810560800).`
-    };
-  }
-  return { phone: cleaned };
-}
-function parseCsv(csvText) {
-  const text2 = csvText.replace(/^\uFEFF/, "");
-  const lines = text2.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  if (lines.length === 0) return { headers: [], rows: [] };
-  const splitLine = (line) => {
-    const out = [];
-    let cur = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          cur += '"';
-          i++;
-        } else inQuotes = !inQuotes;
-      } else if (ch === "," && !inQuotes) {
-        out.push(cur);
-        cur = "";
-      } else {
-        cur += ch;
-      }
-    }
-    out.push(cur);
-    return out.map((s) => s.trim());
-  };
-  const headers = splitLine(lines[0]).map((h) => h.toLowerCase());
-  const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cells = splitLine(lines[i]);
-    const row = {};
-    headers.forEach((h, idx) => {
-      row[h] = (cells[idx] || "").trim();
-    });
-    rows.push(row);
-  }
-  return { headers, rows };
-}
 var COMMON_COUNTRY_CODES, contactGroupService;
 var init_contactGroupService = __esm({
   "server/services/contactGroupService.ts"() {
     "use strict";
     init_db();
     init_schema();
+    init_contactImport();
     COMMON_COUNTRY_CODES = [
       { code: "91", label: "\u{1F1EE}\u{1F1F3} India (+91)" },
       { code: "1", label: "\u{1F1FA}\u{1F1F8} US / \u{1F1E8}\u{1F1E6} Canada (+1)" },
@@ -44090,56 +44764,146 @@ var init_contactGroupService = __esm({
       async getContacts(businessAccountId, groupId, limit = 500) {
         return db.select().from(contactGroupContacts).where(and40(eq50(contactGroupContacts.groupId, groupId), eq50(contactGroupContacts.businessAccountId, businessAccountId))).orderBy(desc17(contactGroupContacts.createdAt)).limit(limit);
       },
-      async importFromCsv(businessAccountId, groupId, csvText, options) {
+      /** Digits-only phones already stored in the group — the dedupe basis. */
+      async getExistingPhones(groupId) {
+        const existingRows = await db.select({ phone: contactGroupContacts.phone }).from(contactGroupContacts).where(eq50(contactGroupContacts.groupId, groupId));
+        return new Set(existingRows.map((r) => r.phone));
+      },
+      /**
+       * Resolve the column mapping and run the shared verdict over a payload.
+       *
+       * Both the review screen and the actual import go through here. Nothing else
+       * is allowed to decide whether a row is importable — if the preview and the
+       * write were computed separately they would eventually disagree, and a
+       * review that promises more contacts than it delivers is worse than none.
+       */
+      async evaluateImport(businessAccountId, groupId, payload) {
         const group = await this.get(businessAccountId, groupId);
         if (!group) throw new Error("Contact group not found");
-        const { headers, rows } = parseCsv(csvText);
-        if (rows.length === 0) return { imported: 0, skipped: 0, total: 0, sampleErrors: ["CSV is empty"] };
-        const phoneCol = (options?.phoneColumn || ["phone", "mobile", "number", "whatsapp"].find((c) => headers.includes(c)) || headers[0]).toLowerCase();
-        const nameCol = (options?.nameColumn || ["name", "full_name", "fullname", "first_name"].find((c) => headers.includes(c)) || "").toLowerCase();
-        let imported = 0;
-        let skipped = 0;
-        const sampleErrors = [];
-        const seenPhones = /* @__PURE__ */ new Set();
-        const existingRows = await db.select({ phone: contactGroupContacts.phone }).from(contactGroupContacts).where(eq50(contactGroupContacts.groupId, groupId));
-        const existingSet = new Set(existingRows.map((r) => r.phone));
-        const valuesToInsert = [];
-        for (const row of rows) {
-          const rawPhone = row[phoneCol] || "";
-          const phone = normalizePhone5(rawPhone);
-          if (!phone || phone.length < 7) {
-            skipped++;
-            if (sampleErrors.length < 5) sampleErrors.push(`Invalid phone: "${rawPhone}"`);
-            continue;
-          }
-          if (seenPhones.has(phone) || existingSet.has(phone)) {
-            skipped++;
-            continue;
-          }
-          seenPhones.add(phone);
-          const attributes = {};
-          for (const h of headers) {
-            if (h === phoneCol || h === nameCol) continue;
-            if (row[h]) attributes[h] = row[h];
-          }
-          valuesToInsert.push({
-            groupId,
-            businessAccountId,
-            phone,
-            name: nameCol ? row[nameCol] || "" : "",
-            attributes
-          });
-          imported++;
+        const columns = Array.isArray(payload.columns) ? payload.columns : [];
+        const rows = Array.isArray(payload.rows) ? payload.rows : [];
+        if (columns.length === 0) throw new Error("No columns found in the file");
+        if (rows.length > MAX_IMPORT_ROWS) {
+          throw new Error(
+            `That file has ${rows.length.toLocaleString()} rows. The limit is ${MAX_IMPORT_ROWS.toLocaleString()} per import \u2014 split it into smaller files.`
+          );
         }
+        const hasColumn = (key) => !!key && columns.some((c) => c.key === key);
+        const phoneColumn = hasColumn(payload.phoneColumn) ? payload.phoneColumn : detectPhoneColumn(columns);
+        const nameColumn = payload.nameColumn === void 0 ? detectNameColumn(columns) : hasColumn(payload.nameColumn) ? payload.nameColumn : "";
+        const existingPhones = await this.getExistingPhones(groupId);
+        const evaluation = evaluateImportRows({
+          columns,
+          rows,
+          phoneColumn,
+          nameColumn,
+          defaultCountryCode: group.defaultCountryCode,
+          existingPhones
+        });
+        return { group, columns, phoneColumn, nameColumn, evaluation };
+      },
+      /**
+       * Build the review payload. Writes nothing.
+       *
+       * Row-level detail is capped for transport; the summary counts are always
+       * complete, so the tally the user acts on is never a sample.
+       */
+      async reviewImport(businessAccountId, groupId, payload, limits) {
+        const problemLimit = limits?.problems ?? 200;
+        const previewLimit = limits?.preview ?? 25;
+        const { group, columns, phoneColumn, nameColumn, evaluation } = await this.evaluateImport(businessAccountId, groupId, payload);
+        const problemRows = [];
+        const previewRows = [];
+        for (const row of evaluation.rows) {
+          if (row.status === "skipped") {
+            if (problemRows.length < problemLimit) problemRows.push(row);
+          } else if (previewRows.length < previewLimit) {
+            previewRows.push(row);
+          }
+          if (problemRows.length >= problemLimit && previewRows.length >= previewLimit) break;
+        }
+        return {
+          columns,
+          phoneColumn,
+          nameColumn,
+          attributeColumns: columns.filter((c) => c.key !== phoneColumn && c.key !== nameColumn),
+          defaultCountryCode: group.defaultCountryCode ?? null,
+          summary: evaluation.summary,
+          problemRows,
+          previewRows
+        };
+      },
+      /**
+       * Apply an import, re-running the identical verdict before writing.
+       *
+       * `reviewedReady` is what the review screen told the user. If the outcome
+       * differs — someone else added contacts to the group in the meantime — say
+       * so rather than quietly reporting a different number.
+       */
+      async commitImport(businessAccountId, groupId, payload, reviewedReady) {
+        const { evaluation } = await this.evaluateImport(businessAccountId, groupId, payload);
+        const valuesToInsert = evaluation.rows.filter((r) => r.status === "ready").map((r) => ({
+          groupId,
+          businessAccountId,
+          phone: r.phone,
+          name: r.name,
+          attributes: r.attributes
+        }));
         if (valuesToInsert.length > 0) {
           const CHUNK = 500;
           for (let i = 0; i < valuesToInsert.length; i += CHUNK) {
             await db.insert(contactGroupContacts).values(valuesToInsert.slice(i, i + CHUNK));
           }
         }
+        await this.refreshContactCount(groupId);
+        const summary = evaluation.summary;
+        let driftNote = null;
+        if (typeof reviewedReady === "number" && reviewedReady !== summary.ready) {
+          driftNote = `The review showed ${reviewedReady} to import, but ${summary.ready} ${summary.ready === 1 ? "was" : "were"} still eligible when you confirmed \u2014 this group's contacts changed in between.`;
+        }
+        return {
+          imported: summary.ready,
+          skipped: summary.skipped,
+          total: summary.total,
+          summary,
+          rows: evaluation.rows,
+          reviewedReady: typeof reviewedReady === "number" ? reviewedReady : null,
+          driftNote
+        };
+      },
+      /** Recompute the cached contact count for a group. */
+      async refreshContactCount(groupId) {
         const [{ cnt }] = await db.select({ cnt: sql28`COUNT(*)::int` }).from(contactGroupContacts).where(eq50(contactGroupContacts.groupId, groupId));
         await db.update(contactGroups).set({ contactCount: cnt, updatedAt: /* @__PURE__ */ new Date() }).where(eq50(contactGroups.id, groupId));
-        return { imported, skipped, total: rows.length, sampleErrors };
+        return cnt;
+      },
+      /**
+       * Legacy entry point: import straight from CSV bytes or text.
+       *
+       * Kept so existing API callers keep working. It shares the same parsing and
+       * the same verdict as the reviewed path — only the interaction differs.
+       */
+      async importFromCsv(businessAccountId, groupId, csvInput, options) {
+        const text2 = typeof csvInput === "string" ? csvInput.replace(/^\uFEFF/, "") : decodeTextBytes(csvInput).text;
+        const { records } = parseDelimitedText(text2);
+        const sheet = buildSheetData(records);
+        if (sheet.rows.length === 0) {
+          return { imported: 0, skipped: 0, total: 0, sampleErrors: ["CSV is empty"] };
+        }
+        const normalizeKey = (value) => value ? value.trim().toLowerCase() : value;
+        const result = await this.commitImport(businessAccountId, groupId, {
+          columns: sheet.columns,
+          rows: sheet.rows,
+          phoneColumn: normalizeKey(options?.phoneColumn),
+          nameColumn: normalizeKey(options?.nameColumn)
+        });
+        const sampleErrors = result.rows.filter((r) => r.status === "skipped" && r.reason !== "already_in_group").slice(0, 5).map((r) => `Row ${r.rowNumber}: ${r.message}`);
+        return {
+          imported: result.imported,
+          skipped: result.skipped,
+          total: result.total,
+          sampleErrors
+        };
       },
       async addContact(businessAccountId, groupId, phone, name, attributes) {
         const normalized = normalizePhone5(phone);
@@ -44275,28 +45039,310 @@ var init_campaignPrerequisites = __esm({
   }
 });
 
+// server/services/campaignAiService.ts
+var campaignAiService_exports = {};
+__export(campaignAiService_exports, {
+  campaignAiService: () => campaignAiService
+});
+import OpenAI31 from "openai";
+import { and as and42, desc as desc18, eq as eq52, inArray as inArray8 } from "drizzle-orm";
+async function buildKnowledgeContext({ campaign, businessAccountId }) {
+  const blocks = [];
+  if (campaign.aiUseFaqs === "true") {
+    const faqRows = await db.select({ question: faqs.question, answer: faqs.answer }).from(faqs).where(eq52(faqs.businessAccountId, businessAccountId)).limit(40);
+    if (faqRows.length > 0) {
+      blocks.push(
+        "FAQS:\n" + faqRows.map((f) => `Q: ${f.question}
+A: ${f.answer}`).join("\n\n")
+      );
+    }
+  }
+  if (campaign.aiUseDocs === "true") {
+    const allowedIds = campaign.aiKnowledgeDocIds || [];
+    const docRows = await db.select({
+      id: trainingDocuments.id,
+      title: trainingDocuments.originalFilename,
+      summary: trainingDocuments.summary,
+      content: trainingDocuments.extractedText
+    }).from(trainingDocuments).where(
+      allowedIds.length > 0 ? and42(eq52(trainingDocuments.businessAccountId, businessAccountId), inArray8(trainingDocuments.id, allowedIds)) : eq52(trainingDocuments.businessAccountId, businessAccountId)
+    ).limit(allowedIds.length > 0 ? allowedIds.length : 8);
+    if (docRows.length > 0) {
+      blocks.push(
+        "TRAINING DOCS:\n" + docRows.map((d) => {
+          const body = (d.content || d.summary || "").toString();
+          return `# ${d.title || "Doc"}
+${body.substring(0, 4e3)}`;
+        }).join("\n---\n")
+      );
+    }
+  }
+  if (campaign.aiUseProducts === "true") {
+    const productRows = await db.select({
+      name: products.name,
+      description: products.description,
+      price: products.price
+    }).from(products).where(eq52(products.businessAccountId, businessAccountId)).limit(30);
+    if (productRows.length > 0) {
+      blocks.push(
+        "PRODUCT CATALOG (for offers and recommendations):\n" + productRows.map((p) => `- ${p.name}${p.price ? ` (\u20B9${p.price})` : ""}${p.description ? `: ${(p.description || "").substring(0, 200)}` : ""}`).join("\n")
+      );
+    }
+  }
+  return blocks.join("\n\n=========\n\n");
+}
+function buildRecipientContext(attributes) {
+  if (!attributes) return "";
+  const entries = Object.entries(attributes).filter(([, v]) => v !== null && v !== void 0 && String(v).trim() !== "");
+  if (entries.length === 0) return "";
+  return [
+    "RECIPIENT DETAILS (this specific customer's data \u2014 answer only from these values):",
+    ...entries.map(([k, v]) => `${k}: ${v}`),
+    "",
+    "Rules for using these details:",
+    "- Quote these values exactly when asked. Never recalculate, estimate or round them.",
+    `- If asked something these details do not cover, reply: "I don't have that information available here \u2014 our team will follow up with you." Never guess or invent an answer.`,
+    "- Never reveal details belonging to any other customer.",
+    "- Do not promise any outcome, exception or concession that is not explicitly stated above or in the knowledge base."
+  ].join("\n");
+}
+async function classifyInboundReply(opts) {
+  const { apiKey, classifications, inboundText, recipientAttributes, onTokens } = opts;
+  if (!classifications || classifications.length === 0) return null;
+  const categoryLines = classifications.map((c) => {
+    const fields = (c.captureFields || []).map((f) => `      - ${f.fieldKey} (${f.fieldType}): ${f.fieldLabel}`).join("\n");
+    return `- ${c.key} \u2014 ${c.label}: ${c.description}${fields ? `
+    Extract when this category applies:
+${fields}` : ""}`;
+  }).join("\n");
+  const contextBlock = buildRecipientContext(recipientAttributes);
+  const system = [
+    "You classify a customer's WhatsApp reply into exactly one business outcome category.",
+    "",
+    "AVAILABLE CATEGORIES:",
+    categoryLines,
+    "",
+    contextBlock ? `For context, the customer's record:
+${contextBlock}
+` : "",
+    "Respond with JSON only, matching this shape:",
+    "{",
+    '  "primary_classification": "<one category key from the list above, or null if the message carries no meaningful business signal>",',
+    '  "disposition_data": { "<capture field key>": "<extracted value>" },',
+    '  "callback_required": <true if the customer asked for a human, or asked something the record above cannot answer>,',
+    '  "callback_reason": "<short reason if callback_required, else null>",',
+    '  "customer_feedback": "<one-line paraphrase of what the customer actually said>"',
+    "}",
+    "",
+    "Rules:",
+    "- Use only category keys from the list. Never invent a new key.",
+    "- Dates in disposition_data must be ISO format (YYYY-MM-DD). Resolve relative dates ('tomorrow', 'next Friday') against today's date.",
+    "- Omit capture fields you cannot determine \u2014 do not fill them with guesses or placeholders.",
+    "- Greetings, acknowledgements and emoji-only replies carry no business signal: return null for primary_classification."
+  ].filter(Boolean).join("\n");
+  try {
+    const openai = new OpenAI31({ apiKey, timeout: 2e4 });
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: system },
+        {
+          role: "user",
+          content: `Today's date is ${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.
+
+Customer's message:
+${inboundText.substring(0, 2e3)}`
+        }
+      ],
+      temperature: 0,
+      max_tokens: 300,
+      response_format: { type: "json_object" }
+    });
+    await onTokens(completion.usage?.total_tokens ?? 0);
+    const raw = completion.choices[0]?.message?.content;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const validKeys = new Set(classifications.map((c) => c.key));
+    const claimed = typeof parsed.primary_classification === "string" ? parsed.primary_classification : null;
+    const primaryClassification = claimed && validKeys.has(claimed) ? claimed : null;
+    if (claimed && !primaryClassification) {
+      console.warn(`[CampaignAI] Classifier returned unknown category "${claimed}" \u2014 storing as unclassified`);
+    }
+    const allowedFields = new Set(
+      (classifications.find((c) => c.key === primaryClassification)?.captureFields || []).map((f) => f.fieldKey)
+    );
+    const dispositionData = {};
+    if (parsed.disposition_data && typeof parsed.disposition_data === "object") {
+      for (const [k, v] of Object.entries(parsed.disposition_data)) {
+        if (allowedFields.has(k) && v !== null && v !== void 0 && String(v).trim() !== "") {
+          dispositionData[k] = String(v).trim();
+        }
+      }
+    }
+    return {
+      primaryClassification,
+      dispositionData,
+      callbackRequired: parsed.callback_required === true,
+      callbackReason: typeof parsed.callback_reason === "string" && parsed.callback_reason.trim() ? parsed.callback_reason.trim().substring(0, 500) : null,
+      customerFeedback: typeof parsed.customer_feedback === "string" && parsed.customer_feedback.trim() ? parsed.customer_feedback.trim().substring(0, 1e3) : null
+    };
+  } catch (err) {
+    console.error("[CampaignAI] classifyInboundReply error:", err);
+    return null;
+  }
+}
+var campaignAiService;
+var init_campaignAiService = __esm({
+  "server/services/campaignAiService.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_encryptionService();
+    init_marketingCampaignService();
+    campaignAiService = {
+      /**
+       * Classify one inbound customer reply and persist the outcome.
+       *
+       * Called fire-and-forget from recordInbound for every inbound message. Exits
+       * cheaply (before any LLM spend) when the campaign has no classification
+       * config, so broadcast-only campaigns are unaffected.
+       */
+      async classifyAndStore(campaignId, recipientId, inboundText) {
+        try {
+          const [campaign] = await db.select().from(marketingCampaigns).where(eq52(marketingCampaigns.id, campaignId)).limit(1);
+          if (!campaign) return;
+          const classifications = campaign.replyClassifications || [];
+          if (classifications.length === 0) return;
+          const text2 = (inboundText || "").trim();
+          if (!text2) return;
+          const budget = await marketingCampaignService.checkClassificationBudget(campaignId);
+          if (!budget.allowed) {
+            console.log(`[CampaignAI] Skipping classification for ${recipientId}: ${budget.reason}`);
+            return;
+          }
+          const [recipient] = await db.select({ attributes: marketingCampaignRecipients.attributes }).from(marketingCampaignRecipients).where(eq52(marketingCampaignRecipients.id, recipientId)).limit(1);
+          if (!recipient) return;
+          const [biz] = await db.select().from(businessAccounts).where(eq52(businessAccounts.id, campaign.businessAccountId)).limit(1);
+          if (!biz) return;
+          const apiKey = biz.openaiApiKey ? safeDecrypt(biz.openaiApiKey) : process.env.OPENAI_API_KEY;
+          if (!apiKey) return;
+          const result = await classifyInboundReply({
+            apiKey,
+            classifications,
+            inboundText: text2,
+            recipientAttributes: recipient.attributes,
+            onTokens: (n) => marketingCampaignService.addAiTokensUsed(campaignId, n)
+          });
+          if (!result) return;
+          await marketingCampaignService.applyClassification(recipientId, result);
+          console.log(
+            `[CampaignAI] Classified recipient ${recipientId} as ${result.primaryClassification || "unclassified"}` + (result.callbackRequired ? " (callback required)" : "")
+          );
+        } catch (err) {
+          console.error("[CampaignAI] classifyAndStore error:", err);
+        }
+      },
+      async generateReply(campaignId, recipientId, inboundText) {
+        try {
+          const [campaign] = await db.select().from(marketingCampaigns).where(eq52(marketingCampaigns.id, campaignId)).limit(1);
+          if (!campaign) return null;
+          if (campaign.aiEnabled !== "true") return null;
+          const [recipient] = await db.select().from(marketingCampaignRecipients).where(eq52(marketingCampaignRecipients.id, recipientId)).limit(1);
+          if (!recipient) return null;
+          const budget = await marketingCampaignService.checkAiBudget(campaignId, recipientId);
+          if (!budget.allowed) {
+            console.log(`[CampaignAI] Blocked reply for campaign ${campaignId} recipient ${recipientId}: ${budget.reason}`);
+            return { text: "", blockedReason: budget.reason };
+          }
+          const inboundClipped = (inboundText || "").substring(0, 2e3);
+          const [biz] = await db.select().from(businessAccounts).where(eq52(businessAccounts.id, campaign.businessAccountId)).limit(1);
+          if (!biz) return null;
+          const apiKey = biz.openaiApiKey ? safeDecrypt(biz.openaiApiKey) : process.env.OPENAI_API_KEY;
+          if (!apiKey) {
+            console.error("[CampaignAI] No OpenAI API key available for business", biz.id);
+            return null;
+          }
+          const [template] = await db.select().from(whatsappTemplates).where(eq52(whatsappTemplates.id, campaign.templateId)).limit(1);
+          const knowledge = await buildKnowledgeContext({
+            campaign,
+            businessAccountId: campaign.businessAccountId
+          });
+          const history = await db.select().from(marketingCampaignMessages).where(eq52(marketingCampaignMessages.recipientId, recipientId)).orderBy(desc18(marketingCampaignMessages.createdAt)).limit(20);
+          const ordered = history.slice().reverse();
+          const persona = (campaign.aiSystemPrompt || "").trim() || `You are ${campaign.aiAgentName || "an assistant"} for ${biz.name}, replying to someone who has responded to a WhatsApp message we sent them. Be warm, concise and helpful. Answer using only the recipient details and knowledge below, and finish with a clear next step. Never invent amounts, dates, prices, policies or product details.`;
+          const recipientContext = buildRecipientContext(recipient.attributes);
+          const systemPrompt = [
+            persona,
+            "",
+            "Channel: WhatsApp. Keep replies short (2-4 sentences). No markdown.",
+            "If you genuinely cannot help and the user wants a human, say so briefly and tell them a team member will call back.",
+            "Customer name: " + (recipient.name || "(unknown)"),
+            "",
+            recipientContext,
+            template ? `
+This conversation started from this campaign template:
+${template.bodyText}
+` : "",
+            knowledge ? `KNOWLEDGE BASE:
+${knowledge}` : ""
+          ].filter(Boolean).join("\n");
+          const messages2 = [
+            { role: "system", content: systemPrompt }
+          ];
+          for (const m of ordered) {
+            if (m.direction === "inbound") {
+              messages2.push({ role: "user", content: m.body });
+            } else if (m.direction === "outbound_ai") {
+              messages2.push({ role: "assistant", content: m.body });
+            } else if (m.direction === "outbound_template") {
+              messages2.push({ role: "assistant", content: `[Sent campaign template] ${m.body.substring(0, 300)}` });
+            }
+          }
+          messages2.push({ role: "user", content: inboundClipped });
+          const openai = new OpenAI31({ apiKey, timeout: 3e4 });
+          const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: messages2,
+            temperature: 0.5,
+            max_tokens: 250
+          });
+          const text2 = completion.choices[0]?.message?.content?.trim();
+          const usedTokens = completion.usage?.total_tokens ?? 0;
+          await marketingCampaignService.addAiTokensUsed(campaignId, usedTokens);
+          if (!text2) return null;
+          return { text: text2 };
+        } catch (err) {
+          console.error("[CampaignAI] generateReply error:", err);
+          return null;
+        }
+      }
+    };
+  }
+});
+
 // server/services/marketingCampaignService.ts
 var marketingCampaignService_exports = {};
 __export(marketingCampaignService_exports, {
   CampaignPrerequisiteError: () => CampaignPrerequisiteError,
+  UNCLASSIFIED_FILTER: () => UNCLASSIFIED_FILTER,
   marketingCampaignService: () => marketingCampaignService,
   recordOptOut: () => recordOptOut,
   resolveParams: () => resolveParams,
   startCampaignScheduler: () => startCampaignScheduler,
   validateTemplateParams: () => validateTemplateParams
 });
-import { and as and42, desc as desc18, eq as eq52, inArray as inArray8, sql as sql30 } from "drizzle-orm";
+import { and as and43, desc as desc19, eq as eq53, inArray as inArray9, sql as sql30 } from "drizzle-orm";
 async function parkUnsendableCampaign(campaignId, businessAccountId, currentStatus, reason) {
   if (currentStatus !== "scheduled" && currentStatus !== "sending") return;
   const [dispatched] = await db.select({ n: sql30`count(*)::int` }).from(marketingCampaignRecipients).where(
-    and42(
-      eq52(marketingCampaignRecipients.campaignId, campaignId),
-      inArray8(marketingCampaignRecipients.status, ["sent", "delivered", "read", "replied"])
+    and43(
+      eq53(marketingCampaignRecipients.campaignId, campaignId),
+      inArray9(marketingCampaignRecipients.status, ["sent", "delivered", "read", "replied"])
     )
   );
   const alreadySent = (dispatched?.n ?? 0) > 0;
   const parkedStatus = alreadySent ? "failed" : "draft";
-  await db.update(marketingCampaigns).set({ status: parkedStatus, heartbeatAt: null, updatedAt: /* @__PURE__ */ new Date() }).where(and42(eq52(marketingCampaigns.id, campaignId), eq52(marketingCampaigns.businessAccountId, businessAccountId)));
+  await db.update(marketingCampaigns).set({ status: parkedStatus, heartbeatAt: null, updatedAt: /* @__PURE__ */ new Date() }).where(and43(eq53(marketingCampaigns.id, campaignId), eq53(marketingCampaigns.businessAccountId, businessAccountId)));
   console.warn(
     `[Campaign] ${campaignId} parked as ${parkedStatus}` + (alreadySent ? ` after ${dispatched?.n} message(s) already sent` : "") + ` \u2014 ${reason}`
   );
@@ -44348,6 +45394,58 @@ function mapMsg91StatusToKind(status) {
   if (s.includes("deliv")) return "delivered";
   if (s.includes("sent") || s.includes("submit") || s.includes("accept") || s === "enroute") return "sent";
   return null;
+}
+function classificationCondition(classification) {
+  if (!classification) return void 0;
+  if (classification === UNCLASSIFIED_FILTER) {
+    return sql30`first_reply_at IS NOT NULL AND primary_classification IS NULL`;
+  }
+  return eq53(marketingCampaignRecipients.primaryClassification, classification);
+}
+function csvCell2(value) {
+  const s = value === null || value === void 0 ? "" : String(value);
+  const guarded = /^[=+\-@\t\r]/.test(s) ? `	${s}` : s;
+  return `"${guarded.replace(/"/g, '""')}"`;
+}
+function normalizeClassifications(input) {
+  if (input === null || input === void 0) return [];
+  if (!Array.isArray(input)) throw new Error("replyClassifications must be an array");
+  if (input.length > MAX_CLASSIFICATIONS) {
+    throw new Error(`A campaign can define at most ${MAX_CLASSIFICATIONS} reply categories`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  return input.map((raw, i) => {
+    const key = String(raw?.key ?? "").trim().toUpperCase().replace(/\s+/g, "_");
+    if (!key) throw new Error(`Reply category ${i + 1} is missing a key`);
+    if (!/^[A-Z0-9_]+$/.test(key)) {
+      throw new Error(`Reply category key "${key}" may only contain letters, numbers and underscores`);
+    }
+    if (seen.has(key)) throw new Error(`Duplicate reply category key "${key}"`);
+    seen.add(key);
+    const captureRaw = raw?.captureFields;
+    if (captureRaw !== void 0 && captureRaw !== null && !Array.isArray(captureRaw)) {
+      throw new Error(`captureFields for "${key}" must be an array`);
+    }
+    const fieldKeys = /* @__PURE__ */ new Set();
+    const captureFields = (captureRaw || []).slice(0, MAX_CAPTURE_FIELDS).map((f) => {
+      const fieldKey = String(f?.fieldKey ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+      if (!fieldKey) throw new Error(`A capture field on "${key}" is missing a field key`);
+      if (fieldKeys.has(fieldKey)) throw new Error(`Duplicate capture field "${fieldKey}" on "${key}"`);
+      fieldKeys.add(fieldKey);
+      const fieldType = String(f?.fieldType ?? "text");
+      return {
+        fieldKey,
+        fieldLabel: String(f?.fieldLabel ?? fieldKey).trim().substring(0, 120),
+        fieldType: VALID_FIELD_TYPES.has(fieldType) ? fieldType : "text"
+      };
+    });
+    return {
+      key,
+      label: String(raw?.label ?? key).trim().substring(0, 120),
+      description: String(raw?.description ?? "").trim().substring(0, 500),
+      captureFields
+    };
+  });
 }
 function toFlag(v, fallback = "true") {
   if (v === void 0) return fallback;
@@ -44415,7 +45513,7 @@ async function recordOptOut(businessAccountId, phone, reason = "user_stop", camp
   const normalized = normalizePhone5(phone);
   if (!normalized) return;
   const last10 = normalized.slice(-10);
-  const existing = await db.select().from(whatsappOptOuts).where(and42(eq52(whatsappOptOuts.businessAccountId, businessAccountId), eq52(whatsappOptOuts.phone, normalized))).limit(1);
+  const existing = await db.select().from(whatsappOptOuts).where(and43(eq53(whatsappOptOuts.businessAccountId, businessAccountId), eq53(whatsappOptOuts.phone, normalized))).limit(1);
   if (existing.length === 0) {
     await db.insert(whatsappOptOuts).values({
       businessAccountId,
@@ -44424,9 +45522,9 @@ async function recordOptOut(businessAccountId, phone, reason = "user_stop", camp
       campaignId: campaignId || null
     });
   }
-  await db.update(marketingCampaignRecipients).set({ status: "opted_out" }).where(and42(
-    eq52(marketingCampaignRecipients.businessAccountId, businessAccountId),
-    inArray8(marketingCampaignRecipients.status, ["pending", "claimed", "queued", "sent", "delivered", "read", "replied"]),
+  await db.update(marketingCampaignRecipients).set({ status: "opted_out" }).where(and43(
+    eq53(marketingCampaignRecipients.businessAccountId, businessAccountId),
+    inArray9(marketingCampaignRecipients.status, ["pending", "claimed", "queued", "sent", "delivered", "read", "replied"]),
     sql30`(${marketingCampaignRecipients.sendPhone} = ${normalized}
            OR ${marketingCampaignRecipients.phone} = ${normalized}
            OR ${marketingCampaignRecipients.phone} = ${last10})`
@@ -44446,7 +45544,7 @@ function startCampaignScheduler() {
   }, reconcileInterval);
   console.log("[CampaignScheduler] Pull-API reconciler started (3 min interval)");
 }
-var CampaignPrerequisiteError, inFlight2, HEARTBEAT_INTERVAL_MS, STALE_CAMPAIGN_HEARTBEAT_MS, STALE_RECIPIENT_CLAIM_MS, SEND_BATCH_SIZE, SEND_DELAY_MS, marketingCampaignService, schedulerStarted;
+var CampaignPrerequisiteError, inFlight2, HEARTBEAT_INTERVAL_MS, STALE_CAMPAIGN_HEARTBEAT_MS, STALE_RECIPIENT_CLAIM_MS, SEND_BATCH_SIZE, SEND_DELAY_MS, UNCLASSIFIED_FILTER, MAX_CLASSIFICATIONS, MAX_CAPTURE_FIELDS, VALID_FIELD_TYPES, marketingCampaignService, schedulerStarted;
 var init_marketingCampaignService = __esm({
   "server/services/marketingCampaignService.ts"() {
     "use strict";
@@ -44471,12 +45569,16 @@ var init_marketingCampaignService = __esm({
     STALE_RECIPIENT_CLAIM_MS = 5 * 60 * 1e3;
     SEND_BATCH_SIZE = 20;
     SEND_DELAY_MS = 250;
+    UNCLASSIFIED_FILTER = "__unclassified__";
+    MAX_CLASSIFICATIONS = 25;
+    MAX_CAPTURE_FIELDS = 8;
+    VALID_FIELD_TYPES = /* @__PURE__ */ new Set(["text", "date", "boolean"]);
     marketingCampaignService = {
       async list(businessAccountId) {
-        return db.select().from(marketingCampaigns).where(eq52(marketingCampaigns.businessAccountId, businessAccountId)).orderBy(desc18(marketingCampaigns.createdAt));
+        return db.select().from(marketingCampaigns).where(eq53(marketingCampaigns.businessAccountId, businessAccountId)).orderBy(desc19(marketingCampaigns.createdAt));
       },
       async get(businessAccountId, id) {
-        const [row] = await db.select().from(marketingCampaigns).where(and42(eq52(marketingCampaigns.id, id), eq52(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
+        const [row] = await db.select().from(marketingCampaigns).where(and43(eq53(marketingCampaigns.id, id), eq53(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
         return row;
       },
       async create(businessAccountId, payload) {
@@ -44485,7 +45587,7 @@ var init_marketingCampaignService = __esm({
           groupIds: payload.groupIds
         });
         if (missing) throw new CampaignPrerequisiteError(missing);
-        const [tpl] = await db.select().from(whatsappTemplates).where(and42(eq52(whatsappTemplates.id, payload.templateId), eq52(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
+        const [tpl] = await db.select().from(whatsappTemplates).where(and43(eq53(whatsappTemplates.id, payload.templateId), eq53(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!tpl) throw new Error("Template not found for this business");
         const paramError = validateTemplateParams(tpl, payload.templateParams);
         if (paramError) throw new Error(paramError);
@@ -44505,7 +45607,8 @@ var init_marketingCampaignService = __esm({
           aiUseProducts: toFlag(payload.aiUseProducts, "true"),
           aiKnowledgeDocIds: payload.aiKnowledgeDocIds || [],
           aiDailyTokenBudget: payload.aiDailyTokenBudget ?? 5e4,
-          aiMaxRepliesPerRecipient: payload.aiMaxRepliesPerRecipient ?? 20
+          aiMaxRepliesPerRecipient: payload.aiMaxRepliesPerRecipient ?? 20,
+          replyClassifications: normalizeClassifications(payload.replyClassifications)
         }).returning();
         return row;
       },
@@ -44525,7 +45628,7 @@ var init_marketingCampaignService = __esm({
           const current = await this.get(businessAccountId, id);
           if (!current) return void 0;
           const templateId = payload.templateId ?? current.templateId;
-          const [tpl] = await db.select().from(whatsappTemplates).where(and42(eq52(whatsappTemplates.id, templateId), eq52(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
+          const [tpl] = await db.select().from(whatsappTemplates).where(and43(eq53(whatsappTemplates.id, templateId), eq53(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
           if (!tpl) throw new Error("Template not found for this business");
           const values = payload.templateParams ?? current.templateParams;
           const paramError = validateTemplateParams(tpl, values);
@@ -44552,38 +45655,48 @@ var init_marketingCampaignService = __esm({
         if (payload.aiUseFaqs !== void 0) set.aiUseFaqs = toFlag(payload.aiUseFaqs, "true");
         if (payload.aiUseDocs !== void 0) set.aiUseDocs = toFlag(payload.aiUseDocs, "true");
         if (payload.aiUseProducts !== void 0) set.aiUseProducts = toFlag(payload.aiUseProducts, "true");
+        if (payload.replyClassifications !== void 0) {
+          set.replyClassifications = normalizeClassifications(payload.replyClassifications);
+        }
         if (payload.status !== void 0) set.status = payload.status;
-        const [row] = await db.update(marketingCampaigns).set(set).where(and42(
-          eq52(marketingCampaigns.id, id),
-          eq52(marketingCampaigns.businessAccountId, businessAccountId),
-          ...opts?.onlyIfStatusIn ? [inArray8(marketingCampaigns.status, opts.onlyIfStatusIn)] : []
+        const [row] = await db.update(marketingCampaigns).set(set).where(and43(
+          eq53(marketingCampaigns.id, id),
+          eq53(marketingCampaigns.businessAccountId, businessAccountId),
+          ...opts?.onlyIfStatusIn ? [inArray9(marketingCampaigns.status, opts.onlyIfStatusIn)] : []
         )).returning();
         return row;
       },
       async remove(businessAccountId, id) {
-        const result = await db.delete(marketingCampaigns).where(and42(eq52(marketingCampaigns.id, id), eq52(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
+        const result = await db.delete(marketingCampaigns).where(and43(eq53(marketingCampaigns.id, id), eq53(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
         return result.length > 0;
       },
       async listRecipients(businessAccountId, campaignId, opts) {
         const limit = Math.min(Math.max(opts?.limit ?? 200, 1), 1e3);
         const offset = Math.max(opts?.offset ?? 0, 0);
-        const where = opts?.status ? and42(
-          eq52(marketingCampaignRecipients.campaignId, campaignId),
-          eq52(marketingCampaignRecipients.businessAccountId, businessAccountId),
-          eq52(marketingCampaignRecipients.status, opts.status)
-        ) : and42(
-          eq52(marketingCampaignRecipients.campaignId, campaignId),
-          eq52(marketingCampaignRecipients.businessAccountId, businessAccountId)
+        const statusCondition = opts?.status ? opts.status === "pending" ? inArray9(marketingCampaignRecipients.status, ["pending", "claimed"]) : eq53(marketingCampaignRecipients.status, opts.status) : void 0;
+        const where = and43(
+          eq53(marketingCampaignRecipients.campaignId, campaignId),
+          eq53(marketingCampaignRecipients.businessAccountId, businessAccountId),
+          statusCondition,
+          classificationCondition(opts?.classification)
         );
-        return db.select().from(marketingCampaignRecipients).where(where).orderBy(desc18(marketingCampaignRecipients.createdAt)).limit(limit).offset(offset);
+        return db.select().from(marketingCampaignRecipients).where(where).orderBy(desc19(marketingCampaignRecipients.createdAt)).limit(limit).offset(offset);
       },
-      async countRecipients(businessAccountId, campaignId) {
+      /**
+       * Status tallies for the recipient table's filter tabs.
+       *
+       * Takes the same `classification` filter as listRecipients on purpose: the tab
+       * counts and the rows behind them are rendered together, so if only one of the
+       * two narrowed by outcome the footer would advertise pages that don't exist.
+       */
+      async countRecipients(businessAccountId, campaignId, opts) {
         const rows = await db.select({
           status: marketingCampaignRecipients.status,
           cnt: sql30`COUNT(*)::int`
-        }).from(marketingCampaignRecipients).where(and42(
-          eq52(marketingCampaignRecipients.campaignId, campaignId),
-          eq52(marketingCampaignRecipients.businessAccountId, businessAccountId)
+        }).from(marketingCampaignRecipients).where(and43(
+          eq53(marketingCampaignRecipients.campaignId, campaignId),
+          eq53(marketingCampaignRecipients.businessAccountId, businessAccountId),
+          classificationCondition(opts?.classification)
         )).groupBy(marketingCampaignRecipients.status);
         const out = { total: 0, pending: 0, queued: 0, sent: 0, delivered: 0, read: 0, failed: 0, expired: 0, replied: 0, opted_out: 0 };
         for (const r of rows) {
@@ -44598,18 +45711,18 @@ var init_marketingCampaignService = __esm({
        * recipient belongs to this campaign+business — closes the IDOR gap in the previous version.
        */
       async getMessagesForRecipient(businessAccountId, campaignId, recipientId) {
-        const [campaign] = await db.select({ id: marketingCampaigns.id }).from(marketingCampaigns).where(and42(eq52(marketingCampaigns.id, campaignId), eq52(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
+        const [campaign] = await db.select({ id: marketingCampaigns.id }).from(marketingCampaigns).where(and43(eq53(marketingCampaigns.id, campaignId), eq53(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
         if (!campaign) return null;
-        const [recipient] = await db.select({ id: marketingCampaignRecipients.id }).from(marketingCampaignRecipients).where(and42(
-          eq52(marketingCampaignRecipients.id, recipientId),
-          eq52(marketingCampaignRecipients.campaignId, campaignId),
-          eq52(marketingCampaignRecipients.businessAccountId, businessAccountId)
+        const [recipient] = await db.select({ id: marketingCampaignRecipients.id }).from(marketingCampaignRecipients).where(and43(
+          eq53(marketingCampaignRecipients.id, recipientId),
+          eq53(marketingCampaignRecipients.campaignId, campaignId),
+          eq53(marketingCampaignRecipients.businessAccountId, businessAccountId)
         )).limit(1);
         if (!recipient) return null;
-        return db.select().from(marketingCampaignMessages).where(and42(
-          eq52(marketingCampaignMessages.recipientId, recipientId),
-          eq52(marketingCampaignMessages.campaignId, campaignId),
-          eq52(marketingCampaignMessages.businessAccountId, businessAccountId)
+        return db.select().from(marketingCampaignMessages).where(and43(
+          eq53(marketingCampaignMessages.recipientId, recipientId),
+          eq53(marketingCampaignMessages.campaignId, campaignId),
+          eq53(marketingCampaignMessages.businessAccountId, businessAccountId)
         )).orderBy(marketingCampaignMessages.createdAt);
       },
       async snapshotRecipients(campaign) {
@@ -44636,7 +45749,7 @@ var init_marketingCampaignService = __esm({
             await db.insert(marketingCampaignRecipients).values(rows.slice(i, i + CHUNK));
           }
         }
-        await db.update(marketingCampaigns).set({ totalRecipients: rows.length, updatedAt: /* @__PURE__ */ new Date() }).where(eq52(marketingCampaigns.id, campaign.id));
+        await db.update(marketingCampaigns).set({ totalRecipients: rows.length, updatedAt: /* @__PURE__ */ new Date() }).where(eq53(marketingCampaigns.id, campaign.id));
         return rows.length;
       },
       /**
@@ -44736,14 +45849,14 @@ var init_marketingCampaignService = __esm({
           await parkUnsendableCampaign(campaignId, businessAccountId, campaign.status, missing.message);
           return { started: false, reason: missing.message };
         }
-        const [tpl] = await db.select().from(whatsappTemplates).where(eq52(whatsappTemplates.id, campaign.templateId)).limit(1);
+        const [tpl] = await db.select().from(whatsappTemplates).where(eq53(whatsappTemplates.id, campaign.templateId)).limit(1);
         if (!tpl) return { started: false, reason: "Template not found" };
         const paramError = validateTemplateParams(tpl, campaign.templateParams);
         if (paramError) {
           await parkUnsendableCampaign(campaignId, businessAccountId, campaign.status, paramError);
           return { started: false, reason: paramError };
         }
-        const existing = await db.select({ id: marketingCampaignRecipients.id }).from(marketingCampaignRecipients).where(eq52(marketingCampaignRecipients.campaignId, campaignId)).limit(1);
+        const existing = await db.select({ id: marketingCampaignRecipients.id }).from(marketingCampaignRecipients).where(eq53(marketingCampaignRecipients.campaignId, campaignId)).limit(1);
         if (existing.length === 0) {
           const total = await this.snapshotRecipients(campaign);
           if (total === 0) return { started: false, reason: "No eligible recipients (after de-dup and opt-outs)" };
@@ -44757,7 +45870,7 @@ var init_marketingCampaignService = __esm({
           startedAt: campaign.startedAt || /* @__PURE__ */ new Date(),
           heartbeatAt: /* @__PURE__ */ new Date(),
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq52(marketingCampaigns.id, campaignId));
+        }).where(eq53(marketingCampaigns.id, campaignId));
         setImmediate(() => {
           this.runSendLoop(businessAccountId, campaignId, tpl, settings).catch((err) => console.error("[Campaign] runSendLoop error:", err)).finally(() => inFlight2.delete(key));
         });
@@ -44786,9 +45899,9 @@ var init_marketingCampaignService = __esm({
           const refreshedCampaign = await this.get(businessAccountId, campaignId);
           const groupIds = (refreshedCampaign?.groupIds || []).filter(Boolean);
           if (groupIds.length > 0) {
-            const groups = await db.select({ id: contactGroups.id, code: contactGroups.defaultCountryCode }).from(contactGroups).where(and42(
-              eq52(contactGroups.businessAccountId, businessAccountId),
-              inArray8(contactGroups.id, groupIds)
+            const groups = await db.select({ id: contactGroups.id, code: contactGroups.defaultCountryCode }).from(contactGroups).where(and43(
+              eq53(contactGroups.businessAccountId, businessAccountId),
+              inArray9(contactGroups.id, groupIds)
             ));
             for (const g of groups) groupCodeMap.set(g.id, g.code ?? null);
           }
@@ -44824,12 +45937,12 @@ var init_marketingCampaignService = __esm({
               const now = Date.now();
               if (now - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
                 lastHeartbeat = now;
-                await db.update(marketingCampaigns).set({ heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq52(marketingCampaigns.id, campaignId));
+                await db.update(marketingCampaigns).set({ heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq53(marketingCampaigns.id, campaignId));
               }
               try {
                 const optOuts = await contactGroupService.getOptOutSet(businessAccountId);
                 if (optOuts.has(r.phone)) {
-                  await db.update(marketingCampaignRecipients).set({ status: "opted_out", claimedAt: null }).where(eq52(marketingCampaignRecipients.id, r.id));
+                  await db.update(marketingCampaignRecipients).set({ status: "opted_out", claimedAt: null }).where(eq53(marketingCampaignRecipients.id, r.id));
                   continue;
                 }
                 const groupCode = r.groupId ? groupCodeMap.get(r.groupId) ?? null : null;
@@ -44839,7 +45952,7 @@ var init_marketingCampaignService = __esm({
                     status: "failed",
                     claimedAt: null,
                     errorMessage: normalized.error || "Invalid phone number"
-                  }).where(eq52(marketingCampaignRecipients.id, r.id));
+                  }).where(eq53(marketingCampaignRecipients.id, r.id));
                   failed++;
                   await new Promise((res) => setTimeout(res, SEND_DELAY_MS));
                   continue;
@@ -44847,7 +45960,7 @@ var init_marketingCampaignService = __esm({
                 const sendPhone = normalized.phone;
                 const { params, problems } = resolveParams(tpl, refreshed, r, knownFields);
                 if (problems.length > 0) {
-                  await db.update(marketingCampaignRecipients).set({ status: "failed", claimedAt: null, errorMessage: problems.join("; ") }).where(eq52(marketingCampaignRecipients.id, r.id));
+                  await db.update(marketingCampaignRecipients).set({ status: "failed", claimedAt: null, errorMessage: problems.join("; ") }).where(eq53(marketingCampaignRecipients.id, r.id));
                   failed++;
                   continue;
                 }
@@ -44863,7 +45976,7 @@ var init_marketingCampaignService = __esm({
                     sendPhone,
                     errorMessage: null,
                     claimedAt: null
-                  }).where(eq52(marketingCampaignRecipients.id, r.id));
+                  }).where(eq53(marketingCampaignRecipients.id, r.id));
                   const renderedBody = (tpl.bodyText || "").replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n) => params[String(n)] ?? `{{${n}}}`);
                   await db.insert(marketingCampaignMessages).values({
                     campaignId,
@@ -44881,7 +45994,7 @@ var init_marketingCampaignService = __esm({
                     providerResponse: result.raw ?? null,
                     sendPhone,
                     errorMessage: typeof result.error === "string" ? result.error : JSON.stringify(result.error || {}).substring(0, 500)
-                  }).where(eq52(marketingCampaignRecipients.id, r.id));
+                  }).where(eq53(marketingCampaignRecipients.id, r.id));
                   failed++;
                 }
               } catch (err) {
@@ -44889,7 +46002,7 @@ var init_marketingCampaignService = __esm({
                   status: "failed",
                   claimedAt: null,
                   errorMessage: (err?.message || String(err)).substring(0, 500)
-                }).where(eq52(marketingCampaignRecipients.id, r.id));
+                }).where(eq53(marketingCampaignRecipients.id, r.id));
                 failed++;
               }
               await new Promise((res) => setTimeout(res, SEND_DELAY_MS));
@@ -44900,17 +46013,17 @@ var init_marketingCampaignService = __esm({
               optedOutCount: sql30`(SELECT COUNT(*)::int FROM ${marketingCampaignRecipients} WHERE campaign_id = ${campaignId} AND status = 'opted_out')`,
               heartbeatAt: /* @__PURE__ */ new Date(),
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq52(marketingCampaigns.id, campaignId));
+            }).where(eq53(marketingCampaigns.id, campaignId));
           }
-          const [{ leftover }] = await db.select({ leftover: sql30`COUNT(*)::int` }).from(marketingCampaignRecipients).where(and42(
-            eq52(marketingCampaignRecipients.campaignId, campaignId),
-            inArray8(marketingCampaignRecipients.status, ["pending", "claimed"])
+          const [{ leftover }] = await db.select({ leftover: sql30`COUNT(*)::int` }).from(marketingCampaignRecipients).where(and43(
+            eq53(marketingCampaignRecipients.campaignId, campaignId),
+            inArray9(marketingCampaignRecipients.status, ["pending", "claimed"])
           ));
           if (leftover > 0) {
             console.warn(`[Campaign] ${campaignId} loop ended with ${leftover} rows still pending/claimed \u2014 leaving status='sending' for scheduler recovery`);
-            await db.update(marketingCampaigns).set({ heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq52(marketingCampaigns.id, campaignId));
+            await db.update(marketingCampaigns).set({ heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq53(marketingCampaigns.id, campaignId));
           } else {
-            await db.update(marketingCampaigns).set({ status: "completed", completedAt: /* @__PURE__ */ new Date(), heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq52(marketingCampaigns.id, campaignId));
+            await db.update(marketingCampaigns).set({ status: "completed", completedAt: /* @__PURE__ */ new Date(), heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq53(marketingCampaigns.id, campaignId));
             console.log(`[Campaign] ${campaignId} complete \u2014 sent=${sent} failed=${failed}`);
           }
         } finally {
@@ -44924,7 +46037,7 @@ var init_marketingCampaignService = __esm({
         }
       },
       async cancel(businessAccountId, campaignId) {
-        const result = await db.update(marketingCampaigns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(and42(eq52(marketingCampaigns.id, campaignId), eq52(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
+        const result = await db.update(marketingCampaigns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(and43(eq53(marketingCampaigns.id, campaignId), eq53(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
         return result.length > 0;
       },
       /**
@@ -44936,17 +46049,17 @@ var init_marketingCampaignService = __esm({
         const normalized = normalizePhone5(phone);
         if (!normalized) return null;
         const last10 = normalized.slice(-10);
-        const recipients = await db.select().from(marketingCampaignRecipients).where(and42(
-          eq52(marketingCampaignRecipients.businessAccountId, businessAccountId),
+        const recipients = await db.select().from(marketingCampaignRecipients).where(and43(
+          eq53(marketingCampaignRecipients.businessAccountId, businessAccountId),
           // 'queued' is included so that a fast inbound reply (which can land before
           // Meta's "sent" webhook) still attributes to the right recipient row.
-          inArray8(marketingCampaignRecipients.status, ["queued", "sent", "delivered", "read", "replied"]),
+          inArray9(marketingCampaignRecipients.status, ["queued", "sent", "delivered", "read", "replied"]),
           sql30`(${marketingCampaignRecipients.sendPhone} = ${normalized}
              OR ${marketingCampaignRecipients.phone} = ${normalized}
              OR ${marketingCampaignRecipients.phone} = ${last10})`
-        )).orderBy(desc18(marketingCampaignRecipients.createdAt)).limit(5);
+        )).orderBy(desc19(marketingCampaignRecipients.createdAt)).limit(5);
         for (const r of recipients) {
-          const [c] = await db.select().from(marketingCampaigns).where(eq52(marketingCampaigns.id, r.campaignId)).limit(1);
+          const [c] = await db.select().from(marketingCampaigns).where(eq53(marketingCampaigns.id, r.campaignId)).limit(1);
           if (!c) continue;
           if (c.status === "cancelled" || c.status === "draft" || c.status === "scheduled") continue;
           const sentAt = r.sentAt ? new Date(r.sentAt).getTime() : 0;
@@ -44973,7 +46086,7 @@ var init_marketingCampaignService = __esm({
           optedOutCount: sql30`(SELECT COUNT(*)::int FROM ${marketingCampaignRecipients} WHERE campaign_id = ${campaignId} AND status = 'opted_out')`,
           repliedCount: sql30`(SELECT COUNT(DISTINCT id)::int FROM ${marketingCampaignRecipients} WHERE campaign_id = ${campaignId} AND first_reply_at IS NOT NULL)`,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq52(marketingCampaigns.id, campaignId));
+        }).where(eq53(marketingCampaigns.id, campaignId));
       },
       /**
        * Process a delivery / read / failed receipt from the provider, keyed by msg91MessageId.
@@ -44985,9 +46098,9 @@ var init_marketingCampaignService = __esm({
       async applyDeliveryReceipt(businessAccountId, msg91MessageId, kind, errorMessage) {
         if (!msg91MessageId) return false;
         const result = await db.transaction(async (tx) => {
-          const [r] = await tx.select().from(marketingCampaignRecipients).where(and42(
-            eq52(marketingCampaignRecipients.businessAccountId, businessAccountId),
-            eq52(marketingCampaignRecipients.msg91MessageId, msg91MessageId)
+          const [r] = await tx.select().from(marketingCampaignRecipients).where(and43(
+            eq53(marketingCampaignRecipients.businessAccountId, businessAccountId),
+            eq53(marketingCampaignRecipients.msg91MessageId, msg91MessageId)
           )).for("update").limit(1);
           if (!r) return { changed: false, campaignId: null };
           const STATUS_RANK = {
@@ -45034,7 +46147,7 @@ var init_marketingCampaignService = __esm({
             if (errorMessage) updates.errorMessage = errorMessage.substring(0, 500);
           }
           if (Object.keys(updates).length === 0) return { changed: false, campaignId: r.campaignId };
-          await tx.update(marketingCampaignRecipients).set(updates).where(eq52(marketingCampaignRecipients.id, r.id));
+          await tx.update(marketingCampaignRecipients).set(updates).where(eq53(marketingCampaignRecipients.id, r.id));
           return { changed: true, campaignId: r.campaignId };
         });
         if (result.changed && result.campaignId) {
@@ -45084,17 +46197,208 @@ var init_marketingCampaignService = __esm({
           direction: "inbound",
           body
         });
-        const [r] = await db.select({ status: marketingCampaignRecipients.status, firstReplyAt: marketingCampaignRecipients.firstReplyAt }).from(marketingCampaignRecipients).where(eq52(marketingCampaignRecipients.id, recipientId)).limit(1);
+        const [r] = await db.select({ status: marketingCampaignRecipients.status, firstReplyAt: marketingCampaignRecipients.firstReplyAt }).from(marketingCampaignRecipients).where(eq53(marketingCampaignRecipients.id, recipientId)).limit(1);
         const updates = {
           replyCount: sql30`${marketingCampaignRecipients.replyCount} + 1`
         };
         if (!r?.firstReplyAt) updates.firstReplyAt = /* @__PURE__ */ new Date();
         if (r?.status === "queued" || r?.status === "sent" || r?.status === "delivered" || r?.status === "read") updates.status = "replied";
-        await db.update(marketingCampaignRecipients).set(updates).where(eq52(marketingCampaignRecipients.id, recipientId));
+        await db.update(marketingCampaignRecipients).set(updates).where(eq53(marketingCampaignRecipients.id, recipientId));
         await db.update(marketingCampaigns).set({
           repliedCount: sql30`(SELECT COUNT(DISTINCT id)::int FROM ${marketingCampaignRecipients} WHERE campaign_id = ${campaignId} AND first_reply_at IS NOT NULL)`,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq52(marketingCampaigns.id, campaignId));
+        }).where(eq53(marketingCampaigns.id, campaignId));
+        void (async () => {
+          try {
+            const { campaignAiService: campaignAiService2 } = await Promise.resolve().then(() => (init_campaignAiService(), campaignAiService_exports));
+            await campaignAiService2.classifyAndStore(campaignId, recipientId, body);
+          } catch (err) {
+            console.error(`[Campaign] classification failed for recipient ${recipientId}:`, err);
+          }
+        })();
+      },
+      /**
+       * Budget gate for the classification pass.
+       *
+       * Separate from checkAiBudget because that one refuses whenever AI *replies*
+       * are disabled, and refuses again once a recipient hits their reply cap —
+       * neither of which should stop us recording what a customer said. This checks
+       * only the campaign's shared daily token budget.
+       */
+      async checkClassificationBudget(campaignId) {
+        const [campaign] = await db.select().from(marketingCampaigns).where(eq53(marketingCampaigns.id, campaignId)).limit(1);
+        if (!campaign) return { allowed: false, reason: "campaign_missing" };
+        const today = todayBucket();
+        if (campaign.aiUsageDate !== today) {
+          await db.update(marketingCampaigns).set({ aiUsageDate: today, aiTokensUsedToday: 0 }).where(eq53(marketingCampaigns.id, campaignId));
+          campaign.aiTokensUsedToday = 0;
+        }
+        if ((campaign.aiTokensUsedToday ?? 0) >= (campaign.aiDailyTokenBudget ?? 0)) {
+          return { allowed: false, reason: "daily_token_budget_exhausted" };
+        }
+        return { allowed: true };
+      },
+      /**
+       * Persist a classification result onto the recipient row.
+       *
+       * Merge semantics matter here because conversations are multi-turn:
+       *  - A null classification ("ok thanks", an emoji) must NOT wipe the real
+       *    disposition captured from an earlier message.
+       *  - dispositionData merges rather than replaces, so a promised date captured
+       *    two messages ago survives a later reclassification and stays auditable.
+       *  - callbackRequired is sticky-true: nothing in this flow resolves a callback,
+       *    so a later neutral message must not silently clear a pending human handoff.
+       */
+      async applyClassification(recipientId, result) {
+        const newData = JSON.stringify(result.dispositionData || {});
+        await db.update(marketingCampaignRecipients).set({
+          primaryClassification: sql30`COALESCE(${result.primaryClassification}, ${marketingCampaignRecipients.primaryClassification})`,
+          dispositionData: sql30`COALESCE(${marketingCampaignRecipients.dispositionData}, '{}'::jsonb) || ${newData}::jsonb`,
+          callbackRequired: sql30`${marketingCampaignRecipients.callbackRequired} OR ${result.callbackRequired}`,
+          callbackReason: result.callbackRequired ? result.callbackReason : sql30`${marketingCampaignRecipients.callbackReason}`,
+          customerFeedback: sql30`COALESCE(${result.customerFeedback}, ${marketingCampaignRecipients.customerFeedback})`,
+          classifiedAt: /* @__PURE__ */ new Date()
+        }).where(eq53(marketingCampaignRecipients.id, recipientId));
+      },
+      /**
+       * Aggregate campaign outcomes for the dashboard and the CSV export.
+       *
+       * Rows are driven by the campaign's own classification config, so the shape of
+       * this response follows the vertical the operator configured. Two details are
+       * deliberate:
+       *
+       *  - Categories with zero hits are still returned. A collections manager needs
+       *    to see "Refusal: 0", and dropping empty rows would make the dashboard
+       *    silently change shape as data arrives.
+       *  - Keys found in recipient data but no longer in the config (a category that
+       *    was renamed or deleted after replies landed) are returned as `orphaned`
+       *    rows rather than discarded, so the counts still reconcile against the
+       *    reply total instead of quietly losing recipients.
+       */
+      async getOutcomeSummary(businessAccountId, campaignId) {
+        const campaign = await this.get(businessAccountId, campaignId);
+        if (!campaign) return null;
+        const configured = campaign.replyClassifications || [];
+        const [totals] = await db.select({
+          totalRecipients: sql30`COUNT(*)::int`,
+          replied: sql30`COUNT(*) FILTER (WHERE first_reply_at IS NOT NULL)::int`,
+          classified: sql30`COUNT(*) FILTER (WHERE primary_classification IS NOT NULL)::int`,
+          unclassifiedReplies: sql30`COUNT(*) FILTER (WHERE first_reply_at IS NOT NULL AND primary_classification IS NULL)::int`,
+          callbacksPending: sql30`COUNT(*) FILTER (WHERE callback_required = true)::int`
+        }).from(marketingCampaignRecipients).where(and43(
+          eq53(marketingCampaignRecipients.campaignId, campaignId),
+          eq53(marketingCampaignRecipients.businessAccountId, businessAccountId)
+        ));
+        const grouped = await db.select({
+          key: marketingCampaignRecipients.primaryClassification,
+          count: sql30`COUNT(*)::int`
+        }).from(marketingCampaignRecipients).where(and43(
+          eq53(marketingCampaignRecipients.campaignId, campaignId),
+          eq53(marketingCampaignRecipients.businessAccountId, businessAccountId),
+          sql30`primary_classification IS NOT NULL`
+        )).groupBy(marketingCampaignRecipients.primaryClassification);
+        const counts = new Map(grouped.map((g) => [g.key, g.count]));
+        const rows = configured.map((c) => ({
+          key: c.key,
+          label: c.label || c.key,
+          count: counts.get(c.key) ?? 0,
+          orphaned: false
+        }));
+        const configuredKeys = new Set(configured.map((c) => c.key));
+        for (const [key, count5] of Array.from(counts.entries())) {
+          if (!configuredKeys.has(key)) {
+            rows.push({ key, label: key, count: count5, orphaned: true });
+          }
+        }
+        return {
+          campaignId,
+          configured: configured.length > 0,
+          totalRecipients: totals?.totalRecipients ?? 0,
+          replied: totals?.replied ?? 0,
+          classified: totals?.classified ?? 0,
+          unclassifiedReplies: totals?.unclassifiedReplies ?? 0,
+          callbacksPending: totals?.callbacksPending ?? 0,
+          rows
+        };
+      },
+      /**
+       * Stream every recipient with their outcome as CSV.
+       *
+       * Columns are the fixed identity/delivery set, then one column per capture
+       * field declared anywhere in the campaign's config — so a collections export
+       * carries ptp_date and a scheduling export carries preferred_date, without
+       * either being hardcoded. Batched to keep a large campaign off the heap.
+       */
+      async *streamOutcomeCsv(businessAccountId, campaignId) {
+        const campaign = await this.get(businessAccountId, campaignId);
+        if (!campaign) return;
+        const configured = campaign.replyClassifications || [];
+        const labelByKey = new Map(configured.map((c) => [c.key, c.label || c.key]));
+        const fieldKeys = [];
+        for (const c of configured) {
+          for (const f of c.captureFields || []) {
+            if (!fieldKeys.includes(f.fieldKey)) fieldKeys.push(f.fieldKey);
+          }
+        }
+        const BATCH = 500;
+        const keyRows = await db.execute(sql30`
+      SELECT DISTINCT k
+      FROM ${marketingCampaignRecipients} r,
+           LATERAL jsonb_object_keys(COALESCE(r.attributes, '{}'::jsonb)) AS k
+      WHERE r.campaign_id = ${campaignId}
+        AND r.business_account_id = ${businessAccountId}
+      ORDER BY k
+    `);
+        const attrKeys = keyRows.rows.map((r) => r.k);
+        const header = [
+          "name",
+          "phone",
+          "status",
+          ...attrKeys,
+          "classification",
+          "classification_label",
+          ...fieldKeys,
+          "callback_required",
+          "callback_reason",
+          "customer_feedback",
+          "reply_count",
+          "first_reply_at",
+          "classified_at",
+          "sent_at"
+        ];
+        yield header.map(csvCell2).join(",") + "\n";
+        const fetchBatch = (offset2) => db.select().from(marketingCampaignRecipients).where(and43(
+          eq53(marketingCampaignRecipients.campaignId, campaignId),
+          eq53(marketingCampaignRecipients.businessAccountId, businessAccountId)
+        )).orderBy(marketingCampaignRecipients.createdAt).limit(BATCH).offset(offset2);
+        let offset = 0;
+        let batch = await fetchBatch(offset);
+        while (batch.length > 0) {
+          for (const r of batch) {
+            const attrs = r.attributes || {};
+            const disp = r.dispositionData || {};
+            const key = r.primaryClassification || "";
+            yield [
+              r.name || "",
+              r.phone,
+              r.status,
+              ...attrKeys.map((k) => attrs[k] ?? ""),
+              key,
+              key ? labelByKey.get(key) || key : "",
+              ...fieldKeys.map((k) => disp[k] ?? ""),
+              r.callbackRequired ? "yes" : "no",
+              r.callbackReason || "",
+              r.customerFeedback || "",
+              String(r.replyCount ?? 0),
+              r.firstReplyAt ? new Date(r.firstReplyAt).toISOString() : "",
+              r.classifiedAt ? new Date(r.classifiedAt).toISOString() : "",
+              r.sentAt ? new Date(r.sentAt).toISOString() : ""
+            ].map(csvCell2).join(",") + "\n";
+          }
+          if (batch.length < BATCH) break;
+          offset += BATCH;
+          batch = await fetchBatch(offset);
+        }
       },
       async recordOutboundAi(campaignId, recipientId, businessAccountId, body, metadata) {
         await db.insert(marketingCampaignMessages).values({
@@ -45105,26 +46409,26 @@ var init_marketingCampaignService = __esm({
           body,
           metadata: metadata || {}
         });
-        await db.update(marketingCampaignRecipients).set({ aiReplyCount: sql30`${marketingCampaignRecipients.aiReplyCount} + 1` }).where(eq52(marketingCampaignRecipients.id, recipientId));
+        await db.update(marketingCampaignRecipients).set({ aiReplyCount: sql30`${marketingCampaignRecipients.aiReplyCount} + 1` }).where(eq53(marketingCampaignRecipients.id, recipientId));
       },
       /**
        * AI guardrails — must be called BEFORE generating a reply.
        * Resets daily token bucket atomically when the day rolls over.
        */
       async checkAiBudget(campaignId, recipientId) {
-        const [campaign] = await db.select().from(marketingCampaigns).where(eq52(marketingCampaigns.id, campaignId)).limit(1);
+        const [campaign] = await db.select().from(marketingCampaigns).where(eq53(marketingCampaigns.id, campaignId)).limit(1);
         if (!campaign) return { allowed: false, reason: "campaign_missing" };
         if (campaign.aiEnabled !== "true") return { allowed: false, reason: "ai_disabled" };
         const today = todayBucket();
         if (campaign.aiUsageDate !== today) {
-          await db.update(marketingCampaigns).set({ aiUsageDate: today, aiTokensUsedToday: 0 }).where(eq52(marketingCampaigns.id, campaignId));
+          await db.update(marketingCampaigns).set({ aiUsageDate: today, aiTokensUsedToday: 0 }).where(eq53(marketingCampaigns.id, campaignId));
           campaign.aiTokensUsedToday = 0;
           campaign.aiUsageDate = today;
         }
         if ((campaign.aiTokensUsedToday ?? 0) >= (campaign.aiDailyTokenBudget ?? 0)) {
           return { allowed: false, reason: "daily_token_budget_exhausted" };
         }
-        const [recipient] = await db.select({ aiReplyCount: marketingCampaignRecipients.aiReplyCount }).from(marketingCampaignRecipients).where(eq52(marketingCampaignRecipients.id, recipientId)).limit(1);
+        const [recipient] = await db.select({ aiReplyCount: marketingCampaignRecipients.aiReplyCount }).from(marketingCampaignRecipients).where(eq53(marketingCampaignRecipients.id, recipientId)).limit(1);
         if (!recipient) return { allowed: false, reason: "recipient_missing" };
         if ((recipient.aiReplyCount ?? 0) >= (campaign.aiMaxRepliesPerRecipient ?? 0)) {
           return { allowed: false, reason: "per_recipient_cap_reached" };
@@ -45133,7 +46437,7 @@ var init_marketingCampaignService = __esm({
       },
       async addAiTokensUsed(campaignId, tokens) {
         if (!tokens || tokens <= 0) return;
-        await db.update(marketingCampaigns).set({ aiTokensUsedToday: sql30`${marketingCampaigns.aiTokensUsedToday} + ${Math.floor(tokens)}` }).where(eq52(marketingCampaigns.id, campaignId));
+        await db.update(marketingCampaigns).set({ aiTokensUsedToday: sql30`${marketingCampaigns.aiTokensUsedToday} + ${Math.floor(tokens)}` }).where(eq53(marketingCampaigns.id, campaignId));
       },
       /**
        * Operator-initiated retry for a single recipient row. Flips a 'failed' or
@@ -45165,9 +46469,9 @@ var init_marketingCampaignService = __esm({
         const rows = result?.rows ?? [];
         if (rows.length > 0) {
           await this.recomputeCampaignAggregates(campaignId);
-          const [c] = await db.select({ status: marketingCampaigns.status }).from(marketingCampaigns).where(and42(eq52(marketingCampaigns.id, campaignId), eq52(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
+          const [c] = await db.select({ status: marketingCampaigns.status }).from(marketingCampaigns).where(and43(eq53(marketingCampaigns.id, campaignId), eq53(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
           if (c && (c.status === "completed" || c.status === "draft" || c.status === "scheduled")) {
-            await db.update(marketingCampaigns).set({ status: "sending", completedAt: null, heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(and42(eq52(marketingCampaigns.id, campaignId), eq52(marketingCampaigns.businessAccountId, businessAccountId)));
+            await db.update(marketingCampaigns).set({ status: "sending", completedAt: null, heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(and43(eq53(marketingCampaigns.id, campaignId), eq53(marketingCampaigns.businessAccountId, businessAccountId)));
           }
         }
         return { requeued: rows.length };
@@ -45198,9 +46502,9 @@ var init_marketingCampaignService = __esm({
         const rows = result?.rows ?? [];
         if (rows.length === 0) return { requeued: 0 };
         await this.recomputeCampaignAggregates(campaignId);
-        const [c] = await db.select({ status: marketingCampaigns.status }).from(marketingCampaigns).where(and42(eq52(marketingCampaigns.id, campaignId), eq52(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
+        const [c] = await db.select({ status: marketingCampaigns.status }).from(marketingCampaigns).where(and43(eq53(marketingCampaigns.id, campaignId), eq53(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
         if (c && (c.status === "completed" || c.status === "draft" || c.status === "scheduled")) {
-          await db.update(marketingCampaigns).set({ status: "sending", completedAt: null, heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(and42(eq52(marketingCampaigns.id, campaignId), eq52(marketingCampaigns.businessAccountId, businessAccountId)));
+          await db.update(marketingCampaigns).set({ status: "sending", completedAt: null, heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(and43(eq53(marketingCampaigns.id, campaignId), eq53(marketingCampaigns.businessAccountId, businessAccountId)));
         }
         this.startSend(businessAccountId, campaignId, { forceResume: true }).catch((err) => {
           console.error(`[Campaign] requeueAllFailed \u2192 startSend(${campaignId}) error:`, err);
@@ -45225,10 +46529,10 @@ var init_marketingCampaignService = __esm({
           id: marketingCampaignRecipients.id,
           msgId: marketingCampaignRecipients.msg91MessageId,
           createdAt: marketingCampaignRecipients.createdAt
-        }).from(marketingCampaignRecipients).where(and42(
-          eq52(marketingCampaignRecipients.businessAccountId, businessAccountId),
-          eq52(marketingCampaignRecipients.campaignId, campaignId),
-          inArray8(marketingCampaignRecipients.status, ["queued", "sent"]),
+        }).from(marketingCampaignRecipients).where(and43(
+          eq53(marketingCampaignRecipients.businessAccountId, businessAccountId),
+          eq53(marketingCampaignRecipients.campaignId, campaignId),
+          inArray9(marketingCampaignRecipients.status, ["queued", "sent"]),
           sql30`${marketingCampaignRecipients.msg91MessageId} IS NOT NULL`
         ));
         if (rows.length === 0) return { checked: 0, updated: 0 };
@@ -45312,8 +46616,8 @@ var init_marketingCampaignService = __esm({
         } catch (err) {
           console.error("[CampaignScheduler] expireStaleQueued error:", err);
         }
-        const due = await db.select().from(marketingCampaigns).where(and42(
-          eq52(marketingCampaigns.status, "scheduled"),
+        const due = await db.select().from(marketingCampaigns).where(and43(
+          eq53(marketingCampaigns.status, "scheduled"),
           sql30`${marketingCampaigns.scheduledAt} <= ${now}`
         )).limit(20);
         for (const c of due) {
@@ -45325,8 +46629,8 @@ var init_marketingCampaignService = __esm({
           }
         }
         const heartbeatCutoff = new Date(Date.now() - STALE_CAMPAIGN_HEARTBEAT_MS);
-        const stuck = await db.select().from(marketingCampaigns).where(and42(
-          eq52(marketingCampaigns.status, "sending"),
+        const stuck = await db.select().from(marketingCampaigns).where(and43(
+          eq53(marketingCampaigns.status, "sending"),
           sql30`(${marketingCampaigns.heartbeatAt} IS NULL OR ${marketingCampaigns.heartbeatAt} <= ${heartbeatCutoff})`
         )).limit(20);
         for (const c of stuck) {
@@ -45342,142 +46646,6 @@ var init_marketingCampaignService = __esm({
       }
     };
     schedulerStarted = false;
-  }
-});
-
-// server/services/campaignAiService.ts
-var campaignAiService_exports = {};
-__export(campaignAiService_exports, {
-  campaignAiService: () => campaignAiService
-});
-import OpenAI31 from "openai";
-import { and as and43, desc as desc19, eq as eq53, inArray as inArray9 } from "drizzle-orm";
-async function buildKnowledgeContext({ campaign, businessAccountId }) {
-  const blocks = [];
-  if (campaign.aiUseFaqs === "true") {
-    const faqRows = await db.select({ question: faqs.question, answer: faqs.answer }).from(faqs).where(eq53(faqs.businessAccountId, businessAccountId)).limit(40);
-    if (faqRows.length > 0) {
-      blocks.push(
-        "FAQS:\n" + faqRows.map((f) => `Q: ${f.question}
-A: ${f.answer}`).join("\n\n")
-      );
-    }
-  }
-  if (campaign.aiUseDocs === "true") {
-    const allowedIds = campaign.aiKnowledgeDocIds || [];
-    const docRows = await db.select({
-      id: trainingDocuments.id,
-      title: trainingDocuments.originalFilename,
-      summary: trainingDocuments.summary,
-      content: trainingDocuments.extractedText
-    }).from(trainingDocuments).where(
-      allowedIds.length > 0 ? and43(eq53(trainingDocuments.businessAccountId, businessAccountId), inArray9(trainingDocuments.id, allowedIds)) : eq53(trainingDocuments.businessAccountId, businessAccountId)
-    ).limit(allowedIds.length > 0 ? allowedIds.length : 8);
-    if (docRows.length > 0) {
-      blocks.push(
-        "TRAINING DOCS:\n" + docRows.map((d) => {
-          const body = (d.content || d.summary || "").toString();
-          return `# ${d.title || "Doc"}
-${body.substring(0, 4e3)}`;
-        }).join("\n---\n")
-      );
-    }
-  }
-  if (campaign.aiUseProducts === "true") {
-    const productRows = await db.select({
-      name: products.name,
-      description: products.description,
-      price: products.price
-    }).from(products).where(eq53(products.businessAccountId, businessAccountId)).limit(30);
-    if (productRows.length > 0) {
-      blocks.push(
-        "PRODUCT CATALOG (for offers and recommendations):\n" + productRows.map((p) => `- ${p.name}${p.price ? ` (\u20B9${p.price})` : ""}${p.description ? `: ${(p.description || "").substring(0, 200)}` : ""}`).join("\n")
-      );
-    }
-  }
-  return blocks.join("\n\n=========\n\n");
-}
-var campaignAiService;
-var init_campaignAiService = __esm({
-  "server/services/campaignAiService.ts"() {
-    "use strict";
-    init_db();
-    init_schema();
-    init_encryptionService();
-    init_marketingCampaignService();
-    campaignAiService = {
-      async generateReply(campaignId, recipientId, inboundText) {
-        try {
-          const [campaign] = await db.select().from(marketingCampaigns).where(eq53(marketingCampaigns.id, campaignId)).limit(1);
-          if (!campaign) return null;
-          if (campaign.aiEnabled !== "true") return null;
-          const [recipient] = await db.select().from(marketingCampaignRecipients).where(eq53(marketingCampaignRecipients.id, recipientId)).limit(1);
-          if (!recipient) return null;
-          const budget = await marketingCampaignService.checkAiBudget(campaignId, recipientId);
-          if (!budget.allowed) {
-            console.log(`[CampaignAI] Blocked reply for campaign ${campaignId} recipient ${recipientId}: ${budget.reason}`);
-            return { text: "", blockedReason: budget.reason };
-          }
-          const inboundClipped = (inboundText || "").substring(0, 2e3);
-          const [biz] = await db.select().from(businessAccounts).where(eq53(businessAccounts.id, campaign.businessAccountId)).limit(1);
-          if (!biz) return null;
-          const apiKey = biz.openaiApiKey ? safeDecrypt(biz.openaiApiKey) : process.env.OPENAI_API_KEY;
-          if (!apiKey) {
-            console.error("[CampaignAI] No OpenAI API key available for business", biz.id);
-            return null;
-          }
-          const [template] = await db.select().from(whatsappTemplates).where(eq53(whatsappTemplates.id, campaign.templateId)).limit(1);
-          const knowledge = await buildKnowledgeContext({
-            campaign,
-            businessAccountId: campaign.businessAccountId
-          });
-          const history = await db.select().from(marketingCampaignMessages).where(eq53(marketingCampaignMessages.recipientId, recipientId)).orderBy(desc19(marketingCampaignMessages.createdAt)).limit(20);
-          const ordered = history.slice().reverse();
-          const persona = (campaign.aiSystemPrompt || "").trim() || `You are ${campaign.aiAgentName || "a friendly sales agent"} for ${biz.name}. Your goal is to convert this WhatsApp campaign reply into a booking, demo, or sale. Be warm, concise, and persuasive. Always end with a clear next step. Never invent prices, policies, or product details \u2014 use only the knowledge below.`;
-          const systemPrompt = [
-            persona,
-            "",
-            "Channel: WhatsApp. Keep replies short (2-4 sentences). No markdown.",
-            "If you genuinely cannot help and the user wants a human, say so briefly.",
-            "Customer name: " + (recipient.name || "(unknown)"),
-            "",
-            template ? `This conversation started from this campaign template:
-${template.bodyText}
-` : "",
-            knowledge ? `KNOWLEDGE BASE:
-${knowledge}` : ""
-          ].filter(Boolean).join("\n");
-          const messages2 = [
-            { role: "system", content: systemPrompt }
-          ];
-          for (const m of ordered) {
-            if (m.direction === "inbound") {
-              messages2.push({ role: "user", content: m.body });
-            } else if (m.direction === "outbound_ai") {
-              messages2.push({ role: "assistant", content: m.body });
-            } else if (m.direction === "outbound_template") {
-              messages2.push({ role: "assistant", content: `[Sent campaign template] ${m.body.substring(0, 300)}` });
-            }
-          }
-          messages2.push({ role: "user", content: inboundClipped });
-          const openai = new OpenAI31({ apiKey, timeout: 3e4 });
-          const completion = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: messages2,
-            temperature: 0.5,
-            max_tokens: 250
-          });
-          const text2 = completion.choices[0]?.message?.content?.trim();
-          const usedTokens = completion.usage?.total_tokens ?? 0;
-          await marketingCampaignService.addAiTokensUsed(campaignId, usedTokens);
-          if (!text2) return null;
-          return { text: text2 };
-        } catch (err) {
-          console.error("[CampaignAI] generateReply error:", err);
-          return null;
-        }
-      }
-    };
   }
 });
 
@@ -47580,10 +48748,10 @@ var init_instagramCommentReplyService = __esm({
             return { success: false, error: "Duplicate comment", status: "skipped" };
           }
           if (settings.commentReplyMode === "keyword_only") {
-            const keywords = this.getKeywords(settings);
-            if (keywords.length > 0) {
+            const keywords2 = this.getKeywords(settings);
+            if (keywords2.length > 0) {
               const commentLower = commentData.commentText.toLowerCase();
-              const matched = keywords.some((kw) => commentLower.includes(kw.toLowerCase()));
+              const matched = keywords2.some((kw) => commentLower.includes(kw.toLowerCase()));
               if (!matched) {
                 console.log(`[Instagram Comment Reply] No keyword match for comment: "${commentData.commentText.substring(0, 50)}..."`);
                 await this.storeComment(businessAccountId, commentData, null, null, "skipped");
@@ -47657,9 +48825,9 @@ var init_instagramCommentReplyService = __esm({
       getKeywords(settings) {
         if (!settings.commentTriggerKeywords) return [];
         try {
-          const keywords = settings.commentTriggerKeywords;
-          if (Array.isArray(keywords)) return keywords;
-          if (typeof keywords === "string") return JSON.parse(keywords);
+          const keywords2 = settings.commentTriggerKeywords;
+          if (Array.isArray(keywords2)) return keywords2;
+          if (typeof keywords2 === "string") return JSON.parse(keywords2);
           return [];
         } catch {
           return [];
@@ -47900,9 +49068,9 @@ Write a brief, appropriate reply.`;
       getDmKeywords(settings) {
         if (!settings.commentDmTriggerKeywords) return [];
         try {
-          const keywords = settings.commentDmTriggerKeywords;
-          if (Array.isArray(keywords)) return keywords;
-          if (typeof keywords === "string") return JSON.parse(keywords);
+          const keywords2 = settings.commentDmTriggerKeywords;
+          if (Array.isArray(keywords2)) return keywords2;
+          if (typeof keywords2 === "string") return JSON.parse(keywords2);
           return [];
         } catch {
           return [];
@@ -50396,10 +51564,10 @@ var init_facebookCommentReplyService = __esm({
             return { success: false, error: "Duplicate comment", status: "skipped" };
           }
           if (settings.commentReplyMode === "keyword_only") {
-            const keywords = this.getKeywords(settings);
-            if (keywords.length > 0) {
+            const keywords2 = this.getKeywords(settings);
+            if (keywords2.length > 0) {
               const commentLower = commentData.commentText.toLowerCase();
-              const matched = keywords.some((kw) => commentLower.includes(kw.toLowerCase()));
+              const matched = keywords2.some((kw) => commentLower.includes(kw.toLowerCase()));
               if (!matched) {
                 console.log(`[Facebook Comment Reply] No keyword match for comment: "${commentData.commentText.substring(0, 50)}..."`);
                 await this.storeComment(businessAccountId, commentData, null, null, "skipped");
@@ -50473,9 +51641,9 @@ var init_facebookCommentReplyService = __esm({
       getKeywords(settings) {
         if (!settings.commentTriggerKeywords) return [];
         try {
-          const keywords = settings.commentTriggerKeywords;
-          if (Array.isArray(keywords)) return keywords;
-          if (typeof keywords === "string") return JSON.parse(keywords);
+          const keywords2 = settings.commentTriggerKeywords;
+          if (Array.isArray(keywords2)) return keywords2;
+          if (typeof keywords2 === "string") return JSON.parse(keywords2);
           return [];
         } catch {
           return [];
@@ -50707,9 +51875,9 @@ Write a brief, appropriate reply.`;
       getDmKeywords(settings) {
         if (!settings.commentDmTriggerKeywords) return [];
         try {
-          const keywords = settings.commentDmTriggerKeywords;
-          if (Array.isArray(keywords)) return keywords;
-          if (typeof keywords === "string") return JSON.parse(keywords);
+          const keywords2 = settings.commentDmTriggerKeywords;
+          if (Array.isArray(keywords2)) return keywords2;
+          if (typeof keywords2 === "string") return JSON.parse(keywords2);
           return [];
         } catch {
           return [];
@@ -51802,20 +52970,93 @@ var init_whatsappTemplateService = __esm({
         );
       },
       /**
-       * MSG91 does NOT expose a public REST endpoint to list WhatsApp templates.
-       * We probed 23+ endpoint variants (api.msg91.com, control.msg91.com,
-       * various /whatsapp-template/, /getTemplate, /get-templates paths) — all
-       * returned 404 even with a valid auth key. Confirmed by hitting the known
-       * outbound-message endpoint, which returned 405 (proving auth + base URL
-       * are correct).
+       * Pull approved templates from MSG91's WhatsApp API and upsert them locally.
        *
-       * Therefore templates must be entered manually via "Add Template" in the
-       * UI. This method is kept for backwards compatibility and just returns the
-       * locally stored list.
+       * Endpoint (documented at https://docs.msg91.com/whatsapp/get-templates):
+       *   GET https://control.msg91.com/api/v5/whatsapp/get-template-client/:number
+       *   Header: authkey: <msg91AuthKey>
+       *   Params: page_size=200, template_status=approved (optional filter)
+       *
+       * The `:number` path variable is the integrated WhatsApp number (digits only).
        */
-      async syncFromMsg91(businessAccountId, _authKey, _integratedNumber) {
+      async syncFromMsg91(businessAccountId, authKey, integratedNumber) {
+        let synced = 0;
+        try {
+          const num = (integratedNumber || "").replace(/\D/g, "");
+          if (!num) {
+            throw new Error("WhatsApp number not configured \u2014 cannot reach MSG91 template API.");
+          }
+          const PAGE_SIZE = 200;
+          const MAX_PAGES = 25;
+          const allRemote = [];
+          for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
+            const url = `https://control.msg91.com/api/v5/whatsapp/get-template-client/${encodeURIComponent(num)}?page_size=${PAGE_SIZE}&page_num=${pageNum}&pagination=true&template_status=approved`;
+            console.log(`[WhatsappTemplateService] Fetching page ${pageNum}: ${url}`);
+            const resp = await fetch(url, {
+              method: "GET",
+              headers: { authkey: authKey, accept: "application/json" }
+            });
+            const json = await resp.json().catch(() => ({}));
+            console.log(`[WhatsappTemplateService] Page ${pageNum}: status=${resp.status}, keys=${JSON.stringify(Object.keys(json || {}))}`);
+            if (!resp.ok) {
+              const msg = json?.message || json?.error || `HTTP ${resp.status}`;
+              throw new Error(`MSG91 API error: ${msg}`);
+            }
+            const page = Array.isArray(json?.data) && json.data || Array.isArray(json?.templates) && json.templates || Array.isArray(json?.data?.templates) && json.data.templates || Array.isArray(json?.result) && json.result || Array.isArray(json) && json || [];
+            allRemote.push(...page);
+            if (page.length < PAGE_SIZE) break;
+          }
+          console.log(`[WhatsappTemplateService] Total templates fetched from MSG91: ${allRemote.length}`);
+          for (const remote of allRemote) {
+            const name = remote.name || remote.template_name;
+            if (!name) continue;
+            const variants = Array.isArray(remote.languages) ? remote.languages : [remote];
+            for (const variant of variants) {
+              const language = (variant.language || remote.language || "en").toString().toLowerCase();
+              const findComp = (type) => variant.code?.find?.((c) => c.type?.toUpperCase() === type.toUpperCase()) || variant.components?.find?.((c) => c.type?.toUpperCase() === type.toUpperCase()) || remote.components?.find?.((c) => c.type?.toUpperCase() === type.toUpperCase());
+              const bodyComp = findComp("BODY");
+              const headerComp = findComp("HEADER");
+              const footerComp = findComp("FOOTER");
+              const buttonsComp = findComp("BUTTONS");
+              const bodyText = bodyComp?.text || variant.body || variant.body_text || variant.bodyText || remote.body || remote.body_text || remote.bodyText || "";
+              const buttons = buttonsComp?.buttons || remote.buttons || variant.buttons || [];
+              const payload = {
+                businessAccountId,
+                name,
+                language,
+                category: (remote.category || variant.category || "MARKETING").toString().toUpperCase(),
+                bodyText,
+                headerType: headerComp?.format ? headerComp.format.toLowerCase() : "none",
+                headerText: headerComp?.text || "",
+                headerMediaUrl: "",
+                footerText: footerComp?.text || "",
+                buttons,
+                paramCount: countParams(bodyText),
+                status: (variant.status || remote.status || "approved").toString().toLowerCase(),
+                msg91TemplateId: (variant.msg91_template_id ?? variant.id ?? remote.id ?? remote.template_id ?? null)?.toString() ?? null,
+                namespace: remote.namespace || variant.namespace || null
+              };
+              const existing = await db.select().from(whatsappTemplates).where(
+                and53(
+                  eq63(whatsappTemplates.businessAccountId, businessAccountId),
+                  eq63(whatsappTemplates.name, name),
+                  eq63(whatsappTemplates.language, language)
+                )
+              ).limit(1);
+              if (existing.length > 0) {
+                await db.update(whatsappTemplates).set({ ...payload, updatedAt: /* @__PURE__ */ new Date() }).where(eq63(whatsappTemplates.id, existing[0].id));
+              } else {
+                await db.insert(whatsappTemplates).values(payload);
+              }
+              synced++;
+            }
+          }
+        } catch (err) {
+          console.error("[WhatsappTemplateService] syncFromMsg91 error:", err);
+          throw err;
+        }
         const templates = await this.list(businessAccountId);
-        return { synced: 0, templates };
+        return { synced, templates };
       },
       /** @deprecated kept only to preserve old type — unused. */
       async _legacySyncFromMsg91(businessAccountId, authKey, integratedNumber) {
@@ -52205,6 +53446,26 @@ var ConversationMemoryService = class {
     this.messageCounters.set(userId, messageCount);
     if (messageCount % this.CLEANUP_FREQUENCY === 0) {
       this.cleanupOldMessages(userId);
+    }
+  }
+  /**
+   * Remove the newest matching message. Used when a response-owned persistence
+   * write loses an interruption race after the database insert completed.
+   */
+  removeLastMatchingMessage(userId, role, content) {
+    const conversation = this.conversations.get(userId);
+    if (!conversation) return;
+    for (let i = conversation.messages.length - 1; i >= 0; i--) {
+      const message = conversation.messages[i];
+      if (message.role === role && message.content === content) {
+        conversation.messages.splice(i, 1);
+        conversation.lastActivity = /* @__PURE__ */ new Date();
+        if (conversation.messages.length === 0) {
+          this.conversations.delete(userId);
+          this.messageCounters.delete(userId);
+        }
+        return;
+      }
     }
   }
   getConversationHistory(userId) {
@@ -53785,6 +55046,22 @@ var ChatService = class {
   }
   // Get or create a conversation for the current session
   async getOrCreateConversation(context) {
+    if (context.existingConversationId) {
+      const existing = await storage.getConversation(
+        context.existingConversationId,
+        context.businessAccountId
+      );
+      if (!existing) {
+        throw new Error("Existing conversation not found or access denied");
+      }
+      if (isTopscholarAccount(context.businessAccountId) && context.topscholarDoubtId && context.topscholarDoubtSyncBaseUrl) {
+        doubtSyncTargets.set(existing.id, {
+          baseUrl: context.topscholarDoubtSyncBaseUrl,
+          doubtId: context.topscholarDoubtId
+        });
+      }
+      return existing.id;
+    }
     const studentId = context.topscholarStudentId || null;
     const subjectScoped = !!context.topscholarSubjectScoping && !!String(context.studentSubject || "").trim();
     const subject = subjectScoped ? String(context.studentSubject).trim() : "";
@@ -53840,7 +55117,7 @@ var ChatService = class {
     {
       const conversationTitle = context.customerName || "Anonymous";
       let awaitingVerification = false;
-      if (!context.isInternalTest) {
+      if (!context.isInternalTest && !context.skipLeadTraining) {
         try {
           const ws = await storage.getWidgetSettings(context.businessAccountId);
           const cfg = ws?.leadTrainingConfig;
@@ -53913,6 +55190,51 @@ var ChatService = class {
       this.mirrorMessageToDoubt(conversationId, role, content);
     } catch (error) {
       console.error("[Chat] Error storing message in DB:", error);
+    }
+  }
+  async commitDeferredAssistantMessage(context, content, stillCurrent) {
+    const conversationId = context.existingConversationId;
+    if (!conversationId || !stillCurrent()) return null;
+    const existing = await storage.getConversation(conversationId, context.businessAccountId);
+    if (!existing || !stillCurrent()) return null;
+    let messageId = null;
+    try {
+      const message = await storage.createMessage({
+        conversationId,
+        role: "assistant",
+        content,
+        interactionSource: "chat"
+      });
+      messageId = message.id;
+      if (!stillCurrent()) {
+        await storage.deleteMessage(message.id, context.businessAccountId);
+        return null;
+      }
+      await storage.updateConversationTimestamp(conversationId);
+      if (!stillCurrent()) {
+        await storage.deleteMessage(message.id, context.businessAccountId);
+        return null;
+      }
+      conversationMemory.storeMessage(context.userId, "assistant", content);
+      this.mirrorMessageToDoubt(conversationId, "assistant", content);
+      return message.id;
+    } catch (error) {
+      if (messageId && !stillCurrent()) {
+        try {
+          await storage.deleteMessage(messageId, context.businessAccountId);
+        } catch (rollbackError) {
+          console.error("[Chat] Failed to roll back abandoned deferred assistant message:", rollbackError);
+        }
+      }
+      console.error("[Chat] Error committing deferred assistant message:", error);
+      throw error;
+    }
+  }
+  async rollbackDeferredAssistantMessage(context, messageId, content) {
+    try {
+      await storage.deleteMessage(messageId, context.businessAccountId);
+    } finally {
+      conversationMemory.removeLastMatchingMessage(context.userId, "assistant", content);
     }
   }
   // TopScholar doubt-sync: push a stored message to the client platform. The
@@ -55245,6 +56567,10 @@ Response:`;
   }
   async processMessage(userMessage, context) {
     try {
+      if (isTopscholarAccount(context.businessAccountId) && !context.skipLeadTraining) {
+        context = { ...context, skipLeadTraining: true };
+        console.log("[TopScholar] Lead capture and verification flow disabled for tutoring conversation");
+      }
       const existingHistory = conversationMemory.getConversationHistory(context.userId);
       const isFirstMessage = existingHistory.length === 0;
       if (isFirstMessage && context.openaiApiKey && !userMessage.startsWith("[RESUME_UPLOAD]") && !userMessage.startsWith("[JOB_APPLY]") && !userMessage.startsWith("[IMAGE_UPLOAD]") && !context.resumeText && !context.imageText) {
@@ -55253,7 +56579,9 @@ Response:`;
           console.log("[Chat] Spam detected (processMessage) - using simplified response path:", userMessage.substring(0, 50));
           conversationMemory.storeMessage(context.userId, "user", userMessage);
           const response = await this.getSimpleAIResponse(userMessage, context);
-          conversationMemory.storeMessage(context.userId, "assistant", response);
+          if (!context.deferAssistantPersistence) {
+            conversationMemory.storeMessage(context.userId, "assistant", response);
+          }
           return response;
         }
       }
@@ -55266,8 +56594,10 @@ Response:`;
         email: leadBeforeCaptureRaw.email,
         name: leadBeforeCaptureRaw.name
       } : null;
-      await this.autoDetectAndCaptureLead(userMessage, conversationId, context.businessAccountId, lastAIMessage, context.visitorCity, context.visitorSessionId, context.pageUrl, context.channel);
-      const hasActiveJourneys = await journeyService.hasActiveJourneys(context.businessAccountId);
+      if (!context.skipLeadTraining) {
+        await this.autoDetectAndCaptureLead(userMessage, conversationId, context.businessAccountId, lastAIMessage, context.visitorCity, context.visitorSessionId, context.pageUrl, context.channel);
+      }
+      const hasActiveJourneys = !context.skipLeadTraining && await journeyService.hasActiveJourneys(context.businessAccountId);
       let isJourneyActive = false;
       if (hasActiveJourneys) {
         if (!context.journeyConversationalGuidelines) {
@@ -55314,20 +56644,26 @@ Response:`;
             const resultData = result.success && "data" in result && result.data ? result.data : {};
             const serverTitle = resultData.jobTitle || clientJobTitle;
             const reply = result.success ? `Your application for **${serverTitle}** has been submitted successfully! The hiring team will review your profile and get back to you soon.` : `Sorry, I couldn't submit your application. ${result.message || "Please try again."}`;
-            conversationMemory.storeMessage(context.userId, "assistant", reply);
-            await this.storeMessageInDB(conversationId, "assistant", reply);
+            if (!context.deferAssistantPersistence) {
+              conversationMemory.storeMessage(context.userId, "assistant", reply);
+              await this.storeMessageInDB(conversationId, "assistant", reply);
+            }
             return reply;
           } catch (err) {
             console.error("[Chat] JOB_APPLY error:", err);
             const errReply = `Sorry, something went wrong while submitting your application. Please try again.`;
-            conversationMemory.storeMessage(context.userId, "assistant", errReply);
-            await this.storeMessageInDB(conversationId, "assistant", errReply);
+            if (!context.deferAssistantPersistence) {
+              conversationMemory.storeMessage(context.userId, "assistant", errReply);
+              await this.storeMessageInDB(conversationId, "assistant", errReply);
+            }
             return errReply;
           }
         } else {
           const errReply = "Sorry, the application request was malformed. Please try clicking Apply Now again.";
-          conversationMemory.storeMessage(context.userId, "assistant", errReply);
-          await this.storeMessageInDB(conversationId, "assistant", errReply);
+          if (!context.deferAssistantPersistence) {
+            conversationMemory.storeMessage(context.userId, "assistant", errReply);
+            await this.storeMessageInDB(conversationId, "assistant", errReply);
+          }
           return errReply;
         }
       }
@@ -55343,8 +56679,10 @@ Response:`;
         const smartReply = await getSmartReplyResponse2(context.businessAccountId, "website", userMessage);
         if (smartReply) {
           console.log(`[Chat] Smart reply matched: "${smartReply.matchedKeyword}" \u2014 returning configured response directly (skipping AI)`);
-          conversationMemory.storeMessage(context.userId, "assistant", smartReply.text);
-          await this.storeMessageInDB(conversationId, "assistant", smartReply.text);
+          if (!context.deferAssistantPersistence) {
+            conversationMemory.storeMessage(context.userId, "assistant", smartReply.text);
+            await this.storeMessageInDB(conversationId, "assistant", smartReply.text);
+          }
           return smartReply.text;
         }
       } catch (err) {
@@ -55359,8 +56697,10 @@ Response:`;
         );
         if (engineResult.shouldBypassAI && engineResult.response) {
           console.log("[Chat] Engine-driven journey handled message - bypassing AI");
-          conversationMemory.storeMessage(context.userId, "assistant", engineResult.response);
-          await this.storeMessageInDB(conversationId, "assistant", engineResult.response);
+          if (!context.deferAssistantPersistence) {
+            conversationMemory.storeMessage(context.userId, "assistant", engineResult.response);
+            await this.storeMessageInDB(conversationId, "assistant", engineResult.response);
+          }
           return engineResult.response;
         }
         const journeyResult = await journeyOrchestrator.processUserMessage(
@@ -55433,11 +56773,11 @@ ${crossPlatformCtx}`;
       } catch (err) {
         console.error("[Chat] Cross-platform context error (non-fatal):", err);
       }
-      const appointmentsEnabled = businessAccount?.appointmentsEnabled === "true" && widgetSettings2?.appointmentBookingEnabled === "true";
+      const appointmentsEnabled = !context.skipLeadTraining && businessAccount?.appointmentsEnabled === "true" && widgetSettings2?.appointmentBookingEnabled === "true";
       const hasProducts = products3.length > 0;
       let phoneValidationFailedNS = false;
       let phoneValidationContextNS = "";
-      const leadTrainingConfigNonStream = widgetSettings2?.leadTrainingConfig;
+      const leadTrainingConfigNonStream = context.skipLeadTraining ? null : widgetSettings2?.leadTrainingConfig;
       if (leadTrainingConfigNonStream) {
         const validationOverrideNS = buildPhoneValidationOverride(userMessage, leadTrainingConfigNonStream);
         if (validationOverrideNS) {
@@ -55446,7 +56786,10 @@ ${crossPlatformCtx}`;
         }
       }
       let relevantTools = await selectRelevantTools(userMessage, appointmentsEnabled, isJourneyActive, hasProducts, history, context.openaiApiKey || void 0, context.systemMode, context.k12EducationEnabled, context.jobPortalEnabled, context.demoOrdersEnabled);
-      if (context.channel === "widget") {
+      if (context.skipLeadTraining) {
+        relevantTools = relevantTools.filter((tool) => tool.function.name !== "capture_lead");
+      }
+      if (context.channel === "widget" && !context.skipLeadTraining) {
         try {
           const otpStateNS = await OtpService.getLatestStateForConversation(context.businessAccountId, conversationId);
           if (otpStateNS.locked) {
@@ -55705,6 +57048,7 @@ ${crossPlatformCtx}`;
           userMessage,
           selectedLanguage: context.preferredLanguage,
           channel: context.channel,
+          skipLeadTraining: context.skipLeadTraining,
           cpId: context.topscholarCpId,
           cpIds: context.topscholarCpIds,
           chapter: context.studentChapter
@@ -56034,6 +57378,10 @@ ${crossPlatformCtx}`;
   }
   async *streamMessage(userMessage, context) {
     try {
+      if (isTopscholarAccount(context.businessAccountId) && !context.skipLeadTraining) {
+        context = { ...context, skipLeadTraining: true };
+        console.log("[TopScholar] Lead capture and verification flow disabled for tutoring conversation");
+      }
       const existingHistory = conversationMemory.getConversationHistory(context.userId);
       const isFirstMessage = existingHistory.length === 0;
       if (isFirstMessage && context.openaiApiKey && !userMessage.startsWith("[RESUME_UPLOAD]") && !userMessage.startsWith("[JOB_APPLY]") && !userMessage.startsWith("[IMAGE_UPLOAD]") && !context.resumeText && !context.imageText) {
@@ -56070,7 +57418,7 @@ ${crossPlatformCtx}`;
       let autoDetectAwaited = false;
       let awaitingOtpBefore = false;
       let otpChallengeJustIssued = false;
-      if (context.channel === "widget") {
+      if (context.channel === "widget" && !context.skipLeadTraining) {
         if (userMessage.length > 2 && !context.skipLeadTraining && (userMessage.match(/\d/g) || []).length >= 7) {
           try {
             const beforeState = await OtpService.getLatestStateForConversation(context.businessAccountId, conversationId);
@@ -56184,7 +57532,7 @@ ${crossPlatformCtx}`;
           console.error("[Chat] Error updating conversation title:", err);
         });
       }
-      const hasActiveJourneys = await journeyService.hasActiveJourneys(context.businessAccountId);
+      const hasActiveJourneys = !context.skipLeadTraining && await journeyService.hasActiveJourneys(context.businessAccountId);
       let isJourneyActive = false;
       if (hasActiveJourneys) {
         if (!context.journeyConversationalGuidelines) {
@@ -56319,8 +57667,10 @@ ${crossPlatformCtx}`;
           console.log("[Chat Stream] Form journey triggered by keyword - emitting form_step:", journeyResult.formStep.questionText?.substring(0, 30));
           yield { type: "form_step", data: JSON.stringify({ ...journeyResult.formStep, conversationId }) };
           const acknowledgment = "Great! Let me help you with that. Please select from the options below:";
-          conversationMemory.storeMessage(context.userId, "assistant", acknowledgment);
-          await this.storeMessageInDB(conversationId, "assistant", acknowledgment);
+          if (!context.deferAssistantPersistence) {
+            conversationMemory.storeMessage(context.userId, "assistant", acknowledgment);
+            await this.storeMessageInDB(conversationId, "assistant", acknowledgment);
+          }
           yield { type: "content", data: acknowledgment };
           yield { type: "final", data: acknowledgment };
           yield { type: "done", data: "" };
@@ -56445,13 +57795,14 @@ ${crossPlatformCtx}`;
       } catch (err) {
         console.error("[Chat-Stream] Cross-platform context error (non-fatal):", err);
       }
-      const appointmentsEnabled = businessAccount?.appointmentsEnabled === "true" && widgetSettings2?.appointmentBookingEnabled === "true";
+      const appointmentsEnabled = !context.skipLeadTraining && businessAccount?.appointmentsEnabled === "true" && widgetSettings2?.appointmentBookingEnabled === "true";
       const hasProducts = products3.length > 0;
-      const [relevantTools, orderLookupIntent, returnExchangeIntent] = await Promise.all([
+      const [selectedTools, orderLookupIntent, returnExchangeIntent] = await Promise.all([
         skipToolsForHandoff ? Promise.resolve([]) : selectRelevantTools(context.resumeText ? `[RESUME_UPLOAD] Please analyze my resume and find matching jobs` : userMessage, appointmentsEnabled, isJourneyActive, hasProducts, history, context.openaiApiKey || void 0, context.systemMode, context.k12EducationEnabled, context.jobPortalEnabled, context.demoOrdersEnabled),
         context.demoOrdersEnabled ? classifyOrderLookupIntent(userMessage, history, context.openaiApiKey || void 0) : Promise.resolve(false),
         context.demoOrdersEnabled ? classifyReturnExchangeIntent(userMessage, history, context.openaiApiKey || void 0) : Promise.resolve(false)
       ]);
+      let relevantTools = context.skipLeadTraining ? selectedTools.filter((tool) => tool.function.name !== "capture_lead") : selectedTools;
       if (skipToolsForHandoff) {
         console.log(`[Handoff Guardrail] Tools disabled for this request - AI will respond conversationally`);
       }
@@ -56465,7 +57816,7 @@ ${crossPlatformCtx}`;
           phoneValidationContext = validationOverride;
         }
       }
-      const appointmentTriggerRules = widgetSettings2?.appointmentSuggestRules ? widgetSettings2.appointmentSuggestRules.filter((r) => r.enabled) : null;
+      const appointmentTriggerRules = !context.skipLeadTraining && widgetSettings2?.appointmentSuggestRules ? widgetSettings2.appointmentSuggestRules.filter((r) => r.enabled) : null;
       let serverSideLookupOptions = false;
       let serverSideReturnExchange = false;
       if (orderLookupIntent) {
@@ -56556,7 +57907,9 @@ Sentence to translate: ${baseSentence}`,
           }
         }
         console.log(`[DemoOrders] Lookup bypass \u2014 lang: ${detectedLang ?? "en"}, sentence: "${lookupSentence}"`);
-        await this.storeMessageInDB(conversationId, "assistant", lookupSentence);
+        if (!context.deferAssistantPersistence) {
+          await this.storeMessageInDB(conversationId, "assistant", lookupSentence);
+        }
         yield { type: "content", data: lookupSentence };
         yield { type: "order_lookup_options", data: JSON.stringify({ mode: serverSideReturnExchange ? "return_exchange" : "track", returnExchange: serverSideReturnExchange }) };
         return;
@@ -56752,6 +58105,7 @@ Sentence to translate: ${baseSentence}`,
               userMessage,
               selectedLanguage: context.preferredLanguage,
               channel: context.channel,
+              skipLeadTraining: context.skipLeadTraining,
               cpId: context.topscholarCpId,
               cpIds: context.topscholarCpIds,
               chapter: context.studentChapter
@@ -57147,14 +58501,16 @@ ${contentSnippet}`;
           }
         }
         finalContent = this.stripFallbackMarker(finalContent);
-        conversationMemory.storeMessage(context.userId, "assistant", finalContent);
         const productIds = productData && Array.isArray(productData) ? productData.map((p) => p.id).filter(Boolean) : void 0;
-        await this.storeMessageInDB(
-          conversationId,
-          "assistant",
-          finalContent,
-          productIds && productIds.length > 0 ? { productIds } : void 0
-        );
+        if (!context.deferAssistantPersistence) {
+          conversationMemory.storeMessage(context.userId, "assistant", finalContent);
+          await this.storeMessageInDB(
+            conversationId,
+            "assistant",
+            finalContent,
+            productIds && productIds.length > 0 ? { productIds } : void 0
+          );
+        }
         yield { type: "final", data: finalContent };
       } else {
         console.log("[Chat Stream] WARNING: No tool calls made for question:", userMessage);
@@ -57233,13 +58589,15 @@ ${contentSnippet}`;
                   console.log("[Chat Stream] Yielding next form step:", toolResult.nextFormStep.questionText?.substring(0, 30));
                   yield { type: "form_step", data: JSON.stringify({ ...toolResult.nextFormStep, conversationId }) };
                 }
-                conversationMemory.storeMessage(context.userId, "assistant", finalAnswer);
-                await this.storeMessageInDB(
-                  conversationId,
-                  "assistant",
-                  finalAnswer,
-                  refusalProductIds && refusalProductIds.length > 0 ? { productIds: refusalProductIds } : void 0
-                );
+                if (!context.deferAssistantPersistence) {
+                  conversationMemory.storeMessage(context.userId, "assistant", finalAnswer);
+                  await this.storeMessageInDB(
+                    conversationId,
+                    "assistant",
+                    finalAnswer,
+                    refusalProductIds && refusalProductIds.length > 0 ? { productIds: refusalProductIds } : void 0
+                  );
+                }
                 yield { type: "final", data: finalAnswer };
                 yield { type: "done", data: "" };
                 return;
@@ -57261,8 +58619,10 @@ ${contentSnippet}`;
                   finalAnswer = `No problem! ${this.stripFallbackMarker(questionResponse.content)}`;
                 }
               }
-              conversationMemory.storeMessage(context.userId, "assistant", finalAnswer);
-              await this.storeMessageInDB(conversationId, "assistant", finalAnswer);
+              if (!context.deferAssistantPersistence) {
+                conversationMemory.storeMessage(context.userId, "assistant", finalAnswer);
+                await this.storeMessageInDB(conversationId, "assistant", finalAnswer);
+              }
               yield { type: "final", data: finalAnswer };
               yield { type: "done", data: "" };
               return;
@@ -57299,8 +58659,10 @@ ${contentSnippet}`;
           }
         }
         finalResponse = this.stripFallbackMarker(finalResponse);
-        conversationMemory.storeMessage(context.userId, "assistant", finalResponse);
-        await this.storeMessageInDB(conversationId, "assistant", finalResponse);
+        if (!context.deferAssistantPersistence) {
+          conversationMemory.storeMessage(context.userId, "assistant", finalResponse);
+          await this.storeMessageInDB(conversationId, "assistant", finalResponse);
+        }
         if (!contentAlreadyYielded && finalResponse && finalResponse.trim()) {
           console.log("[Chat Stream] Yielding finalResponse that was not yet sent to frontend (Gemini empty tool-call guard)");
           yield { type: "content", data: finalResponse };
@@ -57432,8 +58794,8 @@ ${formattedAlwaysActive}
           }
           if (conditionalInstructions.length > 0) {
             const formattedConditional = conditionalInstructions.map((instr) => {
-              const keywords = instr.keywords?.join(", ") || "";
-              return `- When user mentions [${keywords}]: ${instr.text}`;
+              const keywords2 = instr.keywords?.join(", ") || "";
+              return `- When user mentions [${keywords2}]: ${instr.text}`;
             }).join("\n");
             customInstructionsContext += `CONDITIONAL INSTRUCTIONS (apply when keywords are mentioned):
 ${formattedConditional}
@@ -57569,8 +58931,8 @@ DOWNLOADABLE RESOURCES:
             enrichedContext += `When you detect these keywords in the user's message, proactively suggest booking an appointment using the specified prompt:
 `;
             enabledRules.forEach((rule, index2) => {
-              const keywords = Array.isArray(rule.keywords) ? rule.keywords.join(", ") : "";
-              enrichedContext += `${index2 + 1}. Keywords: [${keywords}] \u2192 Respond with: "${rule.prompt}"
+              const keywords2 = Array.isArray(rule.keywords) ? rule.keywords.join(", ") : "";
+              enrichedContext += `${index2 + 1}. Keywords: [${keywords2}] \u2192 Respond with: "${rule.prompt}"
 `;
             });
             enrichedContext += `
@@ -57813,7 +59175,7 @@ IMPORTANT: Users booking appointments for future dates is completely normal and 
     if (context.k12EducationEnabled) {
       const contentOnly = this.isK12ContentOnly(context);
       const verbatim = context.k12VerbatimContentMode === true;
-      const rule4 = contentOnly ? `4. CONTENT-ONLY MODE IS ON. If no curriculum match is found by the tools AND nothing in the uploaded FAQs, notes, documents, or business knowledge base above answers the question, you MUST politely tell the student that this topic isn't in the curriculum yet (e.g. "Great question! That topic isn't in our curriculum yet \u2014 would you like me to look up something else?"). NEVER answer from general knowledge. NEVER guess or improvise an academic answer.` : `4. If no curriculum match is found, you may answer from general knowledge but mention that the specific topic wasn't found in the curriculum.`;
+      const rule4 = contentOnly ? `3. CONTENT-ONLY MODE IS ON. If no curriculum match is found by the tools AND nothing in the uploaded FAQs, notes, documents, or business knowledge base above answers the question, you MUST politely tell the student that this topic isn't in the curriculum yet (e.g. "Great question! That topic isn't in our curriculum yet \u2014 would you like me to look up something else?"). NEVER answer from general knowledge. NEVER guess or improvise an academic answer.` : `3. If no curriculum match is found, you may answer from general knowledge but mention that the specific topic wasn't found in the curriculum.`;
       const studentDisplayName = (context.studentName || "").replace(/[\r\n\t\x00-\x1f\x7f]/g, " ").replace(/[^\p{L}\p{M}\s.'\-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 80);
       const studentFirstName = (studentDisplayName.split(/\s+/)[0] || "").slice(0, 40);
       console.log(`[Context Build] Student name injected: ${studentDisplayName ? `yes (${studentFirstName})` : "no"}`);
@@ -57852,13 +59214,22 @@ You are tutoring ${studentDisplayName}. They are signed in through their school 
 You are a friendly, encouraging educational tutor (study buddy). Your primary role is helping students learn and practice.
 MANDATORY RULES:
 1. For ANY academic, educational, or study-related question, you MUST call the fetch_k12_topic tool FIRST before responding. NEVER answer academic questions from general knowledge alone.
-2. After explaining a topic, ALWAYS offer to show practice questions by calling fetch_k12_questions.
-3. Base your explanations on the revision notes and content returned by the tools. If the tool returns content, use it as your primary source.
+2. Base your explanations on the revision notes and content returned by the tools. If the tool returns content, use it as your primary source.
 ${rule4}
-5. Use a supportive, Socratic teaching style \u2014 guide students to understand concepts rather than just giving bare answers.
-6. You can respond to greetings and casual conversation naturally without calling tools.
-7. MEDIA: When a tool result item includes "mediaUrls" or a "videos" array, surface that media inline using Markdown so the student can see it. For an image URL write \`![diagram](URL)\`; for a video write a labelled link \`[\u25B6 Watch: <title>](URL)\`. Only use URLs that actually appear in the tool result \u2014 never invent or guess a media URL.
-8. MATH: Render mathematical expressions using LaTeX delimited by \\( \\) for inline and \\[ \\] (or $$) for display, so equations render cleanly. Reproduce the math exactly as it appears in the curriculum content.
+4. Be supportive and clear \u2014 explain concepts in a friendly, student-friendly way with examples where helpful.
+5. You can respond to greetings and casual conversation naturally without calling tools.
+6. MEDIA: When a tool result item includes "mediaUrls" or a "videos" array, surface that media inline using Markdown so the student can see it. For an image URL write \`![diagram](URL)\`; for a video write a labelled link \`[\u25B6 Watch: <title>](URL)\`. Only use URLs that actually appear in the tool result \u2014 never invent or guess a media URL.
+7. MATH: Render mathematical expressions using LaTeX delimited by \\( \\) for inline and \\[ \\] (or $$) for display, so equations render cleanly. Reproduce the math exactly as it appears in the curriculum content.
+
+\u26D4 STRICT RULE \u2014 NO FOLLOW-UP INVITATIONS (HIGHEST PRIORITY):
+Your response MUST end immediately after you finish answering. Never append a closing invitation of any kind. The following endings are FORBIDDEN:
+- "Would you like to try some practice questions?"
+- "Would you like to try identifying X in some sentences?"
+- "If you have any further questions or want to practice, just let me know!"
+- "Shall we try some exercises?"
+- "Let me know if you'd like to practice."
+- Any other sentence inviting the student to practice, try exercises, attempt questions, take a quiz, or "let you know" if they want more.
+Answer the question, then STOP. Do not add a friendly closing line. Only fetch or offer practice questions when the student EXPLICITLY asks (e.g. "quiz me", "give me practice questions", "test me").
 
 `;
       if (contentOnly) {
@@ -57867,6 +59238,7 @@ ${rule4}
 - You are FORBIDDEN from answering academic or study-related questions using your general knowledge, training data, the public internet, or "common sense" facts that are not present in the sources above.
 - If the sources do not contain the answer, respond with a friendly "this topic isn't in our curriculum yet" message and offer to help with what IS available. Do NOT attempt the answer.
 - Greetings, small talk, and meta-questions about how to use the tutor are allowed without curriculum lookup.
+- \u26D4 NEVER end your response with an invitation to practice, try exercises, attempt questions, or take a quiz. No "would you like to try...", no "let me know if you want to practice". Answer, then stop.
 
 `;
         console.log(`[Context Build] Added K12 Content-Only guardrail`);
@@ -57879,6 +59251,7 @@ ${rule4}
 - If the tool result includes images (Markdown image tags like ![image](URL)), include them in your response exactly as they appear \u2014 do not remove or skip them.
 - If the tool result does not contain an answer to the student's question, respond with a friendly "This topic isn't in our curriculum yet \u2014 would you like help with something else?" Do NOT attempt an answer from your own knowledge.
 - Greetings, encouragement, and meta-questions about the tutor are always allowed without a curriculum lookup.
+- \u26D4 NEVER end your response with an invitation to practice, try exercises, attempt questions, or take a quiz. No "would you like to try...", no "let me know if you want to practice". Answer, then stop.
 
 `;
         console.log(`[Context Build] Added K12 Verbatim Content guardrail`);
@@ -58124,8 +59497,8 @@ function renderInsightsPdf(data) {
     doc.setFontSize(14);
     doc.text("Breakdown by Account", 14, 90);
     const tableData = data.accountBreakdown.slice().sort((a, b) => b.conversations - a.conversations).map((account) => {
-      const rate = account.conversations > 0 ? (account.leads / account.conversations * 100).toFixed(1) + "%" : "0%";
-      return [account.businessName, account.leads.toString(), account.conversations.toString(), rate];
+      const rate2 = account.conversations > 0 ? (account.leads / account.conversations * 100).toFixed(1) + "%" : "0%";
+      return [account.businessName, account.leads.toString(), account.conversations.toString(), rate2];
     });
     autoTable(doc, {
       startY: 96,
@@ -58592,26 +59965,177 @@ init_elevenlabsService();
 // server/services/voiceFormatterService.ts
 init_aiUsageLogger();
 import OpenAI15 from "openai";
+function createVoiceDisplayFallback(transcript) {
+  let output = transcript.trim();
+  for (let i = 0; i < 4; i++) {
+    const next = output.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "$1/$2");
+    if (next === output) break;
+    output = next;
+  }
+  return output.replace(/\\sqrt\s*\{([^{}]*)\}/g, "\u221A($1)").replace(/\\times/g, "\xD7").replace(/\\div/g, "\xF7").replace(/\\leq?|\\le/g, "\u2264").replace(/\\geq?|\\ge/g, "\u2265").replace(/\\neq?|\\ne/g, "\u2260").replace(/\\pm/g, "\xB1").replace(/\\pi/g, "\u03C0").replace(/\\theta/g, "\u03B8").replace(/\\alpha/g, "\u03B1").replace(/\\beta/g, "\u03B2").replace(/\\(?:text|mathrm|mathbf|left|right)\s*\{([^{}]*)\}/g, "$1").replace(/\\([A-Za-z]+)/g, "$1").replace(/[{}]/g, "").replace(/\$+/g, "").replace(/\s{2,}/g, " ").trim();
+}
 var FORMAT_TIMEOUT_MS = 8e3;
-var SYSTEM_PROMPT = `You convert spoken-style answers from a K12 voice tutor into properly formatted on-screen Markdown for visual display. The user will see the formatted version on screen while they hear the original spoken audio.
+var SPEECH_TIMEOUT_MS = 8e3;
+function createVoiceSpeechFallback(markdown) {
+  let output = markdown.replace(/!\[([^\]]*)\]\([^)]*\)/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/```[\s\S]*?```/g, (block) => block.replace(/```[^\n]*\n?/g, "")).replace(/^\s{0,3}#{1,6}\s+/gm, "").replace(/^\s*[-*+]\s+/gm, "").replace(/^\s*\d+[.)]\s+/gm, "").replace(/[*_~`>]/g, "").replace(/\$\$?([\s\S]*?)\$\$?/g, "$1");
+  for (let i = 0; i < 4; i++) {
+    const next = output.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "$1 over $2");
+    if (next === output) break;
+    output = next;
+  }
+  return output.replace(/\\sqrt\s*\{([^{}]*)\}/g, "the square root of $1").replace(/\\times/g, " times ").replace(/\\div/g, " divided by ").replace(/\\leq?|\\le/g, " less than or equal to ").replace(/\\geq?|\\ge/g, " greater than or equal to ").replace(/\\neq?|\\ne/g, " not equal to ").replace(/\\rightarrow/g, " leads to ").replace(/\\pm/g, " plus or minus ").replace(/\\pi/g, " pi ").replace(/\\theta/g, " theta ").replace(/\\alpha/g, " alpha ").replace(/\\beta/g, " beta ").replace(/\\(?:text|mathrm|mathbf|left|right)\s*\{([^{}]*)\}/g, "$1").replace(/\b(\d+)\s*:\s*(\d+)\b/g, "$1 to $2").replace(/\s*=\s*/g, " equals ").replace(/[{}\\]/g, "").replace(/\n{2,}/g, ". ").replace(/\n/g, " ").replace(/\s{2,}/g, " ").trim();
+}
+async function createVoiceSpeechText(displayMarkdown, apiKey, businessAccountId, conversationId) {
+  const fallback = createVoiceSpeechFallback(displayMarkdown);
+  if (!displayMarkdown.trim() || !apiKey) return fallback;
+  const client = new OpenAI15({ apiKey });
+  try {
+    const completion = await Promise.race([
+      client.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0,
+        messages: [
+          {
+            role: "system",
+            content: `Convert the supplied Markdown answer into a natural voice script.
+Preserve every fact, sentence, step, number, and their order. Do not summarize,
+explain further, add labels, or answer again. Read mathematical notation in
+natural words. Omit Markdown symbols, image URLs, and formatting syntax.
+Return only the complete plain-text speech script.`
+          },
+          { role: "user", content: displayMarkdown }
+        ]
+      }),
+      new Promise(
+        (_, reject) => setTimeout(() => reject(new Error("voice speech conversion timeout")), SPEECH_TIMEOUT_MS)
+      )
+    ]);
+    const speechText = completion.choices?.[0]?.message?.content?.trim() || "";
+    if (businessAccountId) {
+      void aiUsageLogger.logUsage({
+        businessAccountId,
+        category: "voice_mode",
+        model: "gpt-4o-mini",
+        tokensInput: completion.usage?.prompt_tokens || 0,
+        tokensOutput: completion.usage?.completion_tokens || 0,
+        metadata: {
+          feature: "canonical_answer_speech",
+          conversationId
+        }
+      }).catch(() => {
+      });
+    }
+    return speechText || fallback;
+  } catch (err) {
+    console.warn("[VoiceFormatter] Speech conversion failed, using deterministic fallback:", err.message);
+    return fallback;
+  }
+}
+var MAX_DIAGRAMS = 2;
+var SYSTEM_PROMPT = `You post-process a spoken answer from a K12 voice tutor for on-screen display. The student HEARS the original audio; you only decide what is SHOWN alongside it.
 
-CRITICAL RULES:
-1. STRICTLY transform-only. Do NOT add, remove, change, or paraphrase any facts, examples, numbers, or steps. Convert notation only.
-2. First decide if the answer's subject is STEM (math, physics, chemistry, biology, computer science). If NOT STEM, return {"isStem": false, "subject": "other"} with no formatted markdown.
-3. If STEM, return formatted Markdown with:
-   - Inline math wrapped in single dollar signs: $W = m \\\\times g$
-   - Display math wrapped in double dollar signs on their own lines: $$\\\\frac{AE}{AC} = \\\\frac{3x}{8x} = \\\\frac{3}{8}$$
-   - Use \\\\frac{}{} for fractions, ^{} for superscripts, _{} for subscripts, \\\\times for multiplication, \\\\div for division, \\\\le \\\\ge \\\\ne for inequalities, \\\\sqrt{} for square roots, \\\\pi \\\\theta \\\\alpha for Greek letters, \\\\rightarrow for arrows.
-   - Use **bold** for emphasis on key terms (e.g. **Weight on Earth**).
-   - Convert "First / Second / Third" or "Step 1 / Step 2" into proper numbered Markdown lists.
-   - Convert spoken phrases like "AE plus EC equals 3x plus 5x" into "$AE + EC = 3x + 5x$".
-   - Convert "9.8 meters per second squared" into "$9.8 \\\\, m/s^{2}$".
-   - Keep paragraph structure readable. Preserve the original wording wherever possible \u2014 only re-flow when needed for clear math display.
-4. NEVER invent equations the spoken text didn't contain. If the spoken text said only "the ratio is 3 to 5", do not derive new equations.
-5. Output STRICT JSON only: {"isStem": boolean, "subject": "math"|"physics"|"chemistry"|"biology"|"cs"|"other", "formattedMarkdown"?: string}. No prose outside the JSON.`;
-async function formatVoiceTranscript(transcript, apiKey, businessAccountId, conversationId) {
+You have two jobs.
+
+JOB 1 \u2014 DISPLAY FORMAT
+Decide if the answer's subject is STEM (math, physics, chemistry, biology, computer science).
+For EVERY answer, produce formatted Markdown that preserves every fact and the
+original sentence order. If STEM, also rewrite notation correctly:
+ - Inline math in single dollar signs: $W = m \\\\times g$
+ - Display math in double dollar signs on their own lines: $$\\\\frac{AE}{AC} = \\\\frac{3x}{8x} = \\\\frac{3}{8}$$
+ - Use \\\\frac{}{} for fractions, ^{} for superscripts, _{} for subscripts, \\\\times for multiplication, \\\\div for division, \\\\le \\\\ge \\\\ne for inequalities, \\\\sqrt{} for square roots, \\\\pi \\\\theta \\\\alpha for Greek letters, \\\\rightarrow for arrows.
+ - Use **bold** for key terms (e.g. **Weight on Earth**).
+ - Convert "AE plus EC equals 3x plus 5x" into "$AE + EC = 3x + 5x$", and "9.8 meters per second squared" into "$9.8 \\\\, m/s^{2}$".
+LAYOUT \u2014 make it read like a textbook page, not a wall of speech:
+ - Break the flowing speech into SHORT paragraphs (1-3 sentences each), one idea per paragraph, separated by blank lines.
+ - When the answer works through a calculation, derivation or multi-part reasoning, lay those parts out as a numbered Markdown list \u2014 one step per item \u2014 even when the tutor never literally said "Step 1" or "First". Spoken cues like "First / Second / Next / Then / Step 1" ALWAYS become numbered list items. Each item begins with the tutor's own sentence; you may bold the opening words of that sentence to act as its label, but NEVER write a label the tutor did not speak.
+ - Promote each key equation or worked computation onto its own line as display math ($$ ... $$) instead of leaving it buried inline mid-sentence. The equation must be the notation form of words the tutor actually spoke, and the surrounding sentence text stays exactly where it was, in its original order.
+ - Layout freedom is STRUCTURE ONLY: you may insert blank lines, list markers, and bolding of EXISTING words, and move an equation onto its own line. You may NOT reword, reorder, merge or split the tutor's sentences, and you may NOT add headings, labels or words the tutor did not speak.
+For non-STEM answers, use the same short paragraphs and Markdown lists where the
+spoken answer contains clear steps. Do not invent headings or labels.
+STRICTLY transform-only on the words: never add, remove, change or paraphrase any fact, example, number or step, and never invent an equation the spoken text did not contain. Every spoken sentence must appear, in its original order, in the tutor's own words.
+COMPLETE, ALWAYS: formattedMarkdown must contain the ENTIRE spoken answer from its first sentence to its last, including greetings, closing remarks and any question the tutor asked the student at the end. Never summarize, never stop early, never drop the tail. A partial rewrite is invalid output.
+
+JOB 2 \u2014 DIAGRAMS
+This job applies to EVERY answer, whether or not it is STEM. An English, History, geography or grammar answer earns its diagram on exactly the same terms as a maths one \u2014 never skip this job just because isStem is false.
+You may be given a numbered list of curriculum diagrams available for this turn. Each label names the lesson that diagram was taken from. Decide which, if any, belong on screen, in two steps.
+
+STEP 1 \u2014 Did this answer TEACH something?
+A teaching answer explains a concept, gives a definition, works an example, or walks through steps.
+A non-teaching answer is: filler or stalling ("let me pull that up for you"), a refusal or "that isn't in your syllabus", a clarifying question, a greeting, small talk, an acknowledgement, or a reply to the student saying stop / I understand.
+If the answer did NOT teach, choose no diagrams and stop. Nothing else matters.
+
+STEP 2 \u2014 If it DID teach, pick the diagram that illustrates what it taught.
+ - Choose the single best match. An exact title match is not required: judge whether the lesson that diagram came from is what this answer was explaining.
+ - When the answer taught the topic these diagrams belong to, showing none is a miss \u2014 the student loses the figure that goes with the lesson.
+ - Choose a SECOND one only when the answer taught two clearly distinct things and a different diagram illustrates each. Never more than 2.
+ - Choose none if the answer taught something but every diagram comes from an unrelated chapter. An unrelated diagram is worse than no diagram.
+ - Place each chosen diagram by writing its marker [[IMAGE:n]] on its own line, at the exact point in the answer where that thing is being explained \u2014 the way a textbook puts the figure beside the paragraph about it. Not all at the end.
+ - NEVER write a URL or a Markdown image tag yourself. The marker is the only way to show a diagram.
+
+OUTPUT \u2014 strict JSON only, no prose outside it, with the keys in EXACTLY this order:
+{"isStem": boolean, "subject": "math"|"physics"|"chemistry"|"biology"|"cs"|"other", "imageIndexes": number[], "formattedMarkdown"?: string}
+ - imageIndexes comes BEFORE formattedMarkdown deliberately: commit to your diagrams first, then write the answer and drop each chosen marker in as you reach the point it illustrates. Use [] when you are placing none.
+ - Include formattedMarkdown for EVERY non-empty spoken answer.
+ - EVERY index in imageIndexes MUST also appear as its [[IMAGE:n]] marker inside formattedMarkdown. Listing an index without writing its marker is invalid output \u2014 the diagram then has nowhere to go and gets dumped at the bottom of the answer.
+ - Correct example, marker sitting inside the text rather than at the end:
+   {"isStem":true,"subject":"math","imageIndexes":[2],"formattedMarkdown":"Two triangles are **similar** when their corresponding angles are equal.\\n\\n[[IMAGE:2]]\\n\\nFor example, if $AB = 3$ and $PQ = 6$, the ratio is $1:2$."}
+ - If isStem is false and you are placing diagrams, reproduce the spoken answer WORD FOR WORD and insert only the markers \u2014 no rewording, no reformatting.
+ - If isStem is false and you place no diagrams, still return the complete
+   formattedMarkdown with only structure added.`;
+var TOKEN_SEPARATORS = /[^0-9a-z\u00C0-\u0963\u0966-\u1FFF\u2C00-\uD7FF]+/;
+function tokenize(text2) {
+  return text2.toLowerCase().split(TOKEN_SEPARATORS).filter(Boolean);
+}
+function looksFaithful(original, produced, isStem) {
+  const originalTokens = tokenize(original);
+  if (originalTokens.length === 0) return true;
+  const producedSet = new Set(tokenize(produced));
+  const unique2 = Array.from(new Set(originalTokens));
+  const growth = producedSet.size / Math.max(1, unique2.length);
+  if (growth > 1.6) return false;
+  if (isStem) {
+    const producedTokens = tokenize(produced);
+    if (producedTokens.length / originalTokens.length < 0.5) return false;
+    const tail = Array.from(new Set(originalTokens.slice(-25)));
+    const tailKept = tail.filter((t) => producedSet.has(t)).length;
+    return tail.length === 0 || tailKept / tail.length >= 0.4;
+  }
+  const kept = unique2.filter((t) => producedSet.has(t)).length;
+  return kept / unique2.length >= 0.7;
+}
+function placeDiagrams(markdown, indexes, candidates) {
+  let out = markdown.replace(/!\[[^\]]*\]\([^)]*\)/g, "");
+  const urls = [];
+  const seenUrl = /* @__PURE__ */ new Set();
+  for (const idx of indexes) {
+    const candidate = candidates[idx - 1];
+    if (!candidate || seenUrl.has(candidate.url)) {
+      if (candidate) out = out.split(`[[IMAGE:${idx}]]`).join("");
+      continue;
+    }
+    const marker = `[[IMAGE:${idx}]]`;
+    const alt = (candidate.topic || "curriculum diagram").replace(/[[\]]/g, "");
+    const tag = `![${alt}](${candidate.url})`;
+    if (!out.includes(marker)) {
+      continue;
+    }
+    seenUrl.add(candidate.url);
+    urls.push(candidate.url);
+    out = out.replace(marker, () => `
+
+${tag}
+
+`);
+  }
+  out = out.replace(/\[\[IMAGE:\s*\d+\s*\]\]/g, "");
+  out = out.replace(/\n{3,}/g, "\n\n").trim();
+  return { markdown: out, urls };
+}
+async function formatVoiceTranscript(transcript, apiKey, businessAccountId, conversationId, diagramCandidates = []) {
   if (!transcript || transcript.trim().length < 10) return null;
   const client = new OpenAI15({ apiKey });
+  const candidates = diagramCandidates.filter((c) => c && /^https?:\/\//i.test(c.url));
+  const candidateBlock = candidates.length > 0 ? "\n\nAvailable diagrams for this turn:\n" + candidates.map((c, i) => `${i + 1}. topic "${c.topic || "untitled"}" \u2014 chapter "${c.chapter || "unknown"}", subject "${c.subject || "unknown"}"`).join("\n") : "\n\nNo diagrams are available for this turn. Do not use any image markers.";
   try {
     const completion = await Promise.race([
       client.chat.completions.create({
@@ -58620,9 +60144,9 @@ async function formatVoiceTranscript(transcript, apiKey, businessAccountId, conv
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: `Spoken answer to format:
+          { role: "user", content: `Spoken answer to process:
 
-${transcript}` }
+${transcript}${candidateBlock}` }
         ]
       }),
       new Promise(
@@ -58630,6 +60154,7 @@ ${transcript}` }
       )
     ]);
     const raw = completion.choices?.[0]?.message?.content || "";
+    if (process.env.VOICE_FORMATTER_DEBUG === "1") console.log("[VoiceFormatter][debug] raw:", raw.slice(0, 900));
     let parsed;
     try {
       parsed = JSON.parse(raw);
@@ -58638,12 +60163,7 @@ ${transcript}` }
       return null;
     }
     if (typeof parsed.isStem !== "boolean") return null;
-    if (!parsed.isStem) {
-      return { isStem: false, subject: "other" };
-    }
-    if (!parsed.formattedMarkdown || typeof parsed.formattedMarkdown !== "string") {
-      return null;
-    }
+    const subject = parsed.isStem ? parsed.subject || "other" : "other";
     try {
       if (businessAccountId) {
         await aiUsageLogger.logUsage({
@@ -58652,12 +60172,35 @@ ${transcript}` }
           model: "gpt-4o-mini",
           tokensInput: completion.usage?.prompt_tokens || 0,
           tokensOutput: completion.usage?.completion_tokens || 0,
-          metadata: { feature: "voice_stem_formatter", conversationId, isStem: parsed.isStem }
+          metadata: {
+            feature: "voice_stem_formatter",
+            conversationId,
+            isStem: parsed.isStem,
+            diagramCandidates: candidates.length
+          }
         });
       }
     } catch {
     }
-    return parsed;
+    const rawIndexes = Array.isArray(parsed.imageIndexes) ? parsed.imageIndexes : [];
+    const indexes = Array.from(new Set(
+      rawIndexes.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 1 && n <= candidates.length)
+    )).slice(0, MAX_DIAGRAMS);
+    const hasMarkdown = typeof parsed.formattedMarkdown === "string" && parsed.formattedMarkdown.trim().length > 0;
+    if (!hasMarkdown) return null;
+    const produced = parsed.formattedMarkdown;
+    if (!looksFaithful(transcript, produced, parsed.isStem)) {
+      console.warn("[VoiceFormatter] Rejected result \u2014 on-screen text diverged from the spoken answer");
+      return null;
+    }
+    const { markdown, urls } = placeDiagrams(produced, indexes, candidates);
+    if (!markdown) return null;
+    return {
+      isStem: parsed.isStem,
+      subject,
+      formattedMarkdown: markdown,
+      imageUrls: urls
+    };
   } catch (err) {
     console.warn("[VoiceFormatter] Failed:", err.message);
     return null;
@@ -58666,6 +60209,11 @@ ${transcript}` }
 
 // server/realtimeVoiceService.ts
 init_config();
+init_scopeResolver();
+init_mediaMetadata();
+init_aiUsageLogger();
+var REALTIME_MODEL = "gpt-realtime-2.1-mini";
+var realtimeUsageShapeLogged = false;
 var RealtimeVoiceService = class _RealtimeVoiceService {
   conversations = /* @__PURE__ */ new Map();
   // Now keyed by conversationId
@@ -58688,6 +60236,15 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
   // Base delay for exponential backoff (1 second)
   MAX_RECONNECT_DELAY = 3e4;
   // Maximum reconnection delay (30 seconds)
+  /**
+   * Realtime can deliver terminal or delta events for an older response after a
+   * tool continuation has already created the next response. Never let those
+   * late events append to, release, or finalize the current answer.
+   */
+  isCurrentResponseEvent(conversation, event) {
+    const eventResponseId = event.response_id || event.response?.id;
+    return !eventResponseId || !conversation.currentResponseId || eventResponseId === conversation.currentResponseId;
+  }
   constructor() {
     console.log("[RealtimeVoice] Service initialized with OpenAI Realtime API");
     this.startHeartbeatMonitor();
@@ -58721,9 +60278,10 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
     }
     return closed;
   }
-  async handleConnection(clientWs, businessAccountId, userId, existingConversationId, selectedLanguage, textConversationId, topscholarDoubtId) {
+  async handleConnection(clientWs, businessAccountId, userId, existingConversationId, selectedLanguage, textConversationId, topscholarDoubtId, topscholarScope, isInternalTest = false) {
     console.log("[RealtimeVoice] New connection:", { businessAccountId, userId, existingConversationId });
     try {
+      const { cpIds: scopedCpIds, chapter: scopedChapter } = await this.resolveVoiceCurriculumScope(businessAccountId, topscholarScope);
       if (existingConversationId && this.conversations.has(existingConversationId)) {
         const conversation2 = this.conversations.get(existingConversationId);
         console.log("[RealtimeVoice] RECONNECTION detected - reusing existing session:", existingConversationId);
@@ -58737,8 +60295,27 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
         if (topscholarDoubtId) {
           conversation2.topscholarDoubtId = topscholarDoubtId;
         }
+        const scopeChanged = JSON.stringify(conversation2.topscholarScope ?? null) !== JSON.stringify(topscholarScope ?? null);
+        conversation2.topscholarCpIds = scopedCpIds;
+        conversation2.topscholarChapter = scopedChapter;
+        conversation2.topscholarScope = topscholarScope ?? null;
         if (selectedLanguage !== void 0) {
           conversation2.selectedLanguage = selectedLanguage;
+        }
+        if (scopeChanged && conversation2.openaiWs && conversation2.openaiWs.readyState === WebSocket.OPEN) {
+          try {
+            const updatedInstructions = await this.buildSystemInstructions(conversation2);
+            conversation2.openaiWs.send(JSON.stringify({
+              type: "session.update",
+              session: {
+                type: "realtime",
+                instructions: updatedInstructions
+              }
+            }));
+            console.log("[RealtimeVoice] Reconnect: scope changed \u2014 session instructions rebuilt and pushed");
+          } catch (err) {
+            console.warn("[RealtimeVoice] Reconnect: failed to refresh instructions:", err.message);
+          }
         }
         this.setupClientHandlers(existingConversationId, conversation2);
         this.startConversationHeartbeat(existingConversationId);
@@ -58777,10 +60354,35 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
           console.warn("[RealtimeVoice] ElevenLabs voice selected but API key or voice ID missing, falling back to OpenAI shimmer");
         }
       }
-      const dbConversation = await storage.createConversation({
-        businessAccountId,
-        title: "Voice Chat"
-      });
+      let dbConversation = textConversationId ? await storage.getConversation(textConversationId, businessAccountId) : null;
+      if (dbConversation) {
+        const signedStudentId = topscholarScope?.studentId || null;
+        const reusable = signedStudentId ? dbConversation.studentId === signedStudentId && (!topscholarDoubtId || dbConversation.topscholarDoubtId === topscholarDoubtId) : isInternalTest || dbConversation.visitorToken === userId;
+        if (!reusable) {
+          console.warn("[RealtimeVoice] Refusing unowned text conversation reuse:", textConversationId);
+          dbConversation = null;
+        }
+      }
+      if (!dbConversation && topscholarDoubtId) {
+        const doubtConversation = await storage.getLatestConversationByDoubtId(
+          businessAccountId,
+          topscholarDoubtId
+        );
+        if (doubtConversation && (!topscholarScope?.studentId || doubtConversation.studentId === topscholarScope.studentId)) {
+          dbConversation = doubtConversation;
+        }
+      }
+      if (!dbConversation) {
+        dbConversation = await storage.createConversation({
+          businessAccountId,
+          title: "Voice Chat",
+          visitorToken: userId,
+          studentId: topscholarScope?.studentId || null,
+          topscholarDoubtId: topscholarDoubtId || null,
+          topscholarStudentPlanMappingId: topscholarScope?.studentPlanMappingId || null,
+          topscholarPlanId: topscholarScope?.planId || null
+        });
+      }
       const conversationId = dbConversation.id;
       const conversation = {
         clientWs,
@@ -58791,10 +60393,18 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
         sessionId: null,
         conversationId,
         personality: settings?.personality || "friendly",
+        responseLength: settings?.responseLength || "balanced",
         companyDescription: businessAccount.description || "",
         currency: settings?.currency || "USD",
         currencySymbol: settings?.currency === "USD" ? "$" : "\u20AC",
         customInstructions: settings?.customInstructions || void 0,
+        systemMode: settings?.systemMode || "full",
+        k12EducationEnabled: businessAccount.k12EducationEnabled === "true",
+        k12ContentOnly: businessAccount.k12ContentOnlyMode === "true",
+        k12VerbatimContentMode: businessAccount.k12VerbatimContentMode === "true",
+        jobPortalEnabled: businessAccount.jobPortalEnabled === true,
+        demoOrdersEnabled: businessAccount.demoOrdersEnabled === true,
+        skipLeadTraining: businessAccount.skipLeadTraining === true,
         isProcessing: false,
         currentUserTranscript: "",
         currentAITranscript: "",
@@ -58804,8 +60414,13 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
         reconnectAttempts: 0,
         isReconnecting: false,
         selectedLanguage,
+        selectedVoice: isElevenLabsVoice(selectedVoice) ? "shimmer" : selectedVoice,
+        isInternalTest,
         textConversationId,
         topscholarDoubtId,
+        topscholarCpIds: scopedCpIds,
+        topscholarChapter: scopedChapter,
+        topscholarScope: topscholarScope || null,
         elevenlabsApiKey: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsApiKey : void 0,
         elevenlabsVoiceId: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsVoiceId : void 0
       };
@@ -58861,6 +60476,7 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
     if (!conversation) return;
     console.log("[RealtimeVoice] Cleaning up conversation:", conversationId, "reason:", reason);
     try {
+      this.abandonCanonicalResponse(conversation, false);
       if (conversation.clientWs && conversation.clientWs.readyState === WebSocket.OPEN) {
         this.sendToClient(conversation.clientWs, {
           type: "session_closed",
@@ -58884,6 +60500,15 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
         }
         conversation.activeElevenLabsAbort = void 0;
         conversation.activeElevenLabsResponseId = void 0;
+        conversation.activeElevenLabsStartedAt = void 0;
+      }
+      if (conversation.activeOpenAITtsAbort) {
+        try {
+          conversation.activeOpenAITtsAbort.abort();
+        } catch {
+        }
+        conversation.activeOpenAITtsAbort = void 0;
+        conversation.activeOpenAITtsResponseId = void 0;
         conversation.activeElevenLabsStartedAt = void 0;
       }
       conversation.ttsQueue = [];
@@ -58919,24 +60544,78 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
   // playing. This stops the AI's own opening audio / mic echo from killing the
   // answer. Deliberate cancellations (post-transcript "smart interruption",
   // full cleanup) pass respectGrace=false and always cancel.
+  /**
+   * Mark a response abandoned and tell the client so it can drop the audio it
+   * has already buffered for it.
+   *
+   * Without this the client only learns of a cancellation it initiated itself.
+   * A cancellation decided server-side — a barge-in detected while the client
+   * is still inside its own grace window — left the abandoned answer's queued
+   * speech playing, so it ran on into the next answer.
+   */
+  hasDisplayedCanonicalAnswer(conversation, responseId) {
+    return conversation.currentResponseKind === "canonical" && !!responseId && conversation.currentResponseId === responseId && conversation.canonicalDisplayReadyResponseId === responseId;
+  }
+  markResponseCancelled(conversation, responseId, notifyClient = true) {
+    if (!responseId) return;
+    conversation.cancelledResponseIds.add(responseId);
+    if (conversation.cancelledResponseIds.size > 20) {
+      const first = conversation.cancelledResponseIds.values().next().value;
+      if (first) conversation.cancelledResponseIds.delete(first);
+    }
+    if (notifyClient && !this.hasDisplayedCanonicalAnswer(conversation, responseId)) {
+      this.sendToClient(conversation.clientWs, { type: "response_cancelled", responseId });
+    }
+  }
+  abandonCanonicalResponse(conversation, notifyClient = true) {
+    if (conversation.currentResponseKind !== "canonical") return false;
+    const responseId = conversation.currentResponseId;
+    const preserveDisplayedAnswer = this.hasDisplayedCanonicalAnswer(conversation, responseId);
+    if (notifyClient) this.markResponseCancelled(conversation, responseId);
+    if (preserveDisplayedAnswer) {
+      conversation.canonicalPersistedMessageId = void 0;
+      conversation.canonicalPersistedResponseId = void 0;
+      conversation.canonicalPersistedContent = void 0;
+      conversation.canonicalDisplayReadyResponseId = void 0;
+      conversation.isProcessing = false;
+      conversation.currentResponseKind = void 0;
+      conversation.activeElevenLabsStartedAt = void 0;
+      console.log("[RealtimeVoice] Preserved completed canonical answer after audio interruption:", responseId);
+      return true;
+    }
+    if (conversation.canonicalPersistedMessageId && conversation.canonicalPersistedResponseId === responseId && conversation.canonicalPersistedContent) {
+      const messageId = conversation.canonicalPersistedMessageId;
+      const content = conversation.canonicalPersistedContent;
+      conversation.canonicalPersistedMessageId = void 0;
+      conversation.canonicalPersistedResponseId = void 0;
+      conversation.canonicalPersistedContent = void 0;
+      void chatService.rollbackDeferredAssistantMessage({
+        userId: conversation.userId,
+        businessAccountId: conversation.businessAccountId,
+        existingConversationId: conversation.conversationId
+      }, messageId, content).catch((error) => {
+        console.error("[RealtimeVoice] Failed to roll back abandoned canonical answer:", error);
+      });
+    }
+    conversation.isProcessing = false;
+    conversation.currentResponseKind = void 0;
+    conversation.canonicalDisplayReadyResponseId = void 0;
+    conversation.activeElevenLabsStartedAt = void 0;
+    return true;
+  }
   cancelResponse(conversation, respectGrace = false) {
     if (respectGrace && conversation.activeElevenLabsStartedAt) {
       const sincePlaybackStart = Date.now() - conversation.activeElevenLabsStartedAt;
       if (sincePlaybackStart < this.BARGE_IN_GRACE_MS) {
         console.log("[RealtimeVoice] Ignoring barge-in within grace window (", sincePlaybackStart, "ms < ", this.BARGE_IN_GRACE_MS, "ms) \u2014 likely AI self-echo, keeping answer");
-        return;
+        return false;
       }
     }
+    let cancelled = false;
     if (conversation.activeElevenLabsAbort) {
       const abortedResponseId = conversation.activeElevenLabsResponseId;
       console.log("[RealtimeVoice] Aborting in-flight ElevenLabs synth due to user interrupt, responseId:", abortedResponseId, "openaiActive:", conversation.isProcessing);
-      if (abortedResponseId) {
-        conversation.cancelledResponseIds.add(abortedResponseId);
-        if (conversation.cancelledResponseIds.size > 20) {
-          const first = conversation.cancelledResponseIds.values().next().value;
-          if (first) conversation.cancelledResponseIds.delete(first);
-        }
-      }
+      this.markResponseCancelled(conversation, abortedResponseId);
       try {
         conversation.activeElevenLabsAbort.abort();
       } catch {
@@ -58944,28 +60623,47 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
       conversation.activeElevenLabsAbort = void 0;
       conversation.activeElevenLabsResponseId = void 0;
       conversation.activeElevenLabsStartedAt = void 0;
+      cancelled = true;
     }
-    if (conversation.ttsResponseId) {
-      conversation.cancelledResponseIds.add(conversation.ttsResponseId);
-      if (conversation.cancelledResponseIds.size > 20) {
-        const first = conversation.cancelledResponseIds.values().next().value;
-        if (first) conversation.cancelledResponseIds.delete(first);
+    if (conversation.activeOpenAITtsAbort) {
+      const abortedResponseId = conversation.activeOpenAITtsResponseId;
+      console.log("[RealtimeVoice] Aborting in-flight OpenAI TTS due to user interrupt, responseId:", abortedResponseId);
+      this.markResponseCancelled(conversation, abortedResponseId);
+      try {
+        conversation.activeOpenAITtsAbort.abort();
+      } catch {
       }
+      conversation.activeOpenAITtsAbort = void 0;
+      conversation.activeOpenAITtsResponseId = void 0;
+      conversation.activeElevenLabsStartedAt = void 0;
+      cancelled = true;
     }
+    this.markResponseCancelled(conversation, conversation.ttsResponseId);
     if (conversation.ttsQueue && conversation.ttsQueue.length > 0) {
       conversation.ttsQueue = [];
+      cancelled = true;
     }
+    conversation.pendingAiDoneResponseId = void 0;
     conversation.activeElevenLabsStartedAt = void 0;
+    if (conversation.holdSpeechResponseId) {
+      this.markResponseCancelled(conversation, conversation.holdSpeechResponseId);
+      conversation.holdSpeechResponseId = void 0;
+      cancelled = true;
+    }
+    if (conversation.currentResponseKind === "canonical") {
+      return this.abandonCanonicalResponse(conversation, true);
+    }
     if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
       if (!conversation.isProcessing) {
         console.log("[RealtimeVoice] No active OpenAI response to cancel, skipping response.cancel (any ElevenLabs synth has been aborted above)");
-        return;
+        return cancelled;
       }
       if (conversation.currentResponseId) {
-        conversation.cancelledResponseIds.add(conversation.currentResponseId);
-        if (conversation.cancelledResponseIds.size > 20) {
-          const first = conversation.cancelledResponseIds.values().next().value;
-          if (first) conversation.cancelledResponseIds.delete(first);
+        this.markResponseCancelled(conversation, conversation.currentResponseId);
+        const mediaOwner = conversation.pendingCurriculumMediaResponseId;
+        if (mediaOwner == null || mediaOwner === conversation.currentResponseId) {
+          conversation.pendingCurriculumMedia = void 0;
+          conversation.pendingCurriculumMediaResponseId = void 0;
         }
       }
       conversation.openaiWs.send(JSON.stringify({
@@ -58973,11 +60671,13 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
       }));
       conversation.isProcessing = false;
       console.log("[RealtimeVoice] Cancelled ongoing AI response, id:", conversation.currentResponseId);
+      return true;
     }
+    return cancelled;
   }
   async connectToOpenAI(conversationId, conversation) {
-    const url = "wss://api.openai.com/v1/realtime?model=gpt-realtime-mini";
-    console.log("[RealtimeVoice] Connecting to OpenAI Realtime API...");
+    const url = `wss://api.openai.com/v1/realtime?model=${REALTIME_MODEL}`;
+    console.log(`[RealtimeVoice] Connecting to OpenAI Realtime API (${REALTIME_MODEL})...`);
     const openaiWs = new WebSocket(url, {
       headers: {
         "Authorization": `Bearer ${conversation.openaiApiKey}`
@@ -59287,6 +60987,27 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
       console.error("[RealtimeVoice] Error updating message in DB:", error);
     }
   }
+  /**
+   * Human-readable one-liner of what this tutor session teaches, built from
+   * the signed launch scope (e.g. "Mathematics, CBSE Class 7 (English medium),
+   * chapter 'Fractions'"). Returns null for non-TopScholar sessions or when
+   * the scope carries no describable fields — callers fall back to the
+   * business guardrail in that case.
+   */
+  describeTopscholarScope(conversation) {
+    const s = conversation.topscholarScope;
+    if (!s) return null;
+    const parts = [];
+    if (s.subject) parts.push(s.subject);
+    const cls = [];
+    if (s.board) cls.push(s.board);
+    if (s.grade) cls.push(`Class ${s.grade}`);
+    if (cls.length > 0) parts.push(cls.join(" ") + (s.medium ? ` (${s.medium} medium)` : ""));
+    else if (s.medium) parts.push(`${s.medium} medium`);
+    if (s.chapter) parts.push(`chapter "${s.chapter}"`);
+    if (parts.length === 0) return "your school curriculum subjects";
+    return parts.join(", ");
+  }
   async buildSystemInstructions(conversation) {
     const { personality, companyDescription, customInstructions, currencySymbol, currency, businessAccountId, conversationId } = conversation;
     const settings = await storage.getWidgetSettings(businessAccountId);
@@ -59409,13 +61130,30 @@ ${customInstructions}
 `;
       }
     }
-    instructions += "\n\nGUARDRAILS (MUST FOLLOW):\n";
-    instructions += "- ONLY answer questions related to this business's products, services, pricing, FAQs, and company information\n";
-    instructions += "- DECLINE politely if asked about unrelated topics (world events, general knowledge, entertainment, sports, history, science, politics, health advice, financial advice)\n";
-    instructions += "- When declining, keep it SHORT (1 sentence), friendly, and redirect to what you CAN help with\n";
-    instructions += '- Example decline: "I focus on helping with our products and services. What can I tell you about what we offer?"\n';
-    instructions += "- NEVER provide medical, legal, or financial advice\n";
-    instructions += "- NEVER expose internal operations or backend processes\n";
+    const scopeSummary = this.describeTopscholarScope(conversation);
+    if (scopeSummary) {
+      const s = conversation.topscholarScope;
+      const teachTopic = s?.chapter || s?.subject || "your curriculum topics";
+      instructions += "\n\nGUARDRAILS (MUST FOLLOW):\n";
+      instructions += `- You are a personal TUTOR. You teach exactly this: ${scopeSummary}.
+`;
+      instructions += "- ONLY answer questions related to those subjects/chapters, the curriculum content your tools return, and general study guidance for them\n";
+      instructions += "- DECLINE politely if asked about unrelated topics (celebrities, movies, sports, world events, politics, or anything outside the curriculum)\n";
+      instructions += `- When declining, keep it SHORT (1 sentence): simply say what you CAN teach ("I can teach you about ${teachTopic}\u2026"), ideally naming 2-3 concrete topics from the lesson. Do NOT introduce yourself ("I'm your tutor for\u2026"), and do NOT recite the board, class, or medium. Never mention "products" or "services"
+`;
+      instructions += `- Example decline: "That's outside what we cover \u2014 I can teach you about ${teachTopic}. Want to pick a topic from there?"
+`;
+      instructions += "- NEVER provide medical, legal, or financial advice\n";
+      instructions += "- NEVER expose internal operations or backend processes\n";
+    } else {
+      instructions += "\n\nGUARDRAILS (MUST FOLLOW):\n";
+      instructions += "- ONLY answer questions related to this business's products, services, pricing, FAQs, and company information\n";
+      instructions += "- DECLINE politely if asked about unrelated topics (world events, general knowledge, entertainment, sports, history, science, politics, health advice, financial advice)\n";
+      instructions += "- When declining, keep it SHORT (1 sentence), friendly, and redirect to what you CAN help with\n";
+      instructions += '- Example decline: "I focus on helping with our products and services. What can I tell you about what we offer?"\n';
+      instructions += "- NEVER provide medical, legal, or financial advice\n";
+      instructions += "- NEVER expose internal operations or backend processes\n";
+    }
     try {
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
       const k12Enabled = businessAccount?.k12EducationEnabled === "true";
@@ -59425,8 +61163,10 @@ ${customInstructions}
       if (k12Enabled && contentOnly) {
         instructions += "\n\n\u{1F6E1}\uFE0F K12 CONTENT-ONLY GUARDRAIL (MUST FOLLOW):\n";
         instructions += "- For any academic or study-related question, your ONLY allowed sources are the curriculum content returned by your tools, the uploaded FAQs, and the uploaded documents/notes.\n";
-        instructions += "- You are FORBIDDEN from answering academic questions using your general knowledge or training data.\n";
-        instructions += `- If the sources do not contain the answer, say something like: "Great question! That topic isn't in our curriculum yet \u2014 would you like me to look up something else?" Do NOT attempt the answer.
+        instructions += "- You are FORBIDDEN from answering academic questions using your general knowledge or training data. Every fact, definition, example, and explanation you teach must come from those sources.\n";
+        instructions += "- SOLE NARROW EXCEPTION \u2014 completing a calculation: you ARE allowed (and expected) to REASON, CALCULATE, and work through problems step by step, and when the retrieved curriculum provides the governing concept or formula, you may supply ROUTINE SUPPORTING VALUES ONLY (standard constants such as atomic masses, molar masses, g = 9.8 m/s\xB2, and unit conversions) to complete that calculation \u2014 the text-chat tutor does this, and you must give the SAME final answer it would. This exception covers standard constants and conversions, nothing else: never use it to import missing facts, definitions, examples, or explanations.\n";
+        instructions += "- NEVER refuse a calculation the curriculum's concept/formula governs just because a routine constant is missing from the retrieved content. But if the content lacks a NON-routine fact the question needs, answer the supported part and say plainly that the curriculum doesn't cover the rest.\n";
+        instructions += `- If the sources do not cover the topic at all, say something like: "Great question! That topic isn't in our curriculum yet \u2014 would you like me to look up something else?" Do NOT attempt the answer.
 `;
         instructions += "- Greetings and small talk are still allowed without a curriculum lookup.\n";
         instructions += '\n\u{1F4DA} K12 RESPONSE LENGTH OVERRIDE (overrides the general "2\u20134 sentences" rule for academic turns):\n';
@@ -59440,6 +61180,7 @@ ${customInstructions}
         instructions += "\n\n\u{1F4D6} K12 VERBATIM CONTENT GUARDRAIL (MUST FOLLOW):\n";
         instructions += "- When your tools or the uploaded FAQs/documents return content that answers the student's question, you MUST speak that content WORD-FOR-WORD.\n";
         instructions += '- Do NOT paraphrase, summarize, rewrite, or "simplify" the source wording. Read it out exactly as written.\n';
+        instructions += "- Verbatim applies to explanations of curriculum content. When the student asks you to SOLVE a problem, work it out step by step using the formulas and concepts from the curriculum \u2014 the working is yours. Routine supporting values (standard constants such as atomic masses, molar masses, g = 9.8 m/s\xB2, unit conversions) may be supplied to complete the working, per the content-only calculation rule above; verbatim mode does not override that.\n";
         instructions += `- You may add a short friendly intro (e.g. "Here's what your curriculum says:") and a short closer (e.g. "Want to try a practice question on this?"), but the substantive academic content must remain verbatim.
 `;
       }
@@ -59541,6 +61282,8 @@ ${journey.conversationalGuidelines}
       let injectedCount = 0;
       for (const msg of recentMessages) {
         if (!msg.content || msg.content.trim() === "") continue;
+        const historyText = this.stripMediaMarkdown(msg.content);
+        if (!historyText) continue;
         const item = {
           type: "conversation.item.create",
           item: {
@@ -59548,7 +61291,7 @@ ${journey.conversationalGuidelines}
             role: msg.role === "user" ? "user" : "assistant",
             content: [{
               type: msg.role === "user" ? "input_text" : "output_text",
-              text: msg.content.substring(0, 2e3)
+              text: historyText.substring(0, 2e3)
             }]
           }
         };
@@ -59818,11 +61561,7 @@ ${page.extractedContent}
           const userTranscript = event.transcript;
           console.log("[RealtimeVoice] User transcript:", userTranscript);
           conversation.currentUserTranscript = userTranscript;
-          if (conversation.conversationId && userTranscript) {
-            await this.saveMessageToDB(conversation.conversationId, "user", userTranscript);
-            conversationMemory.storeMessage(conversation.userId, "user", userTranscript);
-            console.log("[RealtimeVoice] Saved user message to DB");
-          }
+          conversation.k12TurnSeq = (conversation.k12TurnSeq ?? 0) + 1;
           this.sendToClient(conversation.clientWs, {
             type: "transcript",
             text: userTranscript,
@@ -59865,8 +61604,11 @@ ${page.extractedContent}
               }
             }
           }
+          console.log("[RealtimeVoice] Canonical voice turn: generating ChatService Markdown before TTS");
+          await this.generateCanonicalVoiceAnswer(conversation, trimmedTranscript);
+          break;
           let journeyResult = null;
-          if (conversation.conversationId && conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+          if (conversation.conversationId && conversation.openaiWs?.readyState === WebSocket.OPEN) {
             journeyResult = await journeyOrchestrator.processUserMessage(
               conversation.conversationId,
               conversation.userId,
@@ -59955,12 +61697,17 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
               await new Promise((resolve) => setTimeout(resolve, 100));
             }
             console.log("[RealtimeVoice] Creating normal OpenAI response (journey check skipped)");
-            if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+            if (conversation.openaiWs?.readyState === WebSocket.OPEN) {
               await this.sendNormalResponse(conversation);
             }
           }
           break;
         case "response.created":
+          console.error("[RealtimeVoice] Rejected unexpected Realtime-authored response:", event.response?.id);
+          if (conversation.openaiWs?.readyState === WebSocket.OPEN) {
+            conversation.openaiWs.send(JSON.stringify({ type: "response.cancel" }));
+          }
+          break;
           console.log("[RealtimeVoice] Response created, id:", event.response?.id);
           conversation.isProcessing = true;
           conversation.currentAITranscript = "";
@@ -59971,21 +61718,34 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           conversation.k12TextFinalized = false;
           conversation.ttsTranscriptCursor = 0;
           conversation.currentResponseId = event.response?.id;
+          conversation.currentResponseKind = "realtime";
+          conversation.holdSpeechResponseId = conversation.currentResponseId;
+          console.log("[RealtimeVoice] Show-then-speak hold bound to response:", conversation.currentResponseId);
+          if (conversation.pendingCurriculumMedia?.length) {
+            if (conversation.pendingCurriculumMediaResponseId == null) {
+              conversation.pendingCurriculumMediaResponseId = conversation.currentResponseId ?? null;
+            } else if (conversation.pendingCurriculumMediaResponseId !== conversation.currentResponseId) {
+              conversation.pendingCurriculumMedia = void 0;
+              conversation.pendingCurriculumMediaResponseId = void 0;
+            }
+          }
           if (conversation.currentResponseId) {
             this.sendToClient(conversation.clientWs, {
               type: "voice_message_start",
               responseId: conversation.currentResponseId
             });
           }
-          if (conversation.pendingJourneyStepId && conversation.currentResponseId) {
-            const stepId = conversation.pendingJourneyStepId;
+          const legacyResponseId = conversation.currentResponseId;
+          const legacyStepId = conversation.pendingJourneyStepId;
+          if (legacyStepId && legacyResponseId) {
+            const stepId = legacyStepId;
             conversation.journeyResponseTracking.set(stepId, {
               original: "",
               // Will be set in response.done when we have the full transcript
-              responseId: conversation.currentResponseId,
+              responseId: legacyResponseId,
               timestamp: Date.now()
             });
-            console.log("[RealtimeVoice] Tracked journey by STEP ID:", stepId, "responseId:", conversation.currentResponseId);
+            console.log("[RealtimeVoice] Tracked journey by STEP ID:", stepId, "responseId:", legacyResponseId);
             conversation.pendingJourneyStepId = void 0;
           }
           break;
@@ -59997,10 +61757,17 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           break;
         case "response.output_audio_transcript.delta":
         case "response.audio_transcript.delta":
+          if (!this.isCurrentResponseEvent(conversation, event)) {
+            console.log("[RealtimeVoice] Ignoring transcript delta for superseded response:", event.response_id);
+            break;
+          }
           const transcriptDelta = event.delta;
           console.log("[RealtimeVoice] AI transcript delta:", transcriptDelta);
           conversation.currentAITranscript = (conversation.currentAITranscript || "") + transcriptDelta;
           if (conversation.currentResponseId && conversation.cancelledResponseIds.has(conversation.currentResponseId)) {
+            break;
+          }
+          if (this.isSpeechHeld(conversation)) {
             break;
           }
           this.sendToClient(conversation.clientWs, {
@@ -60017,6 +61784,10 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           break;
         case "response.output_text.delta":
         case "response.text.delta": {
+          if (!this.isCurrentResponseEvent(conversation, event)) {
+            console.log("[RealtimeVoice] Ignoring text delta for superseded response:", event.response_id);
+            break;
+          }
           const textDelta = event.delta || "";
           if (!textDelta) break;
           if (conversation.k12ContentOnly) {
@@ -60038,6 +61809,9 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           if (conversation.currentResponseId && conversation.cancelledResponseIds.has(conversation.currentResponseId)) {
             break;
           }
+          if (this.isSpeechHeld(conversation)) {
+            break;
+          }
           this.sendToClient(conversation.clientWs, {
             type: "ai_chunk",
             text: textDelta,
@@ -60047,26 +61821,38 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
         }
         case "response.output_text.done":
         case "response.text.done": {
+          if (!this.isCurrentResponseEvent(conversation, event)) {
+            console.log("[RealtimeVoice] Ignoring text completion for superseded response:", event.response_id);
+            break;
+          }
           if (!conversation.k12ContentOnly) {
             console.log("[RealtimeVoice] AI text output complete (text-modality turn)");
-            if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId && conversation.currentAITranscript && conversation.lastSynthesizedResponseId !== conversation.currentResponseId) {
+            if (!this.isSpeechHeld(conversation) && conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId && conversation.currentAITranscript && conversation.lastSynthesizedResponseId !== conversation.currentResponseId) {
               conversation.lastSynthesizedResponseId = conversation.currentResponseId;
               await this.synthesizeWithElevenLabs(conversation, conversation.currentAITranscript);
             }
-            conversation.openaiAudioFallbackBuffer = [];
+            if (!this.isSpeechHeld(conversation)) {
+              conversation.openaiAudioFallbackBuffer = [];
+            }
             break;
           }
           console.log("[RealtimeVoice] AI text output complete (K12 text-modality turn)");
           this.finalizeK12TextOutput(conversation);
-          conversation.openaiAudioFallbackBuffer = [];
+          if (!this.isSpeechHeld(conversation)) {
+            conversation.openaiAudioFallbackBuffer = [];
+          }
           break;
         }
         case "response.output_audio.delta":
         case "response.audio.delta":
+          if (!this.isCurrentResponseEvent(conversation, event)) {
+            console.log("[RealtimeVoice] Ignoring audio delta for superseded response:", event.response_id);
+            break;
+          }
           this.touchActivity(conversation);
           const audioDelta = event.delta;
           const audioBuffer = Buffer.from(audioDelta, "base64");
-          if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
+          if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId || this.isSpeechHeld(conversation)) {
             if (!conversation.openaiAudioFallbackBuffer) {
               conversation.openaiAudioFallbackBuffer = [];
             }
@@ -60079,15 +61865,21 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           break;
         case "response.output_audio_transcript.done":
         case "response.audio_transcript.done":
+          if (!this.isCurrentResponseEvent(conversation, event)) {
+            console.log("[RealtimeVoice] Ignoring transcript completion for superseded response:", event.response_id);
+            break;
+          }
           console.log("[RealtimeVoice] AI transcript complete");
-          if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId && conversation.currentAITranscript && conversation.lastSynthesizedResponseId !== conversation.currentResponseId) {
+          if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId && conversation.currentAITranscript && !this.isSpeechHeld(conversation) && conversation.lastSynthesizedResponseId !== conversation.currentResponseId) {
             conversation.lastSynthesizedResponseId = conversation.currentResponseId;
             const cancelled = !!(conversation.currentResponseId && conversation.cancelledResponseIds.has(conversation.currentResponseId));
             if (!cancelled) {
               this.streamTranscriptTts(conversation, true);
             }
           }
-          conversation.openaiAudioFallbackBuffer = [];
+          if (!this.isSpeechHeld(conversation)) {
+            conversation.openaiAudioFallbackBuffer = [];
+          }
           break;
         case "response.output_audio.done":
         case "response.audio.done":
@@ -60096,38 +61888,102 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
         case "response.function_call_arguments.done":
           await this.handleToolCall(event, conversation);
           break;
-        case "response.done":
-          console.log("[RealtimeVoice] Response complete, id:", conversation.currentResponseId);
+        case "response.done": {
+          const completedResponseId = event.response?.id;
+          if (completedResponseId && conversation.currentResponseId && completedResponseId !== conversation.currentResponseId) {
+            console.log("[RealtimeVoice] Ignoring completion for superseded response:", completedResponseId);
+            break;
+          }
+          console.log("[RealtimeVoice] Response complete, id:", completedResponseId || conversation.currentResponseId);
           conversation.isProcessing = false;
+          const realtimeUsage = aiUsageLogger.extractRealtimeUsage(event.response?.usage);
+          if (realtimeUsage) {
+            if (!realtimeUsageShapeLogged) {
+              realtimeUsageShapeLogged = true;
+              console.log("[RealtimeVoice] Realtime usage payload:", JSON.stringify(event.response?.usage));
+            }
+            const { tokensInput, tokensOutput, ...breakdown } = realtimeUsage;
+            void aiUsageLogger.logVoiceModeUsage(
+              conversation.businessAccountId,
+              REALTIME_MODEL,
+              tokensInput,
+              tokensOutput,
+              {
+                feature: "realtime_session",
+                conversationId: conversation.conversationId,
+                // Attribute to the response this event is actually for. A late
+                // done for a cancelled response must not be filed under the
+                // response that has since replaced it.
+                responseId: event.response?.id ?? conversation.currentResponseId
+              },
+              breakdown
+            ).catch(
+              (err) => console.warn("[RealtimeVoice] Usage logging failed:", err.message)
+            );
+          } else if (event.response?.usage) {
+            console.warn(
+              "[RealtimeVoice] Unrecognized usage payload on response.done:",
+              JSON.stringify(event.response.usage).slice(0, 300)
+            );
+          }
           if (conversation.k12ContentOnly && !conversation.k12TextFinalized) {
             this.finalizeK12TextOutput(conversation);
           }
-          if (conversation.conversationId && conversation.currentAITranscript) {
-            const savedMessageId = await this.saveMessageToDB(conversation.conversationId, "assistant", conversation.currentAITranscript);
-            conversationMemory.storeMessage(conversation.userId, "assistant", conversation.currentAITranscript);
-            console.log("[RealtimeVoice] Saved AI message to DB:", conversation.currentAITranscript.substring(0, 50) + "...");
-            const transcriptSnapshot = conversation.currentAITranscript;
-            const responseIdSnapshot = conversation.currentResponseId;
+          const doneTranscript = conversation.currentAITranscript;
+          const doneResponseId = completedResponseId || conversation.currentResponseId;
+          const wasCancelled = !!doneResponseId && conversation.cancelledResponseIds.has(doneResponseId);
+          if (!doneTranscript) {
+            if ((conversation.openaiAudioFallbackBuffer?.length || 0) > 0) {
+              console.warn("[RealtimeVoice] Discarding buffered audio without a transcript, responseId:", doneResponseId);
+            }
+            conversation.openaiAudioFallbackBuffer = [];
+          }
+          if (wasCancelled) {
+            conversation.openaiAudioFallbackBuffer = [];
+            console.log("[RealtimeVoice] Skipping persistence and release for cancelled response:", doneResponseId);
+          } else if (conversation.conversationId && doneTranscript) {
+            const mediaResponseId = doneResponseId;
+            const mediaCancelled = !!(mediaResponseId && conversation.cancelledResponseIds.has(mediaResponseId));
+            const mediaIsForThisResponse = !!conversation.pendingCurriculumMedia?.length && conversation.pendingCurriculumMediaResponseId === mediaResponseId;
+            const curriculumMedia = !mediaCancelled && mediaIsForThisResponse ? conversation.pendingCurriculumMedia : [];
+            if (mediaIsForThisResponse) {
+              conversation.pendingCurriculumMedia = void 0;
+              conversation.pendingCurriculumMediaResponseId = void 0;
+            }
+            const transcriptSnapshot = doneTranscript;
+            const responseIdSnapshot = doneResponseId;
             const conversationIdSnapshot = conversation.conversationId;
             const businessAccountIdSnapshot = conversation.businessAccountId;
             const apiKeySnapshot = conversation.openaiApiKey;
             const clientWsSnapshot = conversation.clientWs;
-            const wasCancelled = !!(responseIdSnapshot && conversation.cancelledResponseIds.has(responseIdSnapshot));
-            if (wasCancelled) {
-              console.log("[RealtimeVoice] Skipping STEM formatter for cancelled response:", responseIdSnapshot);
+            const diagramCandidates = curriculumMedia;
+            const savedMessageId = void 0;
+            const wasHeld = !!responseIdSnapshot && conversation.holdSpeechResponseId === responseIdSnapshot;
+            if (wasHeld) {
+              if (!wasCancelled) {
+                await this.releaseHeldAnswer(conversation, transcriptSnapshot, responseIdSnapshot, curriculumMedia);
+              }
+              if (conversation.holdSpeechResponseId === responseIdSnapshot) {
+                conversation.holdSpeechResponseId = void 0;
+              }
             }
-            if (!wasCancelled && responseIdSnapshot && apiKeySnapshot) {
+            if (!wasHeld && responseIdSnapshot && apiKeySnapshot) {
               (async () => {
                 try {
                   const result = await formatVoiceTranscript(
                     transcriptSnapshot,
                     apiKeySnapshot,
                     businessAccountIdSnapshot,
-                    conversationIdSnapshot
+                    conversationIdSnapshot,
+                    diagramCandidates
                   );
-                  if (!result || !result.isStem || !result.formattedMarkdown) {
+                  if (!result || !result.formattedMarkdown) {
                     return;
                   }
+                  console.log(
+                    `[RealtimeVoice] Display pass chose ${result.imageUrls?.length ?? 0} of ${diagramCandidates.length} diagram(s) for responseId:`,
+                    responseIdSnapshot
+                  );
                   if (savedMessageId) {
                     try {
                       await storage.updateMessageMetadata(savedMessageId, {
@@ -60135,7 +61991,8 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
                         formatSubject: result.subject
                       });
                     } catch (err) {
-                      console.warn("[RealtimeVoice] Could not persist formatted content:", err.message);
+                      console.warn("[RealtimeVoice] Could not persist formatted content, leaving the spoken answer on screen so it matches a reload:", err.message);
+                      return;
                     }
                   }
                   if (clientWsSnapshot && clientWsSnapshot.readyState === WebSocket.OPEN) {
@@ -60155,12 +62012,12 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
             }
             let foundStepId = null;
             conversation.journeyResponseTracking.forEach((journeyData, stepId) => {
-              if (journeyData.responseId === conversation.currentResponseId) {
+              if (journeyData.responseId === doneResponseId) {
                 foundStepId = stepId;
               }
             });
             if (foundStepId) {
-              const rephrasedQuestion = conversation.currentAITranscript.trim();
+              const rephrasedQuestion = doneTranscript.trim();
               console.log("[RealtimeVoice] \u2705 Journey question persisted to chat history (stepId:", foundStepId, ")");
               console.log("[RealtimeVoice]    OpenAI responseId:", conversation.currentResponseId);
               console.log("[RealtimeVoice]    AI-rephrased:", rephrasedQuestion);
@@ -60169,8 +62026,18 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
               console.log("[RealtimeVoice] Cleared journey tracking for stepId:", foundStepId);
             }
           }
-          this.sendToClient(conversation.clientWs, { type: "ai_done" });
+          if (doneResponseId && conversation.currentResponseId && conversation.currentResponseId !== doneResponseId) {
+            console.log("[RealtimeVoice] Skipping ai_done for superseded response:", doneResponseId);
+            break;
+          }
+          if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId && this.isTtsProducing(conversation)) {
+            conversation.pendingAiDoneResponseId = doneResponseId || "unknown";
+            console.log("[RealtimeVoice] Deferring ai_done until ElevenLabs TTS producers finish");
+          } else {
+            this.sendToClient(conversation.clientWs, { type: "ai_done", responseId: doneResponseId });
+          }
           break;
+        }
         case "rate_limits.updated":
           break;
         case "error":
@@ -60350,6 +62217,153 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
     return false;
   }
   /**
+   * Generate the voice turn through the same authoritative completed-answer
+   * pipeline used by text chat. Realtime remains the STT transport only.
+   */
+  async generateCanonicalVoiceAnswer(conversation, userTranscript) {
+    const responseId = `voice_${conversation.conversationId}_${conversation.k12TurnSeq ?? Date.now()}`;
+    const turnSeq = conversation.k12TurnSeq ?? 0;
+    let persistedMessageId = null;
+    let persistedContent = "";
+    conversation.currentResponseId = responseId;
+    conversation.currentResponseKind = "canonical";
+    conversation.currentAITranscript = "";
+    conversation.isProcessing = true;
+    this.sendToClient(conversation.clientWs, { type: "thinking" });
+    this.sendToClient(conversation.clientWs, { type: "voice_message_start", responseId });
+    const abandoned = () => conversation.cancelledResponseIds.has(responseId) || conversation.currentResponseId !== responseId || conversation.currentResponseKind !== "canonical" || (conversation.k12TurnSeq ?? 0) !== turnSeq;
+    const scope = conversation.topscholarScope;
+    const topScholar = isTopscholarAccount(conversation.businessAccountId);
+    const chatContext = {
+      userId: conversation.userId,
+      businessAccountId: conversation.businessAccountId,
+      existingConversationId: conversation.conversationId,
+      personality: conversation.personality,
+      responseLength: conversation.responseLength,
+      companyDescription: conversation.companyDescription,
+      openaiApiKey: conversation.openaiApiKey,
+      currency: conversation.currency,
+      currencySymbol: conversation.currencySymbol,
+      customInstructions: conversation.customInstructions,
+      preferredLanguage: conversation.selectedLanguage || conversation.detectedLanguage,
+      visitorToken: conversation.userId,
+      isInternalTest: conversation.isInternalTest,
+      supportsCalendarUI: false,
+      channel: "widget",
+      systemMode: conversation.systemMode,
+      k12EducationEnabled: conversation.k12EducationEnabled === true || topScholar,
+      k12ContentOnlyMode: conversation.k12ContentOnly === true,
+      k12VerbatimContentMode: conversation.k12VerbatimContentMode === true,
+      jobPortalEnabled: conversation.jobPortalEnabled === true,
+      demoOrdersEnabled: conversation.demoOrdersEnabled === true,
+      skipLeadTraining: conversation.skipLeadTraining === true,
+      topscholarCpId: scope?.cpId ?? null,
+      topscholarStudentId: scope?.studentId ?? null,
+      studentName: scope?.studentName ?? null,
+      topscholarCpIds: conversation.topscholarCpIds,
+      topscholarDoubtId: conversation.topscholarDoubtId ?? null,
+      topscholarStudentPlanMappingId: scope?.studentPlanMappingId ?? null,
+      topscholarPlanId: scope?.planId ?? null,
+      topscholarDoubtSyncBaseUrl: scope?.doubtSyncBaseUrl ?? null,
+      studentBoard: scope?.board ?? null,
+      studentMedium: scope?.medium ?? null,
+      studentGrade: scope?.grade ?? null,
+      studentSubject: scope?.subject ?? null,
+      studentChapter: conversation.topscholarChapter ?? scope?.chapter ?? null,
+      topscholarSubjectScoping: topScholar,
+      deferAssistantPersistence: true
+    };
+    try {
+      let streamedMarkdown = "";
+      let finalMarkdown = "";
+      for await (const event of chatService.streamMessage(userTranscript, chatContext)) {
+        if (abandoned()) return;
+        if (event.type === "content" && typeof event.data === "string") {
+          streamedMarkdown += event.data;
+        } else if (event.type === "final" && typeof event.data === "string" && event.data.trim()) {
+          finalMarkdown = event.data;
+        }
+      }
+      if (abandoned()) return;
+      const displayMarkdown = (finalMarkdown || streamedMarkdown).trim();
+      if (!displayMarkdown) {
+        throw new Error("Canonical chat pipeline returned an empty answer");
+      }
+      const speechText = await createVoiceSpeechText(
+        displayMarkdown,
+        conversation.openaiApiKey,
+        conversation.businessAccountId,
+        conversation.conversationId
+      );
+      if (abandoned()) return;
+      persistedContent = displayMarkdown;
+      persistedMessageId = await chatService.commitDeferredAssistantMessage(
+        chatContext,
+        displayMarkdown,
+        () => !abandoned()
+      );
+      if (!persistedMessageId) {
+        if (abandoned()) return;
+        throw new Error("Canonical assistant answer could not be persisted");
+      }
+      conversation.canonicalPersistedMessageId = persistedMessageId;
+      conversation.canonicalPersistedResponseId = responseId;
+      conversation.canonicalPersistedContent = displayMarkdown;
+      if (abandoned()) {
+        await chatService.rollbackDeferredAssistantMessage(
+          chatContext,
+          persistedMessageId,
+          displayMarkdown
+        );
+        persistedMessageId = null;
+        conversation.canonicalPersistedMessageId = void 0;
+        conversation.canonicalPersistedResponseId = void 0;
+        conversation.canonicalPersistedContent = void 0;
+        return;
+      }
+      conversation.currentAITranscript = speechText;
+      conversation.canonicalDisplayReadyResponseId = responseId;
+      this.sendToClient(conversation.clientWs, {
+        type: "answer_ready",
+        responseId,
+        displayMarkdown,
+        speechText
+      });
+      if (speechText) {
+        if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
+          await this.synthesizeWithElevenLabs(conversation, speechText);
+        } else {
+          await this.synthesizeWithOpenAI(conversation, speechText, responseId);
+        }
+      }
+      if (abandoned()) return;
+      conversation.isProcessing = false;
+      this.sendToClient(conversation.clientWs, { type: "ai_done", responseId });
+    } catch (error) {
+      if (abandoned()) return;
+      if (persistedMessageId && persistedContent) {
+        try {
+          await chatService.rollbackDeferredAssistantMessage(
+            chatContext,
+            persistedMessageId,
+            persistedContent
+          );
+        } catch (rollbackError) {
+          console.error("[RealtimeVoice] Failed to roll back failed canonical answer:", rollbackError);
+        }
+        conversation.canonicalPersistedMessageId = void 0;
+        conversation.canonicalPersistedResponseId = void 0;
+        conversation.canonicalPersistedContent = void 0;
+        conversation.canonicalDisplayReadyResponseId = void 0;
+      }
+      conversation.isProcessing = false;
+      conversation.currentResponseKind = void 0;
+      console.error("[RealtimeVoice] Canonical answer failed:", error);
+      this.sendError(conversation.clientWs, "I could not complete that answer. Please try again.");
+      this.sendToClient(conversation.clientWs, { type: "ai_done", responseId });
+    }
+  }
+  /**
    * Send the response.create for a normal (non-journey) assistant turn.
    *
    * In content-only K12 mode we DO NOT force the model to call fetch_k12_topic
@@ -60364,22 +62378,165 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
    */
   async sendNormalResponse(conversation) {
     if (!conversation.openaiWs || conversation.openaiWs.readyState !== WebSocket.OPEN) return;
-    if (conversation.k12ContentOnly && this.shouldForceK12Fetch(conversation.currentUserTranscript)) {
-      await this.injectK12CurriculumContext(conversation);
+    const turnId = conversation.k12TurnSeq ?? 0;
+    const turnTranscript = conversation.currentUserTranscript;
+    let curriculumInjected = false;
+    if (conversation.k12ContentOnly && this.shouldForceK12Fetch(turnTranscript)) {
+      this.sendToClient(conversation.clientWs, { type: "thinking" });
+      curriculumInjected = await this.injectK12CurriculumContext(conversation, turnId, turnTranscript);
+      if (conversation.k12TurnSeq !== turnId) {
+        console.log("[RealtimeVoice] Turn superseded during curriculum retrieval \u2014 abandoning stale response");
+        return;
+      }
     }
     if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
-      conversation.openaiWs.send(JSON.stringify({ type: "response.create" }));
+      const payload = curriculumInjected ? { type: "response.create", response: { tool_choice: "none" } } : { type: "response.create" };
+      conversation.openaiWs.send(JSON.stringify(payload));
+      if (curriculumInjected) {
+        console.log("[RealtimeVoice] Answering from injected curriculum in a single turn (tool_choice=none)");
+      }
     }
+  }
+  /**
+   * Turn a signed launch scope into the set of content packs voice retrieval is
+   * allowed to search. Deliberately mirrors the text path's precedence so the two
+   * modes never disagree about what a subject means:
+   *   - full board/medium/grade/subject → resolve from the scope mappings, even
+   *     if the identity also names a cp_id directly
+   *   - cp_id only (legacy identity)    → that single pack. Note retrieval only
+   *     honours the cp_id LIST, so a bare cp_id must be wrapped or it silently
+   *     goes unscoped
+   *   - partial / unresolvable          → [] (refuse), never "search everything"
+   */
+  async resolveVoiceCurriculumScope(businessAccountId, scope) {
+    if (!scope) return { cpIds: null, chapter: null };
+    const chapter = String(scope.chapter ?? "").trim() || null;
+    const cpId = String(scope.cpId ?? "").trim();
+    const board = String(scope.board ?? "").trim();
+    const medium = String(scope.medium ?? "").trim();
+    const grade = String(scope.grade ?? "").trim();
+    const subject = String(scope.subject ?? "").trim();
+    const fullScope = !!(board && medium && grade && subject);
+    const anyScope = !!(board || medium || grade || subject);
+    if (anyScope && !fullScope) {
+      console.warn("[RealtimeVoice] Partial launch scope (need board, medium, grade AND subject) \u2014 refusing curriculum for this session");
+      return { cpIds: [], chapter };
+    }
+    if (fullScope) {
+      try {
+        const cpIds = await resolveCpIdsForScope(businessAccountId, { board, medium, grade, subject });
+        if (cpIds.length === 0) {
+          console.warn("[RealtimeVoice] Launch scope matched no content package \u2014 refusing curriculum for this session:", { board, medium, grade, subject });
+        } else {
+          console.log(`[RealtimeVoice] Curriculum scope resolved to ${cpIds.length} content package(s)`, { board, medium, grade, subject, chapter });
+        }
+        return { cpIds, chapter };
+      } catch (err) {
+        console.error("[RealtimeVoice] Scope resolution failed \u2014 refusing curriculum for this session:", err.message);
+        return { cpIds: [], chapter };
+      }
+    }
+    if (cpId) {
+      console.log("[RealtimeVoice] Curriculum scope bound to a single content package from the launch identity", { chapter });
+      return { cpIds: [cpId], chapter };
+    }
+    console.warn("[RealtimeVoice] Launch identity carried neither a content package nor a scope \u2014 refusing curriculum for this session");
+    return { cpIds: [], chapter };
+  }
+  /**
+   * Did the curriculum lookup fail, as opposed to legitimately finding nothing?
+   *
+   * The resolvers swallow their own errors and hand back the same success:true
+   * envelope they use for a genuine no-match, so the message is the only signal
+   * there is. Getting this wrong in the "no-match" direction is the damaging
+   * one: the student is told their syllabus lacks a topic it actually contains.
+   */
+  looksLikeRetrievalFailure(result) {
+    if (!result || result.success === false) return true;
+    const message = typeof result.message === "string" ? result.message : "";
+    return message.startsWith("SYSTEM ERROR") || message.startsWith("Failed to fetch topics from external API") || message.startsWith("External API error");
   }
   /**
    * K12 content-only: retrieve curriculum for the student's question server-side
    * and inject it as a system context item so the next response is grounded.
    * Best-effort — on any failure we simply skip injection and let the normal
    * response proceed (never break the turn).
+   *
+   * Returns true when context was actually injected. The caller uses that to
+   * close tool calling for the turn: if the model can still reach for
+   * fetch_k12_topic it will, and a Realtime response ENDS at a function call —
+   * so the greeting sentence becomes one finished reply and the real answer
+   * becomes a second one, which is heard as the tutor cutting itself off.
    */
-  async injectK12CurriculumContext(conversation) {
-    const query = (conversation.currentUserTranscript || "").trim();
-    if (!query || !conversation.conversationId) return;
+  /**
+   * Rewrite the raw spoken utterance into a standalone curriculum-search query.
+   *
+   * Voice transcripts make poor embedding queries in two ways the typed path
+   * never hits: numbers arrive spelled out ("sixty-six gram" vs "66g"), and
+   * follow-ups arrive context-free ("let's get this again" says nothing about
+   * the mole concept the student is actually revisiting). A small text-model
+   * pass rewrites the utterance using the recent conversation, so retrieval
+   * sees the same kind of query chat does. Best-effort: any failure, timeout,
+   * or empty output falls back to the raw transcript — never FAILS the turn.
+   * It does add serial latency (bounded by the 4s timeout) before the response
+   * is created; the client shows "Thinking…" during this window, and the turn
+   * token in sendNormalResponse guards against a newer utterance racing it.
+   */
+  async buildK12RetrievalQuery(conversation, rawQuery) {
+    try {
+      const history = conversationMemory.getConversationHistory(conversation.userId).filter((m) => m.role === "user" || m.role === "assistant").slice(-6);
+      const historyText = history.length ? history.map((m) => `${m.role === "user" ? "Student" : "Tutor"}: ${m.content.slice(0, 400)}`).join("\n") : "(no earlier messages)";
+      const client = new OpenAI16({ apiKey: conversation.openaiApiKey });
+      const completion = await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0,
+        max_tokens: 60,
+        messages: [
+          {
+            role: "system",
+            content: `You rewrite a student's spoken utterance into ONE standalone search query for a curriculum content database. Rules:
+- Convert spelled-out numbers and units to digits/symbols ("sixty-six gram" \u2192 "66g").
+- If the utterance is a follow-up that refers to the earlier discussion ("explain again", "let's get this again", "what about the second one"), rewrite it as a full standalone question using the conversation context.
+- If the utterance is already a complete, self-contained question, return it with only number/unit normalization.
+- Output ONLY the rewritten query text. No quotes, no explanations.`
+          },
+          {
+            role: "user",
+            content: `Recent conversation:
+${historyText}
+
+Student's new spoken utterance: ${rawQuery}`
+          }
+        ]
+      }, { timeout: 4e3 });
+      try {
+        await aiUsageLogger.logUsage({
+          businessAccountId: conversation.businessAccountId,
+          category: "voice_mode",
+          model: "gpt-4o-mini",
+          tokensInput: completion.usage?.prompt_tokens || 0,
+          tokensOutput: completion.usage?.completion_tokens || 0,
+          metadata: { feature: "voice_k12_query_rewrite", conversationId: conversation.conversationId }
+        });
+      } catch {
+      }
+      const rewritten = (completion.choices[0]?.message?.content || "").trim().replace(/^["']|["']$/g, "");
+      if (rewritten && rewritten.length <= 300) {
+        if (rewritten.toLowerCase() !== rawQuery.toLowerCase()) {
+          console.log(`[RealtimeVoice] K12 retrieval query rewritten: "${rawQuery.slice(0, 60)}" \u2192 "${rewritten.slice(0, 60)}"`);
+        }
+        return rewritten;
+      }
+    } catch (err) {
+      console.warn("[RealtimeVoice] K12 query rewrite failed \u2014 using raw transcript:", err.message);
+    }
+    return rawQuery;
+  }
+  async injectK12CurriculumContext(conversation, turnId, turnTranscript) {
+    const rawQuery = (turnTranscript ?? conversation.currentUserTranscript ?? "").trim();
+    if (!rawQuery || !conversation.conversationId) return false;
+    const query = await this.buildK12RetrievalQuery(conversation, rawQuery);
+    if (turnId !== void 0 && conversation.k12TurnSeq !== turnId) return false;
     try {
       console.log("[RealtimeVoice] K12 content-only: retrieving curriculum server-side for query:", query.slice(0, 80));
       const result = await ToolExecutionService.executeTool(
@@ -60389,15 +62546,29 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           businessAccountId: conversation.businessAccountId,
           userId: conversation.userId,
           conversationId: conversation.conversationId,
-          userMessage: query
+          userMessage: query,
+          // Scope retrieval to the launch identity's curriculum, exactly as the
+          // text path does. Omitting these searches the whole account.
+          cpIds: conversation.topscholarCpIds,
+          chapter: conversation.topscholarChapter
         },
         query,
         false
       );
+      if (turnId !== void 0 && conversation.k12TurnSeq !== turnId) return false;
+      if (this.looksLikeRetrievalFailure(result)) {
+        console.warn("[RealtimeVoice] Curriculum retrieval failed this turn \u2014 skipping injection and leaving the lookup available:", typeof result?.message === "string" ? result.message.slice(0, 120) : result?.error);
+        return false;
+      }
+      conversation.pendingCurriculumMedia = this.extractCurriculumMedia(result, query);
+      conversation.pendingCurriculumMediaResponseId = null;
       const curriculum = this.compactK12Curriculum(result);
-      const instruction = curriculum ? `CURRICULUM CONTEXT for the student's question "${query}". Answer the student's question using ONLY the curriculum content below. If it does not contain the answer, tell the student you don't have that in the curriculum yet \u2014 do NOT use outside knowledge. Give a THOROUGH, COMPLETE spoken lesson that covers EVERY key point in this content (definitions, examples, sub-concepts, distinctions) \u2014 match the depth of a full written answer, do not summarize or shorten it. Convey structure out loud with spoken signposting ("First\u2026", "Next\u2026", "For example\u2026") rather than reading bullet symbols or markdown. Do NOT read this context aloud verbatim and do NOT mention tools or JSON; answer in a natural, warm teaching voice.
+      const provenance = `The curriculum lookup for this question has ALREADY BEEN RUN for you and its result is below. This is the complete result \u2014 there is nothing further to look up and no tool to call. Answer from it directly, in this same reply.`;
+      const instruction = curriculum ? `${provenance}
 
-${curriculum}` : `No curriculum content was found for the student's question "${query}". Tell the student you don't have that topic in the curriculum yet and invite them to ask about another topic. Do NOT answer from outside knowledge and do NOT mention tools or JSON.`;
+CURRICULUM CONTEXT for the student's question "${query}". Answer the student's question using ONLY the curriculum content below \u2014 every fact, definition, example, and explanation must come from it. SOLE NARROW EXCEPTION \u2014 completing a calculation: you ARE allowed and EXPECTED to reason and work through numerical problems step by step, and when this content provides the governing concept or formula you may supply ROUTINE SUPPORTING VALUES ONLY (standard constants such as atomic masses, molar masses, g = 9.8 m/s\xB2, unit conversions) to complete the calculation \u2014 the text-chat tutor computes these and you must give the SAME final answer it would. NEVER refuse a calculation this content governs just because a routine constant is missing. The exception covers standard constants and conversions, nothing else: if the content lacks a NON-routine fact the question needs, answer the supported part and say the curriculum doesn't cover the rest. If it does not cover the topic at all, tell the student you don't have that in the curriculum yet. Give a THOROUGH, COMPLETE spoken lesson that covers EVERY key point in this content (definitions, examples, sub-concepts, distinctions) \u2014 match the depth of a full written answer, do not summarize or shorten it. Convey structure out loud with spoken signposting ("First\u2026", "Next\u2026", "For example\u2026") rather than reading bullet symbols or markdown. Do NOT read this context aloud verbatim and do NOT mention tools or JSON; answer in a natural, warm teaching voice.
+
+${curriculum}` : `The curriculum lookup for the student's question "${query}" has ALREADY BEEN RUN for you and it found nothing. That is the final answer \u2014 there is nothing further to look up and no tool to call. Tell the student, in this same reply, that you don't have that topic in the curriculum yet and invite them to ask about another topic. Do NOT answer from outside knowledge and do NOT mention tools or JSON.`;
       if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
         conversation.openaiWs.send(JSON.stringify({
           type: "conversation.item.create",
@@ -60408,10 +62579,12 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
           }
         }));
         console.log("[RealtimeVoice] Injected K12 curriculum context (" + curriculum.length + " chars)");
+        return true;
       }
     } catch (err) {
       console.error("[RealtimeVoice] K12 curriculum retrieval failed, proceeding without injection:", err);
     }
+    return false;
   }
   /**
    * Flatten a fetch_k12_topic ToolResponse into a rich, speakable curriculum
@@ -60434,15 +62607,17 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
         const lines = [];
         if (header) lines.push(`### ${header}`);
         if (typeof r?.description === "string" && r.description.trim()) {
-          lines.push(`**Overview:** ${r.description.trim()}`);
+          const overview = this.stripMediaMarkdown(r.description);
+          if (overview) lines.push(`**Overview:** ${overview}`);
         }
         if (typeof r?.revisionNotes === "string" && r.revisionNotes.trim()) {
-          lines.push(r.revisionNotes.trim().slice(0, MAX_REVISION_CHARS));
+          const notes = this.stripMediaMarkdown(r.revisionNotes);
+          if (notes) lines.push(notes.slice(0, MAX_REVISION_CHARS));
         }
         if (Array.isArray(r?.notes) && r.notes.length > 0) {
           const noteSections = r.notes.filter((n) => n?.title || n?.content).slice(0, 10).map((n) => {
-            const title = typeof n?.title === "string" ? n.title.trim() : "";
-            const content = typeof n?.content === "string" ? n.content.trim().slice(0, MAX_NOTE_CHARS) : "";
+            const title = typeof n?.title === "string" ? this.stripMediaMarkdown(n.title) : "";
+            const content = typeof n?.content === "string" ? this.stripMediaMarkdown(n.content).slice(0, MAX_NOTE_CHARS) : "";
             return title && content ? `**${title}:** ${content}` : content || title;
           }).filter(Boolean);
           if (noteSections.length > 0) {
@@ -60454,6 +62629,116 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
       return parts.join("\n\n---\n\n");
     } catch {
       return "";
+    }
+  }
+  /**
+   * Remove Markdown image tags and every bare URL from text that is about to be
+   * handed to the model.
+   *
+   * This is not cosmetic. Retrieval appends the curriculum's images to the end of
+   * the notes as `![...](https://...)`. In the text path that is exactly what you
+   * want — the model echoes it and the browser renders a picture. A voice tutor
+   * would instead READ THE LINK OUT LOUD, which is jarring. Images reach the
+   * student through `pendingCurriculumMedia` and the on-screen bubble instead, so
+   * the model never needs to see a URL.
+   */
+  stripMediaMarkdown(text2) {
+    if (typeof text2 !== "string" || !text2) return "";
+    return text2.replace(/\s+xmlns(?::\w+)?="[^"]*"/gi, "").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[[^\]]*\]\((https?:\/\/[^)]+\.(?:png|jpe?g|gif|webp|svg)[^)]*)\)/gi, " ").replace(/https?:\/\/\S+/gi, " ").replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  /**
+   * Deep-clean a tool result before it is handed to the voice model: drop media
+   * fields outright and strip image Markdown / bare image URLs out of every
+   * string. The text path can safely pass these through because a browser
+   * renders them; a voice tutor would pronounce them.
+   */
+  sanitizeToolResultForVoice(value, depth = 0) {
+    if (depth > 8) return value;
+    if (typeof value === "string") return this.stripMediaMarkdown(value);
+    if (Array.isArray(value)) return value.map((v) => this.sanitizeToolResultForVoice(v, depth + 1));
+    if (value && typeof value === "object") {
+      const out = {};
+      for (const [key, v] of Object.entries(value)) {
+        if (key === "mediaUrls" || key === "mediaCandidates" || key === "imageUrl" || key === "imageUrls" || key === "thumbnailUrl") continue;
+        out[key] = this.sanitizeToolResultForVoice(v, depth + 1);
+      }
+      return out;
+    }
+    return value;
+  }
+  /**
+   * Pull the curriculum diagrams out of a retrieval result as CANDIDATES for the
+   * formatter pass to choose from.
+   *
+   * Each one carries the topic and chapter it came from, because that is the
+   * only way a later pass can tell whether the answer actually taught this
+   * diagram's subject or merely searched near it. Retrieval returns six passages
+   * and nearly all of them carry a picture, so handing this list straight to the
+   * screen is what produced a wall of six diagrams on every reply — including on
+   * refusals and filler.
+   *
+   * The cap here is only to bound the choosing prompt, NOT a display limit; at
+   * most two ever reach the student.
+   */
+  extractCurriculumMedia(result, query) {
+    try {
+      const data = Array.isArray(result?.data) ? result.data : [];
+      const candidates = [];
+      for (let rank = 0; rank < data.length; rank++) {
+        const passage = data[rank];
+        const structured = Array.isArray(passage?.mediaCandidates) ? passage.mediaCandidates : [];
+        for (const raw of structured) {
+          const url = typeof raw?.url === "string" ? raw.url.trim() : "";
+          if (!/^https?:\/\//i.test(url)) continue;
+          if (raw?.kind && raw.kind !== "image") continue;
+          candidates.push({
+            url,
+            kind: "image",
+            topic: typeof raw?.topic === "string" ? raw.topic : typeof passage?.name === "string" ? passage.name : "",
+            concept: typeof raw?.concept === "string" ? raw.concept : null,
+            subConcept: typeof raw?.subConcept === "string" ? raw.subConcept : null,
+            caption: typeof raw?.caption === "string" ? raw.caption : null,
+            alt: typeof raw?.alt === "string" ? raw.alt : null,
+            sourceRef: typeof raw?.sourceRef === "string" ? raw.sourceRef : null,
+            order: typeof raw?.order === "number" ? raw.order : 0,
+            chapter: typeof raw?.chapter === "string" ? raw.chapter : typeof passage?.chapterName === "string" ? passage.chapterName : "",
+            subject: typeof raw?.subject === "string" ? raw.subject : typeof passage?.subjectName === "string" ? passage.subjectName : "",
+            retrievalRank: typeof raw?.retrievalRank === "number" ? raw.retrievalRank : rank
+          });
+        }
+        const media = structured.length === 0 && Array.isArray(passage?.mediaUrls) ? passage.mediaUrls : [];
+        for (const raw of media) {
+          const url = typeof raw === "string" ? raw.trim() : "";
+          if (!/^https?:\/\//i.test(url)) continue;
+          candidates.push({
+            url,
+            kind: "image",
+            topic: typeof passage?.name === "string" ? passage.name : "",
+            concept: null,
+            subConcept: null,
+            caption: null,
+            alt: null,
+            sourceRef: null,
+            order: 0,
+            chapter: typeof passage?.chapterName === "string" ? passage.chapterName : "",
+            subject: typeof passage?.subjectName === "string" ? passage.subjectName : "",
+            retrievalRank: rank
+          });
+        }
+      }
+      const approved = selectRelevantImages(query, candidates);
+      console.log(
+        `[RealtimeVoice] Curriculum media gate: ${candidates.length} candidate(s), ${approved.length} approved`,
+        approved.map((candidate) => candidate.topic || candidate.concept || "untitled").slice(0, 2)
+      );
+      return approved.map((candidate) => ({
+        url: candidate.url,
+        topic: candidate.topic || candidate.concept || candidate.subConcept || "",
+        chapter: candidate.chapter || "",
+        subject: candidate.subject || ""
+      }));
+    } catch {
+      return [];
     }
   }
   /**
@@ -60498,18 +62783,31 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
           businessAccountId: conversation.businessAccountId,
           userId: conversation.userId,
           conversationId: conversation.conversationId,
-          userMessage: conversation.currentUserTranscript
+          userMessage: conversation.currentUserTranscript,
+          // Same curriculum scope as the server-side retrieval above — a tool the
+          // model invokes itself must not be a way around the session's scope.
+          cpIds: conversation.topscholarCpIds,
+          chapter: conversation.topscholarChapter
         },
         conversation.currentUserTranscript,
         appointmentsEnabled
       );
       console.log("[RealtimeVoice] Tool execution result:", result);
+      const toolQuery = typeof args?.query === "string" ? args.query : conversation.currentUserTranscript || "";
+      const toolMedia = this.extractCurriculumMedia(result, toolQuery);
+      if (toolMedia.length > 0) {
+        conversation.pendingCurriculumMedia = toolMedia;
+        conversation.pendingCurriculumMediaResponseId = null;
+      }
       const toolOutput = {
         type: "conversation.item.create",
         item: {
           type: "function_call_output",
           call_id,
-          output: JSON.stringify(result)
+          // Sanitized: the raw result carries mediaUrls and image Markdown inside
+          // the notes. Handing those to a SPEAKING model invites it to read the
+          // URL out loud. Images reach the student via the out-of-band channel.
+          output: JSON.stringify(this.sanitizeToolResultForVoice(result))
         }
       };
       if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
@@ -60582,8 +62880,26 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
     switch (message.type) {
       case "interrupt":
         console.log("[RealtimeVoice] User interrupted AI");
-        this.cancelResponse(conversation, true);
-        this.sendToClient(conversation.clientWs, { type: "interrupt_ack" });
+        const preservedDisplay = this.hasDisplayedCanonicalAnswer(
+          conversation,
+          conversation.currentResponseId
+        );
+        const cancelled = this.cancelResponse(conversation, false);
+        this.sendToClient(conversation.clientWs, {
+          type: cancelled ? "interrupt_ack" : "interrupt_ignored",
+          preservedDisplay
+        });
+        break;
+      case "playback_complete":
+        if (message.responseId && message.responseId === conversation.currentResponseId && conversation.currentResponseKind === "canonical") {
+          conversation.currentResponseKind = void 0;
+          conversation.canonicalPersistedMessageId = void 0;
+          conversation.canonicalPersistedResponseId = void 0;
+          conversation.canonicalPersistedContent = void 0;
+          conversation.canonicalDisplayReadyResponseId = void 0;
+          conversation.activeElevenLabsStartedAt = void 0;
+          console.log("[RealtimeVoice] Canonical playback completed:", message.responseId);
+        }
         break;
       case "pong":
         conversation.lastHeartbeat = Date.now();
@@ -60643,7 +62959,7 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
           continue;
         }
         conversation.currentAITranscript = (conversation.currentAITranscript || "") + chunkText2;
-        if (!cancelled) {
+        if (!cancelled && !this.isSpeechHeld(conversation)) {
           this.sendToClient(conversation.clientWs, {
             type: "ai_chunk",
             text: chunkText2,
@@ -60704,6 +63020,7 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
       }
       if (cancelled) return;
       conversation.currentAITranscript = (conversation.currentAITranscript || "") + trimmedFull;
+      if (this.isSpeechHeld(conversation)) return;
       this.sendToClient(conversation.clientWs, {
         type: "ai_chunk",
         text: trimmedFull,
@@ -60720,6 +63037,126 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
     if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
       conversation.lastSynthesizedResponseId = conversation.currentResponseId;
     }
+  }
+  // True while the CURRENT response is a show-then-speak hold: nothing is shown
+  // or spoken incrementally; the release path at response.done does both.
+  isSpeechHeld(conversation) {
+    return !!conversation.holdSpeechResponseId && conversation.holdSpeechResponseId === conversation.currentResponseId;
+  }
+  /**
+   * SHOW-THEN-SPEAK release for any held voice answer.
+   *
+   * Order is the whole point: (1) run the display formatter on the COMPLETE
+   * transcript, (2) derive a readable plain-text fallback when it cannot
+   * format, (3) persist the display version, (4) push the display version and
+   * raw speech transcript together before ANY audio, and (5) release either
+   * buffered OpenAI audio or ElevenLabs TTS. Every await re-checks cancellation
+   * so a barge-in during formatting shows and speaks nothing.
+   */
+  async releaseHeldAnswer(conversation, transcript, responseId, diagramCandidates) {
+    const abandoned = () => conversation.cancelledResponseIds.has(responseId) || conversation.currentResponseId !== responseId || conversation.clientWs.readyState !== WebSocket.OPEN;
+    let result = null;
+    if (conversation.openaiApiKey) {
+      try {
+        result = await formatVoiceTranscript(
+          transcript,
+          conversation.openaiApiKey,
+          conversation.businessAccountId,
+          conversation.conversationId,
+          diagramCandidates
+        );
+      } catch (err) {
+        console.warn("[RealtimeVoice] Held-answer formatter failed, using readable display fallback:", err.message);
+      }
+    }
+    if (abandoned()) {
+      console.log("[RealtimeVoice] Held answer abandoned during formatting, responseId:", responseId);
+      return;
+    }
+    const displayMarkdown = result?.formattedMarkdown || createVoiceDisplayFallback(transcript);
+    let savedMessageId;
+    const discardPersistedAnswer = async (stage) => {
+      if (!savedMessageId) return;
+      try {
+        await storage.deleteMessage(savedMessageId, conversation.businessAccountId);
+      } catch (err) {
+        console.warn("[RealtimeVoice] Could not remove abandoned voice message:", err.message);
+      }
+      savedMessageId = void 0;
+      console.log("[RealtimeVoice] Discarded held answer abandoned during", stage, "responseId:", responseId);
+    };
+    if (conversation.conversationId) {
+      try {
+        savedMessageId = await this.saveMessageToDB(conversation.conversationId, "assistant", transcript);
+      } catch (err) {
+        console.warn("[RealtimeVoice] Could not save held answer before release:", err.message);
+      }
+      if (abandoned()) {
+        await discardPersistedAnswer("message persistence");
+        return;
+      }
+      if (savedMessageId) {
+        try {
+          await storage.updateMessageMetadata(savedMessageId, {
+            formattedContent: displayMarkdown,
+            formatSubject: result?.subject || "other"
+          });
+        } catch (err) {
+          console.warn("[RealtimeVoice] Could not persist display content for held answer:", err.message);
+        }
+        if (abandoned()) {
+          await discardPersistedAnswer("display persistence");
+          return;
+        }
+      }
+    }
+    conversationMemory.storeMessage(conversation.userId, "assistant", transcript);
+    this.sendToClient(conversation.clientWs, {
+      type: "ai_chunk",
+      text: transcript,
+      displayMarkdown,
+      responseId,
+      final: true
+    });
+    console.log(
+      `[RealtimeVoice] Held answer released with ${result?.formattedMarkdown ? "formatted" : "fallback"} display content`,
+      `(${result?.imageUrls?.length ?? 0} diagram(s)), responseId:`,
+      responseId
+    );
+    if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
+      conversation.lastSynthesizedResponseId = responseId;
+      this.enqueueSentenceForTts(conversation, transcript, responseId);
+    } else {
+      this.releaseBufferedOpenAIAudio(conversation, responseId);
+    }
+  }
+  releaseBufferedOpenAIAudio(conversation, responseId) {
+    const audioChunks = conversation.openaiAudioFallbackBuffer || [];
+    conversation.openaiAudioFallbackBuffer = [];
+    if (conversation.cancelledResponseIds.has(responseId) || conversation.currentResponseId !== responseId || conversation.clientWs.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    for (const chunk of audioChunks) {
+      conversation.clientWs.send(chunk);
+    }
+    console.log("[RealtimeVoice] Released buffered OpenAI audio chunks:", audioChunks.length, "responseId:", responseId);
+  }
+  // True while ANY ElevenLabs producer may still send PCM to the client:
+  // the sentence queue (draining or non-empty) or a direct whole-transcript
+  // synth (activeElevenLabsAbort is registered for its whole streaming life).
+  isTtsProducing(conversation) {
+    return !!(conversation.ttsDraining || conversation.ttsQueue && conversation.ttsQueue.length > 0 || conversation.activeElevenLabsAbort || conversation.activeOpenAITtsAbort);
+  }
+  // Send a deferred ai_done once every TTS producer is idle. Bound to the
+  // responseId captured at deferral time: a barge-in clears it, and a
+  // cancelled response must not emit a spurious done for a later one.
+  flushDeferredAiDone(conversation) {
+    const pendingId = conversation.pendingAiDoneResponseId;
+    if (!pendingId || this.isTtsProducing(conversation)) return;
+    conversation.pendingAiDoneResponseId = void 0;
+    if (pendingId !== "unknown" && conversation.cancelledResponseIds.has(pendingId)) return;
+    this.sendToClient(conversation.clientWs, { type: "ai_done", responseId: pendingId });
+    console.log("[RealtimeVoice] Sent deferred ai_done (responseId:", pendingId, ")");
   }
   // Queue a complete sentence for sequential synthesis. The drainer guarantees
   // only one synth streams PCM to the client at a time, in order.
@@ -60760,6 +63197,7 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
         conversation.activeElevenLabsStartedAt = void 0;
         conversation.ttsResponseId = void 0;
       }
+      this.flushDeferredAiDone(conversation);
     }
   }
   // Stream one sentence's PCM to the client. Unlike synthesizeWithElevenLabs
@@ -60803,6 +63241,86 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
       }
     }
   }
+  /**
+   * Speak a canonical answer with OpenAI's text-to-speech endpoint. Realtime is
+   * deliberately not asked to author or restate the answer: the exact
+   * speech-safe script is the TTS input.
+   */
+  async synthesizeWithOpenAI(conversation, text2, responseId) {
+    if (!text2.trim()) return;
+    if (conversation.activeOpenAITtsAbort) {
+      try {
+        conversation.activeOpenAITtsAbort.abort();
+      } catch {
+      }
+    }
+    const abortController = new AbortController();
+    conversation.activeOpenAITtsAbort = abortController;
+    conversation.activeOpenAITtsResponseId = responseId;
+    const supportedVoices = /* @__PURE__ */ new Set([
+      "alloy",
+      "ash",
+      "ballad",
+      "coral",
+      "echo",
+      "fable",
+      "marin",
+      "nova",
+      "onyx",
+      "sage",
+      "shimmer",
+      "verse"
+    ]);
+    const voice = supportedVoices.has(conversation.selectedVoice || "") ? conversation.selectedVoice : "shimmer";
+    const chunks = [];
+    let remaining = text2.trim();
+    while (remaining.length > 3500) {
+      const window = remaining.slice(0, 3500);
+      const sentenceBreak = Math.max(
+        window.lastIndexOf(". "),
+        window.lastIndexOf("? "),
+        window.lastIndexOf("! "),
+        window.lastIndexOf("\n")
+      );
+      const splitAt = sentenceBreak > 1e3 ? sentenceBreak + 1 : window.lastIndexOf(" ");
+      const safeSplit = splitAt > 0 ? splitAt : 3500;
+      chunks.push(remaining.slice(0, safeSplit).trim());
+      remaining = remaining.slice(safeSplit).trim();
+    }
+    if (remaining) chunks.push(remaining);
+    try {
+      const client = new OpenAI16({ apiKey: conversation.openaiApiKey });
+      for (const chunk of chunks) {
+        if (abortController.signal.aborted || conversation.cancelledResponseIds.has(responseId) || conversation.currentResponseId !== responseId) return;
+        const audioResponse = await client.audio.speech.create({
+          model: "gpt-4o-mini-tts",
+          voice,
+          input: chunk,
+          response_format: "pcm"
+        }, { signal: abortController.signal });
+        const pcm = Buffer.from(await audioResponse.arrayBuffer());
+        if (abortController.signal.aborted || conversation.cancelledResponseIds.has(responseId) || conversation.currentResponseId !== responseId || conversation.clientWs.readyState !== WebSocket.OPEN) return;
+        conversation.activeElevenLabsStartedAt ||= Date.now();
+        const evenLength = pcm.length & ~1;
+        for (let offset = 0; offset < evenLength; offset += 32 * 1024) {
+          if (abortController.signal.aborted || conversation.cancelledResponseIds.has(responseId) || conversation.currentResponseId !== responseId) return;
+          conversation.clientWs.send(pcm.subarray(offset, Math.min(offset + 32 * 1024, evenLength)));
+        }
+      }
+    } catch (error) {
+      const errName = error?.name;
+      if (errName === "AbortError" || abortController.signal.aborted) return;
+      console.error("[RealtimeVoice] OpenAI TTS failed:", error instanceof Error ? error.message : String(error));
+    } finally {
+      if (conversation.activeOpenAITtsAbort === abortController) {
+        conversation.activeOpenAITtsAbort = void 0;
+        conversation.activeOpenAITtsResponseId = void 0;
+        if (conversation.currentResponseKind !== "canonical") {
+          conversation.activeElevenLabsStartedAt = void 0;
+        }
+      }
+    }
+  }
   async synthesizeWithElevenLabs(conversation, text2) {
     if (!conversation.elevenlabsApiKey || !conversation.elevenlabsVoiceId) return;
     if (conversation.activeElevenLabsAbort) {
@@ -60816,7 +63334,6 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
     const synthResponseId = conversation.currentResponseId;
     conversation.activeElevenLabsAbort = abortController;
     conversation.activeElevenLabsResponseId = synthResponseId;
-    conversation.activeElevenLabsStartedAt = Date.now();
     try {
       console.log("[RealtimeVoice] Streaming ElevenLabs TTS, text length:", text2.length, "responseId:", synthResponseId);
       let leftover = null;
@@ -60842,6 +63359,7 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
             return;
           }
           if (conversation.clientWs.readyState !== WebSocket.OPEN) return;
+          conversation.activeElevenLabsStartedAt ||= Date.now();
           const merged = leftover ? Buffer.concat([leftover, chunk]) : chunk;
           const evenLen = merged.length & ~1;
           if (evenLen > 0) {
@@ -60877,8 +63395,11 @@ ${curriculum}` : `No curriculum content was found for the student's question "${
       if (conversation.activeElevenLabsAbort === abortController) {
         conversation.activeElevenLabsAbort = void 0;
         conversation.activeElevenLabsResponseId = void 0;
-        conversation.activeElevenLabsStartedAt = void 0;
+        if (conversation.currentResponseKind !== "canonical") {
+          conversation.activeElevenLabsStartedAt = void 0;
+        }
       }
+      this.flushDeferredAiDone(conversation);
     }
   }
 };
@@ -63827,7 +66348,7 @@ init_db();
 init_schema();
 init_auth();
 import { Router } from "express";
-import { eq as eq26, and as and21, desc as desc8, sql as sql17, or as or3 } from "drizzle-orm";
+import { eq as eq27, and as and22, desc as desc8, sql as sql18, or as or3 } from "drizzle-orm";
 
 // server/services/erpClient.ts
 import crypto6 from "crypto";
@@ -64193,14 +66714,14 @@ async function createErpClient(config) {
 // server/services/erpSyncService.ts
 init_db();
 init_schema();
-import { eq as eq24, and as and19, sql as sql15 } from "drizzle-orm";
+import { eq as eq25, and as and20, sql as sql16 } from "drizzle-orm";
 init_productImageEmbeddingService();
 
 // server/services/openAiBatchService.ts
 init_db();
 init_schema();
 import OpenAI18 from "openai";
-import { eq as eq23, and as and18 } from "drizzle-orm";
+import { eq as eq24, and as and19 } from "drizzle-orm";
 var OpenAiBatchService = class {
   openai = null;
   businessAccountId;
@@ -64346,9 +66867,9 @@ var OpenAiBatchService = class {
   }
   async checkBatchStatus(batchJobId) {
     const [batchJob] = await db.select().from(openAiBatchJobs).where(
-      and18(
-        eq23(openAiBatchJobs.id, batchJobId),
-        eq23(openAiBatchJobs.businessAccountId, this.businessAccountId)
+      and19(
+        eq24(openAiBatchJobs.id, batchJobId),
+        eq24(openAiBatchJobs.businessAccountId, this.businessAccountId)
       )
     ).limit(1);
     if (!batchJob || !batchJob.openAiBatchId) {
@@ -64394,7 +66915,7 @@ var OpenAiBatchService = class {
       if (batch.errors?.data && batch.errors.data.length > 0) {
         updates.errorDetails = batch.errors.data;
       }
-      await db.update(openAiBatchJobs).set(updates).where(eq23(openAiBatchJobs.id, batchJobId));
+      await db.update(openAiBatchJobs).set(updates).where(eq24(openAiBatchJobs.id, batchJobId));
       return { ...batchJob, ...updates };
     } catch (error) {
       console.error("[OpenAI Batch] Failed to check batch status:", error.message);
@@ -64403,9 +66924,9 @@ var OpenAiBatchService = class {
   }
   async processBatchResults(batchJobId) {
     const [batchJob] = await db.select().from(openAiBatchJobs).where(
-      and18(
-        eq23(openAiBatchJobs.id, batchJobId),
-        eq23(openAiBatchJobs.businessAccountId, this.businessAccountId)
+      and19(
+        eq24(openAiBatchJobs.id, batchJobId),
+        eq24(openAiBatchJobs.businessAccountId, this.businessAccountId)
       )
     ).limit(1);
     if (!batchJob || !batchJob.openAiOutputFileId) {
@@ -64465,7 +66986,7 @@ var OpenAiBatchService = class {
         status: "completed",
         results: { processed, failed },
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq23(openAiBatchJobs.id, batchJobId));
+      }).where(eq24(openAiBatchJobs.id, batchJobId));
       console.log(`[OpenAI Batch] Processed ${processed} results, ${failed} failed`);
       return { processed, failed };
     } catch (error) {
@@ -64474,15 +66995,15 @@ var OpenAiBatchService = class {
         status: "failed",
         errorMessage: error.message,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq23(openAiBatchJobs.id, batchJobId));
+      }).where(eq24(openAiBatchJobs.id, batchJobId));
       return { processed: 0, failed: 0 };
     }
   }
   async saveEmbedding(product, embedding, visualDescription) {
     const [existing] = await db.select().from(productEmbeddings).where(
-      and18(
-        eq23(productEmbeddings.businessAccountId, this.businessAccountId),
-        product.erpProductId ? eq23(productEmbeddings.erpProductId, product.erpProductId) : eq23(productEmbeddings.productId, product.productId)
+      and19(
+        eq24(productEmbeddings.businessAccountId, this.businessAccountId),
+        product.erpProductId ? eq24(productEmbeddings.erpProductId, product.erpProductId) : eq24(productEmbeddings.productId, product.productId)
       )
     ).limit(1);
     if (existing) {
@@ -64494,7 +67015,7 @@ var OpenAiBatchService = class {
         lastSyncedAt: /* @__PURE__ */ new Date(),
         syncVersion: (existing.syncVersion || 0) + 1,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq23(productEmbeddings.id, existing.id));
+      }).where(eq24(productEmbeddings.id, existing.id));
     } else {
       await db.insert(productEmbeddings).values({
         businessAccountId: this.businessAccountId,
@@ -64512,34 +67033,34 @@ var OpenAiBatchService = class {
   }
   async saveVisualDescription(product, description) {
     const [existing] = await db.select().from(productEmbeddings).where(
-      and18(
-        eq23(productEmbeddings.businessAccountId, this.businessAccountId),
-        product.erpProductId ? eq23(productEmbeddings.erpProductId, product.erpProductId) : eq23(productEmbeddings.productId, product.productId)
+      and19(
+        eq24(productEmbeddings.businessAccountId, this.businessAccountId),
+        product.erpProductId ? eq24(productEmbeddings.erpProductId, product.erpProductId) : eq24(productEmbeddings.productId, product.productId)
       )
     ).limit(1);
     if (existing) {
       await db.update(productEmbeddings).set({
         visualDescription: description,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq23(productEmbeddings.id, existing.id));
+      }).where(eq24(productEmbeddings.id, existing.id));
     }
   }
   async getPendingBatchJobs() {
     return await db.select().from(openAiBatchJobs).where(
-      and18(
-        eq23(openAiBatchJobs.businessAccountId, this.businessAccountId),
-        eq23(openAiBatchJobs.status, "in_progress")
+      and19(
+        eq24(openAiBatchJobs.businessAccountId, this.businessAccountId),
+        eq24(openAiBatchJobs.status, "in_progress")
       )
     );
   }
   async getRecentBatchJobs(limit = 10) {
-    return await db.select().from(openAiBatchJobs).where(eq23(openAiBatchJobs.businessAccountId, this.businessAccountId)).orderBy(openAiBatchJobs.createdAt).limit(limit);
+    return await db.select().from(openAiBatchJobs).where(eq24(openAiBatchJobs.businessAccountId, this.businessAccountId)).orderBy(openAiBatchJobs.createdAt).limit(limit);
   }
   async cancelBatchJob(batchJobId) {
     const [batchJob] = await db.select().from(openAiBatchJobs).where(
-      and18(
-        eq23(openAiBatchJobs.id, batchJobId),
-        eq23(openAiBatchJobs.businessAccountId, this.businessAccountId)
+      and19(
+        eq24(openAiBatchJobs.id, batchJobId),
+        eq24(openAiBatchJobs.businessAccountId, this.businessAccountId)
       )
     ).limit(1);
     if (!batchJob || !batchJob.openAiBatchId) {
@@ -64553,7 +67074,7 @@ var OpenAiBatchService = class {
       await db.update(openAiBatchJobs).set({
         status: "cancelled",
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq23(openAiBatchJobs.id, batchJobId));
+      }).where(eq24(openAiBatchJobs.id, batchJobId));
       return true;
     } catch (error) {
       console.error("[OpenAI Batch] Failed to cancel batch:", error.message);
@@ -64587,10 +67108,10 @@ var ErpSyncService = class {
   }
   async initialize() {
     const [config] = await db.select().from(erpConfigurations).where(
-      and19(
-        eq24(erpConfigurations.businessAccountId, this.businessAccountId),
-        eq24(erpConfigurations.isActive, "true"),
-        eq24(erpConfigurations.syncEnabled, "true")
+      and20(
+        eq25(erpConfigurations.businessAccountId, this.businessAccountId),
+        eq25(erpConfigurations.isActive, "true"),
+        eq25(erpConfigurations.syncEnabled, "true")
       )
     ).limit(1);
     if (!config) {
@@ -64621,7 +67142,7 @@ var ErpSyncService = class {
   }
   async updateSyncLog(updates) {
     if (!this.syncLogId) return;
-    await db.update(erpSyncLogs).set(updates).where(eq24(erpSyncLogs.id, this.syncLogId));
+    await db.update(erpSyncLogs).set(updates).where(eq25(erpSyncLogs.id, this.syncLogId));
   }
   async cacheProduct(product) {
     const cacheData = {
@@ -64676,9 +67197,9 @@ var ErpSyncService = class {
         await this.rateLimitDelay(rateLimit);
       }
       const [existingEmbedding] = await db.select().from(productEmbeddings).where(
-        and19(
-          eq24(productEmbeddings.businessAccountId, this.businessAccountId),
-          eq24(productEmbeddings.erpProductId, product.id)
+        and20(
+          eq25(productEmbeddings.businessAccountId, this.businessAccountId),
+          eq25(productEmbeddings.erpProductId, product.id)
         )
       ).limit(1);
       const { embedding, visualDescription } = await productImageEmbeddingService.generateEmbeddingFromUrl(
@@ -64701,7 +67222,7 @@ var ErpSyncService = class {
           lastSyncedAt: /* @__PURE__ */ new Date(),
           syncVersion: (existingEmbedding.syncVersion || 0) + 1,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq24(productEmbeddings.id, existingEmbedding.id));
+        }).where(eq25(productEmbeddings.id, existingEmbedding.id));
         this.progress.updatedEmbeddings++;
       } else {
         await db.insert(productEmbeddings).values({
@@ -64958,7 +67479,7 @@ var ErpSyncService = class {
     }
   }
   async resumeInterruptedSync(syncLogId) {
-    const [log2] = await db.select().from(erpSyncLogs).where(eq24(erpSyncLogs.id, syncLogId)).limit(1);
+    const [log2] = await db.select().from(erpSyncLogs).where(eq25(erpSyncLogs.id, syncLogId)).limit(1);
     if (!log2 || log2.status !== "running") {
       return null;
     }
@@ -64973,31 +67494,31 @@ var ErpSyncService = class {
   }
   static async getLastSyncTime(businessAccountId) {
     const [lastLog] = await db.select().from(erpSyncLogs).where(
-      and19(
-        eq24(erpSyncLogs.businessAccountId, businessAccountId),
-        eq24(erpSyncLogs.status, "completed")
+      and20(
+        eq25(erpSyncLogs.businessAccountId, businessAccountId),
+        eq25(erpSyncLogs.status, "completed")
       )
-    ).orderBy(sql15`${erpSyncLogs.completedAt} DESC`).limit(1);
+    ).orderBy(sql16`${erpSyncLogs.completedAt} DESC`).limit(1);
     return lastLog?.completedAt || null;
   }
   static async getSyncLogs(businessAccountId, limit = 10) {
-    const logs = await db.select().from(erpSyncLogs).where(eq24(erpSyncLogs.businessAccountId, businessAccountId)).orderBy(sql15`${erpSyncLogs.startedAt} DESC`).limit(limit);
+    const logs = await db.select().from(erpSyncLogs).where(eq25(erpSyncLogs.businessAccountId, businessAccountId)).orderBy(sql16`${erpSyncLogs.startedAt} DESC`).limit(limit);
     return logs;
   }
   static async getInterruptedSyncs(businessAccountId) {
     const logs = await db.select().from(erpSyncLogs).where(
-      and19(
-        eq24(erpSyncLogs.businessAccountId, businessAccountId),
-        eq24(erpSyncLogs.status, "running")
+      and20(
+        eq25(erpSyncLogs.businessAccountId, businessAccountId),
+        eq25(erpSyncLogs.status, "running")
       )
-    ).orderBy(sql15`${erpSyncLogs.startedAt} DESC`);
+    ).orderBy(sql16`${erpSyncLogs.startedAt} DESC`);
     return logs;
   }
   static async getEmbeddingCount(businessAccountId) {
-    const [result] = await db.select({ count: sql15`count(*)` }).from(productEmbeddings).where(
-      and19(
-        eq24(productEmbeddings.businessAccountId, businessAccountId),
-        eq24(productEmbeddings.isActive, "true")
+    const [result] = await db.select({ count: sql16`count(*)` }).from(productEmbeddings).where(
+      and20(
+        eq25(productEmbeddings.businessAccountId, businessAccountId),
+        eq25(productEmbeddings.isActive, "true")
       )
     );
     return Number(result?.count || 0);
@@ -65010,7 +67531,7 @@ async function createErpSyncService(businessAccountId) {
 // server/services/productProvider.ts
 init_db();
 init_schema();
-import { eq as eq25, and as and20, gte as gte4, lte as lte2, ilike as ilike2, or as or2, sql as sql16, desc as desc7 } from "drizzle-orm";
+import { eq as eq26, and as and21, gte as gte4, lte as lte2, ilike as ilike2, or as or2, sql as sql17, desc as desc7 } from "drizzle-orm";
 var ProductProvider = class {
   businessAccountId;
   erpConfig = null;
@@ -65022,9 +67543,9 @@ var ProductProvider = class {
   }
   async initialize() {
     const [erpConfig] = await db.select().from(erpConfigurations).where(
-      and20(
-        eq25(erpConfigurations.businessAccountId, this.businessAccountId),
-        eq25(erpConfigurations.isActive, "true")
+      and21(
+        eq26(erpConfigurations.businessAccountId, this.businessAccountId),
+        eq26(erpConfigurations.isActive, "true")
       )
     ).limit(1);
     if (erpConfig) {
@@ -65122,8 +67643,8 @@ var ProductProvider = class {
     const { query, categoryId, minPrice, maxPrice, page = 1, perPage = 20 } = params;
     const offset = (page - 1) * perPage;
     const conditions = [
-      eq25(erpProductCache.businessAccountId, this.businessAccountId),
-      eq25(erpProductCache.isValid, "true")
+      eq26(erpProductCache.businessAccountId, this.businessAccountId),
+      eq26(erpProductCache.isValid, "true")
     ];
     if (query) {
       conditions.push(
@@ -65135,7 +67656,7 @@ var ProductProvider = class {
       );
     }
     if (categoryId) {
-      conditions.push(eq25(erpProductCache.category, categoryId));
+      conditions.push(eq26(erpProductCache.category, categoryId));
     }
     if (minPrice !== void 0) {
       conditions.push(gte4(erpProductCache.price, String(minPrice)));
@@ -65143,9 +67664,9 @@ var ProductProvider = class {
     if (maxPrice !== void 0) {
       conditions.push(lte2(erpProductCache.price, String(maxPrice)));
     }
-    const [countResult] = await db.select({ count: sql16`count(*)` }).from(erpProductCache).where(and20(...conditions));
+    const [countResult] = await db.select({ count: sql17`count(*)` }).from(erpProductCache).where(and21(...conditions));
     const total = Number(countResult?.count || 0);
-    const cachedProducts = await db.select().from(erpProductCache).where(and20(...conditions)).orderBy(desc7(erpProductCache.cachedAt)).limit(perPage).offset(offset);
+    const cachedProducts = await db.select().from(erpProductCache).where(and21(...conditions)).orderBy(desc7(erpProductCache.cachedAt)).limit(perPage).offset(offset);
     return {
       products: cachedProducts.map((p) => this.normalizeCachedProduct(p)),
       pagination: {
@@ -65160,7 +67681,7 @@ var ProductProvider = class {
   async searchLocalProducts(params) {
     const { query, categoryId, minPrice, maxPrice, page = 1, perPage = 20 } = params;
     const offset = (page - 1) * perPage;
-    const conditions = [eq25(products.businessAccountId, this.businessAccountId)];
+    const conditions = [eq26(products.businessAccountId, this.businessAccountId)];
     if (query) {
       conditions.push(
         or2(
@@ -65175,9 +67696,9 @@ var ProductProvider = class {
     if (maxPrice !== void 0) {
       conditions.push(lte2(products.price, String(maxPrice)));
     }
-    const [countResult] = await db.select({ count: sql16`count(*)` }).from(products).where(and20(...conditions));
+    const [countResult] = await db.select({ count: sql17`count(*)` }).from(products).where(and21(...conditions));
     const total = Number(countResult?.count || 0);
-    const localProducts = await db.select().from(products).where(and20(...conditions)).orderBy(desc7(products.createdAt)).limit(perPage).offset(offset);
+    const localProducts = await db.select().from(products).where(and21(...conditions)).orderBy(desc7(products.createdAt)).limit(perPage).offset(offset);
     return {
       products: localProducts.map((p) => this.normalizeLocalProduct(p)),
       pagination: {
@@ -65200,9 +67721,9 @@ var ProductProvider = class {
         console.error("Failed to fetch product from ERP:", error);
       }
       const [cached] = await db.select().from(erpProductCache).where(
-        and20(
-          eq25(erpProductCache.businessAccountId, this.businessAccountId),
-          eq25(erpProductCache.erpProductId, productId)
+        and21(
+          eq26(erpProductCache.businessAccountId, this.businessAccountId),
+          eq26(erpProductCache.erpProductId, productId)
         )
       ).limit(1);
       if (cached) {
@@ -65210,9 +67731,9 @@ var ProductProvider = class {
       }
     }
     const [localProduct] = await db.select().from(products).where(
-      and20(
-        eq25(products.businessAccountId, this.businessAccountId),
-        eq25(products.id, productId)
+      and21(
+        eq26(products.businessAccountId, this.businessAccountId),
+        eq26(products.id, productId)
       )
     ).limit(1);
     if (localProduct) {
@@ -65239,19 +67760,19 @@ var ProductProvider = class {
         console.error("Failed to fetch categories from ERP:", error);
       }
     }
-    const localCategories = await db.select().from(categories).where(eq25(categories.businessAccountId, this.businessAccountId));
+    const localCategories = await db.select().from(categories).where(eq26(categories.businessAccountId, this.businessAccountId));
     return localCategories.map((c) => ({ id: c.id, name: c.name }));
   }
   async getPriceRange() {
     if (this.hasErpEnabled()) {
       const [result2] = await db.select({
-        min: sql16`COALESCE(MIN(CAST(price AS DECIMAL)), 0)`,
-        max: sql16`COALESCE(MAX(CAST(price AS DECIMAL)), 0)`,
-        avg: sql16`COALESCE(AVG(CAST(price AS DECIMAL)), 0)`
+        min: sql17`COALESCE(MIN(CAST(price AS DECIMAL)), 0)`,
+        max: sql17`COALESCE(MAX(CAST(price AS DECIMAL)), 0)`,
+        avg: sql17`COALESCE(AVG(CAST(price AS DECIMAL)), 0)`
       }).from(erpProductCache).where(
-        and20(
-          eq25(erpProductCache.businessAccountId, this.businessAccountId),
-          eq25(erpProductCache.isValid, "true")
+        and21(
+          eq26(erpProductCache.businessAccountId, this.businessAccountId),
+          eq26(erpProductCache.isValid, "true")
         )
       );
       return {
@@ -65261,10 +67782,10 @@ var ProductProvider = class {
       };
     }
     const [result] = await db.select({
-      min: sql16`COALESCE(MIN(CAST(price AS DECIMAL)), 0)`,
-      max: sql16`COALESCE(MAX(CAST(price AS DECIMAL)), 0)`,
-      avg: sql16`COALESCE(AVG(CAST(price AS DECIMAL)), 0)`
-    }).from(products).where(eq25(products.businessAccountId, this.businessAccountId));
+      min: sql17`COALESCE(MIN(CAST(price AS DECIMAL)), 0)`,
+      max: sql17`COALESCE(MAX(CAST(price AS DECIMAL)), 0)`,
+      avg: sql17`COALESCE(AVG(CAST(price AS DECIMAL)), 0)`
+    }).from(products).where(eq26(products.businessAccountId, this.businessAccountId));
     return {
       min: Number(result?.min || 0),
       max: Number(result?.max || 0),
@@ -65273,15 +67794,15 @@ var ProductProvider = class {
   }
   async getProductCount() {
     if (this.hasErpEnabled()) {
-      const [result2] = await db.select({ count: sql16`count(*)` }).from(erpProductCache).where(
-        and20(
-          eq25(erpProductCache.businessAccountId, this.businessAccountId),
-          eq25(erpProductCache.isValid, "true")
+      const [result2] = await db.select({ count: sql17`count(*)` }).from(erpProductCache).where(
+        and21(
+          eq26(erpProductCache.businessAccountId, this.businessAccountId),
+          eq26(erpProductCache.isValid, "true")
         )
       );
       return Number(result2?.count || 0);
     }
-    const [result] = await db.select({ count: sql16`count(*)` }).from(products).where(eq25(products.businessAccountId, this.businessAccountId));
+    const [result] = await db.select({ count: sql17`count(*)` }).from(products).where(eq26(products.businessAccountId, this.businessAccountId));
     return Number(result?.count || 0);
   }
 };
@@ -65296,7 +67817,7 @@ var router = Router();
 router.get("/api/erp/config", requireAuth, requireBusinessAccount, async (req, res) => {
   try {
     const businessAccountId = req.businessAccountId;
-    const [config] = await db.select().from(erpConfigurations).where(eq26(erpConfigurations.businessAccountId, businessAccountId)).limit(1);
+    const [config] = await db.select().from(erpConfigurations).where(eq27(erpConfigurations.businessAccountId, businessAccountId)).limit(1);
     if (!config) {
       return res.json({ configured: false, config: null });
     }
@@ -65351,13 +67872,13 @@ router.post("/api/erp/config", requireAuth, requireBusinessAccount, async (req, 
     if (body.basicAuthPassword && body.basicAuthPassword !== "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022") {
       encryptedData.basicAuthPassword = encryptCredentials(body.basicAuthPassword);
     }
-    const [existingConfig] = await db.select().from(erpConfigurations).where(eq26(erpConfigurations.businessAccountId, businessAccountId)).limit(1);
+    const [existingConfig] = await db.select().from(erpConfigurations).where(eq27(erpConfigurations.businessAccountId, businessAccountId)).limit(1);
     let config;
     if (existingConfig) {
       [config] = await db.update(erpConfigurations).set({
         ...encryptedData,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq26(erpConfigurations.id, existingConfig.id)).returning();
+      }).where(eq27(erpConfigurations.id, existingConfig.id)).returning();
     } else {
       [config] = await db.insert(erpConfigurations).values(encryptedData).returning();
     }
@@ -65377,7 +67898,7 @@ router.post("/api/erp/config", requireAuth, requireBusinessAccount, async (req, 
 router.post("/api/erp/test-connection", requireAuth, requireBusinessAccount, async (req, res) => {
   try {
     const businessAccountId = req.businessAccountId;
-    const [config] = await db.select().from(erpConfigurations).where(eq26(erpConfigurations.businessAccountId, businessAccountId)).limit(1);
+    const [config] = await db.select().from(erpConfigurations).where(eq27(erpConfigurations.businessAccountId, businessAccountId)).limit(1);
     if (!config) {
       return res.status(400).json({ error: "ERP configuration not found" });
     }
@@ -65387,7 +67908,7 @@ router.post("/api/erp/test-connection", requireAuth, requireBusinessAccount, asy
       lastTestedAt: /* @__PURE__ */ new Date(),
       lastTestStatus: result.success ? "success" : "failed",
       lastTestError: result.success ? null : result.message
-    }).where(eq26(erpConfigurations.id, config.id));
+    }).where(eq27(erpConfigurations.id, config.id));
     return res.json(result);
   } catch (error) {
     console.error("Error testing ERP connection:", error);
@@ -65499,9 +68020,9 @@ router.get("/api/erp/price-range", requireAuth, requireBusinessAccount, async (r
 router.delete("/api/erp/config", requireAuth, requireBusinessAccount, async (req, res) => {
   try {
     const businessAccountId = req.businessAccountId;
-    await db.delete(erpConfigurations).where(eq26(erpConfigurations.businessAccountId, businessAccountId));
-    await db.delete(erpProductCache).where(eq26(erpProductCache.businessAccountId, businessAccountId));
-    await db.delete(productEmbeddings).where(eq26(productEmbeddings.businessAccountId, businessAccountId));
+    await db.delete(erpConfigurations).where(eq27(erpConfigurations.businessAccountId, businessAccountId));
+    await db.delete(erpProductCache).where(eq27(erpProductCache.businessAccountId, businessAccountId));
+    await db.delete(productEmbeddings).where(eq27(productEmbeddings.businessAccountId, businessAccountId));
     return res.json({ success: true, message: "ERP configuration and related data deleted" });
   } catch (error) {
     console.error("Error deleting ERP config:", error);
@@ -65512,7 +68033,7 @@ router.get("/api/erp/batch-jobs", requireAuth, requireBusinessAccount, async (re
   try {
     const businessAccountId = req.businessAccountId;
     const limit = parseInt(req.query.limit) || 10;
-    const jobs2 = await db.select().from(openAiBatchJobs).where(eq26(openAiBatchJobs.businessAccountId, businessAccountId)).orderBy(desc8(openAiBatchJobs.createdAt)).limit(limit);
+    const jobs2 = await db.select().from(openAiBatchJobs).where(eq27(openAiBatchJobs.businessAccountId, businessAccountId)).orderBy(desc8(openAiBatchJobs.createdAt)).limit(limit);
     return res.json({ jobs: jobs2 });
   } catch (error) {
     console.error("Error fetching batch jobs:", error);
@@ -65556,7 +68077,7 @@ router.post("/api/erp/batch-jobs/:jobId/process", requireAuth, requireBusinessAc
         newEmbeddings: result.processed,
         failedProducts: result.failed,
         completedAt: /* @__PURE__ */ new Date()
-      }).where(eq26(erpSyncLogs.id, job.erpSyncLogId));
+      }).where(eq27(erpSyncLogs.id, job.erpSyncLogId));
     }
     return res.json({
       success: true,
@@ -65591,27 +68112,27 @@ router.get("/api/erp/sync/status", requireAuth, requireBusinessAccount, async (r
     const recentLogs = await ErpSyncService.getSyncLogs(businessAccountId, 5);
     const interruptedSyncs = await ErpSyncService.getInterruptedSyncs(businessAccountId);
     const [runningSync] = await db.select().from(erpSyncLogs).where(
-      and21(
-        eq26(erpSyncLogs.businessAccountId, businessAccountId),
+      and22(
+        eq27(erpSyncLogs.businessAccountId, businessAccountId),
         or3(
-          eq26(erpSyncLogs.status, "running"),
-          eq26(erpSyncLogs.status, "batch_processing")
+          eq27(erpSyncLogs.status, "running"),
+          eq27(erpSyncLogs.status, "batch_processing")
         )
       )
     ).orderBy(desc8(erpSyncLogs.startedAt)).limit(1);
     const pendingBatchJobs = await db.select().from(openAiBatchJobs).where(
-      and21(
-        eq26(openAiBatchJobs.businessAccountId, businessAccountId),
+      and22(
+        eq27(openAiBatchJobs.businessAccountId, businessAccountId),
         or3(
-          eq26(openAiBatchJobs.status, "submitted"),
-          eq26(openAiBatchJobs.status, "in_progress")
+          eq27(openAiBatchJobs.status, "submitted"),
+          eq27(openAiBatchJobs.status, "in_progress")
         )
       )
     ).orderBy(desc8(openAiBatchJobs.createdAt));
-    const [cacheCount] = await db.select({ count: sql17`count(*)` }).from(erpProductCache).where(
-      and21(
-        eq26(erpProductCache.businessAccountId, businessAccountId),
-        eq26(erpProductCache.isValid, "true")
+    const [cacheCount] = await db.select({ count: sql18`count(*)` }).from(erpProductCache).where(
+      and22(
+        eq27(erpProductCache.businessAccountId, businessAccountId),
+        eq27(erpProductCache.isValid, "true")
       )
     );
     return res.json({
@@ -65657,7 +68178,7 @@ init_schema();
 init_auth();
 init_topscholarApiService();
 import { Router as Router2 } from "express";
-import { eq as eq27, and as and22, asc as asc2 } from "drizzle-orm";
+import { eq as eq28, and as and23, asc as asc2 } from "drizzle-orm";
 var router2 = Router2();
 function getBusinessAccountId(req) {
   const user = req.user;
@@ -65667,7 +68188,7 @@ function getBusinessAccountId(req) {
 router2.get("/api/k12/subjects", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const subjects = await db.select().from(k12Subjects).where(eq27(k12Subjects.businessAccountId, businessAccountId)).orderBy(asc2(k12Subjects.sortOrder));
+  const subjects = await db.select().from(k12Subjects).where(eq28(k12Subjects.businessAccountId, businessAccountId)).orderBy(asc2(k12Subjects.sortOrder));
   res.json(subjects);
 });
 router2.post("/api/k12/subjects", requireAuth, async (req, res) => {
@@ -65687,27 +68208,27 @@ router2.put("/api/k12/subjects/:id", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
   const { name, language, grade, board } = req.body;
-  const [subject] = await db.update(k12Subjects).set({ name, language, grade, board, updatedAt: /* @__PURE__ */ new Date() }).where(and22(eq27(k12Subjects.id, req.params.id), eq27(k12Subjects.businessAccountId, businessAccountId))).returning();
+  const [subject] = await db.update(k12Subjects).set({ name, language, grade, board, updatedAt: /* @__PURE__ */ new Date() }).where(and23(eq28(k12Subjects.id, req.params.id), eq28(k12Subjects.businessAccountId, businessAccountId))).returning();
   if (!subject) return res.status(404).json({ error: "Subject not found" });
   res.json(subject);
 });
 router2.delete("/api/k12/subjects/:id", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  await db.delete(k12Subjects).where(and22(eq27(k12Subjects.id, req.params.id), eq27(k12Subjects.businessAccountId, businessAccountId)));
+  await db.delete(k12Subjects).where(and23(eq28(k12Subjects.id, req.params.id), eq28(k12Subjects.businessAccountId, businessAccountId)));
   res.json({ success: true });
 });
 router2.get("/api/k12/subjects/:subjectId/chapters", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const chapters = await db.select().from(k12Chapters).where(and22(eq27(k12Chapters.subjectId, req.params.subjectId), eq27(k12Chapters.businessAccountId, businessAccountId))).orderBy(asc2(k12Chapters.sortOrder));
+  const chapters = await db.select().from(k12Chapters).where(and23(eq28(k12Chapters.subjectId, req.params.subjectId), eq28(k12Chapters.businessAccountId, businessAccountId))).orderBy(asc2(k12Chapters.sortOrder));
   res.json(chapters);
 });
 router2.post("/api/k12/chapters", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
   const { subjectId, name } = req.body;
-  const [parentSubject] = await db.select().from(k12Subjects).where(and22(eq27(k12Subjects.id, subjectId), eq27(k12Subjects.businessAccountId, businessAccountId)));
+  const [parentSubject] = await db.select().from(k12Subjects).where(and23(eq28(k12Subjects.id, subjectId), eq28(k12Subjects.businessAccountId, businessAccountId)));
   if (!parentSubject) return res.status(403).json({ error: "Subject not found or access denied" });
   const [chapter] = await db.insert(k12Chapters).values({
     businessAccountId,
@@ -65720,26 +68241,26 @@ router2.put("/api/k12/chapters/:id", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
   const { name } = req.body;
-  const [chapter] = await db.update(k12Chapters).set({ name, updatedAt: /* @__PURE__ */ new Date() }).where(and22(eq27(k12Chapters.id, req.params.id), eq27(k12Chapters.businessAccountId, businessAccountId))).returning();
+  const [chapter] = await db.update(k12Chapters).set({ name, updatedAt: /* @__PURE__ */ new Date() }).where(and23(eq28(k12Chapters.id, req.params.id), eq28(k12Chapters.businessAccountId, businessAccountId))).returning();
   if (!chapter) return res.status(404).json({ error: "Chapter not found" });
   res.json(chapter);
 });
 router2.delete("/api/k12/chapters/:id", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  await db.delete(k12Chapters).where(and22(eq27(k12Chapters.id, req.params.id), eq27(k12Chapters.businessAccountId, businessAccountId)));
+  await db.delete(k12Chapters).where(and23(eq28(k12Chapters.id, req.params.id), eq28(k12Chapters.businessAccountId, businessAccountId)));
   res.json({ success: true });
 });
 router2.get("/api/k12/chapters/:chapterId/topics", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const topics = await db.select().from(k12Topics).where(and22(eq27(k12Topics.chapterId, req.params.chapterId), eq27(k12Topics.businessAccountId, businessAccountId))).orderBy(asc2(k12Topics.sortOrder));
+  const topics = await db.select().from(k12Topics).where(and23(eq28(k12Topics.chapterId, req.params.chapterId), eq28(k12Topics.businessAccountId, businessAccountId))).orderBy(asc2(k12Topics.sortOrder));
   res.json(topics);
 });
 router2.get("/api/k12/topics/:id", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const [topic] = await db.select().from(k12Topics).where(and22(eq27(k12Topics.id, req.params.id), eq27(k12Topics.businessAccountId, businessAccountId)));
+  const [topic] = await db.select().from(k12Topics).where(and23(eq28(k12Topics.id, req.params.id), eq28(k12Topics.businessAccountId, businessAccountId)));
   if (!topic) return res.status(404).json({ error: "Topic not found" });
   res.json(topic);
 });
@@ -65747,7 +68268,7 @@ router2.post("/api/k12/topics", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
   const { chapterId, name, description, tags: tags2 } = req.body;
-  const [parentChapter] = await db.select().from(k12Chapters).where(and22(eq27(k12Chapters.id, chapterId), eq27(k12Chapters.businessAccountId, businessAccountId)));
+  const [parentChapter] = await db.select().from(k12Chapters).where(and23(eq28(k12Chapters.id, chapterId), eq28(k12Chapters.businessAccountId, businessAccountId)));
   if (!parentChapter) return res.status(403).json({ error: "Chapter not found or access denied" });
   const [topic] = await db.insert(k12Topics).values({
     businessAccountId,
@@ -65762,27 +68283,27 @@ router2.put("/api/k12/topics/:id", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
   const { name, description, tags: tags2 } = req.body;
-  const [topic] = await db.update(k12Topics).set({ name, description, tags: tags2, updatedAt: /* @__PURE__ */ new Date() }).where(and22(eq27(k12Topics.id, req.params.id), eq27(k12Topics.businessAccountId, businessAccountId))).returning();
+  const [topic] = await db.update(k12Topics).set({ name, description, tags: tags2, updatedAt: /* @__PURE__ */ new Date() }).where(and23(eq28(k12Topics.id, req.params.id), eq28(k12Topics.businessAccountId, businessAccountId))).returning();
   if (!topic) return res.status(404).json({ error: "Topic not found" });
   res.json(topic);
 });
 router2.delete("/api/k12/topics/:id", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  await db.delete(k12Topics).where(and22(eq27(k12Topics.id, req.params.id), eq27(k12Topics.businessAccountId, businessAccountId)));
+  await db.delete(k12Topics).where(and23(eq28(k12Topics.id, req.params.id), eq28(k12Topics.businessAccountId, businessAccountId)));
   res.json({ success: true });
 });
 router2.get("/api/k12/topics/:topicId/questions", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const questions = await db.select().from(k12Questions).where(and22(eq27(k12Questions.topicId, req.params.topicId), eq27(k12Questions.businessAccountId, businessAccountId))).orderBy(asc2(k12Questions.sortOrder));
+  const questions = await db.select().from(k12Questions).where(and23(eq28(k12Questions.topicId, req.params.topicId), eq28(k12Questions.businessAccountId, businessAccountId))).orderBy(asc2(k12Questions.sortOrder));
   res.json(questions);
 });
 router2.post("/api/k12/questions", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
   const { topicId, questionHtml, questionType, options, solutionHtml, difficulty, marks } = req.body;
-  const [parentTopic] = await db.select().from(k12Topics).where(and22(eq27(k12Topics.id, topicId), eq27(k12Topics.businessAccountId, businessAccountId)));
+  const [parentTopic] = await db.select().from(k12Topics).where(and23(eq28(k12Topics.id, topicId), eq28(k12Topics.businessAccountId, businessAccountId)));
   if (!parentTopic) return res.status(403).json({ error: "Topic not found or access denied" });
   const [question] = await db.insert(k12Questions).values({
     businessAccountId,
@@ -65799,19 +68320,19 @@ router2.post("/api/k12/questions", requireAuth, async (req, res) => {
 router2.delete("/api/k12/questions/:id", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  await db.delete(k12Questions).where(and22(eq27(k12Questions.id, req.params.id), eq27(k12Questions.businessAccountId, businessAccountId)));
+  await db.delete(k12Questions).where(and23(eq28(k12Questions.id, req.params.id), eq28(k12Questions.businessAccountId, businessAccountId)));
   res.json({ success: true });
 });
 router2.get("/api/k12/topics/:topicId/notes", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const notes = await db.select().from(k12TopicNotes).where(and22(eq27(k12TopicNotes.topicId, req.params.topicId), eq27(k12TopicNotes.businessAccountId, businessAccountId))).orderBy(asc2(k12TopicNotes.sortOrder));
+  const notes = await db.select().from(k12TopicNotes).where(and23(eq28(k12TopicNotes.topicId, req.params.topicId), eq28(k12TopicNotes.businessAccountId, businessAccountId))).orderBy(asc2(k12TopicNotes.sortOrder));
   res.json(notes);
 });
 router2.post("/api/k12/topics/:topicId/notes", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const [parentTopic] = await db.select().from(k12Topics).where(and22(eq27(k12Topics.id, req.params.topicId), eq27(k12Topics.businessAccountId, businessAccountId)));
+  const [parentTopic] = await db.select().from(k12Topics).where(and23(eq28(k12Topics.id, req.params.topicId), eq28(k12Topics.businessAccountId, businessAccountId)));
   if (!parentTopic) return res.status(403).json({ error: "Topic not found or access denied" });
   const { title, content } = req.body;
   const [note] = await db.insert(k12TopicNotes).values({
@@ -65826,26 +68347,26 @@ router2.put("/api/k12/notes/:id", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
   const { title, content } = req.body;
-  const [note] = await db.update(k12TopicNotes).set({ title, content, updatedAt: /* @__PURE__ */ new Date() }).where(and22(eq27(k12TopicNotes.id, req.params.id), eq27(k12TopicNotes.businessAccountId, businessAccountId))).returning();
+  const [note] = await db.update(k12TopicNotes).set({ title, content, updatedAt: /* @__PURE__ */ new Date() }).where(and23(eq28(k12TopicNotes.id, req.params.id), eq28(k12TopicNotes.businessAccountId, businessAccountId))).returning();
   if (!note) return res.status(404).json({ error: "Note not found" });
   res.json(note);
 });
 router2.delete("/api/k12/notes/:id", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  await db.delete(k12TopicNotes).where(and22(eq27(k12TopicNotes.id, req.params.id), eq27(k12TopicNotes.businessAccountId, businessAccountId)));
+  await db.delete(k12TopicNotes).where(and23(eq28(k12TopicNotes.id, req.params.id), eq28(k12TopicNotes.businessAccountId, businessAccountId)));
   res.json({ success: true });
 });
 router2.get("/api/k12/topics/:topicId/videos", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const videos = await db.select().from(k12TopicVideos).where(and22(eq27(k12TopicVideos.topicId, req.params.topicId), eq27(k12TopicVideos.businessAccountId, businessAccountId))).orderBy(asc2(k12TopicVideos.sortOrder));
+  const videos = await db.select().from(k12TopicVideos).where(and23(eq28(k12TopicVideos.topicId, req.params.topicId), eq28(k12TopicVideos.businessAccountId, businessAccountId))).orderBy(asc2(k12TopicVideos.sortOrder));
   res.json(videos);
 });
 router2.post("/api/k12/topics/:topicId/videos", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const [parentTopic] = await db.select().from(k12Topics).where(and22(eq27(k12Topics.id, req.params.topicId), eq27(k12Topics.businessAccountId, businessAccountId)));
+  const [parentTopic] = await db.select().from(k12Topics).where(and23(eq28(k12Topics.id, req.params.topicId), eq28(k12Topics.businessAccountId, businessAccountId)));
   if (!parentTopic) return res.status(403).json({ error: "Topic not found or access denied" });
   const { title, videoUrl, transcript } = req.body;
   if (!videoUrl) return res.status(400).json({ error: "Video URL is required" });
@@ -65880,22 +68401,22 @@ router2.put("/api/k12/videos/:id", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Invalid video URL format" });
     }
   }
-  const [video] = await db.update(k12TopicVideos).set({ title, videoUrl, transcript, updatedAt: /* @__PURE__ */ new Date() }).where(and22(eq27(k12TopicVideos.id, req.params.id), eq27(k12TopicVideos.businessAccountId, businessAccountId))).returning();
+  const [video] = await db.update(k12TopicVideos).set({ title, videoUrl, transcript, updatedAt: /* @__PURE__ */ new Date() }).where(and23(eq28(k12TopicVideos.id, req.params.id), eq28(k12TopicVideos.businessAccountId, businessAccountId))).returning();
   if (!video) return res.status(404).json({ error: "Video not found" });
   res.json(video);
 });
 router2.delete("/api/k12/videos/:id", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  await db.delete(k12TopicVideos).where(and22(eq27(k12TopicVideos.id, req.params.id), eq27(k12TopicVideos.businessAccountId, businessAccountId)));
+  await db.delete(k12TopicVideos).where(and23(eq28(k12TopicVideos.id, req.params.id), eq28(k12TopicVideos.businessAccountId, businessAccountId)));
   res.json({ success: true });
 });
 router2.get("/api/k12/content-tree", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const subjects = await db.select().from(k12Subjects).where(eq27(k12Subjects.businessAccountId, businessAccountId)).orderBy(asc2(k12Subjects.sortOrder));
-  const chapters = await db.select().from(k12Chapters).where(eq27(k12Chapters.businessAccountId, businessAccountId)).orderBy(asc2(k12Chapters.sortOrder));
-  const topics = await db.select().from(k12Topics).where(eq27(k12Topics.businessAccountId, businessAccountId)).orderBy(asc2(k12Topics.sortOrder));
+  const subjects = await db.select().from(k12Subjects).where(eq28(k12Subjects.businessAccountId, businessAccountId)).orderBy(asc2(k12Subjects.sortOrder));
+  const chapters = await db.select().from(k12Chapters).where(eq28(k12Chapters.businessAccountId, businessAccountId)).orderBy(asc2(k12Chapters.sortOrder));
+  const topics = await db.select().from(k12Topics).where(eq28(k12Topics.businessAccountId, businessAccountId)).orderBy(asc2(k12Topics.sortOrder));
   const tree = subjects.map((subject) => ({
     ...subject,
     chapters: chapters.filter((ch) => ch.subjectId === subject.id).map((chapter) => ({
@@ -65908,7 +68429,7 @@ router2.get("/api/k12/content-tree", requireAuth, async (req, res) => {
 router2.post("/api/k12/seed-sample-data", requireAuth, async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const existingSubjects = await db.select().from(k12Subjects).where(eq27(k12Subjects.businessAccountId, businessAccountId));
+  const existingSubjects = await db.select().from(k12Subjects).where(eq28(k12Subjects.businessAccountId, businessAccountId));
   if (existingSubjects.length > 0) {
     return res.json({ message: "Sample data already exists", seeded: false });
   }
@@ -66145,7 +68666,7 @@ When a student asks about a topic:
 5. Support Hindi, Marathi, and English \u2014 respond in whatever language the student uses
 6. Be encouraging and patient, celebrate correct answers, and gently explain mistakes
 7. Use simple language appropriate for Class 10 students`;
-  const existingWidgetSettings = await db.select().from(widgetSettings).where(eq27(widgetSettings.businessAccountId, businessAccountId)).limit(1);
+  const existingWidgetSettings = await db.select().from(widgetSettings).where(eq28(widgetSettings.businessAccountId, businessAccountId)).limit(1);
   if (existingWidgetSettings.length > 0) {
     await db.update(widgetSettings).set({
       conversationStarters: k12ConversationStarters,
@@ -66157,7 +68678,7 @@ When a student asks about a topic:
       responseLength: "detailed",
       languageSelectorEnabled: "true",
       availableLanguages: JSON.stringify(["auto", "en", "hi", "mr"])
-    }).where(eq27(widgetSettings.businessAccountId, businessAccountId));
+    }).where(eq28(widgetSettings.businessAccountId, businessAccountId));
   } else {
     await db.insert(widgetSettings).values({
       businessAccountId,
@@ -66179,14 +68700,14 @@ router2.get("/api/k12/search", requireAuth, async (req, res) => {
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
   const query = (req.query.q || "").toLowerCase();
   if (!query) return res.json({ topics: [], questions: [] });
-  const allTopics = await db.select().from(k12Topics).where(eq27(k12Topics.businessAccountId, businessAccountId));
+  const allTopics = await db.select().from(k12Topics).where(eq28(k12Topics.businessAccountId, businessAccountId));
   const matchedTopics = allTopics.filter(
     (t) => t.name.toLowerCase().includes(query) || t.description && t.description.toLowerCase().includes(query) || t.tags && t.tags.some((tag) => tag.toLowerCase().includes(query))
   );
   const topicIds = matchedTopics.map((t) => t.id);
   let matchedQuestions = [];
   if (topicIds.length > 0) {
-    const allQuestions = await db.select().from(k12Questions).where(eq27(k12Questions.businessAccountId, businessAccountId));
+    const allQuestions = await db.select().from(k12Questions).where(eq28(k12Questions.businessAccountId, businessAccountId));
     matchedQuestions = allQuestions.filter((q) => topicIds.includes(q.topicId));
   }
   res.json({ topics: matchedTopics, questions: matchedQuestions });
@@ -66197,7 +68718,7 @@ router2.get("/api/k12/external-api-config", requireAuth, requireBusinessAccount,
   const [account] = await db.select({
     topscholarApiBaseUrl: businessAccounts.topscholarApiBaseUrl,
     topscholarApiToken: businessAccounts.topscholarApiToken
-  }).from(businessAccounts).where(eq27(businessAccounts.id, businessAccountId));
+  }).from(businessAccounts).where(eq28(businessAccounts.id, businessAccountId));
   if (!account) return res.status(404).json({ error: "Account not found" });
   res.json({
     apiBaseUrl: account.topscholarApiBaseUrl || "",
@@ -66233,13 +68754,13 @@ router2.put("/api/k12/external-api-config", requireAuth, requireBusinessAccount,
   if (Object.keys(updates).length === 0) {
     return res.status(400).json({ error: "No valid fields to update" });
   }
-  await db.update(businessAccounts).set(updates).where(eq27(businessAccounts.id, businessAccountId));
+  await db.update(businessAccounts).set(updates).where(eq28(businessAccounts.id, businessAccountId));
   res.json({ success: true });
 });
 router2.get("/api/k12/image-upload-settings", requireAuth, requireBusinessAccount, requireRole("business_user", "super_admin"), async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const [account] = await db.select({ k12ImageUploadEnabled: businessAccounts.k12ImageUploadEnabled }).from(businessAccounts).where(eq27(businessAccounts.id, businessAccountId));
+  const [account] = await db.select({ k12ImageUploadEnabled: businessAccounts.k12ImageUploadEnabled }).from(businessAccounts).where(eq28(businessAccounts.id, businessAccountId));
   if (!account) return res.status(404).json({ error: "Account not found" });
   res.json({ enabled: account.k12ImageUploadEnabled === "true" });
 });
@@ -66250,13 +68771,13 @@ router2.put("/api/k12/image-upload-settings", requireAuth, requireBusinessAccoun
   if (typeof enabled !== "boolean") {
     return res.status(400).json({ error: "enabled must be a boolean" });
   }
-  await db.update(businessAccounts).set({ k12ImageUploadEnabled: enabled ? "true" : "false" }).where(eq27(businessAccounts.id, businessAccountId));
+  await db.update(businessAccounts).set({ k12ImageUploadEnabled: enabled ? "true" : "false" }).where(eq28(businessAccounts.id, businessAccountId));
   res.json({ success: true, enabled });
 });
 router2.get("/api/k12/guardrail-settings", requireAuth, requireBusinessAccount, requireRole("business_user", "super_admin"), async (req, res) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const [account] = await db.select({ k12ContentOnlyMode: businessAccounts.k12ContentOnlyMode, k12VerbatimContentMode: businessAccounts.k12VerbatimContentMode }).from(businessAccounts).where(eq27(businessAccounts.id, businessAccountId));
+  const [account] = await db.select({ k12ContentOnlyMode: businessAccounts.k12ContentOnlyMode, k12VerbatimContentMode: businessAccounts.k12VerbatimContentMode }).from(businessAccounts).where(eq28(businessAccounts.id, businessAccountId));
   if (!account) return res.status(404).json({ error: "Account not found" });
   res.json({
     contentOnlyMode: account.k12ContentOnlyMode === "true",
@@ -66273,7 +68794,7 @@ router2.put("/api/k12/guardrail-settings", requireAuth, requireBusinessAccount, 
   await db.update(businessAccounts).set({
     k12ContentOnlyMode: contentOnlyMode ? "true" : "false",
     k12VerbatimContentMode: verbatimContentMode ? "true" : "false"
-  }).where(eq27(businessAccounts.id, businessAccountId));
+  }).where(eq28(businessAccounts.id, businessAccountId));
   res.json({ success: true, contentOnlyMode, verbatimContentMode });
 });
 router2.post("/api/k12/external-api-test", requireAuth, requireBusinessAccount, requireRole("business_user", "super_admin"), async (req, res) => {
@@ -66285,7 +68806,7 @@ router2.post("/api/k12/external-api-test", requireAuth, requireBusinessAccount, 
     const [account] = await db.select({
       topscholarApiBaseUrl: businessAccounts.topscholarApiBaseUrl,
       topscholarApiToken: businessAccounts.topscholarApiToken
-    }).from(businessAccounts).where(eq27(businessAccounts.id, businessAccountId));
+    }).from(businessAccounts).where(eq28(businessAccounts.id, businessAccountId));
     if (!apiBaseUrl) apiBaseUrl = account?.topscholarApiBaseUrl;
     if (!apiToken) apiToken = account?.topscholarApiToken;
   }
@@ -66316,13 +68837,13 @@ init_schema();
 init_auth();
 init_storage();
 import { Router as Router3 } from "express";
-import { eq as eq29 } from "drizzle-orm";
+import { eq as eq30 } from "drizzle-orm";
 
 // server/services/jobImportService.ts
 init_storage();
 init_db();
 init_schema();
-import { eq as eq28 } from "drizzle-orm";
+import { eq as eq29 } from "drizzle-orm";
 import dns2 from "dns/promises";
 import net from "net";
 function getNestedValue(obj, path9) {
@@ -66526,7 +69047,7 @@ var JobImportService = class {
     return mapped;
   }
   async updateImportConfig(businessAccountId, config) {
-    await db.update(businessAccounts).set({ jobImportConfig: config }).where(eq28(businessAccounts.id, businessAccountId));
+    await db.update(businessAccounts).set({ jobImportConfig: config }).where(eq29(businessAccounts.id, businessAccountId));
   }
   getConfig(account) {
     const raw = account.jobImportConfig;
@@ -66641,7 +69162,7 @@ function getBusinessAccountId2(req) {
 async function requireJobPortalEnabled(req, res, next) {
   const businessAccountId = getBusinessAccountId2(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const [account] = await db.select({ jobPortalEnabled: businessAccounts.jobPortalEnabled }).from(businessAccounts).where(eq29(businessAccounts.id, businessAccountId));
+  const [account] = await db.select({ jobPortalEnabled: businessAccounts.jobPortalEnabled }).from(businessAccounts).where(eq30(businessAccounts.id, businessAccountId));
   if (!account || account.jobPortalEnabled !== "true") {
     return res.status(403).json({ error: "Job Portal feature is not enabled for this account" });
   }
@@ -66903,7 +69424,7 @@ router3.post("/api/job-import/config", requireAuth, requireJobPortalEnabled, asy
     lastSyncError: existing?.lastSyncError,
     lastSyncStats: existing?.lastSyncStats
   };
-  await db.update(businessAccounts).set({ jobImportConfig: config }).where(eq29(businessAccounts.id, businessAccountId));
+  await db.update(businessAccounts).set({ jobImportConfig: config }).where(eq30(businessAccounts.id, businessAccountId));
   res.json({ success: true, config });
 });
 router3.post("/api/job-import/test", requireAuth, requireJobPortalEnabled, async (req, res) => {
@@ -66953,7 +69474,7 @@ init_db();
 init_schema();
 init_embeddingService();
 import crypto7 from "crypto";
-import { and as and23, eq as eq30, ne, inArray as inArray3 } from "drizzle-orm";
+import { and as and24, eq as eq31, ne, inArray as inArray3 } from "drizzle-orm";
 
 // server/services/topscholar/cmsConnector.ts
 init_config();
@@ -67124,6 +69645,29 @@ function transcriptVideoUrl(v) {
   }
   return null;
 }
+function imageText(value) {
+  if (typeof value === "string") return value.trim() || null;
+  if (value && typeof value === "object" && typeof value.en === "string") {
+    return (value.en || "").trim() || null;
+  }
+  return null;
+}
+function standaloneImage(value) {
+  if (typeof value === "string") {
+    const url2 = value.trim();
+    return url2 ? { id: null, url: url2, alt: null, caption: null } : null;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value;
+  const url = [raw.url, raw.imageUrl, raw.src, raw.image].map(imageText).find(Boolean);
+  if (!url) return null;
+  return {
+    id: imageText(raw.id) || imageText(raw.imageId),
+    url,
+    alt: imageText(raw.alt),
+    caption: imageText(raw.caption) || imageText(raw.title) || imageText(raw.name)
+  };
+}
 function parsePlan(raw, source) {
   const cpId = (raw.cp_id || raw.cpId || "").trim();
   if (!cpId) return null;
@@ -67142,6 +69686,7 @@ function parsePlan(raw, source) {
     transcripts: [],
     questions: [],
     pdfs: [],
+    images: [],
     source
   };
   for (const chapter of raw.chapters || []) {
@@ -67190,8 +69735,13 @@ function parsePlan(raw, source) {
         }
         for (const p of content.pdfs || []) {
           const name = pickStr(p.name) || "document";
-          const url = (p.url || p.imageUrl || "").trim() || null;
-          bundle.pdfs.push({ ...ctx, id: p.id || null, name, url });
+          const url = (p.url || "").trim() || null;
+          const imageUrl = (p.imageUrl || "").trim() || null;
+          bundle.pdfs.push({ ...ctx, id: p.id || null, name, url, imageUrl });
+        }
+        for (const rawImage of content.images || []) {
+          const image = standaloneImage(rawImage);
+          if (image) bundle.images.push({ ...ctx, ...image });
         }
       }
     }
@@ -67210,6 +69760,7 @@ function mergeByCpId(bundles) {
     existing.transcripts.push(...b.transcripts);
     existing.questions.push(...b.questions);
     existing.pdfs.push(...b.pdfs);
+    existing.images.push(...b.images);
     existing.cpName = existing.cpName || b.cpName;
     existing.board = existing.board || b.board;
     existing.grade = existing.grade || b.grade;
@@ -67326,19 +69877,23 @@ function linearizeMathml(html) {
   return out;
 }
 function htmlToText(html) {
-  if (!html) return { text: "", images: [] };
+  if (!html) return { text: "", images: [], imageDetails: [] };
   const images = [];
+  const imageDetails = [];
   const imgRe = /<img[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi;
   let m;
   while ((m = imgRe.exec(html)) !== null) {
-    if (m[1]) images.push(m[1]);
+    if (!m[1]) continue;
+    const altMatch = /\balt=["']([^"']*)["']/i.exec(m[0]);
+    images.push(m[1]);
+    imageDetails.push({ url: m[1], alt: altMatch?.[1]?.trim() || null });
   }
   let text2 = linearizeMathml(html);
   text2 = text2.replace(/<(br|\/p|\/div|\/li|\/h[1-6]|\/tr)\s*\/?>/gi, "\n");
   text2 = text2.replace(/<[^>]+>/g, " ");
   text2 = text2.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
   text2 = text2.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
-  return { text: text2, images };
+  return { text: text2, images, imageDetails };
 }
 function chunkText(text2, maxLen = 1400, overlap = 150) {
   const clean = text2.trim();
@@ -67377,18 +69932,19 @@ ${para}` : para;
 init_chunkStore();
 init_embeddingBatchService();
 init_cpLock();
+init_mediaMetadata();
 var DEFAULT_SAMPLE_LIMIT = 50;
 function hashContent(text2) {
   return crypto7.createHash("sha256").update(text2).digest("hex").slice(0, 32);
 }
 async function upsertSync(businessAccountId, cpId, patch, guardNotCancelled = false) {
-  const existing = await db.select({ id: topscholarContentSync.id }).from(topscholarContentSync).where(and23(eq30(topscholarContentSync.businessAccountId, businessAccountId), eq30(topscholarContentSync.cpId, cpId)));
+  const existing = await db.select({ id: topscholarContentSync.id }).from(topscholarContentSync).where(and24(eq31(topscholarContentSync.businessAccountId, businessAccountId), eq31(topscholarContentSync.cpId, cpId)));
   if (existing.length > 0) {
-    const where = guardNotCancelled ? and23(
-      eq30(topscholarContentSync.businessAccountId, businessAccountId),
-      eq30(topscholarContentSync.cpId, cpId),
+    const where = guardNotCancelled ? and24(
+      eq31(topscholarContentSync.businessAccountId, businessAccountId),
+      eq31(topscholarContentSync.cpId, cpId),
       ne(topscholarContentSync.status, "cancelled")
-    ) : and23(eq30(topscholarContentSync.businessAccountId, businessAccountId), eq30(topscholarContentSync.cpId, cpId));
+    ) : and24(eq31(topscholarContentSync.businessAccountId, businessAccountId), eq31(topscholarContentSync.cpId, cpId));
     await db.update(topscholarContentSync).set({ ...patch, updatedAt: /* @__PURE__ */ new Date() }).where(where);
   } else {
     await db.insert(topscholarContentSync).values({ businessAccountId, cpId, ...patch });
@@ -67405,10 +69961,18 @@ function buildRecords(bundle) {
   const subject = subjectLabel(bundle);
   const subjectId = bundle.subjectId;
   for (const note of bundle.notes) {
-    const { text: text2, images } = htmlToText(note.html);
+    const { text: text2, images, imageDetails } = htmlToText(note.html);
     if (!text2) continue;
     const baseTitle = note.title || note.subConcept || note.concept || "Revision Notes";
     const pieces = chunkText(text2);
+    const media = imageDetails.map((image, order) => createMediaMetadata(image.url, "image", {
+      sourceRef: note.contentId,
+      topic: baseTitle,
+      concept: note.concept,
+      subConcept: note.subConcept,
+      chapter: note.chapter,
+      subject
+    }, order, { alt: image.alt, caption: note.subConcept || note.concept || baseTitle })).filter((item) => item !== null);
     pieces.forEach((piece, idx) => {
       records.push({
         contentType: "note",
@@ -67420,7 +69984,7 @@ function buildRecords(bundle) {
         contentText: piece,
         sourceRef: note.contentId,
         mediaUrl: images[0] || null,
-        metadata: { concept: note.concept, subConcept: note.subConcept, images }
+        metadata: { concept: note.concept, subConcept: note.subConcept, images, media }
       });
     });
   }
@@ -67442,7 +70006,17 @@ function buildRecords(bundle) {
           concept: transcript.concept,
           subConcept: transcript.subConcept,
           videoId: transcript.videoId,
-          duration: transcript.duration
+          duration: transcript.duration,
+          media: [
+            createMediaMetadata(transcript.videoUrl || "", "video", {
+              sourceRef: transcript.contentId || transcript.videoId,
+              topic: baseTitle,
+              concept: transcript.concept,
+              subConcept: transcript.subConcept,
+              chapter: transcript.chapter,
+              subject
+            }, 0, { caption: baseTitle })
+          ].filter((item) => item !== null)
         }
       });
     });
@@ -67458,7 +70032,28 @@ function buildRecords(bundle) {
       contentText: pdf.name,
       sourceRef: pdf.id,
       mediaUrl: pdf.url,
-      metadata: { concept: pdf.concept, subConcept: pdf.subConcept }
+      metadata: {
+        concept: pdf.concept,
+        subConcept: pdf.subConcept,
+        media: [
+          createMediaMetadata(pdf.url || "", "document", {
+            sourceRef: pdf.id,
+            topic: pdf.name,
+            concept: pdf.concept,
+            subConcept: pdf.subConcept,
+            chapter: pdf.chapter,
+            subject
+          }, 0, { caption: pdf.name }),
+          createMediaMetadata(pdf.imageUrl || "", "image", {
+            sourceRef: pdf.id,
+            topic: pdf.name,
+            concept: pdf.concept,
+            subConcept: pdf.subConcept,
+            chapter: pdf.chapter,
+            subject
+          }, 1, { caption: pdf.name })
+        ].filter((item) => item !== null)
+      }
     });
   }
   for (const q of bundle.questions) {
@@ -67479,6 +70074,50 @@ function buildRecords(bundle) {
         options: q.options,
         solution: q.solution,
         difficulty: q.difficulty
+      }
+    });
+  }
+  for (const image of bundle.images) {
+    const topic = image.caption || image.alt || image.subConcept || image.concept || "Curriculum image";
+    const media = createMediaMetadata(image.url, "image", {
+      sourceRef: image.id,
+      topic,
+      concept: image.concept,
+      subConcept: image.subConcept,
+      chapter: image.chapter,
+      subject
+    }, 0, { alt: image.alt, caption: image.caption || topic });
+    if (!media) continue;
+    const sameLesson = records.filter(
+      (record) => record.chapter === image.chapter && record.metadata.concept === image.concept && record.metadata.subConcept === image.subConcept
+    );
+    if (sameLesson.length > 0) {
+      for (const record of sameLesson) {
+        const existingMedia = Array.isArray(record.metadata.media) ? record.metadata.media : [];
+        const existingImages = Array.isArray(record.metadata.images) ? record.metadata.images : [];
+        record.metadata = {
+          ...record.metadata,
+          images: Array.from(/* @__PURE__ */ new Set([...existingImages, image.url])),
+          media: [...existingMedia, media]
+        };
+      }
+      continue;
+    }
+    records.push({
+      contentType: "note",
+      subject,
+      subjectId,
+      chapter: image.chapter,
+      title: topic,
+      contentHtml: null,
+      contentText: topic,
+      sourceRef: image.id,
+      mediaUrl: image.url,
+      metadata: {
+        concept: image.concept,
+        subConcept: image.subConcept,
+        images: [image.url],
+        media: [media]
       }
     });
   }
@@ -67548,7 +70187,7 @@ async function ingestBundle(businessAccountId, cfg, bundle, mode, sampleLimit) {
 }
 async function upsertMappingFromBundle(businessAccountId, bundle) {
   const label = curriculumLabel(bundle);
-  const existing = await db.select({ id: topscholarCpMappings.id }).from(topscholarCpMappings).where(and23(eq30(topscholarCpMappings.businessAccountId, businessAccountId), eq30(topscholarCpMappings.cpId, bundle.cpId)));
+  const existing = await db.select({ id: topscholarCpMappings.id }).from(topscholarCpMappings).where(and24(eq31(topscholarCpMappings.businessAccountId, businessAccountId), eq31(topscholarCpMappings.cpId, bundle.cpId)));
   const values = {
     board: bundle.board,
     medium: bundle.medium,
@@ -67560,13 +70199,13 @@ async function upsertMappingFromBundle(businessAccountId, bundle) {
     planId: bundle.planId
   };
   if (existing.length > 0) {
-    await db.update(topscholarCpMappings).set({ ...values, updatedAt: /* @__PURE__ */ new Date() }).where(and23(eq30(topscholarCpMappings.businessAccountId, businessAccountId), eq30(topscholarCpMappings.cpId, bundle.cpId)));
+    await db.update(topscholarCpMappings).set({ ...values, updatedAt: /* @__PURE__ */ new Date() }).where(and24(eq31(topscholarCpMappings.businessAccountId, businessAccountId), eq31(topscholarCpMappings.cpId, bundle.cpId)));
   } else {
     await db.insert(topscholarCpMappings).values({ businessAccountId, cpId: bundle.cpId, ...values });
   }
 }
 async function updatePlanStatus(businessAccountId, planId, patch) {
-  await db.update(topscholarPlanIds).set({ ...patch, updatedAt: /* @__PURE__ */ new Date() }).where(and23(eq30(topscholarPlanIds.businessAccountId, businessAccountId), eq30(topscholarPlanIds.planId, planId)));
+  await db.update(topscholarPlanIds).set({ ...patch, updatedAt: /* @__PURE__ */ new Date() }).where(and24(eq31(topscholarPlanIds.businessAccountId, businessAccountId), eq31(topscholarPlanIds.planId, planId)));
 }
 async function ingestPlanIds(params) {
   const { businessAccountId, cfg } = params;
@@ -67670,8 +70309,8 @@ async function resolvePlans(params) {
     }
   }
   await db.transaction(async (tx) => {
-    await tx.delete(topscholarPlanCpResolutions).where(and23(
-      eq30(topscholarPlanCpResolutions.businessAccountId, businessAccountId),
+    await tx.delete(topscholarPlanCpResolutions).where(and24(
+      eq31(topscholarPlanCpResolutions.businessAccountId, businessAccountId),
       inArray3(topscholarPlanCpResolutions.planId, planIds)
     ));
     for (const { planId, resolved } of rows) {
@@ -67769,7 +70408,7 @@ async function ingestSampleSync(businessAccountId, cpId, cfg, source, records, c
 }
 async function ingestFullBatch(businessAccountId, cpId, cfg, source, records, counts) {
   const jobId = await withCpLock(businessAccountId, cpId, async () => {
-    await db.delete(topscholarEmbedJobs).where(and23(eq30(topscholarEmbedJobs.businessAccountId, businessAccountId), eq30(topscholarEmbedJobs.cpId, cpId)));
+    await db.delete(topscholarEmbedJobs).where(and24(eq31(topscholarEmbedJobs.businessAccountId, businessAccountId), eq31(topscholarEmbedJobs.cpId, cpId)));
     const [job] = await db.insert(topscholarEmbedJobs).values({
       businessAccountId,
       cpId,
@@ -67816,7 +70455,7 @@ async function ingestFullBatch(businessAccountId, cpId, cfg, source, records, co
       count: b.count
     })),
     updatedAt: /* @__PURE__ */ new Date()
-  }).where(and23(eq30(topscholarEmbedJobs.id, jobId), ne(topscholarEmbedJobs.status, "cancelled"))).returning({ id: topscholarEmbedJobs.id });
+  }).where(and24(eq31(topscholarEmbedJobs.id, jobId), ne(topscholarEmbedJobs.status, "cancelled"))).returning({ id: topscholarEmbedJobs.id });
   if (advanced.length === 0) {
     await Promise.allSettled(submitted.map((b) => cancelBatch(businessAccountId, b.batchId)));
     return {
@@ -67866,7 +70505,7 @@ async function ingestFullDirect(businessAccountId, cpId, cfg, source, records, c
     embedJobId: null
   });
   const wasCancelled = async () => {
-    const [row] = await db.select({ status: topscholarContentSync.status }).from(topscholarContentSync).where(and23(eq30(topscholarContentSync.businessAccountId, businessAccountId), eq30(topscholarContentSync.cpId, cpId)));
+    const [row] = await db.select({ status: topscholarContentSync.status }).from(topscholarContentSync).where(and24(eq31(topscholarContentSync.businessAccountId, businessAccountId), eq31(topscholarContentSync.cpId, cpId)));
     return row?.status === "cancelled";
   };
   const run = async () => {
@@ -67943,7 +70582,7 @@ init_mongoContentDb();
 init_db();
 init_schema();
 init_contentDb();
-import { eq as eq31 } from "drizzle-orm";
+import { eq as eq32 } from "drizzle-orm";
 var NULL_CHAPTER_SENTINEL = "__none__";
 function buildLabel(board, medium, grade) {
   const parts = [board, medium, grade].filter(Boolean);
@@ -67957,18 +70596,9 @@ async function safeQuery(pool2, text2, params) {
     throw e;
   }
 }
-async function getContentOverview(cfg, businessAccountId) {
-  const pool2 = getContentPool(cfg.contentDbUrl);
-  const { rows } = await safeQuery(
-    pool2,
-    `SELECT cp_id, content_type, count(*)::int AS n
-       FROM topscholar_content_chunks
-      WHERE business_account_id = $1
-      GROUP BY cp_id, content_type`,
-    [businessAccountId]
-  );
-  const mappings = await db.select().from(topscholarCpMappings).where(eq31(topscholarCpMappings.businessAccountId, businessAccountId));
-  const syncRows = await db.select().from(topscholarContentSync).where(eq31(topscholarContentSync.businessAccountId, businessAccountId));
+async function assemblePackOverview(rows, businessAccountId) {
+  const mappings = await db.select().from(topscholarCpMappings).where(eq32(topscholarCpMappings.businessAccountId, businessAccountId));
+  const syncRows = await db.select().from(topscholarContentSync).where(eq32(topscholarContentSync.businessAccountId, businessAccountId));
   const byMapping = new Map(mappings.map((m) => [m.cpId, m]));
   const bySync = new Map(syncRows.map((s) => [s.cpId, s]));
   const countsByCp = /* @__PURE__ */ new Map();
@@ -68000,6 +70630,9 @@ async function getContentOverview(cfg, businessAccountId) {
       board: m?.board ?? null,
       medium: m?.medium ?? null,
       grade: m?.grade ?? null,
+      // Subject mirrors the scope-options endpoint: prefer the CMS subject name,
+      // fall back to the legacy cp_name for rows that predate the subject column.
+      subject: (m?.subject ?? "").trim() || (m?.cpName ?? "").trim() || null,
       status: s?.status ?? null,
       lastSyncedAt: s?.lastSyncedAt ?? null,
       counts,
@@ -68008,6 +70641,18 @@ async function getContentOverview(cfg, businessAccountId) {
   }
   packs.sort((a, b) => a.label.localeCompare(b.label));
   return packs;
+}
+async function getContentOverview(cfg, businessAccountId) {
+  const pool2 = getContentPool(cfg.contentDbUrl);
+  const { rows } = await safeQuery(
+    pool2,
+    `SELECT cp_id, content_type, count(*)::int AS n
+       FROM topscholar_content_chunks
+      WHERE business_account_id = $1
+      GROUP BY cp_id, content_type`,
+    [businessAccountId]
+  );
+  return assemblePackOverview(rows, businessAccountId);
 }
 async function getChapters(cfg, businessAccountId, cpId) {
   const pool2 = getContentPool(cfg.contentDbUrl);
@@ -68108,6 +70753,112 @@ async function getChunks(cfg, businessAccountId, opts) {
     mediaUrl: r.media_url,
     metadata: r.metadata || {},
     createdAt: r.created_at
+  }));
+  return { items, total, page, pageSize };
+}
+
+// server/services/topscholar/mongoContentReader.ts
+init_mongoContentDb();
+import { ObjectId } from "mongodb";
+var NULL_CHAPTER_SENTINEL2 = "__none__";
+async function getCollection2(cfg) {
+  const url = cfg.contentDbUrl;
+  if (!url) throw new Error("MongoDB content store is not configured.");
+  return getMongoCollection(url, cfg.contentDbName, cfg.contentDbCollection);
+}
+function escapeRegex(input) {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+async function getMongoContentOverview(cfg, businessAccountId) {
+  const col = await getCollection2(cfg);
+  const rows = await col.aggregate([
+    { $match: { business_account_id: businessAccountId } },
+    { $group: { _id: { cp_id: "$cp_id", content_type: "$content_type" }, n: { $sum: 1 } } }
+  ]).toArray();
+  return assemblePackOverview(
+    rows.map((r) => ({ cp_id: r._id.cp_id, content_type: r._id.content_type, n: r.n })),
+    businessAccountId
+  );
+}
+async function getMongoChapters(cfg, businessAccountId, cpId) {
+  const col = await getCollection2(cfg);
+  const rows = await col.aggregate([
+    { $match: { business_account_id: businessAccountId, cp_id: cpId } },
+    { $group: { _id: { chapter: { $ifNull: ["$chapter", null] }, content_type: "$content_type" }, n: { $sum: 1 } } },
+    // Sort named chapters alphabetically with null chapters last (pgvector NULLS LAST parity).
+    { $addFields: { chapterIsNull: { $cond: [{ $eq: ["$_id.chapter", null] }, 1, 0] } } },
+    { $sort: { chapterIsNull: 1, "_id.chapter": 1, "_id.content_type": 1 } }
+  ]).toArray();
+  return rows.map((r) => ({
+    chapter: r._id.chapter,
+    contentType: r._id.content_type,
+    count: r.n
+  }));
+}
+async function getMongoChunks(cfg, businessAccountId, opts) {
+  const col = await getCollection2(cfg);
+  const page = Math.max(1, Math.floor(Number(opts.page) || 1));
+  const pageSize = Math.min(100, Math.max(1, Math.floor(Number(opts.pageSize) || 50)));
+  const match = {
+    business_account_id: businessAccountId,
+    cp_id: opts.cpId
+  };
+  if (opts.contentType) match.content_type = opts.contentType;
+  if (opts.chapter) {
+    if (opts.chapter === NULL_CHAPTER_SENTINEL2) {
+      match.chapter = null;
+    } else {
+      match.chapter = opts.chapter;
+    }
+  }
+  if (opts.q) {
+    const rx = new RegExp(escapeRegex(opts.q), "i");
+    match.$or = [{ title: rx }, { chunk_text: rx }];
+  }
+  const [facetResult] = await col.aggregate([
+    { $match: match },
+    {
+      $facet: {
+        total: [{ $count: "n" }],
+        items: [
+          // Normalize missing → null (same as the chapter aggregation) so both are
+          // reliably sorted last, matching pgvector's ORDER BY chapter NULLS LAST.
+          { $addFields: { chapterIsNull: { $cond: [{ $eq: [{ $ifNull: ["$chapter", null] }, null] }, 1, 0] } } },
+          { $sort: { chapterIsNull: 1, chapter: 1, updated_at: 1, _id: 1 } },
+          { $skip: (page - 1) * pageSize },
+          { $limit: pageSize },
+          {
+            // Never project the embedding vector.
+            $project: {
+              _id: 1,
+              content_type: 1,
+              chapter: 1,
+              title: 1,
+              content_html: 1,
+              chunk_text: 1,
+              source_ref: 1,
+              media_url: 1,
+              metadata: 1,
+              updated_at: 1
+            }
+          }
+        ]
+      }
+    }
+  ]).toArray();
+  const total = facetResult?.total?.[0]?.n ?? 0;
+  const items = (facetResult?.items ?? []).map((d) => ({
+    id: d._id instanceof ObjectId ? d._id.toHexString() : String(d._id),
+    contentType: d.content_type,
+    chapter: d.chapter ?? null,
+    title: d.title ?? null,
+    contentHtml: d.content_html ?? null,
+    contentText: d.chunk_text ?? "",
+    sourceRef: d.source_ref ?? null,
+    mediaUrl: d.media_url ?? null,
+    metadata: d.metadata || {},
+    // Mongo documents carry updated_at only; the viewer uses it as the display timestamp.
+    createdAt: d.updated_at ?? null
   }));
   return { items, total, page, pageSize };
 }
@@ -68782,11 +71533,8 @@ router4.get("/api/topscholar/content/overview", ...topscholarGuards, async (req,
   const account = await loadAccount(businessAccountId);
   if (!account) return res.status(404).json({ error: "Business account not found" });
   const cfg = getTopscholarConfig(account);
-  if (cfg.storeType === "mongodb") {
-    return res.status(501).json({ error: "The content viewer is not available for MongoDB content stores yet." });
-  }
   try {
-    const packs = await getContentOverview(cfg, businessAccountId);
+    const packs = cfg.storeType === "mongodb" ? await getMongoContentOverview(cfg, businessAccountId) : await getContentOverview(cfg, businessAccountId);
     res.json({ packs });
   } catch (error) {
     console.error("[TopScholar Content] overview failed:", error);
@@ -68801,11 +71549,8 @@ router4.get("/api/topscholar/content/chapters", ...topscholarGuards, async (req,
   const account = await loadAccount(businessAccountId);
   if (!account) return res.status(404).json({ error: "Business account not found" });
   const cfg = getTopscholarConfig(account);
-  if (cfg.storeType === "mongodb") {
-    return res.status(501).json({ error: "The content viewer is not available for MongoDB content stores yet." });
-  }
   try {
-    const chapters = await getChapters(cfg, businessAccountId, cpId);
+    const chapters = cfg.storeType === "mongodb" ? await getMongoChapters(cfg, businessAccountId, cpId) : await getChapters(cfg, businessAccountId, cpId);
     res.json({ chapters });
   } catch (error) {
     console.error("[TopScholar Content] chapters failed:", error);
@@ -68820,9 +71565,6 @@ router4.get("/api/topscholar/content/chunks", ...topscholarGuards, async (req, r
   const account = await loadAccount(businessAccountId);
   if (!account) return res.status(404).json({ error: "Business account not found" });
   const cfg = getTopscholarConfig(account);
-  if (cfg.storeType === "mongodb") {
-    return res.status(501).json({ error: "The content viewer is not available for MongoDB content stores yet." });
-  }
   const contentType = String(req.query.contentType || "").trim() || void 0;
   const chapterRaw = req.query.chapter;
   const chapter = chapterRaw === void 0 ? void 0 : String(chapterRaw);
@@ -68830,7 +71572,7 @@ router4.get("/api/topscholar/content/chunks", ...topscholarGuards, async (req, r
   const page = Number(req.query.page) || 1;
   const pageSize = Number(req.query.pageSize) || 50;
   try {
-    const result = await getChunks(cfg, businessAccountId, { cpId, contentType, chapter, q, page, pageSize });
+    const result = cfg.storeType === "mongodb" ? await getMongoChunks(cfg, businessAccountId, { cpId, contentType, chapter, q, page, pageSize }) : await getChunks(cfg, businessAccountId, { cpId, contentType, chapter, q, page, pageSize });
     res.json(result);
   } catch (error) {
     console.error("[TopScholar Content] chunks failed:", error);
@@ -68985,31 +71727,35 @@ router4.post("/api/topscholar/tester/mint-launch-token", ...topscholarGuards, as
   const studentIdV = str(body.studentId);
   const planIdV = str(body.planId);
   const doubtIdV = str(body.doubtId);
-  const nameV = str(body.name) || "Live Test Student";
+  const isPreview = str(body.mode) === "preview";
+  const nameV = str(body.name) || (isPreview ? "Preview Student" : "Live Test Student");
   if (!boardV || !mediumV || !gradeV || !subjectV) {
     return res.status(400).json({ error: "board, medium, grade and subject are all required." });
   }
-  if (!studentIdV || !doubtIdV) {
+  if (!isPreview && (!studentIdV || !doubtIdV)) {
     return res.status(400).json({ error: "studentId and doubtId are required for a live doubt session." });
   }
   const { signLaunchToken: signLaunchToken2 } = await Promise.resolve().then(() => (init_tokenService(), tokenService_exports));
   const nowSec = Math.floor(Date.now() / 1e3);
-  const exp = nowSec + 2 * 60 * 60;
+  const exp = nowSec + (isPreview ? 60 * 60 : 2 * 60 * 60);
   const token = signLaunchToken2(cfg.tokenSecret, {
     board: boardV,
     medium: mediumV,
     grade: gradeV,
     subject: subjectV,
     chapter: chapterV || null,
-    studentId: studentIdV,
+    // A preview must not carry a student or doubt identity: a doubt id would
+    // bind the preview to a real doubt's lock state and let it mirror messages
+    // onto the client's platform.
+    studentId: isPreview ? null : studentIdV,
     name: nameV,
-    doubtId: doubtIdV,
-    planId: planIdV || null,
+    doubtId: isPreview ? null : doubtIdV,
+    planId: isPreview ? null : planIdV || null,
     exp
   });
   const actor = req.user;
   console.log(
-    `[TopScholar][Tester] Live-test launch token minted by user=${actor?.id || "?"} account=${businessAccountId} for doubt=${doubtIdV} student=${studentIdV} plan=${planIdV || "-"} at ${(/* @__PURE__ */ new Date()).toISOString()}`
+    isPreview ? `[TopScholar][Tester] Preview launch token minted by user=${actor?.id || "?"} account=${businessAccountId} scope=${boardV}/${mediumV}/${gradeV}/${subjectV}${chapterV ? `/${chapterV}` : ""} at ${(/* @__PURE__ */ new Date()).toISOString()}` : `[TopScholar][Tester] Live-test launch token minted by user=${actor?.id || "?"} account=${businessAccountId} for doubt=${doubtIdV} student=${studentIdV} plan=${planIdV || "-"} at ${(/* @__PURE__ */ new Date()).toISOString()}`
   );
   res.json({ token, expiresAt: new Date(exp * 1e3).toISOString() });
 });
@@ -70486,6 +73232,7 @@ var verification_default = router6;
 
 // server/routes.ts
 init_phone();
+init_contactImport();
 var execAsync = promisify(exec);
 var activeProcessingJobs = /* @__PURE__ */ new Map();
 var productDescriptionTranslationCache = /* @__PURE__ */ new Map();
@@ -71556,15 +74303,15 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
           console.log(`[Widget Stream] Resume context retrieved (${resumeText.length} chars)${resumeUrl ? " with PDF URL" : ""}`);
         }
       }
-      let imageText;
+      let imageText2;
       let imageUrl;
       if (imageContextId && typeof imageContextId === "string") {
         const cached = imageTextCache.get(imageContextId);
         if (cached && cached.businessAccountId === businessAccountId) {
-          imageText = cached.text;
+          imageText2 = cached.text;
           imageUrl = cached.imageUrl;
           imageTextCache.delete(imageContextId);
-          console.log(`[Widget Stream] K12 image context retrieved (${imageText.length} chars)${imageUrl ? " with image URL" : ""}`);
+          console.log(`[Widget Stream] K12 image context retrieved (${imageText2.length} chars)${imageUrl ? " with image URL" : ""}`);
         }
       }
       let topscholarCpId = null;
@@ -71783,7 +74530,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         jobPortalEnabled: businessAccount.jobPortalEnabled === "true",
         demoOrdersEnabled: businessAccount.demoOrdersEnabled === "true",
         resumeText,
-        imageText,
+        imageText: imageText2,
         imageUrl,
         resumeUrl,
         isReturnExchangeLookup: isReturnExchangeLookup === true,
@@ -73305,6 +76052,7 @@ ${product.description}`;
       let conversationId = "";
       await db.transaction(async (tx) => {
         await tx.execute(sql40`SELECT pg_advisory_xact_lock(${lockKey.toString()}::bigint)`);
+        let voiceIsInternalTest = false;
         if (sessionToken) {
           const existing = await tx.execute(sql40`
             SELECT c.id
@@ -86918,15 +89666,15 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
           console.log(`[Public Chat Stream] Resume context retrieved (${resumeText.length} chars)${resumeUrl ? " with PDF URL" : ""}`);
         }
       }
-      let imageText;
+      let imageText2;
       let imageUrl;
       if (imageContextId && typeof imageContextId === "string") {
         const cached = imageTextCache.get(imageContextId);
         if (cached && cached.businessAccountId === businessAccountId) {
-          imageText = cached.text;
+          imageText2 = cached.text;
           imageUrl = cached.imageUrl;
           imageTextCache.delete(imageContextId);
-          console.log(`[Public Chat Stream] K12 image context retrieved (${imageText.length} chars)${imageUrl ? " with image URL" : ""}`);
+          console.log(`[Public Chat Stream] K12 image context retrieved (${imageText2.length} chars)${imageUrl ? " with image URL" : ""}`);
         }
       }
       for await (const chunk of chatService.streamMessage(message, {
@@ -86948,7 +89696,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         demoOrdersEnabled: businessAccount.demoOrdersEnabled === "true",
         resumeText,
         resumeUrl,
-        imageText,
+        imageText: imageText2,
         imageUrl
       })) {
         res.write(`data: ${JSON.stringify(chunk)}
@@ -89164,14 +91912,14 @@ Strict Requirements:
       if (!["whatsapp", "instagram", "website"].includes(channel)) {
         return res.status(400).json({ error: "Invalid channel" });
       }
-      const { keywords, responseText, responseUrl, priority, isActive } = req.body;
-      if (!keywords || !responseText) {
+      const { keywords: keywords2, responseText, responseUrl, priority, isActive } = req.body;
+      if (!keywords2 || !responseText) {
         return res.status(400).json({ error: "keywords and responseText are required" });
       }
       const [created] = await db.insert(smartReplies).values({
         businessAccountId,
         channel,
-        keywords,
+        keywords: keywords2,
         responseText,
         responseUrl: responseUrl || null,
         priority: priority ?? 0,
@@ -89187,9 +91935,9 @@ Strict Requirements:
       const businessAccountId = req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
       const { id } = req.params;
-      const { keywords, responseText, responseUrl, priority, isActive } = req.body;
+      const { keywords: keywords2, responseText, responseUrl, priority, isActive } = req.body;
       const updates = { updatedAt: /* @__PURE__ */ new Date() };
-      if (keywords !== void 0) updates.keywords = keywords;
+      if (keywords2 !== void 0) updates.keywords = keywords2;
       if (responseText !== void 0) updates.responseText = responseText;
       if (responseUrl !== void 0) updates.responseUrl = responseUrl;
       if (priority !== void 0) updates.priority = priority;
@@ -94795,6 +97543,15 @@ ${businessContext}`
                 }
                 return res.json({ status: "received", note: "marketing_stop" });
               }
+              if (recipientCtx && recipientCtx.campaign.aiEnabled !== "true") {
+                console.log(`[MSG91 Webhook] Campaign ${recipientCtx.campaign.id} owns conversation with ${senderPhone} (AI replies off) \u2014 recording reply, falling through to normal flow`);
+                await marketingCampaignService2.recordInbound(
+                  recipientCtx.campaign.id,
+                  recipientCtx.recipient.id,
+                  businessId,
+                  text2
+                );
+              }
               if (recipientCtx && recipientCtx.campaign.aiEnabled === "true") {
                 console.log(`[MSG91 Webhook] Campaign ${recipientCtx.campaign.id} owns conversation with ${senderPhone}; suppressing journey + auto-reply`);
                 await marketingCampaignService2.recordInbound(
@@ -98326,6 +101083,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           return;
         }
         const sessionToken = extractSessionCookie(request.headers.cookie);
+        let voiceIsInternalTest = false;
         if (sessionToken) {
           const user = await validateSession(sessionToken);
           if (!user) {
@@ -98334,9 +101092,10 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             socket.destroy();
             return;
           }
+          const userActiveAccountId = user.activeBusinessAccountId || user.businessAccountId;
+          voiceIsInternalTest = user.role === "super_admin" || userActiveAccountId === businessAccountId;
           const isWidgetId = userId.startsWith("widget_");
           if (!isWidgetId) {
-            const userActiveAccountId = user.activeBusinessAccountId || user.businessAccountId;
             if (user.role !== "super_admin" && userActiveAccountId !== businessAccountId) {
               console.warn("[WebSocket] User does not have access to business account:", {
                 userId: user.id,
@@ -98399,6 +101158,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           });
         }
         let voiceDoubtId = null;
+        let voiceScope;
         if (userId.startsWith("widget_")) {
           try {
             const { isTopscholarAccount: isTopscholarAccount2, getTopscholarConfig: getTopscholarConfig2 } = await Promise.resolve().then(() => (init_config(), config_exports));
@@ -98417,6 +101177,19 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                 return;
               }
               voiceDoubtId = voiceHandoff.doubtId;
+              voiceScope = {
+                cpId: voiceHandoff.cpId,
+                board: voiceHandoff.board,
+                medium: voiceHandoff.medium,
+                grade: voiceHandoff.grade,
+                subject: voiceHandoff.subject,
+                chapter: voiceHandoff.chapter,
+                studentId: voiceHandoff.studentId,
+                studentName: voiceHandoff.studentName,
+                studentPlanMappingId: voiceHandoff.studentPlanMappingId,
+                planId: voiceHandoff.planId,
+                doubtSyncBaseUrl: voiceCfg.doubtSyncBaseUrl
+              };
               if (voiceDoubtId) {
                 const voiceConv = await storage.getLatestConversationByDoubtId(businessAccountId, voiceDoubtId);
                 const { doubtLockStateFor: doubtLockStateFor2 } = await Promise.resolve().then(() => (init_doubtStatus(), doubtStatus_exports));
@@ -98438,7 +101211,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         }
         wss.handleUpgrade(request, socket, head, (ws) => {
           console.log("[WebSocket] Voice connection established");
-          realtimeVoiceService.handleConnection(ws, businessAccountId, userId, conversationId || void 0, selectedLanguage, textConversationId, voiceDoubtId || void 0);
+          realtimeVoiceService.handleConnection(ws, businessAccountId, userId, conversationId || void 0, selectedLanguage, textConversationId, voiceDoubtId || void 0, voiceScope, voiceIsInternalTest);
         });
       } catch (error) {
         console.error("[WebSocket] Upgrade error:", error);
@@ -98571,8 +101344,10 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const { whatsappService: whatsappService2 } = await Promise.resolve().then(() => (init_whatsappService(), whatsappService_exports));
       const settings = await whatsappService2.getSettings(businessAccountId);
       if (!settings?.msg91AuthKey) return res.status(400).json({ error: "MSG91 auth key not configured" });
+      const number = settings.whatsappNumber || settings.msg91IntegratedNumberId || void 0;
+      if (!number) return res.status(400).json({ error: "WhatsApp number not configured \u2014 save your number in WhatsApp \u2192 Connection settings first." });
       const { whatsappTemplateService: whatsappTemplateService2 } = await Promise.resolve().then(() => (init_whatsappTemplateService(), whatsappTemplateService_exports));
-      const result = await whatsappTemplateService2.syncFromMsg91(businessAccountId, settings.msg91AuthKey, settings.whatsappNumber || void 0);
+      const result = await whatsappTemplateService2.syncFromMsg91(businessAccountId, settings.msg91AuthKey, number);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -98679,14 +101454,81 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
   app2.post("/api/whatsapp/contact-groups/:id/import-csv", requireAuth, requireBusinessAccount, requireWhatsappMarketing, csvUpload.single("file"), async (req, res) => {
     try {
       const businessAccountId = req.user.businessAccountId;
-      const csvText = req.file?.buffer ? req.file.buffer.toString("utf8") : req.body?.csv || "";
-      if (!csvText) return res.status(400).json({ error: "Provide a CSV file ('file') or csv text" });
+      const csvInput = req.file?.buffer ? new Uint8Array(req.file.buffer) : req.body?.csv || "";
+      if (!csvInput || typeof csvInput === "string" && !csvInput) {
+        return res.status(400).json({ error: "Provide a CSV file ('file') or csv text" });
+      }
       const { contactGroupService: contactGroupService2 } = await Promise.resolve().then(() => (init_contactGroupService(), contactGroupService_exports));
-      const result = await contactGroupService2.importFromCsv(businessAccountId, req.params.id, csvText, {
+      const result = await contactGroupService2.importFromCsv(businessAccountId, req.params.id, csvInput, {
         phoneColumn: req.body?.phoneColumn,
         nameColumn: req.body?.nameColumn
       });
       res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+  const sanitizeContactImportPayload = (body) => {
+    const rawRows = Array.isArray(body?.rows) ? body.rows : [];
+    if (rawRows.length > MAX_IMPORT_ROWS) {
+      throw new Error(
+        `That file has ${rawRows.length.toLocaleString()} rows. The limit is ${MAX_IMPORT_ROWS.toLocaleString()} per import \u2014 split it into smaller files.`
+      );
+    }
+    const rawColumns = Array.isArray(body?.columns) ? body.columns.slice(0, 200) : [];
+    const { keys } = normalizeColumnKeys(
+      rawColumns.map((c, i) => String(c?.key ?? `column_${i + 1}`).slice(0, 120))
+    );
+    const columns = keys.map((key, i) => ({
+      key,
+      label: String(rawColumns[i]?.label ?? key).slice(0, 200)
+    }));
+    const rows = rawRows.map((r, i) => ({
+      r: Number.isFinite(r?.r) ? Number(r.r) : i + 2,
+      v: Array.isArray(r?.v) ? r.v.slice(0, columns.length).map((cell) => cell == null ? "" : String(cell).slice(0, 2e3)) : []
+    }));
+    const canonical = (value) => typeof value === "string" ? value.trim().toLowerCase() : void 0;
+    return {
+      columns,
+      rows,
+      phoneColumn: canonical(body?.phoneColumn),
+      // An explicit empty string means "no name column"; undefined means
+      // "you decide". They must stay distinguishable.
+      nameColumn: canonical(body?.nameColumn)
+    };
+  };
+  app2.post("/api/whatsapp/contact-groups/:id/import-preview", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const businessAccountId = req.user.businessAccountId;
+      const { contactGroupService: contactGroupService2 } = await Promise.resolve().then(() => (init_contactGroupService(), contactGroupService_exports));
+      const review = await contactGroupService2.reviewImport(
+        businessAccountId,
+        req.params.id,
+        sanitizeContactImportPayload(req.body)
+      );
+      res.json(review);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+  app2.post("/api/whatsapp/contact-groups/:id/import", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const businessAccountId = req.user.businessAccountId;
+      const { contactGroupService: contactGroupService2 } = await Promise.resolve().then(() => (init_contactGroupService(), contactGroupService_exports));
+      const reviewedReady = Number.isFinite(req.body?.reviewedReady) ? Number(req.body.reviewedReady) : void 0;
+      const result = await contactGroupService2.commitImport(
+        businessAccountId,
+        req.params.id,
+        sanitizeContactImportPayload(req.body),
+        reviewedReady
+      );
+      res.json({
+        imported: result.imported,
+        skipped: result.skipped,
+        total: result.total,
+        summary: result.summary,
+        driftNote: result.driftNote
+      });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -98844,15 +101686,45 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       res.status(500).json({ error: err.message });
     }
   });
+  app2.get("/api/whatsapp/campaigns/:id/outcomes", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { marketingCampaignService: marketingCampaignService2 } = await Promise.resolve().then(() => (init_marketingCampaignService(), marketingCampaignService_exports));
+      const summary = await marketingCampaignService2.getOutcomeSummary(req.user.businessAccountId, req.params.id);
+      if (!summary) return res.status(404).json({ error: "Campaign not found" });
+      res.json(summary);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+  app2.get("/api/whatsapp/campaigns/:id/outcomes.csv", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { marketingCampaignService: marketingCampaignService2 } = await Promise.resolve().then(() => (init_marketingCampaignService(), marketingCampaignService_exports));
+      const campaign = await marketingCampaignService2.get(req.user.businessAccountId, req.params.id);
+      if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+      const safeName = (campaign.name || "campaign").replace(/[^a-zA-Z0-9-_]+/g, "_").substring(0, 60);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeName}_outcomes.csv"`);
+      res.write("\uFEFF");
+      for await (const chunk of marketingCampaignService2.streamOutcomeCsv(req.user.businessAccountId, req.params.id)) {
+        res.write(chunk);
+      }
+      res.end();
+    } catch (err) {
+      console.error("[Campaign] CSV export failed:", err);
+      if (res.headersSent) res.destroy();
+      else res.status(500).json({ error: err.message });
+    }
+  });
   app2.get("/api/whatsapp/campaigns/:id/recipients", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
       const { marketingCampaignService: marketingCampaignService2 } = await Promise.resolve().then(() => (init_marketingCampaignService(), marketingCampaignService_exports));
       const limit = Math.min(Math.max(parseInt(req.query.limit || "200", 10) || 200, 1), 1e3);
       const offset = Math.max(parseInt(req.query.offset || "0", 10) || 0, 0);
       const status = typeof req.query.status === "string" ? req.query.status : void 0;
+      const classification = typeof req.query.classification === "string" ? req.query.classification : void 0;
       const [rows, counts] = await Promise.all([
-        marketingCampaignService2.listRecipients(req.user.businessAccountId, req.params.id, { limit, offset, status }),
-        marketingCampaignService2.countRecipients(req.user.businessAccountId, req.params.id)
+        marketingCampaignService2.listRecipients(req.user.businessAccountId, req.params.id, { limit, offset, status, classification }),
+        marketingCampaignService2.countRecipients(req.user.businessAccountId, req.params.id, { classification })
       ]);
       res.json({ recipients: rows, counts, limit, offset });
     } catch (err) {
@@ -99127,6 +101999,22 @@ async function initializeDatabase() {
       await db.execute(sql41`ALTER TABLE topscholar_plan_cp_resolutions ADD COLUMN IF NOT EXISTS subject_id TEXT`);
     } catch (err) {
       console.error("[INIT] Error adding subject columns to topscholar mapping/resolution tables:", err);
+    }
+    try {
+      await db.execute(sql41`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql41`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_output_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql41`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql41`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+    } catch (err) {
+      console.error("[INIT] Error adding token breakdown columns to ai_usage_events:", err);
+    }
+    try {
+      await db.execute(sql41`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS cached_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql41`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql41`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_cached_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql41`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_output_cost_per_1k NUMERIC(10, 6)`);
+    } catch (err) {
+      console.error("[INIT] Error adding audio/cached rate columns to model_pricing:", err);
     }
     try {
       await visionWarehouseSyncService.resumeInterruptedSyncs();
