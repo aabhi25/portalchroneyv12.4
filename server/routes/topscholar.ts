@@ -84,6 +84,42 @@ function parseSearch(req: Request): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+type PlanEmbeddingFilter = "all" | "pending" | "completed";
+
+function parsePlanEmbeddingFilter(req: Request): PlanEmbeddingFilter {
+  const value = req.query?.embeddingStatus;
+  return value === "pending" || value === "completed" ? value : "all";
+}
+
+function completedPlanEmbeddingCondition(businessAccountId: string) {
+  // A Plan is complete only when its current resolution is non-empty and every
+  // resolved CP has successfully finished a full embedding. Resolution alone,
+  // sample syncs, failures, cancellations, and partial progress stay pending.
+  return sql`
+    ${topscholarPlanIds.lastStatus} NOT IN ('syncing', 'failed', 'cancelled')
+    AND EXISTS (
+      SELECT 1
+      FROM topscholar_plan_cp_resolutions resolution
+      WHERE resolution.business_account_id = ${businessAccountId}
+        AND resolution.plan_id = ${topscholarPlanIds.planId}
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM topscholar_plan_cp_resolutions resolution
+      LEFT JOIN topscholar_content_sync sync
+        ON sync.business_account_id = resolution.business_account_id
+        AND sync.cp_id = resolution.cp_id
+      WHERE resolution.business_account_id = ${businessAccountId}
+        AND resolution.plan_id = ${topscholarPlanIds.planId}
+        AND (
+          sync.id IS NULL
+          OR sync.status <> 'completed'
+          OR sync.sync_mode <> 'full'
+        )
+    )
+  `;
+}
+
 async function loadAccount(businessAccountId: string) {
   const [account] = await db
     .select()
@@ -797,12 +833,20 @@ router.get("/api/topscholar/plan-ids", ...topscholarGuards, async (req: Request,
 
   const { limit, offset } = parsePageParams(req, 25, 200);
   const q = parseSearch(req);
+  const embeddingStatus = parsePlanEmbeddingFilter(req);
 
-  const where = q
+  const baseWhere = q
     ? and(eq(topscholarPlanIds.businessAccountId, businessAccountId), ilike(topscholarPlanIds.planId, `%${q}%`))
     : eq(topscholarPlanIds.businessAccountId, businessAccountId);
+  const completedWhere = completedPlanEmbeddingCondition(businessAccountId);
+  const statusWhere = embeddingStatus === "completed"
+    ? completedWhere
+    : embeddingStatus === "pending"
+      ? sql`NOT (${completedWhere})`
+      : undefined;
+  const where = statusWhere ? and(baseWhere, statusWhere) : baseWhere;
 
-  const [rows, totalRow] = await Promise.all([
+  const [rows, totalRow, allTotalRow, completedTotalRow] = await Promise.all([
     db
       .select()
       .from(topscholarPlanIds)
@@ -814,8 +858,18 @@ router.get("/api/topscholar/plan-ids", ...topscholarGuards, async (req: Request,
       .select({ count: sql<number>`count(*)::int` })
       .from(topscholarPlanIds)
       .where(where),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(topscholarPlanIds)
+      .where(baseWhere),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(topscholarPlanIds)
+      .where(and(baseWhere, completedWhere)),
   ]);
   const total = totalRow[0]?.count ?? 0;
+  const all = allTotalRow[0]?.count ?? 0;
+  const completed = completedTotalRow[0]?.count ?? 0;
 
   // Annotate each plan in the page with how many cp_ids it has resolved, so the UI
   // can show a compact summary without loading the cp rows. One grouped query over
@@ -832,7 +886,11 @@ router.get("/api/topscholar/plan-ids", ...topscholarGuards, async (req: Request,
   }
   const enriched = rows.map((r) => ({ ...r, resolvedCpCount: countByPlan.get(r.planId) ?? 0 }));
 
-  res.json({ rows: enriched, total });
+  res.json({
+    rows: enriched,
+    total,
+    counts: { all, completed, pending: Math.max(0, all - completed) },
+  });
 });
 
 // Replace the saved master list with the supplied set. Accepts { planIds: string[] }

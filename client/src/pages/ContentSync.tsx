@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -149,6 +150,12 @@ interface SyncSummary {
 interface Paged<T> {
   rows: T[];
   total: number;
+}
+
+type PlanEmbeddingFilter = "pending" | "completed" | "all";
+
+interface PlanIdPage extends Paged<PlanIdRow> {
+  counts: Record<PlanEmbeddingFilter, number>;
 }
 
 const NO_PLAN = "__no_plan__";
@@ -457,17 +464,24 @@ export default function ContentSync() {
   // --- Plan IDs (master list) -------------------------------------------------
   const [planSearch, setPlanSearch] = useState("");
   const debouncedPlanSearch = useDebounced(planSearch);
+  const [planEmbeddingFilter, setPlanEmbeddingFilter] = useState<PlanEmbeddingFilter>("pending");
   const [planPage, setPlanPage] = useState(0);
-  useEffect(() => { setPlanPage(0); }, [debouncedPlanSearch]);
+  useEffect(() => { setPlanPage(0); }, [debouncedPlanSearch, planEmbeddingFilter]);
 
-  const { data: planPageData } = useQuery<Paged<PlanIdRow>>({
-    queryKey: ["/api/topscholar/plan-ids", { q: debouncedPlanSearch, page: planPage }],
-    queryFn: () => getJson(buildUrl("/api/topscholar/plan-ids", { q: debouncedPlanSearch, limit: PLAN_PAGE_SIZE, offset: planPage * PLAN_PAGE_SIZE })),
+  const { data: planPageData } = useQuery<PlanIdPage>({
+    queryKey: ["/api/topscholar/plan-ids", { q: debouncedPlanSearch, embeddingStatus: planEmbeddingFilter, page: planPage }],
+    queryFn: () => getJson(buildUrl("/api/topscholar/plan-ids", {
+      q: debouncedPlanSearch,
+      embeddingStatus: planEmbeddingFilter,
+      limit: PLAN_PAGE_SIZE,
+      offset: planPage * PLAN_PAGE_SIZE,
+    })),
     enabled: !configError,
     refetchInterval: configError ? false : anyInProgress ? 5000 : false,
   });
   const plans = planPageData?.rows ?? [];
   const planTotal = planPageData?.total ?? 0;
+  const planCounts = planPageData?.counts ?? { pending: 0, completed: 0, all: 0 };
 
   const [addOpen, setAddOpen] = useState(false);
   const [addText, setAddText] = useState("");
@@ -729,13 +743,26 @@ export default function ContentSync() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <BookOpen className="w-5 h-5 text-violet-600" /> Plan IDs
-            <span className="ml-1 text-sm font-normal text-gray-400">({planTotal})</span>
+            <span className="ml-1 text-sm font-normal text-gray-400">({planCounts.all})</span>
           </CardTitle>
           <CardDescription>
             The master list of TopScholar Plan IDs to ingest. <strong>Resolve</strong> looks up every cp_id under a Plan ID (with content counts) without embedding anything — then expand a plan to sync exactly what you want. Syncing is fully manual; nothing runs on a schedule.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <Tabs value={planEmbeddingFilter} onValueChange={(value) => setPlanEmbeddingFilter(value as PlanEmbeddingFilter)}>
+            <TabsList className="h-9 bg-violet-50/80">
+              <TabsTrigger value="pending" className="h-7 gap-1.5 text-xs">
+                Pending <span className="text-muted-foreground">({planCounts.pending})</span>
+              </TabsTrigger>
+              <TabsTrigger value="completed" className="h-7 gap-1.5 text-xs">
+                Completed <span className="text-muted-foreground">({planCounts.completed})</span>
+              </TabsTrigger>
+              <TabsTrigger value="all" className="h-7 gap-1.5 text-xs">
+                All <span className="text-muted-foreground">({planCounts.all})</span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -839,7 +866,13 @@ export default function ContentSync() {
             </div>
           ) : (
             <p className="text-sm text-gray-400">
-              {debouncedPlanSearch ? "No Plan IDs match your search." : "No Plan IDs yet. Use \u201cAdd plans\u201d to get started."}
+              {debouncedPlanSearch
+                ? `No ${planEmbeddingFilter} Plan IDs match your search.`
+                : planEmbeddingFilter === "completed"
+                  ? "No Plans have fully completed embeddings yet."
+                  : planEmbeddingFilter === "pending"
+                    ? "No Plans are waiting for embeddings."
+                    : "No Plan IDs yet. Use \u201cAdd plans\u201d to get started."}
             </p>
           )}
         </CardContent>
