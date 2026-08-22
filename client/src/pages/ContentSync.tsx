@@ -906,9 +906,6 @@ export default function ContentSync() {
         <CardContent className="space-y-4">
           <Tabs value={statusFilter} onValueChange={setStatusFilter} className="w-full">
             <TabsList className="h-auto w-full justify-start overflow-x-auto bg-violet-50/80 p-1">
-              <TabsTrigger value="all" className="shrink-0 gap-1.5 text-xs">
-                All <span className="text-muted-foreground">({summary?.overall.total ?? 0})</span>
-              </TabsTrigger>
               <TabsTrigger value="syncing" className="shrink-0 gap-1.5 text-xs">
                 Syncing <span className="text-muted-foreground">({summary?.overall.syncing ?? 0})</span>
               </TabsTrigger>
@@ -923,6 +920,9 @@ export default function ContentSync() {
               </TabsTrigger>
               <TabsTrigger value="idle" className="shrink-0 gap-1.5 text-xs">
                 Idle <span className="text-muted-foreground">({summary?.overall.idle ?? 0})</span>
+              </TabsTrigger>
+              <TabsTrigger value="all" className="shrink-0 gap-1.5 text-xs">
+                All <span className="text-muted-foreground">({summary?.overall.total ?? 0})</span>
               </TabsTrigger>
             </TabsList>
           </Tabs>
