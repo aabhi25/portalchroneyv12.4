@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy } from "lucide-react";
+import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, FileSpreadsheet } from "lucide-react";
 
 interface Campaign {
   id: string;
@@ -75,9 +75,14 @@ export default function WhatsAppCampaigns() {
           </h1>
           <p className="text-sm text-gray-600 mt-1">Send template blasts to contact groups; AI negotiates replies per-campaign.</p>
         </div>
-        <Button onClick={() => setLocation("/admin/whatsapp-campaigns/new")} data-testid="button-new-campaign">
-          <Plus className="h-4 w-4 mr-1" /> New Campaign
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setLocation("/admin/whatsapp-campaign-automations")} data-testid="button-campaign-automations">
+            <FileSpreadsheet className="h-4 w-4 mr-1" /> Automations
+          </Button>
+          <Button onClick={() => setLocation("/admin/whatsapp-campaigns/new")} data-testid="button-new-campaign">
+            <Plus className="h-4 w-4 mr-1" /> New Campaign
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (

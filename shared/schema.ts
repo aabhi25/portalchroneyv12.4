@@ -3041,6 +3041,77 @@ export const insertMarketingCampaignSchema = createInsertSchema(marketingCampaig
   optedOutCount: true,
 });
 
+// Spreadsheet campaign automations — reusable daily upload definitions that
+// create ordinary marketing campaigns after a file is validated.
+export const whatsappCampaignAutomations = pgTable("whatsapp_campaign_automations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  templateId: varchar("template_id").notNull().references(() => whatsappTemplates.id, { onDelete: "restrict" }),
+  templateParams: jsonb("template_params").$type<string[]>().default([]),
+  phoneColumn: text("phone_column").notNull(),
+  nameColumn: text("name_column").default(""),
+  recordKeyColumn: text("record_key_column").notNull(),
+  dateColumn: text("date_column").notNull(),
+  // A negative number targets dates before the configured field; a positive
+  // number targets dates after it. For example, -3 means "three days before due date".
+  dateOffsetDays: integer("date_offset_days").notNull().default(0),
+  statusColumn: text("status_column").default(""),
+  eligibleStatuses: jsonb("eligible_statuses").$type<string[]>().default([]),
+  defaultCountryCode: text("default_country_code").notNull().default("91"),
+  // 'review' creates an awaiting-review run; 'automatic' schedules it as soon
+  // as a valid daily upload has been processed.
+  sendMode: text("send_mode").notNull().default("review"),
+  sendTime: text("send_time").notNull().default("10:00"), // HH:mm in timezone
+  timezone: text("timezone").notNull().default("Asia/Kolkata"),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  businessIdx: index("wa_automation_business_idx").on(table.businessAccountId),
+  businessEnabledIdx: index("wa_automation_business_enabled_idx").on(table.businessAccountId, table.enabled),
+}));
+
+// Every spreadsheet upload is an immutable run. It links to the generated
+// contact group and ordinary marketing campaign so operators can audit the
+// exact audience and delivery outcome without storing the source workbook.
+export const whatsappCampaignAutomationRuns = pgTable("whatsapp_campaign_automation_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  automationId: varchar("automation_id").notNull().references(() => whatsappCampaignAutomations.id, { onDelete: "cascade" }),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  campaignId: varchar("campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
+  contactGroupId: varchar("contact_group_id").references(() => contactGroups.id, { onDelete: "set null" }),
+  sourceFileName: text("source_file_name").notNull(),
+  status: text("status").notNull().default("awaiting_review"), // awaiting_review | scheduled | failed | cancelled
+  scheduledAt: timestamp("scheduled_at"),
+  totalRows: integer("total_rows").notNull().default(0),
+  eligibleRows: integer("eligible_rows").notNull().default(0),
+  excludedRows: integer("excluded_rows").notNull().default(0),
+  invalidRows: integer("invalid_rows").notNull().default(0),
+  duplicateRows: integer("duplicate_rows").notNull().default(0),
+  errorMessage: text("error_message"),
+  approvedAt: timestamp("approved_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  automationCreatedIdx: index("wa_automation_runs_automation_created_idx").on(table.automationId, table.createdAt),
+  businessStatusIdx: index("wa_automation_runs_business_status_idx").on(table.businessAccountId, table.status),
+}));
+
+// Stable business record keys (for example loan-id + installment-id) prevent
+// repeated daily uploads from dispatching the same automation event twice.
+export const whatsappCampaignAutomationDispatches = pgTable("whatsapp_campaign_automation_dispatches", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  automationId: varchar("automation_id").notNull().references(() => whatsappCampaignAutomations.id, { onDelete: "cascade" }),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  runId: varchar("run_id").notNull().references(() => whatsappCampaignAutomationRuns.id, { onDelete: "restrict" }),
+  recordKey: text("record_key").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  automationKeyUniq: uniqueIndex("wa_automation_dispatches_automation_key_uniq").on(table.automationId, table.recordKey),
+  runIdx: index("wa_automation_dispatches_run_idx").on(table.runId),
+}));
+
 // Per-recipient row for a campaign (one per phone)
 export const marketingCampaignRecipients = pgTable("marketing_campaign_recipients", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -3161,6 +3232,8 @@ export type InsertWhatsappTemplate = z.infer<typeof insertWhatsappTemplateSchema
 export type WhatsappTemplate = typeof whatsappTemplates.$inferSelect;
 export type InsertMarketingCampaign = z.infer<typeof insertMarketingCampaignSchema>;
 export type MarketingCampaign = typeof marketingCampaigns.$inferSelect;
+export type WhatsappCampaignAutomation = typeof whatsappCampaignAutomations.$inferSelect;
+export type WhatsappCampaignAutomationRun = typeof whatsappCampaignAutomationRuns.$inferSelect;
 export type InsertMarketingCampaignRecipient = z.infer<typeof insertMarketingCampaignRecipientSchema>;
 export type MarketingCampaignRecipient = typeof marketingCampaignRecipients.$inferSelect;
 export type InsertMarketingCampaignMessage = z.infer<typeof insertMarketingCampaignMessageSchema>;

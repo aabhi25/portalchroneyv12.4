@@ -35852,6 +35852,82 @@ Return ONLY a valid JSON object in this format:
     } catch (err: any) { res.status(400).json({ error: err.message }); }
   });
 
+  // ---- Spreadsheet Campaign Automations ----
+  // These definitions turn a reviewed daily spreadsheet into an ordinary
+  // campaign. Delivery itself stays in marketingCampaignService, keeping one
+  // sender, one opt-out check, and one receipt lifecycle.
+  app.get("/api/whatsapp/campaign-automations", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { campaignAutomationService } = await import("./services/campaignAutomationService");
+      res.json(await campaignAutomationService.list(req.user!.businessAccountId!));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/whatsapp/campaign-automations", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { campaignAutomationService } = await import("./services/campaignAutomationService");
+      const automation = await campaignAutomationService.create(req.user!.businessAccountId!, req.body || {});
+      res.status(201).json(automation);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.get("/api/whatsapp/campaign-automations/:id", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { campaignAutomationService } = await import("./services/campaignAutomationService");
+      const automation = await campaignAutomationService.get(req.user!.businessAccountId!, req.params.id);
+      if (!automation) return res.status(404).json({ error: "Automation not found" });
+      res.json(automation);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.patch("/api/whatsapp/campaign-automations/:id", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { campaignAutomationService } = await import("./services/campaignAutomationService");
+      const automation = await campaignAutomationService.update(req.user!.businessAccountId!, req.params.id, req.body || {});
+      if (!automation) return res.status(404).json({ error: "Automation not found" });
+      res.json(automation);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.get("/api/whatsapp/campaign-automations/:id/runs", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { campaignAutomationService } = await import("./services/campaignAutomationService");
+      res.json(await campaignAutomationService.listRuns(req.user!.businessAccountId!, req.params.id));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/whatsapp/campaign-automations/:id/upload-preview", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { campaignAutomationService } = await import("./services/campaignAutomationService");
+      res.json(await campaignAutomationService.preview(req.user!.businessAccountId!, req.params.id, req.body || {}));
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post("/api/whatsapp/campaign-automations/:id/runs", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { campaignAutomationService } = await import("./services/campaignAutomationService");
+      const sourceFileName = typeof req.body?.sourceFileName === "string" ? req.body.sourceFileName : "spreadsheet";
+      const result = await campaignAutomationService.createRun(req.user!.businessAccountId!, req.params.id, req.body || {}, sourceFileName);
+      res.status(201).json(result);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post("/api/whatsapp/campaign-automations/:id/runs/:runId/approve", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { campaignAutomationService } = await import("./services/campaignAutomationService");
+      res.json(await campaignAutomationService.approveRun(req.user!.businessAccountId!, req.params.id, req.params.runId));
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post("/api/whatsapp/campaign-automations/:id/runs/:runId/cancel", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { campaignAutomationService } = await import("./services/campaignAutomationService");
+      const cancelled = await campaignAutomationService.cancelRun(req.user!.businessAccountId!, req.params.id, req.params.runId);
+      if (!cancelled) return res.status(404).json({ error: "Automation run not found" });
+      res.json({ success: true });
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
   // ---- Opt-outs ----
   app.get("/api/whatsapp/opt-outs", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {

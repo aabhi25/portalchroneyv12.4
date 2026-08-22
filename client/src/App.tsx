@@ -10,6 +10,9 @@ import { WhatsAppSectionPanel } from "@/components/whatsapp/WhatsAppSectionPanel
 import { getWhatsappSections } from "@/components/whatsapp/sections";
 import AdminProducts from "@/pages/AdminProducts";
 import WhatsAppCampaigns from "@/pages/WhatsAppCampaigns";
+import WhatsAppCampaignAutomations from "@/pages/WhatsAppCampaignAutomations";
+import WhatsAppCampaignAutomationForm from "@/pages/WhatsAppCampaignAutomationForm";
+import WhatsAppCampaignAutomationDetail from "@/pages/WhatsAppCampaignAutomationDetail";
 import WhatsAppNewCampaign from "@/pages/WhatsAppNewCampaign";
 import WhatsAppCampaignDetail from "@/pages/WhatsAppCampaignDetail";
 import WhatsAppCampaignConversations from "@/pages/WhatsAppCampaignConversations";
@@ -369,6 +372,10 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/whatsapp-config" component={WhatsApp} />
                 <Route path="/admin/whatsapp-smart-replies">{() => <SmartReplies channel="whatsapp" />}</Route>
                 <Route path="/admin/whatsapp-campaign-conversations">{() => <RequireWhatsappMarketing><WhatsAppCampaignConversations /></RequireWhatsappMarketing>}</Route>
+                 <Route path="/admin/whatsapp-campaign-automations/new">{() => <RequireWhatsappMarketing><WhatsAppCampaignAutomationForm /></RequireWhatsappMarketing>}</Route>
+                 <Route path="/admin/whatsapp-campaign-automations/:id/edit">{({ id }) => <RequireWhatsappMarketing><WhatsAppCampaignAutomationForm id={id} /></RequireWhatsappMarketing>}</Route>
+                 <Route path="/admin/whatsapp-campaign-automations/:id">{({ id }) => <RequireWhatsappMarketing><WhatsAppCampaignAutomationDetail id={id} /></RequireWhatsappMarketing>}</Route>
+                 <Route path="/admin/whatsapp-campaign-automations">{() => <RequireWhatsappMarketing><WhatsAppCampaignAutomations /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-campaigns/new">{() => <RequireWhatsappMarketing><WhatsAppNewCampaign /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-campaigns/:id/edit">{() => <RequireWhatsappMarketing><WhatsAppEditCampaign /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-campaigns/:id">{() => <RequireWhatsappMarketing><WhatsAppCampaignDetail /></RequireWhatsappMarketing>}</Route>
