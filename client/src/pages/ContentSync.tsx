@@ -63,6 +63,9 @@ interface ResolutionRow {
   questionCount: number;
   pdfCount: number;
   lastResolvedAt: string | null;
+  syncStatus: string;
+  syncError: string | null;
+  syncRetryable: boolean;
 }
 
 // Uniform curriculum display label. Mirrors the server-side curriculumLabel +
@@ -106,6 +109,8 @@ interface PlanRun {
   activeCpId: string | null;
   error: string | null;
   updatedAt: string;
+  retryableFailedCpIds: number;
+  nonRetryableFailedCpIds: number;
 }
 
 interface SyncRow {
@@ -194,10 +199,16 @@ function statusColor(status: string) {
   switch (status) {
     case "completed": return "bg-green-100 text-green-700";
     case "syncing": return "bg-blue-100 text-blue-700";
+    case "queued": return "bg-violet-100 text-violet-700";
     case "failed": return "bg-red-100 text-red-700";
     case "cancelled": return "bg-amber-100 text-amber-700";
     default: return "bg-gray-100 text-gray-600";
   }
+}
+
+function syncStatusLabel(status: string, retryable = true) {
+  if (status === "failed" && !retryable) return "needs content fix";
+  return status;
 }
 
 // Debounce a fast-changing value (search inputs) so we don't fire a query keystroke.
@@ -310,6 +321,7 @@ export default function ContentSync() {
     queryClient.invalidateQueries({ queryKey: ["/api/topscholar/sync"] });
     queryClient.invalidateQueries({ queryKey: ["/api/topscholar/sync/summary"] });
     queryClient.invalidateQueries({ queryKey: ["/api/topscholar/plan-ids"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/topscholar/resolutions"] });
     queryClient.invalidateQueries({ queryKey: ["/api/topscholar/content/overview"] });
     queryClient.invalidateQueries({ queryKey: ["/api/topscholar/plan-runs"] });
   }
@@ -393,9 +405,16 @@ export default function ContentSync() {
 
   const retryPlanRun = useMutation({
     mutationFn: (runId: string) => sendJson(`/api/topscholar/plan-runs/${runId}/retry-failed`, "POST", {}),
-    onSuccess: () => {
+    onSuccess: (data) => {
       invalidateSyncViews();
-      toast({ title: "Failed CP IDs re-queued", description: "Only the failed CP IDs will be attempted again." });
+      const requeued = data.requeuedCount ?? 0;
+      const blocked = data.skippedNonRetryableCount ?? 0;
+      toast({
+        title: requeued > 0 ? "Failed CP IDs re-queued" : "No retryable failed CP IDs",
+        description: blocked > 0
+          ? `${requeued} re-queued. ${blocked} need content splitting before they can sync.`
+          : "Only retryable failed CP IDs will be attempted again.",
+      });
     },
     onError: (e: any) => toast({ title: "Couldn't retry Plan sync", description: e.message, variant: "destructive" }),
   });
@@ -1063,10 +1082,12 @@ function PlanRow(props: PlanRowProps) {
   const [cpPage, setCpPage] = useState(0);
   useEffect(() => { setCpPage(0); }, [debouncedCpSearch]);
 
+  const planRunActive = !!planRun && ["queued", "resolving", "running"].includes(planRun.status);
   const { data, isLoading } = useQuery<Paged<ResolutionRow>>({
     queryKey: ["/api/topscholar/resolutions", plan.planId, { q: debouncedCpSearch, page: cpPage }],
     queryFn: () => getJson(buildUrl("/api/topscholar/resolutions", { planId: plan.planId, q: debouncedCpSearch, limit: cpPageSize, offset: cpPage * cpPageSize })),
     enabled: open,
+    refetchInterval: planRunActive ? 5000 : false,
   });
   const cps = data?.rows ?? [];
   const cpTotal = data?.total ?? 0;
@@ -1074,7 +1095,8 @@ function PlanRow(props: PlanRowProps) {
   const planSyncing = syncPlanPending && syncingPlan === plan.planId;
   const planResolving = resolvePending && resolvingPlan === plan.planId;
   const planRemoving = removePending && removingPlan === plan.planId;
-  const planRunActive = !!planRun && ["queued", "resolving", "running"].includes(planRun.status);
+  const retryableFailedCpIds = planRun?.retryableFailedCpIds ?? planRun?.failedCpIds ?? 0;
+  const nonRetryableFailedCpIds = planRun?.nonRetryableFailedCpIds ?? 0;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="border rounded-lg overflow-hidden">
@@ -1152,7 +1174,7 @@ function PlanRow(props: PlanRowProps) {
                   Cancel remaining
                 </Button>
               )}
-              {planRun.status === "failed" && planRun.failedCpIds > 0 && (
+              {planRun.status === "failed" && retryableFailedCpIds > 0 && (
                 <Button
                   size="sm"
                   variant="ghost"
@@ -1160,10 +1182,15 @@ function PlanRow(props: PlanRowProps) {
                   onClick={() => onRetryPlanRun(planRun.id)}
                   disabled={retryPlanRunPending}
                 >
-                  Retry failed
+                  Retry failed ({retryableFailedCpIds})
                 </Button>
               )}
             </div>
+            {nonRetryableFailedCpIds > 0 && (
+              <p className="text-amber-700">
+                {nonRetryableFailedCpIds} failed CP ID{nonRetryableFailedCpIds === 1 ? "" : "s"} need content splitting before they can sync.
+              </p>
+            )}
             {planRun.error && <p className="text-red-600 break-words">{planRun.error}</p>}
           </div>
         )}
@@ -1199,37 +1226,52 @@ function PlanRow(props: PlanRowProps) {
                   {cps.map((cp) => {
                     const cpKey = `${plan.planId}:${cp.cpId}`;
                     const cpSyncing = syncCpPending && syncingCp === cpKey;
+                    const needsContentFix = cp.syncStatus === "failed" && !cp.syncRetryable;
                     return (
                       <tr key={cp.id} className="border-t">
                         <td className="p-2">
-                          <div className="text-gray-700">{composeCurriculumLabel(cp) || <span className="text-gray-400">—</span>}</div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-gray-700">{composeCurriculumLabel(cp) || <span className="text-gray-400">—</span>}</span>
+                            <span className={`rounded-full px-2 py-0.5 text-[11px] ${statusColor(cp.syncStatus)}`}>
+                              {syncStatusLabel(cp.syncStatus, cp.syncRetryable)}
+                            </span>
+                          </div>
                           <div className="font-mono text-gray-400">{cp.cpId}</div>
+                          {cp.syncError && (
+                            <div className={needsContentFix ? "mt-1 text-amber-700" : "mt-1 text-red-600"}>
+                              {cp.syncError}
+                            </div>
+                          )}
                         </td>
                         <td className="p-2 text-gray-600">
                           {cp.noteCount}n / {cp.transcriptCount}t / {cp.questionCount}q / {cp.pdfCount}p
                         </td>
                         <td className="p-2">
-                          <div className="flex items-center justify-end gap-2">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 gap-1 text-violet-700 hover:bg-violet-100"
-                              onClick={() => onSyncCp(cp.cpId, plan.planId, "sample")}
-                              disabled={cpSyncing}
-                            >
-                              {cpSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                              Sample
-                            </Button>
-                            <Button
-                              size="sm"
-                              className="h-7 gap-1 bg-violet-600"
-                              onClick={() => onSyncCp(cp.cpId, plan.planId, "full")}
-                              disabled={cpSyncing}
-                            >
-                              {cpSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                              Full
-                            </Button>
-                          </div>
+                          {needsContentFix ? (
+                            <span className="text-right text-amber-700" title={cp.syncError || undefined}>Fix content length first</span>
+                          ) : (
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 gap-1 text-violet-700 hover:bg-violet-100"
+                                onClick={() => onSyncCp(cp.cpId, plan.planId, "sample")}
+                                disabled={cpSyncing}
+                              >
+                                {cpSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                                Sample
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="h-7 gap-1 bg-violet-600"
+                                onClick={() => onSyncCp(cp.cpId, plan.planId, "full")}
+                                disabled={cpSyncing}
+                              >
+                                {cpSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                                Full
+                              </Button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );

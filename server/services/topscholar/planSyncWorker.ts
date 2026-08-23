@@ -12,9 +12,19 @@ import { and, asc, desc, eq, inArray, isNull, lt, ne, or } from 'drizzle-orm';
 import { getTopscholarConfig, type TopscholarConfig } from './config';
 import { ingestSingleCp, resolvePlans } from './ingestionService';
 import { testMongoConnection } from './mongoContentDb';
+import { isNonRetryableEmbeddingFailure } from './syncFailure';
 
 type PlanRun = typeof topscholarPlanRuns.$inferSelect;
 type PlanRunItem = typeof topscholarPlanRunItems.$inferSelect;
+export type PlanRunWithRetrySummary = PlanRun & {
+  retryableFailedCpIds: number;
+  nonRetryableFailedCpIds: number;
+};
+export type RetryFailedPlanSyncResult = {
+  run: PlanRun;
+  requeuedCount: number;
+  skippedNonRetryableCount: number;
+};
 
 const ACTIVE_RUN_STATUSES = ['queued', 'resolving', 'running'] as const;
 const TERMINAL_ITEM_STATUSES = new Set(['completed', 'failed', 'cancelled']);
@@ -492,15 +502,43 @@ export async function enqueueSingleCpSyncRun(params: {
   return run;
 }
 
-export async function listPlanSyncRuns(businessAccountId: string, planId?: string): Promise<PlanRun[]> {
+export async function listPlanSyncRuns(businessAccountId: string, planId?: string): Promise<PlanRunWithRetrySummary[]> {
   const conditions = [eq(topscholarPlanRuns.businessAccountId, businessAccountId)];
   if (planId) conditions.push(eq(topscholarPlanRuns.planId, planId));
-  return db
+  const runs = await db
     .select()
     .from(topscholarPlanRuns)
     .where(and(...conditions))
     .orderBy(desc(topscholarPlanRuns.updatedAt))
     .limit(100);
+  if (runs.length === 0) return [];
+
+  const failedItems = await db
+    .select({
+      runId: topscholarPlanRunItems.runId,
+      error: topscholarPlanRunItems.error,
+    })
+    .from(topscholarPlanRunItems)
+    .where(and(
+      inArray(topscholarPlanRunItems.runId, runs.map((run) => run.id)),
+      eq(topscholarPlanRunItems.status, 'failed'),
+    ));
+  const summaryByRun = new Map<string, { retryable: number; nonRetryable: number }>();
+  for (const item of failedItems) {
+    const summary = summaryByRun.get(item.runId) || { retryable: 0, nonRetryable: 0 };
+    if (isNonRetryableEmbeddingFailure(item.error)) summary.nonRetryable += 1;
+    else summary.retryable += 1;
+    summaryByRun.set(item.runId, summary);
+  }
+
+  return runs.map((run) => {
+    const summary = summaryByRun.get(run.id);
+    return {
+      ...run,
+      retryableFailedCpIds: summary?.retryable ?? 0,
+      nonRetryableFailedCpIds: summary?.nonRetryable ?? 0,
+    };
+  });
 }
 
 export async function cancelPlanSyncRun(businessAccountId: string, runId: string): Promise<PlanRun | null> {
@@ -546,7 +584,10 @@ export async function cancelPlanSyncRun(businessAccountId: string, runId: string
   return (await db.select().from(topscholarPlanRuns).where(eq(topscholarPlanRuns.id, run.id)))[0] || null;
 }
 
-export async function retryFailedPlanSyncItems(businessAccountId: string, runId: string): Promise<PlanRun | null> {
+export async function retryFailedPlanSyncItems(
+  businessAccountId: string,
+  runId: string,
+): Promise<RetryFailedPlanSyncResult | null> {
   const [run] = await db
     .select()
     .from(topscholarPlanRuns)
@@ -555,24 +596,47 @@ export async function retryFailedPlanSyncItems(businessAccountId: string, runId:
   // Retry is a one-way terminal-state transition: cancelled and completed runs
   // must remain historical facts even if an authenticated caller bypasses the
   // UI button's visibility rule.
-  if (run.status !== 'failed') return run;
+  if (run.status !== 'failed') {
+    return { run, requeuedCount: 0, skippedNonRetryableCount: 0 };
+  }
+  const failedItems = await db
+    .select({
+      id: topscholarPlanRunItems.id,
+      error: topscholarPlanRunItems.error,
+    })
+    .from(topscholarPlanRunItems)
+    .where(and(eq(topscholarPlanRunItems.runId, run.id), eq(topscholarPlanRunItems.status, 'failed')));
+  const retryableItemIds = failedItems
+    .filter((item) => !isNonRetryableEmbeddingFailure(item.error))
+    .map((item) => item.id);
+  const skippedNonRetryableCount = failedItems.length - retryableItemIds.length;
+  if (retryableItemIds.length === 0) {
+    return { run, requeuedCount: 0, skippedNonRetryableCount };
+  }
   const requeued = await db
     .update(topscholarPlanRunItems)
     .set({ status: 'queued', error: null, completedAt: null, ...nowPatch() })
-    .where(and(eq(topscholarPlanRunItems.runId, run.id), eq(topscholarPlanRunItems.status, 'failed')))
+    .where(and(
+      eq(topscholarPlanRunItems.runId, run.id),
+      eq(topscholarPlanRunItems.status, 'failed'),
+      inArray(topscholarPlanRunItems.id, retryableItemIds),
+    ))
     .returning({ id: topscholarPlanRunItems.id });
-  if (requeued.length === 0) return run;
+  if (requeued.length === 0) {
+    return { run, requeuedCount: 0, skippedNonRetryableCount };
+  }
   const restarted = await db
     .update(topscholarPlanRuns)
     .set({ status: 'running', error: null, completedAt: null, ...nowPatch() })
     .where(and(eq(topscholarPlanRuns.id, run.id), eq(topscholarPlanRuns.status, 'failed')))
     .returning({ id: topscholarPlanRuns.id });
   if (restarted.length === 0) {
-    return (await db.select().from(topscholarPlanRuns).where(eq(topscholarPlanRuns.id, run.id)))[0] || null;
+    const current = (await db.select().from(topscholarPlanRuns).where(eq(topscholarPlanRuns.id, run.id)))[0];
+    return current ? { run: current, requeuedCount: requeued.length, skippedNonRetryableCount } : null;
   }
   const refreshed = await refreshRun(run.id);
   processPendingPlanRuns().catch((error) => console.error('[TopScholar PlanSync] retry kick failed:', error));
-  return refreshed;
+  return refreshed ? { run: refreshed, requeuedCount: requeued.length, skippedNonRetryableCount } : null;
 }
 
 /** Process at most one leased Plan work item. */

@@ -8,6 +8,8 @@ import {
   topscholarEmbedStaging,
   topscholarPlanIds,
   topscholarPlanCpResolutions,
+  topscholarPlanRunItems,
+  topscholarPlanRuns,
   conversations,
 } from "@shared/schema";
 import { and, eq, desc, isNotNull, inArray, ilike, sql } from "drizzle-orm";
@@ -35,6 +37,7 @@ import { testContentBundleConnection } from "../services/topscholar/cmsConnector
 import { cancelBatch } from "../services/topscholar/embeddingBatchService";
 import { withCpLock } from "../services/topscholar/cpLock";
 import { deleteCpChunks } from "../services/topscholar/chunkStore";
+import { isNonRetryableEmbeddingFailure } from "../services/topscholar/syncFailure";
 import {
   cancelPlanSyncRun,
   enqueuePlanSyncRuns,
@@ -1053,9 +1056,9 @@ router.post("/api/topscholar/plan-runs/:runId/retry-failed", ...topscholarGuards
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
   try {
-    const run = await retryFailedPlanSyncItems(businessAccountId, req.params.runId);
-    if (!run) return res.status(404).json({ error: "Plan sync run not found." });
-    res.json({ success: true, run });
+    const result = await retryFailedPlanSyncItems(businessAccountId, req.params.runId);
+    if (!result) return res.status(404).json({ error: "Plan sync run not found." });
+    res.json({ success: true, ...result });
   } catch (error: any) {
     console.error("[TopScholar PlanRuns] Retry failed:", error);
     res.status(500).json({ error: error?.message || "Couldn't retry failed CP IDs." });
@@ -1214,7 +1217,67 @@ router.get("/api/topscholar/resolutions", ...topscholarGuards, async (req: Reque
       .where(where),
   ]);
 
-  res.json({ rows, total: totalRow[0]?.count ?? 0 });
+  const cpIds = rows.map((row) => row.cpId);
+  if (cpIds.length === 0) return res.json({ rows: [], total: totalRow[0]?.count ?? 0 });
+
+  const [syncRows, latestRunRows] = await Promise.all([
+    db
+      .select({
+        cpId: topscholarContentSync.cpId,
+        status: topscholarContentSync.status,
+        lastError: topscholarContentSync.lastError,
+      })
+      .from(topscholarContentSync)
+      .where(and(
+        eq(topscholarContentSync.businessAccountId, businessAccountId),
+        inArray(topscholarContentSync.cpId, cpIds),
+      )),
+    planId
+      ? db
+        .select({ id: topscholarPlanRuns.id })
+        .from(topscholarPlanRuns)
+        .where(and(
+          eq(topscholarPlanRuns.businessAccountId, businessAccountId),
+          eq(topscholarPlanRuns.planId, planId),
+        ))
+        .orderBy(desc(topscholarPlanRuns.updatedAt))
+        .limit(1)
+      : Promise.resolve([]),
+  ]);
+  const syncByCpId = new Map(syncRows.map((row) => [row.cpId, row]));
+  const latestRunId = latestRunRows[0]?.id;
+  const itemRows = latestRunId
+    ? await db
+      .select({
+        cpId: topscholarPlanRunItems.cpId,
+        status: topscholarPlanRunItems.status,
+        error: topscholarPlanRunItems.error,
+      })
+      .from(topscholarPlanRunItems)
+      .where(and(
+        eq(topscholarPlanRunItems.runId, latestRunId),
+        inArray(topscholarPlanRunItems.cpId, cpIds),
+      ))
+    : [];
+  const itemByCpId = new Map(itemRows.map((row) => [row.cpId, row]));
+
+  const rowsWithSyncStatus = rows.map((row) => {
+    const sync = syncByCpId.get(row.cpId);
+    const item = itemByCpId.get(row.cpId);
+    const activeItemStatus = item?.status === "queued" || item?.status === "running" || item?.status === "submitted";
+    const syncStatus = activeItemStatus
+      ? (item?.status === "queued" ? "queued" : "syncing")
+      : (sync?.status || item?.status || "idle");
+    const syncError = sync?.lastError || item?.error || null;
+    return {
+      ...row,
+      syncStatus,
+      syncError,
+      syncRetryable: syncStatus !== "failed" || !isNonRetryableEmbeddingFailure(syncError),
+    };
+  });
+
+  res.json({ rows: rowsWithSyncStatus, total: totalRow[0]?.count ?? 0 });
 });
 
 // Fetch-only resolve: takes one or more Plan IDs (explicit array/text, else the
