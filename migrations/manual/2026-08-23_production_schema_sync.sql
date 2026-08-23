@@ -1,0 +1,212 @@
+-- Production schema sync: TopScholar Plan Sync, spreadsheet campaign automation,
+-- and Tester content-scope metadata.
+--
+-- Generated from the 2026-08-22 production backup compared with the current
+-- development schema. This migration is additive only: it creates missing tables,
+-- columns, and indexes, but never drops data or changes existing defaults.
+--
+-- Run with psql as a role that can CREATE TABLE, ALTER TABLE, and CREATE INDEX.
+-- Do not wrap this entire file in an outer BEGIN/COMMIT: the final content index
+-- is built concurrently to avoid a long write lock on an existing chunk table.
+
+DO $$
+BEGIN
+  IF to_regprocedure('gen_random_uuid()') IS NULL THEN
+    RAISE EXCEPTION 'gen_random_uuid() is unavailable. Enable pgcrypto before running this migration.';
+  END IF;
+
+  IF to_regclass('public.business_accounts') IS NULL
+    OR to_regclass('public.whatsapp_templates') IS NULL
+    OR to_regclass('public.marketing_campaigns') IS NULL
+    OR to_regclass('public.contact_groups') IS NULL
+    OR to_regclass('public.topscholar_content_chunks') IS NULL THEN
+    RAISE EXCEPTION 'Expected production base tables are missing; stop and verify the target database before continuing.';
+  END IF;
+END
+$$;
+
+BEGIN;
+
+-- ---------------------------------------------------------------------------
+-- Reusable spreadsheet-to-WhatsApp campaign automation
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.whatsapp_campaign_automations (
+  id varchar DEFAULT gen_random_uuid() NOT NULL,
+  business_account_id varchar NOT NULL,
+  name text NOT NULL,
+  template_id varchar NOT NULL,
+  template_params jsonb DEFAULT '[]'::jsonb,
+  phone_column text NOT NULL,
+  name_column text DEFAULT ''::text,
+  record_key_column text NOT NULL,
+  date_column text NOT NULL,
+  date_offset_days integer DEFAULT 0 NOT NULL,
+  status_column text DEFAULT ''::text,
+  eligible_statuses jsonb DEFAULT '[]'::jsonb,
+  default_country_code text DEFAULT '91'::text NOT NULL,
+  send_mode text DEFAULT 'review'::text NOT NULL,
+  send_time text DEFAULT '10:00'::text NOT NULL,
+  timezone text DEFAULT 'Asia/Kolkata'::text NOT NULL,
+  enabled boolean DEFAULT true NOT NULL,
+  created_at timestamp without time zone DEFAULT now() NOT NULL,
+  updated_at timestamp without time zone DEFAULT now() NOT NULL,
+  CONSTRAINT whatsapp_campaign_automations_pkey PRIMARY KEY (id),
+  CONSTRAINT whatsapp_campaign_automations_business_account_id_business_acco
+    FOREIGN KEY (business_account_id) REFERENCES public.business_accounts(id) ON DELETE CASCADE,
+  CONSTRAINT whatsapp_campaign_automations_template_id_whatsapp_templates_id
+    FOREIGN KEY (template_id) REFERENCES public.whatsapp_templates(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS public.whatsapp_campaign_automation_runs (
+  id varchar DEFAULT gen_random_uuid() NOT NULL,
+  automation_id varchar NOT NULL,
+  business_account_id varchar NOT NULL,
+  campaign_id varchar,
+  contact_group_id varchar,
+  source_file_name text NOT NULL,
+  status text DEFAULT 'awaiting_review'::text NOT NULL,
+  scheduled_at timestamp without time zone,
+  total_rows integer DEFAULT 0 NOT NULL,
+  eligible_rows integer DEFAULT 0 NOT NULL,
+  excluded_rows integer DEFAULT 0 NOT NULL,
+  invalid_rows integer DEFAULT 0 NOT NULL,
+  duplicate_rows integer DEFAULT 0 NOT NULL,
+  error_message text,
+  approved_at timestamp without time zone,
+  created_at timestamp without time zone DEFAULT now() NOT NULL,
+  updated_at timestamp without time zone DEFAULT now() NOT NULL,
+  CONSTRAINT whatsapp_campaign_automation_runs_pkey PRIMARY KEY (id),
+  CONSTRAINT whatsapp_campaign_automation_runs_automation_id_whatsapp_campai
+    FOREIGN KEY (automation_id) REFERENCES public.whatsapp_campaign_automations(id) ON DELETE CASCADE,
+  CONSTRAINT whatsapp_campaign_automation_runs_business_account_id_business_
+    FOREIGN KEY (business_account_id) REFERENCES public.business_accounts(id) ON DELETE CASCADE,
+  CONSTRAINT whatsapp_campaign_automation_runs_campaign_id_marketing_campaig
+    FOREIGN KEY (campaign_id) REFERENCES public.marketing_campaigns(id) ON DELETE SET NULL,
+  CONSTRAINT whatsapp_campaign_automation_runs_contact_group_id_contact_grou
+    FOREIGN KEY (contact_group_id) REFERENCES public.contact_groups(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.whatsapp_campaign_automation_dispatches (
+  id varchar DEFAULT gen_random_uuid() NOT NULL,
+  automation_id varchar NOT NULL,
+  business_account_id varchar NOT NULL,
+  run_id varchar NOT NULL,
+  record_key text NOT NULL,
+  created_at timestamp without time zone DEFAULT now() NOT NULL,
+  CONSTRAINT whatsapp_campaign_automation_dispatches_pkey PRIMARY KEY (id),
+  CONSTRAINT whatsapp_campaign_automation_dispatches_automation_id_whatsapp_
+    FOREIGN KEY (automation_id) REFERENCES public.whatsapp_campaign_automations(id) ON DELETE CASCADE,
+  CONSTRAINT whatsapp_campaign_automation_dispatches_business_account_id_bus
+    FOREIGN KEY (business_account_id) REFERENCES public.business_accounts(id) ON DELETE CASCADE,
+  CONSTRAINT whatsapp_campaign_automation_dispatches_run_id_whatsapp_campaig
+    FOREIGN KEY (run_id) REFERENCES public.whatsapp_campaign_automation_runs(id) ON DELETE RESTRICT
+);
+
+-- ---------------------------------------------------------------------------
+-- TopScholar Plan Sync tracking and leases
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.topscholar_plan_runs (
+  id varchar DEFAULT gen_random_uuid() NOT NULL,
+  business_account_id varchar NOT NULL,
+  plan_id text NOT NULL,
+  mode text DEFAULT 'full'::text NOT NULL,
+  status text DEFAULT 'queued'::text NOT NULL,
+  total_cp_ids integer DEFAULT 0 NOT NULL,
+  completed_cp_ids integer DEFAULT 0 NOT NULL,
+  failed_cp_ids integer DEFAULT 0 NOT NULL,
+  active_cp_id text,
+  error text,
+  started_at timestamp without time zone,
+  completed_at timestamp without time zone,
+  created_at timestamp without time zone DEFAULT now() NOT NULL,
+  updated_at timestamp without time zone DEFAULT now() NOT NULL,
+  lease_owner text,
+  lease_expires_at timestamp without time zone,
+  requested_cp_id text,
+  CONSTRAINT topscholar_plan_runs_pkey PRIMARY KEY (id),
+  CONSTRAINT topscholar_plan_runs_business_account_id_business_accounts_id_f
+    FOREIGN KEY (business_account_id) REFERENCES public.business_accounts(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS public.topscholar_plan_run_items (
+  id varchar DEFAULT gen_random_uuid() NOT NULL,
+  run_id varchar NOT NULL,
+  business_account_id varchar NOT NULL,
+  plan_id text NOT NULL,
+  cp_id text NOT NULL,
+  status text DEFAULT 'queued'::text NOT NULL,
+  attempts integer DEFAULT 0 NOT NULL,
+  error text,
+  started_at timestamp without time zone,
+  completed_at timestamp without time zone,
+  created_at timestamp without time zone DEFAULT now() NOT NULL,
+  updated_at timestamp without time zone DEFAULT now() NOT NULL,
+  CONSTRAINT topscholar_plan_run_items_pkey PRIMARY KEY (id),
+  CONSTRAINT topscholar_plan_run_items_business_account_id_business_accounts
+    FOREIGN KEY (business_account_id) REFERENCES public.business_accounts(id) ON DELETE CASCADE,
+  CONSTRAINT topscholar_plan_run_items_run_id_topscholar_plan_runs_id_fk
+    FOREIGN KEY (run_id) REFERENCES public.topscholar_plan_runs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS public.topscholar_plan_sync_leases (
+  business_account_id varchar NOT NULL,
+  owner text NOT NULL,
+  expires_at timestamp without time zone NOT NULL,
+  updated_at timestamp without time zone DEFAULT now() NOT NULL,
+  CONSTRAINT topscholar_plan_sync_leases_pkey PRIMARY KEY (business_account_id),
+  CONSTRAINT topscholar_plan_sync_leases_business_account_id_business_accoun
+    FOREIGN KEY (business_account_id) REFERENCES public.business_accounts(id) ON DELETE CASCADE
+);
+
+-- ---------------------------------------------------------------------------
+-- Tester content-scope metadata for PostgreSQL/pgvector content storage.
+-- These are intentionally nullable so existing chunks remain valid.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE public.topscholar_content_chunks
+  ADD COLUMN IF NOT EXISTS board text,
+  ADD COLUMN IF NOT EXISTS medium text,
+  ADD COLUMN IF NOT EXISTS grade text;
+
+-- Indexes for the new empty automation and Plan Sync tables.
+CREATE INDEX IF NOT EXISTS wa_automation_business_idx
+  ON public.whatsapp_campaign_automations USING btree (business_account_id);
+CREATE INDEX IF NOT EXISTS wa_automation_business_enabled_idx
+  ON public.whatsapp_campaign_automations USING btree (business_account_id, enabled);
+CREATE INDEX IF NOT EXISTS wa_automation_runs_automation_created_idx
+  ON public.whatsapp_campaign_automation_runs USING btree (automation_id, created_at);
+CREATE INDEX IF NOT EXISTS wa_automation_runs_business_status_idx
+  ON public.whatsapp_campaign_automation_runs USING btree (business_account_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS wa_automation_dispatches_automation_key_uniq
+  ON public.whatsapp_campaign_automation_dispatches USING btree (automation_id, record_key);
+CREATE INDEX IF NOT EXISTS wa_automation_dispatches_run_idx
+  ON public.whatsapp_campaign_automation_dispatches USING btree (run_id);
+
+CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_plan_updated_idx
+  ON public.topscholar_plan_runs USING btree (business_account_id, plan_id, updated_at);
+CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_status_idx
+  ON public.topscholar_plan_runs USING btree (business_account_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_cp_unique
+  ON public.topscholar_plan_runs USING btree (business_account_id, plan_id, requested_cp_id)
+  WHERE requested_cp_id IS NOT NULL
+    AND status = ANY (ARRAY['queued'::text, 'resolving'::text, 'running'::text]);
+CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_plan_unique
+  ON public.topscholar_plan_runs USING btree (business_account_id, plan_id)
+  WHERE requested_cp_id IS NULL
+    AND status = ANY (ARRAY['queued'::text, 'resolving'::text, 'running'::text]);
+CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_account_cp_idx
+  ON public.topscholar_plan_run_items USING btree (business_account_id, cp_id);
+CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_run_items_run_cp_idx
+  ON public.topscholar_plan_run_items USING btree (run_id, cp_id);
+CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_run_status_idx
+  ON public.topscholar_plan_run_items USING btree (run_id, status);
+
+COMMIT;
+
+-- The chunk table may already be large. Concurrent creation minimizes write
+-- blocking, but PostgreSQL forbids it inside a transaction block.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS topscholar_chunks_scope_idx
+  ON public.topscholar_content_chunks USING btree
+  (business_account_id, board, medium, grade, subject, cp_id);
