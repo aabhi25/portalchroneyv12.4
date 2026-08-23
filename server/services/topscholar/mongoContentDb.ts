@@ -36,6 +36,9 @@ export const EMBEDDING_DIMENSIONS = 1536;
 export interface MongoChunkDoc {
   business_account_id: string;
   cp_id: string;
+  board: string | null;
+  medium: string | null;
+  grade: string | null;
   content_type: string;
   subject: string | null;
   subject_id: string | null;

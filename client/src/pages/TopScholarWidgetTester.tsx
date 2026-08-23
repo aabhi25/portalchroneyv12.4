@@ -32,9 +32,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { getPublicWidgetOrigin } from "@/lib/deploymentUrls";
 
-// One distinct board/medium/grade combination the admin has configured, plus how
-// many content packs (cp_ids) it resolves to. Sourced from the TopScholar-guarded
-// /api/topscholar/scope-options endpoint.
+  // One distinct board/medium/grade combination physically present in the active
+  // client content store, plus the content packs (cp_ids) it contains.
 interface SubjectOption {
   name: string;
   cpCount: number;
@@ -132,9 +131,8 @@ export default function TopScholarWidgetTester() {
 
   const opts = options ?? [];
 
-  // Chapters available for the chosen board/medium/grade/subject. Sourced from the
-  // store-agnostic /api/topscholar/scope-chapters endpoint and only fetched once a
-  // full subject scope is selected (chapter cascades from subject).
+  // Chapters available for the chosen board/medium/grade/subject, read from the
+  // active client content store once a complete subject scope is selected.
   const baseScopeSelected = !!(board && medium && grade && subject);
   const { data: chapterData, isLoading: chaptersLoading } = useQuery<{ chapters: string[] }>({
     queryKey: ["/api/topscholar/scope-chapters", board, medium, grade, subject],
@@ -239,8 +237,8 @@ export default function TopScholarWidgetTester() {
         setSignedPreview({ scopeKey, token: json.token || "", error: "" });
       } catch (err) {
         if (cancelled) return;
-        // Non-fatal: the preview still loads with unsigned scope params, so chat
-        // behaves exactly as before. Only voice needs the signature.
+        // Do not fall back to an unsigned scope here: the server may have rejected
+        // a client-store scope that does not match the current live-widget mapping.
         setSignedPreview({
           scopeKey,
           token: "",
@@ -270,7 +268,7 @@ export default function TopScholarWidgetTester() {
   // the iframe mounts once with its final URL — never with a stale token, and
   // never reloading mid-conversation when the token lands.
   const previewUrl =
-    !hasFullSelection || (!isLive && !currentPreview)
+    !hasFullSelection || (!isLive && (!currentPreview || previewTokenError))
       ? ""
       : isLive
         ? `/embed/chat?businessAccountId=${encodeURIComponent(businessAccountId)}&token=${encodeURIComponent(liveToken)}`
@@ -536,18 +534,18 @@ export default function TopScholarWidgetTester() {
           <CardContent className="space-y-4">
             {isLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="w-4 h-4 animate-spin" /> Loading curriculum mappings…
+                <Loader2 className="w-4 h-4 animate-spin" /> Loading client content scope…
               </div>
             ) : isError ? (
               <div className="flex items-center gap-2 text-sm text-destructive">
-                <AlertTriangle className="w-4 h-4" /> Failed to load curriculum mappings.
+                <AlertTriangle className="w-4 h-4" /> Failed to load client content scope.
               </div>
             ) : opts.length === 0 ? (
               <div className="flex items-start gap-2 text-sm text-muted-foreground">
                 <AlertTriangle className="w-4 h-4 mt-0.5" />
                 <span>
-                  No curriculum mappings configured yet. Sync content and map board/medium/grade
-                  on the Ext. Content page first.
+                  No complete curriculum scope was found in the client content store yet. Sync
+                  content with Board, Medium, Grade, Subject, and Chapter metadata first.
                 </span>
               </div>
             ) : (
@@ -932,7 +930,7 @@ export default function TopScholarWidgetTester() {
             )}
             {!isLive && previewTokenError && (
               <p className="mt-2 text-xs text-red-600" data-testid="text-preview-token-error">
-                Voice is unavailable in this preview: {previewTokenError} Chat is unaffected.
+                Preview unavailable: {previewTokenError}
               </p>
             )}
           </CardContent>

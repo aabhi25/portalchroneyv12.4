@@ -43,6 +43,9 @@ export async function ensureContentSchema(pool: Pool): Promise<void> {
         id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
         business_account_id varchar NOT NULL,
         cp_id text NOT NULL,
+        board text,
+        medium text,
+        grade text,
         content_type text NOT NULL,
         subject text,
         subject_id text,
@@ -65,12 +68,22 @@ export async function ensureContentSchema(pool: Pool): Promise<void> {
       ALTER TABLE topscholar_content_chunks ADD COLUMN IF NOT EXISTS subject_id text
     `);
     await client.query(`
+      ALTER TABLE topscholar_content_chunks
+        ADD COLUMN IF NOT EXISTS board text,
+        ADD COLUMN IF NOT EXISTS medium text,
+        ADD COLUMN IF NOT EXISTS grade text
+    `);
+    await client.query(`
       CREATE INDEX IF NOT EXISTS topscholar_chunks_account_cp_idx
         ON topscholar_content_chunks (business_account_id, cp_id)
     `);
     await client.query(`
       CREATE INDEX IF NOT EXISTS topscholar_chunks_account_cp_type_idx
         ON topscholar_content_chunks (business_account_id, cp_id, content_type)
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS topscholar_chunks_scope_idx
+        ON topscholar_content_chunks (business_account_id, board, medium, grade, subject, cp_id)
     `);
     await client.query(`
       CREATE INDEX IF NOT EXISTS topscholar_chunks_embedding_hnsw

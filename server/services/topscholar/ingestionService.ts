@@ -12,6 +12,9 @@ import type { TopscholarConfig } from './config';
 import { createMediaMetadata } from './mediaMetadata';
 
 interface ChunkRecord {
+  board?: string | null;
+  medium?: string | null;
+  grade?: string | null;
   contentType: 'note' | 'transcript' | 'ebook_page' | 'question';
   subject: string | null;
   subjectId: string | null;
@@ -274,7 +277,20 @@ function buildRecords(bundle: CpContentBundle): ChunkRecord[] {
     });
   }
 
-  return records;
+  const curriculumScope = {
+    board: bundle.board,
+    medium: bundle.medium,
+    grade: bundle.grade,
+  };
+  return records.map((record) => ({
+    ...record,
+    board: bundle.board,
+    medium: bundle.medium,
+    grade: bundle.grade,
+    // Batch embedding jobs retain this in their app-side staging metadata so the
+    // later landing worker can write the same complete scope into the client store.
+    metadata: { ...record.metadata, curriculumScope },
+  }));
 }
 
 function countByType(records: ChunkRecord[]) {
@@ -729,6 +745,9 @@ async function ingestSampleSync(
   );
 
   const chunks: StoreChunk[] = records.map((r, i) => ({
+    board: r.board ?? null,
+    medium: r.medium ?? null,
+    grade: r.grade ?? null,
     contentType: r.contentType,
     subject: r.subject,
     subjectId: r.subjectId,
@@ -970,6 +989,9 @@ async function ingestFullDirect(
           businessAccountId,
         );
         const chunks: StoreChunk[] = page.map((r, idx) => ({
+          board: r.board ?? null,
+          medium: r.medium ?? null,
+          grade: r.grade ?? null,
           contentType: r.contentType,
           subject: r.subject,
           subjectId: r.subjectId,

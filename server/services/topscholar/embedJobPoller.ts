@@ -131,7 +131,18 @@ async function completeJob(job: typeof topscholarEmbedJobs.$inferSelect): Promis
     for (const { customId, embedding } of buffer) {
       const s = stagedById.get(customId);
       if (!s) continue;
+      const metadata = (s.metadata || {}) as Record<string, unknown>;
+      const curriculumScope = (
+        metadata.curriculumScope && typeof metadata.curriculumScope === "object"
+          ? metadata.curriculumScope
+          : {}
+      ) as Record<string, unknown>;
+      const scopeValue = (key: "board" | "medium" | "grade") =>
+        typeof curriculumScope[key] === "string" ? curriculumScope[key] : null;
       chunks.push({
+        board: scopeValue("board"),
+        medium: scopeValue("medium"),
+        grade: scopeValue("grade"),
         contentType: s.contentType,
         subject: s.subject,
         subjectId: s.subjectId,
@@ -141,7 +152,7 @@ async function completeJob(job: typeof topscholarEmbedJobs.$inferSelect): Promis
         contentText: s.contentText,
         sourceRef: s.sourceRef,
         mediaUrl: s.mediaUrl,
-        metadata: (s.metadata || {}) as Record<string, unknown>,
+        metadata,
         contentHash: s.contentHash,
         embedding,
       });

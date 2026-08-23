@@ -13,3 +13,4 @@
 - [TopScholar media relevance](topscholar-media-relevance.md) — images need source-bound lesson metadata and the shared exact-token gate; uncertainty or a missing placement marker means no image.
 - [TopScholar Plan sync durability](topscholar-plan-sync-durability.md) — full Plan embedding is a leased, cancellable CP queue; never recreate unbounded direct workers from bulk actions.
 - [Spreadsheet campaign dispatch reservations](spreadsheet-campaign-dispatch-reservations.md) — reserve a business record key only when a run is scheduled; cancelled review runs must remain eligible.
+- [Tester client-store filters](topscholar-tester-client-store-filters.md) — Tester options may use stored client content, but preview must prove it matches live scope mapping until production authority migrates.

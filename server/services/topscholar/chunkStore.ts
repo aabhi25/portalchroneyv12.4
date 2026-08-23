@@ -13,6 +13,9 @@ import type { TopscholarConfig } from './config';
  */
 
 export interface StoreChunk {
+  board: string | null;
+  medium: string | null;
+  grade: string | null;
   contentType: string;
   subject: string | null;
   subjectId: string | null;
@@ -65,11 +68,11 @@ async function replacePgvector(
       if (!c.embedding || c.embedding.length === 0) continue;
       await client.query(
         `INSERT INTO topscholar_content_chunks
-          (business_account_id, cp_id, content_type, subject, subject_id, chapter, title,
+          (business_account_id, cp_id, board, medium, grade, content_type, subject, subject_id, chapter, title,
            content_html, content_text, source_ref, media_url, embedding, metadata, content_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::vector,$13::jsonb,$14)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::vector,$15::jsonb,$16)`,
         [
-          businessAccountId, cpId, c.contentType, c.subject, c.subjectId, c.chapter, c.title,
+          businessAccountId, cpId, c.board, c.medium, c.grade, c.contentType, c.subject, c.subjectId, c.chapter, c.title,
           c.contentHtml, c.contentText, c.sourceRef, c.mediaUrl,
           toVectorLiteral(c.embedding), JSON.stringify(c.metadata || {}), c.contentHash,
         ],
@@ -141,6 +144,9 @@ export async function appendCpChunks(
     const docs: MongoChunkDoc[] = usable.map((c) => ({
       business_account_id: businessAccountId,
       cp_id: cpId,
+      board: c.board,
+      medium: c.medium,
+      grade: c.grade,
       content_type: c.contentType,
       subject: c.subject,
       subject_id: c.subjectId,
@@ -167,11 +173,11 @@ export async function appendCpChunks(
     for (const c of usable) {
       await client.query(
         `INSERT INTO topscholar_content_chunks
-          (business_account_id, cp_id, content_type, subject, subject_id, chapter, title,
+          (business_account_id, cp_id, board, medium, grade, content_type, subject, subject_id, chapter, title,
            content_html, content_text, source_ref, media_url, embedding, metadata, content_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::vector,$13::jsonb,$14)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::vector,$15::jsonb,$16)`,
         [
-          businessAccountId, cpId, c.contentType, c.subject, c.subjectId, c.chapter, c.title,
+          businessAccountId, cpId, c.board, c.medium, c.grade, c.contentType, c.subject, c.subjectId, c.chapter, c.title,
           c.contentHtml, c.contentText, c.sourceRef, c.mediaUrl,
           toVectorLiteral(c.embedding), JSON.stringify(c.metadata || {}), c.contentHash,
         ],

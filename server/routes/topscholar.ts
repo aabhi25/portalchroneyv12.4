@@ -25,6 +25,12 @@ import { getContentOverview, getChapters, getChunks, getChapterNamesForCpIds, ge
 import { getMongoContentOverview, getMongoChapters, getMongoChunks } from "../services/topscholar/mongoContentReader";
 import { getMongoChapterNames, getMongoCpIdsWithContent } from "../services/topscholar/mongoContentDb";
 import { resolveCpIdsForScope } from "../services/topscholar/scopeResolver";
+import {
+  backfillTesterScopeMetadata,
+  listStoredCurriculumScopes,
+  resolveStoredScopeCpIds,
+  type StoredCurriculumScope,
+} from "../services/topscholar/testerContentScopes";
 import { testContentBundleConnection } from "../services/topscholar/cmsConnector";
 import { cancelBatch } from "../services/topscholar/embeddingBatchService";
 import { withCpLock } from "../services/topscholar/cpLock";
@@ -1378,51 +1384,28 @@ router.get("/api/topscholar/students", ...topscholarGuards, async (req: Request,
   res.json(students);
 });
 
-// Task #13: TopScholar widget tester panel. Returns the distinct
-// board/medium/grade combinations the admin has actually configured in the
-// curriculum mappings table, each with the count of cp_id(s) it resolves to.
-// The tester page uses this to build cascading dropdowns (so values match the
-// mapping vocabulary exactly — resolution is case-insensitive + trimmed) and to
-// show "N packs matched" vs "no match — bot will refuse" for a selection.
-// Short-lived cache of "which cp_ids actually have content chunks" per business
-// account. The MongoDB distinct query can take seconds against the client's Atlas
-// cluster, and the Tester refetches scope options on every mount — a 60s TTL keeps
-// the dropdowns snappy while staying fresh enough to pick up new content syncs.
-const cpContentCache = new Map<string, { at: number; cpIds: Set<string> }>();
-const CP_CONTENT_CACHE_TTL_MS = 60_000;
+// The Tester reads scope values from the configured content store, not from the
+// app's CP mapping table. A short cache avoids repeatedly grouping a large client
+// embedding collection while still picking up a completed sync promptly.
+const testerScopeCache = new Map<string, { at: number; scopes: StoredCurriculumScope[] }>();
+const TESTER_SCOPE_CACHE_TTL_MS = 60_000;
 
-/**
- * Resolves the set of cp_ids that have at least one content chunk in whichever
- * content store the account uses (MongoDB Atlas or pgvector). Returns null when
- * the lookup fails — callers should fail OPEN (show all mapped scopes) rather
- * than presenting an empty Tester because the client's cluster hiccupped.
- */
-async function getCpIdsWithContentCached(
+async function getStoredTesterScopesCached(
   businessAccountId: string,
   account: any,
-): Promise<Set<string> | null> {
+): Promise<StoredCurriculumScope[]> {
   const cfg = getTopscholarConfig(account);
-  // Key includes the effective store config so switching store URL/db/collection
-  // never serves a stale cp_id set from the previous store.
   const cacheKey = `${businessAccountId}|${cfg.contentDbUrl || ""}|${cfg.contentDbName || ""}|${cfg.contentDbCollection || ""}`;
-  const cached = cpContentCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < CP_CONTENT_CACHE_TTL_MS) return cached.cpIds;
-  try {
-    const cpIds = isMongoConnectionString(cfg.contentDbUrl)
-      ? await getMongoCpIdsWithContent(
-          { connectionString: cfg.contentDbUrl!, dbName: cfg.contentDbName, collection: cfg.contentDbCollection },
-          businessAccountId,
-        )
-      : await getCpIdsWithContent(cfg, businessAccountId);
-    cpContentCache.set(cacheKey, { at: Date.now(), cpIds });
-    return cpIds;
-  } catch (error) {
-    console.warn(
-      "[TopScholar] content-presence lookup failed (scope options will be unfiltered):",
-      error instanceof Error ? error.message : error,
-    );
-    return null;
-  }
+  const cached = testerScopeCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < TESTER_SCOPE_CACHE_TTL_MS) return cached.scopes;
+
+  // Older chunks did not carry board/medium/grade. Backfill only those metadata
+  // fields into the client store before reading; the dropdown remains content-store
+  // driven after this one-time enrichment.
+  await backfillTesterScopeMetadata(cfg, businessAccountId);
+  const scopes = await listStoredCurriculumScopes(cfg, businessAccountId);
+  testerScopeCache.set(cacheKey, { at: Date.now(), scopes });
+  return scopes;
 }
 
 router.get("/api/topscholar/scope-options", ...topscholarGuards, async (req: Request, res: Response) => {
@@ -1432,32 +1415,19 @@ router.get("/api/topscholar/scope-options", ...topscholarGuards, async (req: Req
   const account = await loadAccount(businessAccountId);
   if (!account) return res.status(404).json({ error: "Business account not found" });
 
-  // Only offer scopes whose pack(s) actually have synced content — a mapping row
-  // alone isn't testable (the chapter dropdown would come up empty and the bot
-  // would refuse). If the store lookup fails we fall back to all mapped scopes.
-  const contentCpIds = await getCpIdsWithContentCached(businessAccountId, account);
-
-  const allRows = await db
-    .select({
-      board: topscholarCpMappings.board,
-      medium: topscholarCpMappings.medium,
-      grade: topscholarCpMappings.grade,
-      cpId: topscholarCpMappings.cpId,
-      cpName: topscholarCpMappings.cpName,
-      subject: topscholarCpMappings.subject,
-    })
-    .from(topscholarCpMappings)
-    .where(eq(topscholarCpMappings.businessAccountId, businessAccountId));
-
-  const rows = contentCpIds
-    ? allRows.filter((r) => !!r.cpId && contentCpIds.has(r.cpId))
-    : allRows;
+  let rows: StoredCurriculumScope[];
+  try {
+    rows = await getStoredTesterScopesCached(businessAccountId, account);
+  } catch (error) {
+    console.error("[TopScholar] Tester scope lookup failed:", error);
+    return res.status(503).json({
+      error: "Could not load curriculum scope from the configured content store. Check the content-store connection and try again.",
+    });
+  }
 
   // Group by the (board, medium, grade) tuple, de-duplicating cp_ids per combo.
-  // Each combo also tracks its subjects: a subject is a content pack's CMS subject
-  // name (the `subject` column), matched 1:1 to a cp_id; we fall back to the legacy
-  // `cp_name` for older rows that predate the subject column. Rows with neither
-  // contribute to cpCount but expose no subject option (they can't be subject-scoped).
+  // Every row is a physically stored client-content scope, so a mapping row with
+  // no retrievable chunks can never appear in this Tester dropdown.
   const combos = new Map<
     string,
     {
@@ -1469,24 +1439,24 @@ router.get("/api/topscholar/scope-options", ...topscholarGuards, async (req: Req
     }
   >();
   for (const r of rows) {
-    const board = (r.board ?? "").trim();
-    const medium = (r.medium ?? "").trim();
-    const grade = (r.grade ?? "").trim();
-    const subject = ((r.subject ?? "").trim() || (r.cpName ?? "").trim());
+    const board = r.board.trim();
+    const medium = r.medium.trim();
+    const grade = r.grade.trim();
+    const subject = r.subject.trim();
     const key = `${board.toLowerCase()}|${medium.toLowerCase()}|${grade.toLowerCase()}`;
     let combo = combos.get(key);
     if (!combo) {
       combo = { board, medium, grade, cpIds: new Set(), subjects: new Map() };
       combos.set(key, combo);
     }
-    if (r.cpId) combo.cpIds.add(r.cpId);
+    combo.cpIds.add(r.cpId);
     if (subject) {
       let subjCps = combo.subjects.get(subject);
       if (!subjCps) {
         subjCps = new Set();
         combo.subjects.set(subject, subjCps);
       }
-      if (r.cpId) subjCps.add(r.cpId);
+      subjCps.add(r.cpId);
     }
   }
 
@@ -1530,10 +1500,11 @@ router.get("/api/topscholar/scope-chapters", ...topscholarGuards, async (req: Re
   if (!account) return res.status(404).json({ error: "Business account not found" });
 
   try {
-    const cpIds = await resolveCpIdsForScope(businessAccountId, { board, medium, grade, subject });
+    const cfg = getTopscholarConfig(account);
+    await backfillTesterScopeMetadata(cfg, businessAccountId);
+    const cpIds = await resolveStoredScopeCpIds(cfg, businessAccountId, { board, medium, grade, subject });
     if (cpIds.length === 0) return res.json({ chapters: [] });
 
-    const cfg = getTopscholarConfig(account);
     const chapters = isMongoConnectionString(cfg.contentDbUrl)
       ? await getMongoChapterNames(
           { connectionString: cfg.contentDbUrl!, dbName: cfg.contentDbName, collection: cfg.contentDbCollection },
@@ -1595,6 +1566,57 @@ router.post("/api/topscholar/tester/mint-launch-token", ...topscholarGuards, asy
   // it must say which student and doubt it is acting as. A preview has neither.
   if (!isPreview && (!studentIdV || !doubtIdV)) {
     return res.status(400).json({ error: "studentId and doubtId are required for a live doubt session." });
+  }
+
+  if (isPreview) {
+    try {
+      const storedCpIds = await resolveStoredScopeCpIds(cfg, businessAccountId, {
+        board: boardV,
+        medium: mediumV,
+        grade: gradeV,
+        subject: subjectV,
+      });
+      if (storedCpIds.length === 0) {
+        return res.status(400).json({
+          error: "This scope is not present in the configured client content store.",
+        });
+      }
+
+      const liveCpIds = await resolveCpIdsForScope(businessAccountId, {
+        board: boardV,
+        medium: mediumV,
+        grade: gradeV,
+        subject: subjectV,
+      });
+      const samePacks =
+        storedCpIds.length === liveCpIds.length &&
+        storedCpIds.every((cpId) => liveCpIds.includes(cpId));
+      if (!samePacks) {
+        return res.status(409).json({
+          error: "This client-store scope does not match the live widget's current curriculum mapping. Refresh the content mapping before testing this preview.",
+        });
+      }
+
+      if (chapterV) {
+        const chapters = isMongoConnectionString(cfg.contentDbUrl)
+          ? await getMongoChapterNames(
+              { connectionString: cfg.contentDbUrl!, dbName: cfg.contentDbName, collection: cfg.contentDbCollection },
+              businessAccountId,
+              storedCpIds,
+            )
+          : await getChapterNamesForCpIds(cfg, businessAccountId, storedCpIds);
+        if (!chapters.some((chapter) => chapter.trim().toLowerCase() === chapterV.toLowerCase())) {
+          return res.status(400).json({
+            error: "This chapter is not present for the selected scope in the client content store.",
+          });
+        }
+      }
+    } catch (error) {
+      console.error("[TopScholar] Tester preview compatibility check failed:", error);
+      return res.status(503).json({
+        error: "Could not verify this preview scope against the configured content store.",
+      });
+    }
   }
 
   const { signLaunchToken } = await import("../services/topscholar/tokenService");
