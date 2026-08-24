@@ -62,6 +62,7 @@ interface MenuData {
 
 interface ChatMenuNavigationProps {
   businessAccountId: string;
+  publicChatToken?: string;
   chatColor: string;
   chatColorEnd?: string;
   avatarUrl?: string;
@@ -112,6 +113,7 @@ const getIconComponent = (iconName?: string | null) => {
 
 export function ChatMenuNavigation({
   businessAccountId,
+  publicChatToken,
   chatColor,
   chatColorEnd,
   avatarUrl,
@@ -156,7 +158,9 @@ export function ChatMenuNavigation({
   useEffect(() => {
     const fetchMenuData = async () => {
       try {
-        const response = await fetch(`/api/chat-menu/public?businessAccountId=${businessAccountId}`, {
+        const params = new URLSearchParams({ businessAccountId });
+        if (publicChatToken) params.set("token", publicChatToken);
+        const response = await fetch(`/api/chat-menu/public?${params.toString()}`, {
           cache: "no-store",
         });
         const data = await response.json();
@@ -172,7 +176,7 @@ export function ChatMenuNavigation({
     if (businessAccountId) {
       fetchMenuData();
     }
-  }, [businessAccountId]);
+  }, [businessAccountId, publicChatToken]);
 
   // Translate menu content when language changes
   useEffect(() => {

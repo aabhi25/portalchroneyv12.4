@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { 
   AlertCircle, Send, Loader2, Sparkles, Lock, Camera, X, Globe, 
-  ChevronDown, MoreVertical, Plus, History, Scale, Image as ImageIcon, Briefcase 
+  ChevronDown, MoreVertical, MessageSquarePlus, History, Scale, Image as ImageIcon, Briefcase, Mic
 } from "lucide-react";
 import { ProductCard } from "@/components/ProductCard";
 import { ConversationStarters } from "@/components/ConversationStarters";
@@ -25,6 +25,7 @@ const VoiceMode = lazy(() => import('@/components/VoiceMode').then(m => ({ defau
 const ProductCarousel = lazy(() => import('@/components/ProductCarousel').then(m => ({ default: m.ProductCarousel })));
 const ProductComparisonView = lazy(() => import('@/components/ProductComparisonView').then(m => ({ default: m.ProductComparisonView })));
 const JobCarousel = lazy(() => import('@/components/JobCarousel').then(m => ({ default: m.JobCarousel })));
+const ChatMenuNavigation = lazy(() => import("@/components/ChatMenuNavigation").then(m => ({ default: m.ChatMenuNavigation })));
 
 // Animated typing indicator with rotating messages
 const TYPING_MESSAGES = [
@@ -151,6 +152,10 @@ interface PublicChatData {
   hasPassword: boolean;
 }
 
+interface PublicMenuData {
+  enabled: boolean;
+}
+
 const LANGUAGE_CONFIG: { [key: string]: { name: string; nativeName: string; flag: string } } = {
   'auto': { name: 'Auto Detect', nativeName: 'Auto', flag: '🌐' },
   'en': { name: 'English', nativeName: 'English', flag: '🇺🇸' },
@@ -238,6 +243,7 @@ export default function PublicChat() {
   const [featuredProductsTitle, setFeaturedProductsTitle] = useState<string>('Featured Products');
   
   const [isVoiceModeOpen, setIsVoiceModeOpen] = useState(false);
+  const [isMenuMode, setIsMenuMode] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -259,6 +265,7 @@ export default function PublicChat() {
   const sessionIdRef = useRef<string>(crypto.randomUUID());
   const conversationIdRef = useRef<string>('');
   const sendMessageRef = useRef<((msg?: string) => Promise<void>) | null>(null);
+  const menuModeInitializedRef = useRef(false);
 
   const [isPasswordVerified, setIsPasswordVerified] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
@@ -277,6 +284,16 @@ export default function PublicChat() {
   const chatColor = data?.widgetSettings?.chatColor || "#9333ea";
   const chatColorEnd = data?.widgetSettings?.chatColorEnd || "#3b82f6";
   const currency = data?.widgetSettings?.currency || "USD";
+  const { data: menuData } = useQuery<PublicMenuData>({
+    queryKey: ["/api/chat-menu/public", businessAccountId, token],
+    queryFn: async () => {
+      const params = new URLSearchParams({ businessAccountId: businessAccountId! });
+      if (token) params.set("token", token);
+      return await apiRequest("GET", `/api/chat-menu/public?${params.toString()}`);
+    },
+    enabled: !!businessAccountId && !!token && (!data?.hasPassword || isPasswordVerified),
+  });
+  const menuEnabled = menuData?.enabled === true;
 
   const {
     activeOffer,
@@ -335,6 +352,13 @@ export default function PublicChat() {
       loadIntroMessage();
     }
   }, [data, isPasswordVerified, selectedLanguage]);
+
+  useEffect(() => {
+    if (menuEnabled && !menuModeInitializedRef.current) {
+      menuModeInitializedRef.current = true;
+      setIsMenuMode(true);
+    }
+  }, [menuEnabled]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -399,6 +423,7 @@ export default function PublicChat() {
     setShowComparisonView(false);
     setActiveFormStep(null);
     setActiveJourneyId(null);
+    if (menuEnabled) setIsMenuMode(true);
     
     await loadIntroMessage();
   };
@@ -1225,15 +1250,15 @@ export default function PublicChat() {
   }
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-gray-50 via-purple-50/30 to-blue-50/30 p-4">
-      <div className="w-full max-w-4xl h-[90vh] flex flex-col bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden relative">
+    <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-0 sm:p-6">
+      <div className="w-full max-w-3xl h-screen sm:h-[min(760px,calc(100vh-3rem))] flex flex-col bg-white sm:rounded-2xl border-0 sm:border sm:border-slate-200 shadow-none sm:shadow-2xl overflow-hidden relative">
         {/* Header */}
         <div 
-          className="flex-shrink-0 border-b shadow-sm"
-          style={{ background: `linear-gradient(135deg, ${chatColor} 0%, ${chatColorEnd} 100%)` }}
+          className="flex-shrink-0 shadow-lg"
+          style={{ background: `linear-gradient(to right, ${chatColor}, ${chatColorEnd})` }}
         >
-          <div className="px-6 py-4 flex items-center gap-3">
-            <div className="p-2 bg-white rounded-lg shadow-md overflow-hidden w-9 h-9 flex items-center justify-center">
+          <div className="px-3 py-2 flex items-center gap-2 text-white">
+            <div className="w-7 h-7 rounded-full flex items-center justify-center overflow-hidden bg-white/20">
               {data?.widgetSettings?.avatarType && data.widgetSettings.avatarType !== 'none' ? (
                 <img 
                   src={data.widgetSettings.avatarType === 'custom' ? data.widgetSettings.avatarUrl : `/avatars/avatar-${data.widgetSettings.avatarType.replace('preset-', '')}.png`}
@@ -1241,24 +1266,24 @@ export default function PublicChat() {
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <Sparkles className="w-5 h-5" style={{ color: chatColor }} />
+                <img src="/c_logo.png" alt="AI Chroney" className="w-5 h-5 object-contain" />
               )}
             </div>
             <div className="flex-1">
-              <h1 className="text-xl font-bold text-white drop-shadow-md">
-                {data.businessAccount.name}
+              <h1 className="font-semibold text-base truncate">
+                {data.widgetSettings?.widgetHeaderText || data.businessAccount.name}
               </h1>
             </div>
             
             {/* Language Selector */}
-            {languageSelectorEnabled && (
+            {languageSelectorEnabled && availableLanguages.length > 1 && (
               <div className="relative" ref={languageDropdownRef}>
                 <button
                   onClick={() => setIsLanguageDropdownOpen(!isLanguageDropdownOpen)}
-                  className="flex items-center gap-1 px-2 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg transition-colors text-white text-sm"
+                  className="px-2 py-1 rounded-md hover:bg-white/20 transition-colors flex items-center gap-1 text-sm"
+                  aria-label="Select language"
                 >
-                  <Globe className="w-4 h-4" />
-                  <span>{LANGUAGE_CONFIG[selectedLanguage]?.flag || '🌐'}</span>
+                  <span>{LANGUAGE_CONFIG[selectedLanguage]?.nativeName || 'Auto'}</span>
                   <ChevronDown className={`w-3 h-3 transition-transform ${isLanguageDropdownOpen ? 'rotate-180' : ''}`} />
                 </button>
                 
@@ -1293,28 +1318,40 @@ export default function PublicChat() {
                 )}
               </div>
             )}
+
+            {voiceModeEnabled && (
+              <button
+                onClick={() => setIsVoiceModeOpen(true)}
+                className="p-1 rounded-full hover:bg-white/20 transition-colors"
+                aria-label="Voice mode"
+                title="Voice mode"
+              >
+                <Mic className="w-4 h-4" />
+              </button>
+            )}
             
             {/* Menu Dropdown */}
             <div className="relative" ref={menuDropdownRef}>
               <button
                 onClick={() => setIsMenuOpen(!isMenuOpen)}
-                className="p-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors text-white"
+                className="p-1 rounded-full hover:bg-white/20 transition-colors"
+                aria-label="Menu"
               >
-                <MoreVertical className="w-5 h-5" />
+                <MoreVertical className="w-4 h-4" />
               </button>
               
               {isMenuOpen && (
                 <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-50">
                   <button
                     onClick={handleNewChat}
-                    className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center gap-3 text-gray-700"
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2 text-gray-700"
                   >
-                    <Plus className="w-4 h-4" />
+                    <MessageSquarePlus className="w-4 h-4" />
                     <span>New Chat</span>
                   </button>
                   <button
                     onClick={handleOpenHistory}
-                    className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center gap-3 text-gray-700"
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2 text-gray-700"
                   >
                     <History className="w-4 h-4" />
                     <span>Chat History</span>
@@ -1325,12 +1362,66 @@ export default function PublicChat() {
           </div>
         </div>
 
+        {isMenuMode && menuEnabled ? (
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+            <Suspense fallback={<div className="flex flex-1 items-center justify-center"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>}>
+              <ChatMenuNavigation
+                businessAccountId={businessAccountId!}
+                publicChatToken={token}
+                chatColor={chatColor}
+                chatColorEnd={chatColorEnd}
+                avatarUrl={data?.widgetSettings?.avatarType && data.widgetSettings.avatarType !== 'none'
+                  ? (data.widgetSettings.avatarType === 'custom'
+                    ? data.widgetSettings.avatarUrl
+                    : `/avatars/avatar-${data.widgetSettings.avatarType.replace('preset-', '')}.png`)
+                  : undefined}
+                selectedLanguage={selectedLanguage}
+                pageUrl={new URLSearchParams(window.location.search).get('sourceUrl') || new URLSearchParams(window.location.search).get('parentUrl') || window.location.href}
+                conversationId={conversationIdRef.current || undefined}
+                onSwitchToChat={() => setIsMenuMode(false)}
+                onSendMessage={(menuMessage) => {
+                  setIsMenuMode(false);
+                  window.setTimeout(() => sendMessage(menuMessage), 0);
+                }}
+                onStartJourney={async (journeyId) => {
+                  try {
+                    const response = await fetch(`/api/journey/${journeyId}/first-step?businessAccountId=${encodeURIComponent(businessAccountId!)}`);
+                    if (!response.ok) return;
+                    const journey = await response.json();
+                    if (journey.formStep) {
+                      setMessages([]);
+                      setActiveJourneyId(journeyId);
+                      setActiveFormStep(journey.formStep);
+                      setIsMenuMode(false);
+                    }
+                  } catch (error) {
+                    console.error("Failed to start menu journey:", error);
+                  }
+                }}
+              />
+            </Suspense>
+          </div>
+        ) : (
+          <>
+        {menuEnabled && (
+          <div className="bg-white border-b border-gray-100 px-3 py-2 flex items-center">
+            <button
+              onClick={() => setIsMenuMode(true)}
+              className="flex items-center gap-1.5 text-sm font-medium hover:opacity-80 transition-opacity"
+              style={{ color: chatColor }}
+            >
+              <span aria-hidden="true">←</span>
+              Back to Menu
+            </button>
+          </div>
+        )}
+
         {/* Chat Messages */}
         <div 
           ref={messagesContainerRef}
-          className="flex-1 overflow-y-auto bg-gradient-to-br from-slate-50/50 to-white"
+          className="flex-1 overflow-y-auto overflow-x-hidden bg-white min-h-0"
         >
-          <div className="px-6 py-6 space-y-6">
+          <div className="p-4 space-y-4">
             {/* Featured Products Carousel */}
             {featuredProducts.length > 0 && userMessages.length === 0 && (
               <Suspense fallback={<div className="h-32 animate-pulse bg-gray-100 rounded-lg" />}>
@@ -1605,9 +1696,9 @@ export default function PublicChat() {
 
         {/* Input Area */}
         {!activeFormStep && (
-          <div className="flex-shrink-0 border-t bg-white shadow-lg">
-            <div className="px-6 py-4">
-              <div className="flex gap-3 items-center">
+          <div className="flex-shrink-0 border-t border-gray-200 bg-gray-100">
+            <div className="p-2 sm:p-3 md:p-4">
+              <div className="flex gap-2 items-center">
                 {/* Visual Search Button */}
                 {visualSearchEnabled && (
                   <>
@@ -1819,6 +1910,8 @@ export default function PublicChat() {
               </svg>
             </button>
           </div>
+        )}
+          </>
         )}
       </div>
     </div>

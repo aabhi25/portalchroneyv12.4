@@ -91075,7 +91075,14 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
           avatarType: widgetSettings2.avatarType,
           avatarUrl: widgetSettings2.avatarUrl,
           conversationStarters: widgetSettings2.conversationStarters,
-          conversationStartersEnabled: widgetSettings2.conversationStartersEnabled
+          conversationStartersEnabled: widgetSettings2.conversationStartersEnabled,
+          languageSelectorEnabled: widgetSettings2.languageSelectorEnabled,
+          availableLanguages: widgetSettings2.availableLanguages,
+          quickBrowseEnabled: widgetSettings2.quickBrowseEnabled,
+          quickBrowseButtons: widgetSettings2.quickBrowseButtons,
+          visualSearchEnabled: widgetSettings2.visualSearchEnabled,
+          productComparisonEnabled: widgetSettings2.productComparisonEnabled,
+          voiceModeEnabled: widgetSettings2.voiceModeEnabled
         } : null,
         hasPassword: !!link.password,
         jobPortalEnabled: businessAccount.jobPortalEnabled === "true",
@@ -97461,9 +97468,21 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
   });
   app2.get("/api/chat-menu/public", async (req, res) => {
     try {
-      const { businessAccountId } = req.query;
+      const { businessAccountId, token } = req.query;
       if (!businessAccountId || typeof businessAccountId !== "string") {
         return res.status(400).json({ error: "businessAccountId is required" });
+      }
+      if (token && typeof token === "string") {
+        const link = await storage.getPublicChatLinkByToken(token);
+        if (!link || link.isActive !== "true" || link.businessAccountId !== businessAccountId) {
+          return res.status(404).json({ error: "Chat link not found or disabled" });
+        }
+        if (link.password) {
+          const verificationCookie = req.signedCookies[`public_chat_verified_${token}`];
+          if (!verificationCookie) {
+            return res.status(403).json({ error: "Password verification required" });
+          }
+        }
       }
       const [config] = await db.select().from(chatMenuConfigs).where(eq68(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
       if (!config || config.enabled !== "true") {

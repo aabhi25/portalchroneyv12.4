@@ -1,4 +1,4 @@
-import{c}from"./embed-DJSYIuzW.js";/**
+import{c}from"./embed-B2j_xr63.js";/**
  * @license lucide-react v0.453.0 - ISC
  *
  * This source code is licensed under the ISC license.

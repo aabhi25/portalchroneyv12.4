@@ -20550,6 +20550,13 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
           avatarUrl: widgetSettings.avatarUrl,
           conversationStarters: widgetSettings.conversationStarters,
           conversationStartersEnabled: widgetSettings.conversationStartersEnabled,
+          languageSelectorEnabled: widgetSettings.languageSelectorEnabled,
+          availableLanguages: widgetSettings.availableLanguages,
+          quickBrowseEnabled: widgetSettings.quickBrowseEnabled,
+          quickBrowseButtons: widgetSettings.quickBrowseButtons,
+          visualSearchEnabled: widgetSettings.visualSearchEnabled,
+          productComparisonEnabled: widgetSettings.productComparisonEnabled,
+          voiceModeEnabled: widgetSettings.voiceModeEnabled,
         } : null,
         hasPassword: !!link.password,
         jobPortalEnabled: businessAccount.jobPortalEnabled === 'true',
@@ -28648,9 +28655,25 @@ Be constructive and helpful. Return ONLY valid JSON.`;
   // Public endpoint - Get menu config and items for widget (hierarchical structure)
   app.get("/api/chat-menu/public", async (req, res) => {
     try {
-      const { businessAccountId } = req.query;
+      const { businessAccountId, token } = req.query;
       if (!businessAccountId || typeof businessAccountId !== "string") {
         return res.status(400).json({ error: "businessAccountId is required" });
+      }
+
+      // Public share links pass their token so password-protected links do not
+      // expose menu content before the existing verification cookie is set.
+      // Embedded widgets continue to use this endpoint without a token.
+      if (token && typeof token === "string") {
+        const link = await storage.getPublicChatLinkByToken(token);
+        if (!link || link.isActive !== "true" || link.businessAccountId !== businessAccountId) {
+          return res.status(404).json({ error: "Chat link not found or disabled" });
+        }
+        if (link.password) {
+          const verificationCookie = req.signedCookies[`public_chat_verified_${token}`];
+          if (!verificationCookie) {
+            return res.status(403).json({ error: "Password verification required" });
+          }
+        }
       }
 
       const [config] = await db
