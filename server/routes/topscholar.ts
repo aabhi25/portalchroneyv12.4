@@ -614,6 +614,10 @@ router.post("/api/topscholar/sync", ...topscholarGuards, async (req: Request, re
 
   // Sync mode: 'sample' (regular API, instant, first N chunks) or 'full' (Batch API, async).
   const mode: "sample" | "full" = req.body?.mode === "sample" ? "sample" : "full";
+  // Set only by the failed-row action. The ingestion path is always
+  // chunk-aware, but echoing this intent lets the UI explain that a formerly
+  // oversized source is being rebuilt rather than blindly retried.
+  const rebuild = req.body?.rebuild === true;
   let sampleLimit = DEFAULT_SAMPLE_LIMIT;
   if (mode === "sample") {
     const raw = Number(req.body?.sampleLimit);
@@ -669,10 +673,10 @@ router.post("/api/topscholar/sync", ...topscholarGuards, async (req: Request, re
     // (or "Resync selected") from creating fire-and-forget MongoDB workers.
     if (mode === "full" && cfg.contentDbUrl) {
       const run = await enqueueSingleCpSyncRun({ businessAccountId, planId, cpId });
-      return res.status(202).json({ success: true, queued: true, run });
+      return res.status(202).json({ success: true, queued: true, rebuild, run });
     }
     const result = await ingestSingleCp({ businessAccountId, cpId, planId, cfg, mode, sampleLimit });
-    res.json({ success: true, result });
+    res.json({ success: true, rebuild, result });
   } catch (error: any) {
     console.error("[TopScholar Sync] Failed:", error);
     res.status(500).json({ error: error?.message || "Sync failed." });

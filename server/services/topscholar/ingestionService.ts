@@ -4,7 +4,7 @@ import { topscholarContentSync, topscholarEmbedJobs, topscholarEmbedStaging, top
 import { and, eq, ne, inArray } from 'drizzle-orm';
 import { embeddingService } from '../embeddingService';
 import { getContentBundles, type CpContentBundle } from './cmsConnector';
-import { htmlToText, chunkText } from './htmlContent';
+import { htmlToText, chunkText, splitTextForEmbedding } from './htmlContent';
 import { replaceCpChunks, deleteCpChunks, appendCpChunks, type StoreChunk } from './chunkStore';
 import { submitEmbeddingBatches, cancelBatch } from './embeddingBatchService';
 import { withCpLock } from './cpLock';
@@ -293,6 +293,33 @@ function buildRecords(bundle: CpContentBundle): ChunkRecord[] {
   }));
 }
 
+/**
+ * Source-specific normalisation already chunks notes and transcripts, but the
+ * CMS can still send an oversized value in another field (such as a question).
+ * Apply one final byte-bounded split before either embedding path sees a
+ * record. Every replacement keeps the same retrieval scope, source reference,
+ * and media metadata so a rebuild cannot detach an image from its lesson.
+ */
+function makeRecordsSafeForEmbedding(records: ChunkRecord[]): ChunkRecord[] {
+  return records.flatMap((record) => {
+    const pieces = splitTextForEmbedding(record.contentText);
+    if (pieces.length <= 1) return pieces.length === 1 ? [{ ...record, contentText: pieces[0] }] : [];
+
+    return pieces.map((contentText, index) => ({
+      ...record,
+      title: `${record.title || record.contentType} (part ${index + 1})`,
+      // Preserve the rich original source once without duplicating a large HTML
+      // payload onto every vector record.
+      contentHtml: index === 0 ? record.contentHtml : null,
+      contentText,
+      metadata: {
+        ...record.metadata,
+        embeddingPart: { index: index + 1, total: pieces.length },
+      },
+    }));
+  });
+}
+
 function countByType(records: ChunkRecord[]) {
   return {
     noteCount: records.filter((r) => r.contentType === 'note').length,
@@ -341,7 +368,7 @@ async function ingestBundle(
   });
 
   try {
-    let records = buildRecords(bundle);
+    let records = makeRecordsSafeForEmbedding(buildRecords(bundle));
 
     if (mode === 'sample') {
       records = records.slice(0, sampleLimit);
@@ -742,6 +769,7 @@ async function ingestSampleSync(
   const embeddings = await embeddingService.generateBatchEmbeddings(
     records.map((r) => r.contentText),
     businessAccountId,
+    50,
   );
 
   const chunks: StoreChunk[] = records.map((r, i) => ({
@@ -900,7 +928,9 @@ async function ingestFullBatch(
 // Page size for the direct (client-DB) full sync: embed + write this many chunks at a
 // time so a huge cp_id is never fully resident in memory as embeddings, and progress
 // advances incrementally.
-const DIRECT_SYNC_PAGE = 100;
+// At most 50 byte-bounded inputs are sent in one synchronous embedding call,
+// keeping the aggregate request below the embeddings API's batch-token limit.
+const DIRECT_SYNC_PAGE = 50;
 
 /**
  * FULL sync, direct to the client's content DB (used when an external Content DB URL is

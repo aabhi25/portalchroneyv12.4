@@ -32,6 +32,12 @@ export interface ExtractedHtml {
   imageDetails: Array<{ url: string; alt: string | null }>;
 }
 
+// An embedding token always consumes at least one UTF-8 byte. Keeping source
+// passages below this byte limit therefore remains safely below the model's
+// 8,191-token limit even for text whose token-to-character ratio is unusually
+// high (for example, non-Latin text or symbol-heavy questions).
+export const MAX_EMBEDDING_INPUT_BYTES = 6000;
+
 export function htmlToText(html: string | null | undefined): ExtractedHtml {
   if (!html) return { text: '', images: [], imageDetails: [] };
 
@@ -102,4 +108,60 @@ export function chunkText(text: string, maxLen = 1400, overlap = 150): string[] 
   }
   flush();
   return chunks.filter(Boolean);
+}
+
+/**
+ * Split a normalized source passage into complete, UTF-8-byte-bounded embedding
+ * inputs. This is the final guard after source-specific chunking: some CMS
+ * fields (notably questions) can arrive as a single unusually long string.
+ *
+ * Unlike truncation, every source character remains represented by one of the
+ * returned passages. Prefer a nearby whitespace or sentence boundary when it
+ * does not create an excessively short preceding chunk.
+ */
+export function splitTextForEmbedding(
+  text: string,
+  maxBytes = MAX_EMBEDDING_INPUT_BYTES,
+): string[] {
+  const remaining = text.trim();
+  if (!remaining) return [];
+  if (Buffer.byteLength(remaining, 'utf8') <= maxBytes) return [remaining];
+
+  const chunks: string[] = [];
+  let rest = remaining;
+  while (rest) {
+    if (Buffer.byteLength(rest, 'utf8') <= maxBytes) {
+      chunks.push(rest);
+      break;
+    }
+
+    let bytes = 0;
+    let index = 0;
+    let preferredBreak = 0;
+    for (const char of rest) {
+      const charBytes = Buffer.byteLength(char, 'utf8');
+      if (bytes + charBytes > maxBytes) break;
+      bytes += charBytes;
+      index += char.length;
+      if (/\s|[.!?;:]/.test(char)) preferredBreak = index;
+    }
+
+    // Every Unicode code point is smaller than the 6 KB limit, so `index`
+    // always advances. Only use a natural break when it keeps at least two
+    // thirds of the safely-sized passage; otherwise preserve more context.
+    const minimumUsefulIndex = Math.floor(index * 0.66);
+    const splitAt = preferredBreak >= minimumUsefulIndex ? preferredBreak : index;
+    const chunk = rest.slice(0, splitAt).trim();
+    if (!chunk) {
+      // Defensive fallback for a pathological whitespace-only prefix.
+      const forced = rest.slice(0, index);
+      chunks.push(forced);
+      rest = rest.slice(index);
+      continue;
+    }
+    chunks.push(chunk);
+    rest = rest.slice(splitAt).trimStart();
+  }
+
+  return chunks;
 }

@@ -329,8 +329,10 @@ export default function ContentSync() {
   function syncToast(data: any) {
     if (data.queued) {
       toast({
-        title: "Full sync queued",
-        description: "This cp_id will run through the same protected queue as Plan syncs.",
+        title: data.rebuild ? "Embedding rebuild queued" : "Full sync queued",
+        description: data.rebuild
+          ? "Oversized source content will be split safely before embeddings are created."
+          : "This cp_id will run through the same protected queue as Plan syncs.",
       });
       return;
     }
@@ -347,8 +349,14 @@ export default function ContentSync() {
   // Per-cp sync: embeds exactly one cp_id under its plan. mode is chosen per click.
   const [syncingCp, setSyncingCp] = useState<string | null>(null);
   const syncCp = useMutation({
-    mutationFn: (vars: { cpId: string; planId: string; mode: "sample" | "full" }) =>
-      sendJson("/api/topscholar/sync", "POST", { cpId: vars.cpId, planId: vars.planId, mode: vars.mode, sampleLimit }),
+    mutationFn: (vars: { cpId: string; planId: string; mode: "sample" | "full"; rebuild?: boolean }) =>
+      sendJson("/api/topscholar/sync", "POST", {
+        cpId: vars.cpId,
+        planId: vars.planId,
+        mode: vars.mode,
+        sampleLimit,
+        rebuild: vars.rebuild === true,
+      }),
     onSuccess: (data) => { invalidateSyncViews(); syncToast(data); },
     onError: (e: any) => toast({ title: "Sync failed", description: e.message, variant: "destructive" }),
     onSettled: () => setSyncingCp(null),
@@ -880,7 +888,10 @@ export default function ContentSync() {
                   planRun={planRunsByPlan.get(plan.planId)}
                   sampleLimit={sampleLimit}
                   cpPageSize={CP_PAGE_SIZE}
-                  onSyncCp={(cpId, planId, mode) => { setSyncingCp(`${planId}:${cpId}`); syncCp.mutate({ cpId, planId, mode }); }}
+                  onSyncCp={(cpId, planId, mode, rebuild) => {
+                    setSyncingCp(`${planId}:${cpId}`);
+                    syncCp.mutate({ cpId, planId, mode, rebuild });
+                  }}
                   syncingCp={syncingCp}
                   syncCpPending={syncCp.isPending}
                   onSyncPlan={(planId, mode) => { setSyncingPlan(planId); syncPlan.mutate({ planId, mode }); }}
@@ -1049,7 +1060,7 @@ interface PlanRowProps {
   planRun?: PlanRun;
   sampleLimit: number;
   cpPageSize: number;
-  onSyncCp: (cpId: string, planId: string, mode: "sample" | "full") => void;
+  onSyncCp: (cpId: string, planId: string, mode: "sample" | "full", rebuild?: boolean) => void;
   syncingCp: string | null;
   syncCpPending: boolean;
   onSyncPlan: (planId: string, mode: "sample" | "full") => void;
@@ -1226,7 +1237,8 @@ function PlanRow(props: PlanRowProps) {
                   {cps.map((cp) => {
                     const cpKey = `${plan.planId}:${cp.cpId}`;
                     const cpSyncing = syncCpPending && syncingCp === cpKey;
-                    const needsContentFix = cp.syncStatus === "failed" && !cp.syncRetryable;
+                    const needsChunkAwareRebuild = cp.syncStatus === "failed" && !cp.syncRetryable;
+                    const retryableFailure = cp.syncStatus === "failed" && cp.syncRetryable;
                     return (
                       <tr key={cp.id} className="border-t">
                         <td className="p-2">
@@ -1238,7 +1250,7 @@ function PlanRow(props: PlanRowProps) {
                           </div>
                           <div className="font-mono text-gray-400">{cp.cpId}</div>
                           {cp.syncError && (
-                            <div className={needsContentFix ? "mt-1 text-amber-700" : "mt-1 text-red-600"}>
+                            <div className={needsChunkAwareRebuild ? "mt-1 text-amber-700" : "mt-1 text-red-600"}>
                               {cp.syncError}
                             </div>
                           )}
@@ -1247,8 +1259,17 @@ function PlanRow(props: PlanRowProps) {
                           {cp.noteCount}n / {cp.transcriptCount}t / {cp.questionCount}q / {cp.pdfCount}p
                         </td>
                         <td className="p-2">
-                          {needsContentFix ? (
-                            <span className="text-right text-amber-700" title={cp.syncError || undefined}>Fix content length first</span>
+                          {needsChunkAwareRebuild ? (
+                            <Button
+                              size="sm"
+                              className="h-7 gap-1 bg-amber-600 hover:bg-amber-700"
+                              title="Rebuild this CP ID using safe source splitting before embeddings are created."
+                              onClick={() => onSyncCp(cp.cpId, plan.planId, "full", true)}
+                              disabled={cpSyncing}
+                            >
+                              {cpSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                              Rebuild embeddings
+                            </Button>
                           ) : (
                             <div className="flex items-center justify-end gap-2">
                               <Button
@@ -1268,7 +1289,7 @@ function PlanRow(props: PlanRowProps) {
                                 disabled={cpSyncing}
                               >
                                 {cpSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                                Full
+                                {retryableFailure ? "Retry full" : "Full"}
                               </Button>
                             </div>
                           )}

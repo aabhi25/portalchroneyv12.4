@@ -15,6 +15,10 @@ the same remediation: split the content and resync.
 failure, leaving a Plan run stuck while adding unnecessary API work.
 
 **How to apply:** use one shared classifier for Plan retry policy, admin status
-copy, and CP-level actions. When adding an embedding path or changing OpenAI
+and CP-level actions. Before any TopScholar embedding path, apply a final
+UTF-8-byte-bounded split to every normalized record—not only notes and
+transcripts—because a token consumes at least one byte and byte limits remain
+safe for token-dense or non-Latin source text. Preserve source scope and media
+metadata on each split record. When adding an embedding path or changing OpenAI
 error wrapping, confirm its token-overflow wording is recognized before exposing
 retry controls.

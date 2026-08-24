@@ -29290,11 +29290,47 @@ ${para}` : para;
   flush();
   return chunks.filter(Boolean);
 }
-var MATHML_TAGS;
+function splitTextForEmbedding(text3, maxBytes = MAX_EMBEDDING_INPUT_BYTES) {
+  const remaining = text3.trim();
+  if (!remaining) return [];
+  if (Buffer.byteLength(remaining, "utf8") <= maxBytes) return [remaining];
+  const chunks = [];
+  let rest = remaining;
+  while (rest) {
+    if (Buffer.byteLength(rest, "utf8") <= maxBytes) {
+      chunks.push(rest);
+      break;
+    }
+    let bytes = 0;
+    let index2 = 0;
+    let preferredBreak = 0;
+    for (const char of rest) {
+      const charBytes = Buffer.byteLength(char, "utf8");
+      if (bytes + charBytes > maxBytes) break;
+      bytes += charBytes;
+      index2 += char.length;
+      if (/\s|[.!?;:]/.test(char)) preferredBreak = index2;
+    }
+    const minimumUsefulIndex = Math.floor(index2 * 0.66);
+    const splitAt = preferredBreak >= minimumUsefulIndex ? preferredBreak : index2;
+    const chunk = rest.slice(0, splitAt).trim();
+    if (!chunk) {
+      const forced = rest.slice(0, index2);
+      chunks.push(forced);
+      rest = rest.slice(index2);
+      continue;
+    }
+    chunks.push(chunk);
+    rest = rest.slice(splitAt).trimStart();
+  }
+  return chunks;
+}
+var MATHML_TAGS, MAX_EMBEDDING_INPUT_BYTES;
 var init_htmlContent = __esm({
   "server/services/topscholar/htmlContent.ts"() {
     "use strict";
     MATHML_TAGS = ["math", "mrow", "mi", "mn", "mo", "msup", "msub", "msubsup", "mfrac", "msqrt", "mroot", "mfenced", "mtext", "mspace", "mtable", "mtr", "mtd"];
+    MAX_EMBEDDING_INPUT_BYTES = 6e3;
   }
 });
 
@@ -29854,6 +29890,24 @@ function buildRecords(bundle) {
     metadata: { ...record.metadata, curriculumScope }
   }));
 }
+function makeRecordsSafeForEmbedding(records) {
+  return records.flatMap((record) => {
+    const pieces = splitTextForEmbedding(record.contentText);
+    if (pieces.length <= 1) return pieces.length === 1 ? [{ ...record, contentText: pieces[0] }] : [];
+    return pieces.map((contentText, index2) => ({
+      ...record,
+      title: `${record.title || record.contentType} (part ${index2 + 1})`,
+      // Preserve the rich original source once without duplicating a large HTML
+      // payload onto every vector record.
+      contentHtml: index2 === 0 ? record.contentHtml : null,
+      contentText,
+      metadata: {
+        ...record.metadata,
+        embeddingPart: { index: index2 + 1, total: pieces.length }
+      }
+    }));
+  });
+}
 function countByType(records) {
   return {
     noteCount: records.filter((r) => r.contentType === "note").length,
@@ -29889,7 +29943,7 @@ async function ingestBundle(businessAccountId, cfg, bundle, mode, sampleLimit, o
     embedJobId: null
   });
   try {
-    let records = buildRecords(bundle);
+    let records = makeRecordsSafeForEmbedding(buildRecords(bundle));
     if (mode === "sample") {
       records = records.slice(0, sampleLimit);
     }
@@ -30128,7 +30182,8 @@ async function ingestSingleCp(params) {
 async function ingestSampleSync(businessAccountId, cpId, cfg, source, records, counts) {
   const embeddings = await embeddingService.generateBatchEmbeddings(
     records.map((r) => r.contentText),
-    businessAccountId
+    businessAccountId,
+    50
   );
   const chunks = records.map((r, i) => ({
     board: r.board ?? null,
@@ -30383,7 +30438,7 @@ var init_ingestionService = __esm({
     init_cpLock();
     init_mediaMetadata();
     DEFAULT_SAMPLE_LIMIT = 50;
-    DIRECT_SYNC_PAGE = 100;
+    DIRECT_SYNC_PAGE = 50;
   }
 });
 
@@ -73001,6 +73056,7 @@ router4.post("/api/topscholar/sync", ...topscholarGuards, async (req, res) => {
     return res.status(400).json({ error: "TopScholar RAG mode is not enabled for this account." });
   }
   const mode = req.body?.mode === "sample" ? "sample" : "full";
+  const rebuild = req.body?.rebuild === true;
   let sampleLimit = DEFAULT_SAMPLE_LIMIT;
   if (mode === "sample") {
     const raw = Number(req.body?.sampleLimit);
@@ -73034,10 +73090,10 @@ router4.post("/api/topscholar/sync", ...topscholarGuards, async (req, res) => {
   try {
     if (mode === "full" && cfg.contentDbUrl) {
       const run = await enqueueSingleCpSyncRun({ businessAccountId, planId, cpId });
-      return res.status(202).json({ success: true, queued: true, run });
+      return res.status(202).json({ success: true, queued: true, rebuild, run });
     }
     const result = await ingestSingleCp({ businessAccountId, cpId, planId, cfg, mode, sampleLimit });
-    res.json({ success: true, result });
+    res.json({ success: true, rebuild, result });
   } catch (error) {
     console.error("[TopScholar Sync] Failed:", error);
     res.status(500).json({ error: error?.message || "Sync failed." });
