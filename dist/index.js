@@ -3316,11 +3316,13 @@ var init_schema = __esm({
       // HH:mm in timezone
       timezone: text("timezone").notNull().default("Asia/Kolkata"),
       enabled: boolean("enabled").notNull().default(true),
+      deletedAt: timestamp("deleted_at"),
       createdAt: timestamp("created_at").notNull().defaultNow(),
       updatedAt: timestamp("updated_at").notNull().defaultNow()
     }, (table) => ({
       businessIdx: index("wa_automation_business_idx").on(table.businessAccountId),
-      businessEnabledIdx: index("wa_automation_business_enabled_idx").on(table.businessAccountId, table.enabled)
+      businessEnabledIdx: index("wa_automation_business_enabled_idx").on(table.businessAccountId, table.enabled),
+      businessDeletedIdx: index("wa_automation_business_deleted_idx").on(table.businessAccountId, table.deletedAt)
     }));
     whatsappCampaignAutomationRuns = pgTable("whatsapp_campaign_automation_runs", {
       id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -47678,13 +47680,22 @@ var init_marketingCampaignService = __esm({
           const released = await this.releaseStaleClaims(campaignId, 0);
           if (released > 0) console.log(`[Campaign] ${campaignId} recovery: released ${released} stale claims`);
         }
-        inFlight2.add(key);
-        await db.update(marketingCampaigns).set({
+        const startableStatuses = opts?.forceResume ? ["draft", "scheduled", "failed", "sending"] : ["draft", "scheduled", "failed"];
+        const [claimedCampaign] = await db.update(marketingCampaigns).set({
           status: "sending",
           startedAt: campaign.startedAt || /* @__PURE__ */ new Date(),
           heartbeatAt: /* @__PURE__ */ new Date(),
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq55(marketingCampaigns.id, campaignId));
+        }).where(and44(
+          eq55(marketingCampaigns.id, campaignId),
+          eq55(marketingCampaigns.businessAccountId, businessAccountId),
+          inArray10(marketingCampaigns.status, startableStatuses)
+        )).returning({ id: marketingCampaigns.id });
+        if (!claimedCampaign) {
+          const latest = await this.get(businessAccountId, campaignId);
+          return { started: false, reason: latest?.status === "cancelled" ? "Campaign cancelled" : "Campaign state changed before sending could begin" };
+        }
+        inFlight2.add(key);
         setImmediate(() => {
           this.runSendLoop(businessAccountId, campaignId, tpl, settings).catch((err) => console.error("[Campaign] runSendLoop error:", err)).finally(() => inFlight2.delete(key));
         });
@@ -55077,7 +55088,7 @@ var campaignAutomationService_exports = {};
 __export(campaignAutomationService_exports, {
   campaignAutomationService: () => campaignAutomationService
 });
-import { and as and56, desc as desc29, eq as eq67, inArray as inArray11 } from "drizzle-orm";
+import { and as and56, desc as desc29, eq as eq67, inArray as inArray11, isNull as isNull10 } from "drizzle-orm";
 function canonical(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -55343,10 +55354,17 @@ var init_campaignAutomationService = __esm({
     ALLOWED_SEND_MODES = /* @__PURE__ */ new Set(["review", "automatic"]);
     campaignAutomationService = {
       async list(businessAccountId) {
-        return db.select().from(whatsappCampaignAutomations).where(eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId)).orderBy(desc29(whatsappCampaignAutomations.updatedAt));
+        return db.select().from(whatsappCampaignAutomations).where(and56(
+          eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          isNull10(whatsappCampaignAutomations.deletedAt)
+        )).orderBy(desc29(whatsappCampaignAutomations.updatedAt));
       },
       async get(businessAccountId, id) {
-        const [row] = await db.select().from(whatsappCampaignAutomations).where(and56(eq67(whatsappCampaignAutomations.id, id), eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId))).limit(1);
+        const [row] = await db.select().from(whatsappCampaignAutomations).where(and56(
+          eq67(whatsappCampaignAutomations.id, id),
+          eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          isNull10(whatsappCampaignAutomations.deletedAt)
+        )).limit(1);
         return row;
       },
       async create(businessAccountId, input) {
@@ -55387,6 +55405,62 @@ var init_campaignAutomationService = __esm({
         }).where(and56(eq67(whatsappCampaignAutomations.id, id), eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId))).returning();
         return row;
       },
+      async delete(businessAccountId, id) {
+        return db.transaction(async (tx) => {
+          const [automation] = await tx.select().from(whatsappCampaignAutomations).where(and56(
+            eq67(whatsappCampaignAutomations.id, id),
+            eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+            isNull10(whatsappCampaignAutomations.deletedAt)
+          )).for("update").limit(1);
+          if (!automation) return void 0;
+          const activeRuns = await tx.select().from(whatsappCampaignAutomationRuns).where(and56(
+            eq67(whatsappCampaignAutomationRuns.automationId, id),
+            eq67(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+            inArray11(whatsappCampaignAutomationRuns.status, ["awaiting_review", "scheduled"])
+          ));
+          const campaignIds = activeRuns.map((run) => run.campaignId).filter((campaignId) => Boolean(campaignId));
+          const campaigns = campaignIds.length ? await tx.select({ id: marketingCampaigns.id, status: marketingCampaigns.status }).from(marketingCampaigns).where(and56(
+            eq67(marketingCampaigns.businessAccountId, businessAccountId),
+            inArray11(marketingCampaigns.id, campaignIds)
+          )).for("update") : [];
+          const campaignById = new Map(campaigns.map((campaign) => [campaign.id, campaign]));
+          const blockedRun = activeRuns.find((run) => {
+            const campaign = run.campaignId ? campaignById.get(run.campaignId) : void 0;
+            return campaign && !["draft", "scheduled"].includes(campaign.status);
+          });
+          if (blockedRun) {
+            throw new Error("This automation has a campaign that is already sending or complete. Wait for delivery to finish before deleting it.");
+          }
+          const deletedAt = /* @__PURE__ */ new Date();
+          for (const run of activeRuns) {
+            if (run.campaignId) {
+              await tx.update(marketingCampaigns).set({ status: "cancelled", updatedAt: deletedAt }).where(and56(
+                eq67(marketingCampaigns.id, run.campaignId),
+                eq67(marketingCampaigns.businessAccountId, businessAccountId),
+                inArray11(marketingCampaigns.status, ["draft", "scheduled"])
+              ));
+            }
+            await tx.delete(whatsappCampaignAutomationDispatches).where(and56(
+              eq67(whatsappCampaignAutomationDispatches.runId, run.id),
+              eq67(whatsappCampaignAutomationDispatches.businessAccountId, businessAccountId)
+            ));
+            await tx.update(whatsappCampaignAutomationRuns).set({ status: "cancelled", updatedAt: deletedAt }).where(and56(
+              eq67(whatsappCampaignAutomationRuns.id, run.id),
+              eq67(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId)
+            ));
+          }
+          const [deleted] = await tx.update(whatsappCampaignAutomations).set({
+            enabled: false,
+            deletedAt,
+            updatedAt: deletedAt
+          }).where(and56(
+            eq67(whatsappCampaignAutomations.id, id),
+            eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+            isNull10(whatsappCampaignAutomations.deletedAt)
+          )).returning();
+          return deleted;
+        });
+      },
       async preview(businessAccountId, id, payload) {
         const automation = await this.get(businessAccountId, id);
         if (!automation) throw new Error("Automation not found");
@@ -55419,6 +55493,13 @@ var init_campaignAutomationService = __esm({
         const automatic = automation.sendMode === "automatic";
         const safeFileName = String(sourceFileName || "spreadsheet").slice(0, 200);
         const result = await db.transaction(async (tx) => {
+          const [activeAutomation] = await tx.select().from(whatsappCampaignAutomations).where(and56(
+            eq67(whatsappCampaignAutomations.id, id),
+            eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+            eq67(whatsappCampaignAutomations.enabled, true),
+            isNull10(whatsappCampaignAutomations.deletedAt)
+          )).for("update").limit(1);
+          if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be created");
           const [group] = await tx.insert(contactGroups).values({
             businessAccountId,
             name: `${automation.name} \u2014 ${dateInTimezone(automation.timezone)} (${safeFileName})`.slice(0, 250),
@@ -55478,6 +55559,8 @@ var init_campaignAutomationService = __esm({
         };
       },
       async listRuns(businessAccountId, automationId) {
+        const automation = await this.get(businessAccountId, automationId);
+        if (!automation) throw new Error("Automation not found");
         const runs = await db.select().from(whatsappCampaignAutomationRuns).where(and56(
           eq67(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
           eq67(whatsappCampaignAutomationRuns.automationId, automationId)
@@ -55497,8 +55580,15 @@ var init_campaignAutomationService = __esm({
         if (run.status !== "awaiting_review" || !run.campaignId) throw new Error("This run is not awaiting review");
         const automation = await this.get(businessAccountId, automationId);
         if (!automation) throw new Error("Automation not found");
-        const scheduledAt = nextScheduledAt(automation);
         const updated = await db.transaction(async (tx) => {
+          const [activeAutomation] = await tx.select().from(whatsappCampaignAutomations).where(and56(
+            eq67(whatsappCampaignAutomations.id, automationId),
+            eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+            eq67(whatsappCampaignAutomations.enabled, true),
+            isNull10(whatsappCampaignAutomations.deletedAt)
+          )).for("update").limit(1);
+          if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be scheduled");
+          const scheduledAt = nextScheduledAt(activeAutomation);
           const contacts = await tx.select({
             phone: contactGroupContacts.phone,
             name: contactGroupContacts.name,
@@ -55511,7 +55601,7 @@ var init_campaignAutomationService = __esm({
             automationId,
             businessAccountId,
             runId: run.id,
-            recordKey: recordKeyForContact(automation, contact)
+            recordKey: recordKeyForContact(activeAutomation, contact)
           }));
           if (dispatches.some((dispatch) => !dispatch.recordKey)) {
             throw new Error("This run has a blank record key and cannot be scheduled");
@@ -55541,6 +55631,8 @@ var init_campaignAutomationService = __esm({
         return updated;
       },
       async cancelRun(businessAccountId, automationId, runId) {
+        const automation = await this.get(businessAccountId, automationId);
+        if (!automation) return false;
         const [run] = await db.select().from(whatsappCampaignAutomationRuns).where(and56(
           eq67(whatsappCampaignAutomationRuns.id, runId),
           eq67(whatsappCampaignAutomationRuns.automationId, automationId),
@@ -82860,8 +82952,8 @@ ${instruction}`
         return res.status(403).json({ error: "Demo Orders module is not enabled for this account" });
       }
       const { demoOrders: demoOrders2, products: products3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { isNull: isNull13 } = await import("drizzle-orm");
-      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and57(eq68(demoOrders2.businessAccountId, businessAccountId), isNull13(demoOrders2.productImageUrl)));
+      const { isNull: isNull14 } = await import("drizzle-orm");
+      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and57(eq68(demoOrders2.businessAccountId, businessAccountId), isNull14(demoOrders2.productImageUrl)));
       const allProducts = await db.select({ name: products3.name, imageUrl: products3.imageUrl }).from(products3).where(eq68(products3.businessAccountId, businessAccountId));
       const imageByName = new Map(
         allProducts.filter((p) => p.imageUrl).map((p) => [p.name.toLowerCase(), p.imageUrl])
@@ -99853,7 +99945,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                           const eagerDocState = sessionData._documentState;
                           if (eagerDocState) {
                             const { whatsappLeadAttachments: wlaEager } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-                            const { eq: eqE, and: andE, sql: sqlE, isNull: isNull13 } = await import("drizzle-orm");
+                            const { eq: eqE, and: andE, sql: sqlE, isNull: isNull14 } = await import("drizzle-orm");
                             for (const [eagerDocType, eagerState] of Object.entries(eagerDocState)) {
                               const eagerPages = eagerState?.pages || [];
                               for (const page of eagerPages) {
@@ -99866,7 +99958,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                 const eagerTagged = await db.update(wlaEager).set({ documentCategory: eagerDocType }).where(andE(
                                   eqE(wlaEager.leadId, attachToLeadId),
                                   sqlE`${wlaEager.mediaUrl} = ${pageUrl}`,
-                                  isNull13(wlaEager.documentCategory)
+                                  isNull14(wlaEager.documentCategory)
                                 )).returning({ id: wlaEager.id });
                                 if (eagerTagged.length > 0) {
                                   console.log(`[MSG91 Webhook] Eager tag: ${eagerTagged.length} attachment(s) tagged as ${eagerDocType}`);
@@ -103304,6 +103396,16 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       res.status(400).json({ error: err.message });
     }
   });
+  app2.delete("/api/whatsapp/campaign-automations/:id", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { campaignAutomationService: campaignAutomationService2 } = await Promise.resolve().then(() => (init_campaignAutomationService(), campaignAutomationService_exports));
+      const automation = await campaignAutomationService2.delete(req.user.businessAccountId, req.params.id);
+      if (!automation) return res.status(404).json({ error: "Automation not found" });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
   app2.get("/api/whatsapp/campaign-automations/:id/runs", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
       const { campaignAutomationService: campaignAutomationService2 } = await Promise.resolve().then(() => (init_campaignAutomationService(), campaignAutomationService_exports));
@@ -103711,7 +103813,7 @@ init_auth();
 init_jewelryImageGeneratorService();
 init_db();
 init_schema();
-import { and as and58, eq as eq69, isNull as isNull11, sql as sql41 } from "drizzle-orm";
+import { and as and58, eq as eq69, isNull as isNull12, sql as sql41 } from "drizzle-orm";
 async function initializeDatabase() {
   try {
     try {
@@ -103752,7 +103854,7 @@ async function initializeDatabase() {
         await db.update(whatsappLeadFields).set({ defaultCrmFieldKey: crmKey }).where(and58(
           eq69(whatsappLeadFields.fieldKey, fieldKey),
           eq69(whatsappLeadFields.isDefault, true),
-          isNull11(whatsappLeadFields.defaultCrmFieldKey)
+          isNull12(whatsappLeadFields.defaultCrmFieldKey)
         ));
       }
     } catch (err) {
@@ -103983,7 +104085,7 @@ init_shopifySyncScheduler();
 init_storage();
 init_db();
 init_schema();
-import { and as and59, eq as eq71, lte as lte6, lt as lt3, sql as sql43, or as or7, isNull as isNull12 } from "drizzle-orm";
+import { and as and59, eq as eq71, lte as lte6, lt as lt3, sql as sql43, or as or7, isNull as isNull13 } from "drizzle-orm";
 var MAX_RETRY_COUNT = 3;
 var RETRY_DELAYS_MS = [
   1 * 60 * 1e3,
@@ -104028,7 +104130,7 @@ var LeadsquaredRetryWorker = class {
           eq71(leads.leadsquaredSyncStatus, "failed"),
           lt3(sql43`COALESCE(${leads.leadsquaredRetryCount}::int, 0)`, MAX_RETRY_COUNT),
           or7(
-            isNull12(leads.leadsquaredNextRetryAt),
+            isNull13(leads.leadsquaredNextRetryAt),
             lte6(leads.leadsquaredNextRetryAt, now)
           )
         )

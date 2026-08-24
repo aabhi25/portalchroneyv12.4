@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../db";
 import {
   contactGroupContacts,
@@ -374,13 +374,20 @@ async function evaluateUpload(
 export const campaignAutomationService = {
   async list(businessAccountId: string) {
     return db.select().from(whatsappCampaignAutomations)
-      .where(eq(whatsappCampaignAutomations.businessAccountId, businessAccountId))
+      .where(and(
+        eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+        isNull(whatsappCampaignAutomations.deletedAt),
+      ))
       .orderBy(desc(whatsappCampaignAutomations.updatedAt));
   },
 
   async get(businessAccountId: string, id: string) {
     const [row] = await db.select().from(whatsappCampaignAutomations)
-      .where(and(eq(whatsappCampaignAutomations.id, id), eq(whatsappCampaignAutomations.businessAccountId, businessAccountId)))
+      .where(and(
+        eq(whatsappCampaignAutomations.id, id),
+        eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+        isNull(whatsappCampaignAutomations.deletedAt),
+      ))
       .limit(1);
     return row;
   },
@@ -430,6 +437,78 @@ export const campaignAutomationService = {
     return row;
   },
 
+  async delete(businessAccountId: string, id: string) {
+    return db.transaction(async tx => {
+      const [automation] = await tx.select().from(whatsappCampaignAutomations)
+        .where(and(
+          eq(whatsappCampaignAutomations.id, id),
+          eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          isNull(whatsappCampaignAutomations.deletedAt),
+        ))
+        .for("update")
+        .limit(1);
+      if (!automation) return undefined;
+
+      const activeRuns = await tx.select().from(whatsappCampaignAutomationRuns)
+        .where(and(
+          eq(whatsappCampaignAutomationRuns.automationId, id),
+          eq(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+          inArray(whatsappCampaignAutomationRuns.status, ["awaiting_review", "scheduled"]),
+        ));
+      const campaignIds = activeRuns.map(run => run.campaignId).filter((campaignId): campaignId is string => Boolean(campaignId));
+      const campaigns = campaignIds.length
+        ? await tx.select({ id: marketingCampaigns.id, status: marketingCampaigns.status })
+          .from(marketingCampaigns)
+          .where(and(
+            eq(marketingCampaigns.businessAccountId, businessAccountId),
+            inArray(marketingCampaigns.id, campaignIds),
+          ))
+          .for("update")
+        : [];
+      const campaignById = new Map(campaigns.map(campaign => [campaign.id, campaign]));
+      const blockedRun = activeRuns.find(run => {
+        const campaign = run.campaignId ? campaignById.get(run.campaignId) : undefined;
+        return campaign && !["draft", "scheduled"].includes(campaign.status);
+      });
+      if (blockedRun) {
+        throw new Error("This automation has a campaign that is already sending or complete. Wait for delivery to finish before deleting it.");
+      }
+
+      const deletedAt = new Date();
+      for (const run of activeRuns) {
+        if (run.campaignId) {
+          await tx.update(marketingCampaigns).set({ status: "cancelled", updatedAt: deletedAt })
+            .where(and(
+              eq(marketingCampaigns.id, run.campaignId),
+              eq(marketingCampaigns.businessAccountId, businessAccountId),
+              inArray(marketingCampaigns.status, ["draft", "scheduled"]),
+            ));
+        }
+        await tx.delete(whatsappCampaignAutomationDispatches)
+          .where(and(
+            eq(whatsappCampaignAutomationDispatches.runId, run.id),
+            eq(whatsappCampaignAutomationDispatches.businessAccountId, businessAccountId),
+          ));
+        await tx.update(whatsappCampaignAutomationRuns).set({ status: "cancelled", updatedAt: deletedAt })
+          .where(and(
+            eq(whatsappCampaignAutomationRuns.id, run.id),
+            eq(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+          ));
+      }
+
+      const [deleted] = await tx.update(whatsappCampaignAutomations).set({
+        enabled: false,
+        deletedAt,
+        updatedAt: deletedAt,
+      }).where(and(
+        eq(whatsappCampaignAutomations.id, id),
+        eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+        isNull(whatsappCampaignAutomations.deletedAt),
+      )).returning();
+      return deleted;
+    });
+  },
+
   async preview(businessAccountId: string, id: string, payload: any) {
     const automation = await this.get(businessAccountId, id);
     if (!automation) throw new Error("Automation not found");
@@ -467,6 +546,17 @@ export const campaignAutomationService = {
     const automatic = automation.sendMode === "automatic";
     const safeFileName = String(sourceFileName || "spreadsheet").slice(0, 200);
     const result = await db.transaction(async tx => {
+      const [activeAutomation] = await tx.select().from(whatsappCampaignAutomations)
+        .where(and(
+          eq(whatsappCampaignAutomations.id, id),
+          eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          eq(whatsappCampaignAutomations.enabled, true),
+          isNull(whatsappCampaignAutomations.deletedAt),
+        ))
+        .for("update")
+        .limit(1);
+      if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be created");
+
       const [group] = await tx.insert(contactGroups).values({
         businessAccountId,
         name: `${automation.name} — ${dateInTimezone(automation.timezone)} (${safeFileName})`.slice(0, 250),
@@ -535,6 +625,8 @@ export const campaignAutomationService = {
   },
 
   async listRuns(businessAccountId: string, automationId: string) {
+    const automation = await this.get(businessAccountId, automationId);
+    if (!automation) throw new Error("Automation not found");
     const runs = await db.select().from(whatsappCampaignAutomationRuns)
       .where(and(
         eq(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
@@ -562,8 +654,19 @@ export const campaignAutomationService = {
 
     const automation = await this.get(businessAccountId, automationId);
     if (!automation) throw new Error("Automation not found");
-    const scheduledAt = nextScheduledAt(automation);
     const updated = await db.transaction(async tx => {
+      const [activeAutomation] = await tx.select().from(whatsappCampaignAutomations)
+        .where(and(
+          eq(whatsappCampaignAutomations.id, automationId),
+          eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          eq(whatsappCampaignAutomations.enabled, true),
+          isNull(whatsappCampaignAutomations.deletedAt),
+        ))
+        .for("update")
+        .limit(1);
+      if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be scheduled");
+      const scheduledAt = nextScheduledAt(activeAutomation);
+
       const contacts = await tx.select({
         phone: contactGroupContacts.phone,
         name: contactGroupContacts.name,
@@ -577,7 +680,7 @@ export const campaignAutomationService = {
         automationId,
         businessAccountId,
         runId: run.id,
-        recordKey: recordKeyForContact(automation, contact),
+        recordKey: recordKeyForContact(activeAutomation, contact),
       }));
       if (dispatches.some(dispatch => !dispatch.recordKey)) {
         throw new Error("This run has a blank record key and cannot be scheduled");
@@ -611,6 +714,8 @@ export const campaignAutomationService = {
   },
 
   async cancelRun(businessAccountId: string, automationId: string, runId: string) {
+    const automation = await this.get(businessAccountId, automationId);
+    if (!automation) return false;
     const [run] = await db.select().from(whatsappCampaignAutomationRuns)
       .where(and(
         eq(whatsappCampaignAutomationRuns.id, runId),

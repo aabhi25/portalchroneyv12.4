@@ -35896,6 +35896,15 @@ Return ONLY a valid JSON object in this format:
     } catch (err: any) { res.status(400).json({ error: err.message }); }
   });
 
+  app.delete("/api/whatsapp/campaign-automations/:id", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { campaignAutomationService } = await import("./services/campaignAutomationService");
+      const automation = await campaignAutomationService.delete(req.user!.businessAccountId!, req.params.id);
+      if (!automation) return res.status(404).json({ error: "Automation not found" });
+      res.json({ success: true });
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
   app.get("/api/whatsapp/campaign-automations/:id/runs", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
       const { campaignAutomationService } = await import("./services/campaignAutomationService");

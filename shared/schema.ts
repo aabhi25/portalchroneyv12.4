@@ -3065,11 +3065,13 @@ export const whatsappCampaignAutomations = pgTable("whatsapp_campaign_automation
   sendTime: text("send_time").notNull().default("10:00"), // HH:mm in timezone
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   enabled: boolean("enabled").notNull().default(true),
+  deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
   businessIdx: index("wa_automation_business_idx").on(table.businessAccountId),
   businessEnabledIdx: index("wa_automation_business_enabled_idx").on(table.businessAccountId, table.enabled),
+  businessDeletedIdx: index("wa_automation_business_deleted_idx").on(table.businessAccountId, table.deletedAt),
 }));
 
 // Every spreadsheet upload is an immutable run. It links to the generated

@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { ArrowLeft, CheckCircle2, FileSpreadsheet, Pencil, Play, Upload, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, FileSpreadsheet, Pencil, Play, Trash2, Upload, XCircle } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { parseSpreadsheetFile, pickDefaultSheet } from "@/lib/spreadsheetImport";
 import { buildSheetData } from "@shared/contactImport";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import type { CampaignAutomation } from "./WhatsAppCampaignAutomations";
 
@@ -35,6 +36,7 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
   const [payload, setPayload] = useState<any>(null);
   const [fileName, setFileName] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { data: automation, isLoading } = useQuery<CampaignAutomation & Record<string, any>>({
     queryKey: ["/api/whatsapp/campaign-automations", id],
     queryFn: () => apiRequest("GET", `/api/whatsapp/campaign-automations/${id}`),
@@ -70,6 +72,15 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/campaign-automations", id, "runs"] }); toast({ title: "Run cancelled" }); },
     onError: (error: any) => toast({ title: "Could not cancel run", description: error.message, variant: "destructive" }),
   });
+  const deleteMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/whatsapp/campaign-automations/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/campaign-automations"] });
+      toast({ title: "Automation deleted" });
+      setLocation("/admin/whatsapp-campaign-automations");
+    },
+    onError: (error: any) => toast({ title: "Could not delete automation", description: error.message, variant: "destructive" }),
+  });
 
   const handleFile = async (file?: File) => {
     if (!file) return;
@@ -102,7 +113,35 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
             {automation.dateOffsetDays > 0 ? `${automation.dateOffsetDays} days after` : automation.dateOffsetDays < 0 ? `${Math.abs(automation.dateOffsetDays)} days before` : "On"} <span className="font-medium">{automation.dateColumn}</span> · send at {automation.sendTime} {automation.timezone}
           </p>
         </div>
-        <Button variant="outline" onClick={() => setLocation(`/admin/whatsapp-campaign-automations/${id}/edit`)}><Pencil className="h-4 w-4 mr-1" /> Edit</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setLocation(`/admin/whatsapp-campaign-automations/${id}/edit`)}><Pencil className="h-4 w-4 mr-1" /> Edit</Button>
+          <AlertDialog open={isDeleteDialogOpen} onOpenChange={open => { if (!deleteMutation.isPending) setIsDeleteDialogOpen(open); }}>
+            <Button variant="outline" className="text-red-600 hover:text-red-700" onClick={() => setIsDeleteDialogOpen(true)} data-testid="button-delete-campaign-automation">
+              <Trash2 className="h-4 w-4 mr-1" /> Delete
+            </Button>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete automation?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will stop future runs for <strong>{automation.name}</strong> and remove it from the active automation list. Already-sent messages and campaign run history will be preserved. Pending review or scheduled work will be cancelled.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-red-600 hover:bg-red-700"
+                  disabled={deleteMutation.isPending}
+                  onClick={event => {
+                    event.preventDefault();
+                    deleteMutation.mutate();
+                  }}
+                >
+                  {deleteMutation.isPending ? "Deleting..." : "Delete automation"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       </div>
 
       <Card>

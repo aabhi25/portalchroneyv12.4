@@ -1,9 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { CalendarClock, ChevronRight, FileSpreadsheet, Plus } from "lucide-react";
+import { CalendarClock, ChevronRight, FileSpreadsheet, Plus, Trash2 } from "lucide-react";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { useToast } from "@/hooks/use-toast";
 
 export interface CampaignAutomation {
   id: string;
@@ -19,8 +23,19 @@ export interface CampaignAutomation {
 
 export default function WhatsAppCampaignAutomations() {
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
+  const [deleteTarget, setDeleteTarget] = useState<CampaignAutomation | null>(null);
   const { data: automations = [], isLoading } = useQuery<CampaignAutomation[]>({
     queryKey: ["/api/whatsapp/campaign-automations"],
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/whatsapp/campaign-automations/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/campaign-automations"] });
+      toast({ title: "Automation deleted" });
+      setDeleteTarget(null);
+    },
+    onError: (error: any) => toast({ title: "Could not delete automation", description: error.message, variant: "destructive" }),
   });
 
   return (
@@ -83,12 +98,48 @@ export default function WhatsAppCampaignAutomations() {
                     <span>Offset: {automation.dateOffsetDays > 0 ? "+" : ""}{automation.dateOffsetDays} days</span>
                   </div>
                 </div>
-                <ChevronRight className="h-5 w-5 text-gray-400 shrink-0" />
+                <div className="flex items-center gap-1 shrink-0" onClick={event => event.stopPropagation()}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-gray-400 hover:text-red-600"
+                    onClick={() => setDeleteTarget(automation)}
+                    aria-label={`Delete ${automation.name}`}
+                    data-testid={`button-delete-campaign-automation-${automation.id}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                  <ChevronRight className="h-5 w-5 text-gray-400" />
+                </div>
               </CardContent>
             </Card>
           ))}
         </div>
       )}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={open => { if (!open && !deleteMutation.isPending) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete automation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will stop future runs for <strong>{deleteTarget?.name}</strong> and remove it from the active automation list. Already-sent messages and campaign run history will be preserved. Pending review or scheduled work will be cancelled.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              disabled={deleteMutation.isPending}
+              onClick={event => {
+                event.preventDefault();
+                if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+              }}
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete automation"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

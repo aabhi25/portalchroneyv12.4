@@ -785,8 +785,10 @@ export const marketingCampaignService = {
       if (released > 0) console.log(`[Campaign] ${campaignId} recovery: released ${released} stale claims`);
     }
 
-    inFlight.add(key);
-    await db
+    const startableStatuses = opts?.forceResume
+      ? ["draft", "scheduled", "failed", "sending"]
+      : ["draft", "scheduled", "failed"];
+    const [claimedCampaign] = await db
       .update(marketingCampaigns)
       .set({
         status: "sending",
@@ -794,7 +796,18 @@ export const marketingCampaignService = {
         heartbeatAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(marketingCampaigns.id, campaignId));
+      .where(and(
+        eq(marketingCampaigns.id, campaignId),
+        eq(marketingCampaigns.businessAccountId, businessAccountId),
+        inArray(marketingCampaigns.status, startableStatuses),
+      ))
+      .returning({ id: marketingCampaigns.id });
+    if (!claimedCampaign) {
+      const latest = await this.get(businessAccountId, campaignId);
+      return { started: false, reason: latest?.status === "cancelled" ? "Campaign cancelled" : "Campaign state changed before sending could begin" };
+    }
+
+    inFlight.add(key);
 
     setImmediate(() => {
       this.runSendLoop(businessAccountId, campaignId, tpl, settings)
