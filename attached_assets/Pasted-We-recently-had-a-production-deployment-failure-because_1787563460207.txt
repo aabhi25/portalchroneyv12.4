@@ -1,0 +1,50 @@
+We recently had a production deployment failure because package-lock.json contained Replit internal registry URLs such as package-firewall.replit.local. This caused npm install / npm ci on AWS to fail with EAI_AGAIN getaddrinfo because AWS cannot resolve Replit's internal package registry.
+
+Please audit and fix the project with these requirements:
+
+Remove all Replit-specific package registry references from the project.
+Search the entire repository for:
+package-firewall.replit.local
+replit.local
+other Replit-internal npm registry URLs
+These must not exist in package-lock.json, .npmrc, npm configuration, scripts, or deployment configuration.
+Regenerate package-lock.json using the public npm registry.
+Use https://registry.npmjs.org/
+Do not preserve any resolved URLs pointing to Replit's internal registry.
+Ensure the lockfile is committed to Git.
+Make sure a clean AWS machine can install dependencies without Replit.
+Test from a clean dependency state by removing node_modules and running:
+npm ci --registry=https://registry.npmjs.org/
+It must complete successfully without requiring any Replit infrastructure.
+Fix the terser dependency issue.
+Our deployment previously showed:
+sh: 1: terser: not found
+Ensure terser is explicitly declared in the appropriate dependencies/devDependencies and that npm ci creates node_modules/.bin/terser.
+Verify with:
+npm ls terser
+and
+ls -la node_modules/.bin/terser
+Review the build process.
+The current build runs:
+node scripts/install-stubs.mjs && npm run widget:minify && vite build && npm run build:embed && esbuild server/index.ts ...
+Make sure every CLI used by these scripts is declared as a project dependency and is available after a clean npm ci.
+Do not rely on globally installed packages.
+All build tools such as terser, vite, esbuild, etc. must be installed through package.json.
+Check the production build.
+Run the complete production build from a clean node_modules.
+Verify that dist/index.js is generated successfully.
+Verify that the production server can start with:
+node dist/index.js
+Verify that it listens on the expected port.
+Check the package manager configuration.
+Review .npmrc, package.json, lockfiles, Replit configuration and build scripts.
+AWS deployment should work with standard Node.js + npm without requiring Replit.
+Do not make unrelated application changes.
+Focus on dependency management, build reliability, and deployment portability.
+Do not upgrade major application dependencies unless necessary to fix the deployment issue.
+Before finishing, run these checks:
+grep -R "package-firewall.replit.local" . --exclude-dir=node_modules --exclude-dir=.git
+npm ci --registry=https://registry.npmjs.org/
+npm run build
+npm ls terser
+ls -la node_modules/.bin/terser
