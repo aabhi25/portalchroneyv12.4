@@ -64,18 +64,44 @@ export function isMongoUrl(url: string | null | undefined): boolean {
 // One cached client per connection string. The MongoDB driver pools connections
 // internally, so a single shared client per cluster is the recommended pattern.
 const clients = new Map<string, MongoClient>();
+const connectingClients = new Map<string, Promise<MongoClient>>();
+
+// The Tester is an interactive admin screen. When Atlas is unavailable, making
+// an administrator wait the driver's default 10 seconds before showing an error
+// is needlessly disruptive. The shared client is also used by read paths, so a
+// short connection-selection budget keeps an unavailable remote store from
+// tying up multiple HTTP requests. Established pooled connections are reused.
+const MONGO_SERVER_SELECTION_TIMEOUT_MS = 3_000;
 
 async function getClient(connectionString: string): Promise<MongoClient> {
-  let client = clients.get(connectionString);
-  if (!client) {
-    client = new MongoClient(connectionString, {
-      maxPoolSize: 10,
-      serverSelectionTimeoutMS: 10000,
+  const existing = clients.get(connectionString);
+  if (existing) return existing;
+
+  // Do not fan out simultaneous connection attempts when a page requests scope
+  // options, chapters, and preview validation around the same time.
+  const connecting = connectingClients.get(connectionString);
+  if (connecting) return connecting;
+
+  const client = new MongoClient(connectionString, {
+    maxPoolSize: 10,
+    serverSelectionTimeoutMS: MONGO_SERVER_SELECTION_TIMEOUT_MS,
+    connectTimeoutMS: MONGO_SERVER_SELECTION_TIMEOUT_MS,
+  });
+  const connection = client
+    .connect()
+    .then(() => {
+      clients.set(connectionString, client);
+      return client;
+    })
+    .catch(async (error) => {
+      await client.close().catch(() => undefined);
+      throw error;
+    })
+    .finally(() => {
+      connectingClients.delete(connectionString);
     });
-    await client.connect();
-    clients.set(connectionString, client);
-  }
-  return client;
+  connectingClients.set(connectionString, connection);
+  return connection;
 }
 
 function getDb(client: MongoClient, dbName: string | null): Db {

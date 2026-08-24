@@ -28,9 +28,7 @@ import { getMongoContentOverview, getMongoChapters, getMongoChunks } from "../se
 import { getMongoChapterNames, getMongoCpIdsWithContent } from "../services/topscholar/mongoContentDb";
 import { resolveCpIdsForScope } from "../services/topscholar/scopeResolver";
 import {
-  backfillTesterScopeMetadata,
   listStoredCurriculumScopes,
-  resolveStoredScopeCpIds,
   type StoredCurriculumScope,
 } from "../services/topscholar/testerContentScopes";
 import { testContentBundleConnection } from "../services/topscholar/cmsConnector";
@@ -1448,27 +1446,82 @@ router.get("/api/topscholar/students", ...topscholarGuards, async (req: Request,
 });
 
 // The Tester reads scope values from the configured content store, not from the
-// app's CP mapping table. A short cache avoids repeatedly grouping a large client
+// app's CP mapping table. A cache avoids repeatedly grouping a large client
 // embedding collection while still picking up a completed sync promptly.
 const testerScopeCache = new Map<string, { at: number; scopes: StoredCurriculumScope[] }>();
+const testerScopeLoads = new Map<string, Promise<StoredCurriculumScope[]>>();
 const TESTER_SCOPE_CACHE_TTL_MS = 60_000;
+const TESTER_SCOPE_STALE_TTL_MS = 15 * 60_000;
+
+function testerScopeCacheKey(businessAccountId: string, account: any): string {
+  const cfg = getTopscholarConfig(account);
+  return [
+    businessAccountId,
+    cfg.storeType,
+    cfg.externalContentDbDisabled ? "external-disabled" : "external-enabled",
+    cfg.contentDbUrl || "",
+    cfg.contentDbName || "",
+    cfg.contentDbCollection || "",
+  ].join("|");
+}
+
+function sameScopeValue(left: string, right: string): boolean {
+  return left.trim().localeCompare(right.trim(), undefined, { sensitivity: "accent" }) === 0;
+}
+
+function storedCpIdsForScope(
+  scopes: StoredCurriculumScope[],
+  selection: { board: string; medium: string; grade: string; subject: string },
+): string[] {
+  return Array.from(
+    new Set(
+      scopes
+        .filter((scope) =>
+          sameScopeValue(scope.board, selection.board) &&
+          sameScopeValue(scope.medium, selection.medium) &&
+          sameScopeValue(scope.grade, selection.grade) &&
+          sameScopeValue(scope.subject, selection.subject),
+        )
+        .map((scope) => scope.cpId),
+    ),
+  );
+}
 
 async function getStoredTesterScopesCached(
   businessAccountId: string,
   account: any,
+  options: { allowStale?: boolean; forceRefresh?: boolean } = {},
 ): Promise<StoredCurriculumScope[]> {
   const cfg = getTopscholarConfig(account);
-  const cacheKey = `${businessAccountId}|${cfg.contentDbUrl || ""}|${cfg.contentDbName || ""}|${cfg.contentDbCollection || ""}`;
+  const cacheKey = testerScopeCacheKey(businessAccountId, account);
   const cached = testerScopeCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < TESTER_SCOPE_CACHE_TTL_MS) return cached.scopes;
+  if (!options.forceRefresh && cached && Date.now() - cached.at < TESTER_SCOPE_CACHE_TTL_MS) {
+    return cached.scopes;
+  }
 
-  // Older chunks did not carry board/medium/grade. Backfill only those metadata
-  // fields into the client store before reading; the dropdown remains content-store
-  // driven after this one-time enrichment.
-  await backfillTesterScopeMetadata(cfg, businessAccountId);
-  const scopes = await listStoredCurriculumScopes(cfg, businessAccountId);
-  testerScopeCache.set(cacheKey, { at: Date.now(), scopes });
-  return scopes;
+  let load = testerScopeLoads.get(cacheKey);
+  if (!load) {
+    load = listStoredCurriculumScopes(cfg, businessAccountId)
+      .then((scopes) => {
+        testerScopeCache.set(cacheKey, { at: Date.now(), scopes });
+        console.info(`[TopScholar] Tester scope refresh completed in ${scopes.length} scope row(s).`);
+        return scopes;
+      })
+      .finally(() => {
+        testerScopeLoads.delete(cacheKey);
+      });
+    testerScopeLoads.set(cacheKey, load);
+  }
+
+  try {
+    return await load;
+  } catch (error) {
+    if (options.allowStale && cached && Date.now() - cached.at < TESTER_SCOPE_STALE_TTL_MS) {
+      console.warn("[TopScholar] Serving cached Tester scope options while the content store is unavailable.");
+      return cached.scopes;
+    }
+    throw error;
+  }
 }
 
 router.get("/api/topscholar/scope-options", ...topscholarGuards, async (req: Request, res: Response) => {
@@ -1480,7 +1533,7 @@ router.get("/api/topscholar/scope-options", ...topscholarGuards, async (req: Req
 
   let rows: StoredCurriculumScope[];
   try {
-    rows = await getStoredTesterScopesCached(businessAccountId, account);
+    rows = await getStoredTesterScopesCached(businessAccountId, account, { allowStale: true });
   } catch (error) {
     console.error("[TopScholar] Tester scope lookup failed:", error);
     return res.status(503).json({
@@ -1564,8 +1617,8 @@ router.get("/api/topscholar/scope-chapters", ...topscholarGuards, async (req: Re
 
   try {
     const cfg = getTopscholarConfig(account);
-    await backfillTesterScopeMetadata(cfg, businessAccountId);
-    const cpIds = await resolveStoredScopeCpIds(cfg, businessAccountId, { board, medium, grade, subject });
+    const storedScopes = await getStoredTesterScopesCached(businessAccountId, account, { allowStale: true });
+    const cpIds = storedCpIdsForScope(storedScopes, { board, medium, grade, subject });
     if (cpIds.length === 0) return res.json({ chapters: [] });
 
     const chapters = isMongoConnectionString(cfg.contentDbUrl)
@@ -1633,7 +1686,13 @@ router.post("/api/topscholar/tester/mint-launch-token", ...topscholarGuards, asy
 
   if (isPreview) {
     try {
-      const storedCpIds = await resolveStoredScopeCpIds(cfg, businessAccountId, {
+      // A preview authorization must prove the selected CP set is currently in
+      // the active content store. Force a fresh read, but share it with another
+      // simultaneous scope request instead of launching another aggregation.
+      const freshStoredScopes = await getStoredTesterScopesCached(businessAccountId, account, {
+        forceRefresh: true,
+      });
+      const storedCpIds = storedCpIdsForScope(freshStoredScopes, {
         board: boardV,
         medium: mediumV,
         grade: gradeV,

@@ -7063,9 +7063,9 @@ var init_storage = __esm({
           const acctFormPhoneMap = /* @__PURE__ */ new Map();
           for (const l of formLeadRows) {
             if (l.conversationId && l.phone) {
-              const normalized2 = l.phone.replace(/\D/g, "").slice(-10);
-              if (normalized2.length >= 7 && !acctFormPhoneMap.has(l.conversationId)) {
-                acctFormPhoneMap.set(l.conversationId, "form_" + normalized2);
+              const normalized = l.phone.replace(/\D/g, "").slice(-10);
+              if (normalized.length >= 7 && !acctFormPhoneMap.has(l.conversationId)) {
+                acctFormPhoneMap.set(l.conversationId, "form_" + normalized);
               }
             }
           }
@@ -9578,9 +9578,9 @@ var init_storage = __esm({
           const grpFormPhoneMap = /* @__PURE__ */ new Map();
           for (const l of grpFormLeadRows) {
             if (l.conversationId && l.phone) {
-              const normalized2 = l.phone.replace(/\D/g, "").slice(-10);
-              if (normalized2.length >= 7 && !grpFormPhoneMap.has(l.conversationId)) {
-                grpFormPhoneMap.set(l.conversationId, "form_" + normalized2);
+              const normalized = l.phone.replace(/\D/g, "").slice(-10);
+              if (normalized.length >= 7 && !grpFormPhoneMap.has(l.conversationId)) {
+                grpFormPhoneMap.set(l.conversationId, "form_" + normalized);
               }
             }
           }
@@ -15097,16 +15097,26 @@ function resolveCollectionName(collection) {
   return trimmed || TOPSCHOLAR_COLLECTION;
 }
 async function getClient(connectionString) {
-  let client = clients.get(connectionString);
-  if (!client) {
-    client = new MongoClient(connectionString, {
-      maxPoolSize: 10,
-      serverSelectionTimeoutMS: 1e4
-    });
-    await client.connect();
+  const existing = clients.get(connectionString);
+  if (existing) return existing;
+  const connecting = connectingClients.get(connectionString);
+  if (connecting) return connecting;
+  const client = new MongoClient(connectionString, {
+    maxPoolSize: 10,
+    serverSelectionTimeoutMS: MONGO_SERVER_SELECTION_TIMEOUT_MS,
+    connectTimeoutMS: MONGO_SERVER_SELECTION_TIMEOUT_MS
+  });
+  const connection = client.connect().then(() => {
     clients.set(connectionString, client);
-  }
-  return client;
+    return client;
+  }).catch(async (error) => {
+    await client.close().catch(() => void 0);
+    throw error;
+  }).finally(() => {
+    connectingClients.delete(connectionString);
+  });
+  connectingClients.set(connectionString, connection);
+  return connection;
 }
 function getDb(client, dbName) {
   return dbName ? client.db(dbName) : client.db();
@@ -15261,12 +15271,14 @@ async function mongoVectorSearch(cfg, params) {
   ];
   return col.aggregate(pipeline).toArray();
 }
-var TOPSCHOLAR_COLLECTION, clients;
+var TOPSCHOLAR_COLLECTION, clients, connectingClients, MONGO_SERVER_SELECTION_TIMEOUT_MS;
 var init_mongoContentDb = __esm({
   "server/services/topscholar/mongoContentDb.ts"() {
     "use strict";
     TOPSCHOLAR_COLLECTION = "topscholar_embeddings";
     clients = /* @__PURE__ */ new Map();
+    connectingClients = /* @__PURE__ */ new Map();
+    MONGO_SERVER_SELECTION_TIMEOUT_MS = 3e3;
   }
 });
 
@@ -19027,15 +19039,15 @@ ${JSON.stringify(productsToTranslate)}`;
           if (!otpGateApplies || !phoneOnLead || !phoneOnLead.trim()) return false;
           try {
             const { normalizePhone: normalizePhone6 } = await Promise.resolve().then(() => (init_otp(), otp_exports));
-            const normalized2 = normalizePhone6(phoneOnLead);
-            if (!normalized2) return false;
+            const normalized = normalizePhone6(phoneOnLead);
+            if (!normalized) return false;
             const verified = await storage.hasVerifiedOtpForConversationPhone(
               context.businessAccountId,
               context.conversationId,
-              normalized2
+              normalized
             );
             if (!verified) {
-              console.log(`[OTP-Gate] capture_lead: CRM sync blocked \u2014 lead phone ${normalized2.slice(-4)} not OTP-verified for this conversation`);
+              console.log(`[OTP-Gate] capture_lead: CRM sync blocked \u2014 lead phone ${normalized.slice(-4)} not OTP-verified for this conversation`);
             }
             return !verified;
           } catch (err) {
@@ -19063,11 +19075,11 @@ ${JSON.stringify(productsToTranslate)}`;
         const shouldGateWithOtp = otpEnabledForPhone && context.channel === "widget" && !!context.conversationId && !!(phone && phone.trim());
         if (shouldGateWithOtp) {
           const { OtpService: OtpService2, normalizePhone: normalizePhone6 } = await Promise.resolve().then(() => (init_otp(), otp_exports));
-          const normalized2 = normalizePhone6(phone);
-          const alreadyVerified = normalized2 ? await storage.hasVerifiedOtpForConversationPhone(
+          const normalized = normalizePhone6(phone);
+          const alreadyVerified = normalized ? await storage.hasVerifiedOtpForConversationPhone(
             context.businessAccountId,
             context.conversationId,
-            normalized2
+            normalized
           ) : false;
           if (!alreadyVerified) {
             const issue = await OtpService2.issueChallenge(
@@ -23951,8 +23963,8 @@ ${rawContent.substring(0, 500)}...`;
         paramEntries.forEach(([key, value]) => sortedParams.append(key, value));
         const pathname = url.pathname.replace(/\/$/, "") || "/";
         const queryString = sortedParams.toString();
-        const normalized2 = `${protocol}//${hostname}${pathname}${queryString ? "?" + queryString : ""}`;
-        return normalized2;
+        const normalized = `${protocol}//${hostname}${pathname}${queryString ? "?" + queryString : ""}`;
+        return normalized;
       }
       /**
        * Calculate priority score for a URL based on business importance
@@ -31151,7 +31163,7 @@ function execute2(rule, ctx) {
     };
   }
   let mismatched = false;
-  const normalized2 = collected.map((c) => {
+  const normalized = collected.map((c) => {
     switch (comparator) {
       case "date":
         return parseDate2(c.raw);
@@ -31165,8 +31177,8 @@ function execute2(rule, ctx) {
   });
   if (comparator === "fuzzy_name") {
     const threshold = cfg.threshold ?? 0.8;
-    for (let i = 1; i < normalized2.length; i++) {
-      const sim = fuzzyNameSimilarity(String(normalized2[0] ?? ""), String(normalized2[i] ?? ""));
+    for (let i = 1; i < normalized.length; i++) {
+      const sim = fuzzyNameSimilarity(String(normalized[0] ?? ""), String(normalized[i] ?? ""));
       if (sim < threshold) {
         mismatched = true;
         break;
@@ -31174,11 +31186,11 @@ function execute2(rule, ctx) {
     }
   } else if (comparator === "numeric") {
     const tol = cfg.threshold ?? 0;
-    const first = normalized2[0];
+    const first = normalized[0];
     if (first == null) mismatched = true;
     else {
-      for (let i = 1; i < normalized2.length; i++) {
-        const v = normalized2[i];
+      for (let i = 1; i < normalized.length; i++) {
+        const v = normalized[i];
         if (v == null || Math.abs(v - first) > tol) {
           mismatched = true;
           break;
@@ -31186,8 +31198,8 @@ function execute2(rule, ctx) {
       }
     }
   } else {
-    for (let i = 1; i < normalized2.length; i++) {
-      if (normalized2[i] !== normalized2[0] || normalized2[0] == null) {
+    for (let i = 1; i < normalized.length; i++) {
+      if (normalized[i] !== normalized[0] || normalized[0] == null) {
         mismatched = true;
         break;
       }
@@ -31521,10 +31533,10 @@ function buildSessionRuleContext(collectedData, businessAccountId) {
   for (const [rawKey, doc] of Object.entries(collectedDocs)) {
     if (!doc || typeof doc !== "object") continue;
     if (doc.isValid === false) continue;
-    const normalized2 = normalizeDocKey(rawKey);
+    const normalized = normalizeDocKey(rawKey);
     const extracted = doc.extractedData || {};
-    const variants = Array.from(/* @__PURE__ */ new Set([normalized2, `${normalized2}_card`]));
-    const stub = [{ documentCategory: normalized2, businessAccountId }];
+    const variants = Array.from(/* @__PURE__ */ new Set([normalized, `${normalized}_card`]));
+    const stub = [{ documentCategory: normalized, businessAccountId }];
     for (const variant of variants) {
       docsByType.set(variant, stub);
       leadFields[variant] = { ...leadFields[variant] || {}, ...extracted };
@@ -35312,8 +35324,8 @@ var init_whatsappFlowService = __esm({
         }
       }
       async checkDuplicatePhone(businessAccountId, customerPhone, currentSessionId) {
-        const normalized2 = normalizePhone4(customerPhone);
-        if (normalized2.length < 10) {
+        const normalized = normalizePhone4(customerPhone);
+        if (normalized.length < 10) {
           return { isDuplicate: false, isRecent: false };
         }
         const existingLeads = await db.select().from(whatsappLeads).where(
@@ -35326,7 +35338,7 @@ var init_whatsappFlowService = __esm({
           if (lead.flowSessionId === currentSessionId) continue;
           const ed = lead.extractedData || {};
           const phonesOnLead = [ed.customer_phone, lead.customerPhone].filter(Boolean);
-          const matchFound = phonesOnLead.some((p) => normalizePhone4(p) === normalized2);
+          const matchFound = phonesOnLead.some((p) => normalizePhone4(p) === normalized);
           if (!matchFound) continue;
           const hoursAgo = Math.round((Date.now() - new Date(lead.createdAt).getTime()) / (1e3 * 60 * 60));
           const isRecent = hoursAgo < 24;
@@ -35354,10 +35366,10 @@ var init_whatsappFlowService = __esm({
       }
       findFieldValue(data, fieldName) {
         if (data[fieldName] !== void 0) return data[fieldName];
-        const normalized2 = this.normalizeFieldName(fieldName);
-        if (normalized2 !== fieldName && data[normalized2] !== void 0) return data[normalized2];
+        const normalized = this.normalizeFieldName(fieldName);
+        if (normalized !== fieldName && data[normalized] !== void 0) return data[normalized];
         for (const key of Object.keys(data)) {
-          if (this.normalizeFieldName(key) === normalized2) return data[key];
+          if (this.normalizeFieldName(key) === normalized) return data[key];
         }
         return void 0;
       }
@@ -35758,8 +35770,8 @@ Return ONLY a valid JSON object:
         }
       }
       isExitKeyword(message) {
-        const normalized2 = message.trim().toLowerCase();
-        return this.EXIT_KEYWORDS.some((kw) => normalized2 === kw);
+        const normalized = message.trim().toLowerCase();
+        return this.EXIT_KEYWORDS.some((kw) => normalized === kw);
       }
       isTextOnlyMessageStep(step) {
         if (step.type !== "text") return false;
@@ -35985,9 +35997,9 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
         const needsNormalization = steps.some((s) => s.stepKey.startsWith("step_"));
         if (needsNormalization) {
           await this.normalizeStepKeys(flowId, steps);
-          const normalized2 = await db.select().from(whatsappFlowSteps).where(eq44(whatsappFlowSteps.flowId, flowId)).orderBy(asc7(whatsappFlowSteps.stepOrder));
-          this.stepsCache.set(flowId, { data: normalized2, ts: Date.now() });
-          return normalized2;
+          const normalized = await db.select().from(whatsappFlowSteps).where(eq44(whatsappFlowSteps.flowId, flowId)).orderBy(asc7(whatsappFlowSteps.stepOrder));
+          this.stepsCache.set(flowId, { data: normalized, ts: Date.now() });
+          return normalized;
         }
         this.stepsCache.set(flowId, { data: steps, ts: Date.now() });
         return steps;
@@ -36066,8 +36078,8 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
         return null;
       }
       isUpdateKeyword(message) {
-        const normalized2 = message.trim().toLowerCase();
-        return this.UPDATE_KEYWORDS.some((kw) => normalized2 === kw);
+        const normalized = message.trim().toLowerCase();
+        return this.UPDATE_KEYWORDS.some((kw) => normalized === kw);
       }
       isUpdateFlowStep(stepKey) {
         return stepKey.startsWith("__update_");
@@ -40199,10 +40211,10 @@ ${this.formatConfirmationMessage(summary)}`,
             return diffCount > 0;
           };
           const isDocMatch = (existingNum) => {
-            const normalized2 = normalizeDocNum(existingNum);
-            if (normalized2 === normalizedDocNumber) return true;
-            if (isAadhaarType && fuzzyAadhaarMatch(aadhaarDigitsOnly, normalized2)) {
-              console.log(`[WhatsApp Flow] Fuzzy Aadhaar match: ${normalizedDocNumber} vs ${normalized2} (1-2 digit OCR difference)`);
+            const normalized = normalizeDocNum(existingNum);
+            if (normalized === normalizedDocNumber) return true;
+            if (isAadhaarType && fuzzyAadhaarMatch(aadhaarDigitsOnly, normalized)) {
+              console.log(`[WhatsApp Flow] Fuzzy Aadhaar match: ${normalizedDocNumber} vs ${normalized} (1-2 digit OCR difference)`);
               return true;
             }
             return false;
@@ -46722,14 +46734,14 @@ var init_contactGroupService = __esm({
         };
       },
       async addContact(businessAccountId, groupId, phone, name, attributes) {
-        const normalized2 = normalizePhone5(phone);
-        if (!normalized2) return void 0;
-        const [existing] = await db.select().from(contactGroupContacts).where(and41(eq52(contactGroupContacts.groupId, groupId), eq52(contactGroupContacts.phone, normalized2))).limit(1);
+        const normalized = normalizePhone5(phone);
+        if (!normalized) return void 0;
+        const [existing] = await db.select().from(contactGroupContacts).where(and41(eq52(contactGroupContacts.groupId, groupId), eq52(contactGroupContacts.phone, normalized))).limit(1);
         if (existing) return existing;
         const [row] = await db.insert(contactGroupContacts).values({
           groupId,
           businessAccountId,
-          phone: normalized2,
+          phone: normalized,
           name: name || "",
           attributes: attributes || {}
         }).returning();
@@ -46739,9 +46751,9 @@ var init_contactGroupService = __esm({
       async updateContact(businessAccountId, groupId, contactId, updates) {
         const set = {};
         if (updates.phone !== void 0) {
-          const normalized2 = normalizePhone5(updates.phone);
-          if (!normalized2) return void 0;
-          set.phone = normalized2;
+          const normalized = normalizePhone5(updates.phone);
+          if (!normalized) return void 0;
+          set.phone = normalized;
         }
         if (updates.name !== void 0) set.name = updates.name;
         if (Object.keys(set).length === 0) return void 0;
@@ -47326,14 +47338,14 @@ function resolveParams(template, campaign, recipient, knownFields = /* @__PURE__
   return { params: out, problems };
 }
 async function recordOptOut(businessAccountId, phone, reason = "user_stop", campaignId) {
-  const normalized2 = normalizePhone5(phone);
-  if (!normalized2) return;
-  const last10 = normalized2.slice(-10);
-  const existing = await db.select().from(whatsappOptOuts).where(and44(eq55(whatsappOptOuts.businessAccountId, businessAccountId), eq55(whatsappOptOuts.phone, normalized2))).limit(1);
+  const normalized = normalizePhone5(phone);
+  if (!normalized) return;
+  const last10 = normalized.slice(-10);
+  const existing = await db.select().from(whatsappOptOuts).where(and44(eq55(whatsappOptOuts.businessAccountId, businessAccountId), eq55(whatsappOptOuts.phone, normalized))).limit(1);
   if (existing.length === 0) {
     await db.insert(whatsappOptOuts).values({
       businessAccountId,
-      phone: normalized2,
+      phone: normalized,
       reason,
       campaignId: campaignId || null
     });
@@ -47341,8 +47353,8 @@ async function recordOptOut(businessAccountId, phone, reason = "user_stop", camp
   await db.update(marketingCampaignRecipients).set({ status: "opted_out" }).where(and44(
     eq55(marketingCampaignRecipients.businessAccountId, businessAccountId),
     inArray10(marketingCampaignRecipients.status, ["pending", "claimed", "queued", "sent", "delivered", "read", "replied"]),
-    sql30`(${marketingCampaignRecipients.sendPhone} = ${normalized2}
-           OR ${marketingCampaignRecipients.phone} = ${normalized2}
+    sql30`(${marketingCampaignRecipients.sendPhone} = ${normalized}
+           OR ${marketingCampaignRecipients.phone} = ${normalized}
            OR ${marketingCampaignRecipients.phone} = ${last10})`
   ));
 }
@@ -47771,18 +47783,18 @@ var init_marketingCampaignService = __esm({
                   continue;
                 }
                 const groupCode = r.groupId ? groupCodeMap.get(r.groupId) ?? null : null;
-                const normalized2 = applyCountryCode(r.phone, groupCode);
-                if (!normalized2.phone) {
+                const normalized = applyCountryCode(r.phone, groupCode);
+                if (!normalized.phone) {
                   await db.update(marketingCampaignRecipients).set({
                     status: "failed",
                     claimedAt: null,
-                    errorMessage: normalized2.error || "Invalid phone number"
+                    errorMessage: normalized.error || "Invalid phone number"
                   }).where(eq55(marketingCampaignRecipients.id, r.id));
                   failed++;
                   await new Promise((res) => setTimeout(res, SEND_DELAY_MS));
                   continue;
                 }
-                const sendPhone = normalized2.phone;
+                const sendPhone = normalized.phone;
                 const { params, problems } = resolveParams(tpl, refreshed, r, knownFields);
                 if (problems.length > 0) {
                   await db.update(marketingCampaignRecipients).set({ status: "failed", claimedAt: null, errorMessage: problems.join("; ") }).where(eq55(marketingCampaignRecipients.id, r.id));
@@ -47871,16 +47883,16 @@ var init_marketingCampaignService = __esm({
        * AND the recipient has been sent the template.
        */
       async findActiveRecipientForInbound(businessAccountId, phone) {
-        const normalized2 = normalizePhone5(phone);
-        if (!normalized2) return null;
-        const last10 = normalized2.slice(-10);
+        const normalized = normalizePhone5(phone);
+        if (!normalized) return null;
+        const last10 = normalized.slice(-10);
         const recipients = await db.select().from(marketingCampaignRecipients).where(and44(
           eq55(marketingCampaignRecipients.businessAccountId, businessAccountId),
           // 'queued' is included so that a fast inbound reply (which can land before
           // Meta's "sent" webhook) still attributes to the right recipient row.
           inArray10(marketingCampaignRecipients.status, ["queued", "sent", "delivered", "read", "replied"]),
-          sql30`(${marketingCampaignRecipients.sendPhone} = ${normalized2}
-             OR ${marketingCampaignRecipients.phone} = ${normalized2}
+          sql30`(${marketingCampaignRecipients.sendPhone} = ${normalized}
+             OR ${marketingCampaignRecipients.phone} = ${normalized}
              OR ${marketingCampaignRecipients.phone} = ${last10})`
         )).orderBy(desc20(marketingCampaignRecipients.createdAt)).limit(5);
         for (const r of recipients) {
@@ -51044,10 +51056,10 @@ var init_instagramFlowService = __esm({
       }
       findFieldValue(data, fieldName) {
         if (data[fieldName] !== void 0) return data[fieldName];
-        const normalized2 = this.normalizeFieldName(fieldName);
-        if (normalized2 !== fieldName && data[normalized2] !== void 0) return data[normalized2];
+        const normalized = this.normalizeFieldName(fieldName);
+        if (normalized !== fieldName && data[normalized] !== void 0) return data[normalized];
         for (const key of Object.keys(data)) {
-          if (this.normalizeFieldName(key) === normalized2) return data[key];
+          if (this.normalizeFieldName(key) === normalized) return data[key];
         }
         return void 0;
       }
@@ -53851,10 +53863,10 @@ var init_facebookFlowService = __esm({
       }
       findFieldValue(data, fieldName) {
         if (data[fieldName] !== void 0) return data[fieldName];
-        const normalized2 = this.normalizeFieldName(fieldName);
-        if (normalized2 !== fieldName && data[normalized2] !== void 0) return data[normalized2];
+        const normalized = this.normalizeFieldName(fieldName);
+        if (normalized !== fieldName && data[normalized] !== void 0) return data[normalized];
         for (const key of Object.keys(data)) {
-          if (this.normalizeFieldName(key) === normalized2) return data[key];
+          if (this.normalizeFieldName(key) === normalized) return data[key];
         }
         return void 0;
       }
@@ -56223,8 +56235,8 @@ var VAGUE_RESPONSE_PATTERNS = [
   /never mind/
 ];
 function isVagueResponse(message) {
-  const normalized2 = message.toLowerCase().trim().replace(/[.,!?;:'"()\-…]/g, "").replace(/[^\w\s]/g, "").replace(/\s+/g, " ").trim();
-  return VAGUE_RESPONSE_PATTERNS.some((pattern) => pattern.test(normalized2));
+  const normalized = message.toLowerCase().trim().replace(/[.,!?;:'"()\-…]/g, "").replace(/[^\w\s]/g, "").replace(/\s+/g, " ").trim();
+  return VAGUE_RESPONSE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 function parseStepChoiceOptions(step) {
   if (!step) return void 0;
@@ -58547,11 +58559,11 @@ Response:`;
         if (!otpGateActive || !conversationId || !rawPhone || !rawPhone.trim()) return false;
         try {
           const { normalizePhone: normalizePhone6 } = await Promise.resolve().then(() => (init_otp(), otp_exports));
-          const normalized2 = normalizePhone6(rawPhone);
-          if (!normalized2) return false;
-          const verified = await storage.hasVerifiedOtpForConversationPhone(businessAccountId, conversationId, normalized2);
+          const normalized = normalizePhone6(rawPhone);
+          if (!normalized) return false;
+          const verified = await storage.hasVerifiedOtpForConversationPhone(businessAccountId, conversationId, normalized);
           if (!verified) {
-            console.log(`[OTP-Gate] Auto-detect: CRM sync blocked \u2014 lead phone \u2026${normalized2.slice(-4)} not OTP-verified for this conversation`);
+            console.log(`[OTP-Gate] Auto-detect: CRM sync blocked \u2014 lead phone \u2026${normalized.slice(-4)} not OTP-verified for this conversation`);
           }
           return !verified;
         } catch (err) {
@@ -72286,97 +72298,6 @@ import { eq as eq33 } from "drizzle-orm";
 function text2(value) {
   return typeof value === "string" ? value.trim() : "";
 }
-function normalized(value) {
-  return text2(value).toLocaleLowerCase();
-}
-var indexedMongoStores = /* @__PURE__ */ new Set();
-async function backfillTesterScopeMetadata(cfg, businessAccountId) {
-  const mappings = await db.select({
-    cpId: topscholarCpMappings.cpId,
-    board: topscholarCpMappings.board,
-    medium: topscholarCpMappings.medium,
-    grade: topscholarCpMappings.grade,
-    subject: topscholarCpMappings.subject,
-    cpName: topscholarCpMappings.cpName
-  }).from(topscholarCpMappings).where(eq33(topscholarCpMappings.businessAccountId, businessAccountId));
-  const valid = mappings.map((mapping) => ({
-    cpId: text2(mapping.cpId),
-    board: text2(mapping.board),
-    medium: text2(mapping.medium),
-    grade: text2(mapping.grade),
-    subject: text2(mapping.subject) || text2(mapping.cpName)
-  })).filter(
-    (mapping) => !!(mapping.cpId && mapping.board && mapping.medium && mapping.grade && mapping.subject)
-  );
-  if (valid.length === 0) return;
-  if (cfg.storeType === "mongodb") {
-    if (!cfg.contentDbUrl) throw new Error("MongoDB content DB URL is not configured.");
-    const collection = await getMongoCollection(
-      cfg.contentDbUrl,
-      cfg.contentDbName,
-      cfg.contentDbCollection
-    );
-    const storeKey = `${cfg.contentDbUrl}|${cfg.contentDbName || ""}|${cfg.contentDbCollection || ""}`;
-    if (!indexedMongoStores.has(storeKey)) {
-      await collection.createIndex(
-        { business_account_id: 1, board: 1, medium: 1, grade: 1, subject: 1, cp_id: 1 },
-        { name: "topscholar_tester_scope_idx" }
-      ).catch((error) => {
-        console.warn("[TopScholar] Could not create Tester scope index in MongoDB:", error instanceof Error ? error.message : error);
-      });
-      indexedMongoStores.add(storeKey);
-    }
-    for (const mapping of valid) {
-      await collection.updateMany(
-        {
-          business_account_id: businessAccountId,
-          cp_id: mapping.cpId,
-          $or: [
-            { board: { $ne: mapping.board } },
-            { medium: { $ne: mapping.medium } },
-            { grade: { $ne: mapping.grade } },
-            { subject: { $ne: mapping.subject } }
-          ]
-        },
-        {
-          $set: {
-            board: mapping.board,
-            medium: mapping.medium,
-            grade: mapping.grade,
-            subject: mapping.subject
-          }
-        }
-      );
-    }
-    return;
-  }
-  const pool2 = getContentPool(cfg.contentDbUrl);
-  await ensureContentSchema(pool2);
-  for (const mapping of valid) {
-    await pool2.query(
-      `UPDATE topscholar_content_chunks
-          SET board = $3,
-              medium = $4,
-              grade = $5,
-              subject = $6,
-              updated_at = now()
-        WHERE business_account_id = $1
-          AND cp_id = $2
-          AND (board IS DISTINCT FROM $3
-            OR medium IS DISTINCT FROM $4
-            OR grade IS DISTINCT FROM $5
-            OR subject IS DISTINCT FROM $6)`,
-      [
-        businessAccountId,
-        mapping.cpId,
-        mapping.board,
-        mapping.medium,
-        mapping.grade,
-        mapping.subject
-      ]
-    );
-  }
-}
 async function listStoredCurriculumScopes(cfg, businessAccountId) {
   if (cfg.storeType === "mongodb") {
     if (!cfg.contentDbUrl) throw new Error("MongoDB content DB URL is not configured.");
@@ -72456,20 +72377,6 @@ async function listStoredCurriculumScopes(cfg, businessAccountId) {
     grade: text2(row.grade),
     subject: text2(row.subject)
   }));
-}
-async function resolveStoredScopeCpIds(cfg, businessAccountId, selection) {
-  const scope = await listStoredCurriculumScopes(cfg, businessAccountId);
-  const board = normalized(selection.board);
-  const medium = normalized(selection.medium);
-  const grade = normalized(selection.grade);
-  const subject = normalized(selection.subject);
-  return Array.from(
-    new Set(
-      scope.filter(
-        (row) => normalized(row.board) === board && normalized(row.medium) === medium && normalized(row.grade) === grade && normalized(row.subject) === subject
-      ).map((row) => row.cpId)
-    )
-  );
 }
 
 // server/routes/topscholar.ts
@@ -73395,16 +73302,59 @@ router4.get("/api/topscholar/students", ...topscholarGuards, async (req, res) =>
   res.json(students);
 });
 var testerScopeCache = /* @__PURE__ */ new Map();
+var testerScopeLoads = /* @__PURE__ */ new Map();
 var TESTER_SCOPE_CACHE_TTL_MS = 6e4;
-async function getStoredTesterScopesCached(businessAccountId, account) {
+var TESTER_SCOPE_STALE_TTL_MS = 15 * 6e4;
+function testerScopeCacheKey(businessAccountId, account) {
   const cfg = getTopscholarConfig(account);
-  const cacheKey = `${businessAccountId}|${cfg.contentDbUrl || ""}|${cfg.contentDbName || ""}|${cfg.contentDbCollection || ""}`;
+  return [
+    businessAccountId,
+    cfg.storeType,
+    cfg.externalContentDbDisabled ? "external-disabled" : "external-enabled",
+    cfg.contentDbUrl || "",
+    cfg.contentDbName || "",
+    cfg.contentDbCollection || ""
+  ].join("|");
+}
+function sameScopeValue(left, right) {
+  return left.trim().localeCompare(right.trim(), void 0, { sensitivity: "accent" }) === 0;
+}
+function storedCpIdsForScope(scopes, selection) {
+  return Array.from(
+    new Set(
+      scopes.filter(
+        (scope) => sameScopeValue(scope.board, selection.board) && sameScopeValue(scope.medium, selection.medium) && sameScopeValue(scope.grade, selection.grade) && sameScopeValue(scope.subject, selection.subject)
+      ).map((scope) => scope.cpId)
+    )
+  );
+}
+async function getStoredTesterScopesCached(businessAccountId, account, options = {}) {
+  const cfg = getTopscholarConfig(account);
+  const cacheKey = testerScopeCacheKey(businessAccountId, account);
   const cached = testerScopeCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < TESTER_SCOPE_CACHE_TTL_MS) return cached.scopes;
-  await backfillTesterScopeMetadata(cfg, businessAccountId);
-  const scopes = await listStoredCurriculumScopes(cfg, businessAccountId);
-  testerScopeCache.set(cacheKey, { at: Date.now(), scopes });
-  return scopes;
+  if (!options.forceRefresh && cached && Date.now() - cached.at < TESTER_SCOPE_CACHE_TTL_MS) {
+    return cached.scopes;
+  }
+  let load3 = testerScopeLoads.get(cacheKey);
+  if (!load3) {
+    load3 = listStoredCurriculumScopes(cfg, businessAccountId).then((scopes) => {
+      testerScopeCache.set(cacheKey, { at: Date.now(), scopes });
+      console.info(`[TopScholar] Tester scope refresh completed in ${scopes.length} scope row(s).`);
+      return scopes;
+    }).finally(() => {
+      testerScopeLoads.delete(cacheKey);
+    });
+    testerScopeLoads.set(cacheKey, load3);
+  }
+  try {
+    return await load3;
+  } catch (error) {
+    if (options.allowStale && cached && Date.now() - cached.at < TESTER_SCOPE_STALE_TTL_MS) {
+      console.warn("[TopScholar] Serving cached Tester scope options while the content store is unavailable.");
+      return cached.scopes;
+    }
+    throw error;
+  }
 }
 router4.get("/api/topscholar/scope-options", ...topscholarGuards, async (req, res) => {
   const businessAccountId = getBusinessAccountId3(req);
@@ -73413,7 +73363,7 @@ router4.get("/api/topscholar/scope-options", ...topscholarGuards, async (req, re
   if (!account) return res.status(404).json({ error: "Business account not found" });
   let rows;
   try {
-    rows = await getStoredTesterScopesCached(businessAccountId, account);
+    rows = await getStoredTesterScopesCached(businessAccountId, account, { allowStale: true });
   } catch (error) {
     console.error("[TopScholar] Tester scope lookup failed:", error);
     return res.status(503).json({
@@ -73466,8 +73416,8 @@ router4.get("/api/topscholar/scope-chapters", ...topscholarGuards, async (req, r
   if (!account) return res.status(404).json({ error: "Business account not found" });
   try {
     const cfg = getTopscholarConfig(account);
-    await backfillTesterScopeMetadata(cfg, businessAccountId);
-    const cpIds = await resolveStoredScopeCpIds(cfg, businessAccountId, { board, medium, grade, subject });
+    const storedScopes = await getStoredTesterScopesCached(businessAccountId, account, { allowStale: true });
+    const cpIds = storedCpIdsForScope(storedScopes, { board, medium, grade, subject });
     if (cpIds.length === 0) return res.json({ chapters: [] });
     const chapters = isMongoConnectionString(cfg.contentDbUrl) ? await getMongoChapterNames(
       { connectionString: cfg.contentDbUrl, dbName: cfg.contentDbName, collection: cfg.contentDbCollection },
@@ -73511,7 +73461,10 @@ router4.post("/api/topscholar/tester/mint-launch-token", ...topscholarGuards, as
   }
   if (isPreview) {
     try {
-      const storedCpIds = await resolveStoredScopeCpIds(cfg, businessAccountId, {
+      const freshStoredScopes = await getStoredTesterScopesCached(businessAccountId, account, {
+        forceRefresh: true
+      });
+      const storedCpIds = storedCpIdsForScope(freshStoredScopes, {
         board: boardV,
         medium: mediumV,
         grade: gradeV,
@@ -80518,18 +80471,18 @@ data: ${JSON.stringify({ message: error.message })}
       }
       const normalizeJewelryType = (type) => {
         if (!type) return type;
-        let normalized2 = type.toLowerCase().replace(/\s+/g, "-");
+        let normalized = type.toLowerCase().replace(/\s+/g, "-");
         const pluralMappings = {
           "brooches": "brooch",
           "watches": "watch"
         };
-        if (pluralMappings[normalized2]) {
-          return pluralMappings[normalized2];
+        if (pluralMappings[normalized]) {
+          return pluralMappings[normalized];
         }
-        if (normalized2.endsWith("s") && !normalized2.endsWith("ss")) {
-          normalized2 = normalized2.slice(0, -1);
+        if (normalized.endsWith("s") && !normalized.endsWith("ss")) {
+          normalized = normalized.slice(0, -1);
         }
-        return normalized2;
+        return normalized;
       };
       const getBaseCategory = (type) => {
         if (!type || !type.includes("-")) return null;
@@ -86301,9 +86254,9 @@ ${instruction}`
       const formConvPhoneMap = /* @__PURE__ */ new Map();
       for (const l of acctLeadsRaw) {
         if (l.phone && l.conversationId && (l.topicsOfInterest || []).includes("Via Form")) {
-          const normalized2 = l.phone.replace(/\D/g, "").slice(-10);
-          if (normalized2.length >= 7 && !formConvPhoneMap.has(l.conversationId)) {
-            formConvPhoneMap.set(l.conversationId, "form_" + normalized2);
+          const normalized = l.phone.replace(/\D/g, "").slice(-10);
+          if (normalized.length >= 7 && !formConvPhoneMap.has(l.conversationId)) {
+            formConvPhoneMap.set(l.conversationId, "form_" + normalized);
           }
         }
       }
@@ -86427,9 +86380,9 @@ ${instruction}`
       const formConvPhoneMapGroup = /* @__PURE__ */ new Map();
       for (const l of allLeadsRaw) {
         if (l.phone && l.conversationId && (l.topicsOfInterest || []).includes("Via Form")) {
-          const normalized2 = l.phone.replace(/\D/g, "").slice(-10);
-          if (normalized2.length >= 7 && !formConvPhoneMapGroup.has(l.conversationId)) {
-            formConvPhoneMapGroup.set(l.conversationId, "form_" + normalized2);
+          const normalized = l.phone.replace(/\D/g, "").slice(-10);
+          if (normalized.length >= 7 && !formConvPhoneMapGroup.has(l.conversationId)) {
+            formConvPhoneMapGroup.set(l.conversationId, "form_" + normalized);
           }
         }
       }
@@ -86488,9 +86441,9 @@ ${instruction}`
         const acctFormPhoneMap = /* @__PURE__ */ new Map();
         for (const l of acctLeadsRaw) {
           if (l.phone && l.conversationId && (l.topicsOfInterest || []).includes("Via Form")) {
-            const normalized2 = l.phone.replace(/\D/g, "").slice(-10);
-            if (normalized2.length >= 7 && !acctFormPhoneMap.has(l.conversationId)) {
-              acctFormPhoneMap.set(l.conversationId, "form_" + normalized2);
+            const normalized = l.phone.replace(/\D/g, "").slice(-10);
+            if (normalized.length >= 7 && !acctFormPhoneMap.has(l.conversationId)) {
+              acctFormPhoneMap.set(l.conversationId, "form_" + normalized);
             }
           }
         }
@@ -86694,9 +86647,9 @@ ${instruction}`
       const viFormPhoneMap = /* @__PURE__ */ new Map();
       for (const l of viFormLeadRows) {
         if (l.conversationId && l.phone) {
-          const normalized2 = l.phone.replace(/\D/g, "").slice(-10);
-          if (normalized2.length >= 7 && !viFormPhoneMap.has(l.conversationId)) {
-            viFormPhoneMap.set(l.conversationId, "form_" + normalized2);
+          const normalized = l.phone.replace(/\D/g, "").slice(-10);
+          if (normalized.length >= 7 && !viFormPhoneMap.has(l.conversationId)) {
+            viFormPhoneMap.set(l.conversationId, "form_" + normalized);
           }
         }
       }
@@ -87015,9 +86968,9 @@ Format your response as JSON with this structure:
       const formPhoneMap = /* @__PURE__ */ new Map();
       for (const l of acctLeadsRaw) {
         if (l.phone && l.conversationId && (l.topicsOfInterest || []).includes("Via Form")) {
-          const normalized2 = l.phone.replace(/\D/g, "").slice(-10);
-          if (normalized2.length >= 7 && !formPhoneMap.has(l.conversationId)) {
-            formPhoneMap.set(l.conversationId, "form_" + normalized2);
+          const normalized = l.phone.replace(/\D/g, "").slice(-10);
+          if (normalized.length >= 7 && !formPhoneMap.has(l.conversationId)) {
+            formPhoneMap.set(l.conversationId, "form_" + normalized);
           }
         }
       }
@@ -97756,9 +97709,9 @@ ${reviewText}`
       const dashFormPhoneMap = /* @__PURE__ */ new Map();
       for (const l of dashFormLeadRows) {
         if (l.conversationId && l.phone) {
-          const normalized2 = l.phone.replace(/\D/g, "").slice(-10);
-          if (normalized2.length >= 7 && !dashFormPhoneMap.has(l.conversationId)) {
-            dashFormPhoneMap.set(l.conversationId, "form_" + normalized2);
+          const normalized = l.phone.replace(/\D/g, "").slice(-10);
+          if (normalized.length >= 7 && !dashFormPhoneMap.has(l.conversationId)) {
+            dashFormPhoneMap.set(l.conversationId, "form_" + normalized);
           }
         }
       }
@@ -100776,17 +100729,17 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       if (!businessAccountId) return res.status(400).json({ error: "No active business account" });
       const { phoneNumber, label } = req.body;
       if (!phoneNumber) return res.status(400).json({ error: "Phone number is required" });
-      const normalized2 = phoneNumber.replace(/\D/g, "");
-      if (normalized2.length < 7) return res.status(400).json({ error: "Invalid phone number" });
+      const normalized = phoneNumber.replace(/\D/g, "");
+      if (normalized.length < 7) return res.status(400).json({ error: "Invalid phone number" });
       const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
       const existing = await db.select().from(whatsappWhitelist2).where(and57(
         eq68(whatsappWhitelist2.businessAccountId, businessAccountId),
-        eq68(whatsappWhitelist2.phoneNumber, normalized2)
+        eq68(whatsappWhitelist2.phoneNumber, normalized)
       )).limit(1);
       if (existing.length > 0) return res.status(409).json({ error: "Number already whitelisted" });
       const [entry] = await db.insert(whatsappWhitelist2).values({
         businessAccountId,
-        phoneNumber: normalized2,
+        phoneNumber: normalized,
         label: label || null
       }).returning();
       res.json({ entry });
@@ -100809,17 +100762,17 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       for (const item of numbers) {
         const phone = typeof item === "string" ? item : item.phoneNumber;
         const label = typeof item === "string" ? null : item.label || null;
-        const normalized2 = phone?.replace(/\D/g, "");
-        if (!normalized2 || normalized2.length < 7) {
+        const normalized = phone?.replace(/\D/g, "");
+        if (!normalized || normalized.length < 7) {
           skipped++;
           continue;
         }
-        if (existingSet.has(normalized2)) {
+        if (existingSet.has(normalized)) {
           skipped++;
           continue;
         }
-        existingSet.add(normalized2);
-        toInsert.push({ businessAccountId, phoneNumber: normalized2, label });
+        existingSet.add(normalized);
+        toInsert.push({ businessAccountId, phoneNumber: normalized, label });
       }
       let added = 0;
       if (toInsert.length > 0) {

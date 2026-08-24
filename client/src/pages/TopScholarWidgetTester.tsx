@@ -116,7 +116,14 @@ export default function TopScholarWidgetTester() {
     setWidgetInjected(false);
   };
 
-  const { data: options, isLoading, isError } = useQuery<ScopeOption[]>({
+  const {
+    data: options,
+    isLoading,
+    isError,
+    error: scopeOptionsError,
+    refetch: refetchScopeOptions,
+    isFetching: isRefreshingScopeOptions,
+  } = useQuery<ScopeOption[]>({
     queryKey: ["/api/topscholar/scope-options"],
     enabled: isTopscholar,
   });
@@ -537,8 +544,24 @@ export default function TopScholarWidgetTester() {
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading client content scope…
               </div>
             ) : isError ? (
-              <div className="flex items-center gap-2 text-sm text-destructive">
-                <AlertTriangle className="w-4 h-4" /> Failed to load client content scope.
+              <div className="flex items-start justify-between gap-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 w-4 h-4 shrink-0" />
+                  <span>
+                    Couldn’t reach the client content store.{" "}
+                    {scopeOptionsError instanceof Error ? scopeOptionsError.message : "Try again after checking the content-store connection."}
+                  </span>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => refetchScopeOptions()}
+                  disabled={isRefreshingScopeOptions}
+                >
+                  {isRefreshingScopeOptions ? <Loader2 className="h-4 w-4 animate-spin" /> : "Retry"}
+                </Button>
               </div>
             ) : opts.length === 0 ? (
               <div className="flex items-start gap-2 text-sm text-muted-foreground">
