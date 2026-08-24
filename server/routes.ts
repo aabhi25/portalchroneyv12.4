@@ -35856,6 +35856,13 @@ Return ONLY a valid JSON object in this format:
   // These definitions turn a reviewed daily spreadsheet into an ordinary
   // campaign. Delivery itself stays in marketingCampaignService, keeping one
   // sender, one opt-out check, and one receipt lifecycle.
+  app.post("/api/whatsapp/campaign-automations/suggest-mappings", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { suggestAutomationMappings } = await import("./services/campaignAutomationMappingService");
+      res.json(await suggestAutomationMappings(req.user!.businessAccountId!, req.body || {}));
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
   app.get("/api/whatsapp/campaign-automations", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
       const { campaignAutomationService } = await import("./services/campaignAutomationService");

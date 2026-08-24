@@ -15,3 +15,4 @@
 - [TopScholar embedding input limits](topscholar-embedding-input-limits.md) — direct and Batch API token-overflow failures use different wording but both require content splitting, never a retry.
 - [Spreadsheet campaign dispatch reservations](spreadsheet-campaign-dispatch-reservations.md) — reserve a business record key only when a run is scheduled; cancelled review runs must remain eligible.
 - [Tester client-store filters](topscholar-tester-client-store-filters.md) — Tester options may use stored client content, but preview must prove it matches live scope mapping until production authority migrates.
+- [Campaign sample parsing](campaign-sample-parsing.md) — parse Excel/PDF samples only in the browser; the mapping endpoint accepts headers, never file bytes or rows.
