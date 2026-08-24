@@ -4302,7 +4302,12 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           // objects (question/options/solution) that this compactor would strip, so it is
           // left intact (its payload is already bounded by the resolver).
           let toolResultContent = (this.isK12ContentOnly(context) && toolName === 'fetch_k12_topic')
-            ? this.compactK12ToolResult(result)
+            ? this.compactK12ToolResult(result, {
+                // TopScholar students cannot open the curriculum video URLs, so keep
+                // those URLs out of the model context rather than relying on prompt
+                // compliance to prevent broken links from being displayed.
+                omitVideos: isTopscholarAccount(context.businessAccountId),
+              })
             : JSON.stringify(result);
           if (toolName === 'capture_lead' && captureLeadOriginalQuestion) {
             const enhancedResult = {
@@ -5006,7 +5011,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
    * survive. Only used on the content-only K12 path; other accounts are
    * unaffected.
    */
-  private compactK12ToolResult(result: any): string {
+  private compactK12ToolResult(result: any, options?: { omitVideos?: boolean }): string {
     try {
       if (!result || !Array.isArray(result.data)) return JSON.stringify(result);
       const MAX_PASSAGES = 3;
@@ -5021,7 +5026,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           revisionNotes: notes,
         };
         if (Array.isArray(r?.mediaUrls) && r.mediaUrls.length > 0) compact.mediaUrls = r.mediaUrls;
-        if (Array.isArray(r?.videos) && r.videos.length > 0) {
+        if (!options?.omitVideos && Array.isArray(r?.videos) && r.videos.length > 0) {
           compact.videos = r.videos.map((v: any) => ({ title: v?.title ?? null, videoUrl: v?.videoUrl ?? '' }));
         }
         return compact;
@@ -5516,6 +5521,10 @@ You are tutoring ${studentDisplayName}. They are signed in through their school 
         finalContext += `\n`;
       }
 
+      const k12MediaRule = isTopscholarAccount(context.businessAccountId)
+        ? '6. MEDIA: Surface approved image media inline using Markdown when a tool result includes "mediaUrls" (for an image URL write `![diagram](URL)`). NEVER include video links or video markdown for TopScholar because students cannot open those curriculum links. Do not mention or recommend a video resource.'
+        : '6. MEDIA: When a tool result item includes "mediaUrls" or a "videos" array, surface that media inline using Markdown so the student can see it. For an image URL write `![diagram](URL)`; for a video write a labelled link `[▶ Watch: <title>](URL)`. Only use URLs that actually appear in the tool result — never invent or guess a media URL.';
+
       finalContext += `K12 EDUCATION MODE — TUTOR INSTRUCTIONS:
 You are a friendly, encouraging educational tutor (study buddy). Your primary role is helping students learn and practice.
 MANDATORY RULES:
@@ -5524,7 +5533,7 @@ MANDATORY RULES:
 ${rule4}
 4. Be supportive and clear — explain concepts in a friendly, student-friendly way with examples where helpful.
 5. You can respond to greetings and casual conversation naturally without calling tools.
-6. MEDIA: When a tool result item includes "mediaUrls" or a "videos" array, surface that media inline using Markdown so the student can see it. For an image URL write \`![diagram](URL)\`; for a video write a labelled link \`[▶ Watch: <title>](URL)\`. Only use URLs that actually appear in the tool result — never invent or guess a media URL.
+       ${k12MediaRule}
 7. MATH: Render mathematical expressions using LaTeX delimited by \\( \\) for inline and \\[ \\] (or $$) for display, so equations render cleanly. Reproduce the math exactly as it appears in the curriculum content.
 
 ⛔ STRICT RULE — NO FOLLOW-UP INVITATIONS (HIGHEST PRIORITY):

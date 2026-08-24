@@ -197,9 +197,10 @@ export class RagK12ContentResolver implements K12ContentResolver {
           description: null,
           revisionNotes: enrichedText,
           notes: [{ title: r.title || 'Notes', content: enrichedText }],
-          videos: isVideo
-            ? [{ title: r.title || 'Video', videoUrl: r.media_url || '', transcript: r.content_text }]
-            : [],
+          // Keep transcript text available in revisionNotes for grounded answers, but
+          // never expose the client-hosted video URL. TopScholar students cannot
+          // open those links from the embedded tutor.
+          videos: [],
           tags: null,
           chapterName: r.chapter || 'Curriculum',
           subjectName: r.subject || 'Curriculum',

@@ -14610,7 +14610,7 @@ var init_aiTools = __esm({
         type: "function",
         function: {
           name: "fetch_k12_topic",
-          description: 'MANDATORY for education mode: ALWAYS call this tool FIRST before answering ANY educational, academic, science, math, physics, chemistry, biology, history, geography, language, or study-related question. Do NOT answer from general knowledge \u2014 retrieve curriculum content first. Searches subjects, chapters, and topics in the curriculum database. Returns revision notes, descriptions, video URLs with transcripts, and chapter/subject context. Works with English, Hindi, and Marathi queries. Extract the core academic concept as the query (e.g., for "What is the SI unit of gravitational constant G?", use query "gravitational constant" or "gravitation"). IMPORTANT: When video URLs are returned, ALWAYS include them in your answer so the student can watch the relevant video.',
+          description: 'MANDATORY for education mode: ALWAYS call this tool FIRST before answering ANY educational, academic, science, math, physics, chemistry, biology, history, geography, language, or study-related question. Do NOT answer from general knowledge \u2014 retrieve curriculum content first. Searches subjects, chapters, and topics in the curriculum database. Returns revision notes, descriptions, optional video resources with transcripts, and chapter/subject context. Follow the tutor instructions about whether media may be shown. Works with English, Hindi, and Marathi queries. Extract the core academic concept as the query (e.g., for "What is the SI unit of gravitational constant G?", use query "gravitational constant" or "gravitation").',
           parameters: {
             type: "object",
             properties: {
@@ -15586,7 +15586,10 @@ var init_ragResolver = __esm({
               description: null,
               revisionNotes: enrichedText,
               notes: [{ title: r.title || "Notes", content: enrichedText }],
-              videos: isVideo ? [{ title: r.title || "Video", videoUrl: r.media_url || "", transcript: r.content_text }] : [],
+              // Keep transcript text available in revisionNotes for grounded answers, but
+              // never expose the client-hosted video URL. TopScholar students cannot
+              // open those links from the embedded tutor.
+              videos: [],
               tags: null,
               chapterName: r.chapter || "Curriculum",
               subjectName: r.subject || "Curriculum",
@@ -60751,7 +60754,12 @@ Sentence to translate: ${baseSentence}`,
               _ui_note: `CRITICAL INSTRUCTION \u2014 FOLLOW EXACTLY: Job cards with full details (title, salary, location, skills, match score, Apply button) are ALREADY rendered as visual cards in the chat UI below your message. You MUST NOT list any job titles, locations, salaries, departments, or details in your text \u2014 not as bullet points, numbered lists, or inline mentions. Your ENTIRE response must be ONE short paragraph (2-3 sentences max), e.g. "Great news! I found some positions that match your profile. You can browse the cards below and click Apply Now on any role you like!" NEVER list specific job names.`
             };
           }
-          let toolResultContent = this.isK12ContentOnly(context) && toolName === "fetch_k12_topic" ? this.compactK12ToolResult(result) : JSON.stringify(result);
+          let toolResultContent = this.isK12ContentOnly(context) && toolName === "fetch_k12_topic" ? this.compactK12ToolResult(result, {
+            // TopScholar students cannot open the curriculum video URLs, so keep
+            // those URLs out of the model context rather than relying on prompt
+            // compliance to prevent broken links from being displayed.
+            omitVideos: isTopscholarAccount(context.businessAccountId)
+          }) : JSON.stringify(result);
           if (toolName === "capture_lead" && captureLeadOriginalQuestion) {
             const enhancedResult = {
               ...result,
@@ -61289,7 +61297,7 @@ ${contentSnippet}`;
    * survive. Only used on the content-only K12 path; other accounts are
    * unaffected.
    */
-  compactK12ToolResult(result) {
+  compactK12ToolResult(result, options) {
     try {
       if (!result || !Array.isArray(result.data)) return JSON.stringify(result);
       const MAX_PASSAGES = 3;
@@ -61304,7 +61312,7 @@ ${contentSnippet}`;
           revisionNotes: notes
         };
         if (Array.isArray(r?.mediaUrls) && r.mediaUrls.length > 0) compact.mediaUrls = r.mediaUrls;
-        if (Array.isArray(r?.videos) && r.videos.length > 0) {
+        if (!options?.omitVideos && Array.isArray(r?.videos) && r.videos.length > 0) {
           compact.videos = r.videos.map((v) => ({ title: v?.title ?? null, videoUrl: v?.videoUrl ?? "" }));
         }
         return compact;
@@ -61751,6 +61759,7 @@ You are tutoring ${studentDisplayName}. They are signed in through their school 
         finalContext += `
 `;
       }
+      const k12MediaRule = isTopscholarAccount(context.businessAccountId) ? '6. MEDIA: Surface approved image media inline using Markdown when a tool result includes "mediaUrls" (for an image URL write `![diagram](URL)`). NEVER include video links or video markdown for TopScholar because students cannot open those curriculum links. Do not mention or recommend a video resource.' : '6. MEDIA: When a tool result item includes "mediaUrls" or a "videos" array, surface that media inline using Markdown so the student can see it. For an image URL write `![diagram](URL)`; for a video write a labelled link `[\u25B6 Watch: <title>](URL)`. Only use URLs that actually appear in the tool result \u2014 never invent or guess a media URL.';
       finalContext += `K12 EDUCATION MODE \u2014 TUTOR INSTRUCTIONS:
 You are a friendly, encouraging educational tutor (study buddy). Your primary role is helping students learn and practice.
 MANDATORY RULES:
@@ -61759,7 +61768,7 @@ MANDATORY RULES:
 ${rule4}
 4. Be supportive and clear \u2014 explain concepts in a friendly, student-friendly way with examples where helpful.
 5. You can respond to greetings and casual conversation naturally without calling tools.
-6. MEDIA: When a tool result item includes "mediaUrls" or a "videos" array, surface that media inline using Markdown so the student can see it. For an image URL write \`![diagram](URL)\`; for a video write a labelled link \`[\u25B6 Watch: <title>](URL)\`. Only use URLs that actually appear in the tool result \u2014 never invent or guess a media URL.
+       ${k12MediaRule}
 7. MATH: Render mathematical expressions using LaTeX delimited by \\( \\) for inline and \\[ \\] (or $$) for display, so equations render cleanly. Reproduce the math exactly as it appears in the curriculum content.
 
 \u26D4 STRICT RULE \u2014 NO FOLLOW-UP INVITATIONS (HIGHEST PRIORITY):

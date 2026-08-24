@@ -815,7 +815,7 @@ export const aiTools = [
     type: 'function',
     function: {
       name: 'fetch_k12_topic',
-      description: 'MANDATORY for education mode: ALWAYS call this tool FIRST before answering ANY educational, academic, science, math, physics, chemistry, biology, history, geography, language, or study-related question. Do NOT answer from general knowledge — retrieve curriculum content first. Searches subjects, chapters, and topics in the curriculum database. Returns revision notes, descriptions, video URLs with transcripts, and chapter/subject context. Works with English, Hindi, and Marathi queries. Extract the core academic concept as the query (e.g., for "What is the SI unit of gravitational constant G?", use query "gravitational constant" or "gravitation"). IMPORTANT: When video URLs are returned, ALWAYS include them in your answer so the student can watch the relevant video.',
+      description: 'MANDATORY for education mode: ALWAYS call this tool FIRST before answering ANY educational, academic, science, math, physics, chemistry, biology, history, geography, language, or study-related question. Do NOT answer from general knowledge — retrieve curriculum content first. Searches subjects, chapters, and topics in the curriculum database. Returns revision notes, descriptions, optional video resources with transcripts, and chapter/subject context. Follow the tutor instructions about whether media may be shown. Works with English, Hindi, and Marathi queries. Extract the core academic concept as the query (e.g., for "What is the SI unit of gravitational constant G?", use query "gravitational constant" or "gravitation").',
       parameters: {
         type: 'object',
         properties: {
