@@ -127,6 +127,7 @@ import TopScholarWidgetTester from "@/pages/TopScholarWidgetTester";
 import TopScholarAnalytics from "@/pages/TopScholarAnalytics";
 import TopScholarDebug from "@/pages/TopScholarDebug";
 import ContentSync from "@/pages/ContentSync";
+import { isTopScholarSuperAdminView } from "@/lib/accountAccess";
 import JobPortalJobs from "@/pages/JobPortalJobs";
 import JobPortalApplicants from "@/pages/JobPortalApplicants";
 import NotFound from "@/pages/not-found";
@@ -206,6 +207,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
 
   // Check if SuperAdmin is impersonating a business account
   const isSuperAdminImpersonating = user?.role === "super_admin" && user?.activeBusinessAccountId;
+  const canManageTopScholarContent = isTopScholarSuperAdminView(user);
 
   // Authenticated routes
   return (
@@ -223,6 +225,9 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
         <div className="flex-1 overflow-auto">
           <WhatsAppSectionPanel user={user}>
           <Switch>
+            <Route path="/admin/content-sync">
+              {() => canManageTopScholarContent ? <ContentSync /> : <Redirect to="/" />}
+            </Route>
             {user?.role === "super_admin" && !isSuperAdminImpersonating ? (
               <>
                 <Route path="/">
@@ -316,7 +321,6 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/topscholar/tester" component={TopScholarWidgetTester} />
                 <Route path="/admin/topscholar/analytics" component={TopScholarAnalytics} />
                 <Route path="/admin/topscholar/debug" component={TopScholarDebug} />
-                <Route path="/admin/content-sync" component={ContentSync} />
                 <Route path="/admin/jobs" component={JobPortalJobs} />
                 <Route path="/admin/applicants" component={JobPortalApplicants} />
                 <Route path="/admin/products" component={AdminProducts} />

@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { Settings2, AlertCircle, Lock, Loader2, Upload, Trash2, Palette, Sparkles, Check, CheckCircle2, ArrowRight, Database, SlidersHorizontal, RefreshCw } from "lucide-react";
 import type { MeResponseDto } from "@shared/dto";
+import { isTopScholarSuperAdminView } from "@/lib/accountAccess";
 
 interface WidgetSettings {
   visualSimilarityThreshold?: string;
@@ -70,6 +71,7 @@ export default function Settings() {
   const productTier = user?.businessAccount?.productTier || 'chroney';
   const hasJewelryAccess = productTier === 'jewelry_showcase' || productTier === 'jewelry_showcase_chroney';
   const isK12Education = user?.businessAccount?.k12EducationEnabled === true;
+  const canManageTopScholarContent = isTopScholarSuperAdminView(user);
 
   const { data: erpConfig } = useQuery<{ configured: boolean; config?: { name: string; isActive: string; lastTestedAt: string | null; lastTestStatus: string | null } } | null>({
     queryKey: ['/api/erp/config'],
@@ -88,7 +90,7 @@ export default function Settings() {
       if (!response.ok) return null;
       return response.json();
     },
-    enabled: isK12Education,
+    enabled: canManageTopScholarContent,
   });
 
   const { data: imageUploadSettings, isLoading: imageUploadSettingsLoading } = useQuery<{ enabled: boolean } | null>({
@@ -539,7 +541,7 @@ export default function Settings() {
           </Card>
         )}
 
-        {isK12Education && (
+        {canManageTopScholarContent && (
           <Card className="shadow-lg border-gray-200">
             <CardHeader className="border-b bg-gradient-to-r from-cyan-50 to-blue-50 py-4">
               <CardTitle className="text-base flex items-center gap-2">
@@ -587,7 +589,7 @@ export default function Settings() {
           </Card>
         )}
 
-        {isK12Education && (
+        {canManageTopScholarContent && (
           <Card className="shadow-lg border-gray-200">
             <CardHeader className="border-b bg-gradient-to-r from-violet-50 to-purple-50 py-4">
               <CardTitle className="text-base flex items-center gap-2">

@@ -4,6 +4,7 @@ import { k12Subjects, k12Chapters, k12Topics, k12Questions, k12TopicNotes, k12To
 import { eq, and, asc } from "drizzle-orm";
 import { requireAuth, requireBusinessAccount, requireRole } from "../auth";
 import { TopScholarApiService } from "../services/topscholarApiService";
+import { isTopscholarAccount } from "../services/topscholar/config";
 
 const router = Router();
 
@@ -11,6 +12,23 @@ function getBusinessAccountId(req: Request): string | null {
   const user = (req as any).user;
   if (!user) return null;
   return user.businessAccountId || null;
+}
+
+function requireTopScholarSuperAdminView(req: Request, res: Response, next: Function) {
+  const user = (req as any).user;
+  const businessAccountId = getBusinessAccountId(req);
+  const isAllowed =
+    user?.role === "super_admin" &&
+    !!user.activeBusinessAccountId &&
+    user.activeBusinessAccountId === businessAccountId &&
+    !!businessAccountId &&
+    isTopscholarAccount(businessAccountId);
+
+  if (!isAllowed) {
+    return res.status(403).json({ error: "TopScholar content management is available only from superadmin account access." });
+  }
+
+  next();
 }
 
 router.get("/api/k12/subjects", requireAuth, async (req: Request, res: Response) => {
@@ -676,7 +694,7 @@ router.get("/api/k12/search", requireAuth, async (req: Request, res: Response) =
   res.json({ topics: matchedTopics, questions: matchedQuestions });
 });
 
-router.get("/api/k12/external-api-config", requireAuth, requireBusinessAccount, requireRole("business_user", "super_admin"), async (req: Request, res: Response) => {
+router.get("/api/k12/external-api-config", requireAuth, requireBusinessAccount, requireRole("business_user", "super_admin"), requireTopScholarSuperAdminView, async (req: Request, res: Response) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -697,7 +715,7 @@ router.get("/api/k12/external-api-config", requireAuth, requireBusinessAccount, 
   });
 });
 
-router.put("/api/k12/external-api-config", requireAuth, requireBusinessAccount, requireRole("business_user", "super_admin"), async (req: Request, res: Response) => {
+router.put("/api/k12/external-api-config", requireAuth, requireBusinessAccount, requireRole("business_user", "super_admin"), requireTopScholarSuperAdminView, async (req: Request, res: Response) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
 
