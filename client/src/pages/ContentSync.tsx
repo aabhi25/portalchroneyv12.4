@@ -21,6 +21,8 @@ interface TopScholarConfig {
   ragEnabled: boolean;
   uatPlainCpId: boolean;
   contentDbUrl: string;
+  externalContentDbDisabled: boolean;
+  clientDatabaseReady: boolean;
   contentDbName: string;
   contentDbIndex: string;
   storeType: "pgvector" | "mongodb";
@@ -162,6 +164,13 @@ interface PlanIdPage extends Paged<PlanIdRow> {
   counts: Record<PlanEmbeddingFilter, number>;
 }
 
+interface ManualCpSyncResponse {
+  requested: number;
+  queued: Array<{ cpId: string; planId: string; runId: string }>;
+  skipped: Array<{ cpId: string; planId: string; runId: string }>;
+  rejected: Array<{ cpId: string; error: string }>;
+}
+
 const NO_PLAN = "__no_plan__";
 const PLAN_PAGE_SIZE = 20;
 const CP_PAGE_SIZE = 25;
@@ -193,6 +202,10 @@ function buildUrl(base: string, params: Record<string, string | number | undefin
   }
   const s = qs.toString();
   return s ? `${base}?${s}` : base;
+}
+
+function parseCpIds(text: string): string[] {
+  return Array.from(new Set(text.split(/[\r\n,]+/).map((cpId) => cpId.trim()).filter(Boolean)));
 }
 
 function statusColor(status: string) {
@@ -461,6 +474,39 @@ export default function ContentSync() {
         variant: failed.length > 0 ? "destructive" : undefined,
       });
     },
+  });
+
+  // --- Manual CP-ID queue -----------------------------------------------------
+  const [manualCpText, setManualCpText] = useState("");
+  const [confirmManualCpSync, setConfirmManualCpSync] = useState(false);
+  const [manualCpResult, setManualCpResult] = useState<ManualCpSyncResponse | null>(null);
+  const manualCpIds = useMemo(() => parseCpIds(manualCpText), [manualCpText]);
+  const clientDatabaseReady = !!config?.clientDatabaseReady;
+  const manualDuplicateCount = Math.max(
+    0,
+    manualCpText.split(/[\r\n,]+/).map((cpId) => cpId.trim()).filter(Boolean).length - manualCpIds.length,
+  );
+  const manualCpSync = useMutation({
+    mutationFn: (cpIds: string[]) => sendJson("/api/topscholar/manual-cp-sync", "POST", { cpIds }) as Promise<ManualCpSyncResponse>,
+    onSuccess: (data) => {
+      setManualCpResult(data);
+      invalidateSyncViews();
+      setManualCpText(data.rejected.map((result) => result.cpId).join("\n"));
+      const queued = data.queued.length;
+      const skipped = data.skipped.length;
+      const rejected = data.rejected.length;
+      toast({
+        title: queued > 0 ? `${queued} CP ID${queued === 1 ? "" : "s"} queued` : "No CP IDs queued",
+        description: rejected > 0
+          ? `${skipped} already active; ${rejected} need their owning Plan resolved first.`
+          : skipped > 0
+            ? `${skipped} already had an active refresh.`
+            : "Each package will refresh through the protected client-database queue.",
+        variant: rejected > 0 ? "destructive" : undefined,
+      });
+    },
+    onError: (error: any) => toast({ title: "Couldn't queue CP IDs", description: error.message, variant: "destructive" }),
+    onSettled: () => setConfirmManualCpSync(false),
   });
 
   // Resolve: fetch-only — lists every cp_id under the given plans with counts.
@@ -783,6 +829,87 @@ export default function ContentSync() {
         </CardContent>
       </Card>
 
+      {/* Targeted client package refresh */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <RefreshCw className="w-5 h-5 text-cyan-600" /> Embed CP IDs
+          </CardTitle>
+          <CardDescription>
+            Paste client-provided <strong>cp_id</strong> values to refresh only those curriculum packages in the configured client database.
+            This performs a full package refresh and does not add anything to the saved Plan ID list.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Textarea
+            value={manualCpText}
+            onChange={(event) => {
+              setManualCpText(event.target.value);
+              setManualCpResult(null);
+            }}
+            rows={4}
+            placeholder={"Paste CP IDs — one per line or comma-separated\n6712ab...\n6713cd..."}
+            className="font-mono text-xs"
+            disabled={!clientDatabaseReady || manualCpSync.isPending}
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              className="gap-2 bg-cyan-600 hover:bg-cyan-700"
+              onClick={() => setConfirmManualCpSync(true)}
+              disabled={!clientDatabaseReady || manualCpIds.length === 0 || manualCpIds.length > 50 || manualCpSync.isPending}
+            >
+              {manualCpSync.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              Queue full embeddings ({manualCpIds.length})
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setManualCpText("");
+                setManualCpResult(null);
+              }}
+              disabled={!manualCpText || manualCpSync.isPending}
+            >
+              Clear
+            </Button>
+            <span className="text-xs text-gray-400">
+              {manualCpIds.length > 50
+                ? "Queue up to 50 CP IDs at a time."
+                : manualDuplicateCount > 0
+                  ? `${manualCpIds.length} unique CP IDs (${manualDuplicateCount} duplicate${manualDuplicateCount === 1 ? "" : "s"} removed).`
+                  : `${manualCpIds.length} unique CP ID${manualCpIds.length === 1 ? "" : "s"} ready.`}
+            </span>
+          </div>
+          {!clientDatabaseReady && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {config?.contentDbUrl
+                ? "Enable the external client content database before queueing manual CP-ID embeddings."
+                : "Configure the client content database before queueing manual CP-ID embeddings."}
+            </p>
+          )}
+          <p className="text-xs text-gray-400">
+            A CP ID must already be linked to a TopScholar Plan by a previous Plan resolve or sync. Unknown IDs are left unqueued with an explanation; no content is accepted directly from this page.
+          </p>
+          {manualCpResult && (
+            <div className="rounded-lg border bg-slate-50 p-3 text-sm space-y-2">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-gray-700">
+                <span><strong>{manualCpResult.queued.length}</strong> queued</span>
+                <span><strong>{manualCpResult.skipped.length}</strong> already active</span>
+                <span><strong>{manualCpResult.rejected.length}</strong> rejected</span>
+              </div>
+              {manualCpResult.rejected.length > 0 && (
+                <ul className="space-y-1 text-xs text-red-700">
+                  {manualCpResult.rejected.map((result) => (
+                    <li key={result.cpId} className="break-words">
+                      <span className="font-mono">{result.cpId}</span>: {result.error}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Plan IDs master list */}
       <Card>
         <CardHeader>
@@ -1018,6 +1145,31 @@ export default function ContentSync() {
               }}
             >
               Delete plan
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmManualCpSync} onOpenChange={(open) => { if (!open && !manualCpSync.isPending) setConfirmManualCpSync(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Queue full CP-ID embeddings?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will refresh the full curriculum package and embeddings in the configured client database for{" "}
+              <strong>{manualCpIds.length}</strong> CP ID{manualCpIds.length === 1 ? "" : "s"}.{" "}
+              Existing active refreshes will be skipped, and IDs without an established TopScholar Plan link will not be queued.
+              This does not add anything to the saved Plan ID list.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={manualCpSync.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-cyan-600 hover:bg-cyan-700 text-white"
+              disabled={manualCpSync.isPending || manualCpIds.length === 0 || manualCpIds.length > 50}
+              onClick={() => manualCpSync.mutate(manualCpIds)}
+            >
+              {manualCpSync.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Queue full refresh
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

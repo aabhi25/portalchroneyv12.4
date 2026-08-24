@@ -12,7 +12,7 @@ import {
   topscholarPlanRuns,
   conversations,
 } from "@shared/schema";
-import { and, eq, desc, gt, isNotNull, inArray, ilike, sql } from "drizzle-orm";
+import { and, eq, desc, gt, isNotNull, isNull, inArray, ilike, sql } from "drizzle-orm";
 import { requireAuth, requireBusinessAccount, requireRole } from "../auth";
 import {
   getTopscholarConfig,
@@ -175,6 +175,9 @@ function configResponse(cfg: ReturnType<typeof getTopscholarConfig>) {
     // admin can see/edit it while running on the local store.
     contentDbUrl: cfg.savedContentDbUrl || "",
     externalContentDbDisabled: cfg.externalContentDbDisabled,
+    // Unlike contentDbUrl above, this reflects whether external writes are
+    // currently allowed. Consumers that trigger client-store work must use it.
+    clientDatabaseReady: !!cfg.contentDbUrl,
     contentDbName: cfg.contentDbName || "",
     contentDbIndex: cfg.contentDbIndex || "",
     contentDbCollection: cfg.contentDbCollection || "",
@@ -600,6 +603,210 @@ router.get("/api/topscholar/sync/summary", ...topscholarGuards, async (req: Requ
   res.json({ overall, plans, noPlan: noPlan.total > 0 ? noPlan : null });
 });
 
+/**
+ * Returns the most recently confirmed owning Plan ID for each requested CP ID.
+ * The Content Bundle service accepts Plan IDs (not CP IDs), so every targeted
+ * refresh must start from a mapping we previously received from that service.
+ */
+async function findKnownPlanIdsForCpIds(
+  businessAccountId: string,
+  cpIds: string[],
+): Promise<Map<string, string>> {
+  const uniqueCpIds = Array.from(new Set(cpIds.map((cpId) => cpId.trim()).filter(Boolean)));
+  if (uniqueCpIds.length === 0) return new Map();
+
+  const [resolutions, mappings, legacyPlans] = await Promise.all([
+    db
+      .select({
+        cpId: topscholarPlanCpResolutions.cpId,
+        planId: topscholarPlanCpResolutions.planId,
+      })
+      .from(topscholarPlanCpResolutions)
+      .where(and(
+        eq(topscholarPlanCpResolutions.businessAccountId, businessAccountId),
+        inArray(topscholarPlanCpResolutions.cpId, uniqueCpIds),
+      ))
+      .orderBy(desc(topscholarPlanCpResolutions.lastResolvedAt), desc(topscholarPlanCpResolutions.updatedAt)),
+    db
+      .select({
+        cpId: topscholarCpMappings.cpId,
+        planId: topscholarCpMappings.planId,
+      })
+      .from(topscholarCpMappings)
+      .where(and(
+        eq(topscholarCpMappings.businessAccountId, businessAccountId),
+        inArray(topscholarCpMappings.cpId, uniqueCpIds),
+      ))
+      .orderBy(desc(topscholarCpMappings.updatedAt)),
+    db
+      .select({
+        cpId: topscholarPlanIds.lastCpId,
+        planId: topscholarPlanIds.planId,
+      })
+      .from(topscholarPlanIds)
+      .where(and(
+        eq(topscholarPlanIds.businessAccountId, businessAccountId),
+        inArray(topscholarPlanIds.lastCpId, uniqueCpIds),
+      ))
+      .orderBy(desc(topscholarPlanIds.updatedAt)),
+  ]);
+
+  const planByCpId = new Map<string, string>();
+  for (const row of resolutions) {
+    if (!planByCpId.has(row.cpId)) planByCpId.set(row.cpId, row.planId);
+  }
+  for (const row of mappings) {
+    if (row.planId && !planByCpId.has(row.cpId)) planByCpId.set(row.cpId, row.planId);
+  }
+  for (const row of legacyPlans) {
+    if (row.cpId && !planByCpId.has(row.cpId)) planByCpId.set(row.cpId, row.planId);
+  }
+  return planByCpId;
+}
+
+router.post("/api/topscholar/manual-cp-sync", ...topscholarGuards, async (req: Request, res: Response) => {
+  const businessAccountId = getBusinessAccountId(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+
+  const rawCpIds: string[] = Array.isArray(req.body?.cpIds)
+    ? req.body.cpIds.map((cpId: unknown): string => String(cpId))
+    : typeof req.body?.text === "string"
+      ? req.body.text.split(/[\r\n,]+/)
+      : [];
+  const cpIds: string[] = Array.from(new Set<string>(rawCpIds.map((cpId) => cpId.trim()).filter(Boolean)));
+  if (cpIds.length === 0) {
+    return res.status(400).json({ error: "Provide one or more CP IDs." });
+  }
+  if (cpIds.length > 50) {
+    return res.status(400).json({ error: "Queue at most 50 CP IDs at a time." });
+  }
+  if (cpIds.some((cpId) => cpId.length > 200)) {
+    return res.status(400).json({ error: "One or more CP IDs are too long." });
+  }
+
+  const account = await loadAccount(businessAccountId);
+  if (!account) return res.status(404).json({ error: "Business account not found" });
+  const cfg = getTopscholarConfig(account);
+  if (!cfg.ragEnabled) {
+    return res.status(400).json({ error: "TopScholar RAG mode is not enabled for this account." });
+  }
+  if (!account.openaiApiKey) {
+    return res.status(400).json({ error: "An OpenAI API key must be configured for this account before syncing." });
+  }
+  if (!cfg.contentDbUrl) {
+    return res.status(400).json({ error: "A client content database must be configured before queuing manual CP IDs." });
+  }
+
+  const planByCpId = await findKnownPlanIdsForCpIds(businessAccountId, cpIds);
+  const knownCpIds = cpIds.filter((cpId) => planByCpId.has(cpId));
+  const activeRuns = knownCpIds.length === 0
+    ? []
+    : await db
+      .select({
+        cpId: topscholarPlanRuns.requestedCpId,
+        planId: topscholarPlanRuns.planId,
+        runId: topscholarPlanRuns.id,
+      })
+      .from(topscholarPlanRuns)
+      .where(and(
+        eq(topscholarPlanRuns.businessAccountId, businessAccountId),
+        inArray(topscholarPlanRuns.requestedCpId, knownCpIds),
+        inArray(topscholarPlanRuns.status, ["queued", "resolving", "running"]),
+      ))
+      .orderBy(desc(topscholarPlanRuns.updatedAt));
+  const activePlanItems = knownCpIds.length === 0
+    ? []
+    : await db
+      .select({
+        cpId: topscholarPlanRunItems.cpId,
+        planId: topscholarPlanRuns.planId,
+        runId: topscholarPlanRuns.id,
+      })
+      .from(topscholarPlanRunItems)
+      .innerJoin(topscholarPlanRuns, eq(topscholarPlanRunItems.runId, topscholarPlanRuns.id))
+      .where(and(
+        eq(topscholarPlanRunItems.businessAccountId, businessAccountId),
+        inArray(topscholarPlanRunItems.cpId, knownCpIds),
+        inArray(topscholarPlanRunItems.status, ["queued", "running", "submitted"]),
+        inArray(topscholarPlanRuns.status, ["queued", "resolving", "running"]),
+      ))
+      .orderBy(desc(topscholarPlanRuns.updatedAt));
+  const activeFullPlanRuns = knownCpIds.length === 0
+    ? []
+    : await db
+      .select({
+        planId: topscholarPlanRuns.planId,
+        runId: topscholarPlanRuns.id,
+      })
+      .from(topscholarPlanRuns)
+      .where(and(
+        eq(topscholarPlanRuns.businessAccountId, businessAccountId),
+        inArray(topscholarPlanRuns.planId, Array.from(new Set(knownCpIds.map((cpId) => planByCpId.get(cpId)!)))),
+        isNull(topscholarPlanRuns.requestedCpId),
+        inArray(topscholarPlanRuns.status, ["queued", "resolving", "running"]),
+      ))
+      .orderBy(desc(topscholarPlanRuns.updatedAt));
+  const activeRunByCpId = new Map<string, { runId: string; planId: string }>();
+  const activeFullRunByPlanId = new Map<string, string>();
+  for (const run of activeRuns) {
+    if (run.cpId && !activeRunByCpId.has(run.cpId)) {
+      activeRunByCpId.set(run.cpId, { runId: run.runId, planId: run.planId });
+    }
+  }
+  for (const item of activePlanItems) {
+    if (!activeRunByCpId.has(item.cpId)) {
+      activeRunByCpId.set(item.cpId, { runId: item.runId, planId: item.planId });
+    }
+  }
+  for (const run of activeFullPlanRuns) {
+    if (!activeFullRunByPlanId.has(run.planId)) activeFullRunByPlanId.set(run.planId, run.runId);
+  }
+
+  const queued: Array<{ cpId: string; planId: string; runId: string }> = [];
+  const skipped: Array<{ cpId: string; planId: string; runId: string }> = [];
+  const rejected: Array<{ cpId: string; error: string }> = [];
+
+  for (const cpId of cpIds) {
+    const planId = planByCpId.get(cpId);
+    if (!planId) {
+      rejected.push({
+        cpId,
+        error: "This CP ID is not yet known to a resolved TopScholar Plan. Resolve its owning Plan first, then queue this package.",
+      });
+      continue;
+    }
+    const active = activeRunByCpId.get(cpId);
+    if (active) {
+      skipped.push({ cpId, planId: active.planId, runId: active.runId });
+      continue;
+    }
+    const activeFullRunId = activeFullRunByPlanId.get(planId);
+    if (activeFullRunId) {
+      skipped.push({ cpId, planId, runId: activeFullRunId });
+      continue;
+    }
+    try {
+      const run = await enqueueSingleCpSyncRun({ businessAccountId, planId, cpId });
+      if (!run.created) {
+        skipped.push({ cpId, planId: run.planId, runId: run.id });
+        activeRunByCpId.set(cpId, { runId: run.id, planId: run.planId });
+        continue;
+      }
+      queued.push({ cpId, planId: run.planId, runId: run.id });
+      activeRunByCpId.set(cpId, { runId: run.id, planId: run.planId });
+    } catch (error: any) {
+      rejected.push({ cpId, error: error?.message || "Could not queue this CP ID." });
+    }
+  }
+
+  res.status(202).json({
+    requested: cpIds.length,
+    queued,
+    skipped,
+    rejected,
+  });
+});
+
 router.post("/api/topscholar/sync", ...topscholarGuards, async (req: Request, res: Response) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
@@ -639,29 +846,7 @@ router.post("/api/topscholar/sync", ...topscholarGuards, async (req: Request, re
   }
   let planId = (req.body?.planId || "").trim();
   if (!planId) {
-    const [resolution] = await db
-      .select({ planId: topscholarPlanCpResolutions.planId })
-      .from(topscholarPlanCpResolutions)
-      .where(and(eq(topscholarPlanCpResolutions.businessAccountId, businessAccountId), eq(topscholarPlanCpResolutions.cpId, cpId)))
-      .orderBy(sql`${topscholarPlanCpResolutions.lastResolvedAt} DESC NULLS LAST`, desc(topscholarPlanCpResolutions.updatedAt))
-      .limit(1);
-    if (resolution?.planId) {
-      planId = resolution.planId;
-    } else {
-      const [mapping] = await db
-        .select({ planId: topscholarCpMappings.planId })
-        .from(topscholarCpMappings)
-        .where(and(eq(topscholarCpMappings.businessAccountId, businessAccountId), eq(topscholarCpMappings.cpId, cpId)));
-      if (mapping?.planId) {
-        planId = mapping.planId;
-      } else {
-        const [plan] = await db
-          .select({ planId: topscholarPlanIds.planId })
-          .from(topscholarPlanIds)
-          .where(and(eq(topscholarPlanIds.businessAccountId, businessAccountId), eq(topscholarPlanIds.lastCpId, cpId)));
-        if (plan?.planId) planId = plan.planId;
-      }
-    }
+    planId = (await findKnownPlanIdsForCpIds(businessAccountId, [cpId])).get(cpId) || "";
   }
   if (!planId) {
     return res.status(400).json({ error: "Couldn't resolve the Plan ID for that cp_id. Re-resolve the plan and try again." });

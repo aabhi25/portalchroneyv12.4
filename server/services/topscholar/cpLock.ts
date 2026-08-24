@@ -36,8 +36,9 @@ const BACKOFF_MAX_MS = 2000;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
- * Runs `fn` while holding the per-cp advisory lock, serializing it against any other
- * caller of withCpLock for the same (business, cp).
+ * Runs `fn` while holding a named per-CP advisory lock. The operation's work may
+ * still use the regular pooled `db`; only the short-lived lock owner connection
+ * stays pinned.
  *
  * CRITICAL #1 — same connection: pg_advisory_lock state is per-session, so the lock and its
  * unlock MUST run on the SAME physical connection. We pin one checked-out client for the
@@ -51,12 +52,13 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  * off, only the single holder ever pins a connection; waiters hold one only momentarily per
  * probe. The work inside `fn` continues to use the regular pooled `db`.
  */
-export async function withCpLock<T>(
+async function withNamedCpLock<T>(
+  scope: string,
   businessAccountId: string,
   cpId: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const key = advisoryLockKey(`topscholar_cp:${businessAccountId}:${cpId}`).toString();
+  const key = advisoryLockKey(`${scope}:${businessAccountId}:${cpId}`).toString();
 
   // Phase 1: acquire. Never hold a pooled connection while waiting.
   const deadline = Date.now() + ACQUIRE_TIMEOUT_MS;
@@ -94,4 +96,26 @@ export async function withCpLock<T>(
       held.release();
     }
   }
+}
+
+/** Serializes destructive curriculum writes for one account/CP pair. */
+export async function withCpLock<T>(
+  businessAccountId: string,
+  cpId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withNamedCpLock('topscholar_cp', businessAccountId, cpId, fn);
+}
+
+/**
+ * Serializes only the short queue-creation transaction for a CP. It deliberately
+ * has a separate key from withCpLock so an HTTP queue request never waits behind
+ * a long-running embedding write.
+ */
+export async function withCpQueueLock<T>(
+  businessAccountId: string,
+  cpId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withNamedCpLock('topscholar_cp_queue', businessAccountId, cpId, fn);
 }

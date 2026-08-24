@@ -29637,8 +29637,8 @@ function advisoryLockKey(str) {
   if (hash2 >= SIGN_BIT) hash2 -= TWO_64;
   return hash2;
 }
-async function withCpLock(businessAccountId, cpId, fn) {
-  const key = advisoryLockKey(`topscholar_cp:${businessAccountId}:${cpId}`).toString();
+async function withNamedCpLock(scope, businessAccountId, cpId, fn) {
+  const key = advisoryLockKey(`${scope}:${businessAccountId}:${cpId}`).toString();
   const deadline = Date.now() + ACQUIRE_TIMEOUT_MS;
   let backoff = BACKOFF_START_MS;
   let held = null;
@@ -29672,6 +29672,12 @@ async function withCpLock(businessAccountId, cpId, fn) {
       held.release();
     }
   }
+}
+async function withCpLock(businessAccountId, cpId, fn) {
+  return withNamedCpLock("topscholar_cp", businessAccountId, cpId, fn);
+}
+async function withCpQueueLock(businessAccountId, cpId, fn) {
+  return withNamedCpLock("topscholar_cp_queue", businessAccountId, cpId, fn);
 }
 var ACQUIRE_TIMEOUT_MS, BACKOFF_START_MS, BACKOFF_MAX_MS, sleep2;
 var init_cpLock = __esm({
@@ -30650,14 +30656,29 @@ async function processOneItem(run, cfg) {
   if (!cfg.contentDbUrl && submitted >= MAX_SUBMITTED_BATCH_ITEMS_PER_RUN) return;
   const item = items.find((candidate) => candidate.status === "queued");
   if (!item) return;
-  const claimedItem = await db.update(topscholarPlanRunItems).set({
-    status: "running",
-    attempts: item.attempts + 1,
-    error: null,
-    startedAt: item.startedAt || /* @__PURE__ */ new Date(),
-    ...nowPatch()
-  }).where(and26(eq34(topscholarPlanRunItems.id, item.id), eq34(topscholarPlanRunItems.status, "queued"))).returning({ id: topscholarPlanRunItems.id });
-  if (claimedItem.length === 0) return;
+  const claim = await withCpQueueLock(run.businessAccountId, item.cpId, async () => {
+    const [activeTargetedRun] = await db.select({ id: topscholarPlanRuns.id }).from(topscholarPlanRuns).where(and26(
+      eq34(topscholarPlanRuns.businessAccountId, run.businessAccountId),
+      eq34(topscholarPlanRuns.requestedCpId, item.cpId),
+      ne2(topscholarPlanRuns.id, run.id),
+      inArray4(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES])
+    )).limit(1);
+    if (activeTargetedRun) return "defer";
+    const claimedItem = await db.update(topscholarPlanRunItems).set({
+      status: "running",
+      attempts: item.attempts + 1,
+      error: null,
+      startedAt: item.startedAt || /* @__PURE__ */ new Date(),
+      ...nowPatch()
+    }).where(and26(eq34(topscholarPlanRunItems.id, item.id), eq34(topscholarPlanRunItems.status, "queued"))).returning({ id: topscholarPlanRunItems.id });
+    return claimedItem.length > 0 ? "claimed" : "lost";
+  });
+  if (claim === "defer") {
+    await db.update(topscholarPlanRunItems).set({ status: "submitted", error: null, ...nowPatch() }).where(and26(eq34(topscholarPlanRunItems.id, item.id), eq34(topscholarPlanRunItems.status, "queued")));
+    await refreshRun(run.id);
+    return;
+  }
+  if (claim === "lost") return;
   const activeRun = await db.update(topscholarPlanRuns).set({ activeCpId: item.cpId, status: "running", ...nowPatch() }).where(and26(eq34(topscholarPlanRuns.id, run.id), eq34(topscholarPlanRuns.leaseOwner, WORKER_ID), ne2(topscholarPlanRuns.status, "cancelled"))).returning({ id: topscholarPlanRuns.id });
   if (activeRun.length === 0) {
     await db.update(topscholarPlanRunItems).set({ status: "cancelled", completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(eq34(topscholarPlanRunItems.id, item.id));
@@ -30737,45 +30758,66 @@ async function enqueuePlanSyncRuns(params) {
   return runs;
 }
 async function enqueueSingleCpSyncRun(params) {
-  const [existing] = await db.select().from(topscholarPlanRuns).where(and26(
-    eq34(topscholarPlanRuns.businessAccountId, params.businessAccountId),
-    eq34(topscholarPlanRuns.planId, params.planId),
-    eq34(topscholarPlanRuns.requestedCpId, params.cpId),
-    inArray4(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES])
-  )).orderBy(desc9(topscholarPlanRuns.updatedAt)).limit(1);
-  if (existing) return existing;
-  let run;
-  try {
-    await db.transaction(async (tx) => {
-      [run] = await tx.insert(topscholarPlanRuns).values({
-        businessAccountId: params.businessAccountId,
-        planId: params.planId,
-        requestedCpId: params.cpId,
-        mode: "full",
-        status: "running",
-        totalCpIds: 1
-      }).returning();
-      await tx.insert(topscholarPlanRunItems).values({
-        runId: run.id,
-        businessAccountId: params.businessAccountId,
-        planId: params.planId,
-        cpId: params.cpId
-      });
-    });
-  } catch (error) {
-    if (error?.code !== "23505") throw error;
-    const [winner] = await db.select().from(topscholarPlanRuns).where(and26(
+  const { run, created } = await withCpQueueLock(params.businessAccountId, params.cpId, async () => {
+    const [existing] = await db.select().from(topscholarPlanRuns).where(and26(
       eq34(topscholarPlanRuns.businessAccountId, params.businessAccountId),
-      eq34(topscholarPlanRuns.planId, params.planId),
       eq34(topscholarPlanRuns.requestedCpId, params.cpId),
       inArray4(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES])
     )).orderBy(desc9(topscholarPlanRuns.updatedAt)).limit(1);
-    if (!winner) throw error;
-    return winner;
+    if (existing) return { run: existing, created: false };
+    const [activePlanItem] = await db.select({ runId: topscholarPlanRunItems.runId }).from(topscholarPlanRunItems).innerJoin(topscholarPlanRuns, eq34(topscholarPlanRuns.id, topscholarPlanRunItems.runId)).where(and26(
+      eq34(topscholarPlanRunItems.businessAccountId, params.businessAccountId),
+      eq34(topscholarPlanRunItems.cpId, params.cpId),
+      inArray4(topscholarPlanRunItems.status, ["queued", "running", "submitted"]),
+      isNull7(topscholarPlanRuns.requestedCpId),
+      inArray4(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES])
+    )).orderBy(desc9(topscholarPlanRuns.updatedAt)).limit(1);
+    if (activePlanItem) {
+      const [owner] = await db.select().from(topscholarPlanRuns).where(eq34(topscholarPlanRuns.id, activePlanItem.runId)).limit(1);
+      if (owner) return { run: owner, created: false };
+    }
+    const [activeFullPlan] = await db.select().from(topscholarPlanRuns).where(and26(
+      eq34(topscholarPlanRuns.businessAccountId, params.businessAccountId),
+      eq34(topscholarPlanRuns.planId, params.planId),
+      isNull7(topscholarPlanRuns.requestedCpId),
+      inArray4(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES])
+    )).orderBy(desc9(topscholarPlanRuns.updatedAt)).limit(1);
+    if (activeFullPlan) return { run: activeFullPlan, created: false };
+    let run2;
+    try {
+      await db.transaction(async (tx) => {
+        [run2] = await tx.insert(topscholarPlanRuns).values({
+          businessAccountId: params.businessAccountId,
+          planId: params.planId,
+          requestedCpId: params.cpId,
+          mode: "full",
+          status: "running",
+          totalCpIds: 1
+        }).returning();
+        await tx.insert(topscholarPlanRunItems).values({
+          runId: run2.id,
+          businessAccountId: params.businessAccountId,
+          planId: params.planId,
+          cpId: params.cpId
+        });
+      });
+      return { run: run2, created: true };
+    } catch (error) {
+      if (error?.code !== "23505") throw error;
+      const [winner] = await db.select().from(topscholarPlanRuns).where(and26(
+        eq34(topscholarPlanRuns.businessAccountId, params.businessAccountId),
+        eq34(topscholarPlanRuns.requestedCpId, params.cpId),
+        inArray4(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES])
+      )).orderBy(desc9(topscholarPlanRuns.updatedAt)).limit(1);
+      if (!winner) throw error;
+      return { run: winner, created: false };
+    }
+  });
+  if (created) {
+    await setPlanStatus(params.businessAccountId, params.planId, "syncing", null);
+    processPendingPlanRuns().catch((error) => console.error("[TopScholar PlanSync] single-CP queue kick failed:", error));
   }
-  await setPlanStatus(params.businessAccountId, params.planId, "syncing", null);
-  processPendingPlanRuns().catch((error) => console.error("[TopScholar PlanSync] single-CP queue kick failed:", error));
-  return run;
+  return { ...run, created };
 }
 async function listPlanSyncRuns(businessAccountId, planId) {
   const conditions = [eq34(topscholarPlanRuns.businessAccountId, businessAccountId)];
@@ -30863,7 +30905,15 @@ async function processPendingPlanRuns() {
   try {
     let candidates = await db.select().from(topscholarPlanRuns).where(inArray4(topscholarPlanRuns.status, ["queued", "resolving"])).orderBy(asc3(topscholarPlanRuns.createdAt)).limit(1);
     if (candidates.length === 0) {
-      candidates = await db.select().from(topscholarPlanRuns).where(eq34(topscholarPlanRuns.status, "running")).orderBy(asc3(topscholarPlanRuns.createdAt)).limit(1);
+      const [runnable] = await db.select({ runId: topscholarPlanRuns.id }).from(topscholarPlanRuns).innerJoin(topscholarPlanRunItems, eq34(topscholarPlanRunItems.runId, topscholarPlanRuns.id)).where(and26(
+        eq34(topscholarPlanRuns.status, "running"),
+        eq34(topscholarPlanRunItems.status, "queued")
+      )).orderBy(asc3(topscholarPlanRuns.createdAt), asc3(topscholarPlanRunItems.createdAt)).limit(1);
+      if (runnable) {
+        candidates = await db.select().from(topscholarPlanRuns).where(eq34(topscholarPlanRuns.id, runnable.runId)).limit(1);
+      } else {
+        candidates = await db.select().from(topscholarPlanRuns).where(eq34(topscholarPlanRuns.status, "running")).orderBy(asc3(topscholarPlanRuns.createdAt)).limit(1);
+      }
     }
     for (const candidate of candidates) {
       const run = await claimRun(candidate);
@@ -30903,6 +30953,7 @@ var init_planSyncWorker = __esm({
     init_ingestionService();
     init_mongoContentDb();
     init_syncFailure();
+    init_cpLock();
     ACTIVE_RUN_STATUSES = ["queued", "resolving", "running"];
     TERMINAL_ITEM_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
     MAX_SUBMITTED_BATCH_ITEMS_PER_RUN = 2;
@@ -31690,7 +31741,7 @@ __export(whatsappService_exports, {
   whatsappService: () => whatsappService
 });
 import OpenAI21 from "openai";
-import { eq as eq41, ne as ne3, sql as sql23, and as and32, or as or5, asc as asc6, desc as desc13, gte as gte6, lte as lte4, isNull as isNull9 } from "drizzle-orm";
+import { eq as eq41, ne as ne3, sql as sql23, and as and32, or as or5, asc as asc6, desc as desc13, gte as gte6, lte as lte4, isNull as isNull10 } from "drizzle-orm";
 function normalizePhone3(phone) {
   let p = phone.replace(/[\s\-\(\)]/g, "");
   p = p.replace(/^\+91/, "").replace(/^91(?=\d{10}$)/, "").replace(/^0/, "");
@@ -31842,7 +31893,7 @@ For example:
             eq41(whatsappLeads.businessAccountId, businessAccountId),
             eq41(whatsappLeads.senderPhone, senderPhone),
             eq41(whatsappLeads.status, "new"),
-            isNull9(whatsappLeads.customerName),
+            isNull10(whatsappLeads.customerName),
             sql23`(${whatsappLeads.extractedData} IS NULL OR ${whatsappLeads.extractedData} = '{}'::jsonb)`,
             gte6(whatsappLeads.receivedAt, twentyFourHoursAgo)
           )).limit(1);
@@ -31904,7 +31955,7 @@ For example:
               eq41(whatsappLeads.businessAccountId, businessAccountId),
               eq41(whatsappLeads.senderPhone, senderPhone),
               eq41(whatsappLeads.status, "new"),
-              isNull9(whatsappLeads.customerName)
+              isNull10(whatsappLeads.customerName)
             )).orderBy(desc13(whatsappLeads.receivedAt)).limit(1);
             if (existingLead) {
               await db.update(whatsappLeads).set({
@@ -55168,7 +55219,7 @@ var campaignAutomationService_exports = {};
 __export(campaignAutomationService_exports, {
   campaignAutomationService: () => campaignAutomationService
 });
-import { and as and57, desc as desc29, eq as eq67, inArray as inArray11, isNull as isNull10 } from "drizzle-orm";
+import { and as and57, desc as desc29, eq as eq67, inArray as inArray11, isNull as isNull11 } from "drizzle-orm";
 function canonical(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -55436,14 +55487,14 @@ var init_campaignAutomationService = __esm({
       async list(businessAccountId) {
         return db.select().from(whatsappCampaignAutomations).where(and57(
           eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-          isNull10(whatsappCampaignAutomations.deletedAt)
+          isNull11(whatsappCampaignAutomations.deletedAt)
         )).orderBy(desc29(whatsappCampaignAutomations.updatedAt));
       },
       async get(businessAccountId, id) {
         const [row] = await db.select().from(whatsappCampaignAutomations).where(and57(
           eq67(whatsappCampaignAutomations.id, id),
           eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-          isNull10(whatsappCampaignAutomations.deletedAt)
+          isNull11(whatsappCampaignAutomations.deletedAt)
         )).limit(1);
         return row;
       },
@@ -55490,7 +55541,7 @@ var init_campaignAutomationService = __esm({
           const [automation] = await tx.select().from(whatsappCampaignAutomations).where(and57(
             eq67(whatsappCampaignAutomations.id, id),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-            isNull10(whatsappCampaignAutomations.deletedAt)
+            isNull11(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!automation) return void 0;
           const activeRuns = await tx.select().from(whatsappCampaignAutomationRuns).where(and57(
@@ -55536,7 +55587,7 @@ var init_campaignAutomationService = __esm({
           }).where(and57(
             eq67(whatsappCampaignAutomations.id, id),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-            isNull10(whatsappCampaignAutomations.deletedAt)
+            isNull11(whatsappCampaignAutomations.deletedAt)
           )).returning();
           return deleted;
         });
@@ -55577,7 +55628,7 @@ var init_campaignAutomationService = __esm({
             eq67(whatsappCampaignAutomations.id, id),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
             eq67(whatsappCampaignAutomations.enabled, true),
-            isNull10(whatsappCampaignAutomations.deletedAt)
+            isNull11(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be created");
           const [group] = await tx.insert(contactGroups).values({
@@ -55665,7 +55716,7 @@ var init_campaignAutomationService = __esm({
             eq67(whatsappCampaignAutomations.id, automationId),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
             eq67(whatsappCampaignAutomations.enabled, true),
-            isNull10(whatsappCampaignAutomations.deletedAt)
+            isNull11(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be scheduled");
           const scheduledAt = nextScheduledAt(activeAutomation);
@@ -72191,7 +72242,7 @@ init_encryptionService();
 init_ingestionService();
 init_mongoContentDb();
 import { Router as Router4 } from "express";
-import { and as and27, eq as eq35, desc as desc10, gt as gt2, isNotNull as isNotNull3, inArray as inArray5, ilike as ilike3, sql as sql20 } from "drizzle-orm";
+import { and as and27, eq as eq35, desc as desc10, gt as gt2, isNotNull as isNotNull3, isNull as isNull8, inArray as inArray5, ilike as ilike3, sql as sql20 } from "drizzle-orm";
 
 // server/services/topscholar/contentReader.ts
 init_db();
@@ -72750,6 +72801,9 @@ function configResponse(cfg) {
     // admin can see/edit it while running on the local store.
     contentDbUrl: cfg.savedContentDbUrl || "",
     externalContentDbDisabled: cfg.externalContentDbDisabled,
+    // Unlike contentDbUrl above, this reflects whether external writes are
+    // currently allowed. Consumers that trigger client-store work must use it.
+    clientDatabaseReady: !!cfg.contentDbUrl,
     contentDbName: cfg.contentDbName || "",
     contentDbIndex: cfg.contentDbIndex || "",
     contentDbCollection: cfg.contentDbCollection || "",
@@ -73056,6 +73110,157 @@ router4.get("/api/topscholar/sync/summary", ...topscholarGuards, async (req, res
   const plans = Array.from(byPlan.entries()).map(([planId, c]) => ({ planId, ...c })).sort((a, b) => b.syncing - a.syncing || b.total - a.total || a.planId.localeCompare(b.planId));
   res.json({ overall, plans, noPlan: noPlan.total > 0 ? noPlan : null });
 });
+async function findKnownPlanIdsForCpIds(businessAccountId, cpIds) {
+  const uniqueCpIds = Array.from(new Set(cpIds.map((cpId) => cpId.trim()).filter(Boolean)));
+  if (uniqueCpIds.length === 0) return /* @__PURE__ */ new Map();
+  const [resolutions, mappings, legacyPlans] = await Promise.all([
+    db.select({
+      cpId: topscholarPlanCpResolutions.cpId,
+      planId: topscholarPlanCpResolutions.planId
+    }).from(topscholarPlanCpResolutions).where(and27(
+      eq35(topscholarPlanCpResolutions.businessAccountId, businessAccountId),
+      inArray5(topscholarPlanCpResolutions.cpId, uniqueCpIds)
+    )).orderBy(desc10(topscholarPlanCpResolutions.lastResolvedAt), desc10(topscholarPlanCpResolutions.updatedAt)),
+    db.select({
+      cpId: topscholarCpMappings.cpId,
+      planId: topscholarCpMappings.planId
+    }).from(topscholarCpMappings).where(and27(
+      eq35(topscholarCpMappings.businessAccountId, businessAccountId),
+      inArray5(topscholarCpMappings.cpId, uniqueCpIds)
+    )).orderBy(desc10(topscholarCpMappings.updatedAt)),
+    db.select({
+      cpId: topscholarPlanIds.lastCpId,
+      planId: topscholarPlanIds.planId
+    }).from(topscholarPlanIds).where(and27(
+      eq35(topscholarPlanIds.businessAccountId, businessAccountId),
+      inArray5(topscholarPlanIds.lastCpId, uniqueCpIds)
+    )).orderBy(desc10(topscholarPlanIds.updatedAt))
+  ]);
+  const planByCpId = /* @__PURE__ */ new Map();
+  for (const row of resolutions) {
+    if (!planByCpId.has(row.cpId)) planByCpId.set(row.cpId, row.planId);
+  }
+  for (const row of mappings) {
+    if (row.planId && !planByCpId.has(row.cpId)) planByCpId.set(row.cpId, row.planId);
+  }
+  for (const row of legacyPlans) {
+    if (row.cpId && !planByCpId.has(row.cpId)) planByCpId.set(row.cpId, row.planId);
+  }
+  return planByCpId;
+}
+router4.post("/api/topscholar/manual-cp-sync", ...topscholarGuards, async (req, res) => {
+  const businessAccountId = getBusinessAccountId3(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+  const rawCpIds = Array.isArray(req.body?.cpIds) ? req.body.cpIds.map((cpId) => String(cpId)) : typeof req.body?.text === "string" ? req.body.text.split(/[\r\n,]+/) : [];
+  const cpIds = Array.from(new Set(rawCpIds.map((cpId) => cpId.trim()).filter(Boolean)));
+  if (cpIds.length === 0) {
+    return res.status(400).json({ error: "Provide one or more CP IDs." });
+  }
+  if (cpIds.length > 50) {
+    return res.status(400).json({ error: "Queue at most 50 CP IDs at a time." });
+  }
+  if (cpIds.some((cpId) => cpId.length > 200)) {
+    return res.status(400).json({ error: "One or more CP IDs are too long." });
+  }
+  const account = await loadAccount(businessAccountId);
+  if (!account) return res.status(404).json({ error: "Business account not found" });
+  const cfg = getTopscholarConfig(account);
+  if (!cfg.ragEnabled) {
+    return res.status(400).json({ error: "TopScholar RAG mode is not enabled for this account." });
+  }
+  if (!account.openaiApiKey) {
+    return res.status(400).json({ error: "An OpenAI API key must be configured for this account before syncing." });
+  }
+  if (!cfg.contentDbUrl) {
+    return res.status(400).json({ error: "A client content database must be configured before queuing manual CP IDs." });
+  }
+  const planByCpId = await findKnownPlanIdsForCpIds(businessAccountId, cpIds);
+  const knownCpIds = cpIds.filter((cpId) => planByCpId.has(cpId));
+  const activeRuns = knownCpIds.length === 0 ? [] : await db.select({
+    cpId: topscholarPlanRuns.requestedCpId,
+    planId: topscholarPlanRuns.planId,
+    runId: topscholarPlanRuns.id
+  }).from(topscholarPlanRuns).where(and27(
+    eq35(topscholarPlanRuns.businessAccountId, businessAccountId),
+    inArray5(topscholarPlanRuns.requestedCpId, knownCpIds),
+    inArray5(topscholarPlanRuns.status, ["queued", "resolving", "running"])
+  )).orderBy(desc10(topscholarPlanRuns.updatedAt));
+  const activePlanItems = knownCpIds.length === 0 ? [] : await db.select({
+    cpId: topscholarPlanRunItems.cpId,
+    planId: topscholarPlanRuns.planId,
+    runId: topscholarPlanRuns.id
+  }).from(topscholarPlanRunItems).innerJoin(topscholarPlanRuns, eq35(topscholarPlanRunItems.runId, topscholarPlanRuns.id)).where(and27(
+    eq35(topscholarPlanRunItems.businessAccountId, businessAccountId),
+    inArray5(topscholarPlanRunItems.cpId, knownCpIds),
+    inArray5(topscholarPlanRunItems.status, ["queued", "running", "submitted"]),
+    inArray5(topscholarPlanRuns.status, ["queued", "resolving", "running"])
+  )).orderBy(desc10(topscholarPlanRuns.updatedAt));
+  const activeFullPlanRuns = knownCpIds.length === 0 ? [] : await db.select({
+    planId: topscholarPlanRuns.planId,
+    runId: topscholarPlanRuns.id
+  }).from(topscholarPlanRuns).where(and27(
+    eq35(topscholarPlanRuns.businessAccountId, businessAccountId),
+    inArray5(topscholarPlanRuns.planId, Array.from(new Set(knownCpIds.map((cpId) => planByCpId.get(cpId))))),
+    isNull8(topscholarPlanRuns.requestedCpId),
+    inArray5(topscholarPlanRuns.status, ["queued", "resolving", "running"])
+  )).orderBy(desc10(topscholarPlanRuns.updatedAt));
+  const activeRunByCpId = /* @__PURE__ */ new Map();
+  const activeFullRunByPlanId = /* @__PURE__ */ new Map();
+  for (const run of activeRuns) {
+    if (run.cpId && !activeRunByCpId.has(run.cpId)) {
+      activeRunByCpId.set(run.cpId, { runId: run.runId, planId: run.planId });
+    }
+  }
+  for (const item of activePlanItems) {
+    if (!activeRunByCpId.has(item.cpId)) {
+      activeRunByCpId.set(item.cpId, { runId: item.runId, planId: item.planId });
+    }
+  }
+  for (const run of activeFullPlanRuns) {
+    if (!activeFullRunByPlanId.has(run.planId)) activeFullRunByPlanId.set(run.planId, run.runId);
+  }
+  const queued = [];
+  const skipped = [];
+  const rejected = [];
+  for (const cpId of cpIds) {
+    const planId = planByCpId.get(cpId);
+    if (!planId) {
+      rejected.push({
+        cpId,
+        error: "This CP ID is not yet known to a resolved TopScholar Plan. Resolve its owning Plan first, then queue this package."
+      });
+      continue;
+    }
+    const active = activeRunByCpId.get(cpId);
+    if (active) {
+      skipped.push({ cpId, planId: active.planId, runId: active.runId });
+      continue;
+    }
+    const activeFullRunId = activeFullRunByPlanId.get(planId);
+    if (activeFullRunId) {
+      skipped.push({ cpId, planId, runId: activeFullRunId });
+      continue;
+    }
+    try {
+      const run = await enqueueSingleCpSyncRun({ businessAccountId, planId, cpId });
+      if (!run.created) {
+        skipped.push({ cpId, planId: run.planId, runId: run.id });
+        activeRunByCpId.set(cpId, { runId: run.id, planId: run.planId });
+        continue;
+      }
+      queued.push({ cpId, planId: run.planId, runId: run.id });
+      activeRunByCpId.set(cpId, { runId: run.id, planId: run.planId });
+    } catch (error) {
+      rejected.push({ cpId, error: error?.message || "Could not queue this CP ID." });
+    }
+  }
+  res.status(202).json({
+    requested: cpIds.length,
+    queued,
+    skipped,
+    rejected
+  });
+});
 router4.post("/api/topscholar/sync", ...topscholarGuards, async (req, res) => {
   const businessAccountId = getBusinessAccountId3(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
@@ -73081,18 +73286,7 @@ router4.post("/api/topscholar/sync", ...topscholarGuards, async (req, res) => {
   }
   let planId = (req.body?.planId || "").trim();
   if (!planId) {
-    const [resolution] = await db.select({ planId: topscholarPlanCpResolutions.planId }).from(topscholarPlanCpResolutions).where(and27(eq35(topscholarPlanCpResolutions.businessAccountId, businessAccountId), eq35(topscholarPlanCpResolutions.cpId, cpId))).orderBy(sql20`${topscholarPlanCpResolutions.lastResolvedAt} DESC NULLS LAST`, desc10(topscholarPlanCpResolutions.updatedAt)).limit(1);
-    if (resolution?.planId) {
-      planId = resolution.planId;
-    } else {
-      const [mapping] = await db.select({ planId: topscholarCpMappings.planId }).from(topscholarCpMappings).where(and27(eq35(topscholarCpMappings.businessAccountId, businessAccountId), eq35(topscholarCpMappings.cpId, cpId)));
-      if (mapping?.planId) {
-        planId = mapping.planId;
-      } else {
-        const [plan] = await db.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(and27(eq35(topscholarPlanIds.businessAccountId, businessAccountId), eq35(topscholarPlanIds.lastCpId, cpId)));
-        if (plan?.planId) planId = plan.planId;
-      }
-    }
+    planId = (await findKnownPlanIdsForCpIds(businessAccountId, [cpId])).get(cpId) || "";
   }
   if (!planId) {
     return res.status(400).json({ error: "Couldn't resolve the Plan ID for that cp_id. Re-resolve the plan and try again." });
@@ -74565,7 +74759,7 @@ async function getConversationTranscript(businessAccountId, studentId, conversat
 init_db();
 init_schema();
 import OpenAI20 from "openai";
-import { and as and29, eq as eq37, isNull as isNull8, isNotNull as isNotNull5, desc as desc12, sql as sql22 } from "drizzle-orm";
+import { and as and29, eq as eq37, isNull as isNull9, isNotNull as isNotNull5, desc as desc12, sql as sql22 } from "drizzle-orm";
 var VALID = /* @__PURE__ */ new Set(["positive", "neutral", "confused"]);
 var inFlight = /* @__PURE__ */ new Set();
 function extractLabel(text3) {
@@ -74601,7 +74795,7 @@ async function batchEnrichSentiment(businessAccountId, limit = 15) {
       isNotNull5(conversations.topscholarCpId),
       eq37(conversations.awaitingVerification, false),
       sql22`${conversations.isInternalTest} = 'false'`,
-      isNull8(conversations.sentiment)
+      isNull9(conversations.sentiment)
     )
   ).orderBy(desc12(conversations.updatedAt)).limit(limit);
   if (pending.length === 0) return { processed: 0, failed: 0 };
@@ -83200,8 +83394,8 @@ ${instruction}`
         return res.status(403).json({ error: "Demo Orders module is not enabled for this account" });
       }
       const { demoOrders: demoOrders2, products: products3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { isNull: isNull14 } = await import("drizzle-orm");
-      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and58(eq68(demoOrders2.businessAccountId, businessAccountId), isNull14(demoOrders2.productImageUrl)));
+      const { isNull: isNull15 } = await import("drizzle-orm");
+      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and58(eq68(demoOrders2.businessAccountId, businessAccountId), isNull15(demoOrders2.productImageUrl)));
       const allProducts = await db.select({ name: products3.name, imageUrl: products3.imageUrl }).from(products3).where(eq68(products3.businessAccountId, businessAccountId));
       const imageByName = new Map(
         allProducts.filter((p) => p.imageUrl).map((p) => [p.name.toLowerCase(), p.imageUrl])
@@ -100212,7 +100406,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                           const eagerDocState = sessionData._documentState;
                           if (eagerDocState) {
                             const { whatsappLeadAttachments: wlaEager } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-                            const { eq: eqE, and: andE, sql: sqlE, isNull: isNull14 } = await import("drizzle-orm");
+                            const { eq: eqE, and: andE, sql: sqlE, isNull: isNull15 } = await import("drizzle-orm");
                             for (const [eagerDocType, eagerState] of Object.entries(eagerDocState)) {
                               const eagerPages = eagerState?.pages || [];
                               for (const page of eagerPages) {
@@ -100225,7 +100419,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                 const eagerTagged = await db.update(wlaEager).set({ documentCategory: eagerDocType }).where(andE(
                                   eqE(wlaEager.leadId, attachToLeadId),
                                   sqlE`${wlaEager.mediaUrl} = ${pageUrl}`,
-                                  isNull14(wlaEager.documentCategory)
+                                  isNull15(wlaEager.documentCategory)
                                 )).returning({ id: wlaEager.id });
                                 if (eagerTagged.length > 0) {
                                   console.log(`[MSG91 Webhook] Eager tag: ${eagerTagged.length} attachment(s) tagged as ${eagerDocType}`);
@@ -104080,7 +104274,7 @@ init_auth();
 init_jewelryImageGeneratorService();
 init_db();
 init_schema();
-import { and as and59, eq as eq69, isNull as isNull12, sql as sql41 } from "drizzle-orm";
+import { and as and59, eq as eq69, isNull as isNull13, sql as sql41 } from "drizzle-orm";
 async function initializeDatabase() {
   try {
     try {
@@ -104121,7 +104315,7 @@ async function initializeDatabase() {
         await db.update(whatsappLeadFields).set({ defaultCrmFieldKey: crmKey }).where(and59(
           eq69(whatsappLeadFields.fieldKey, fieldKey),
           eq69(whatsappLeadFields.isDefault, true),
-          isNull12(whatsappLeadFields.defaultCrmFieldKey)
+          isNull13(whatsappLeadFields.defaultCrmFieldKey)
         ));
       }
     } catch (err) {
@@ -104352,7 +104546,7 @@ init_shopifySyncScheduler();
 init_storage();
 init_db();
 init_schema();
-import { and as and60, eq as eq71, lte as lte6, lt as lt3, sql as sql43, or as or7, isNull as isNull13 } from "drizzle-orm";
+import { and as and60, eq as eq71, lte as lte6, lt as lt3, sql as sql43, or as or7, isNull as isNull14 } from "drizzle-orm";
 var MAX_RETRY_COUNT = 3;
 var RETRY_DELAYS_MS = [
   1 * 60 * 1e3,
@@ -104397,7 +104591,7 @@ var LeadsquaredRetryWorker = class {
           eq71(leads.leadsquaredSyncStatus, "failed"),
           lt3(sql43`COALESCE(${leads.leadsquaredRetryCount}::int, 0)`, MAX_RETRY_COUNT),
           or7(
-            isNull13(leads.leadsquaredNextRetryAt),
+            isNull14(leads.leadsquaredNextRetryAt),
             lte6(leads.leadsquaredNextRetryAt, now)
           )
         )

@@ -13,9 +13,11 @@ import { getTopscholarConfig, type TopscholarConfig } from './config';
 import { ingestSingleCp, resolvePlans } from './ingestionService';
 import { testMongoConnection } from './mongoContentDb';
 import { isNonRetryableEmbeddingFailure } from './syncFailure';
+import { withCpQueueLock } from './cpLock';
 
 type PlanRun = typeof topscholarPlanRuns.$inferSelect;
 type PlanRunItem = typeof topscholarPlanRunItems.$inferSelect;
+type SingleCpEnqueueResult = PlanRun & { created: boolean };
 export type PlanRunWithRetrySummary = PlanRun & {
   retryableFailedCpIds: number;
   nonRetryableFailedCpIds: number;
@@ -309,18 +311,44 @@ async function processOneItem(run: PlanRun, cfg: TopscholarConfig): Promise<void
   const item = items.find((candidate) => candidate.status === 'queued');
   if (!item) return;
 
-  const claimedItem = await db
-    .update(topscholarPlanRunItems)
-    .set({
-      status: 'running',
-      attempts: item.attempts + 1,
-      error: null,
-      startedAt: item.startedAt || new Date(),
-      ...nowPatch(),
-    })
-    .where(and(eq(topscholarPlanRunItems.id, item.id), eq(topscholarPlanRunItems.status, 'queued')))
-    .returning({ id: topscholarPlanRunItems.id });
-  if (claimedItem.length === 0) return;
+  // Claiming a Plan item and creating a targeted run must share the same short
+  // queue lock. Whichever reaches this point first owns the CP; the other path
+  // defers to it instead of scheduling a second full refresh.
+  const claim = await withCpQueueLock(run.businessAccountId, item.cpId, async () => {
+    const [activeTargetedRun] = await db
+      .select({ id: topscholarPlanRuns.id })
+      .from(topscholarPlanRuns)
+      .where(and(
+        eq(topscholarPlanRuns.businessAccountId, run.businessAccountId),
+        eq(topscholarPlanRuns.requestedCpId, item.cpId),
+        ne(topscholarPlanRuns.id, run.id),
+        inArray(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES]),
+      ))
+      .limit(1);
+    if (activeTargetedRun) return 'defer' as const;
+
+    const claimedItem = await db
+      .update(topscholarPlanRunItems)
+      .set({
+        status: 'running',
+        attempts: item.attempts + 1,
+        error: null,
+        startedAt: item.startedAt || new Date(),
+        ...nowPatch(),
+      })
+      .where(and(eq(topscholarPlanRunItems.id, item.id), eq(topscholarPlanRunItems.status, 'queued')))
+      .returning({ id: topscholarPlanRunItems.id });
+    return claimedItem.length > 0 ? 'claimed' as const : 'lost' as const;
+  });
+  if (claim === 'defer') {
+    await db
+      .update(topscholarPlanRunItems)
+      .set({ status: 'submitted', error: null, ...nowPatch() })
+      .where(and(eq(topscholarPlanRunItems.id, item.id), eq(topscholarPlanRunItems.status, 'queued')));
+    await refreshRun(run.id);
+    return;
+  }
+  if (claim === 'lost') return;
   const activeRun = await db
     .update(topscholarPlanRuns)
     .set({ activeCpId: item.cpId, status: 'running', ...nowPatch() })
@@ -446,60 +474,100 @@ export async function enqueueSingleCpSyncRun(params: {
   businessAccountId: string;
   planId: string;
   cpId: string;
-}): Promise<PlanRun> {
-  const [existing] = await db
-    .select()
-    .from(topscholarPlanRuns)
-    .where(and(
-      eq(topscholarPlanRuns.businessAccountId, params.businessAccountId),
-      eq(topscholarPlanRuns.planId, params.planId),
-      eq(topscholarPlanRuns.requestedCpId, params.cpId),
-      inArray(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES]),
-    ))
-    .orderBy(desc(topscholarPlanRuns.updatedAt))
-    .limit(1);
-  if (existing) return existing;
-
-  let run!: PlanRun;
-  try {
-    await db.transaction(async (tx) => {
-      [run] = await tx
-        .insert(topscholarPlanRuns)
-        .values({
-          businessAccountId: params.businessAccountId,
-          planId: params.planId,
-          requestedCpId: params.cpId,
-          mode: 'full',
-          status: 'running',
-          totalCpIds: 1,
-        })
-        .returning();
-      await tx.insert(topscholarPlanRunItems).values({
-        runId: run.id,
-        businessAccountId: params.businessAccountId,
-        planId: params.planId,
-        cpId: params.cpId,
-      });
-    });
-  } catch (error: any) {
-    if (error?.code !== '23505') throw error;
-    const [winner] = await db
+}): Promise<SingleCpEnqueueResult> {
+  const { run, created } = await withCpQueueLock(params.businessAccountId, params.cpId, async () => {
+    const [existing] = await db
       .select()
       .from(topscholarPlanRuns)
       .where(and(
         eq(topscholarPlanRuns.businessAccountId, params.businessAccountId),
-        eq(topscholarPlanRuns.planId, params.planId),
         eq(topscholarPlanRuns.requestedCpId, params.cpId),
         inArray(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES]),
       ))
       .orderBy(desc(topscholarPlanRuns.updatedAt))
       .limit(1);
-    if (!winner) throw error;
-    return winner;
+    if (existing) return { run: existing, created: false };
+
+    // A full Plan run may already own this CP, including the short interval
+    // before it has started embedding. Reuse that run rather than creating a
+    // targeted run which would repeat the same package refresh.
+    const [activePlanItem] = await db
+      .select({ runId: topscholarPlanRunItems.runId })
+      .from(topscholarPlanRunItems)
+      .innerJoin(topscholarPlanRuns, eq(topscholarPlanRuns.id, topscholarPlanRunItems.runId))
+      .where(and(
+        eq(topscholarPlanRunItems.businessAccountId, params.businessAccountId),
+        eq(topscholarPlanRunItems.cpId, params.cpId),
+        inArray(topscholarPlanRunItems.status, ['queued', 'running', 'submitted']),
+        isNull(topscholarPlanRuns.requestedCpId),
+        inArray(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES]),
+      ))
+      .orderBy(desc(topscholarPlanRuns.updatedAt))
+      .limit(1);
+    if (activePlanItem) {
+      const [owner] = await db
+        .select()
+        .from(topscholarPlanRuns)
+        .where(eq(topscholarPlanRuns.id, activePlanItem.runId))
+        .limit(1);
+      if (owner) return { run: owner, created: false };
+    }
+    const [activeFullPlan] = await db
+      .select()
+      .from(topscholarPlanRuns)
+      .where(and(
+        eq(topscholarPlanRuns.businessAccountId, params.businessAccountId),
+        eq(topscholarPlanRuns.planId, params.planId),
+        isNull(topscholarPlanRuns.requestedCpId),
+        inArray(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES]),
+      ))
+      .orderBy(desc(topscholarPlanRuns.updatedAt))
+      .limit(1);
+    if (activeFullPlan) return { run: activeFullPlan, created: false };
+
+    let run!: PlanRun;
+    try {
+      await db.transaction(async (tx) => {
+        [run] = await tx
+          .insert(topscholarPlanRuns)
+          .values({
+            businessAccountId: params.businessAccountId,
+            planId: params.planId,
+            requestedCpId: params.cpId,
+            mode: 'full',
+            status: 'running',
+            totalCpIds: 1,
+          })
+          .returning();
+        await tx.insert(topscholarPlanRunItems).values({
+          runId: run.id,
+          businessAccountId: params.businessAccountId,
+          planId: params.planId,
+          cpId: params.cpId,
+        });
+      });
+      return { run, created: true };
+    } catch (error: any) {
+      if (error?.code !== '23505') throw error;
+      const [winner] = await db
+        .select()
+        .from(topscholarPlanRuns)
+        .where(and(
+          eq(topscholarPlanRuns.businessAccountId, params.businessAccountId),
+          eq(topscholarPlanRuns.requestedCpId, params.cpId),
+          inArray(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES]),
+        ))
+        .orderBy(desc(topscholarPlanRuns.updatedAt))
+        .limit(1);
+      if (!winner) throw error;
+      return { run: winner, created: false };
+    }
+  });
+  if (created) {
+    await setPlanStatus(params.businessAccountId, params.planId, 'syncing', null);
+    processPendingPlanRuns().catch((error) => console.error('[TopScholar PlanSync] single-CP queue kick failed:', error));
   }
-  await setPlanStatus(params.businessAccountId, params.planId, 'syncing', null);
-  processPendingPlanRuns().catch((error) => console.error('[TopScholar PlanSync] single-CP queue kick failed:', error));
-  return run;
+  return { ...run, created };
 }
 
 export async function listPlanSyncRuns(businessAccountId: string, planId?: string): Promise<PlanRunWithRetrySummary[]> {
@@ -655,12 +723,36 @@ export async function processPendingPlanRuns(): Promise<void> {
       .orderBy(asc(topscholarPlanRuns.createdAt))
       .limit(1);
     if (candidates.length === 0) {
-      candidates = await db
-        .select()
+      // A run containing a queued CP item can make forward progress immediately.
+      // Prioritize it over an older submitted-only run that is merely waiting for
+      // another targeted CP run to finish, otherwise that waiter can monopolize
+      // the single worker slot and starve the work it is waiting on.
+      const [runnable] = await db
+        .select({ runId: topscholarPlanRuns.id })
         .from(topscholarPlanRuns)
-        .where(eq(topscholarPlanRuns.status, 'running'))
-        .orderBy(asc(topscholarPlanRuns.createdAt))
+        .innerJoin(topscholarPlanRunItems, eq(topscholarPlanRunItems.runId, topscholarPlanRuns.id))
+        .where(and(
+          eq(topscholarPlanRuns.status, 'running'),
+          eq(topscholarPlanRunItems.status, 'queued'),
+        ))
+        .orderBy(asc(topscholarPlanRuns.createdAt), asc(topscholarPlanRunItems.createdAt))
         .limit(1);
+      if (runnable) {
+        candidates = await db
+          .select()
+          .from(topscholarPlanRuns)
+          .where(eq(topscholarPlanRuns.id, runnable.runId))
+          .limit(1);
+      } else {
+        // Submitted-only runs still need occasional reconciliation once there is
+        // no queued/resolving or runnable work elsewhere.
+        candidates = await db
+          .select()
+          .from(topscholarPlanRuns)
+          .where(eq(topscholarPlanRuns.status, 'running'))
+          .orderBy(asc(topscholarPlanRuns.createdAt))
+          .limit(1);
+      }
     }
     for (const candidate of candidates) {
       const run = await claimRun(candidate);
