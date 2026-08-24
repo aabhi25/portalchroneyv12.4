@@ -255,14 +255,16 @@ export function AppSidebar({ user }: AppSidebarProps) {
                   <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-gray-400 font-semibold px-3 mb-1">Education</SidebarGroupLabel>
                   <SidebarGroupContent>
                     <SidebarMenu className="space-y-0.5">
-                      <NavItem
-                        icon={BookOpen}
-                        label="Content"
-                        onClick={() => setLocation("/admin/k12/content")}
-                        isActive={location.startsWith("/admin/k12/content") || location.startsWith("/admin/k12/topic")}
-                        testId="link-k12-content"
-                        gradient="bg-gradient-to-br from-blue-500 to-indigo-600"
-                      />
+                      {!isTopscholar && (
+                        <NavItem
+                          icon={BookOpen}
+                          label="Content"
+                          onClick={() => setLocation("/admin/k12/content")}
+                          isActive={location.startsWith("/admin/k12/content") || location.startsWith("/admin/k12/topic")}
+                          testId="link-k12-content"
+                          gradient="bg-gradient-to-br from-blue-500 to-indigo-600"
+                        />
+                      )}
                       {isTopscholar && (
                         <NavItem
                           icon={Library}

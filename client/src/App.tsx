@@ -208,6 +208,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
   // Check if SuperAdmin is impersonating a business account
   const isSuperAdminImpersonating = user?.role === "super_admin" && user?.activeBusinessAccountId;
   const canManageTopScholarContent = isTopScholarSuperAdminView(user);
+  const isTopScholarAccount = user?.businessAccount?.isTopscholar === true;
 
   // Authenticated routes
   return (
@@ -310,8 +311,12 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/ai-insights" component={AIInsights} />
                 <Route path="/conversations" component={Conversations} />
                 <Route path="/train-chroney" component={TrainChroney} />
-                <Route path="/admin/k12/content" component={K12Content} />
-                <Route path="/admin/k12/topic/:id" component={K12TopicDetail} />
+                <Route path="/admin/k12/content">
+                  {() => isTopScholarAccount ? <Redirect to="/admin/topscholar/content" /> : <K12Content />}
+                </Route>
+                <Route path="/admin/k12/topic/:id">
+                  {() => isTopScholarAccount ? <Redirect to="/admin/topscholar/content" /> : <K12TopicDetail />}
+                </Route>
                 <Route path="/admin/k12/external-api">
                   <Redirect to="/admin/topscholar" />
                 </Route>
