@@ -9,6 +9,12 @@ Curriculum media must carry source-bound topic, concept, sub-concept, chapter, a
 
 **How to apply:** Preserve structured media in both storage backends and maintain legacy URL compatibility through normalization. When introducing an image source, attach it to matching lesson chunks or create a small source-bound chunk. Do not add an LLM, embedding, or vector call to the voice latency path to decide image relevance.
 
+TopScholar's S3-hosted diagrams can be valid image files while being served as `application/octet-stream`. Curriculum Markdown therefore needs a constrained same-origin fallback that detects file signatures and returns the actual image MIME type.
+
+**Why:** Browser image requests can reject a generic binary response, leaving students with only image alt text even though the source object is reachable.
+
+**How to apply:** Try the source URL first, then use the guarded curriculum-media fallback only after it fails. Keep the fallback limited to approved content hosts, HTTPS, bounded redirects and downloads, and recognized image formats; it must never become a general-purpose fetch proxy.
+
 TopScholar video URLs must not be exposed to the tutor or student, although their transcript text may remain available as curriculum evidence.
 
 **Why:** The client portal's embedded tutor cannot open those video resources, so presenting them gives students a broken action.

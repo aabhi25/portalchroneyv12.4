@@ -18,6 +18,7 @@ import { ResumeUploadProgress } from "@/components/ResumeUploadProgress";
 import { ImageUploadProgress } from "@/components/ImageUploadProgress";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { CurriculumMarkdownImage } from '@/components/CurriculumMarkdownImage';
 
 const FormStep = lazy(() => import('@/components/FormStep').then(m => ({ default: m.FormStep })));
 const AppointmentCalendar = lazy(() => import('@/components/AppointmentCalendar').then(m => ({ default: m.AppointmentCalendar })));
@@ -1498,6 +1499,14 @@ export default function PublicChat() {
                                   li: ({ children }) => <li className="mb-1">{children}</li>,
                                   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
                                   em: ({ children }) => <em className="italic">{children}</em>,
+                                  img: ({ src, alt }) => (
+                                    <CurriculumMarkdownImage
+                                      src={typeof src === 'string' ? src : undefined}
+                                      alt={alt || 'curriculum image'}
+                                      loading="lazy"
+                                      className="my-2 max-w-full h-auto rounded-lg border border-slate-200"
+                                    />
+                                  ),
                                 }}
                               >
                                 {msg.content}

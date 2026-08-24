@@ -72296,6 +72296,78 @@ async function getMongoChunks(cfg, businessAccountId, opts) {
 
 // server/routes/topscholar.ts
 init_mongoContentDb();
+
+// server/services/topscholar/mediaProxy.ts
+var MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+var MAX_REDIRECTS = 3;
+function isAllowedMediaHost(hostname) {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return host.endsWith(".amazonaws.com") || host.endsWith(".amazonaws.com.cn") || host.endsWith(".cloudfront.net") || host.endsWith(".toppscholars.com");
+}
+function parseMediaUrl(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("Invalid image URL.");
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.port) {
+    throw new Error("Image URL must be a public HTTPS URL.");
+  }
+  if (!isAllowedMediaHost(url.hostname)) {
+    throw new Error("Image host is not an approved curriculum media host.");
+  }
+  return url;
+}
+function detectImageType(bytes) {
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) {
+    return "image/png";
+  }
+  if (bytes.length >= 3 && bytes.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex"))) {
+    return "image/jpeg";
+  }
+  if (bytes.length >= 6 && (bytes.subarray(0, 6).toString("ascii") === "GIF87a" || bytes.subarray(0, 6).toString("ascii") === "GIF89a")) {
+    return "image/gif";
+  }
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") {
+    return "image/webp";
+  }
+  if (bytes.length >= 12 && bytes.subarray(4, 8).toString("ascii") === "ftyp") {
+    const brand = bytes.subarray(8, 12).toString("ascii");
+    if (brand === "avif" || brand === "avis") return "image/avif";
+  }
+  return null;
+}
+async function fetchCurriculumImage(rawUrl) {
+  let url = parseMediaUrl(rawUrl);
+  for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
+    const upstream = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(15e3)
+    });
+    if (upstream.status >= 300 && upstream.status < 400) {
+      const location = upstream.headers.get("location");
+      if (!location || redirect === MAX_REDIRECTS) {
+        throw new Error("Image source redirected too many times.");
+      }
+      url = parseMediaUrl(new URL(location, url).toString());
+      continue;
+    }
+    if (!upstream.ok) {
+      throw new Error(`Image source returned HTTP ${upstream.status}.`);
+    }
+    const length = Number(upstream.headers.get("content-length") || 0);
+    if (length > MAX_IMAGE_BYTES) throw new Error("Image is too large.");
+    const body = Buffer.from(await upstream.arrayBuffer());
+    if (body.length > MAX_IMAGE_BYTES) throw new Error("Image is too large.");
+    const contentType = detectImageType(body);
+    if (!contentType) throw new Error("Image source did not return a supported image.");
+    return { body, contentType };
+  }
+  throw new Error("Image source could not be loaded.");
+}
+
+// server/routes/topscholar.ts
 init_scopeResolver();
 
 // server/services/topscholar/testerContentScopes.ts
@@ -72424,6 +72496,25 @@ var topscholarGuards = [
   requireRole("business_user", "super_admin"),
   requireTopscholarAccount
 ];
+router4.get("/api/topscholar/media-proxy", async (req, res) => {
+  const rawUrl = typeof req.query.url === "string" ? req.query.url : "";
+  if (!rawUrl) return res.status(400).json({ error: "Image URL is required." });
+  try {
+    const image = await fetchCurriculumImage(rawUrl);
+    res.status(200).set({
+      "Content-Type": image.contentType,
+      "Content-Length": String(image.body.length),
+      "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
+      "Content-Disposition": "inline",
+      "X-Content-Type-Options": "nosniff"
+    }).send(image.body);
+  } catch (error) {
+    const message = error?.message || "Unable to load curriculum image.";
+    const status = /approved|invalid|public HTTPS|supported|too large/i.test(message) ? 400 : 502;
+    console.warn("[TopScholar Media] image proxy failed:", message);
+    res.status(status).json({ error: "Unable to load curriculum image." });
+  }
+});
 function getBusinessAccountId3(req) {
   const user = req.user;
   if (!user) return null;

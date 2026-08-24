@@ -23,6 +23,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { convertLatexDelimiters } from '@/lib/convertLatexDelimiters';
+import { CurriculumMarkdownImage } from '@/components/CurriculumMarkdownImage';
 
 // Lazy-loaded components for optional features (reduces initial bundle)
 const VoiceMode = lazy(() => import("@/components/VoiceMode").then(m => ({ default: m.VoiceMode })));
@@ -471,8 +472,8 @@ export default function EmbedChat() {
         strong: ({ children }) => <strong className="font-bold">{children}</strong>,
         em: ({ children }) => <em className="italic">{children}</em>,
         img: ({ src, alt }) => (
-          <img
-            src={typeof src === 'string' ? src : ''}
+          <CurriculumMarkdownImage
+            src={typeof src === 'string' ? src : undefined}
             alt={alt || 'curriculum image'}
             loading="lazy"
             className="my-2 max-w-full h-auto rounded-lg border border-border"
@@ -520,6 +521,14 @@ export default function EmbedChat() {
         p: ({ children }) => <span className="font-medium">{children}</span>,
         strong: ({ children }) => <strong className="font-bold">{children}</strong>,
         em: ({ children }) => <em className="italic">{children}</em>,
+        img: ({ src, alt }) => (
+          <CurriculumMarkdownImage
+            src={typeof src === 'string' ? src : undefined}
+            alt={alt || 'curriculum image'}
+            loading="lazy"
+            className="my-2 max-w-full h-auto rounded-lg border border-border"
+          />
+        ),
       }}
     >
       {convertLatexDelimiters(content)}

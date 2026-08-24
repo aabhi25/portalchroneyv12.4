@@ -26,6 +26,7 @@ import { testMongoConnection } from "../services/topscholar/mongoContentDb";
 import { getContentOverview, getChapters, getChunks, getChapterNamesForCpIds, getCpIdsWithContent } from "../services/topscholar/contentReader";
 import { getMongoContentOverview, getMongoChapters, getMongoChunks } from "../services/topscholar/mongoContentReader";
 import { getMongoChapterNames, getMongoCpIdsWithContent } from "../services/topscholar/mongoContentDb";
+import { fetchCurriculumImage } from "../services/topscholar/mediaProxy";
 import { resolveCpIdsForScope } from "../services/topscholar/scopeResolver";
 import {
   reconcileSubjectNamesFromContentStore,
@@ -62,6 +63,33 @@ const topscholarGuards = [
   requireRole("business_user", "super_admin"),
   requireTopscholarAccount,
 ] as const;
+
+// Public widget sessions do not have the admin session required by the other
+// TopScholar routes. This endpoint only proxies approved curriculum media and
+// normalizes incorrect upstream MIME types (not arbitrary URLs).
+router.get("/api/topscholar/media-proxy", async (req: Request, res: Response) => {
+  const rawUrl = typeof req.query.url === "string" ? req.query.url : "";
+  if (!rawUrl) return res.status(400).json({ error: "Image URL is required." });
+
+  try {
+    const image = await fetchCurriculumImage(rawUrl);
+    res
+      .status(200)
+      .set({
+        "Content-Type": image.contentType,
+        "Content-Length": String(image.body.length),
+        "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
+        "Content-Disposition": "inline",
+        "X-Content-Type-Options": "nosniff",
+      })
+      .send(image.body);
+  } catch (error: any) {
+    const message = error?.message || "Unable to load curriculum image.";
+    const status = /approved|invalid|public HTTPS|supported|too large/i.test(message) ? 400 : 502;
+    console.warn("[TopScholar Media] image proxy failed:", message);
+    res.status(status).json({ error: "Unable to load curriculum image." });
+  }
+});
 
 function getBusinessAccountId(req: Request): string | null {
   const user = (req as any).user;
