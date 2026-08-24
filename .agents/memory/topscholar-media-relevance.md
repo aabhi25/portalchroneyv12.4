@@ -9,6 +9,12 @@ Curriculum media must carry source-bound topic, concept, sub-concept, chapter, a
 
 **How to apply:** Preserve structured media in both storage backends and maintain legacy URL compatibility through normalization. When introducing an image source, attach it to matching lesson chunks or create a small source-bound chunk. Do not add an LLM, embedding, or vector call to the voice latency path to decide image relevance.
 
+For a vague visual follow-up such as “show me an image,” inherit only a preceding student question that explicitly names the active chapter. The chapter scope alone must not approve every chapter image.
+
+**Why:** Students naturally ask for a diagram after naming a topic, but using chapter scope as generic image evidence can surface an unrelated lesson illustration.
+
+**How to apply:** Add the confirmed prior topic to the retrieval/relevance query only for visual-only follow-ups. Keep generic image requests with no established topic fail-closed, and normalize closely related curriculum forms (for example, gravitation/gravitational) without allowing substring matches.
+
 TopScholar's S3-hosted diagrams can be valid image files while being served as `application/octet-stream`. Curriculum Markdown therefore needs a constrained same-origin fallback that detects file signatures and returns the actual image MIME type.
 
 **Why:** Browser image requests can reject a generic binary response, leaving students with only image alt text even though the source object is reachable.

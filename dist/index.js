@@ -15343,7 +15343,7 @@ function readCurriculumMedia(metadata, fallbackMediaUrl, fallbackKind, context) 
 }
 function keywords(text3) {
   return Array.from(new Set(
-    text3.toLowerCase().replace(/[^0-9a-z\u00C0-\u0963\u0966-\u1FFF\u2C00-\uD7FF\s]/g, " ").split(/\s+/).filter((word) => word.length > 2 && !STOP_WORDS.has(word))
+    text3.toLowerCase().replace(/[^0-9a-z\u00C0-\u0963\u0966-\u1FFF\u2C00-\uD7FF\s]/g, " ").split(/\s+/).filter((word) => word.length > 2 && !STOP_WORDS.has(word)).map((word) => word.endsWith("ational") ? word.slice(0, -2) : word)
   ));
 }
 function candidateEvidence(candidate) {
@@ -15451,7 +15451,17 @@ var init_mediaMetadata = __esm({
       "formula",
       "definition",
       "meaning",
-      "paper"
+      "paper",
+      "image",
+      "images",
+      "diagram",
+      "diagrams",
+      "visual",
+      "visuals",
+      "illustration",
+      "illustrations",
+      "picture",
+      "pictures"
     ]);
   }
 });
@@ -57500,6 +57510,48 @@ var activeConversations = /* @__PURE__ */ new Map();
 var subjectScopedSessionCreatedAt = /* @__PURE__ */ new Map();
 var SUBJECT_SCOPED_SESSION_TTL_MS = 24 * 60 * 60 * 1e3;
 var doubtSyncTargets = /* @__PURE__ */ new Map();
+var K12_VISUAL_REQUEST_WORDS = /* @__PURE__ */ new Set([
+  "image",
+  "images",
+  "diagram",
+  "diagrams",
+  "visual",
+  "visuals",
+  "illustration",
+  "illustrations",
+  "picture",
+  "pictures",
+  "show",
+  "see",
+  "view"
+]);
+var K12_VISUAL_REQUEST_FILLER_WORDS = /* @__PURE__ */ new Set([
+  ...K12_VISUAL_REQUEST_WORDS,
+  "a",
+  "an",
+  "the",
+  "can",
+  "could",
+  "you",
+  "please",
+  "help",
+  "me",
+  "with",
+  "to",
+  "understand",
+  "explain",
+  "give",
+  "need",
+  "want",
+  "of",
+  "this",
+  "that"
+]);
+function k12ContextWords(value) {
+  return Array.from(new Set(
+    value.toLowerCase().replace(/[^0-9a-z\u00C0-\u0963\u0966-\u1FFF\u2C00-\uD7FF\s]/g, " ").split(/\s+/).filter((word) => word.length > 2).map((word) => word.endsWith("ational") ? word.slice(0, -2) : word)
+  ));
+}
 var ChatService = class {
   // Track last escalation check per conversation to prevent repeated expensive checks
   lastEscalationCheck = /* @__PURE__ */ new Map();
@@ -57547,6 +57599,35 @@ var ChatService = class {
     }
     console.log("[Question Extraction] No substantive question found in history");
     return "";
+  }
+  /**
+   * A request such as "show me an image" should be able to refer to the topic
+   * established in the preceding student turn. Only inherit it when that turn
+   * explicitly names the active chapter; this avoids turning a generic image
+   * request into permission to show any diagram from the chapter.
+   */
+  enrichK12ImageFollowupQuery(query, history, chapter) {
+    const trimmed = query.trim();
+    if (!trimmed || !chapter?.trim()) return query;
+    const currentWords = k12ContextWords(trimmed);
+    const asksForVisual = currentWords.some((word) => K12_VISUAL_REQUEST_WORDS.has(word));
+    const isVisualOnlyFollowup = asksForVisual && currentWords.every((word) => K12_VISUAL_REQUEST_FILLER_WORDS.has(word));
+    if (!isVisualOnlyFollowup) return query;
+    const normalizedCurrent = trimmed.toLowerCase().replace(/\s+/g, " ");
+    const chapterWords = new Set(k12ContextWords(chapter));
+    if (chapterWords.size === 0) return query;
+    for (let index2 = history.length - 1; index2 >= 0; index2--) {
+      const message = history[index2];
+      if (message.role !== "user") continue;
+      const previous = message.content.trim();
+      if (!previous || previous.toLowerCase().replace(/\s+/g, " ") === normalizedCurrent) continue;
+      const previousWords = k12ContextWords(previous);
+      if (!previousWords.some((word) => chapterWords.has(word))) continue;
+      return `${trimmed}
+
+Established curriculum topic: ${previous.slice(0, 300)}`;
+    }
+    return query;
   }
   // Check if required lead fields were just completed (comparing before/after state)
   async checkLeadCompletionStatus(conversationId, businessAccountId, widgetSettings2, leadBeforeCapture) {
@@ -59568,6 +59649,13 @@ ${crossPlatformCtx}`;
     for (const toolCall of aiResponse.tool_calls) {
       const toolName = toolCall.function.name;
       const toolParams = JSON.parse(toolCall.function.arguments);
+      if (toolName === "fetch_k12_topic" && typeof toolParams.query === "string") {
+        toolParams.query = this.enrichK12ImageFollowupQuery(
+          toolParams.query,
+          updatedHistory,
+          context.studentChapter
+        );
+      }
       if (toolName === "parse_resume_and_match") {
         if (context.resumeText) {
           toolParams.resumeText = context.resumeText;
@@ -60469,13 +60557,18 @@ Sentence to translate: ${baseSentence}`,
       const shortCircuitK12 = k12ForcedToolAvailable && !skipToolsForHandoff && !otpState.locked && !otpState.awaiting_otp && !k12WouldUseGreetingFastPath;
       if (shortCircuitK12) {
         const k12Query = userMessage && userMessage.trim().length > 0 ? userMessage : context.imageText ? context.imageText.slice(0, 1e3) : userMessage;
+        const contextualK12Query = this.enrichK12ImageFollowupQuery(
+          k12Query,
+          history,
+          context.studentChapter
+        );
         hasToolCalls = true;
         toolCalls.push({
           id: "k12_forced_" + Date.now(),
           type: "function",
-          function: { name: "fetch_k12_topic", arguments: JSON.stringify({ query: k12Query }) }
+          function: { name: "fetch_k12_topic", arguments: JSON.stringify({ query: contextualK12Query }) }
         });
-        console.log("[K12 Fast Path] Skipping forced first LLM call \u2014 direct fetch_k12_topic query:", k12Query.substring(0, 80));
+        console.log("[K12 Fast Path] Skipping forced first LLM call \u2014 direct fetch_k12_topic query:", contextualK12Query.substring(0, 80));
       } else {
         for await (const chunk of llamaService.streamToolAwareResponse(
           userMessage,
@@ -60610,6 +60703,13 @@ Sentence to translate: ${baseSentence}`,
         for (const toolCall of toolCalls) {
           const toolName = toolCall.function.name;
           const toolParams = JSON.parse(toolCall.function.arguments);
+          if (toolName === "fetch_k12_topic" && typeof toolParams.query === "string") {
+            toolParams.query = this.enrichK12ImageFollowupQuery(
+              toolParams.query,
+              history,
+              context.studentChapter
+            );
+          }
           if (toolName === "parse_resume_and_match") {
             if (context.resumeText) {
               toolParams.resumeText = context.resumeText;
@@ -61304,14 +61404,21 @@ ${contentSnippet}`;
       const MAX_CHARS2 = 1500;
       const compactData = result.data.slice(0, MAX_PASSAGES).map((r) => {
         const raw = typeof r?.revisionNotes === "string" ? r.revisionNotes : "";
-        const notes = raw.length > MAX_CHARS2 ? raw.slice(0, MAX_CHARS2) : raw;
+        const mediaUrls = Array.isArray(r?.mediaUrls) ? r.mediaUrls.filter((url) => typeof url === "string" && /^https:\/\//i.test(url)) : [];
+        let notes = raw.length > MAX_CHARS2 ? raw.slice(0, MAX_CHARS2) : raw;
+        const missingMediaMarkdown = mediaUrls.filter((url) => !notes.includes(url)).map((url) => `![Curriculum diagram](${url})`);
+        if (missingMediaMarkdown.length > 0) {
+          notes = `${notes.trimEnd()}
+
+${missingMediaMarkdown.join("\n")}`;
+        }
         const compact = {
           name: r?.name ?? null,
           chapterName: r?.chapterName ?? null,
           subjectName: r?.subjectName ?? null,
           revisionNotes: notes
         };
-        if (Array.isArray(r?.mediaUrls) && r.mediaUrls.length > 0) compact.mediaUrls = r.mediaUrls;
+        if (mediaUrls.length > 0) compact.mediaUrls = mediaUrls;
         if (!options?.omitVideos && Array.isArray(r?.videos) && r.videos.length > 0) {
           compact.videos = r.videos.map((v) => ({ title: v?.title ?? null, videoUrl: v?.videoUrl ?? "" }));
         }
@@ -61759,7 +61866,7 @@ You are tutoring ${studentDisplayName}. They are signed in through their school 
         finalContext += `
 `;
       }
-      const k12MediaRule = isTopscholarAccount(context.businessAccountId) ? '6. MEDIA: Surface approved image media inline using Markdown when a tool result includes "mediaUrls" (for an image URL write `![diagram](URL)`). NEVER include video links or video markdown for TopScholar because students cannot open those curriculum links. Do not mention or recommend a video resource.' : '6. MEDIA: When a tool result item includes "mediaUrls" or a "videos" array, surface that media inline using Markdown so the student can see it. For an image URL write `![diagram](URL)`; for a video write a labelled link `[\u25B6 Watch: <title>](URL)`. Only use URLs that actually appear in the tool result \u2014 never invent or guess a media URL.';
+      const k12MediaRule = isTopscholarAccount(context.businessAccountId) ? '6. MEDIA: When the student asks for an image, diagram, visual, illustration, or picture and a tool result includes "mediaUrls", you MUST render exactly one inline Markdown image using one of those exact URLs (write `![diagram](URL)`). Never alter, shorten, invent, search for, or substitute an image URL. If no tool result has mediaUrls, clearly say no specific relevant curriculum image is available. NEVER include video links or video markdown for TopScholar because students cannot open those curriculum links. Do not mention or recommend a video resource.' : '6. MEDIA: When a tool result item includes "mediaUrls" or a "videos" array, surface that media inline using Markdown so the student can see it. For an image URL write `![diagram](URL)`; for a video write a labelled link `[\u25B6 Watch: <title>](URL)`. Only use URLs that actually appear in the tool result \u2014 never invent or guess a media URL.';
       finalContext += `K12 EDUCATION MODE \u2014 TUTOR INSTRUCTIONS:
 You are a friendly, encouraging educational tutor (study buddy). Your primary role is helping students learn and practice.
 MANDATORY RULES:

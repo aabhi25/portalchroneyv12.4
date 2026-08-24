@@ -42,6 +42,8 @@ const STOP_WORDS = new Set([
   'should', 'can', 'about', 'with', 'from', 'into', 'through', 'give', 'me', 'tell',
   'explain', 'describe', 'define', 'show', 'please', 'help', 'need', 'want', 'know',
   'learn', 'study', 'understand', 'formula', 'definition', 'meaning', 'paper',
+  'image', 'images', 'diagram', 'diagrams', 'visual', 'visuals', 'illustration',
+  'illustrations', 'picture', 'pictures',
 ]);
 
 function isHttpUrl(value: unknown): value is string {
@@ -139,7 +141,12 @@ function keywords(text: string): string[] {
       // the ES2018-only Unicode-property regex flag used elsewhere in the repo.
       .replace(/[^0-9a-z\u00C0-\u0963\u0966-\u1FFF\u2C00-\uD7FF\s]/g, ' ')
       .split(/\s+/)
-      .filter((word) => word.length > 2 && !STOP_WORDS.has(word)),
+      .filter((word) => word.length > 2 && !STOP_WORDS.has(word))
+      // Keep closely related curriculum forms comparable without allowing
+      // arbitrary substring matches. This lets "gravitation" match a media
+      // record labelled "gravitational potential", while "ion" still cannot
+      // match "concentration".
+      .map((word) => word.endsWith('ational') ? word.slice(0, -2) : word),
   ));
 }
 

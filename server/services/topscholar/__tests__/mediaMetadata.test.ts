@@ -91,6 +91,31 @@ const candidates: CurriculumMediaCandidate[] = [
 }
 
 {
+  const gravitation: CurriculumMediaCandidate = {
+    url: 'https://cdn.test/gravitational-potential.png',
+    kind: 'image',
+    topic: 'Gravitational potential energy',
+    chapter: 'Gravitation',
+    retrievalRank: 0,
+  };
+  expect(
+    selectRelevantImages('Show a gravitation diagram', [gravitation])[0]?.url === gravitation.url,
+    'closely related gravitation and gravitational terms select the verified diagram',
+  );
+  expect(
+    selectRelevantImages('Help me with an image', [gravitation]).length === 0,
+    'a vague image-only request remains fail-closed without established topic context',
+  );
+  expect(
+    selectRelevantImages(
+      'Help me with an image\n\nEstablished curriculum topic: What is gravitation?',
+      [gravitation],
+    )[0]?.url === gravitation.url,
+    'an established explicit topic safely enables a visual follow-up',
+  );
+}
+
+{
   const ambiguous: CurriculumMediaCandidate[] = [
     { ...candidates[0], url: 'https://cdn.test/litmus-a.png', retrievalRank: 0 },
     { ...candidates[0], url: 'https://cdn.test/litmus-b.png', retrievalRank: 1 },

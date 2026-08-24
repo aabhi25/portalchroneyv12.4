@@ -137,6 +137,27 @@ interface ChatMessage {
   content: string;
 }
 
+const K12_VISUAL_REQUEST_WORDS = new Set([
+  'image', 'images', 'diagram', 'diagrams', 'visual', 'visuals', 'illustration',
+  'illustrations', 'picture', 'pictures', 'show', 'see', 'view',
+]);
+const K12_VISUAL_REQUEST_FILLER_WORDS = new Set([
+  ...K12_VISUAL_REQUEST_WORDS,
+  'a', 'an', 'the', 'can', 'could', 'you', 'please', 'help', 'me', 'with',
+  'to', 'understand', 'explain', 'give', 'need', 'want', 'of', 'this', 'that',
+]);
+
+function k12ContextWords(value: string): string[] {
+  return Array.from(new Set(
+    value
+      .toLowerCase()
+      .replace(/[^0-9a-z\u00C0-\u0963\u0966-\u1FFF\u2C00-\uD7FF\s]/g, ' ')
+      .split(/\s+/)
+      .filter((word) => word.length > 2)
+      .map((word) => word.endsWith('ational') ? word.slice(0, -2) : word),
+  ));
+}
+
 export class ChatService {
   // Track last escalation check per conversation to prevent repeated expensive checks
   private lastEscalationCheck = new Map<string, number>();
@@ -227,6 +248,45 @@ export class ChatService {
     
     console.log('[Question Extraction] No substantive question found in history');
     return ''; // No substantive question found
+  }
+
+  /**
+   * A request such as "show me an image" should be able to refer to the topic
+   * established in the preceding student turn. Only inherit it when that turn
+   * explicitly names the active chapter; this avoids turning a generic image
+   * request into permission to show any diagram from the chapter.
+   */
+  private enrichK12ImageFollowupQuery(
+    query: string,
+    history: ChatMessage[],
+    chapter?: string | null,
+  ): string {
+    const trimmed = query.trim();
+    if (!trimmed || !chapter?.trim()) return query;
+
+    const currentWords = k12ContextWords(trimmed);
+    const asksForVisual = currentWords.some((word) => K12_VISUAL_REQUEST_WORDS.has(word));
+    const isVisualOnlyFollowup = asksForVisual &&
+      currentWords.every((word) => K12_VISUAL_REQUEST_FILLER_WORDS.has(word));
+    if (!isVisualOnlyFollowup) return query;
+
+    const normalizedCurrent = trimmed.toLowerCase().replace(/\s+/g, ' ');
+    const chapterWords = new Set(k12ContextWords(chapter));
+    if (chapterWords.size === 0) return query;
+
+    for (let index = history.length - 1; index >= 0; index--) {
+      const message = history[index];
+      if (message.role !== 'user') continue;
+      const previous = message.content.trim();
+      if (!previous || previous.toLowerCase().replace(/\s+/g, ' ') === normalizedCurrent) continue;
+
+      const previousWords = k12ContextWords(previous);
+      if (!previousWords.some((word) => chapterWords.has(word))) continue;
+
+      return `${trimmed}\n\nEstablished curriculum topic: ${previous.slice(0, 300)}`;
+    }
+
+    return query;
   }
   
   // Check if required lead fields were just completed (comparing before/after state)
@@ -2657,6 +2717,13 @@ Response:`;
     for (const toolCall of aiResponse.tool_calls) {
       const toolName = toolCall.function.name;
       const toolParams = JSON.parse(toolCall.function.arguments);
+      if (toolName === 'fetch_k12_topic' && typeof toolParams.query === 'string') {
+        toolParams.query = this.enrichK12ImageFollowupQuery(
+          toolParams.query,
+          updatedHistory,
+          context.studentChapter,
+        );
+      }
 
       if (toolName === 'parse_resume_and_match') {
         if (context.resumeText) {
@@ -3929,13 +3996,18 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         const k12Query = (userMessage && userMessage.trim().length > 0)
           ? userMessage
           : (context.imageText ? context.imageText.slice(0, 1000) : userMessage);
+        const contextualK12Query = this.enrichK12ImageFollowupQuery(
+          k12Query,
+          history,
+          context.studentChapter,
+        );
         hasToolCalls = true;
         toolCalls.push({
           id: 'k12_forced_' + Date.now(),
           type: 'function',
-          function: { name: 'fetch_k12_topic', arguments: JSON.stringify({ query: k12Query }) },
+          function: { name: 'fetch_k12_topic', arguments: JSON.stringify({ query: contextualK12Query }) },
         });
-        console.log('[K12 Fast Path] Skipping forced first LLM call — direct fetch_k12_topic query:', k12Query.substring(0, 80));
+        console.log('[K12 Fast Path] Skipping forced first LLM call — direct fetch_k12_topic query:', contextualK12Query.substring(0, 80));
       } else {
       // Stream AI response (pass existing lead to avoid re-asking for captured contact info)
       // Pass raw customInstructions directly to avoid truncation during extraction
@@ -4105,6 +4177,13 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         for (const toolCall of toolCalls) {
           const toolName = toolCall.function.name;
           const toolParams = JSON.parse(toolCall.function.arguments);
+          if (toolName === 'fetch_k12_topic' && typeof toolParams.query === 'string') {
+            toolParams.query = this.enrichK12ImageFollowupQuery(
+              toolParams.query,
+              history,
+              context.studentChapter,
+            );
+          }
 
           if (toolName === 'parse_resume_and_match') {
             if (context.resumeText) {
@@ -5018,14 +5097,26 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       const MAX_CHARS = 1500;
       const compactData = result.data.slice(0, MAX_PASSAGES).map((r: any) => {
         const raw = typeof r?.revisionNotes === 'string' ? r.revisionNotes : '';
-        const notes = raw.length > MAX_CHARS ? raw.slice(0, MAX_CHARS) : raw;
+        const mediaUrls = Array.isArray(r?.mediaUrls)
+          ? r.mediaUrls.filter((url: unknown): url is string => typeof url === 'string' && /^https:\/\//i.test(url))
+          : [];
+        let notes = raw.length > MAX_CHARS ? raw.slice(0, MAX_CHARS) : raw;
+        // The source result appends approved media after its prose, so character
+        // compaction can otherwise cut off the only verified image URL. Re-append
+        // missing URLs verbatim rather than asking the model to reconstruct them.
+        const missingMediaMarkdown = mediaUrls
+          .filter((url) => !notes.includes(url))
+          .map((url) => `![Curriculum diagram](${url})`);
+        if (missingMediaMarkdown.length > 0) {
+          notes = `${notes.trimEnd()}\n\n${missingMediaMarkdown.join('\n')}`;
+        }
         const compact: any = {
           name: r?.name ?? null,
           chapterName: r?.chapterName ?? null,
           subjectName: r?.subjectName ?? null,
           revisionNotes: notes,
         };
-        if (Array.isArray(r?.mediaUrls) && r.mediaUrls.length > 0) compact.mediaUrls = r.mediaUrls;
+        if (mediaUrls.length > 0) compact.mediaUrls = mediaUrls;
         if (!options?.omitVideos && Array.isArray(r?.videos) && r.videos.length > 0) {
           compact.videos = r.videos.map((v: any) => ({ title: v?.title ?? null, videoUrl: v?.videoUrl ?? '' }));
         }
@@ -5522,7 +5613,7 @@ You are tutoring ${studentDisplayName}. They are signed in through their school 
       }
 
       const k12MediaRule = isTopscholarAccount(context.businessAccountId)
-        ? '6. MEDIA: Surface approved image media inline using Markdown when a tool result includes "mediaUrls" (for an image URL write `![diagram](URL)`). NEVER include video links or video markdown for TopScholar because students cannot open those curriculum links. Do not mention or recommend a video resource.'
+        ? '6. MEDIA: When the student asks for an image, diagram, visual, illustration, or picture and a tool result includes "mediaUrls", you MUST render exactly one inline Markdown image using one of those exact URLs (write `![diagram](URL)`). Never alter, shorten, invent, search for, or substitute an image URL. If no tool result has mediaUrls, clearly say no specific relevant curriculum image is available. NEVER include video links or video markdown for TopScholar because students cannot open those curriculum links. Do not mention or recommend a video resource.'
         : '6. MEDIA: When a tool result item includes "mediaUrls" or a "videos" array, surface that media inline using Markdown so the student can see it. For an image URL write `![diagram](URL)`; for a video write a labelled link `[▶ Watch: <title>](URL)`. Only use URLs that actually appear in the tool result — never invent or guess a media URL.';
 
       finalContext += `K12 EDUCATION MODE — TUTOR INSTRUCTIONS:

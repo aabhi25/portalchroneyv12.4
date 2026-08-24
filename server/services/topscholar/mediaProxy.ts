@@ -28,6 +28,16 @@ function parseMediaUrl(rawUrl: string): URL {
   return url;
 }
 
+/** Used by regression tests and renderers that need the proxy's exact policy. */
+export function isApprovedCurriculumImageUrl(rawUrl: string): boolean {
+  try {
+    parseMediaUrl(rawUrl);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function detectImageType(bytes: Buffer): string | null {
   if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) {
     return "image/png";
