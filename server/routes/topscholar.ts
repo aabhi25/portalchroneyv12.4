@@ -12,7 +12,7 @@ import {
   topscholarPlanRuns,
   conversations,
 } from "@shared/schema";
-import { and, eq, desc, isNotNull, inArray, ilike, sql } from "drizzle-orm";
+import { and, eq, desc, gt, isNotNull, inArray, ilike, sql } from "drizzle-orm";
 import { requireAuth, requireBusinessAccount, requireRole } from "../auth";
 import {
   getTopscholarConfig,
@@ -27,10 +27,7 @@ import { getContentOverview, getChapters, getChunks, getChapterNamesForCpIds, ge
 import { getMongoContentOverview, getMongoChapters, getMongoChunks } from "../services/topscholar/mongoContentReader";
 import { getMongoChapterNames, getMongoCpIdsWithContent } from "../services/topscholar/mongoContentDb";
 import { resolveCpIdsForScope } from "../services/topscholar/scopeResolver";
-import {
-  listStoredCurriculumScopes,
-  type StoredCurriculumScope,
-} from "../services/topscholar/testerContentScopes";
+import type { StoredCurriculumScope } from "../services/topscholar/testerContentScopes";
 import { testContentBundleConnection } from "../services/topscholar/cmsConnector";
 import { cancelBatch } from "../services/topscholar/embeddingBatchService";
 import { withCpLock } from "../services/topscholar/cpLock";
@@ -1445,28 +1442,52 @@ router.get("/api/topscholar/students", ...topscholarGuards, async (req: Request,
   res.json(students);
 });
 
-// The Tester reads scope values from the configured content store, not from the
-// app's CP mapping table. A cache avoids repeatedly grouping a large client
-// embedding collection while still picking up a completed sync promptly.
-const testerScopeCache = new Map<string, { at: number; scopes: StoredCurriculumScope[] }>();
-const testerScopeLoads = new Map<string, Promise<StoredCurriculumScope[]>>();
-const TESTER_SCOPE_CACHE_TTL_MS = 60_000;
-const TESTER_SCOPE_STALE_TTL_MS = 15 * 60_000;
-
-function testerScopeCacheKey(businessAccountId: string, account: any): string {
-  const cfg = getTopscholarConfig(account);
-  return [
-    businessAccountId,
-    cfg.storeType,
-    cfg.externalContentDbDisabled ? "external-disabled" : "external-enabled",
-    cfg.contentDbUrl || "",
-    cfg.contentDbName || "",
-    cfg.contentDbCollection || "",
-  ].join("|");
-}
-
 function sameScopeValue(left: string, right: string): boolean {
   return left.trim().localeCompare(right.trim(), undefined, { sensitivity: "accent" }) === 0;
+}
+
+/**
+ * Metadata-only read model for Tester navigation. A row becomes eligible only
+ * after its CP has completed a content-store sync; deleting content also removes
+ * that sync row. This avoids grouping every embedding document just to build
+ * dropdowns, while leaving the narrow chapter check against the active content
+ * store in place before a preview is authorized.
+ */
+async function listTesterScopeMetadata(businessAccountId: string): Promise<StoredCurriculumScope[]> {
+  const rows = await db
+    .select({
+      cpId: topscholarCpMappings.cpId,
+      board: topscholarCpMappings.board,
+      medium: topscholarCpMappings.medium,
+      grade: topscholarCpMappings.grade,
+      subject: topscholarCpMappings.subject,
+      cpName: topscholarCpMappings.cpName,
+    })
+    .from(topscholarCpMappings)
+    .innerJoin(
+      topscholarContentSync,
+      and(
+        eq(topscholarContentSync.businessAccountId, topscholarCpMappings.businessAccountId),
+        eq(topscholarContentSync.cpId, topscholarCpMappings.cpId),
+      ),
+    )
+    .where(
+      and(
+        eq(topscholarCpMappings.businessAccountId, businessAccountId),
+        eq(topscholarContentSync.status, "completed"),
+        gt(topscholarContentSync.chunkCount, 0),
+      ),
+    );
+
+  return rows
+    .map((row) => ({
+      cpId: row.cpId.trim(),
+      board: row.board?.trim() || "",
+      medium: row.medium?.trim() || "",
+      grade: row.grade?.trim() || "",
+      subject: row.subject?.trim() || row.cpName?.trim() || "",
+    }))
+    .filter((row) => !!(row.cpId && row.board && row.medium && row.grade && row.subject));
 }
 
 function storedCpIdsForScope(
@@ -1487,43 +1508,6 @@ function storedCpIdsForScope(
   );
 }
 
-async function getStoredTesterScopesCached(
-  businessAccountId: string,
-  account: any,
-  options: { allowStale?: boolean; forceRefresh?: boolean } = {},
-): Promise<StoredCurriculumScope[]> {
-  const cfg = getTopscholarConfig(account);
-  const cacheKey = testerScopeCacheKey(businessAccountId, account);
-  const cached = testerScopeCache.get(cacheKey);
-  if (!options.forceRefresh && cached && Date.now() - cached.at < TESTER_SCOPE_CACHE_TTL_MS) {
-    return cached.scopes;
-  }
-
-  let load = testerScopeLoads.get(cacheKey);
-  if (!load) {
-    load = listStoredCurriculumScopes(cfg, businessAccountId)
-      .then((scopes) => {
-        testerScopeCache.set(cacheKey, { at: Date.now(), scopes });
-        console.info(`[TopScholar] Tester scope refresh completed in ${scopes.length} scope row(s).`);
-        return scopes;
-      })
-      .finally(() => {
-        testerScopeLoads.delete(cacheKey);
-      });
-    testerScopeLoads.set(cacheKey, load);
-  }
-
-  try {
-    return await load;
-  } catch (error) {
-    if (options.allowStale && cached && Date.now() - cached.at < TESTER_SCOPE_STALE_TTL_MS) {
-      console.warn("[TopScholar] Serving cached Tester scope options while the content store is unavailable.");
-      return cached.scopes;
-    }
-    throw error;
-  }
-}
-
 router.get("/api/topscholar/scope-options", ...topscholarGuards, async (req: Request, res: Response) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
@@ -1533,7 +1517,7 @@ router.get("/api/topscholar/scope-options", ...topscholarGuards, async (req: Req
 
   let rows: StoredCurriculumScope[];
   try {
-    rows = await getStoredTesterScopesCached(businessAccountId, account, { allowStale: true });
+    rows = await listTesterScopeMetadata(businessAccountId);
   } catch (error) {
     console.error("[TopScholar] Tester scope lookup failed:", error);
     return res.status(503).json({
@@ -1617,7 +1601,7 @@ router.get("/api/topscholar/scope-chapters", ...topscholarGuards, async (req: Re
 
   try {
     const cfg = getTopscholarConfig(account);
-    const storedScopes = await getStoredTesterScopesCached(businessAccountId, account, { allowStale: true });
+    const storedScopes = await listTesterScopeMetadata(businessAccountId);
     const cpIds = storedCpIdsForScope(storedScopes, { board, medium, grade, subject });
     if (cpIds.length === 0) return res.json({ chapters: [] });
 
@@ -1686,13 +1670,10 @@ router.post("/api/topscholar/tester/mint-launch-token", ...topscholarGuards, asy
 
   if (isPreview) {
     try {
-      // A preview authorization must prove the selected CP set is currently in
-      // the active content store. Force a fresh read, but share it with another
-      // simultaneous scope request instead of launching another aggregation.
-      const freshStoredScopes = await getStoredTesterScopesCached(businessAccountId, account, {
-        forceRefresh: true,
-      });
-      const storedCpIds = storedCpIdsForScope(freshStoredScopes, {
+      // Use the completed-sync metadata read model for the selected CP set. It
+      // contains no curriculum text or embeddings; chapter presence is still
+      // checked against the active content store below before signing.
+      const storedCpIds = storedCpIdsForScope(await listTesterScopeMetadata(businessAccountId), {
         board: boardV,
         medium: mediumV,
         grade: gradeV,
