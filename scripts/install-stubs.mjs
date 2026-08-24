@@ -1,19 +1,15 @@
 #!/usr/bin/env node
-// Materialize local "compatibility stub" packages into node_modules.
+// Materialize local compatibility stub packages into node_modules.
 //
-// package.json `overrides` redirect a few transitive dependencies to local
-// stubs via `file:stubs/<name>`. npm records these file: overrides in
-// package-lock.json as a symlink whose target is resolved RELATIVE TO THE
-// DEPENDENT package (e.g. node_modules/@aws-sdk/core/stubs/fast-xml-parser),
-// which does not exist. On a clean `npm ci` (as the deployment runs) this
-// produces a DANGLING symlink at node_modules/<name>, so `require('<name>')`
-// throws MODULE_NOT_FOUND at runtime and the server crash-loops.
+// `file:` npm overrides resolve relative to the package being overridden, not
+// the project root. That makes their lockfile links invalid for clean installs.
+// The project instead records intended stubs in `compatibilityStubs`, then this
+// script copies them as real files after npm has completed dependency resolution.
 //
-// This script is idempotent: for every `file:stubs/*` override it removes
-// whatever is at node_modules/<name> (dangling symlink, symlink, or dir) and
-// copies the real stub files in. Run automatically via `postinstall` and at
-// the start of the `build` step so the deployed runtime image always has the
-// stub present as real files regardless of npm's symlink behavior.
+// This script is idempotent: it removes whatever is at node_modules/<name>
+// (a package directory or symlink) before copying the local stub. It runs
+// during postinstall and at the beginning of the build so both build-time and
+// runtime dependency trees contain the intended compatibility package.
 
 import { existsSync, rmSync, cpSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -21,14 +17,14 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-const overrides = pkg.overrides || {};
+const compatibilityStubs = pkg.compatibilityStubs || {};
 
-const stubs = Object.entries(overrides)
-  .filter(([, spec]) => typeof spec === "string" && spec.startsWith("file:stubs/"))
-  .map(([name, spec]) => ({ name, dir: spec.slice("file:".length) }));
+const stubs = Object.entries(compatibilityStubs)
+  .filter(([, dir]) => typeof dir === "string" && dir.startsWith("stubs/"))
+  .map(([name, dir]) => ({ name, dir }));
 
 if (stubs.length === 0) {
-  console.log("[install-stubs] no file:stubs/* overrides found — nothing to do");
+  console.log("[install-stubs] no compatibility stubs configured — nothing to do");
   process.exit(0);
 }
 

@@ -161,8 +161,8 @@
   "optionalDependencies": {
     "bufferutil": "^4.1.0"
   },
-  "overrides": {
-    "fast-xml-parser": "file:stubs/fast-xml-parser",
-    "protobufjs": "file:stubs/protobufjs"
+  "compatibilityStubs": {
+    "fast-xml-parser": "stubs/fast-xml-parser",
+    "protobufjs": "stubs/protobufjs"
   }
 }
