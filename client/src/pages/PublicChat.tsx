@@ -1362,7 +1362,7 @@ export default function PublicChat() {
           </div>
         </div>
 
-        {isMenuMode && menuEnabled ? (
+        {isMenuMode && menuEnabled && !activeFormStep ? (
           <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
             <Suspense fallback={<div className="flex flex-1 items-center justify-center"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>}>
               <ChatMenuNavigation
@@ -1419,11 +1419,11 @@ export default function PublicChat() {
         {/* Chat Messages */}
         <div 
           ref={messagesContainerRef}
-          className="flex-1 overflow-y-auto overflow-x-hidden bg-white min-h-0"
+          className={`flex-1 overflow-y-auto overflow-x-hidden bg-white min-h-0 ${activeFormStep ? 'hidden' : ''}`}
         >
           <div className="p-4 space-y-4">
             {/* Featured Products Carousel */}
-            {featuredProducts.length > 0 && userMessages.length === 0 && (
+            {featuredProducts.length > 0 && userMessages.length === 0 && !activeFormStep && (
               <Suspense fallback={<div className="h-32 animate-pulse bg-gray-100 rounded-lg" />}>
                 <ProductCarousel
                   products={featuredProducts}
@@ -1440,11 +1440,11 @@ export default function PublicChat() {
               onSelect={handleStarterSelect}
               chatColor={chatColor}
               chatColorEnd={chatColorEnd}
-              show={shouldShowStarters}
+              show={shouldShowStarters && !activeFormStep}
             />
 
             {/* Quick Browse Buttons */}
-            {quickBrowseEnabled && quickBrowseButtons.length > 0 && userMessages.length === 0 && (
+            {quickBrowseEnabled && quickBrowseButtons.length > 0 && userMessages.length === 0 && !activeFormStep && (
               <div className="flex flex-wrap gap-2 justify-center">
                 {quickBrowseButtons.map((btn: { label: string; action: string }, idx: number) => (
                   <button
@@ -1643,20 +1643,27 @@ export default function PublicChat() {
           </div>
         </div>
 
-        {/* Form Step UI */}
+        {/* Journey step UI
+            An active journey takes over the public chat content area. Keeping
+            the form outside the message list prevents conversation starters
+            and old chat content from competing with the question. */}
         {activeFormStep && (
-          <Suspense fallback={<div className="h-24 animate-pulse bg-gray-100" />}>
-            <FormStep
-              step={activeFormStep}
-              onSubmit={handleFormStepSubmit}
-              isLoading={isLoading}
-              chatColor={chatColor}
-            />
-          </Suspense>
+          <div className="flex-1 min-h-0 overflow-y-auto bg-white px-3 py-4 sm:px-5 sm:py-6 flex items-center">
+            <div className="w-full max-w-2xl mx-auto">
+              <Suspense fallback={<div className="h-24 animate-pulse bg-gray-100 rounded-2xl" />}>
+                <FormStep
+                  step={activeFormStep}
+                  onSubmit={handleFormStepSubmit}
+                  isLoading={isLoading}
+                  primaryColor={chatColor}
+                />
+              </Suspense>
+            </div>
+          </div>
         )}
 
         {/* Image Preview */}
-        {imagePreviewUrl && (
+        {!activeFormStep && imagePreviewUrl && (
           <div className="flex-shrink-0 border-t bg-gray-50 px-6 py-3">
             <div className="flex items-center gap-3">
               <div className="relative">
