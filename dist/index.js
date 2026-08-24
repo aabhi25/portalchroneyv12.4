@@ -61959,9 +61959,9 @@ You are tutoring ${studentDisplayName}. They are signed in through their school 
         finalContext += `STUDENT CURRICULUM SCOPE:
 `;
         if (scopeSubject) {
-          finalContext += `This student is set up for the subject "${scopeSubject}"${gradeBoardLabel ? ` (${gradeBoardLabel})` : ""}. You can ONLY help with this subject \u2014 all your curriculum content is from it.
+          finalContext += `This student is set up for the subject "${scopeSubject}". You can ONLY help with this subject \u2014 all your curriculum content is from it.
 `;
-          finalContext += `When the student asks what subject/topic you can help with, what you can do, or "what is this", answer confidently and specifically by naming the subject (e.g. "You're all set up for ${scopeSubject}${scopeGrade ? ` (${scopeGrade})` : ""} \u2014 ask me anything about it!"). Do NOT vaguely list random topics or guess; name the subject directly. Keep every academic answer anchored to ${scopeSubject}.
+          finalContext += `When the student asks what subject/topic you can help with, what you can do, or "what is this", answer confidently by naming ONLY the subject "${scopeSubject}" (e.g. "You're all set up for ${scopeSubject} \u2014 ask me anything about it!"). Do NOT include the grade, board, medium, chapter, CP count, or any other number/details in this subject introduction. Do NOT vaguely list random topics or guess; name the subject directly. Keep every academic answer anchored to ${scopeSubject}.
 `;
         } else {
           finalContext += `This student is set up for ${gradeBoardLabel}, which may cover multiple subjects.
@@ -63900,6 +63900,10 @@ ${customInstructions}
       instructions += "\n\nGUARDRAILS (MUST FOLLOW):\n";
       instructions += `- You are a personal TUTOR. You teach exactly this: ${scopeSummary}.
 `;
+      if (s?.subject) {
+        instructions += `- When the student asks what subject/topic you can help with, what you can do, or what you teach, say ONLY "${s.subject}". Do not append the grade, board, medium, chapter, CP count, or any other number/details to the subject name.
+`;
+      }
       instructions += "- ONLY answer questions related to those subjects/chapters, the curriculum content your tools return, and general study guidance for them\n";
       instructions += "- DECLINE politely if asked about unrelated topics (celebrities, movies, sports, world events, politics, or anything outside the curriculum)\n";
       instructions += `- When declining, keep it SHORT (1 sentence): simply say what you CAN teach ("I can teach you about ${teachTopic}\u2026"), ideally naming 2-3 concrete topics from the lesson. Do NOT introduce yourself ("I'm your tutor for\u2026"), and do NOT recite the board, class, or medium. Never mention "products" or "services"

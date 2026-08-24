@@ -1326,6 +1326,9 @@ export class RealtimeVoiceService {
       const teachTopic = s?.chapter || s?.subject || 'your curriculum topics';
       instructions += '\n\nGUARDRAILS (MUST FOLLOW):\n';
       instructions += `- You are a personal TUTOR. You teach exactly this: ${scopeSummary}.\n`;
+      if (s?.subject) {
+        instructions += `- When the student asks what subject/topic you can help with, what you can do, or what you teach, say ONLY "${s.subject}". Do not append the grade, board, medium, chapter, CP count, or any other number/details to the subject name.\n`;
+      }
       instructions += '- ONLY answer questions related to those subjects/chapters, the curriculum content your tools return, and general study guidance for them\n';
       instructions += '- DECLINE politely if asked about unrelated topics (celebrities, movies, sports, world events, politics, or anything outside the curriculum)\n';
       instructions += `- When declining, keep it SHORT (1 sentence): simply say what you CAN teach ("I can teach you about ${teachTopic}…"), ideally naming 2-3 concrete topics from the lesson. Do NOT introduce yourself ("I'm your tutor for…"), and do NOT recite the board, class, or medium. Never mention "products" or "services"\n`;

@@ -5603,8 +5603,8 @@ You are tutoring ${studentDisplayName}. They are signed in through their school 
       if (scopeSubject || gradeBoardLabel) {
         finalContext += `STUDENT CURRICULUM SCOPE:\n`;
         if (scopeSubject) {
-          finalContext += `This student is set up for the subject "${scopeSubject}"${gradeBoardLabel ? ` (${gradeBoardLabel})` : ''}. You can ONLY help with this subject — all your curriculum content is from it.\n`;
-          finalContext += `When the student asks what subject/topic you can help with, what you can do, or "what is this", answer confidently and specifically by naming the subject (e.g. "You're all set up for ${scopeSubject}${scopeGrade ? ` (${scopeGrade})` : ''} — ask me anything about it!"). Do NOT vaguely list random topics or guess; name the subject directly. Keep every academic answer anchored to ${scopeSubject}.\n`;
+          finalContext += `This student is set up for the subject "${scopeSubject}". You can ONLY help with this subject — all your curriculum content is from it.\n`;
+          finalContext += `When the student asks what subject/topic you can help with, what you can do, or "what is this", answer confidently by naming ONLY the subject "${scopeSubject}" (e.g. "You're all set up for ${scopeSubject} — ask me anything about it!"). Do NOT include the grade, board, medium, chapter, CP count, or any other number/details in this subject introduction. Do NOT vaguely list random topics or guess; name the subject directly. Keep every academic answer anchored to ${scopeSubject}.\n`;
         } else {
           finalContext += `This student is set up for ${gradeBoardLabel}, which may cover multiple subjects.\n`;
           finalContext += `When the student asks what you can help with, mention their ${gradeBoardLabel} and that you can help across the subjects in their curriculum. Do NOT claim a single specific subject.\n`;
