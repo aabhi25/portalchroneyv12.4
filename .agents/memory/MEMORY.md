@@ -17,3 +17,4 @@
 - [Tester client-store filters](topscholar-tester-client-store-filters.md) — Tester options may use stored client content, but preview must prove it matches live scope mapping until production authority migrates.
 - [Campaign sample parsing](campaign-sample-parsing.md) — parse Excel/PDF samples only in the browser; the mapping endpoint accepts headers, never file bytes or rows.
 - [Automation deletion safety](automation-deletion-safety.md) — deactivate definitions only after locking their pending work; otherwise a delete can race a scheduled campaign into sending.
+- [TopScholar subject labels](topscholar-subject-labels.md) — the configured client embedding store has subject IDs but not clean subject names; its subject field can be a full CP label.

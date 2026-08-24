@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../../db";
 import { topscholarCpMappings } from "@shared/schema";
 import { ensureContentSchema, getContentPool } from "./contentDb";
@@ -20,6 +20,15 @@ export interface StoredScopeSelection {
   subject: string;
 }
 
+export interface SubjectReconciliationResult {
+  scannedRows: number;
+  usableSubjects: number;
+  updatedMappings: number;
+  unchangedMappings: number;
+  unmatchedCpIds: number;
+  conflictingSubjects: number;
+}
+
 function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -29,6 +38,128 @@ function normalized(value: unknown): string {
 }
 
 const indexedMongoStores = new Set<string>();
+
+/**
+ * Imports the authoritative subject label from the active content store into
+ * the app-side CP mapping table. This is intentionally an explicit maintenance
+ * operation, not part of a request path: it may scan the client's store once,
+ * but subsequent Tester requests remain metadata-only and fast.
+ *
+ * Only non-blank, unambiguous subject values are applied to an existing mapping
+ * in the same tenant. The client content store is never modified.
+ */
+export async function reconcileSubjectNamesFromContentStore(
+  cfg: TopscholarConfig,
+  businessAccountId: string,
+): Promise<SubjectReconciliationResult> {
+  const mappings = await db
+    .select({
+      cpId: topscholarCpMappings.cpId,
+      subject: topscholarCpMappings.subject,
+    })
+    .from(topscholarCpMappings)
+    .where(eq(topscholarCpMappings.businessAccountId, businessAccountId));
+
+  const mappingByCpId = new Map(
+    mappings.map((mapping) => [text(mapping.cpId), text(mapping.subject)]),
+  );
+
+  let rows: Array<{ cpId: string; subject: string }>;
+  if (cfg.storeType === "mongodb") {
+    if (!cfg.contentDbUrl) throw new Error("MongoDB content DB URL is not configured.");
+    const collection = await getMongoCollection(
+      cfg.contentDbUrl,
+      cfg.contentDbName,
+      cfg.contentDbCollection,
+    );
+    const storedRows = await collection
+      .aggregate<{ cpId: string; subject: string }>([
+        { $match: { business_account_id: businessAccountId } },
+        {
+          $project: {
+            _id: 0,
+            cpId: { $trim: { input: { $ifNull: ["$cp_id", ""] } } },
+            subject: { $trim: { input: { $ifNull: ["$subject", ""] } } },
+          },
+        },
+        { $match: { cpId: { $ne: "" }, subject: { $ne: "" } } },
+        {
+          $group: {
+            _id: { cpId: "$cpId", subject: "$subject" },
+            cpId: { $first: "$cpId" },
+            subject: { $first: "$subject" },
+          },
+        },
+        { $project: { _id: 0, cpId: 1, subject: 1 } },
+      ])
+      .toArray();
+    rows = storedRows.map((row) => ({ cpId: text(row.cpId), subject: text(row.subject) }));
+  } else {
+    const pool = getContentPool(cfg.contentDbUrl);
+    const result = await pool.query(
+      `SELECT DISTINCT
+         btrim(cp_id) AS "cpId",
+         btrim(subject) AS subject
+       FROM topscholar_content_chunks
+       WHERE business_account_id = $1
+         AND cp_id IS NOT NULL AND btrim(cp_id) <> ''
+         AND subject IS NOT NULL AND btrim(subject) <> ''`,
+      [businessAccountId],
+    );
+    rows = result.rows.map((row) => ({ cpId: text(row.cpId), subject: text(row.subject) }));
+  }
+
+  const subjectsByCpId = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (!row.cpId || !row.subject) continue;
+    const subjects = subjectsByCpId.get(row.cpId) || new Set<string>();
+    subjects.add(row.subject);
+    subjectsByCpId.set(row.cpId, subjects);
+  }
+
+  let updatedMappings = 0;
+  let unchangedMappings = 0;
+  let unmatchedCpIds = 0;
+  let conflictingSubjects = 0;
+
+  await db.transaction(async (tx) => {
+    for (const [cpId, subjects] of subjectsByCpId) {
+      if (!mappingByCpId.has(cpId)) {
+        unmatchedCpIds++;
+        continue;
+      }
+      if (subjects.size !== 1) {
+        conflictingSubjects++;
+        continue;
+      }
+      const subject = Array.from(subjects)[0];
+      const currentSubject = mappingByCpId.get(cpId) || "";
+      if (currentSubject === subject) {
+        unchangedMappings++;
+        continue;
+      }
+      await tx
+        .update(topscholarCpMappings)
+        .set({ subject, updatedAt: new Date() })
+        .where(
+          and(
+            eq(topscholarCpMappings.businessAccountId, businessAccountId),
+            eq(topscholarCpMappings.cpId, cpId),
+          ),
+        );
+      updatedMappings++;
+    }
+  });
+
+  return {
+    scannedRows: rows.length,
+    usableSubjects: subjectsByCpId.size,
+    updatedMappings,
+    unchangedMappings,
+    unmatchedCpIds,
+    conflictingSubjects,
+  };
+}
 
 /**
  * Writes scope metadata into legacy client-store chunks from the CP metadata that

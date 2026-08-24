@@ -36,6 +36,15 @@ interface StudentRow {
   updatedAt: string;
 }
 
+interface SubjectReconciliationResult {
+  scannedRows: number;
+  usableSubjects: number;
+  updatedMappings: number;
+  unchangedMappings: number;
+  unmatchedCpIds: number;
+  conflictingSubjects: number;
+}
+
 async function getJson(url: string) {
   const r = await fetch(url, { credentials: "include" });
   if (!r.ok) throw new Error("Request failed");
@@ -181,6 +190,24 @@ export default function TopScholarAdmin() {
       setMongoTest({ success: false, message: e.message });
       toast({ title: "Connection failed", description: e.message, variant: "destructive" });
     },
+  });
+
+  const [subjectReconciliation, setSubjectReconciliation] = useState<SubjectReconciliationResult | null>(null);
+  const reconcileSubjects = useMutation({
+    mutationFn: () => sendJson("/api/topscholar/reconcile-subjects", "POST", {}),
+    onSuccess: (data: SubjectReconciliationResult) => {
+      setSubjectReconciliation(data);
+      queryClient.invalidateQueries({ queryKey: ["/api/topscholar/scope-options"] });
+      toast({
+        title: data.updatedMappings > 0 ? "Subject names imported" : "Subject names already match",
+        description: `${data.updatedMappings} mapping${data.updatedMappings === 1 ? "" : "s"} updated from the client content database.`,
+      });
+    },
+    onError: (e: any) => toast({
+      title: "Could not import subject names",
+      description: e.message,
+      variant: "destructive",
+    }),
   });
 
   const [apiTest, setApiTest] = useState<{ success: boolean; message: string } | null>(null);
@@ -415,6 +442,36 @@ export default function TopScholarAdmin() {
                   <span className={`text-xs ${mongoTest.success ? "text-emerald-700" : "text-red-600"}`}>
                     {mongoTest.success ? "✓ " : "✗ "}{(mongoTest as any).warning || mongoTest.message}
                   </span>
+                )}
+              </div>
+              <div className="rounded-md border border-amber-200 bg-amber-50/70 p-3 space-y-2">
+                <div>
+                  <Label className="text-sm font-medium text-amber-950">Fix Tester subject labels</Label>
+                  <p className="mt-1 text-xs text-amber-900/80">
+                    Reads each stored CP&apos;s subject name from this client database once and updates only the app&apos;s CP mapping metadata. It never changes client content and does not run while opening the Widget Tester.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 border-amber-300 bg-white hover:bg-amber-100"
+                  disabled={!contentDbUrl.trim() || externalContentDbDisabled || reconcileSubjects.isPending}
+                  onClick={() => {
+                    if (window.confirm("Import the current subject names from the client content database into the app's Tester mappings? This does not modify client content.")) {
+                      reconcileSubjects.mutate();
+                    }
+                  }}
+                >
+                  {reconcileSubjects.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Import subject names once
+                </Button>
+                {subjectReconciliation && (
+                  <p className="text-xs text-amber-900/80">
+                    Read {subjectReconciliation.usableSubjects} CP subject{subjectReconciliation.usableSubjects === 1 ? "" : "s"}; updated {subjectReconciliation.updatedMappings}, unchanged {subjectReconciliation.unchangedMappings}.
+                    {subjectReconciliation.unmatchedCpIds > 0 && ` ${subjectReconciliation.unmatchedCpIds} CP ID${subjectReconciliation.unmatchedCpIds === 1 ? "" : "s"} had no app mapping.`}
+                    {subjectReconciliation.conflictingSubjects > 0 && ` ${subjectReconciliation.conflictingSubjects} CP ID${subjectReconciliation.conflictingSubjects === 1 ? "" : "s"} had conflicting client subjects and was skipped.`}
+                  </p>
                 )}
               </div>
             </div>

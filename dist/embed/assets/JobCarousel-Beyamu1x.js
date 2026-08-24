@@ -1,4 +1,4 @@
-import{c as x,r as f,j as e,t as u,b as N,X as k}from"./embed-BcA_A6sY.js";import{C as m}from"./clock-BV5bxKBb.js";import{G as v}from"./graduation-cap-DnEJ5Grm.js";/**
+import{c as x,r as f,j as e,t as u,b as N,X as k}from"./embed-DAthcQCC.js";import{C as m}from"./clock-DgRE6Dty.js";import{G as v}from"./graduation-cap-Bo7B2qmd.js";/**
  * @license lucide-react v0.453.0 - ISC
  *
  * This source code is licensed under the ISC license.

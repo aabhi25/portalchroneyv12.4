@@ -27,7 +27,10 @@ import { getContentOverview, getChapters, getChunks, getChapterNamesForCpIds, ge
 import { getMongoContentOverview, getMongoChapters, getMongoChunks } from "../services/topscholar/mongoContentReader";
 import { getMongoChapterNames, getMongoCpIdsWithContent } from "../services/topscholar/mongoContentDb";
 import { resolveCpIdsForScope } from "../services/topscholar/scopeResolver";
-import type { StoredCurriculumScope } from "../services/topscholar/testerContentScopes";
+import {
+  reconcileSubjectNamesFromContentStore,
+  type StoredCurriculumScope,
+} from "../services/topscholar/testerContentScopes";
 import { testContentBundleConnection } from "../services/topscholar/cmsConnector";
 import { cancelBatch } from "../services/topscholar/embeddingBatchService";
 import { withCpLock } from "../services/topscholar/cpLock";
@@ -315,6 +318,35 @@ router.post("/api/topscholar/test-mongo", ...topscholarGuards, async (req: Reque
 
   const result = await testMongoConnection({ connectionString, dbName, collection, indexName });
   res.json(result);
+});
+
+// Explicit maintenance action. It may scan the active client store once, but it
+// only writes clean subject labels into the app-side CP mapping metadata.
+router.post("/api/topscholar/reconcile-subjects", ...topscholarGuards, async (req: Request, res: Response) => {
+  const businessAccountId = getBusinessAccountId(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+
+  const account = await loadAccount(businessAccountId);
+  if (!account) return res.status(404).json({ error: "Business account not found" });
+
+  try {
+    const cfg = getTopscholarConfig(account);
+    if (cfg.externalContentDbDisabled || !cfg.contentDbUrl) {
+      return res.status(400).json({
+        error: "Enable and save the external client content database before importing subject names.",
+      });
+    }
+    const result = await reconcileSubjectNamesFromContentStore(
+      cfg,
+      businessAccountId,
+    );
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    console.error("[TopScholar] Subject reconciliation failed:", error);
+    res.status(502).json({
+      error: error?.message || "Could not read subject names from the configured content store.",
+    });
+  }
 });
 
 // Probe the Content Bundle API (plan-and-promo). Tests a not-yet-saved URL/token

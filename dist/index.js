@@ -4889,8 +4889,8 @@ async function withTimeout(fn) {
     clearTimeout(timer);
   }
 }
-async function pushTextMessageDetailed(baseUrl, doubtId, from, text2) {
-  const trimmed = String(text2 || "").trim();
+async function pushTextMessageDetailed(baseUrl, doubtId, from, text3) {
+  const trimmed = String(text3 || "").trim();
   const started = Date.now();
   const url = baseUrl ? joinUrl(baseUrl, "/api/conversation/save-message-ai-bot") : "(no base URL configured)";
   const request = { url, method: "POST", fields: { doubt: doubtId, from_user: from, messages: trimmed.slice(0, 200) } };
@@ -4921,8 +4921,8 @@ async function pushTextMessageDetailed(baseUrl, doubtId, from, text2) {
     return { ok: false, request, response: null, latencyMs, error: msg.includes("abort") ? `Request timed out after ${REQUEST_TIMEOUT_MS / 1e3}s \u2014 client server did not respond.` : msg };
   }
 }
-async function pushTextMessage(baseUrl, doubtId, from, text2) {
-  const trimmed = String(text2 || "").trim();
+async function pushTextMessage(baseUrl, doubtId, from, text3) {
+  const trimmed = String(text3 || "").trim();
   if (!baseUrl || !doubtId || !trimmed) return false;
   try {
     assertSafeBaseUrl(baseUrl);
@@ -5451,8 +5451,8 @@ var init_embeddingService = __esm({
       /**
        * Generate a content hash for cache key
        */
-      getContentHash(text2, businessAccountId) {
-        return crypto3.createHash("sha256").update(`${businessAccountId}:${text2}`).digest("hex");
+      getContentHash(text3, businessAccountId) {
+        return crypto3.createHash("sha256").update(`${businessAccountId}:${text3}`).digest("hex");
       }
       /**
        * Get cached embedding if available and not expired
@@ -5504,9 +5504,9 @@ var init_embeddingService = __esm({
        * @param businessAccountId - Business account ID for API key
        * @returns Embedding vector (1536 dimensions)
        */
-      async generateEmbedding(text2, businessAccountId) {
+      async generateEmbedding(text3, businessAccountId) {
         const maxChars = 8191 * 4;
-        const truncatedText = text2.slice(0, maxChars);
+        const truncatedText = text3.slice(0, maxChars);
         const contentHash = this.getContentHash(truncatedText, businessAccountId);
         const cachedEmbedding = this.getCachedEmbedding(contentHash);
         if (cachedEmbedding) {
@@ -5554,7 +5554,7 @@ var init_embeddingService = __esm({
         try {
           const openai = await this.getOpenAIClient(businessAccountId);
           const maxChars = 8191 * 4;
-          const truncatedTexts = texts.map((text2) => text2.slice(0, maxChars));
+          const truncatedTexts = texts.map((text3) => text3.slice(0, maxChars));
           const response = await openai.embeddings.create({
             model: "text-embedding-3-small",
             input: truncatedTexts,
@@ -6043,12 +6043,12 @@ async function buildJourneyCrmContext(conversationId) {
   try {
     const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
     const { journeyResponses: journeyResponses2, journeySteps: journeySteps2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-    const { eq: eq72, and: and61, isNotNull: isNotNull8, asc: asc14 } = await import("drizzle-orm");
+    const { eq: eq73, and: and62, isNotNull: isNotNull8, asc: asc14 } = await import("drizzle-orm");
     const rows = await db2.select({
       crmFieldKey: journeySteps2.crmFieldKey,
       response: journeyResponses2.response
-    }).from(journeyResponses2).innerJoin(journeySteps2, eq72(journeyResponses2.stepId, journeySteps2.id)).where(and61(
-      eq72(journeyResponses2.conversationId, conversationId),
+    }).from(journeyResponses2).innerJoin(journeySteps2, eq73(journeyResponses2.stepId, journeySteps2.id)).where(and62(
+      eq73(journeyResponses2.conversationId, conversationId),
       isNotNull8(journeySteps2.crmFieldKey)
     )).orderBy(asc14(journeyResponses2.createdAt));
     const map = {};
@@ -6068,11 +6068,11 @@ async function buildConversationCrmContext(conversationId) {
   try {
     const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
     const { conversations: conversations2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-    const { eq: eq72 } = await import("drizzle-orm");
+    const { eq: eq73 } = await import("drizzle-orm");
     const rows = await db2.select({
       summary: conversations2.summary,
       topicKeywords: conversations2.topicKeywords
-    }).from(conversations2).where(eq72(conversations2.id, conversationId)).limit(1);
+    }).from(conversations2).where(eq73(conversations2.id, conversationId)).limit(1);
     const row = rows[0];
     if (!row) return {};
     const summary = row.summary != null ? String(row.summary).trim() : "";
@@ -10199,17 +10199,17 @@ var init_storage = __esm({
       // LeadSquared URL Extraction Cache
       async getUrlExtraction(url, businessAccountId) {
         const { leadsquaredUrlExtractionCache: leadsquaredUrlExtractionCache2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { and: and61, eq: eq72 } = await import("drizzle-orm");
-        const [row] = await db.select().from(leadsquaredUrlExtractionCache2).where(and61(
-          eq72(leadsquaredUrlExtractionCache2.url, url),
-          eq72(leadsquaredUrlExtractionCache2.businessAccountId, businessAccountId)
+        const { and: and62, eq: eq73 } = await import("drizzle-orm");
+        const [row] = await db.select().from(leadsquaredUrlExtractionCache2).where(and62(
+          eq73(leadsquaredUrlExtractionCache2.url, url),
+          eq73(leadsquaredUrlExtractionCache2.businessAccountId, businessAccountId)
         )).limit(1);
         if (!row) return null;
         return { university: row.university, product: row.product };
       }
       async saveUrlExtraction(url, businessAccountId, university, product) {
         const { leadsquaredUrlExtractionCache: leadsquaredUrlExtractionCache2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { and: and61, eq: eq72 } = await import("drizzle-orm");
+        const { and: and62, eq: eq73 } = await import("drizzle-orm");
         await db.insert(leadsquaredUrlExtractionCache2).values({ url, businessAccountId, university, product }).onConflictDoUpdate({
           target: [leadsquaredUrlExtractionCache2.url, leadsquaredUrlExtractionCache2.businessAccountId],
           set: { university, product, extractedAt: /* @__PURE__ */ new Date() }
@@ -10217,8 +10217,8 @@ var init_storage = __esm({
       }
       async getUrlRules(businessAccountId) {
         const { leadsquaredUrlRules: leadsquaredUrlRules2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { eq: eq72 } = await import("drizzle-orm");
-        return db.select().from(leadsquaredUrlRules2).where(eq72(leadsquaredUrlRules2.businessAccountId, businessAccountId)).orderBy(leadsquaredUrlRules2.createdAt);
+        const { eq: eq73 } = await import("drizzle-orm");
+        return db.select().from(leadsquaredUrlRules2).where(eq73(leadsquaredUrlRules2.businessAccountId, businessAccountId)).orderBy(leadsquaredUrlRules2.createdAt);
       }
       async createUrlRule(data) {
         const { leadsquaredUrlRules: leadsquaredUrlRules2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
@@ -10232,26 +10232,26 @@ var init_storage = __esm({
       }
       async updateUrlRule(id, businessAccountId, data) {
         const { leadsquaredUrlRules: leadsquaredUrlRules2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { and: and61, eq: eq72 } = await import("drizzle-orm");
+        const { and: and62, eq: eq73 } = await import("drizzle-orm");
         const updateData = {};
         if (data.urlPattern !== void 0) updateData.urlPattern = data.urlPattern;
         if (data.university !== void 0) updateData.university = data.university || null;
         if (data.product !== void 0) updateData.product = data.product || null;
         if (data.isEnabled !== void 0) updateData.isEnabled = data.isEnabled;
-        const [rule] = await db.update(leadsquaredUrlRules2).set(updateData).where(and61(eq72(leadsquaredUrlRules2.id, id), eq72(leadsquaredUrlRules2.businessAccountId, businessAccountId))).returning();
+        const [rule] = await db.update(leadsquaredUrlRules2).set(updateData).where(and62(eq73(leadsquaredUrlRules2.id, id), eq73(leadsquaredUrlRules2.businessAccountId, businessAccountId))).returning();
         return rule;
       }
       async deleteUrlRule(id, businessAccountId) {
         const { leadsquaredUrlRules: leadsquaredUrlRules2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { and: and61, eq: eq72 } = await import("drizzle-orm");
-        await db.delete(leadsquaredUrlRules2).where(and61(eq72(leadsquaredUrlRules2.id, id), eq72(leadsquaredUrlRules2.businessAccountId, businessAccountId)));
+        const { and: and62, eq: eq73 } = await import("drizzle-orm");
+        await db.delete(leadsquaredUrlRules2).where(and62(eq73(leadsquaredUrlRules2.id, id), eq73(leadsquaredUrlRules2.businessAccountId, businessAccountId)));
       }
       async getUrlRuleByUrl(url, businessAccountId) {
         const { leadsquaredUrlRules: leadsquaredUrlRules2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { and: and61, eq: eq72 } = await import("drizzle-orm");
-        const rules = await db.select().from(leadsquaredUrlRules2).where(and61(
-          eq72(leadsquaredUrlRules2.businessAccountId, businessAccountId),
-          eq72(leadsquaredUrlRules2.isEnabled, "true")
+        const { and: and62, eq: eq73 } = await import("drizzle-orm");
+        const rules = await db.select().from(leadsquaredUrlRules2).where(and62(
+          eq73(leadsquaredUrlRules2.businessAccountId, businessAccountId),
+          eq73(leadsquaredUrlRules2.isEnabled, "true")
         ));
         const normalizedUrl = url.toLowerCase().replace(/\/$/, "");
         for (const rule of rules) {
@@ -13461,21 +13461,21 @@ ${phoneValidationOverride}`;
         return response.choices[0]?.message?.content || "";
       }
       static quickDetectLanguage(message) {
-        const text2 = message.trim();
-        if (!text2) return "en";
-        if (/[\u0900-\u097F]/.test(text2)) return "hi";
-        if (/[\u0B80-\u0BFF]/.test(text2)) return "ta";
-        if (/[\u0C00-\u0C7F]/.test(text2)) return "te";
-        if (/[\u0C80-\u0CFF]/.test(text2)) return "kn";
-        if (/[\u0980-\u09FF]/.test(text2)) return "bn";
-        if (/[\u0A80-\u0AFF]/.test(text2)) return "gu";
-        if (/[\u0D00-\u0D7F]/.test(text2)) return "ml";
-        if (/[\u0A00-\u0A7F]/.test(text2)) return "pa";
-        if (/[\u0600-\u06FF]/.test(text2)) return "ar";
-        if (/[\uAC00-\uD7AF]/.test(text2)) return "ko";
-        if (/[\u3040-\u309F\u30A0-\u30FF]/.test(text2)) return "ja";
-        if (/[\u4E00-\u9FFF]/.test(text2)) return "zh";
-        const isLatinOnly = /^[\x00-\x7F\s\u00C0-\u024F\u1E00-\u1EFF.,!?'"()\-:;@#%&*+/\\0-9]*$/.test(text2);
+        const text3 = message.trim();
+        if (!text3) return "en";
+        if (/[\u0900-\u097F]/.test(text3)) return "hi";
+        if (/[\u0B80-\u0BFF]/.test(text3)) return "ta";
+        if (/[\u0C00-\u0C7F]/.test(text3)) return "te";
+        if (/[\u0C80-\u0CFF]/.test(text3)) return "kn";
+        if (/[\u0980-\u09FF]/.test(text3)) return "bn";
+        if (/[\u0A80-\u0AFF]/.test(text3)) return "gu";
+        if (/[\u0D00-\u0D7F]/.test(text3)) return "ml";
+        if (/[\u0A00-\u0A7F]/.test(text3)) return "pa";
+        if (/[\u0600-\u06FF]/.test(text3)) return "ar";
+        if (/[\uAC00-\uD7AF]/.test(text3)) return "ko";
+        if (/[\u3040-\u309F\u30A0-\u30FF]/.test(text3)) return "ja";
+        if (/[\u4E00-\u9FFF]/.test(text3)) return "zh";
+        const isLatinOnly = /^[\x00-\x7F\s\u00C0-\u024F\u1E00-\u1EFF.,!?'"()\-:;@#%&*+/\\0-9]*$/.test(text3);
         if (isLatinOnly) {
           const HINGLISH_WORDS = /* @__PURE__ */ new Set([
             "kya",
@@ -13637,7 +13637,7 @@ ${phoneValidationOverride}`;
             "dikhana",
             "chahte"
           ]);
-          const words = text2.toLowerCase().replace(/[.,!?'"()\-:;@#%&*+/\\]/g, " ").split(/\s+/).filter(Boolean);
+          const words = text3.toLowerCase().replace(/[.,!?'"()\-:;@#%&*+/\\]/g, " ").split(/\s+/).filter(Boolean);
           const hasHindiWord = words.some((w) => HINGLISH_WORDS.has(w));
           if (hasHindiWord) return "hinglish";
           if (words.length <= 4) return "en";
@@ -14824,10 +14824,10 @@ function parseTopScholarQuestion(q, topicName) {
   const solutionIndex = q.solutionIndex || q.solution_index || [];
   const options = (q.options || []).map((opt, i) => {
     const seqNum = opt.sequenceNumber || opt.sequence_number || i + 1;
-    const text2 = opt.name?.en || "";
+    const text3 = opt.name?.en || "";
     return {
       label: String.fromCharCode(64 + seqNum),
-      text: stripHtml(text2),
+      text: stripHtml(text3),
       isCorrect: solutionIndex.includes(seqNum)
     };
   });
@@ -15341,9 +15341,9 @@ function readCurriculumMedia(metadata, fallbackMediaUrl, fallbackKind, context) 
   if (isHttpUrl(fallbackMediaUrl)) add(fallbackMediaUrl, out.length, fallbackKind);
   return out;
 }
-function keywords(text2) {
+function keywords(text3) {
   return Array.from(new Set(
-    text2.toLowerCase().replace(/[^0-9a-z\u00C0-\u0963\u0966-\u1FFF\u2C00-\uD7FF\s]/g, " ").split(/\s+/).filter((word) => word.length > 2 && !STOP_WORDS.has(word))
+    text3.toLowerCase().replace(/[^0-9a-z\u00C0-\u0963\u0966-\u1FFF\u2C00-\uD7FF\s]/g, " ").split(/\s+/).filter((word) => word.length > 2 && !STOP_WORDS.has(word))
   ));
 }
 function candidateEvidence(candidate) {
@@ -15813,8 +15813,8 @@ function extractKeywords(query) {
   ]);
   return query.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((w) => w.length > 1 && !stopWords.has(w) && !hindiStopWords.has(w));
 }
-function scoreMatch(text2, keywords2) {
-  const lower = text2.toLowerCase();
+function scoreMatch(text3, keywords2) {
+  const lower = text3.toLowerCase();
   let score = 0;
   for (const kw of keywords2) {
     if (lower.includes(kw)) score++;
@@ -16714,13 +16714,13 @@ async function sendTemplateMessage(settings, recipientPhone, templateName, param
     };
   }
 }
-async function storeOutgoingTemplateMessage(businessAccountId, recipientPhone, text2) {
+async function storeOutgoingTemplateMessage(businessAccountId, recipientPhone, text3) {
   try {
     const cleanPhone = recipientPhone.replace(/\D/g, "");
     await db.insert(whatsappLeads).values({
       businessAccountId,
       senderPhone: cleanPhone,
-      rawMessage: text2,
+      rawMessage: text3,
       status: "message_only",
       direction: "outgoing"
     });
@@ -20037,7 +20037,7 @@ ${JSON.stringify(productsToTranslate)}`;
         try {
           const { embeddingService: embeddingService2 } = await Promise.resolve().then(() => (init_embeddingService(), embeddingService_exports));
           const { jobs: jobsTable } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-          const { cosineDistance, desc: desc31, eq: eq72, and: and61, sql: sqlFn } = await import("drizzle-orm");
+          const { cosineDistance, desc: desc31, eq: eq73, and: and62, sql: sqlFn } = await import("drizzle-orm");
           const queryEmbedding = await embeddingService2.generateEmbedding(query, businessAccountId);
           const similarity = sqlFn`1 - (${cosineDistance(jobsTable.textEmbedding, queryEmbedding)})`;
           const results = await db.select({
@@ -20053,9 +20053,9 @@ ${JSON.stringify(productsToTranslate)}`;
             department: jobsTable.department,
             skills: jobsTable.skills,
             similarity
-          }).from(jobsTable).where(and61(
-            eq72(jobsTable.businessAccountId, businessAccountId),
-            eq72(jobsTable.status, "active")
+          }).from(jobsTable).where(and62(
+            eq73(jobsTable.businessAccountId, businessAccountId),
+            eq73(jobsTable.status, "active")
           )).orderBy(desc31(similarity)).limit(10);
           const filteredResults = results.filter((r) => r.similarity > 0.3);
           if (filteredResults.length === 0) {
@@ -20192,7 +20192,7 @@ Return ONLY valid JSON, no markdown or explanation.`
           console.log(`[JobPortal Tool] Created applicant: ${applicant.id} name="${applicant.name}"`);
           const { embeddingService: embeddingService2 } = await Promise.resolve().then(() => (init_embeddingService(), embeddingService_exports));
           const { jobs: jobsTable } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-          const { cosineDistance, desc: desc31, eq: eq72, and: and61, sql: sqlFn } = await import("drizzle-orm");
+          const { cosineDistance, desc: desc31, eq: eq73, and: and62, sql: sqlFn } = await import("drizzle-orm");
           const skillsText = [parsed.experienceSummary, ...parsed.skills || []].filter(Boolean).join(" ");
           const resumeEmbedding = await embeddingService2.generateEmbedding(skillsText || resumeText.substring(0, 2e3), businessAccountId);
           const similarity = sqlFn`1 - (${cosineDistance(jobsTable.textEmbedding, resumeEmbedding)})`;
@@ -20209,9 +20209,9 @@ Return ONLY valid JSON, no markdown or explanation.`
             department: jobsTable.department,
             skills: jobsTable.skills,
             similarity
-          }).from(jobsTable).where(and61(
-            eq72(jobsTable.businessAccountId, businessAccountId),
-            eq72(jobsTable.status, "active")
+          }).from(jobsTable).where(and62(
+            eq73(jobsTable.businessAccountId, businessAccountId),
+            eq73(jobsTable.status, "active")
           )).orderBy(desc31(similarity)).limit(5);
           const jobResults = matchedJobs.map((j) => ({
             id: j.id,
@@ -20305,30 +20305,30 @@ Return ONLY valid JSON, no markdown or explanation.`
           }
           const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
           const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
-          const { eq: eq72, and: and61 } = await import("drizzle-orm");
+          const { eq: eq73, and: and62 } = await import("drizzle-orm");
           let orders = [];
           if (order_id) {
             const normalizedId = "#" + order_id.replace(/^#/, "").toUpperCase();
-            const exact = await db2.select().from(demoOrders2).where(and61(eq72(demoOrders2.businessAccountId, businessAccountId), eq72(demoOrders2.orderId, normalizedId)));
+            const exact = await db2.select().from(demoOrders2).where(and62(eq73(demoOrders2.businessAccountId, businessAccountId), eq73(demoOrders2.orderId, normalizedId)));
             if (exact.length === 0) {
               const altId = order_id.replace(/^#/, "").toUpperCase();
-              const altExact = await db2.select().from(demoOrders2).where(and61(eq72(demoOrders2.businessAccountId, businessAccountId), eq72(demoOrders2.orderId, altId)));
+              const altExact = await db2.select().from(demoOrders2).where(and62(eq73(demoOrders2.businessAccountId, businessAccountId), eq73(demoOrders2.orderId, altId)));
               orders = altExact;
             } else {
               orders = exact;
             }
             if (orders.length === 0) {
-              const all = await db2.select().from(demoOrders2).where(eq72(demoOrders2.businessAccountId, businessAccountId));
+              const all = await db2.select().from(demoOrders2).where(eq73(demoOrders2.businessAccountId, businessAccountId));
               const needle = order_id.replace(/^#/, "").toUpperCase();
               orders = all.filter((o) => (o.orderId || "").replace(/^#/, "").toUpperCase() === needle);
             }
           } else if (phone) {
             const { desc: desc31 } = await import("drizzle-orm");
-            const all = await db2.select().from(demoOrders2).where(eq72(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc31(demoOrders2.orderDate), desc31(demoOrders2.createdAt));
+            const all = await db2.select().from(demoOrders2).where(eq73(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc31(demoOrders2.orderDate), desc31(demoOrders2.createdAt));
             orders = all.filter((o) => (o.customerPhone || "").replace(/\D/g, "") === phone.replace(/\D/g, "")).slice(0, 3);
           } else if (email) {
             const { desc: desc31 } = await import("drizzle-orm");
-            const all = await db2.select().from(demoOrders2).where(eq72(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc31(demoOrders2.orderDate), desc31(demoOrders2.createdAt));
+            const all = await db2.select().from(demoOrders2).where(eq73(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc31(demoOrders2.orderDate), desc31(demoOrders2.createdAt));
             orders = all.filter((o) => (o.customerEmail || "").toLowerCase() === email.toLowerCase()).slice(0, 3);
           }
           if (orders.length === 0) {
@@ -20381,8 +20381,8 @@ Return ONLY valid JSON, no markdown or explanation.`
           }
           const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
           const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
-          const { eq: eq72 } = await import("drizzle-orm");
-          const all = await db2.select().from(demoOrders2).where(eq72(demoOrders2.businessAccountId, businessAccountId));
+          const { eq: eq73 } = await import("drizzle-orm");
+          const all = await db2.select().from(demoOrders2).where(eq73(demoOrders2.businessAccountId, businessAccountId));
           const normalizedId = (order_id || "").replace(/^#/, "").toUpperCase();
           const order = all.find((o) => (o.orderId || "").replace(/^#/, "").toUpperCase() === normalizedId);
           if (!order) {
@@ -20422,7 +20422,7 @@ Return ONLY valid JSON, no markdown or explanation.`
             status: "return_requested",
             notes: order.notes ? `${order.notes} | ${returnNote}` : returnNote,
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq72(demoOrders2.id, order.id));
+          }).where(eq73(demoOrders2.id, order.id));
           console.log(`[DemoOrders Tool] Order ${order.orderId} status updated to return_requested, ticket ${ticketNumber}`);
           return this.createSuccessResponse(
             `Your return request for order ${order_id} has been registered! Ticket: #${ticketNumber}. Reason: ${reason}. Resolution: ${resolution === "refund" ? "Refund" : "Exchange"}. Our team will contact you within 24-48 hours.`,
@@ -21973,11 +21973,11 @@ function normalizeCategory(raw) {
   const key = titleCased.toLowerCase();
   return CATEGORY_MERGE_MAP[key] || titleCased;
 }
-function extractJson(text2) {
+function extractJson(text3) {
   try {
-    return JSON.parse(text2);
+    return JSON.parse(text3);
   } catch {
-    const match = text2.match(/\{[\s\S]*\}/);
+    const match = text3.match(/\{[\s\S]*\}/);
     if (match) {
       try {
         return JSON.parse(match[0]);
@@ -22245,11 +22245,11 @@ __export(conversationSummarizationService_exports, {
 });
 import OpenAI9 from "openai";
 import { eq as eq15, and as and12, isNull as isNull5, sql as sql10 } from "drizzle-orm";
-function extractJson2(text2) {
+function extractJson2(text3) {
   try {
-    return JSON.parse(text2);
+    return JSON.parse(text3);
   } catch {
-    const match = text2.match(/\{[\s\S]*\}/);
+    const match = text3.match(/\{[\s\S]*\}/);
     if (match) {
       try {
         return JSON.parse(match[0]);
@@ -24520,7 +24520,7 @@ CRITICAL: Do NOT remove any existing data. Only add to it and update when necess
             }
           }
           if (!mainContent || mainContent.length < 200) {
-            const sections = $('section, [class*="section"], [class*="content"], [id*="content"]').map((_, el) => $(el).text().trim()).get().filter((text2) => text2.length > 50).join(" ");
+            const sections = $('section, [class*="section"], [class*="content"], [id*="content"]').map((_, el) => $(el).text().trim()).get().filter((text3) => text3.length > 50).join(" ");
             if (sections) mainContent = sections;
           }
           if (!mainContent || mainContent.length < 200) {
@@ -24532,15 +24532,15 @@ CRITICAL: Do NOT remove any existing data. Only add to it and update when necess
           const paragraphs = $("p").map((_, el) => $(el).text().trim()).get().filter((p) => p.length > 20).join(" ");
           const telLinks = $('a[href^="tel:"]').map((_, el) => {
             const href = $(el).attr("href") || "";
-            const text2 = $(el).text().trim();
-            return `Phone: ${href.replace("tel:", "")} (${text2})`;
+            const text3 = $(el).text().trim();
+            return `Phone: ${href.replace("tel:", "")} (${text3})`;
           }).get().join(", ");
           const mailtoLinks = $('a[href^="mailto:"]').map((_, el) => {
             const href = $(el).attr("href") || "";
-            const text2 = $(el).text().trim();
-            return `Email: ${href.replace("mailto:", "")} (${text2})`;
+            const text3 = $(el).text().trim();
+            return `Email: ${href.replace("mailto:", "")} (${text3})`;
           }).get().join(", ");
-          const contactContent = $('[class*="contact"], [id*="contact"], .address, .phone, .email, [class*="phone"], [class*="email"]').map((_, el) => $(el).text().trim()).get().filter((text2) => text2.length > 0 && text2.length < 500).join(" ");
+          const contactContent = $('[class*="contact"], [id*="contact"], .address, .phone, .email, [class*="phone"], [class*="email"]').map((_, el) => $(el).text().trim()).get().filter((text3) => text3.length > 0 && text3.length < 500).join(" ");
           const fullContent = `
         Title: ${title}
         Meta Description: ${metaDescription}
@@ -24912,11 +24912,11 @@ var init_chunkingService = __esm({
        * @param text - Full text to chunk
        * @returns Array of text chunks with metadata
        */
-      chunkText(text2) {
-        if (!text2 || text2.trim().length === 0) {
+      chunkText(text3) {
+        if (!text3 || text3.trim().length === 0) {
           return [];
         }
-        const cleanedText = text2.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+        const cleanedText = text3.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
         if (cleanedText.length <= this.minChunkSize) {
           return [{ text: cleanedText, index: 0 }];
         }
@@ -24947,9 +24947,9 @@ var init_chunkingService = __esm({
        * Find the best breaking point for a chunk
        * Prefers: paragraph > sentence > word boundary
        */
-      findBreakPoint(text2, start, maxEnd) {
+      findBreakPoint(text3, start, maxEnd) {
         const searchStart = Math.max(start, maxEnd - 200);
-        const searchText = text2.slice(searchStart, maxEnd);
+        const searchText = text3.slice(searchStart, maxEnd);
         const paragraphBreak = searchText.lastIndexOf("\n\n");
         if (paragraphBreak !== -1 && paragraphBreak > searchText.length / 2) {
           return searchStart + paragraphBreak + 2;
@@ -24968,11 +24968,11 @@ var init_chunkingService = __esm({
        * Find the last sentence boundary in text
        * Looks for: . ! ? followed by space or newline
        */
-      findSentenceBreak(text2) {
+      findSentenceBreak(text3) {
         const sentenceEnders = /[.!?][\s\n]/g;
         let lastMatch = -1;
         let match;
-        while ((match = sentenceEnders.exec(text2)) !== null) {
+        while ((match = sentenceEnders.exec(text3)) !== null) {
           lastMatch = match.index + 1;
         }
         return lastMatch;
@@ -24981,8 +24981,8 @@ var init_chunkingService = __esm({
        * Estimate token count for a chunk (rough approximation)
        * 1 token ≈ 4 characters for English text
        */
-      estimateTokens(text2) {
-        return Math.ceil(text2.length / 4);
+      estimateTokens(text3) {
+        return Math.ceil(text3.length / 4);
       }
     };
     chunkingService = new ChunkingService();
@@ -25103,8 +25103,8 @@ var init_pdfProcessingService = __esm({
         console.log(`[PDF Vision] Extracted ${extractedText.length} chars via vision`);
         return { text: extractedText, truncated: pageCount > VISION_MAX_PAGES };
       }
-      passesQualityGate(text2, pageCount) {
-        const trimmed = text2.trim();
+      passesQualityGate(text3, pageCount) {
+        const trimmed = text3.trim();
         if (trimmed.length < MIN_CHARS_THRESHOLD) return false;
         if (pageCount > 0 && trimmed.length / pageCount < 20) return false;
         return true;
@@ -25113,8 +25113,8 @@ var init_pdfProcessingService = __esm({
         try {
           const dataBuffer = await fs.readFile(filePath);
           const uint8Array = new Uint8Array(dataBuffer);
-          const { text: text2 } = await this.extractWithPdfjs(uint8Array);
-          return text2;
+          const { text: text3 } = await this.extractWithPdfjs(uint8Array);
+          return text3;
         } catch (error) {
           console.error("Error extracting text from PDF:", error);
           throw new Error(`Failed to extract text from PDF: ${error.message}`);
@@ -25123,8 +25123,8 @@ var init_pdfProcessingService = __esm({
       async extractTextFromBuffer(buffer2) {
         try {
           const uint8Array = new Uint8Array(buffer2);
-          const { text: text2 } = await this.extractWithPdfjs(uint8Array);
-          return text2;
+          const { text: text3 } = await this.extractWithPdfjs(uint8Array);
+          return text3;
         } catch (error) {
           console.error("Error extracting text from PDF buffer:", error);
           throw new Error(`Failed to extract text from PDF: ${error.message}`);
@@ -25201,10 +25201,10 @@ var init_pdfProcessingService = __esm({
           warning: "Could not extract text from this PDF. The file may be corrupted or in an unsupported format."
         };
       }
-      async processWithAI(text2, businessAccountId, filename) {
+      async processWithAI(text3, businessAccountId, filename) {
         try {
           const openai = await this.getOpenAIClient(businessAccountId);
-          const truncatedText = text2.slice(0, 12e3);
+          const truncatedText = text3.slice(0, 12e3);
           const prompt = `Analyze this document (${filename}) and provide:
 1. A comprehensive summary (2-3 paragraphs)
 2. Key points and important information (as a list)
@@ -25419,7 +25419,7 @@ async function synthesizeSpeechStreaming(options, onChunk) {
   const {
     apiKey,
     voiceId,
-    text: text2,
+    text: text3,
     // eleven_flash_v2_5 — ElevenLabs' lowest-latency model (~75ms time-to-first-byte
     // vs ~250-300ms for turbo_v2_5). Quality is comparable for conversational
     // K12 use; the latency win matters for voice mode UX where the student
@@ -25436,7 +25436,7 @@ async function synthesizeSpeechStreaming(options, onChunk) {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      text: text2,
+      text: text3,
       model_id: modelId,
       voice_settings: {
         stability: 0.5,
@@ -28091,9 +28091,9 @@ var init_productImageEmbeddingService = __esm({
        * Generate text embedding for a jewelry description using OpenAI text-embedding-3-small
        * Used for text-based similarity matching alongside image embeddings
        */
-      async generateTextEmbedding(text2, businessAccountId) {
+      async generateTextEmbedding(text3, businessAccountId) {
         try {
-          const embedding = await embeddingService.generateEmbedding(text2, businessAccountId);
+          const embedding = await embeddingService.generateEmbedding(text3, businessAccountId);
           console.log(`[Jewelry Description] Generated text embedding (${embedding.length} dims)`);
           return embedding;
         } catch (error) {
@@ -29048,8 +29048,8 @@ function parsePlan(raw, source) {
           bundle.notes.push({ ...ctx, contentId: note.contentId || null, title: pickStr(note.title), html });
         }
         for (const t of content.videoTranscripts || []) {
-          const text2 = (t.transcriptText || "").trim();
-          if (!text2) continue;
+          const text3 = (t.transcriptText || "").trim();
+          if (!text3) continue;
           bundle.transcripts.push({
             ...ctx,
             contentId: t.contentId || null,
@@ -29057,7 +29057,7 @@ function parsePlan(raw, source) {
             title: pickStr(t.title),
             videoUrl: transcriptVideoUrl(t.videoUrl),
             duration: toNum(t.duration),
-            text: text2
+            text: text3
           });
         }
         for (const q of content.questions || []) {
@@ -29238,15 +29238,15 @@ function htmlToText(html) {
     images.push(m[1]);
     imageDetails.push({ url: m[1], alt: altMatch?.[1]?.trim() || null });
   }
-  let text2 = linearizeMathml(html);
-  text2 = text2.replace(/<(br|\/p|\/div|\/li|\/h[1-6]|\/tr)\s*\/?>/gi, "\n");
-  text2 = text2.replace(/<[^>]+>/g, " ");
-  text2 = text2.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-  text2 = text2.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
-  return { text: text2, images, imageDetails };
+  let text3 = linearizeMathml(html);
+  text3 = text3.replace(/<(br|\/p|\/div|\/li|\/h[1-6]|\/tr)\s*\/?>/gi, "\n");
+  text3 = text3.replace(/<[^>]+>/g, " ");
+  text3 = text3.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  text3 = text3.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  return { text: text3, images, imageDetails };
 }
-function chunkText(text2, maxLen = 1400, overlap = 150) {
-  const clean = text2.trim();
+function chunkText(text3, maxLen = 1400, overlap = 150) {
+  const clean = text3.trim();
   if (clean.length <= maxLen) return clean ? [clean] : [];
   const chunks = [];
   const paragraphs = clean.split(/\n{2,}/);
@@ -29551,8 +29551,8 @@ async function streamBatchResults(businessAccountId, outputFileId, onEmbedding) 
     buffer2 += decoder.decode();
     if (buffer2) await handleLine(buffer2);
   } else {
-    const text2 = await response.text();
-    for (const line of text2.split("\n")) await handleLine(line);
+    const text3 = await response.text();
+    for (const line of text3.split("\n")) await handleLine(line);
   }
   return count5;
 }
@@ -29639,8 +29639,8 @@ var init_cpLock = __esm({
 // server/services/topscholar/ingestionService.ts
 import crypto7 from "crypto";
 import { and as and24, eq as eq31, ne, inArray as inArray3 } from "drizzle-orm";
-function hashContent(text2) {
-  return crypto7.createHash("sha256").update(text2).digest("hex").slice(0, 32);
+function hashContent(text3) {
+  return crypto7.createHash("sha256").update(text3).digest("hex").slice(0, 32);
 }
 async function upsertSync(businessAccountId, cpId, patch, guardNotCancelled = false) {
   const existing = await db.select({ id: topscholarContentSync.id }).from(topscholarContentSync).where(and24(eq31(topscholarContentSync.businessAccountId, businessAccountId), eq31(topscholarContentSync.cpId, cpId)));
@@ -29666,10 +29666,10 @@ function buildRecords(bundle) {
   const subject = subjectLabel(bundle);
   const subjectId = bundle.subjectId;
   for (const note of bundle.notes) {
-    const { text: text2, images, imageDetails } = htmlToText(note.html);
-    if (!text2) continue;
+    const { text: text3, images, imageDetails } = htmlToText(note.html);
+    if (!text3) continue;
     const baseTitle = note.title || note.subConcept || note.concept || "Revision Notes";
-    const pieces = chunkText(text2);
+    const pieces = chunkText(text3);
     const media = imageDetails.map((image, order) => createMediaMetadata(image.url, "image", {
       sourceRef: note.contentId,
       topic: baseTitle,
@@ -30404,7 +30404,7 @@ __export(planSyncWorker_exports, {
   startPlanSyncWorker: () => startPlanSyncWorker
 });
 import crypto8 from "crypto";
-import { and as and25, asc as asc3, desc as desc9, eq as eq33, inArray as inArray4, isNull as isNull7, lt, ne as ne2, or as or4 } from "drizzle-orm";
+import { and as and26, asc as asc3, desc as desc9, eq as eq34, inArray as inArray4, isNull as isNull7, lt, ne as ne2, or as or4 } from "drizzle-orm";
 function nowPatch() {
   return { updatedAt: /* @__PURE__ */ new Date() };
 }
@@ -30414,10 +30414,10 @@ async function setPlanStatus(businessAccountId, planId, status, error) {
     lastError: error,
     lastSyncedAt: status === "completed" ? /* @__PURE__ */ new Date() : void 0,
     ...nowPatch()
-  }).where(and25(eq33(topscholarPlanIds.businessAccountId, businessAccountId), eq33(topscholarPlanIds.planId, planId)));
+  }).where(and26(eq34(topscholarPlanIds.businessAccountId, businessAccountId), eq34(topscholarPlanIds.planId, planId)));
 }
 async function loadRunAccount(run) {
-  const [account] = await db.select().from(businessAccounts).where(eq33(businessAccounts.id, run.businessAccountId));
+  const [account] = await db.select().from(businessAccounts).where(eq34(businessAccounts.id, run.businessAccountId));
   if (!account) throw new Error("Business account no longer exists.");
   const cfg = getTopscholarConfig(account);
   if (!cfg.ragEnabled) throw new Error("TopScholar RAG mode is not enabled for this account.");
@@ -30440,7 +30440,7 @@ async function acquireAccountLease(businessAccountId) {
   const rows = await db.insert(topscholarPlanSyncLeases).values({ businessAccountId, owner: WORKER_ID, expiresAt: new Date(now.getTime() + LEASE_MS) }).onConflictDoUpdate({
     target: topscholarPlanSyncLeases.businessAccountId,
     set: { owner: WORKER_ID, expiresAt: new Date(now.getTime() + LEASE_MS), updatedAt: now },
-    where: or4(lt(topscholarPlanSyncLeases.expiresAt, now), eq33(topscholarPlanSyncLeases.owner, WORKER_ID))
+    where: or4(lt(topscholarPlanSyncLeases.expiresAt, now), eq34(topscholarPlanSyncLeases.owner, WORKER_ID))
   }).returning({ businessAccountId: topscholarPlanSyncLeases.businessAccountId });
   return rows.length > 0;
 }
@@ -30448,26 +30448,26 @@ async function renewLease(run) {
   const now = /* @__PURE__ */ new Date();
   const expiresAt = new Date(now.getTime() + LEASE_MS);
   await Promise.all([
-    db.update(topscholarPlanSyncLeases).set({ expiresAt, updatedAt: now }).where(and25(eq33(topscholarPlanSyncLeases.businessAccountId, run.businessAccountId), eq33(topscholarPlanSyncLeases.owner, WORKER_ID))),
-    db.update(topscholarPlanRuns).set({ leaseExpiresAt: expiresAt, ...nowPatch() }).where(and25(eq33(topscholarPlanRuns.id, run.id), eq33(topscholarPlanRuns.leaseOwner, WORKER_ID)))
+    db.update(topscholarPlanSyncLeases).set({ expiresAt, updatedAt: now }).where(and26(eq34(topscholarPlanSyncLeases.businessAccountId, run.businessAccountId), eq34(topscholarPlanSyncLeases.owner, WORKER_ID))),
+    db.update(topscholarPlanRuns).set({ leaseExpiresAt: expiresAt, ...nowPatch() }).where(and26(eq34(topscholarPlanRuns.id, run.id), eq34(topscholarPlanRuns.leaseOwner, WORKER_ID)))
   ]);
 }
 async function releaseLease(run) {
   await Promise.all([
-    db.delete(topscholarPlanSyncLeases).where(and25(eq33(topscholarPlanSyncLeases.businessAccountId, run.businessAccountId), eq33(topscholarPlanSyncLeases.owner, WORKER_ID))),
-    db.update(topscholarPlanRuns).set({ leaseOwner: null, leaseExpiresAt: null, ...nowPatch() }).where(and25(eq33(topscholarPlanRuns.id, run.id), eq33(topscholarPlanRuns.leaseOwner, WORKER_ID)))
+    db.delete(topscholarPlanSyncLeases).where(and26(eq34(topscholarPlanSyncLeases.businessAccountId, run.businessAccountId), eq34(topscholarPlanSyncLeases.owner, WORKER_ID))),
+    db.update(topscholarPlanRuns).set({ leaseOwner: null, leaseExpiresAt: null, ...nowPatch() }).where(and26(eq34(topscholarPlanRuns.id, run.id), eq34(topscholarPlanRuns.leaseOwner, WORKER_ID)))
   ]);
 }
 async function claimRun(candidate) {
   if (!await acquireAccountLease(candidate.businessAccountId)) return null;
   const now = /* @__PURE__ */ new Date();
-  const [claimed] = await db.update(topscholarPlanRuns).set({ leaseOwner: WORKER_ID, leaseExpiresAt: new Date(now.getTime() + LEASE_MS), ...nowPatch() }).where(and25(
-    eq33(topscholarPlanRuns.id, candidate.id),
+  const [claimed] = await db.update(topscholarPlanRuns).set({ leaseOwner: WORKER_ID, leaseExpiresAt: new Date(now.getTime() + LEASE_MS), ...nowPatch() }).where(and26(
+    eq34(topscholarPlanRuns.id, candidate.id),
     inArray4(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES]),
     or4(
       isNull7(topscholarPlanRuns.leaseExpiresAt),
       lt(topscholarPlanRuns.leaseExpiresAt, now),
-      eq33(topscholarPlanRuns.leaseOwner, WORKER_ID)
+      eq34(topscholarPlanRuns.leaseOwner, WORKER_ID)
     )
   )).returning();
   if (!claimed) {
@@ -30475,14 +30475,14 @@ async function claimRun(candidate) {
     return null;
   }
   if (candidate.leaseOwner && candidate.leaseOwner !== WORKER_ID) {
-    await db.update(topscholarPlanRunItems).set({ status: "queued", ...nowPatch() }).where(and25(eq33(topscholarPlanRunItems.runId, claimed.id), eq33(topscholarPlanRunItems.status, "running")));
+    await db.update(topscholarPlanRunItems).set({ status: "queued", ...nowPatch() }).where(and26(eq34(topscholarPlanRunItems.runId, claimed.id), eq34(topscholarPlanRunItems.status, "running")));
   }
   return claimed;
 }
 async function refreshRun(runId) {
-  const [run] = await db.select().from(topscholarPlanRuns).where(eq33(topscholarPlanRuns.id, runId));
+  const [run] = await db.select().from(topscholarPlanRuns).where(eq34(topscholarPlanRuns.id, runId));
   if (!run) return null;
-  const items = await db.select().from(topscholarPlanRunItems).where(eq33(topscholarPlanRunItems.runId, runId)).orderBy(asc3(topscholarPlanRunItems.createdAt));
+  const items = await db.select().from(topscholarPlanRunItems).where(eq34(topscholarPlanRunItems.runId, runId)).orderBy(asc3(topscholarPlanRunItems.createdAt));
   const completed = items.filter((item) => item.status === "completed").length;
   const failed = items.filter((item) => item.status === "failed").length;
   const active = items.find((item) => item.status === "running") || items.find((item) => item.status === "submitted");
@@ -30504,24 +30504,24 @@ async function refreshRun(runId) {
     activeCpId: active?.cpId || null,
     completedAt,
     ...nowPatch()
-  }).where(and25(eq33(topscholarPlanRuns.id, runId), ne2(topscholarPlanRuns.status, "cancelled")));
+  }).where(and26(eq34(topscholarPlanRuns.id, runId), ne2(topscholarPlanRuns.status, "cancelled")));
   if (status === "completed") await setPlanStatus(run.businessAccountId, run.planId, "completed", null);
   if (status === "failed") await setPlanStatus(run.businessAccountId, run.planId, "failed", run.error || `${failed} cp_id sync(s) failed.`);
   if (status === "cancelled") await setPlanStatus(run.businessAccountId, run.planId, "cancelled", "Plan sync was cancelled.");
-  const [refreshed] = await db.select().from(topscholarPlanRuns).where(eq33(topscholarPlanRuns.id, runId));
+  const [refreshed] = await db.select().from(topscholarPlanRuns).where(eq34(topscholarPlanRuns.id, runId));
   return refreshed || null;
 }
 async function failRun(run, error) {
   const message = error instanceof Error ? error.message : String(error);
-  const failed = await db.update(topscholarPlanRuns).set({ status: "failed", error: message, activeCpId: null, completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(and25(eq33(topscholarPlanRuns.id, run.id), eq33(topscholarPlanRuns.leaseOwner, WORKER_ID), ne2(topscholarPlanRuns.status, "cancelled"))).returning({ id: topscholarPlanRuns.id });
+  const failed = await db.update(topscholarPlanRuns).set({ status: "failed", error: message, activeCpId: null, completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(and26(eq34(topscholarPlanRuns.id, run.id), eq34(topscholarPlanRuns.leaseOwner, WORKER_ID), ne2(topscholarPlanRuns.status, "cancelled"))).returning({ id: topscholarPlanRuns.id });
   if (failed.length > 0) await setPlanStatus(run.businessAccountId, run.planId, "failed", message);
   console.error(`[TopScholar PlanSync] Run ${run.id} (${run.planId}) failed: ${message}`);
 }
 async function reconcileSubmittedItems(run) {
-  const items = await db.select().from(topscholarPlanRunItems).where(and25(eq33(topscholarPlanRunItems.runId, run.id), eq33(topscholarPlanRunItems.status, "submitted")));
+  const items = await db.select().from(topscholarPlanRunItems).where(and26(eq34(topscholarPlanRunItems.runId, run.id), eq34(topscholarPlanRunItems.status, "submitted")));
   if (items.length === 0) return;
-  const syncRows = await db.select({ cpId: topscholarContentSync.cpId, status: topscholarContentSync.status, lastError: topscholarContentSync.lastError }).from(topscholarContentSync).where(and25(
-    eq33(topscholarContentSync.businessAccountId, run.businessAccountId),
+  const syncRows = await db.select({ cpId: topscholarContentSync.cpId, status: topscholarContentSync.status, lastError: topscholarContentSync.lastError }).from(topscholarContentSync).where(and26(
+    eq34(topscholarContentSync.businessAccountId, run.businessAccountId),
     inArray4(topscholarContentSync.cpId, items.map((item) => item.cpId))
   ));
   const byCp = new Map(syncRows.map((row) => [row.cpId, row]));
@@ -30533,13 +30533,13 @@ async function reconcileSubmittedItems(run) {
       error: sync.status === "completed" ? null : sync.lastError || `Embedding ${sync.status}.`,
       completedAt: /* @__PURE__ */ new Date(),
       ...nowPatch()
-    }).where(and25(eq33(topscholarPlanRunItems.id, item.id), eq33(topscholarPlanRunItems.status, "submitted")));
+    }).where(and26(eq34(topscholarPlanRunItems.id, item.id), eq34(topscholarPlanRunItems.status, "submitted")));
   }
 }
 async function resolveRun(run, cfg) {
-  const resolving = await db.update(topscholarPlanRuns).set({ status: "resolving", error: null, activeCpId: null, startedAt: run.startedAt || /* @__PURE__ */ new Date(), ...nowPatch() }).where(and25(
-    eq33(topscholarPlanRuns.id, run.id),
-    eq33(topscholarPlanRuns.leaseOwner, WORKER_ID),
+  const resolving = await db.update(topscholarPlanRuns).set({ status: "resolving", error: null, activeCpId: null, startedAt: run.startedAt || /* @__PURE__ */ new Date(), ...nowPatch() }).where(and26(
+    eq34(topscholarPlanRuns.id, run.id),
+    eq34(topscholarPlanRuns.leaseOwner, WORKER_ID),
     inArray4(topscholarPlanRuns.status, ["queued", "resolving", "running"])
   )).returning({ id: topscholarPlanRuns.id });
   if (resolving.length === 0) return;
@@ -30557,9 +30557,9 @@ async function resolveRun(run, cfg) {
     throw new Error("No CP IDs were returned for this Plan ID.");
   }
   await db.transaction(async (tx) => {
-    const advanced = await tx.update(topscholarPlanRuns).set({ status: "running", totalCpIds: resolution.cps.length, error: null, ...nowPatch() }).where(and25(
-      eq33(topscholarPlanRuns.id, run.id),
-      eq33(topscholarPlanRuns.leaseOwner, WORKER_ID),
+    const advanced = await tx.update(topscholarPlanRuns).set({ status: "running", totalCpIds: resolution.cps.length, error: null, ...nowPatch() }).where(and26(
+      eq34(topscholarPlanRuns.id, run.id),
+      eq34(topscholarPlanRuns.leaseOwner, WORKER_ID),
       inArray4(topscholarPlanRuns.status, ["queued", "resolving", "running"])
     )).returning({ id: topscholarPlanRuns.id });
     if (advanced.length === 0) return;
@@ -30577,7 +30577,7 @@ async function processOneItem(run, cfg) {
   await reconcileSubmittedItems(run);
   const refreshed = await refreshRun(run.id);
   if (!refreshed || refreshed.status === "cancelled" || refreshed.status === "completed" || refreshed.status === "failed") return;
-  const items = await db.select().from(topscholarPlanRunItems).where(eq33(topscholarPlanRunItems.runId, run.id)).orderBy(asc3(topscholarPlanRunItems.createdAt));
+  const items = await db.select().from(topscholarPlanRunItems).where(eq34(topscholarPlanRunItems.runId, run.id)).orderBy(asc3(topscholarPlanRunItems.createdAt));
   const submitted = items.filter((item2) => item2.status === "submitted").length;
   if (!cfg.contentDbUrl && submitted >= MAX_SUBMITTED_BATCH_ITEMS_PER_RUN) return;
   const item = items.find((candidate) => candidate.status === "queued");
@@ -30588,11 +30588,11 @@ async function processOneItem(run, cfg) {
     error: null,
     startedAt: item.startedAt || /* @__PURE__ */ new Date(),
     ...nowPatch()
-  }).where(and25(eq33(topscholarPlanRunItems.id, item.id), eq33(topscholarPlanRunItems.status, "queued"))).returning({ id: topscholarPlanRunItems.id });
+  }).where(and26(eq34(topscholarPlanRunItems.id, item.id), eq34(topscholarPlanRunItems.status, "queued"))).returning({ id: topscholarPlanRunItems.id });
   if (claimedItem.length === 0) return;
-  const activeRun = await db.update(topscholarPlanRuns).set({ activeCpId: item.cpId, status: "running", ...nowPatch() }).where(and25(eq33(topscholarPlanRuns.id, run.id), eq33(topscholarPlanRuns.leaseOwner, WORKER_ID), ne2(topscholarPlanRuns.status, "cancelled"))).returning({ id: topscholarPlanRuns.id });
+  const activeRun = await db.update(topscholarPlanRuns).set({ activeCpId: item.cpId, status: "running", ...nowPatch() }).where(and26(eq34(topscholarPlanRuns.id, run.id), eq34(topscholarPlanRuns.leaseOwner, WORKER_ID), ne2(topscholarPlanRuns.status, "cancelled"))).returning({ id: topscholarPlanRuns.id });
   if (activeRun.length === 0) {
-    await db.update(topscholarPlanRunItems).set({ status: "cancelled", completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(eq33(topscholarPlanRunItems.id, item.id));
+    await db.update(topscholarPlanRunItems).set({ status: "cancelled", completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(eq34(topscholarPlanRunItems.id, item.id));
     return;
   }
   try {
@@ -30604,7 +30604,7 @@ async function processOneItem(run, cfg) {
       mode: "full",
       awaitDirect: !!cfg.contentDbUrl,
       isCancelled: async () => {
-        const [state] = await db.select({ runStatus: topscholarPlanRuns.status, itemStatus: topscholarPlanRunItems.status }).from(topscholarPlanRuns).innerJoin(topscholarPlanRunItems, eq33(topscholarPlanRunItems.runId, topscholarPlanRuns.id)).where(and25(eq33(topscholarPlanRuns.id, run.id), eq33(topscholarPlanRunItems.id, item.id)));
+        const [state] = await db.select({ runStatus: topscholarPlanRuns.status, itemStatus: topscholarPlanRunItems.status }).from(topscholarPlanRuns).innerJoin(topscholarPlanRunItems, eq34(topscholarPlanRunItems.runId, topscholarPlanRuns.id)).where(and26(eq34(topscholarPlanRuns.id, run.id), eq34(topscholarPlanRunItems.id, item.id)));
         return !state || state.runStatus === "cancelled" || state.itemStatus === "cancelled";
       }
     });
@@ -30614,10 +30614,10 @@ async function processOneItem(run, cfg) {
       error: result.cancelled ? "Cancelled during direct sync." : null,
       completedAt: status === "submitted" ? null : /* @__PURE__ */ new Date(),
       ...nowPatch()
-    }).where(and25(eq33(topscholarPlanRunItems.id, item.id), eq33(topscholarPlanRunItems.status, "running")));
+    }).where(and26(eq34(topscholarPlanRunItems.id, item.id), eq34(topscholarPlanRunItems.status, "running")));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await db.update(topscholarPlanRunItems).set({ status: "failed", error: message, completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(and25(eq33(topscholarPlanRunItems.id, item.id), eq33(topscholarPlanRunItems.status, "running")));
+    await db.update(topscholarPlanRunItems).set({ status: "failed", error: message, completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(and26(eq34(topscholarPlanRunItems.id, item.id), eq34(topscholarPlanRunItems.status, "running")));
     console.error(`[TopScholar PlanSync] CP ${item.cpId} failed in run ${run.id}: ${message}`);
   }
   await refreshRun(run.id);
@@ -30625,7 +30625,7 @@ async function processOneItem(run, cfg) {
 async function processRun(run) {
   try {
     const { cfg } = await loadRunAccount(run);
-    const items = await db.select({ id: topscholarPlanRunItems.id }).from(topscholarPlanRunItems).where(eq33(topscholarPlanRunItems.runId, run.id)).limit(1);
+    const items = await db.select({ id: topscholarPlanRunItems.id }).from(topscholarPlanRunItems).where(eq34(topscholarPlanRunItems.runId, run.id)).limit(1);
     if (items.length === 0) {
       await resolveRun(run, cfg);
       await refreshRun(run.id);
@@ -30640,9 +30640,9 @@ async function enqueuePlanSyncRuns(params) {
   const planIds = Array.from(new Set(params.planIds.map((value) => value.trim()).filter(Boolean)));
   const runs = [];
   for (const planId of planIds) {
-    const active = await db.select().from(topscholarPlanRuns).where(and25(
-      eq33(topscholarPlanRuns.businessAccountId, params.businessAccountId),
-      eq33(topscholarPlanRuns.planId, planId),
+    const active = await db.select().from(topscholarPlanRuns).where(and26(
+      eq34(topscholarPlanRuns.businessAccountId, params.businessAccountId),
+      eq34(topscholarPlanRuns.planId, planId),
       isNull7(topscholarPlanRuns.requestedCpId),
       inArray4(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES])
     )).orderBy(desc9(topscholarPlanRuns.updatedAt)).limit(1);
@@ -30655,9 +30655,9 @@ async function enqueuePlanSyncRuns(params) {
       runs.push(run);
     } catch (error) {
       if (error?.code !== "23505") throw error;
-      const [winner] = await db.select().from(topscholarPlanRuns).where(and25(
-        eq33(topscholarPlanRuns.businessAccountId, params.businessAccountId),
-        eq33(topscholarPlanRuns.planId, planId),
+      const [winner] = await db.select().from(topscholarPlanRuns).where(and26(
+        eq34(topscholarPlanRuns.businessAccountId, params.businessAccountId),
+        eq34(topscholarPlanRuns.planId, planId),
         isNull7(topscholarPlanRuns.requestedCpId),
         inArray4(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES])
       )).orderBy(desc9(topscholarPlanRuns.updatedAt)).limit(1);
@@ -30669,10 +30669,10 @@ async function enqueuePlanSyncRuns(params) {
   return runs;
 }
 async function enqueueSingleCpSyncRun(params) {
-  const [existing] = await db.select().from(topscholarPlanRuns).where(and25(
-    eq33(topscholarPlanRuns.businessAccountId, params.businessAccountId),
-    eq33(topscholarPlanRuns.planId, params.planId),
-    eq33(topscholarPlanRuns.requestedCpId, params.cpId),
+  const [existing] = await db.select().from(topscholarPlanRuns).where(and26(
+    eq34(topscholarPlanRuns.businessAccountId, params.businessAccountId),
+    eq34(topscholarPlanRuns.planId, params.planId),
+    eq34(topscholarPlanRuns.requestedCpId, params.cpId),
     inArray4(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES])
   )).orderBy(desc9(topscholarPlanRuns.updatedAt)).limit(1);
   if (existing) return existing;
@@ -30696,10 +30696,10 @@ async function enqueueSingleCpSyncRun(params) {
     });
   } catch (error) {
     if (error?.code !== "23505") throw error;
-    const [winner] = await db.select().from(topscholarPlanRuns).where(and25(
-      eq33(topscholarPlanRuns.businessAccountId, params.businessAccountId),
-      eq33(topscholarPlanRuns.planId, params.planId),
-      eq33(topscholarPlanRuns.requestedCpId, params.cpId),
+    const [winner] = await db.select().from(topscholarPlanRuns).where(and26(
+      eq34(topscholarPlanRuns.businessAccountId, params.businessAccountId),
+      eq34(topscholarPlanRuns.planId, params.planId),
+      eq34(topscholarPlanRuns.requestedCpId, params.cpId),
       inArray4(topscholarPlanRuns.status, [...ACTIVE_RUN_STATUSES])
     )).orderBy(desc9(topscholarPlanRuns.updatedAt)).limit(1);
     if (!winner) throw error;
@@ -30710,16 +30710,16 @@ async function enqueueSingleCpSyncRun(params) {
   return run;
 }
 async function listPlanSyncRuns(businessAccountId, planId) {
-  const conditions = [eq33(topscholarPlanRuns.businessAccountId, businessAccountId)];
-  if (planId) conditions.push(eq33(topscholarPlanRuns.planId, planId));
-  const runs = await db.select().from(topscholarPlanRuns).where(and25(...conditions)).orderBy(desc9(topscholarPlanRuns.updatedAt)).limit(100);
+  const conditions = [eq34(topscholarPlanRuns.businessAccountId, businessAccountId)];
+  if (planId) conditions.push(eq34(topscholarPlanRuns.planId, planId));
+  const runs = await db.select().from(topscholarPlanRuns).where(and26(...conditions)).orderBy(desc9(topscholarPlanRuns.updatedAt)).limit(100);
   if (runs.length === 0) return [];
   const failedItems = await db.select({
     runId: topscholarPlanRunItems.runId,
     error: topscholarPlanRunItems.error
-  }).from(topscholarPlanRunItems).where(and25(
+  }).from(topscholarPlanRunItems).where(and26(
     inArray4(topscholarPlanRunItems.runId, runs.map((run) => run.id)),
-    eq33(topscholarPlanRunItems.status, "failed")
+    eq34(topscholarPlanRunItems.status, "failed")
   ));
   const summaryByRun = /* @__PURE__ */ new Map();
   for (const item of failedItems) {
@@ -30738,27 +30738,27 @@ async function listPlanSyncRuns(businessAccountId, planId) {
   });
 }
 async function cancelPlanSyncRun(businessAccountId, runId) {
-  const [run] = await db.select().from(topscholarPlanRuns).where(and25(eq33(topscholarPlanRuns.id, runId), eq33(topscholarPlanRuns.businessAccountId, businessAccountId)));
+  const [run] = await db.select().from(topscholarPlanRuns).where(and26(eq34(topscholarPlanRuns.id, runId), eq34(topscholarPlanRuns.businessAccountId, businessAccountId)));
   if (!run) return null;
   if (["completed", "failed", "cancelled"].includes(run.status)) return run;
-  await db.update(topscholarPlanRunItems).set({ status: "cancelled", error: "Cancelled before processing.", completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(and25(eq33(topscholarPlanRunItems.runId, run.id), eq33(topscholarPlanRunItems.status, "queued")));
-  const activeItems = await db.select({ cpId: topscholarPlanRunItems.cpId }).from(topscholarPlanRunItems).where(and25(eq33(topscholarPlanRunItems.runId, run.id), eq33(topscholarPlanRunItems.status, "running")));
-  await db.update(topscholarPlanRunItems).set({ status: "cancelled", error: "Cancelled from the Plan sync queue.", completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(and25(
-    eq33(topscholarPlanRunItems.runId, run.id),
+  await db.update(topscholarPlanRunItems).set({ status: "cancelled", error: "Cancelled before processing.", completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(and26(eq34(topscholarPlanRunItems.runId, run.id), eq34(topscholarPlanRunItems.status, "queued")));
+  const activeItems = await db.select({ cpId: topscholarPlanRunItems.cpId }).from(topscholarPlanRunItems).where(and26(eq34(topscholarPlanRunItems.runId, run.id), eq34(topscholarPlanRunItems.status, "running")));
+  await db.update(topscholarPlanRunItems).set({ status: "cancelled", error: "Cancelled from the Plan sync queue.", completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(and26(
+    eq34(topscholarPlanRunItems.runId, run.id),
     inArray4(topscholarPlanRunItems.status, ["queued", "running"])
   ));
   if (activeItems.length > 0) {
-    await db.update(topscholarContentSync).set({ status: "cancelled", lastError: "Cancelled from the Plan sync queue.", updatedAt: /* @__PURE__ */ new Date() }).where(and25(
-      eq33(topscholarContentSync.businessAccountId, run.businessAccountId),
+    await db.update(topscholarContentSync).set({ status: "cancelled", lastError: "Cancelled from the Plan sync queue.", updatedAt: /* @__PURE__ */ new Date() }).where(and26(
+      eq34(topscholarContentSync.businessAccountId, run.businessAccountId),
       inArray4(topscholarContentSync.cpId, activeItems.map((item) => item.cpId))
     ));
   }
-  await db.update(topscholarPlanRuns).set({ status: "cancelled", activeCpId: null, completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(eq33(topscholarPlanRuns.id, run.id));
+  await db.update(topscholarPlanRuns).set({ status: "cancelled", activeCpId: null, completedAt: /* @__PURE__ */ new Date(), ...nowPatch() }).where(eq34(topscholarPlanRuns.id, run.id));
   await setPlanStatus(run.businessAccountId, run.planId, "cancelled", "Plan sync was cancelled. Any active CP ID may finish its current page.");
-  return (await db.select().from(topscholarPlanRuns).where(eq33(topscholarPlanRuns.id, run.id)))[0] || null;
+  return (await db.select().from(topscholarPlanRuns).where(eq34(topscholarPlanRuns.id, run.id)))[0] || null;
 }
 async function retryFailedPlanSyncItems(businessAccountId, runId) {
-  const [run] = await db.select().from(topscholarPlanRuns).where(and25(eq33(topscholarPlanRuns.id, runId), eq33(topscholarPlanRuns.businessAccountId, businessAccountId)));
+  const [run] = await db.select().from(topscholarPlanRuns).where(and26(eq34(topscholarPlanRuns.id, runId), eq34(topscholarPlanRuns.businessAccountId, businessAccountId)));
   if (!run) return null;
   if (run.status !== "failed") {
     return { run, requeuedCount: 0, skippedNonRetryableCount: 0 };
@@ -30766,23 +30766,23 @@ async function retryFailedPlanSyncItems(businessAccountId, runId) {
   const failedItems = await db.select({
     id: topscholarPlanRunItems.id,
     error: topscholarPlanRunItems.error
-  }).from(topscholarPlanRunItems).where(and25(eq33(topscholarPlanRunItems.runId, run.id), eq33(topscholarPlanRunItems.status, "failed")));
+  }).from(topscholarPlanRunItems).where(and26(eq34(topscholarPlanRunItems.runId, run.id), eq34(topscholarPlanRunItems.status, "failed")));
   const retryableItemIds = failedItems.filter((item) => !isNonRetryableEmbeddingFailure(item.error)).map((item) => item.id);
   const skippedNonRetryableCount = failedItems.length - retryableItemIds.length;
   if (retryableItemIds.length === 0) {
     return { run, requeuedCount: 0, skippedNonRetryableCount };
   }
-  const requeued = await db.update(topscholarPlanRunItems).set({ status: "queued", error: null, completedAt: null, ...nowPatch() }).where(and25(
-    eq33(topscholarPlanRunItems.runId, run.id),
-    eq33(topscholarPlanRunItems.status, "failed"),
+  const requeued = await db.update(topscholarPlanRunItems).set({ status: "queued", error: null, completedAt: null, ...nowPatch() }).where(and26(
+    eq34(topscholarPlanRunItems.runId, run.id),
+    eq34(topscholarPlanRunItems.status, "failed"),
     inArray4(topscholarPlanRunItems.id, retryableItemIds)
   )).returning({ id: topscholarPlanRunItems.id });
   if (requeued.length === 0) {
     return { run, requeuedCount: 0, skippedNonRetryableCount };
   }
-  const restarted = await db.update(topscholarPlanRuns).set({ status: "running", error: null, completedAt: null, ...nowPatch() }).where(and25(eq33(topscholarPlanRuns.id, run.id), eq33(topscholarPlanRuns.status, "failed"))).returning({ id: topscholarPlanRuns.id });
+  const restarted = await db.update(topscholarPlanRuns).set({ status: "running", error: null, completedAt: null, ...nowPatch() }).where(and26(eq34(topscholarPlanRuns.id, run.id), eq34(topscholarPlanRuns.status, "failed"))).returning({ id: topscholarPlanRuns.id });
   if (restarted.length === 0) {
-    const current = (await db.select().from(topscholarPlanRuns).where(eq33(topscholarPlanRuns.id, run.id)))[0];
+    const current = (await db.select().from(topscholarPlanRuns).where(eq34(topscholarPlanRuns.id, run.id)))[0];
     return current ? { run: current, requeuedCount: requeued.length, skippedNonRetryableCount } : null;
   }
   const refreshed = await refreshRun(run.id);
@@ -30795,7 +30795,7 @@ async function processPendingPlanRuns() {
   try {
     let candidates = await db.select().from(topscholarPlanRuns).where(inArray4(topscholarPlanRuns.status, ["queued", "resolving"])).orderBy(asc3(topscholarPlanRuns.createdAt)).limit(1);
     if (candidates.length === 0) {
-      candidates = await db.select().from(topscholarPlanRuns).where(eq33(topscholarPlanRuns.status, "running")).orderBy(asc3(topscholarPlanRuns.createdAt)).limit(1);
+      candidates = await db.select().from(topscholarPlanRuns).where(eq34(topscholarPlanRuns.status, "running")).orderBy(asc3(topscholarPlanRuns.createdAt)).limit(1);
     }
     for (const candidate of candidates) {
       const run = await claimRun(candidate);
@@ -31401,7 +31401,7 @@ __export(verification_exports, {
   runIncrementalVerification: () => runIncrementalVerification,
   runVerification: () => runVerification
 });
-import { and as and29, asc as asc5, eq as eq38 } from "drizzle-orm";
+import { and as and30, asc as asc5, eq as eq39 } from "drizzle-orm";
 function computeVerdict(findings) {
   let anyOtherBlockerFail = false;
   let anyWarningFail = false;
@@ -31420,15 +31420,15 @@ function computeVerdict(findings) {
   return "Eligible";
 }
 async function runVerification({ leadId, ruleSetId }) {
-  const [lead] = await db.select().from(whatsappLeads).where(eq38(whatsappLeads.id, leadId)).limit(1);
+  const [lead] = await db.select().from(whatsappLeads).where(eq39(whatsappLeads.id, leadId)).limit(1);
   if (!lead) throw new Error(`Lead ${leadId} not found`);
-  const [ruleSet] = await db.select().from(verificationRuleSets).where(and29(
-    eq38(verificationRuleSets.id, ruleSetId),
-    eq38(verificationRuleSets.businessAccountId, lead.businessAccountId)
+  const [ruleSet] = await db.select().from(verificationRuleSets).where(and30(
+    eq39(verificationRuleSets.id, ruleSetId),
+    eq39(verificationRuleSets.businessAccountId, lead.businessAccountId)
   )).limit(1);
   if (!ruleSet) throw new Error(`Rule set ${ruleSetId} not found for this business account`);
-  const rules = await db.select().from(verificationRules).where(and29(eq38(verificationRules.ruleSetId, ruleSetId), eq38(verificationRules.isActive, true))).orderBy(asc5(verificationRules.sortOrder), asc5(verificationRules.createdAt));
-  const attachments = await db.select().from(whatsappLeadAttachments).where(eq38(whatsappLeadAttachments.leadId, leadId));
+  const rules = await db.select().from(verificationRules).where(and30(eq39(verificationRules.ruleSetId, ruleSetId), eq39(verificationRules.isActive, true))).orderBy(asc5(verificationRules.sortOrder), asc5(verificationRules.createdAt));
+  const attachments = await db.select().from(whatsappLeadAttachments).where(eq39(whatsappLeadAttachments.leadId, leadId));
   const docsByType = /* @__PURE__ */ new Map();
   for (const att of attachments) {
     if (!att.documentCategory) continue;
@@ -31490,19 +31490,19 @@ async function runVerification({ leadId, ruleSetId }) {
     verificationResults: result,
     verificationRunAt: /* @__PURE__ */ new Date(),
     updatedAt: /* @__PURE__ */ new Date()
-  }).where(eq38(whatsappLeads.id, leadId));
+  }).where(eq39(whatsappLeads.id, leadId));
   return result;
 }
 async function getLeadVerification(leadId) {
-  const [lead] = await db.select({ result: whatsappLeads.verificationResults }).from(whatsappLeads).where(eq38(whatsappLeads.id, leadId)).limit(1);
+  const [lead] = await db.select({ result: whatsappLeads.verificationResults }).from(whatsappLeads).where(eq39(whatsappLeads.id, leadId)).limit(1);
   if (!lead || !lead.result) return null;
   return lead.result;
 }
 async function listRuleSets(businessAccountId) {
-  return db.select().from(verificationRuleSets).where(eq38(verificationRuleSets.businessAccountId, businessAccountId)).orderBy(asc5(verificationRuleSets.createdAt));
+  return db.select().from(verificationRuleSets).where(eq39(verificationRuleSets.businessAccountId, businessAccountId)).orderBy(asc5(verificationRuleSets.createdAt));
 }
 async function listRules(ruleSetId) {
-  return db.select().from(verificationRules).where(eq38(verificationRules.ruleSetId, ruleSetId)).orderBy(asc5(verificationRules.sortOrder), asc5(verificationRules.createdAt));
+  return db.select().from(verificationRules).where(eq39(verificationRules.ruleSetId, ruleSetId)).orderBy(asc5(verificationRules.sortOrder), asc5(verificationRules.createdAt));
 }
 function getRuleRequiredDocs(rule) {
   const cfg = rule.config || {};
@@ -31554,12 +31554,12 @@ function buildSessionRuleContext(collectedData, businessAccountId) {
 }
 async function runIncrementalVerification(input) {
   const { ruleSetId, businessAccountId, collectedData } = input;
-  const [ruleSet] = await db.select().from(verificationRuleSets).where(and29(
-    eq38(verificationRuleSets.id, ruleSetId),
-    eq38(verificationRuleSets.businessAccountId, businessAccountId)
+  const [ruleSet] = await db.select().from(verificationRuleSets).where(and30(
+    eq39(verificationRuleSets.id, ruleSetId),
+    eq39(verificationRuleSets.businessAccountId, businessAccountId)
   )).limit(1);
   if (!ruleSet) return { findings: [], failures: [], evaluated: 0, skippedMissingDocs: 0 };
-  const allRules = await db.select().from(verificationRules).where(and29(eq38(verificationRules.ruleSetId, ruleSetId), eq38(verificationRules.isActive, true))).orderBy(asc5(verificationRules.sortOrder), asc5(verificationRules.createdAt));
+  const allRules = await db.select().from(verificationRules).where(and30(eq39(verificationRules.ruleSetId, ruleSetId), eq39(verificationRules.isActive, true))).orderBy(asc5(verificationRules.sortOrder), asc5(verificationRules.createdAt));
   const rules = allRules.filter((r) => INCREMENTAL_RULE_TYPES.has(r.ruleType));
   if (rules.length === 0) return { findings: [], failures: [], evaluated: 0, skippedMissingDocs: 0 };
   const ctx = buildSessionRuleContext(collectedData, businessAccountId);
@@ -31622,7 +31622,7 @@ __export(whatsappService_exports, {
   whatsappService: () => whatsappService
 });
 import OpenAI21 from "openai";
-import { eq as eq40, ne as ne3, sql as sql23, and as and31, or as or5, asc as asc6, desc as desc13, gte as gte6, lte as lte4, isNull as isNull9 } from "drizzle-orm";
+import { eq as eq41, ne as ne3, sql as sql23, and as and32, or as or5, asc as asc6, desc as desc13, gte as gte6, lte as lte4, isNull as isNull9 } from "drizzle-orm";
 function normalizePhone3(phone) {
   let p = phone.replace(/[\s\-\(\)]/g, "");
   p = p.replace(/^\+91/, "").replace(/^91(?=\d{10}$)/, "").replace(/^0/, "");
@@ -31643,13 +31643,13 @@ var init_whatsappService = __esm({
         }
       }
       async getSettings(businessAccountId) {
-        const [settings] = await db.select().from(whatsappSettings).where(eq40(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+        const [settings] = await db.select().from(whatsappSettings).where(eq41(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
         return settings || null;
       }
       async saveSettings(businessAccountId, data) {
         const existing = await this.getSettings(businessAccountId);
         if (existing) {
-          const [updated] = await db.update(whatsappSettings).set({ ...data, updatedAt: /* @__PURE__ */ new Date() }).where(eq40(whatsappSettings.businessAccountId, businessAccountId)).returning();
+          const [updated] = await db.update(whatsappSettings).set({ ...data, updatedAt: /* @__PURE__ */ new Date() }).where(eq41(whatsappSettings.businessAccountId, businessAccountId)).returning();
           return updated;
         } else {
           const [created] = await db.insert(whatsappSettings).values({ businessAccountId, ...data }).returning();
@@ -31657,7 +31657,7 @@ var init_whatsappService = __esm({
         }
       }
       async extractLeadInfo(messageText, businessAccountId, customPrompt) {
-        const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq40(businessAccounts.id, businessAccountId)).limit(1);
+        const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq41(businessAccounts.id, businessAccountId)).limit(1);
         const apiKey = account?.openaiApiKey;
         if (!apiKey) {
           console.warn(`[WhatsApp] OpenAI API key not configured for business account ${businessAccountId}`);
@@ -31734,10 +31734,10 @@ For example:
         const settings = await this.getSettings(businessAccountId);
         const isFlowOnlyMode = settings?.leadGenerationMode === "flow_only";
         if (flowSessionId) {
-          const existingLeads = await db.select().from(whatsappLeads).where(and31(
-            eq40(whatsappLeads.businessAccountId, businessAccountId),
-            eq40(whatsappLeads.flowSessionId, flowSessionId),
-            eq40(whatsappLeads.direction, "incoming")
+          const existingLeads = await db.select().from(whatsappLeads).where(and32(
+            eq41(whatsappLeads.businessAccountId, businessAccountId),
+            eq41(whatsappLeads.flowSessionId, flowSessionId),
+            eq41(whatsappLeads.direction, "incoming")
           )).orderBy(asc6(whatsappLeads.receivedAt));
           if (existingLeads.length > 0) {
             const isDuplicate = existingLeads.some((l) => l.whatsappMessageId === messageId);
@@ -31763,23 +31763,23 @@ For example:
               lastMessageAt: /* @__PURE__ */ new Date(),
               lastMessage: messageText,
               conversationCount: sql23`COALESCE(${whatsappLeads.conversationCount}, 1) + 1`
-            }).where(eq40(whatsappLeads.id, originalLead.id));
+            }).where(eq41(whatsappLeads.id, originalLead.id));
             console.log(`[WhatsApp] Flow message stored for session ${flowSessionId}, activity updated`);
             return originalLead;
           }
         }
         if (!isFlowOnlyMode) {
           const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1e3);
-          const [existingBlankLead] = await db.select().from(whatsappLeads).where(and31(
-            eq40(whatsappLeads.businessAccountId, businessAccountId),
-            eq40(whatsappLeads.senderPhone, senderPhone),
-            eq40(whatsappLeads.status, "new"),
+          const [existingBlankLead] = await db.select().from(whatsappLeads).where(and32(
+            eq41(whatsappLeads.businessAccountId, businessAccountId),
+            eq41(whatsappLeads.senderPhone, senderPhone),
+            eq41(whatsappLeads.status, "new"),
             isNull9(whatsappLeads.customerName),
             sql23`(${whatsappLeads.extractedData} IS NULL OR ${whatsappLeads.extractedData} = '{}'::jsonb)`,
             gte6(whatsappLeads.receivedAt, twentyFourHoursAgo)
           )).limit(1);
           if (existingBlankLead) {
-            const [attachmentCheck] = await db.select({ count: sql23`count(*)` }).from(whatsappLeadAttachments).where(eq40(whatsappLeadAttachments.leadId, existingBlankLead.id));
+            const [attachmentCheck] = await db.select({ count: sql23`count(*)` }).from(whatsappLeadAttachments).where(eq41(whatsappLeadAttachments.leadId, existingBlankLead.id));
             if (Number(attachmentCheck?.count || 0) === 0) {
               await db.update(whatsappLeads).set({
                 flowSessionId: flowSessionId || null,
@@ -31787,7 +31787,7 @@ For example:
                 lastMessage: messageText,
                 conversationCount: sql23`COALESCE(${whatsappLeads.conversationCount}, 1) + 1`,
                 updatedAt: /* @__PURE__ */ new Date()
-              }).where(eq40(whatsappLeads.id, existingBlankLead.id));
+              }).where(eq41(whatsappLeads.id, existingBlankLead.id));
               if (messageText && messageText !== existingBlankLead.rawMessage) {
                 const messageRow = {
                   businessAccountId,
@@ -31832,10 +31832,10 @@ For example:
               console.log(`[WhatsApp] Lead created (flow_only mode, bypassed blank constraint): ${lead.id}`);
               return lead;
             }
-            const [existingLead] = await db.select().from(whatsappLeads).where(and31(
-              eq40(whatsappLeads.businessAccountId, businessAccountId),
-              eq40(whatsappLeads.senderPhone, senderPhone),
-              eq40(whatsappLeads.status, "new"),
+            const [existingLead] = await db.select().from(whatsappLeads).where(and32(
+              eq41(whatsappLeads.businessAccountId, businessAccountId),
+              eq41(whatsappLeads.senderPhone, senderPhone),
+              eq41(whatsappLeads.status, "new"),
               isNull9(whatsappLeads.customerName)
             )).orderBy(desc13(whatsappLeads.receivedAt)).limit(1);
             if (existingLead) {
@@ -31846,7 +31846,7 @@ For example:
                 lastMessage: messageText,
                 conversationCount: sql23`COALESCE(${whatsappLeads.conversationCount}, 1) + 1`,
                 updatedAt: /* @__PURE__ */ new Date()
-              }).where(eq40(whatsappLeads.id, existingLead.id));
+              }).where(eq41(whatsappLeads.id, existingLead.id));
               console.log(`[WhatsApp] Reused existing blank lead ${existingLead.id} for ${senderPhone} (conflict resolved)`);
               return { ...existingLead, flowSessionId: flowSessionId || null, rawMessage: messageText };
             }
@@ -31862,10 +31862,10 @@ For example:
         const leadCaptureEnabled = settings?.leadCaptureEnabled !== "false";
         if (isFlowOnlyMode && !flowSessionId) {
           console.log(`[WhatsApp] Flow-only mode: non-flow message from ${senderPhone}, storing as message_only`);
-          const allPhoneLeads = await db.select().from(whatsappLeads).where(and31(
-            eq40(whatsappLeads.businessAccountId, businessAccountId),
-            eq40(whatsappLeads.senderPhone, senderPhone),
-            eq40(whatsappLeads.direction, "incoming")
+          const allPhoneLeads = await db.select().from(whatsappLeads).where(and32(
+            eq41(whatsappLeads.businessAccountId, businessAccountId),
+            eq41(whatsappLeads.senderPhone, senderPhone),
+            eq41(whatsappLeads.direction, "incoming")
           )).orderBy(asc6(whatsappLeads.receivedAt));
           const messageRow = {
             businessAccountId,
@@ -31918,10 +31918,10 @@ For example:
           skipReason = "lead capture disabled";
         }
         if (flowSessionId) {
-          const existingLeads = await db.select().from(whatsappLeads).where(and31(
-            eq40(whatsappLeads.businessAccountId, businessAccountId),
-            eq40(whatsappLeads.flowSessionId, flowSessionId),
-            eq40(whatsappLeads.direction, "incoming")
+          const existingLeads = await db.select().from(whatsappLeads).where(and32(
+            eq41(whatsappLeads.businessAccountId, businessAccountId),
+            eq41(whatsappLeads.flowSessionId, flowSessionId),
+            eq41(whatsappLeads.direction, "incoming")
           )).orderBy(asc6(whatsappLeads.receivedAt));
           if (existingLeads.length > 0) {
             const isDuplicate = existingLeads.some((l) => l.whatsappMessageId === messageId);
@@ -31970,30 +31970,30 @@ For example:
             updateData.lastMessageAt = /* @__PURE__ */ new Date();
             updateData.lastMessage = messageText;
             updateData.conversationCount = sql23`COALESCE(${whatsappLeads.conversationCount}, 1) + 1`;
-            const [updatedLead] = await db.update(whatsappLeads).set(updateData).where(eq40(whatsappLeads.id, originalLead.id)).returning();
+            const [updatedLead] = await db.update(whatsappLeads).set(updateData).where(eq41(whatsappLeads.id, originalLead.id)).returning();
             console.log(`[WhatsApp] Lead fields merged into original lead ${updatedLead.id} for session ${flowSessionId}`);
             return updatedLead;
           }
         }
         if (!flowSessionId) {
-          const duplicateCheck = await db.select({ id: whatsappLeads.id }).from(whatsappLeads).where(and31(
-            eq40(whatsappLeads.businessAccountId, businessAccountId),
-            eq40(whatsappLeads.whatsappMessageId, messageId)
+          const duplicateCheck = await db.select({ id: whatsappLeads.id }).from(whatsappLeads).where(and32(
+            eq41(whatsappLeads.businessAccountId, businessAccountId),
+            eq41(whatsappLeads.whatsappMessageId, messageId)
           )).limit(1);
           if (duplicateCheck.length > 0) {
             console.log(`[WhatsApp] Duplicate message ${messageId} for phone ${senderPhone}, skipping`);
-            const qualifiedLead = await db.select().from(whatsappLeads).where(and31(
-              eq40(whatsappLeads.businessAccountId, businessAccountId),
-              eq40(whatsappLeads.senderPhone, senderPhone),
-              eq40(whatsappLeads.direction, "incoming"),
+            const qualifiedLead = await db.select().from(whatsappLeads).where(and32(
+              eq41(whatsappLeads.businessAccountId, businessAccountId),
+              eq41(whatsappLeads.senderPhone, senderPhone),
+              eq41(whatsappLeads.direction, "incoming"),
               ne3(whatsappLeads.status, "message_only")
             )).orderBy(asc6(whatsappLeads.receivedAt)).limit(1);
             return qualifiedLead[0] || null;
           }
-          const allPhoneLeads = await db.select().from(whatsappLeads).where(and31(
-            eq40(whatsappLeads.businessAccountId, businessAccountId),
-            eq40(whatsappLeads.senderPhone, senderPhone),
-            eq40(whatsappLeads.direction, "incoming")
+          const allPhoneLeads = await db.select().from(whatsappLeads).where(and32(
+            eq41(whatsappLeads.businessAccountId, businessAccountId),
+            eq41(whatsappLeads.senderPhone, senderPhone),
+            eq41(whatsappLeads.direction, "incoming")
           )).orderBy(asc6(whatsappLeads.receivedAt));
           if (allPhoneLeads.length > 0) {
             const originalLead = allPhoneLeads.find((l) => l.status !== "message_only") || allPhoneLeads[0];
@@ -32036,7 +32036,7 @@ For example:
               updateData.lastMessageAt = /* @__PURE__ */ new Date();
               updateData.lastMessage = messageText;
               updateData.conversationCount = sql23`COALESCE(${whatsappLeads.conversationCount}, 1) + 1`;
-              const [updatedLead] = await db.update(whatsappLeads).set(updateData).where(eq40(whatsappLeads.id, originalLead.id)).returning();
+              const [updatedLead] = await db.update(whatsappLeads).set(updateData).where(eq41(whatsappLeads.id, originalLead.id)).returning();
               console.log(`[WhatsApp] Lead fields merged into existing lead ${updatedLead.id} for phone ${senderPhone}`);
               return updatedLead;
             } else {
@@ -32044,7 +32044,7 @@ For example:
                 lastMessageAt: /* @__PURE__ */ new Date(),
                 lastMessage: messageText,
                 conversationCount: sql23`COALESCE(${whatsappLeads.conversationCount}, 1) + 1`
-              }).where(eq40(whatsappLeads.id, originalLead.id));
+              }).where(eq41(whatsappLeads.id, originalLead.id));
               console.log(`[WhatsApp] Message stored for phone ${senderPhone} (lead capture disabled), activity updated on lead ${originalLead.id}`);
             }
             return originalLead;
@@ -32242,12 +32242,12 @@ For example:
       }
       async getLeads(businessAccountId, options = {}) {
         const { limit = 20, offset = 0, status, search, includeMessageOnly = false, dateFrom, dateTo } = options;
-        const whereConditions = [eq40(whatsappLeads.businessAccountId, businessAccountId)];
+        const whereConditions = [eq41(whatsappLeads.businessAccountId, businessAccountId)];
         if (!includeMessageOnly && !status) {
           whereConditions.push(ne3(whatsappLeads.status, "message_only"));
         }
         if (status) {
-          whereConditions.push(eq40(whatsappLeads.status, status));
+          whereConditions.push(eq41(whatsappLeads.status, status));
         }
         if (search?.trim()) {
           const searchPattern = `%${search.trim()}%`;
@@ -32268,8 +32268,8 @@ For example:
         if (dateTo) {
           whereConditions.push(lte4(whatsappLeads.receivedAt, dateTo));
         }
-        const leads3 = await db.select().from(whatsappLeads).where(and31(...whereConditions)).orderBy(sql23`COALESCE(${whatsappLeads.lastMessageAt}, ${whatsappLeads.receivedAt}) DESC`).limit(limit).offset(offset);
-        const [countResult] = await db.select({ count: sql23`count(*)` }).from(whatsappLeads).where(and31(...whereConditions));
+        const leads3 = await db.select().from(whatsappLeads).where(and32(...whereConditions)).orderBy(sql23`COALESCE(${whatsappLeads.lastMessageAt}, ${whatsappLeads.receivedAt}) DESC`).limit(limit).offset(offset);
+        const [countResult] = await db.select({ count: sql23`count(*)` }).from(whatsappLeads).where(and32(...whereConditions));
         const leadIds = leads3.map((l) => l.id);
         let attachmentCounts = {};
         if (leadIds.length > 0) {
@@ -32291,17 +32291,17 @@ For example:
         };
       }
       async getLeadById(leadId, businessAccountId) {
-        const [lead] = await db.select().from(whatsappLeads).where(eq40(whatsappLeads.id, leadId)).limit(1);
+        const [lead] = await db.select().from(whatsappLeads).where(eq41(whatsappLeads.id, leadId)).limit(1);
         if (lead && lead.businessAccountId !== businessAccountId) {
           return null;
         }
         return lead || null;
       }
       async deleteLead(leadId) {
-        await db.delete(whatsappLeads).where(eq40(whatsappLeads.id, leadId));
+        await db.delete(whatsappLeads).where(eq41(whatsappLeads.id, leadId));
       }
       async updateLeadDocuments(leadId, documents) {
-        const [lead] = await db.select({ extractedData: whatsappLeads.extractedData }).from(whatsappLeads).where(eq40(whatsappLeads.id, leadId)).limit(1);
+        const [lead] = await db.select({ extractedData: whatsappLeads.extractedData }).from(whatsappLeads).where(eq41(whatsappLeads.id, leadId)).limit(1);
         const currentData = lead?.extractedData || {};
         const updatedData = {
           ...currentData,
@@ -32310,11 +32310,11 @@ For example:
             ...documents
           }
         };
-        await db.update(whatsappLeads).set({ extractedData: updatedData }).where(eq40(whatsappLeads.id, leadId));
+        await db.update(whatsappLeads).set({ extractedData: updatedData }).where(eq41(whatsappLeads.id, leadId));
         console.log(`[WhatsApp] Updated lead ${leadId} with ${Object.keys(documents).length} documents`);
       }
       async syncLeadDocuments(leadId, collectedDocs) {
-        const [lead] = await db.select({ extractedData: whatsappLeads.extractedData }).from(whatsappLeads).where(eq40(whatsappLeads.id, leadId)).limit(1);
+        const [lead] = await db.select({ extractedData: whatsappLeads.extractedData }).from(whatsappLeads).where(eq41(whatsappLeads.id, leadId)).limit(1);
         const currentData = lead?.extractedData || {};
         const currentDocs = currentData._documents || {};
         const currentRejected = currentData._rejectedDocuments || {};
@@ -32344,22 +32344,22 @@ For example:
         } else {
           delete updatedData._rejectedDocuments;
         }
-        await db.update(whatsappLeads).set({ extractedData: updatedData }).where(eq40(whatsappLeads.id, leadId));
+        await db.update(whatsappLeads).set({ extractedData: updatedData }).where(eq41(whatsappLeads.id, leadId));
         const validCount = Object.keys(nextDocs).length;
         const invalidCount = Object.values(collectedDocs).filter((d) => d?.isValid === false).length;
         console.log(`[WhatsApp] Synced documents for lead ${leadId}: ${validCount} valid, ${invalidCount} invalid (moved to _rejectedDocuments)`);
       }
       async findLeadByFlowSession(businessAccountId, flowSessionId) {
-        const leads3 = await db.select().from(whatsappLeads).where(and31(
-          eq40(whatsappLeads.businessAccountId, businessAccountId),
-          eq40(whatsappLeads.flowSessionId, flowSessionId)
+        const leads3 = await db.select().from(whatsappLeads).where(and32(
+          eq41(whatsappLeads.businessAccountId, businessAccountId),
+          eq41(whatsappLeads.flowSessionId, flowSessionId)
         )).orderBy(asc6(whatsappLeads.receivedAt));
         if (leads3.length === 0) return null;
         return leads3.find((l) => l.status !== "message_only") || leads3[0];
       }
       async findLeadByCustomerPhone(businessAccountId, customerPhone) {
         const normalizedPhone = customerPhone.replace(/[\s\-\(\)]/g, "");
-        const leads3 = await db.select().from(whatsappLeads).where(eq40(whatsappLeads.businessAccountId, businessAccountId)).orderBy(desc13(whatsappLeads.createdAt)).limit(200);
+        const leads3 = await db.select().from(whatsappLeads).where(eq41(whatsappLeads.businessAccountId, businessAccountId)).orderBy(desc13(whatsappLeads.createdAt)).limit(200);
         for (const lead of leads3) {
           if (lead.customerPhone) {
             const leadPhone = lead.customerPhone.replace(/[\s\-\(\)]/g, "");
@@ -32372,9 +32372,9 @@ For example:
       }
       async findMostRecentLeadBySender(businessAccountId, senderPhone) {
         const [lead] = await db.select().from(whatsappLeads).where(
-          and31(
-            eq40(whatsappLeads.businessAccountId, businessAccountId),
-            eq40(whatsappLeads.senderPhone, senderPhone)
+          and32(
+            eq41(whatsappLeads.businessAccountId, businessAccountId),
+            eq41(whatsappLeads.senderPhone, senderPhone)
           )
         ).orderBy(desc13(whatsappLeads.createdAt)).limit(1);
         return lead || null;
@@ -32391,10 +32391,10 @@ For example:
         return lead;
       }
       async getLeadAttachments(leadId) {
-        return await db.select().from(whatsappLeadAttachments).where(eq40(whatsappLeadAttachments.leadId, leadId));
+        return await db.select().from(whatsappLeadAttachments).where(eq41(whatsappLeadAttachments.leadId, leadId));
       }
       async updateLeadStatus(leadId, status) {
-        const [updated] = await db.update(whatsappLeads).set({ status, updatedAt: /* @__PURE__ */ new Date() }).where(eq40(whatsappLeads.id, leadId)).returning();
+        const [updated] = await db.update(whatsappLeads).set({ status, updatedAt: /* @__PURE__ */ new Date() }).where(eq41(whatsappLeads.id, leadId)).returning();
         return updated || null;
       }
       async updateLeadWithFlowData(businessAccountId, senderPhone, collectedData, flowSessionId, flowCompleted) {
@@ -32404,19 +32404,19 @@ For example:
         let existingLead;
         if (flowSessionId) {
           const sessionLeads = await db.select().from(whatsappLeads).where(
-            and31(
-              eq40(whatsappLeads.businessAccountId, businessAccountId),
-              eq40(whatsappLeads.senderPhone, senderPhone),
-              eq40(whatsappLeads.flowSessionId, flowSessionId)
+            and32(
+              eq41(whatsappLeads.businessAccountId, businessAccountId),
+              eq41(whatsappLeads.senderPhone, senderPhone),
+              eq41(whatsappLeads.flowSessionId, flowSessionId)
             )
           ).orderBy(desc13(whatsappLeads.createdAt));
           existingLead = sessionLeads.find((l) => l.status !== "message_only") || sessionLeads[0];
         }
         if (!existingLead) {
           const fallbackLeads = await db.select().from(whatsappLeads).where(
-            and31(
-              eq40(whatsappLeads.businessAccountId, businessAccountId),
-              eq40(whatsappLeads.senderPhone, senderPhone)
+            and32(
+              eq41(whatsappLeads.businessAccountId, businessAccountId),
+              eq41(whatsappLeads.senderPhone, senderPhone)
             )
           ).orderBy(desc13(whatsappLeads.createdAt)).limit(10);
           existingLead = fallbackLeads.find((l) => l.status !== "message_only") || fallbackLeads[0];
@@ -32427,13 +32427,13 @@ For example:
         }
         if (collectedData._blockedDuplicate) {
           console.log(`[WhatsApp] Blocked duplicate \u2014 keeping lead ${existingLead.id} as message_only, no merge`);
-          await db.update(whatsappLeads).set({ status: "message_only", updatedAt: /* @__PURE__ */ new Date() }).where(eq40(whatsappLeads.id, existingLead.id));
+          await db.update(whatsappLeads).set({ status: "message_only", updatedAt: /* @__PURE__ */ new Date() }).where(eq41(whatsappLeads.id, existingLead.id));
           return existingLead;
         }
         if (collectedData._updateExistingLeadId) {
           const targetLeadId = collectedData._updateExistingLeadId;
           console.log(`[WhatsApp] Updating existing lead ${targetLeadId} (>24h duplicate, overwriting data)`);
-          const [targetLead] = await db.select().from(whatsappLeads).where(eq40(whatsappLeads.id, targetLeadId)).limit(1);
+          const [targetLead] = await db.select().from(whatsappLeads).where(eq41(whatsappLeads.id, targetLeadId)).limit(1);
           if (targetLead) {
             const currentData = targetLead.extractedData || {};
             const mergedData2 = { ...currentData };
@@ -32459,17 +32459,17 @@ For example:
             if (mergedData2.customer_email) {
               updateSet2.customerEmail = mergedData2.customer_email;
             }
-            const [updated2] = await db.update(whatsappLeads).set(updateSet2).where(eq40(whatsappLeads.id, targetLeadId)).returning();
+            const [updated2] = await db.update(whatsappLeads).set(updateSet2).where(eq41(whatsappLeads.id, targetLeadId)).returning();
             if (existingLead.id !== targetLeadId) {
-              await db.update(whatsappLeads).set({ status: "message_only", updatedAt: /* @__PURE__ */ new Date() }).where(eq40(whatsappLeads.id, existingLead.id));
+              await db.update(whatsappLeads).set({ status: "message_only", updatedAt: /* @__PURE__ */ new Date() }).where(eq41(whatsappLeads.id, existingLead.id));
               const collectedDocs = collectedData._collectedDocuments || {};
               const newDocCategories = Object.keys(collectedDocs).filter((k) => collectedDocs[k]);
               const isUpdateFlow = Boolean(collectedData._updateExistingLeadId);
-              const incomingAttachments = await db.select({ id: whatsappLeadAttachments.id }).from(whatsappLeadAttachments).where(eq40(whatsappLeadAttachments.leadId, existingLead.id));
+              const incomingAttachments = await db.select({ id: whatsappLeadAttachments.id }).from(whatsappLeadAttachments).where(eq41(whatsappLeadAttachments.leadId, existingLead.id));
               if (!isUpdateFlow && incomingAttachments.length > 0) {
                 if (newDocCategories.length > 0) {
-                  const oldToDelete = await db.select({ id: whatsappLeadAttachments.id }).from(whatsappLeadAttachments).where(and31(
-                    eq40(whatsappLeadAttachments.leadId, targetLeadId),
+                  const oldToDelete = await db.select({ id: whatsappLeadAttachments.id }).from(whatsappLeadAttachments).where(and32(
+                    eq41(whatsappLeadAttachments.leadId, targetLeadId),
                     sql23`${whatsappLeadAttachments.documentCategory} IN (${sql23.join(newDocCategories.map((c) => sql23`${c}`), sql23`, `)})`
                   ));
                   if (oldToDelete.length > 0) {
@@ -32477,7 +32477,7 @@ For example:
                     console.log(`[WhatsApp] Deleted ${oldToDelete.length} old attachment(s) from lead ${targetLeadId} (replaced by new uploads: ${newDocCategories.join(", ")})`);
                   }
                 }
-                await db.update(whatsappLeadAttachments).set({ leadId: targetLeadId }).where(eq40(whatsappLeadAttachments.leadId, existingLead.id));
+                await db.update(whatsappLeadAttachments).set({ leadId: targetLeadId }).where(eq41(whatsappLeadAttachments.leadId, existingLead.id));
               } else {
                 console.log(`[WhatsApp] Skipping attachment delete+move for lead ${targetLeadId} (isUpdateFlow=${isUpdateFlow}, incomingCount=${incomingAttachments.length}) \u2014 docs already saved to target during upload`);
               }
@@ -32491,8 +32491,8 @@ For example:
           const normalizedPhone = normalizePhone3(customerPhone);
           const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1e3);
           const recentLeads = await db.select().from(whatsappLeads).where(
-            and31(
-              eq40(whatsappLeads.businessAccountId, businessAccountId),
+            and32(
+              eq41(whatsappLeads.businessAccountId, businessAccountId),
               ne3(whatsappLeads.status, "message_only"),
               gte6(whatsappLeads.createdAt, twentyFourHoursAgo)
             )
@@ -32540,10 +32540,10 @@ For example:
             if (mergedData2.customer_email) {
               updateSet2.customerEmail = mergedData2.customer_email;
             }
-            const [updated2] = await db.update(whatsappLeads).set(updateSet2).where(eq40(whatsappLeads.id, duplicateLead.id)).returning();
+            const [updated2] = await db.update(whatsappLeads).set(updateSet2).where(eq41(whatsappLeads.id, duplicateLead.id)).returning();
             if (existingLead.id !== duplicateLead.id) {
-              await db.update(whatsappLeads).set({ status: "message_only", updatedAt: /* @__PURE__ */ new Date() }).where(eq40(whatsappLeads.id, existingLead.id));
-              await db.update(whatsappLeadAttachments).set({ leadId: duplicateLead.id }).where(eq40(whatsappLeadAttachments.leadId, existingLead.id));
+              await db.update(whatsappLeads).set({ status: "message_only", updatedAt: /* @__PURE__ */ new Date() }).where(eq41(whatsappLeads.id, existingLead.id));
+              await db.update(whatsappLeadAttachments).set({ leadId: duplicateLead.id }).where(eq41(whatsappLeadAttachments.leadId, existingLead.id));
               console.log(`[WhatsApp] Demoted session lead ${existingLead.id} to message_only and moved attachments to ${duplicateLead.id}`);
             }
             return updated2 || null;
@@ -32570,16 +32570,16 @@ For example:
         if (collectedData.customer_email && isPlaceholder(existingLead.customerEmail)) {
           updateSet.customerEmail = collectedData.customer_email;
         }
-        const [updated] = await db.update(whatsappLeads).set(updateSet).where(eq40(whatsappLeads.id, existingLead.id)).returning();
+        const [updated] = await db.update(whatsappLeads).set(updateSet).where(eq41(whatsappLeads.id, existingLead.id)).returning();
         console.log(`[WhatsApp] Updated lead ${existingLead.id} with flow collected data:`, collectedData);
         return updated || null;
       }
       async findBusinessByWebhookSecret(webhookSecret) {
-        const [settings] = await db.select().from(whatsappSettings).where(eq40(whatsappSettings.webhookSecret, webhookSecret)).limit(1);
+        const [settings] = await db.select().from(whatsappSettings).where(eq41(whatsappSettings.webhookSecret, webhookSecret)).limit(1);
         return settings?.businessAccountId || null;
       }
       async findBusinessByWhatsappNumber(whatsappNumber) {
-        const [settings] = await db.select().from(whatsappSettings).where(eq40(whatsappSettings.whatsappNumber, whatsappNumber)).limit(1);
+        const [settings] = await db.select().from(whatsappSettings).where(eq41(whatsappSettings.whatsappNumber, whatsappNumber)).limit(1);
         return settings?.businessAccountId || null;
       }
       generateWebhookSecret() {
@@ -32745,14 +32745,14 @@ For example:
       async deleteConversation(businessAccountId, senderPhone, sessionStart, sessionEnd) {
         return await db.transaction(async (tx) => {
           const whereConditions = [
-            eq40(whatsappLeads.businessAccountId, businessAccountId),
-            eq40(whatsappLeads.senderPhone, senderPhone)
+            eq41(whatsappLeads.businessAccountId, businessAccountId),
+            eq41(whatsappLeads.senderPhone, senderPhone)
           ];
           if (sessionStart && sessionEnd) {
             whereConditions.push(sql23`${whatsappLeads.receivedAt} >= ${sessionStart}::timestamp`);
             whereConditions.push(sql23`${whatsappLeads.receivedAt} <= ${sessionEnd}::timestamp`);
           }
-          const leadsToDelete = await tx.select({ id: whatsappLeads.id, flowSessionId: whatsappLeads.flowSessionId }).from(whatsappLeads).where(and31(...whereConditions));
+          const leadsToDelete = await tx.select({ id: whatsappLeads.id, flowSessionId: whatsappLeads.flowSessionId }).from(whatsappLeads).where(and32(...whereConditions));
           if (leadsToDelete.length === 0) return 0;
           const leadIds = leadsToDelete.map((l) => l.id);
           await tx.delete(whatsappLeadAttachments).where(sql23`${whatsappLeadAttachments.leadId} IN (${sql23.join(leadIds.map((id) => sql23`${id}`), sql23`, `)})`);
@@ -32770,19 +32770,19 @@ For example:
         const beforeCondition = before ? sql23`${whatsappLeads.receivedAt} < ${before}::timestamp` : void 0;
         if (flowSessionId) {
           const conditions = [
-            eq40(whatsappLeads.businessAccountId, businessAccountId),
-            eq40(whatsappLeads.senderPhone, senderPhone),
-            eq40(whatsappLeads.flowSessionId, flowSessionId)
+            eq41(whatsappLeads.businessAccountId, businessAccountId),
+            eq41(whatsappLeads.senderPhone, senderPhone),
+            eq41(whatsappLeads.flowSessionId, flowSessionId)
           ];
           if (beforeCondition) conditions.push(beforeCondition);
-          const sessionMessages = await db.select().from(whatsappLeads).where(and31(...conditions)).orderBy(desc13(whatsappLeads.receivedAt)).limit(limit + 1);
+          const sessionMessages = await db.select().from(whatsappLeads).where(and32(...conditions)).orderBy(desc13(whatsappLeads.receivedAt)).limit(limit + 1);
           if (!beforeCondition && sessionMessages.length > 0) {
             const earliest = sessionMessages[sessionMessages.length - 1];
             const earliestTs = earliest.receivedAt instanceof Date ? earliest.receivedAt : new Date(String(earliest.receivedAt));
             const windowStart = new Date(earliestTs.getTime() - 5 * 60 * 1e3);
-            const contextMessages = await db.select().from(whatsappLeads).where(and31(
-              eq40(whatsappLeads.businessAccountId, businessAccountId),
-              eq40(whatsappLeads.senderPhone, senderPhone),
+            const contextMessages = await db.select().from(whatsappLeads).where(and32(
+              eq41(whatsappLeads.businessAccountId, businessAccountId),
+              eq41(whatsappLeads.senderPhone, senderPhone),
               ne3(whatsappLeads.flowSessionId, flowSessionId),
               sql23`${whatsappLeads.receivedAt} < ${earliestTs.toISOString()}::timestamp`,
               sql23`${whatsappLeads.receivedAt} >= ${windowStart.toISOString()}::timestamp`
@@ -32793,20 +32793,20 @@ For example:
           }
         } else if (sessionStart && sessionEnd) {
           const conditions = [
-            eq40(whatsappLeads.businessAccountId, businessAccountId),
-            eq40(whatsappLeads.senderPhone, senderPhone),
+            eq41(whatsappLeads.businessAccountId, businessAccountId),
+            eq41(whatsappLeads.senderPhone, senderPhone),
             sql23`${whatsappLeads.receivedAt} >= ${sessionStart}::timestamp`,
             sql23`${whatsappLeads.receivedAt} <= ${sessionEnd}::timestamp`
           ];
           if (beforeCondition) conditions.push(beforeCondition);
-          messages2 = await db.select().from(whatsappLeads).where(and31(...conditions)).orderBy(desc13(whatsappLeads.receivedAt)).limit(limit + 1);
+          messages2 = await db.select().from(whatsappLeads).where(and32(...conditions)).orderBy(desc13(whatsappLeads.receivedAt)).limit(limit + 1);
         } else {
           const conditions = [
-            eq40(whatsappLeads.businessAccountId, businessAccountId),
-            eq40(whatsappLeads.senderPhone, senderPhone)
+            eq41(whatsappLeads.businessAccountId, businessAccountId),
+            eq41(whatsappLeads.senderPhone, senderPhone)
           ];
           if (beforeCondition) conditions.push(beforeCondition);
-          messages2 = await db.select().from(whatsappLeads).where(and31(...conditions)).orderBy(desc13(whatsappLeads.receivedAt)).limit(limit + 1);
+          messages2 = await db.select().from(whatsappLeads).where(and32(...conditions)).orderBy(desc13(whatsappLeads.receivedAt)).limit(limit + 1);
         }
         const hasMore = messages2.length > limit;
         if (hasMore) {
@@ -32842,7 +32842,7 @@ For example:
             flowId: whatsappFlowSessions.flowId,
             createdAt: whatsappFlowSessions.createdAt,
             flowName: whatsappFlows.name
-          }).from(whatsappFlowSessions).leftJoin(whatsappFlows, eq40(whatsappFlowSessions.flowId, whatsappFlows.id)).where(sql23`${whatsappFlowSessions.id} IN (${sql23.join(uniqueSessionIds.map((id) => sql23`${id}`), sql23`, `)})`);
+          }).from(whatsappFlowSessions).leftJoin(whatsappFlows, eq41(whatsappFlowSessions.flowId, whatsappFlows.id)).where(sql23`${whatsappFlowSessions.id} IN (${sql23.join(uniqueSessionIds.map((id) => sql23`${id}`), sql23`, `)})`);
           flowSessions = sessionDetails.map((s) => ({
             id: s.id,
             flowName: s.flowName || "Journey",
@@ -32859,10 +32859,10 @@ For example:
       }
       // Lead Fields Management
       async getLeadFields(businessAccountId) {
-        let fields = await db.select().from(whatsappLeadFields).where(eq40(whatsappLeadFields.businessAccountId, businessAccountId)).orderBy(asc6(whatsappLeadFields.displayOrder));
+        let fields = await db.select().from(whatsappLeadFields).where(eq41(whatsappLeadFields.businessAccountId, businessAccountId)).orderBy(asc6(whatsappLeadFields.displayOrder));
         if (fields.length === 0) {
           await this.createDefaultLeadFields(businessAccountId);
-          fields = await db.select().from(whatsappLeadFields).where(eq40(whatsappLeadFields.businessAccountId, businessAccountId)).orderBy(asc6(whatsappLeadFields.displayOrder));
+          fields = await db.select().from(whatsappLeadFields).where(eq41(whatsappLeadFields.businessAccountId, businessAccountId)).orderBy(asc6(whatsappLeadFields.displayOrder));
         }
         return fields;
       }
@@ -32880,7 +32880,7 @@ For example:
         }
       }
       async createLeadField(businessAccountId, data) {
-        const maxOrder = await db.select({ maxOrder: sql23`COALESCE(MAX(display_order), 0)` }).from(whatsappLeadFields).where(eq40(whatsappLeadFields.businessAccountId, businessAccountId));
+        const maxOrder = await db.select({ maxOrder: sql23`COALESCE(MAX(display_order), 0)` }).from(whatsappLeadFields).where(eq41(whatsappLeadFields.businessAccountId, businessAccountId));
         const [field] = await db.insert(whatsappLeadFields).values({
           businessAccountId,
           fieldKey: data.fieldKey.toLowerCase().replace(/\s+/g, "_"),
@@ -32904,19 +32904,19 @@ For example:
         if (data.defaultCrmFieldKey !== void 0) updateData.defaultCrmFieldKey = data.defaultCrmFieldKey;
         if (data.allowedValues !== void 0) updateData.allowedValues = data.allowedValues && data.allowedValues.length > 0 ? data.allowedValues : null;
         const [field] = await db.update(whatsappLeadFields).set(updateData).where(
-          and31(
-            eq40(whatsappLeadFields.id, fieldId),
-            eq40(whatsappLeadFields.businessAccountId, businessAccountId)
+          and32(
+            eq41(whatsappLeadFields.id, fieldId),
+            eq41(whatsappLeadFields.businessAccountId, businessAccountId)
           )
         ).returning();
         return field || null;
       }
       async deleteLeadField(businessAccountId, fieldId) {
         await db.delete(whatsappLeadFields).where(
-          and31(
-            eq40(whatsappLeadFields.id, fieldId),
-            eq40(whatsappLeadFields.businessAccountId, businessAccountId),
-            eq40(whatsappLeadFields.isDefault, false)
+          and32(
+            eq41(whatsappLeadFields.id, fieldId),
+            eq41(whatsappLeadFields.businessAccountId, businessAccountId),
+            eq41(whatsappLeadFields.isDefault, false)
           )
         );
       }
@@ -33888,7 +33888,7 @@ var documentTypeService_exports = {};
 __export(documentTypeService_exports, {
   documentTypeService: () => documentTypeService
 });
-import { eq as eq41, and as and32 } from "drizzle-orm";
+import { eq as eq42, and as and33 } from "drizzle-orm";
 function normalizeScanModel(value) {
   if (!value) return null;
   return ALLOWED_SCAN_MODELS.has(value) ? value : null;
@@ -33995,7 +33995,7 @@ var init_documentTypeService = __esm({
       CACHE_TTL_MS = 5 * 60 * 1e3;
       async seedDefaultsForAccount(businessAccountId) {
         for (const def of SYSTEM_DEFAULTS) {
-          const existing = await db.select({ id: documentTypes.id }).from(documentTypes).where(and32(eq41(documentTypes.businessAccountId, businessAccountId), eq41(documentTypes.key, def.key))).limit(1);
+          const existing = await db.select({ id: documentTypes.id }).from(documentTypes).where(and33(eq42(documentTypes.businessAccountId, businessAccountId), eq42(documentTypes.key, def.key))).limit(1);
           if (existing.length === 0) {
             await db.insert(documentTypes).values({
               businessAccountId,
@@ -34010,10 +34010,10 @@ var init_documentTypeService = __esm({
               version: 1
             });
           } else if (def.leadFieldMappings.length > 0) {
-            const row = await db.select({ leadFieldMappings: documentTypes.leadFieldMappings }).from(documentTypes).where(eq41(documentTypes.id, existing[0].id)).limit(1);
+            const row = await db.select({ leadFieldMappings: documentTypes.leadFieldMappings }).from(documentTypes).where(eq42(documentTypes.id, existing[0].id)).limit(1);
             const current = row[0]?.leadFieldMappings || [];
             if (current.length === 0) {
-              await db.update(documentTypes).set({ leadFieldMappings: def.leadFieldMappings }).where(eq41(documentTypes.id, existing[0].id));
+              await db.update(documentTypes).set({ leadFieldMappings: def.leadFieldMappings }).where(eq42(documentTypes.id, existing[0].id));
             }
           }
         }
@@ -34024,7 +34024,7 @@ var init_documentTypeService = __esm({
           return cached.data;
         }
         await this.seedDefaultsForAccount(businessAccountId);
-        const rows = await db.select().from(documentTypes).where(eq41(documentTypes.businessAccountId, businessAccountId));
+        const rows = await db.select().from(documentTypes).where(eq42(documentTypes.businessAccountId, businessAccountId));
         const configs = rows.map((r) => {
           let fields = r.extractionFields || [];
           const rawRules = r.validationRules;
@@ -34107,7 +34107,7 @@ var init_documentTypeService = __esm({
         };
       }
       async updateDocumentType(id, businessAccountId, data, changedBy) {
-        const existing = await db.select().from(documentTypes).where(and32(eq41(documentTypes.id, id), eq41(documentTypes.businessAccountId, businessAccountId))).limit(1);
+        const existing = await db.select().from(documentTypes).where(and33(eq42(documentTypes.id, id), eq42(documentTypes.businessAccountId, businessAccountId))).limit(1);
         if (existing.length === 0) return null;
         const old = existing[0];
         const promptChanged = data.promptTemplate !== void 0 && data.promptTemplate !== old.promptTemplate;
@@ -34132,7 +34132,7 @@ var init_documentTypeService = __esm({
         if (data.isActive !== void 0) updateData.isActive = data.isActive;
         if ("confirmationRequired" in data) updateData.confirmationRequired = data.confirmationRequired ?? null;
         if ("scanModel" in data) updateData.scanModel = normalizeScanModel(data.scanModel);
-        const [updated] = await db.update(documentTypes).set(updateData).where(and32(eq41(documentTypes.id, id), eq41(documentTypes.businessAccountId, businessAccountId))).returning();
+        const [updated] = await db.update(documentTypes).set(updateData).where(and33(eq42(documentTypes.id, id), eq42(documentTypes.businessAccountId, businessAccountId))).returning();
         this.invalidateCache(businessAccountId);
         return {
           id: updated.id,
@@ -34151,15 +34151,15 @@ var init_documentTypeService = __esm({
         };
       }
       async deleteDocumentType(id, businessAccountId) {
-        const existing = await db.select().from(documentTypes).where(and32(eq41(documentTypes.id, id), eq41(documentTypes.businessAccountId, businessAccountId))).limit(1);
+        const existing = await db.select().from(documentTypes).where(and33(eq42(documentTypes.id, id), eq42(documentTypes.businessAccountId, businessAccountId))).limit(1);
         if (existing.length === 0) return false;
         if (existing[0].isSystemDefault) return false;
-        await db.delete(documentTypes).where(eq41(documentTypes.id, id));
+        await db.delete(documentTypes).where(eq42(documentTypes.id, id));
         this.invalidateCache(businessAccountId);
         return true;
       }
       async getPromptHistory(documentTypeId) {
-        return db.select().from(documentTypePromptHistory).where(eq41(documentTypePromptHistory.documentTypeId, documentTypeId)).orderBy(documentTypePromptHistory.changedAt);
+        return db.select().from(documentTypePromptHistory).where(eq42(documentTypePromptHistory.documentTypeId, documentTypeId)).orderBy(documentTypePromptHistory.changedAt);
       }
       buildExtractionPrompt(config) {
         const fieldList = config.extractionFields.map((f) => {
@@ -34388,7 +34388,7 @@ __export(documentIdentificationService_exports, {
   documentIdentificationService: () => documentIdentificationService
 });
 import OpenAI22 from "openai";
-import { eq as eq42 } from "drizzle-orm";
+import { eq as eq43 } from "drizzle-orm";
 var DocumentIdentificationService, documentIdentificationService;
 var init_documentIdentificationService = __esm({
   "server/services/documentIdentificationService.ts"() {
@@ -34497,7 +34497,7 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
           return this.classifyAndStrictExtract(businessAccountId, [imageUrl], allowedDocTypes, sideHint);
         }
         try {
-          const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq42(businessAccounts.id, businessAccountId)).limit(1);
+          const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq43(businessAccounts.id, businessAccountId)).limit(1);
           const apiKey = account?.openaiApiKey;
           if (!apiKey) {
             console.warn(`[Document ID] OpenAI API key not configured for business ${businessAccountId}`);
@@ -34585,15 +34585,15 @@ Identify this document, extract all visible information, and validate its authen
           }
           parser = new PDFParse(options);
           const result = await parser.getText();
-          const text2 = (result?.text || "").trim();
-          if (!text2 || text2.length < 10) {
+          const text3 = (result?.text || "").trim();
+          if (!text3 || text3.length < 10) {
             return {
               success: false,
               isScannedDocument: true,
               error: "PDF contains no readable text. It may be a scanned document."
             };
           }
-          return { success: true, text: text2 };
+          return { success: true, text: text3 };
         } catch (error) {
           if (PasswordException && error instanceof PasswordException || error.constructor?.name === "PasswordException" || (error.name || "").includes("PasswordException") || (error.message || "").toLowerCase().includes("password") || (error.message || "").toLowerCase().includes("encrypted")) {
             return {
@@ -34749,9 +34749,9 @@ Identify this document, extract all visible information, and validate its authen
           }];
         }
       }
-      async identifyDocumentFromText(businessAccountId, text2) {
+      async identifyDocumentFromText(businessAccountId, text3) {
         try {
-          const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq42(businessAccounts.id, businessAccountId)).limit(1);
+          const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq43(businessAccounts.id, businessAccountId)).limit(1);
           const apiKey = account?.openaiApiKey;
           if (!apiKey) {
             return {
@@ -34764,7 +34764,7 @@ Identify this document, extract all visible information, and validate its authen
           }
           const systemPrompt = await this.buildSystemPrompt(businessAccountId);
           const openai = new OpenAI22({ apiKey, timeout: 3e4 });
-          const truncatedText = text2.substring(0, 5e3);
+          const truncatedText = text3.substring(0, 5e3);
           const response = await openai.chat.completions.create({
             model: "gpt-4o-mini",
             messages: [
@@ -35002,7 +35002,7 @@ Return JSON exactly matching the enforced schema. Do not add prose outside the J
               _extractionTier: tierLabel
             };
           }
-          const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq42(businessAccounts.id, businessAccountId)).limit(1);
+          const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq43(businessAccounts.id, businessAccountId)).limit(1);
           const apiKey = account?.openaiApiKey;
           if (!apiKey) {
             return {
@@ -35097,7 +35097,7 @@ ${userInstruction}` : userInstruction
         }
         const allowedNorm = allowedPairs.map((p) => p.norm);
         try {
-          const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq42(businessAccounts.id, businessAccountId)).limit(1);
+          const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq43(businessAccounts.id, businessAccountId)).limit(1);
           const apiKey = account?.openaiApiKey;
           if (!apiKey) {
             return { docType: "unknown", confidence: 0, validationNotes: "OpenAI API key not configured" };
@@ -35226,7 +35226,7 @@ __export(whatsappFlowService_exports, {
   WhatsappFlowService: () => WhatsappFlowService,
   whatsappFlowService: () => whatsappFlowService
 });
-import { eq as eq43, and as and33, desc as desc14, sql as sql24, asc as asc7, ne as ne4, gte as gte7, ilike as ilike4 } from "drizzle-orm";
+import { eq as eq44, and as and34, desc as desc14, sql as sql24, asc as asc7, ne as ne4, gte as gte7, ilike as ilike4 } from "drizzle-orm";
 import OpenAI23 from "openai";
 function normalizePhone4(phone) {
   let p = phone.replace(/[\s\-\(\)]/g, "");
@@ -35285,7 +35285,7 @@ var init_whatsappFlowService = __esm({
         if (cached) {
           return cached;
         }
-        const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey, name: businessAccounts.name }).from(businessAccounts).where(eq43(businessAccounts.id, businessAccountId)).limit(1);
+        const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey, name: businessAccounts.name }).from(businessAccounts).where(eq44(businessAccounts.id, businessAccountId)).limit(1);
         const result = { apiKey: account?.openaiApiKey || null, name: account?.name || null };
         this.apiKeyCache.set(businessAccountId, { data: result, ts: Date.now() });
         return result;
@@ -35329,8 +35329,8 @@ var init_whatsappFlowService = __esm({
           return { isDuplicate: false, isRecent: false };
         }
         const existingLeads = await db.select().from(whatsappLeads).where(
-          and33(
-            eq43(whatsappLeads.businessAccountId, businessAccountId),
+          and34(
+            eq44(whatsappLeads.businessAccountId, businessAccountId),
             ne4(whatsappLeads.status, "message_only")
           )
         ).orderBy(desc14(whatsappLeads.createdAt)).limit(100);
@@ -35975,9 +35975,9 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
           return cached;
         }
         const [flow] = await db.select().from(whatsappFlows).where(
-          and33(
-            eq43(whatsappFlows.businessAccountId, businessAccountId),
-            eq43(whatsappFlows.isActive, "true")
+          and34(
+            eq44(whatsappFlows.businessAccountId, businessAccountId),
+            eq44(whatsappFlows.isActive, "true")
           )
         ).limit(1);
         const result = flow || null;
@@ -35985,7 +35985,7 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
         return result;
       }
       async getFlowById(flowId) {
-        const [flow] = await db.select().from(whatsappFlows).where(eq43(whatsappFlows.id, flowId)).limit(1);
+        const [flow] = await db.select().from(whatsappFlows).where(eq44(whatsappFlows.id, flowId)).limit(1);
         return flow || null;
       }
       async getFlowSteps(flowId) {
@@ -35993,11 +35993,11 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
         if (cached !== void 0) {
           return cached;
         }
-        const steps = await db.select().from(whatsappFlowSteps).where(eq43(whatsappFlowSteps.flowId, flowId)).orderBy(asc7(whatsappFlowSteps.stepOrder));
+        const steps = await db.select().from(whatsappFlowSteps).where(eq44(whatsappFlowSteps.flowId, flowId)).orderBy(asc7(whatsappFlowSteps.stepOrder));
         const needsNormalization = steps.some((s) => s.stepKey.startsWith("step_"));
         if (needsNormalization) {
           await this.normalizeStepKeys(flowId, steps);
-          const normalized = await db.select().from(whatsappFlowSteps).where(eq43(whatsappFlowSteps.flowId, flowId)).orderBy(asc7(whatsappFlowSteps.stepOrder));
+          const normalized = await db.select().from(whatsappFlowSteps).where(eq44(whatsappFlowSteps.flowId, flowId)).orderBy(asc7(whatsappFlowSteps.stepOrder));
           this.stepsCache.set(flowId, { data: normalized, ts: Date.now() });
           return normalized;
         }
@@ -36016,19 +36016,19 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
         }
         for (let i = 0; i < steps.length; i++) {
           const newKey = String(i + 1);
-          await db.update(whatsappFlowSteps).set({ stepKey: newKey }).where(eq43(whatsappFlowSteps.id, steps[i].id));
+          await db.update(whatsappFlowSteps).set({ stepKey: newKey }).where(eq44(whatsappFlowSteps.id, steps[i].id));
         }
         if (Object.keys(keyMapping).length > 0) {
           await this.updateGoToReferences(flowId, keyMapping);
           const activeSessions = await db.select().from(whatsappFlowSessions).where(
-            and33(
-              eq43(whatsappFlowSessions.flowId, flowId),
-              eq43(whatsappFlowSessions.status, "active")
+            and34(
+              eq44(whatsappFlowSessions.flowId, flowId),
+              eq44(whatsappFlowSessions.status, "active")
             )
           );
           for (const session of activeSessions) {
             if (session.currentStepKey && keyMapping[session.currentStepKey]) {
-              await db.update(whatsappFlowSessions).set({ currentStepKey: keyMapping[session.currentStepKey] }).where(eq43(whatsappFlowSessions.id, session.id));
+              await db.update(whatsappFlowSessions).set({ currentStepKey: keyMapping[session.currentStepKey] }).where(eq44(whatsappFlowSessions.id, session.id));
               console.log(`[WhatsApp Flow] Updated session ${session.id} currentStepKey: ${session.currentStepKey} -> ${keyMapping[session.currentStepKey]}`);
             }
           }
@@ -36037,9 +36037,9 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
       }
       async getStepByKey(flowId, stepKey) {
         const [step] = await db.select().from(whatsappFlowSteps).where(
-          and33(
-            eq43(whatsappFlowSteps.flowId, flowId),
-            eq43(whatsappFlowSteps.stepKey, stepKey)
+          and34(
+            eq44(whatsappFlowSteps.flowId, flowId),
+            eq44(whatsappFlowSteps.stepKey, stepKey)
           )
         ).limit(1);
         return step || null;
@@ -36047,17 +36047,17 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
       async findCompletedLeadForSender(businessAccountId, senderPhone) {
         const normalizedSender = normalizePhone4(senderPhone);
         const completedSessions = await db.select().from(whatsappFlowSessions).where(
-          and33(
-            eq43(whatsappFlowSessions.businessAccountId, businessAccountId),
-            eq43(whatsappFlowSessions.status, "completed")
+          and34(
+            eq44(whatsappFlowSessions.businessAccountId, businessAccountId),
+            eq44(whatsappFlowSessions.status, "completed")
           )
         ).orderBy(desc14(whatsappFlowSessions.createdAt)).limit(20);
         const matchedSession = completedSessions.find((s) => normalizePhone4(s.senderPhone) === normalizedSender);
         if (matchedSession) {
           const leads3 = await db.select().from(whatsappLeads).where(
-            and33(
-              eq43(whatsappLeads.businessAccountId, businessAccountId),
-              eq43(whatsappLeads.flowSessionId, matchedSession.id)
+            and34(
+              eq44(whatsappLeads.businessAccountId, businessAccountId),
+              eq44(whatsappLeads.flowSessionId, matchedSession.id)
             )
           ).orderBy(desc14(whatsappLeads.createdAt)).limit(5);
           const qualifiedLead = leads3.find((l) => l.status !== "message_only") || leads3[0];
@@ -36066,8 +36066,8 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
           }
         }
         const recentLeads = await db.select().from(whatsappLeads).where(
-          and33(
-            eq43(whatsappLeads.businessAccountId, businessAccountId),
+          and34(
+            eq44(whatsappLeads.businessAccountId, businessAccountId),
             ne4(whatsappLeads.status, "message_only")
           )
         ).orderBy(desc14(whatsappLeads.createdAt)).limit(20);
@@ -36195,10 +36195,10 @@ Example: {"name": null, "phone": "9876543210", "email": null, "address": "123 Ma
       }
       async startUpdateSession(businessAccountId, flowId, senderPhone, startStepKey, existingLeadId, existingCollectedData, sessionTimeoutMinutes) {
         await db.update(whatsappFlowSessions).set({ status: "abandoned" }).where(
-          and33(
-            eq43(whatsappFlowSessions.businessAccountId, businessAccountId),
-            eq43(whatsappFlowSessions.senderPhone, senderPhone),
-            eq43(whatsappFlowSessions.status, "active")
+          and34(
+            eq44(whatsappFlowSessions.businessAccountId, businessAccountId),
+            eq44(whatsappFlowSessions.senderPhone, senderPhone),
+            eq44(whatsappFlowSessions.status, "active")
           )
         );
         let timeoutMinutes = sessionTimeoutMinutes;
@@ -36302,13 +36302,13 @@ You can update one or more fields at a time. Type "done" when finished.`
             };
           }
           if (normalizedMessage === "start_new" || normalizedMessage === "start new") {
-            const [cooldownSettings] = await db.select({ newApplicationCooldownDays: whatsappSettings.newApplicationCooldownDays }).from(whatsappSettings).where(eq43(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+            const [cooldownSettings] = await db.select({ newApplicationCooldownDays: whatsappSettings.newApplicationCooldownDays }).from(whatsappSettings).where(eq44(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
             const cooldownDays = cooldownSettings?.newApplicationCooldownDays ?? 7;
             if (cooldownDays > 0) {
               let leadCreatedAt = null;
               const existingLeadId2 = collectedData._updateExistingLeadId;
               if (existingLeadId2) {
-                const [existingLead] = await db.select({ createdAt: whatsappLeads.createdAt }).from(whatsappLeads).where(eq43(whatsappLeads.id, existingLeadId2)).limit(1);
+                const [existingLead] = await db.select({ createdAt: whatsappLeads.createdAt }).from(whatsappLeads).where(eq44(whatsappLeads.id, existingLeadId2)).limit(1);
                 if (existingLead) leadCreatedAt = existingLead.createdAt;
               }
               if (!leadCreatedAt) {
@@ -36316,7 +36316,7 @@ You can update one or more fields at a time. Type "done" when finished.`
                 if (customerPhone) {
                   const dupResult = await this.checkDuplicatePhone(businessAccountId, customerPhone, session.id);
                   if (dupResult.isDuplicate && dupResult.existingLeadId) {
-                    const [dupLead] = await db.select({ createdAt: whatsappLeads.createdAt }).from(whatsappLeads).where(eq43(whatsappLeads.id, dupResult.existingLeadId)).limit(1);
+                    const [dupLead] = await db.select({ createdAt: whatsappLeads.createdAt }).from(whatsappLeads).where(eq44(whatsappLeads.id, dupResult.existingLeadId)).limit(1);
                     if (dupLead) leadCreatedAt = dupLead.createdAt;
                   }
                 }
@@ -36440,7 +36440,7 @@ Email: john@example.com`
             } else if (field === "phone") {
               const rawPhone = value.replace(/[\s\-\(\)\+]/g, "");
               const digitsOnly = rawPhone.replace(/\D/g, "");
-              const [phoneLenRow] = await db.select({ phoneNumberLength: whatsappSettings.phoneNumberLength }).from(whatsappSettings).where(eq43(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+              const [phoneLenRow] = await db.select({ phoneNumberLength: whatsappSettings.phoneNumberLength }).from(whatsappSettings).where(eq44(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
               const expectedLen = phoneLenRow?.phoneNumberLength ?? 10;
               let cleanPhone = digitsOnly;
               if (expectedLen === 10 && digitsOnly.length === 12 && digitsOnly.startsWith("91")) {
@@ -36472,12 +36472,12 @@ Email: john@example.com`
           }
           collectedData._extractedData = extracted;
           if (existingLeadId && updatedFields.length > 0) {
-            await db.update(whatsappLeads).set(updateSet).where(eq43(whatsappLeads.id, existingLeadId));
+            await db.update(whatsappLeads).set(updateSet).where(eq44(whatsappLeads.id, existingLeadId));
             const existingLead = await this.getLeadById(existingLeadId);
             if (existingLead) {
               const existingExtracted = existingLead.extractedData || {};
               const mergedExtracted = { ...existingExtracted, ...extracted };
-              await db.update(whatsappLeads).set({ extractedData: mergedExtracted }).where(eq43(whatsappLeads.id, existingLeadId));
+              await db.update(whatsappLeads).set({ extractedData: mergedExtracted }).where(eq44(whatsappLeads.id, existingLeadId));
             }
             console.log(`[WhatsApp Flow] Updated lead ${existingLeadId} fields: ${updatedFields.join(", ")}`);
           }
@@ -36498,14 +36498,14 @@ You can update more details or type "done" to finish.`
       }
       async getLeadById(leadId) {
         if (!leadId) return null;
-        const [lead] = await db.select().from(whatsappLeads).where(eq43(whatsappLeads.id, leadId)).limit(1);
+        const [lead] = await db.select().from(whatsappLeads).where(eq44(whatsappLeads.id, leadId)).limit(1);
         return lead || null;
       }
       async getMostRecentSession(businessAccountId, senderPhone) {
         const [session] = await db.select().from(whatsappFlowSessions).where(
-          and33(
-            eq43(whatsappFlowSessions.businessAccountId, businessAccountId),
-            eq43(whatsappFlowSessions.senderPhone, senderPhone)
+          and34(
+            eq44(whatsappFlowSessions.businessAccountId, businessAccountId),
+            eq44(whatsappFlowSessions.senderPhone, senderPhone)
           )
         ).orderBy(
           sql24`${whatsappFlowSessions.lastMessageAt} DESC NULLS LAST`,
@@ -36515,10 +36515,10 @@ You can update more details or type "done" to finish.`
       }
       async getActiveSession(businessAccountId, senderPhone) {
         const [session] = await db.select().from(whatsappFlowSessions).where(
-          and33(
-            eq43(whatsappFlowSessions.businessAccountId, businessAccountId),
-            eq43(whatsappFlowSessions.senderPhone, senderPhone),
-            eq43(whatsappFlowSessions.status, "active")
+          and34(
+            eq44(whatsappFlowSessions.businessAccountId, businessAccountId),
+            eq44(whatsappFlowSessions.senderPhone, senderPhone),
+            eq44(whatsappFlowSessions.status, "active")
           )
         ).orderBy(desc14(whatsappFlowSessions.createdAt)).limit(1);
         if (!session) return null;
@@ -36541,21 +36541,21 @@ You can update more details or type "done" to finish.`
       }
       async hasCompletedSession(businessAccountId, flowId, senderPhone) {
         const [row] = await db.select({ id: whatsappFlowSessions.id }).from(whatsappFlowSessions).where(
-          and33(
-            eq43(whatsappFlowSessions.businessAccountId, businessAccountId),
-            eq43(whatsappFlowSessions.flowId, flowId),
-            eq43(whatsappFlowSessions.senderPhone, senderPhone),
-            eq43(whatsappFlowSessions.status, "completed")
+          and34(
+            eq44(whatsappFlowSessions.businessAccountId, businessAccountId),
+            eq44(whatsappFlowSessions.flowId, flowId),
+            eq44(whatsappFlowSessions.senderPhone, senderPhone),
+            eq44(whatsappFlowSessions.status, "completed")
           )
         ).limit(1);
         return !!row;
       }
       async startSession(businessAccountId, flowId, senderPhone, startStepKey, sessionTimeoutMinutes) {
         await db.update(whatsappFlowSessions).set({ status: "abandoned" }).where(
-          and33(
-            eq43(whatsappFlowSessions.businessAccountId, businessAccountId),
-            eq43(whatsappFlowSessions.senderPhone, senderPhone),
-            eq43(whatsappFlowSessions.status, "active")
+          and34(
+            eq44(whatsappFlowSessions.businessAccountId, businessAccountId),
+            eq44(whatsappFlowSessions.senderPhone, senderPhone),
+            eq44(whatsappFlowSessions.status, "active")
           )
         );
         let timeoutMinutes = sessionTimeoutMinutes;
@@ -36584,9 +36584,9 @@ You can update more details or type "done" to finish.`
         const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1e3);
         (async () => {
           try {
-            const emptyNonFlowLeads = await db.select().from(whatsappLeads).where(and33(
-              eq43(whatsappLeads.businessAccountId, businessAccountId),
-              eq43(whatsappLeads.direction, "incoming"),
+            const emptyNonFlowLeads = await db.select().from(whatsappLeads).where(and34(
+              eq44(whatsappLeads.businessAccountId, businessAccountId),
+              eq44(whatsappLeads.direction, "incoming"),
               ne4(whatsappLeads.status, "message_only"),
               sql24`${whatsappLeads.flowSessionId} IS NULL`,
               gte7(whatsappLeads.receivedAt, thirtyMinsAgo)
@@ -36600,7 +36600,7 @@ You can update more details or type "done" to finish.`
                 ([key, val]) => val && !key.startsWith("_") && key !== "raw_message"
               );
               if (!hasUsefulData) {
-                await db.update(whatsappLeads).set({ status: "message_only" }).where(eq43(whatsappLeads.id, lead.id));
+                await db.update(whatsappLeads).set({ status: "message_only" }).where(eq44(whatsappLeads.id, lead.id));
                 console.log(`[WhatsApp Flow] Downgraded empty non-flow lead ${lead.id} to message_only (phone: ${senderPhone})`);
               }
             }
@@ -36614,12 +36614,12 @@ You can update more details or type "done" to finish.`
           currentStepKey: nextStepKey,
           collectedData,
           lastMessageAt: /* @__PURE__ */ new Date()
-        }).where(eq43(whatsappFlowSessions.id, sessionId));
+        }).where(eq44(whatsappFlowSessions.id, sessionId));
         console.log(`[WhatsApp Flow] Advanced session ${sessionId} to step: ${nextStepKey}`);
       }
       async finalizeSessionCompletion(sessionId, collectedData) {
-        const updated = await db.update(whatsappFlowSessions).set({ status: "completed", collectedData, lastMessageAt: /* @__PURE__ */ new Date() }).where(and33(
-          eq43(whatsappFlowSessions.id, sessionId),
+        const updated = await db.update(whatsappFlowSessions).set({ status: "completed", collectedData, lastMessageAt: /* @__PURE__ */ new Date() }).where(and34(
+          eq44(whatsappFlowSessions.id, sessionId),
           ne4(whatsappFlowSessions.status, "completed")
         )).returning({ id: whatsappFlowSessions.id });
         const transitioned = updated.length > 0;
@@ -36638,9 +36638,9 @@ You can update more details or type "done" to finish.`
       }
       async triggerVerification(sessionId) {
         try {
-          const [session] = await db.select().from(whatsappFlowSessions).where(eq43(whatsappFlowSessions.id, sessionId)).limit(1);
+          const [session] = await db.select().from(whatsappFlowSessions).where(eq44(whatsappFlowSessions.id, sessionId)).limit(1);
           if (!session) return;
-          const [flow] = await db.select().from(whatsappFlows).where(eq43(whatsappFlows.id, session.flowId)).limit(1);
+          const [flow] = await db.select().from(whatsappFlows).where(eq44(whatsappFlows.id, session.flowId)).limit(1);
           if (!flow || !flow.verificationRuleSetId) return;
           const { whatsappService: whatsappService2 } = await Promise.resolve().then(() => (init_whatsappService(), whatsappService_exports));
           const lead = await whatsappService2.findLeadByFlowSession(session.businessAccountId, sessionId) || await whatsappService2.findMostRecentLeadBySender(session.businessAccountId, session.senderPhone);
@@ -36696,7 +36696,7 @@ You can update more details or type "done" to finish.`
        */
       async runInstantVerification(session, collectedData, justUploadedDocType, opts = {}) {
         try {
-          const [flow] = await db.select({ verificationRuleSetId: whatsappFlows.verificationRuleSetId }).from(whatsappFlows).where(eq43(whatsappFlows.id, session.flowId)).limit(1);
+          const [flow] = await db.select({ verificationRuleSetId: whatsappFlows.verificationRuleSetId }).from(whatsappFlows).where(eq44(whatsappFlows.id, session.flowId)).limit(1);
           console.log(`[Verification] runInstantVerification entered for session ${session.id} (ruleSet=${flow?.verificationRuleSetId || "none"}, justUploaded=${justUploadedDocType}, silent=${!!opts.silent})`);
           verifDebug(session.businessAccountId, "runInstantVerification:start", {
             sessionId: session.id,
@@ -36792,10 +36792,10 @@ You can update more details or type "done" to finish.`
       }
       async triggerCrmAutoSync(sessionId, collectedData) {
         try {
-          const [session] = await db.select().from(whatsappFlowSessions).where(eq43(whatsappFlowSessions.id, sessionId)).limit(1);
+          const [session] = await db.select().from(whatsappFlowSessions).where(eq44(whatsappFlowSessions.id, sessionId)).limit(1);
           if (!session) return;
           const { businessAccountId, senderPhone } = session;
-          const [settings] = await db.select().from(customCrmSettings).where(eq43(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+          const [settings] = await db.select().from(customCrmSettings).where(eq44(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
           if (!settings || !settings.enabled || !settings.autoSyncEnabled) {
             return;
           }
@@ -36803,14 +36803,14 @@ You can update more details or type "done" to finish.`
             console.log(`[CRM AutoSync] Skipping - API URL not configured for ${businessAccountId}`);
             return;
           }
-          const fieldMappings = await db.select().from(customCrmFieldMappings).where(eq43(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
+          const fieldMappings = await db.select().from(customCrmFieldMappings).where(eq44(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
           if (fieldMappings.length === 0) {
             console.log(`[CRM AutoSync] Skipping - No field mappings for ${businessAccountId}`);
             return;
           }
-          const [sessionLead] = await db.select().from(whatsappLeads).where(and33(
-            eq43(whatsappLeads.businessAccountId, businessAccountId),
-            eq43(whatsappLeads.flowSessionId, sessionId)
+          const [sessionLead] = await db.select().from(whatsappLeads).where(and34(
+            eq44(whatsappLeads.businessAccountId, businessAccountId),
+            eq44(whatsappLeads.flowSessionId, sessionId)
           )).orderBy(
             sql24`CASE WHEN ${whatsappLeads.customerName} IS NOT NULL AND ${whatsappLeads.customerName} != '' THEN 0 ELSE 1 END`,
             desc14(whatsappLeads.updatedAt)
@@ -36818,18 +36818,18 @@ You can update more details or type "done" to finish.`
           let namedLead;
           const customerName = (collectedData.customer_name || collectedData.customerName || "").trim();
           if (!sessionLead && customerName) {
-            const [found] = await db.select().from(whatsappLeads).where(and33(
-              eq43(whatsappLeads.businessAccountId, businessAccountId),
-              eq43(whatsappLeads.senderPhone, senderPhone),
+            const [found] = await db.select().from(whatsappLeads).where(and34(
+              eq44(whatsappLeads.businessAccountId, businessAccountId),
+              eq44(whatsappLeads.senderPhone, senderPhone),
               ilike4(whatsappLeads.customerName, customerName)
             )).orderBy(desc14(whatsappLeads.updatedAt)).limit(1);
             namedLead = found;
           }
           let fallbackLead;
           if (!sessionLead && !namedLead) {
-            const [found] = await db.select().from(whatsappLeads).where(and33(
-              eq43(whatsappLeads.businessAccountId, businessAccountId),
-              eq43(whatsappLeads.senderPhone, senderPhone)
+            const [found] = await db.select().from(whatsappLeads).where(and34(
+              eq44(whatsappLeads.businessAccountId, businessAccountId),
+              eq44(whatsappLeads.senderPhone, senderPhone)
             )).orderBy(desc14(whatsappLeads.updatedAt)).limit(1);
             fallbackLead = found;
           }
@@ -36851,7 +36851,7 @@ You can update more details or type "done" to finish.`
             fileName: whatsappLeadAttachments.fileName,
             mimeType: whatsappLeadAttachments.mimeType,
             documentCategory: whatsappLeadAttachments.documentCategory
-          }).from(whatsappLeadAttachments).where(eq43(whatsappLeadAttachments.leadId, lead.id));
+          }).from(whatsappLeadAttachments).where(eq44(whatsappLeadAttachments.leadId, lead.id));
           for (const att of attachments) {
             if (!att.filePath || !att.documentCategory) continue;
             if (!documents[att.documentCategory]) documents[att.documentCategory] = [];
@@ -36876,9 +36876,9 @@ You can update more details or type "done" to finish.`
           const dealerName = extractedData.dealer_name || extractedData.dealerName || extractedData.dealer;
           const cityName = extractedData.city || extractedData.city_name || extractedData.dealer_city || extractedData.dealerCity;
           if (storeName || dealerName) {
-            const storeCreds = await db.select().from(crmStoreCredentials).where(and33(
-              eq43(crmStoreCredentials.businessAccountId, businessAccountId),
-              eq43(crmStoreCredentials.isActive, true)
+            const storeCreds = await db.select().from(crmStoreCredentials).where(and34(
+              eq44(crmStoreCredentials.businessAccountId, businessAccountId),
+              eq44(crmStoreCredentials.isActive, true)
             ));
             const norm2 = (s) => s ? s.trim().toLowerCase() : "";
             const nStore = norm2(storeName);
@@ -36962,7 +36962,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               customCrmSyncError: null,
               customCrmSyncPayload: result.payload,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq43(whatsappLeads.id, lead.id));
+            }).where(eq44(whatsappLeads.id, lead.id));
             console.log(`[CRM AutoSync] Lead ${lead.id} synced successfully: ${result.message}`);
           } else {
             await db.update(whatsappLeads).set({
@@ -36970,7 +36970,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               customCrmSyncError: result.message,
               customCrmSyncPayload: result.payload,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq43(whatsappLeads.id, lead.id));
+            }).where(eq44(whatsappLeads.id, lead.id));
             console.error(`[CRM AutoSync] Lead ${lead.id} sync failed: ${result.message}`);
           }
         } catch (error) {
@@ -36978,7 +36978,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         }
       }
       async expireSession(sessionId) {
-        await db.update(whatsappFlowSessions).set({ status: "expired" }).where(eq43(whatsappFlowSessions.id, sessionId));
+        await db.update(whatsappFlowSessions).set({ status: "expired" }).where(eq44(whatsappFlowSessions.id, sessionId));
       }
       async detectGlobalFlowIntent(message, collectedData, steps, businessAccountId, currentStepType) {
         const restartRegex = /(start\s*(over|again|fresh|from\s*(the\s*)?beginning)|fill\s*(again|fresh|it\s*again)|cancel|restart|begin\s*again|shuru\s*se|fir\s*se|dobara|naya\s*bharo)/i;
@@ -37720,7 +37720,7 @@ ${docLines.join("\n")}` },
             if (collectedData.customer_phone && !collectedData._phoneValidated) {
               const rawPhone = String(collectedData.customer_phone).replace(/[\s\-\(\)\+]/g, "");
               const digitsOnly = rawPhone.replace(/\D/g, "");
-              const [phoneLenRow] = await db.select({ phoneNumberLength: whatsappSettings.phoneNumberLength }).from(whatsappSettings).where(eq43(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+              const [phoneLenRow] = await db.select({ phoneNumberLength: whatsappSettings.phoneNumberLength }).from(whatsappSettings).where(eq44(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
               const expectedLen = phoneLenRow?.phoneNumberLength ?? 10;
               let cleanPhone = digitsOnly;
               if (expectedLen === 10 && digitsOnly.length === 12 && digitsOnly.startsWith("91")) {
@@ -37753,9 +37753,9 @@ ${docLines.join("\n")}` },
               );
               if (dupResult.isDuplicate && dupResult.existingLeadId) {
                 console.log(`[WhatsApp Flow] Duplicate phone detected: ${collectedData.customer_phone} \u2014 lead ${dupResult.existingLeadId} exists (${dupResult.hoursAgo}h ago).`);
-                const [dupSettings] = await db.select({ updateLeadEnabled: whatsappSettings.updateLeadEnabled, newApplicationCooldownDays: whatsappSettings.newApplicationCooldownDays }).from(whatsappSettings).where(eq43(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+                const [dupSettings] = await db.select({ updateLeadEnabled: whatsappSettings.updateLeadEnabled, newApplicationCooldownDays: whatsappSettings.newApplicationCooldownDays }).from(whatsappSettings).where(eq44(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
                 const isUpdateEnabled = dupSettings?.updateLeadEnabled !== "false";
-                const [existingLead] = await db.select().from(whatsappLeads).where(eq43(whatsappLeads.id, dupResult.existingLeadId)).limit(1);
+                const [existingLead] = await db.select().from(whatsappLeads).where(eq44(whatsappLeads.id, dupResult.existingLeadId)).limit(1);
                 if (existingLead) {
                   const existingExtracted = existingLead.extractedData || {};
                   const existingDocs = existingExtracted._documents || existingExtracted._collectedDocuments || {};
@@ -38372,7 +38372,7 @@ ${fieldLines.join("\n")}`;
         }
       }
       async getAllFlows(businessAccountId) {
-        return await db.select().from(whatsappFlows).where(eq43(whatsappFlows.businessAccountId, businessAccountId)).orderBy(desc14(whatsappFlows.createdAt));
+        return await db.select().from(whatsappFlows).where(eq44(whatsappFlows.businessAccountId, businessAccountId)).orderBy(desc14(whatsappFlows.createdAt));
       }
       async createFlow(businessAccountId, name, description, completionMessage) {
         const [flow] = await db.insert(whatsappFlows).values({
@@ -38389,23 +38389,23 @@ ${fieldLines.join("\n")}`;
       }
       async updateFlow(flowId, updates) {
         if (updates.isActive === "true") {
-          const [flow] = await db.select().from(whatsappFlows).where(eq43(whatsappFlows.id, flowId));
+          const [flow] = await db.select().from(whatsappFlows).where(eq44(whatsappFlows.id, flowId));
           if (flow) {
             await db.update(whatsappFlows).set({ isActive: "false" }).where(
-              and33(
-                eq43(whatsappFlows.businessAccountId, flow.businessAccountId),
+              and34(
+                eq44(whatsappFlows.businessAccountId, flow.businessAccountId),
                 sql24`${whatsappFlows.id} != ${flowId}`
               )
             );
           }
         }
-        const [updated] = await db.update(whatsappFlows).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq43(whatsappFlows.id, flowId)).returning();
+        const [updated] = await db.update(whatsappFlows).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq44(whatsappFlows.id, flowId)).returning();
         if (updated) this.invalidateFlowCache(updated.businessAccountId);
         return updated || null;
       }
       async deleteFlow(flowId) {
-        const [flow] = await db.select({ bid: whatsappFlows.businessAccountId }).from(whatsappFlows).where(eq43(whatsappFlows.id, flowId)).limit(1);
-        await db.delete(whatsappFlows).where(eq43(whatsappFlows.id, flowId));
+        const [flow] = await db.select({ bid: whatsappFlows.businessAccountId }).from(whatsappFlows).where(eq44(whatsappFlows.id, flowId)).limit(1);
+        await db.delete(whatsappFlows).where(eq44(whatsappFlows.id, flowId));
         if (flow) this.invalidateFlowCache(flow.bid);
         console.log(`[WhatsApp Flow] Deleted flow: ${flowId}`);
       }
@@ -38419,12 +38419,12 @@ ${fieldLines.join("\n")}`;
         return step;
       }
       async updateStep(stepId, updates) {
-        const [updated] = await db.update(whatsappFlowSteps).set(updates).where(eq43(whatsappFlowSteps.id, stepId)).returning();
+        const [updated] = await db.update(whatsappFlowSteps).set(updates).where(eq44(whatsappFlowSteps.id, stepId)).returning();
         if (updated) this.stepsCache.delete(updated.flowId);
         return updated || null;
       }
       async deleteStep(stepId) {
-        const [stepToDelete] = await db.select().from(whatsappFlowSteps).where(eq43(whatsappFlowSteps.id, stepId)).limit(1);
+        const [stepToDelete] = await db.select().from(whatsappFlowSteps).where(eq44(whatsappFlowSteps.id, stepId)).limit(1);
         if (!stepToDelete) {
           console.log(`[WhatsApp Flow] Step not found for deletion: ${stepId}`);
           return;
@@ -38432,9 +38432,9 @@ ${fieldLines.join("\n")}`;
         const flowId = stepToDelete.flowId;
         const deletedOrder = stepToDelete.stepOrder;
         const deletedStepKey = stepToDelete.stepKey;
-        await db.delete(whatsappFlowSteps).where(eq43(whatsappFlowSteps.id, stepId));
+        await db.delete(whatsappFlowSteps).where(eq44(whatsappFlowSteps.id, stepId));
         console.log(`[WhatsApp Flow] Deleted step: ${stepId}`);
-        const remainingSteps = await db.select().from(whatsappFlowSteps).where(eq43(whatsappFlowSteps.flowId, flowId)).orderBy(whatsappFlowSteps.stepOrder);
+        const remainingSteps = await db.select().from(whatsappFlowSteps).where(eq44(whatsappFlowSteps.flowId, flowId)).orderBy(whatsappFlowSteps.stepOrder);
         const keyMapping = {};
         for (let i = 0; i < remainingSteps.length; i++) {
           const oldKey = remainingSteps[i].stepKey;
@@ -38445,14 +38445,14 @@ ${fieldLines.join("\n")}`;
         }
         for (let i = 0; i < remainingSteps.length; i++) {
           const newKey = String(i + 1);
-          await db.update(whatsappFlowSteps).set({ stepOrder: i, stepKey: newKey }).where(eq43(whatsappFlowSteps.id, remainingSteps[i].id));
+          await db.update(whatsappFlowSteps).set({ stepOrder: i, stepKey: newKey }).where(eq44(whatsappFlowSteps.id, remainingSteps[i].id));
         }
         await this.updateGoToReferences(flowId, keyMapping, deletedStepKey);
         this.stepsCache.delete(flowId);
         console.log(`[WhatsApp Flow] Renumbered ${remainingSteps.length} remaining steps with new stepKeys`);
       }
       async updateGoToReferences(flowId, keyMapping, deletedStepKey) {
-        const steps = await db.select().from(whatsappFlowSteps).where(eq43(whatsappFlowSteps.flowId, flowId)).orderBy(whatsappFlowSteps.stepOrder);
+        const steps = await db.select().from(whatsappFlowSteps).where(eq44(whatsappFlowSteps.flowId, flowId)).orderBy(whatsappFlowSteps.stepOrder);
         const getNextStepKey = (currentStepOrder) => {
           const nextStep = steps.find((s) => s.stepOrder === currentStepOrder + 1);
           return nextStep ? keyMapping[nextStep.stepKey] || nextStep.stepKey : null;
@@ -38524,20 +38524,20 @@ ${fieldLines.join("\n")}`;
             }
             if (mappingNeedsUpdate) {
               needsUpdate = true;
-              await db.update(whatsappFlowSteps).set({ nextStepMapping: updatedMapping }).where(eq43(whatsappFlowSteps.id, step.id));
+              await db.update(whatsappFlowSteps).set({ nextStepMapping: updatedMapping }).where(eq44(whatsappFlowSteps.id, step.id));
             }
           }
           if (needsUpdate) {
             await db.update(whatsappFlowSteps).set({
               options: updatedOptions,
               defaultNextStep: updatedDefaultNextStep
-            }).where(eq43(whatsappFlowSteps.id, step.id));
+            }).where(eq44(whatsappFlowSteps.id, step.id));
             console.log(`[WhatsApp Flow] Updated Go-to references in step ${step.id}`);
           }
         }
       }
       async reorderSteps(flowId, stepIds) {
-        const existingSteps = await db.select().from(whatsappFlowSteps).where(eq43(whatsappFlowSteps.flowId, flowId));
+        const existingSteps = await db.select().from(whatsappFlowSteps).where(eq44(whatsappFlowSteps.flowId, flowId));
         const existingIds = new Set(existingSteps.map((s) => s.id));
         const stepMap = new Map(existingSteps.map((s) => [s.id, s]));
         const validStepIds = stepIds.filter((id) => existingIds.has(id));
@@ -38559,9 +38559,9 @@ ${fieldLines.join("\n")}`;
         for (let i = 0; i < validStepIds.length; i++) {
           const newKey = String(i + 1);
           await db.update(whatsappFlowSteps).set({ stepOrder: i, stepKey: newKey }).where(
-            and33(
-              eq43(whatsappFlowSteps.id, validStepIds[i]),
-              eq43(whatsappFlowSteps.flowId, flowId)
+            and34(
+              eq44(whatsappFlowSteps.id, validStepIds[i]),
+              eq44(whatsappFlowSteps.flowId, flowId)
             )
           );
         }
@@ -39090,11 +39090,11 @@ ${this.formatConfirmationMessage(summary)}`,
                 const cvNormalizeNum = (s) => s.replace(/[\s\-\.\/]+/g, "").toUpperCase();
                 const cvNormalized = cvNormalizeNum(cvDocNumber);
                 const cvExistingLeadId = freshCollectedData._updateExistingLeadId;
-                const [cvCooldownRow] = await db.select({ newApplicationCooldownDays: whatsappSettings.newApplicationCooldownDays }).from(whatsappSettings).where(eq43(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+                const [cvCooldownRow] = await db.select({ newApplicationCooldownDays: whatsappSettings.newApplicationCooldownDays }).from(whatsappSettings).where(eq44(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
                 const cvCooldownDays = cvCooldownRow?.newApplicationCooldownDays ?? 7;
                 const cvCutoffDate = new Date(Date.now() - cvCooldownDays * 24 * 60 * 60 * 1e3);
-                const cvRecentLeads = await db.select().from(whatsappLeads).where(and33(
-                  eq43(whatsappLeads.businessAccountId, businessAccountId),
+                const cvRecentLeads = await db.select().from(whatsappLeads).where(and34(
+                  eq44(whatsappLeads.businessAccountId, businessAccountId),
                   ne4(whatsappLeads.status, "message_only"),
                   gte7(whatsappLeads.createdAt, cvCutoffDate)
                 ));
@@ -40152,7 +40152,7 @@ ${this.formatConfirmationMessage(summary)}`,
         const docTypeState = this.getDocTypeState(collectedData, normalizedMatchedType);
         if (docTypeState.status === "complete") {
           console.log(`[WhatsApp Flow] Extra page for already-complete ${normalizedMatchedType} (side: ${result.side || "unknown"}) \u2014 enriching`);
-          const enrichSessionData = await db.select({ businessAccountId: whatsappFlowSessions.businessAccountId }).from(whatsappFlowSessions).where(eq43(whatsappFlowSessions.id, session.id)).limit(1);
+          const enrichSessionData = await db.select({ businessAccountId: whatsappFlowSessions.businessAccountId }).from(whatsappFlowSessions).where(eq44(whatsappFlowSessions.id, session.id)).limit(1);
           const enrichBusinessAccountId = enrichSessionData[0]?.businessAccountId;
           await this.enrichCompletedDocumentFromExtraPage(
             session,
@@ -40164,7 +40164,7 @@ ${this.formatConfirmationMessage(summary)}`,
           );
           return { handled: true, collectedData, sessionId: session.id };
         }
-        const sessionData = await db.select({ businessAccountId: whatsappFlowSessions.businessAccountId }).from(whatsappFlowSessions).where(eq43(whatsappFlowSessions.id, session.id)).limit(1);
+        const sessionData = await db.select({ businessAccountId: whatsappFlowSessions.businessAccountId }).from(whatsappFlowSessions).where(eq44(whatsappFlowSessions.id, session.id)).limit(1);
         const businessAccountId = sessionData[0]?.businessAccountId;
         const { documentTypeService: docTypeSvc } = await Promise.resolve().then(() => (init_documentTypeService(), documentTypeService_exports));
         const docTypeConfig = businessAccountId ? await docTypeSvc.getDocumentTypeByKey(businessAccountId, normalizedMatchedType) || await docTypeSvc.getDocumentTypeByKey(businessAccountId, matchedType) : void 0;
@@ -40185,12 +40185,12 @@ ${this.formatConfirmationMessage(summary)}`,
         docTypeState.status = "processing";
         console.log(`[WhatsApp Flow] Duplicate check gate: matchedType="${matchedType}", normalizedMatchedType="${normalizedMatchedType}", docNumber="${docNumber || "(empty)"}", shouldDuplicateCheck=${shouldDuplicateCheck}, duplicateFieldKey="${duplicateFieldKey || "(none)"}"`);
         if (docNumber && shouldDuplicateCheck && businessAccountId) {
-          const [cooldownRow] = await db.select({ newApplicationCooldownDays: whatsappSettings.newApplicationCooldownDays }).from(whatsappSettings).where(eq43(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+          const [cooldownRow] = await db.select({ newApplicationCooldownDays: whatsappSettings.newApplicationCooldownDays }).from(whatsappSettings).where(eq44(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
           const cooldownDays = cooldownRow?.newApplicationCooldownDays ?? 7;
           const cutoffDate = new Date(Date.now() - cooldownDays * 24 * 60 * 60 * 1e3);
           const recentLeads = await db.select().from(whatsappLeads).where(
-            and33(
-              eq43(whatsappLeads.businessAccountId, businessAccountId),
+            and34(
+              eq44(whatsappLeads.businessAccountId, businessAccountId),
               ne4(whatsappLeads.status, "message_only"),
               gte7(whatsappLeads.createdAt, cutoffDate)
             )
@@ -40622,10 +40622,10 @@ ${inlineSummary}
         return steps.find((s) => !s.paused) || null;
       }
       async updateSessionData(sessionId, collectedData) {
-        await db.update(whatsappFlowSessions).set({ collectedData, lastMessageAt: /* @__PURE__ */ new Date() }).where(eq43(whatsappFlowSessions.id, sessionId));
+        await db.update(whatsappFlowSessions).set({ collectedData, lastMessageAt: /* @__PURE__ */ new Date() }).where(eq44(whatsappFlowSessions.id, sessionId));
       }
       async updateSessionStep(sessionId, stepKey) {
-        await db.update(whatsappFlowSessions).set({ currentStepKey: stepKey, lastMessageAt: /* @__PURE__ */ new Date() }).where(eq43(whatsappFlowSessions.id, sessionId));
+        await db.update(whatsappFlowSessions).set({ currentStepKey: stepKey, lastMessageAt: /* @__PURE__ */ new Date() }).where(eq44(whatsappFlowSessions.id, sessionId));
       }
       recoveryInterval = null;
       RECOVERY_INTERVAL_MS = 3 * 60 * 1e3;
@@ -40642,8 +40642,8 @@ ${inlineSummary}
       async checkAndRecoverStuckSessions() {
         const stuckThreshold = new Date(Date.now() - this.STUCK_THRESHOLD_MS);
         const stuckSessions = await db.select().from(whatsappFlowSessions).where(
-          and33(
-            eq43(whatsappFlowSessions.status, "active"),
+          and34(
+            eq44(whatsappFlowSessions.status, "active"),
             sql24`${whatsappFlowSessions.lastMessageAt} < ${stuckThreshold}`
           )
         );
@@ -40811,7 +40811,7 @@ __export(whatsappAutoReplyService_exports, {
   whatsappAutoReplyService: () => whatsappAutoReplyService
 });
 import OpenAI24 from "openai";
-import { eq as eq44, and as and34, desc as desc15, gte as gte8 } from "drizzle-orm";
+import { eq as eq45, and as and35, desc as desc15, gte as gte8 } from "drizzle-orm";
 var WhatsappAutoReplyService, whatsappAutoReplyService;
 var init_whatsappAutoReplyService = __esm({
   "server/services/whatsappAutoReplyService.ts"() {
@@ -40851,7 +40851,7 @@ var init_whatsappAutoReplyService = __esm({
         const startTime = Date.now();
         try {
           console.log(`[WhatsApp Auto-Reply] Processing message from ${senderPhone}`);
-          const [settings] = await db.select().from(whatsappSettings).where(eq44(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+          const [settings] = await db.select().from(whatsappSettings).where(eq45(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
           if (!settings) {
             console.error(`[WhatsApp Auto-Reply] No WhatsApp settings found for business: ${businessAccountId}`);
             return { success: false, error: "WhatsApp settings not configured" };
@@ -40861,7 +40861,7 @@ var init_whatsappAutoReplyService = __esm({
             return { success: false, error: "Auto-reply is disabled" };
           }
           const businessAccount = await db.query.businessAccounts.findFirst({
-            where: eq44(businessAccounts.id, businessAccountId)
+            where: eq45(businessAccounts.id, businessAccountId)
           });
           if (!businessAccount) {
             console.error(`[WhatsApp Auto-Reply] Business account not found: ${businessAccountId}`);
@@ -41186,9 +41186,9 @@ Personalization rules:
           direction: whatsappLeads.direction,
           receivedAt: whatsappLeads.receivedAt
         }).from(whatsappLeads).where(
-          and34(
-            eq44(whatsappLeads.businessAccountId, businessAccountId),
-            eq44(whatsappLeads.senderPhone, senderPhone),
+          and35(
+            eq45(whatsappLeads.businessAccountId, businessAccountId),
+            eq45(whatsappLeads.senderPhone, senderPhone),
             gte8(whatsappLeads.receivedAt, cutoffDate)
           )
         ).orderBy(desc15(whatsappLeads.receivedAt)).limit(10);
@@ -41223,9 +41223,9 @@ Personalization rules:
               trainingDocsResult
             ] = await Promise.allSettled([
               db.query.businessAccounts.findFirst({
-                where: eq44(businessAccounts.id, businessAccountId)
+                where: eq45(businessAccounts.id, businessAccountId)
               }),
-              db.select().from(widgetSettings).where(eq44(widgetSettings.businessAccountId, businessAccountId)).limit(1),
+              db.select().from(widgetSettings).where(eq45(widgetSettings.businessAccountId, businessAccountId)).limit(1),
               (async () => {
                 const { websiteAnalysisService: websiteAnalysisService2 } = await Promise.resolve().then(() => (init_websiteAnalysisService(), websiteAnalysisService_exports));
                 return await websiteAnalysisService2.getAnalyzedContent(businessAccountId);
@@ -41406,7 +41406,7 @@ ${websiteContent.uniqueSellingPoints.map((u) => `- ${u}`).join("\n")}
           const [searchResults, relevantFaqs, freshWidgetSettingArr] = await Promise.all([
             useDocument ? vectorSearchService.search(userMessage, businessAccountId, 5, 0.5) : Promise.resolve([]),
             useFaq ? faqEmbeddingService.searchFAQs(userMessage, businessAccountId, 5, 0.5) : Promise.resolve([]),
-            db.select().from(widgetSettings).where(eq44(widgetSettings.businessAccountId, businessAccountId)).limit(1)
+            db.select().from(widgetSettings).where(eq45(widgetSettings.businessAccountId, businessAccountId)).limit(1)
           ]);
           if (searchResults.length > 0) {
             context += `\u{1F512} CRITICAL DOCUMENT KNOWLEDGE - HIGHEST PRIORITY:
@@ -41898,10 +41898,10 @@ ${productSummaries.join("\n")}`;
                 temperature: 0.3,
                 max_tokens: isNumberSelection ? 800 : 500
               });
-              const text3 = followUpResponse.choices[0]?.message?.content;
-              if (!text3) return null;
+              const text4 = followUpResponse.choices[0]?.message?.content;
+              if (!text4) return null;
               return {
-                text: text3,
+                text: text4,
                 productImages: collectedProductImages.length > 0 ? collectedProductImages : void 0,
                 productCards: collectedProductCards.length > 0 ? collectedProductCards : void 0,
                 isProductSelection: isNumberSelection,
@@ -41912,9 +41912,9 @@ ${productSummaries.join("\n")}`;
               return { text: "I'm having trouble fetching product details right now. Please try again in a moment!" };
             }
           }
-          const text2 = assistantMessage?.content;
-          if (!text2) return null;
-          return { text: text2 };
+          const text3 = assistantMessage?.content;
+          if (!text3) return null;
+          return { text: text3 };
         } catch (error) {
           console.error(`[WhatsApp Auto-Reply] OpenAI error:`, error);
           return null;
@@ -42468,13 +42468,13 @@ function tryDecode(encoding, bytes) {
     return null;
   }
 }
-function detectDelimiter(text2) {
+function detectDelimiter(text3) {
   const counts = new Map(DELIMITER_CANDIDATES.map((d) => [d, 0]));
   let inQuotes = false;
-  for (let i = 0; i < text2.length; i++) {
-    const ch = text2[i];
+  for (let i = 0; i < text3.length; i++) {
+    const ch = text3[i];
     if (ch === '"') {
-      if (inQuotes && text2[i + 1] === '"') {
+      if (inQuotes && text3[i + 1] === '"') {
         i++;
         continue;
       }
@@ -42496,8 +42496,8 @@ function detectDelimiter(text2) {
   }
   return best;
 }
-function parseDelimitedText(text2, delimiterHint) {
-  const delimiter = delimiterHint || detectDelimiter(text2);
+function parseDelimitedText(text3, delimiterHint) {
+  const delimiter = delimiterHint || detectDelimiter(text3);
   const records = [];
   let field = "";
   let current = [];
@@ -42516,11 +42516,11 @@ function parseDelimitedText(text2, delimiterHint) {
     current = [];
     started = false;
   };
-  for (let i = 0; i < text2.length; i++) {
-    const ch = text2[i];
+  for (let i = 0; i < text3.length; i++) {
+    const ch = text3[i];
     if (inQuotes) {
       if (ch === '"') {
-        if (text2[i + 1] === '"') {
+        if (text3[i + 1] === '"') {
           field += '"';
           i++;
           continue;
@@ -42541,7 +42541,7 @@ function parseDelimitedText(text2, delimiterHint) {
       continue;
     }
     if (ch === "\r") {
-      if (text2[i + 1] === "\n") i++;
+      if (text3[i + 1] === "\n") i++;
       endRecord();
       continue;
     }
@@ -42754,7 +42754,7 @@ __export(lsqQualificationService_exports, {
   PERSISTENT_CTA_FORM_SOURCE: () => PERSISTENT_CTA_FORM_SOURCE,
   evaluateLsqQualification: () => evaluateLsqQualification
 });
-import { eq as eq46, and as and36 } from "drizzle-orm";
+import { eq as eq47, and as and37 } from "drizzle-orm";
 function parseCustomFields(raw) {
   if (!raw) return [];
   try {
@@ -42773,14 +42773,14 @@ function isGated(f) {
   return !!f && f.fieldType === "dropdown" && Array.isArray(f.lsqQualifyValues) && f.lsqQualifyValues.length > 0;
 }
 async function collectGatedFields(businessAccountId, leadFormSource, submittedIds) {
-  const [menuConfig] = await db.select().from(chatMenuConfigs).where(eq46(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
+  const [menuConfig] = await db.select().from(chatMenuConfigs).where(eq47(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
   const menuLevelFields = parseCustomFields(menuConfig?.leadFormFields);
   let claimedFields = menuLevelFields;
   if (leadFormSource && leadFormSource !== PERSISTENT_CTA_FORM_SOURCE) {
     const [item] = await db.select().from(chatMenuItems).where(
-      and36(
-        eq46(chatMenuItems.id, leadFormSource),
-        eq46(chatMenuItems.businessAccountId, businessAccountId)
+      and37(
+        eq47(chatMenuItems.id, leadFormSource),
+        eq47(chatMenuItems.businessAccountId, businessAccountId)
       )
     ).limit(1);
     if (item?.leadFormFields) {
@@ -42795,7 +42795,7 @@ async function collectGatedFields(businessAccountId, leadFormSource, submittedId
     (id) => !claimedFields.some((f) => f.id === id)
   );
   if (unclaimedIds.length > 0) {
-    const items = await db.select().from(chatMenuItems).where(eq46(chatMenuItems.businessAccountId, businessAccountId));
+    const items = await db.select().from(chatMenuItems).where(eq47(chatMenuItems.businessAccountId, businessAccountId));
     const others = [menuLevelFields, ...items.map((i) => parseCustomFields(i.leadFormFields))];
     for (const fields of others) {
       for (const f of fields) {
@@ -44329,7 +44329,7 @@ __export(jewelryImageGeneratorService_exports, {
   getTemplatePrompt: () => getTemplatePrompt,
   jewelryImageGeneratorService: () => jewelryImageGeneratorService
 });
-import { eq as eq47, desc as desc16, and as and37, sql as sql25 } from "drizzle-orm";
+import { eq as eq48, desc as desc16, and as and38, sql as sql25 } from "drizzle-orm";
 function buildTemplatePrompt(category, style) {
   const basePrompt = CATEGORY_STYLE_PROMPTS[category][style];
   return basePrompt + JEWELRY_PRESERVATION_INSTRUCTIONS;
@@ -44612,28 +44612,28 @@ No additions, removals, or changes to the jewelry itself.`;
         return job;
       }
       async getJob(jobId, businessAccountId) {
-        const [job] = await db.select().from(vistaStudioJobs).where(and37(
-          eq47(vistaStudioJobs.id, jobId),
-          eq47(vistaStudioJobs.businessAccountId, businessAccountId)
+        const [job] = await db.select().from(vistaStudioJobs).where(and38(
+          eq48(vistaStudioJobs.id, jobId),
+          eq48(vistaStudioJobs.businessAccountId, businessAccountId)
         ));
         return job || null;
       }
       async getJobs(businessAccountId, limit = 20) {
-        const jobs2 = await db.select().from(vistaStudioJobs).where(eq47(vistaStudioJobs.businessAccountId, businessAccountId)).orderBy(desc16(vistaStudioJobs.createdAt)).limit(limit);
+        const jobs2 = await db.select().from(vistaStudioJobs).where(eq48(vistaStudioJobs.businessAccountId, businessAccountId)).orderBy(desc16(vistaStudioJobs.createdAt)).limit(limit);
         return jobs2;
       }
       async processJob(jobId) {
         console.log(`[Vista Studio] Starting background job processing: ${jobId}`);
         let provider = "openai";
         try {
-          await db.update(vistaStudioJobs).set({ status: "processing" }).where(eq47(vistaStudioJobs.id, jobId));
-          const [job] = await db.select().from(vistaStudioJobs).where(eq47(vistaStudioJobs.id, jobId));
+          await db.update(vistaStudioJobs).set({ status: "processing" }).where(eq48(vistaStudioJobs.id, jobId));
+          const [job] = await db.select().from(vistaStudioJobs).where(eq48(vistaStudioJobs.id, jobId));
           if (!job) {
             console.error(`[Vista Studio] Job not found: ${jobId}`);
             return;
           }
           provider = job.provider || "openai";
-          const [account] = await db.select().from(businessAccounts).where(eq47(businessAccounts.id, job.businessAccountId));
+          const [account] = await db.select().from(businessAccounts).where(eq48(businessAccounts.id, job.businessAccountId));
           let apiKey;
           if (provider === "google") {
             if (!account?.googleNanoBananaApiKey) {
@@ -44675,7 +44675,7 @@ No additions, removals, or changes to the jewelry itself.`;
             status: "completed",
             generatedImageUrl: generatedUploadResult.url,
             completedAt: /* @__PURE__ */ new Date()
-          }).where(eq47(vistaStudioJobs.id, jobId));
+          }).where(eq48(vistaStudioJobs.id, jobId));
           console.log(`[Vista Studio] Job completed: ${jobId}`);
         } catch (error) {
           console.error(`[Vista Studio] Job failed: ${jobId}`, error);
@@ -44684,20 +44684,20 @@ No additions, removals, or changes to the jewelry itself.`;
             status: "failed",
             errorMessage,
             completedAt: /* @__PURE__ */ new Date()
-          }).where(eq47(vistaStudioJobs.id, jobId));
+          }).where(eq48(vistaStudioJobs.id, jobId));
         }
       }
       async deleteJob(jobId, businessAccountId) {
-        const result = await db.delete(vistaStudioJobs).where(and37(
-          eq47(vistaStudioJobs.id, jobId),
-          eq47(vistaStudioJobs.businessAccountId, businessAccountId)
+        const result = await db.delete(vistaStudioJobs).where(and38(
+          eq48(vistaStudioJobs.id, jobId),
+          eq48(vistaStudioJobs.businessAccountId, businessAccountId)
         ));
         return true;
       }
       async recoverStuckJobs() {
         const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1e3);
-        const stuckJobs = await db.select().from(vistaStudioJobs).where(and37(
-          eq47(vistaStudioJobs.status, "processing"),
+        const stuckJobs = await db.select().from(vistaStudioJobs).where(and38(
+          eq48(vistaStudioJobs.status, "processing"),
           sql25`${vistaStudioJobs.createdAt} < ${fiveMinutesAgo}`
         ));
         if (stuckJobs.length === 0) {
@@ -44709,7 +44709,7 @@ No additions, removals, or changes to the jewelry itself.`;
             status: "failed",
             errorMessage: "Job was interrupted due to server restart. Please retry.",
             completedAt: /* @__PURE__ */ new Date()
-          }).where(eq47(vistaStudioJobs.id, job.id));
+          }).where(eq48(vistaStudioJobs.id, job.id));
           console.log(`[Vista Studio] Recovered stuck job: ${job.id}`);
         }
         return stuckJobs.length;
@@ -44736,12 +44736,12 @@ __export(urgencyOfferService_exports, {
   startUrgencyOffer: () => startUrgencyOffer,
   upsertCampaign: () => upsertCampaign
 });
-import { eq as eq48, and as and38, desc as desc17, gte as gte9, sql as sql26, asc as asc8 } from "drizzle-orm";
+import { eq as eq49, and as and39, desc as desc17, gte as gte9, sql as sql26, asc as asc8 } from "drizzle-orm";
 import OpenAI28 from "openai";
 import { randomBytes } from "crypto";
 async function getOpenAIForBusiness(businessAccountId) {
   const businessAccount = await db.query.businessAccounts.findFirst({
-    where: eq48(businessAccounts.id, businessAccountId)
+    where: eq49(businessAccounts.id, businessAccountId)
   });
   const apiKey = businessAccount?.openaiApiKey || process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -44810,19 +44810,19 @@ ${conversationText}`
 }
 async function getUrgencyOfferSettings(businessAccountId) {
   return await db.query.urgencyOfferSettings.findFirst({
-    where: eq48(urgencyOfferSettings.businessAccountId, businessAccountId),
+    where: eq49(urgencyOfferSettings.businessAccountId, businessAccountId),
     orderBy: [asc8(urgencyOfferSettings.priority)]
   });
 }
 async function getAllCampaigns(businessAccountId) {
   return await db.query.urgencyOfferSettings.findMany({
-    where: eq48(urgencyOfferSettings.businessAccountId, businessAccountId),
+    where: eq49(urgencyOfferSettings.businessAccountId, businessAccountId),
     orderBy: [asc8(urgencyOfferSettings.priority)]
   });
 }
 async function getCampaignById(campaignId) {
   return await db.query.urgencyOfferSettings.findFirst({
-    where: eq48(urgencyOfferSettings.id, campaignId)
+    where: eq49(urgencyOfferSettings.id, campaignId)
   });
 }
 async function upsertCampaign(businessAccountId, settings) {
@@ -44830,7 +44830,7 @@ async function upsertCampaign(businessAccountId, settings) {
   if (campaignId) {
     const existing = await getCampaignById(campaignId);
     if (existing) {
-      const [updated] = await db.update(urgencyOfferSettings).set({ ...settingsData, updatedAt: /* @__PURE__ */ new Date() }).where(eq48(urgencyOfferSettings.id, campaignId)).returning();
+      const [updated] = await db.update(urgencyOfferSettings).set({ ...settingsData, updatedAt: /* @__PURE__ */ new Date() }).where(eq49(urgencyOfferSettings.id, campaignId)).returning();
       return updated;
     }
   }
@@ -44838,35 +44838,35 @@ async function upsertCampaign(businessAccountId, settings) {
   return created;
 }
 async function deleteCampaign(campaignId) {
-  const [deleted] = await db.delete(urgencyOfferSettings).where(eq48(urgencyOfferSettings.id, campaignId)).returning();
+  const [deleted] = await db.delete(urgencyOfferSettings).where(eq49(urgencyOfferSettings.id, campaignId)).returning();
   return deleted;
 }
 async function getActiveOffer2(businessAccountId, visitorToken, campaignId) {
   const now = /* @__PURE__ */ new Date();
   const conditions = [
-    eq48(urgencyOffers.businessAccountId, businessAccountId),
-    eq48(urgencyOffers.visitorToken, visitorToken),
-    eq48(urgencyOffers.status, "active"),
+    eq49(urgencyOffers.businessAccountId, businessAccountId),
+    eq49(urgencyOffers.visitorToken, visitorToken),
+    eq49(urgencyOffers.status, "active"),
     gte9(urgencyOffers.countdownExpiresAt, now)
   ];
   if (campaignId) {
-    conditions.push(eq48(urgencyOffers.campaignId, campaignId));
+    conditions.push(eq49(urgencyOffers.campaignId, campaignId));
   }
   return await db.query.urgencyOffers.findFirst({
-    where: and38(...conditions),
+    where: and39(...conditions),
     orderBy: [desc17(urgencyOffers.createdAt)]
   });
 }
 async function getOfferByVisitorToken(businessAccountId, visitorToken, campaignId) {
   const conditions = [
-    eq48(urgencyOffers.businessAccountId, businessAccountId),
-    eq48(urgencyOffers.visitorToken, visitorToken)
+    eq49(urgencyOffers.businessAccountId, businessAccountId),
+    eq49(urgencyOffers.visitorToken, visitorToken)
   ];
   if (campaignId) {
-    conditions.push(eq48(urgencyOffers.campaignId, campaignId));
+    conditions.push(eq49(urgencyOffers.campaignId, campaignId));
   }
   return await db.query.urgencyOffers.findFirst({
-    where: and38(...conditions),
+    where: and39(...conditions),
     orderBy: [desc17(urgencyOffers.createdAt)]
   });
 }
@@ -44884,7 +44884,7 @@ async function startUrgencyOffer(businessAccountId, visitorToken, conversationId
       if (expiresAt && expiresAt.getTime() > Date.now()) {
         return existingOffer;
       }
-      await db.update(urgencyOffers).set({ status: "expired", expiredAt: /* @__PURE__ */ new Date() }).where(eq48(urgencyOffers.id, existingOffer.id));
+      await db.update(urgencyOffers).set({ status: "expired", expiredAt: /* @__PURE__ */ new Date() }).where(eq49(urgencyOffers.id, existingOffer.id));
     }
     if (existingOffer.status === "redeemed") {
       const redeemedAt = existingOffer.redeemedAt;
@@ -44910,7 +44910,7 @@ async function startUrgencyOffer(businessAccountId, visitorToken, conversationId
   let validConversationId = null;
   if (conversationId) {
     const conversation = await db.query.conversations.findFirst({
-      where: eq48(conversations.id, conversationId)
+      where: eq49(conversations.id, conversationId)
     });
     if (conversation) {
       validConversationId = conversationId;
@@ -44935,7 +44935,7 @@ async function startUrgencyOffer(businessAccountId, visitorToken, conversationId
 }
 async function redeemUrgencyOffer(offerId, phoneNumber, phoneCountryCode, geoCity, pageUrl, conversationId) {
   const offer = await db.query.urgencyOffers.findFirst({
-    where: eq48(urgencyOffers.id, offerId)
+    where: eq49(urgencyOffers.id, offerId)
   });
   if (!offer) {
     throw new Error("Offer not found");
@@ -44944,19 +44944,19 @@ async function redeemUrgencyOffer(offerId, phoneNumber, phoneCountryCode, geoCit
     throw new Error(`Offer is ${offer.status}`);
   }
   if (/* @__PURE__ */ new Date() > offer.countdownExpiresAt) {
-    await db.update(urgencyOffers).set({ status: "expired", expiredAt: /* @__PURE__ */ new Date() }).where(eq48(urgencyOffers.id, offerId));
+    await db.update(urgencyOffers).set({ status: "expired", expiredAt: /* @__PURE__ */ new Date() }).where(eq49(urgencyOffers.id, offerId));
     throw new Error("Offer has expired");
   }
   const redemptionConditions = [
-    eq48(urgencyOffers.businessAccountId, offer.businessAccountId),
-    eq48(urgencyOffers.phoneNumber, phoneNumber),
-    eq48(urgencyOffers.status, "redeemed")
+    eq49(urgencyOffers.businessAccountId, offer.businessAccountId),
+    eq49(urgencyOffers.phoneNumber, phoneNumber),
+    eq49(urgencyOffers.status, "redeemed")
   ];
   if (offer.campaignId) {
-    redemptionConditions.push(eq48(urgencyOffers.campaignId, offer.campaignId));
+    redemptionConditions.push(eq49(urgencyOffers.campaignId, offer.campaignId));
   }
   const existingRedemption = await db.query.urgencyOffers.findFirst({
-    where: and38(...redemptionConditions)
+    where: and39(...redemptionConditions)
   });
   if (existingRedemption) {
     throw new Error("This phone number has already been used to redeem an offer for this campaign");
@@ -44966,7 +44966,7 @@ async function redeemUrgencyOffer(offerId, phoneNumber, phoneCountryCode, geoCit
     redeemedAt: /* @__PURE__ */ new Date(),
     phoneNumber,
     phoneCountryCode
-  }).where(eq48(urgencyOffers.id, offerId)).returning();
+  }).where(eq49(urgencyOffers.id, offerId)).returning();
   const fullPhoneNumber = phoneCountryCode ? `${phoneCountryCode}${phoneNumber}` : phoneNumber;
   const visitorCity = geoCity || null;
   try {
@@ -44995,7 +44995,7 @@ async function redeemUrgencyOffer(offerId, phoneNumber, phoneCountryCode, geoCit
             const businessAccount = await storage2.getBusinessAccount(offer.businessAccountId);
             const fieldMappings = await storage2.getLeadsquaredFieldMappings(offer.businessAccountId);
             const { extractUtmCampaign: extractUtmCampaign2, extractUtmSource: extractUtmSource3, extractUtmMedium: extractUtmMedium3 } = await Promise.resolve().then(() => (init_leadsquaredService(), leadsquaredService_exports));
-            const existingLeadRows = offer.conversationId ? await db.select().from(leads).where(eq48(leads.conversationId, offer.conversationId)).limit(1) : [];
+            const existingLeadRows = offer.conversationId ? await db.select().from(leads).where(eq49(leads.conversationId, offer.conversationId)).limit(1) : [];
             const sourceUrl = existingLeadRows[0]?.sourceUrl || null;
             const effectivePageUrl = pageUrl || sourceUrl || null;
             const existingLead = existingLeadRows[0] || null;
@@ -45068,7 +45068,7 @@ async function dismissUrgencyOffer(offerId) {
   const [updated] = await db.update(urgencyOffers).set({
     status: "dismissed",
     dismissedAt: /* @__PURE__ */ new Date()
-  }).where(eq48(urgencyOffers.id, offerId)).returning();
+  }).where(eq49(urgencyOffers.id, offerId)).returning();
   return updated;
 }
 async function checkAndTriggerUrgencyOffer(businessAccountId, visitorToken, conversationId, providedConversationHistory) {
@@ -45090,7 +45090,7 @@ async function checkAndTriggerUrgencyOffer(businessAccountId, visitorToken, conv
         if (expiresAt && expiresAt.getTime() > Date.now()) {
           return { shouldTrigger: true, offer: existingOffer, settings: campaign };
         }
-        await db.update(urgencyOffers).set({ status: "expired", expiredAt: /* @__PURE__ */ new Date() }).where(eq48(urgencyOffers.id, existingOffer.id));
+        await db.update(urgencyOffers).set({ status: "expired", expiredAt: /* @__PURE__ */ new Date() }).where(eq49(urgencyOffers.id, existingOffer.id));
       }
       if (existingOffer.status === "redeemed") {
         const redeemedAt = existingOffer.redeemedAt;
@@ -45107,7 +45107,7 @@ async function checkAndTriggerUrgencyOffer(businessAccountId, visitorToken, conv
     }
     if (!messageHistory) {
       const conversationMessages = await db.query.messages.findMany({
-        where: eq48(messages.conversationId, conversationId),
+        where: eq49(messages.conversationId, conversationId),
         orderBy: [desc17(messages.createdAt)]
       });
       if (conversationMessages.length < campaign.minMessagesBeforeTrigger) {
@@ -45172,8 +45172,8 @@ async function checkAndTriggerUrgencyOffer(businessAccountId, visitorToken, conv
 }
 async function expireOldOffers() {
   const now = /* @__PURE__ */ new Date();
-  await db.update(urgencyOffers).set({ status: "expired", expiredAt: now }).where(and38(
-    eq48(urgencyOffers.status, "active"),
+  await db.update(urgencyOffers).set({ status: "expired", expiredAt: now }).where(and39(
+    eq49(urgencyOffers.status, "active"),
     sql26`${urgencyOffers.countdownExpiresAt} <= ${now}`
   ));
 }
@@ -45637,7 +45637,7 @@ __export(urlTrainingService_exports, {
 });
 import OpenAI29 from "openai";
 import * as cheerio2 from "cheerio";
-import { eq as eq49, and as and39 } from "drizzle-orm";
+import { eq as eq50, and as and40 } from "drizzle-orm";
 var UrlTrainingService, urlTrainingService;
 var init_urlTrainingService = __esm({
   "server/services/urlTrainingService.ts"() {
@@ -45693,10 +45693,10 @@ var init_urlTrainingService = __esm({
           throw new Error(`Failed to crawl URL: ${error.message}`);
         }
       }
-      async processWithAI(text2, url, businessAccountId) {
+      async processWithAI(text3, url, businessAccountId) {
         try {
           const openai = await this.getOpenAIClient(businessAccountId);
-          const truncatedText = text2.slice(0, 12e3);
+          const truncatedText = text3.slice(0, 12e3);
           const prompt = `Analyze this web page content and extract key information that would be useful for a customer support AI chatbot.
 
 URL: ${url}
@@ -45747,9 +45747,9 @@ Format:
           await db.update(trainedUrls).set({
             embeddingStatus: "processing",
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq49(trainedUrls.id, trainedUrlId));
+          }).where(eq50(trainedUrls.id, trainedUrlId));
           await db.delete(urlContentChunks).where(
-            eq49(urlContentChunks.trainedUrlId, trainedUrlId)
+            eq50(urlContentChunks.trainedUrlId, trainedUrlId)
           );
           const chunks = chunkingService.chunkText(extractedText);
           if (chunks.length === 0) {
@@ -45759,7 +45759,7 @@ Format:
               embeddedChunkCount: "0",
               embeddedAt: /* @__PURE__ */ new Date(),
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq49(trainedUrls.id, trainedUrlId));
+            }).where(eq50(trainedUrls.id, trainedUrlId));
             return;
           }
           console.log(`[URL Training] Generated ${chunks.length} chunks, generating embeddings...`);
@@ -45784,7 +45784,7 @@ Format:
             embeddedChunkCount: embeddedCount.toString(),
             embeddedAt: /* @__PURE__ */ new Date(),
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq49(trainedUrls.id, trainedUrlId));
+          }).where(eq50(trainedUrls.id, trainedUrlId));
           console.log(`[URL Training] Completed embedding ${embeddedCount}/${chunks.length} chunks for URL ${trainedUrlId}`);
         } catch (error) {
           console.error(`[URL Training] Error in chunkAndEmbedUrl:`, error.message);
@@ -45792,7 +45792,7 @@ Format:
             embeddingStatus: "failed",
             errorMessage: error.message,
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq49(trainedUrls.id, trainedUrlId));
+          }).where(eq50(trainedUrls.id, trainedUrlId));
           throw error;
         }
       }
@@ -45802,7 +45802,7 @@ Format:
           await db.update(trainedUrls).set({
             status: "crawling",
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq49(trainedUrls.id, trainedUrlId));
+          }).where(eq50(trainedUrls.id, trainedUrlId));
           const { title, content, metaDescription } = await this.crawlUrl(url);
           if (!content || content.length < 50) {
             throw new Error("Insufficient content extracted from URL");
@@ -45814,7 +45814,7 @@ Format:
             extractedText: content,
             crawledAt: /* @__PURE__ */ new Date(),
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq49(trainedUrls.id, trainedUrlId));
+          }).where(eq50(trainedUrls.id, trainedUrlId));
           const { summary, keyPoints } = await this.processWithAI(content, url, businessAccountId);
           await db.update(trainedUrls).set({
             status: "completed",
@@ -45822,7 +45822,7 @@ Format:
             keyPoints: JSON.stringify(keyPoints),
             processedAt: /* @__PURE__ */ new Date(),
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq49(trainedUrls.id, trainedUrlId));
+          }).where(eq50(trainedUrls.id, trainedUrlId));
           this.chunkAndEmbedUrl(trainedUrlId, content, businessAccountId).catch((err) => {
             console.error(`[URL Training] Background embedding failed for ${trainedUrlId}:`, err.message);
           });
@@ -45833,24 +45833,24 @@ Format:
             status: "failed",
             errorMessage: error.message,
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq49(trainedUrls.id, trainedUrlId));
+          }).where(eq50(trainedUrls.id, trainedUrlId));
           throw error;
         }
       }
       async getTrainedUrls(businessAccountId) {
-        return await db.select().from(trainedUrls).where(eq49(trainedUrls.businessAccountId, businessAccountId)).orderBy(trainedUrls.createdAt);
+        return await db.select().from(trainedUrls).where(eq50(trainedUrls.businessAccountId, businessAccountId)).orderBy(trainedUrls.createdAt);
       }
       async getTrainedUrl(id, businessAccountId) {
-        const results = await db.select().from(trainedUrls).where(and39(
-          eq49(trainedUrls.id, id),
-          eq49(trainedUrls.businessAccountId, businessAccountId)
+        const results = await db.select().from(trainedUrls).where(and40(
+          eq50(trainedUrls.id, id),
+          eq50(trainedUrls.businessAccountId, businessAccountId)
         )).limit(1);
         return results[0] || null;
       }
       async deleteTrainedUrl(id, businessAccountId) {
-        const result = await db.delete(trainedUrls).where(and39(
-          eq49(trainedUrls.id, id),
-          eq49(trainedUrls.businessAccountId, businessAccountId)
+        const result = await db.delete(trainedUrls).where(and40(
+          eq50(trainedUrls.id, id),
+          eq50(trainedUrls.businessAccountId, businessAccountId)
         ));
         return true;
       }
@@ -46532,7 +46532,7 @@ __export(contactGroupService_exports, {
   contactGroupService: () => contactGroupService,
   normalizePhone: () => normalizePhone5
 });
-import { and as and41, desc as desc18, eq as eq51, inArray as inArray7, sql as sql28 } from "drizzle-orm";
+import { and as and42, desc as desc18, eq as eq52, inArray as inArray7, sql as sql28 } from "drizzle-orm";
 var COMMON_COUNTRY_CODES, contactGroupService;
 var init_contactGroupService = __esm({
   "server/services/contactGroupService.ts"() {
@@ -46564,10 +46564,10 @@ var init_contactGroupService = __esm({
     ];
     contactGroupService = {
       async list(businessAccountId) {
-        return db.select().from(contactGroups).where(eq51(contactGroups.businessAccountId, businessAccountId)).orderBy(desc18(contactGroups.updatedAt));
+        return db.select().from(contactGroups).where(eq52(contactGroups.businessAccountId, businessAccountId)).orderBy(desc18(contactGroups.updatedAt));
       },
       async get(businessAccountId, id) {
-        const [row] = await db.select().from(contactGroups).where(and41(eq51(contactGroups.id, id), eq51(contactGroups.businessAccountId, businessAccountId))).limit(1);
+        const [row] = await db.select().from(contactGroups).where(and42(eq52(contactGroups.id, id), eq52(contactGroups.businessAccountId, businessAccountId))).limit(1);
         return row;
       },
       async create(businessAccountId, name, description) {
@@ -46582,19 +46582,19 @@ var init_contactGroupService = __esm({
           const raw = (updates.defaultCountryCode || "").toString().replace(/\D/g, "");
           set.defaultCountryCode = raw || null;
         }
-        const [row] = await db.update(contactGroups).set(set).where(and41(eq51(contactGroups.id, id), eq51(contactGroups.businessAccountId, businessAccountId))).returning();
+        const [row] = await db.update(contactGroups).set(set).where(and42(eq52(contactGroups.id, id), eq52(contactGroups.businessAccountId, businessAccountId))).returning();
         return row;
       },
       async remove(businessAccountId, id) {
-        const result = await db.delete(contactGroups).where(and41(eq51(contactGroups.id, id), eq51(contactGroups.businessAccountId, businessAccountId))).returning({ id: contactGroups.id });
+        const result = await db.delete(contactGroups).where(and42(eq52(contactGroups.id, id), eq52(contactGroups.businessAccountId, businessAccountId))).returning({ id: contactGroups.id });
         return result.length > 0;
       },
       async getContacts(businessAccountId, groupId, limit = 500) {
-        return db.select().from(contactGroupContacts).where(and41(eq51(contactGroupContacts.groupId, groupId), eq51(contactGroupContacts.businessAccountId, businessAccountId))).orderBy(desc18(contactGroupContacts.createdAt)).limit(limit);
+        return db.select().from(contactGroupContacts).where(and42(eq52(contactGroupContacts.groupId, groupId), eq52(contactGroupContacts.businessAccountId, businessAccountId))).orderBy(desc18(contactGroupContacts.createdAt)).limit(limit);
       },
       /** Digits-only phones already stored in the group — the dedupe basis. */
       async getExistingPhones(groupId) {
-        const existingRows = await db.select({ phone: contactGroupContacts.phone }).from(contactGroupContacts).where(eq51(contactGroupContacts.groupId, groupId));
+        const existingRows = await db.select({ phone: contactGroupContacts.phone }).from(contactGroupContacts).where(eq52(contactGroupContacts.groupId, groupId));
         return new Set(existingRows.map((r) => r.phone));
       },
       /**
@@ -46701,8 +46701,8 @@ var init_contactGroupService = __esm({
       },
       /** Recompute the cached contact count for a group. */
       async refreshContactCount(groupId) {
-        const [{ cnt }] = await db.select({ cnt: sql28`COUNT(*)::int` }).from(contactGroupContacts).where(eq51(contactGroupContacts.groupId, groupId));
-        await db.update(contactGroups).set({ contactCount: cnt, updatedAt: /* @__PURE__ */ new Date() }).where(eq51(contactGroups.id, groupId));
+        const [{ cnt }] = await db.select({ cnt: sql28`COUNT(*)::int` }).from(contactGroupContacts).where(eq52(contactGroupContacts.groupId, groupId));
+        await db.update(contactGroups).set({ contactCount: cnt, updatedAt: /* @__PURE__ */ new Date() }).where(eq52(contactGroups.id, groupId));
         return cnt;
       },
       /**
@@ -46712,8 +46712,8 @@ var init_contactGroupService = __esm({
        * the same verdict as the reviewed path — only the interaction differs.
        */
       async importFromCsv(businessAccountId, groupId, csvInput, options) {
-        const text2 = typeof csvInput === "string" ? csvInput.replace(/^\uFEFF/, "") : decodeTextBytes(csvInput).text;
-        const { records } = parseDelimitedText(text2);
+        const text3 = typeof csvInput === "string" ? csvInput.replace(/^\uFEFF/, "") : decodeTextBytes(csvInput).text;
+        const { records } = parseDelimitedText(text3);
         const sheet = buildSheetData(records);
         if (sheet.rows.length === 0) {
           return { imported: 0, skipped: 0, total: 0, sampleErrors: ["CSV is empty"] };
@@ -46736,7 +46736,7 @@ var init_contactGroupService = __esm({
       async addContact(businessAccountId, groupId, phone, name, attributes) {
         const normalized = normalizePhone5(phone);
         if (!normalized) return void 0;
-        const [existing] = await db.select().from(contactGroupContacts).where(and41(eq51(contactGroupContacts.groupId, groupId), eq51(contactGroupContacts.phone, normalized))).limit(1);
+        const [existing] = await db.select().from(contactGroupContacts).where(and42(eq52(contactGroupContacts.groupId, groupId), eq52(contactGroupContacts.phone, normalized))).limit(1);
         if (existing) return existing;
         const [row] = await db.insert(contactGroupContacts).values({
           groupId,
@@ -46745,7 +46745,7 @@ var init_contactGroupService = __esm({
           name: name || "",
           attributes: attributes || {}
         }).returning();
-        await db.update(contactGroups).set({ contactCount: sql28`${contactGroups.contactCount} + 1`, updatedAt: /* @__PURE__ */ new Date() }).where(eq51(contactGroups.id, groupId));
+        await db.update(contactGroups).set({ contactCount: sql28`${contactGroups.contactCount} + 1`, updatedAt: /* @__PURE__ */ new Date() }).where(eq52(contactGroups.id, groupId));
         return row;
       },
       async updateContact(businessAccountId, groupId, contactId, updates) {
@@ -46757,33 +46757,33 @@ var init_contactGroupService = __esm({
         }
         if (updates.name !== void 0) set.name = updates.name;
         if (Object.keys(set).length === 0) return void 0;
-        const [row] = await db.update(contactGroupContacts).set(set).where(and41(
-          eq51(contactGroupContacts.id, contactId),
-          eq51(contactGroupContacts.groupId, groupId),
-          eq51(contactGroupContacts.businessAccountId, businessAccountId)
+        const [row] = await db.update(contactGroupContacts).set(set).where(and42(
+          eq52(contactGroupContacts.id, contactId),
+          eq52(contactGroupContacts.groupId, groupId),
+          eq52(contactGroupContacts.businessAccountId, businessAccountId)
         )).returning();
         return row;
       },
       async removeContact(businessAccountId, groupId, contactId) {
-        const result = await db.delete(contactGroupContacts).where(and41(
-          eq51(contactGroupContacts.id, contactId),
-          eq51(contactGroupContacts.groupId, groupId),
-          eq51(contactGroupContacts.businessAccountId, businessAccountId)
+        const result = await db.delete(contactGroupContacts).where(and42(
+          eq52(contactGroupContacts.id, contactId),
+          eq52(contactGroupContacts.groupId, groupId),
+          eq52(contactGroupContacts.businessAccountId, businessAccountId)
         )).returning({ id: contactGroupContacts.id });
         if (result.length > 0) {
-          await db.update(contactGroups).set({ contactCount: sql28`GREATEST(${contactGroups.contactCount} - 1, 0)`, updatedAt: /* @__PURE__ */ new Date() }).where(eq51(contactGroups.id, groupId));
+          await db.update(contactGroups).set({ contactCount: sql28`GREATEST(${contactGroups.contactCount} - 1, 0)`, updatedAt: /* @__PURE__ */ new Date() }).where(eq52(contactGroups.id, groupId));
         }
         return result.length > 0;
       },
       async getContactsForGroups(businessAccountId, groupIds) {
         if (groupIds.length === 0) return [];
-        return db.select().from(contactGroupContacts).where(and41(
-          eq51(contactGroupContacts.businessAccountId, businessAccountId),
+        return db.select().from(contactGroupContacts).where(and42(
+          eq52(contactGroupContacts.businessAccountId, businessAccountId),
           inArray7(contactGroupContacts.groupId, groupIds)
         ));
       },
       async getOptOutSet(businessAccountId) {
-        const rows = await db.select({ phone: whatsappOptOuts.phone }).from(whatsappOptOuts).where(eq51(whatsappOptOuts.businessAccountId, businessAccountId));
+        const rows = await db.select({ phone: whatsappOptOuts.phone }).from(whatsappOptOuts).where(eq52(whatsappOptOuts.businessAccountId, businessAccountId));
         const out = /* @__PURE__ */ new Set();
         for (const r of rows) {
           if (!r.phone) continue;
@@ -46797,28 +46797,28 @@ var init_contactGroupService = __esm({
 });
 
 // server/services/whatsapp/campaignPrerequisites.ts
-import { and as and42, eq as eq52, inArray as inArray8, sql as sql29 } from "drizzle-orm";
+import { and as and43, eq as eq53, inArray as inArray8, sql as sql29 } from "drizzle-orm";
 function isTemplateUsable(tpl) {
   return !!tpl && tpl.status === USABLE_TEMPLATE_STATUS;
 }
 async function countUsableTemplates(businessAccountId) {
   const [row] = await db.select({ n: sql29`count(*)::int` }).from(whatsappTemplates).where(
-    and42(
-      eq52(whatsappTemplates.businessAccountId, businessAccountId),
-      eq52(whatsappTemplates.status, USABLE_TEMPLATE_STATUS)
+    and43(
+      eq53(whatsappTemplates.businessAccountId, businessAccountId),
+      eq53(whatsappTemplates.status, USABLE_TEMPLATE_STATUS)
     )
   );
   return row?.n ?? 0;
 }
 async function countUsableAudiences(businessAccountId) {
-  const [row] = await db.select({ n: sql29`count(distinct ${contactGroups.id})::int` }).from(contactGroups).innerJoin(contactGroupContacts, eq52(contactGroupContacts.groupId, contactGroups.id)).where(eq52(contactGroups.businessAccountId, businessAccountId));
+  const [row] = await db.select({ n: sql29`count(distinct ${contactGroups.id})::int` }).from(contactGroups).innerJoin(contactGroupContacts, eq53(contactGroupContacts.groupId, contactGroups.id)).where(eq53(contactGroups.businessAccountId, businessAccountId));
   return row?.n ?? 0;
 }
 async function countContactsInGroups(businessAccountId, groupIds) {
   if (!groupIds || groupIds.length === 0) return 0;
-  const [row] = await db.select({ n: sql29`count(*)::int` }).from(contactGroupContacts).innerJoin(contactGroups, eq52(contactGroupContacts.groupId, contactGroups.id)).where(
-    and42(
-      eq52(contactGroups.businessAccountId, businessAccountId),
+  const [row] = await db.select({ n: sql29`count(*)::int` }).from(contactGroupContacts).innerJoin(contactGroups, eq53(contactGroupContacts.groupId, contactGroups.id)).where(
+    and43(
+      eq53(contactGroups.businessAccountId, businessAccountId),
       inArray8(contactGroups.id, groupIds)
     )
   );
@@ -46832,7 +46832,7 @@ async function checkCampaignPrerequisites(businessAccountId, opts) {
       message: "Choose an approved message template before saving this campaign."
     };
   }
-  const [tpl] = await db.select().from(whatsappTemplates).where(and42(eq52(whatsappTemplates.id, templateId), eq52(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
+  const [tpl] = await db.select().from(whatsappTemplates).where(and43(eq53(whatsappTemplates.id, templateId), eq53(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
   if (!tpl) {
     return { code: "template_not_found", message: "That message template no longer exists." };
   }
@@ -46873,11 +46873,11 @@ __export(campaignAiService_exports, {
   campaignAiService: () => campaignAiService
 });
 import OpenAI31 from "openai";
-import { and as and43, desc as desc19, eq as eq53, inArray as inArray9 } from "drizzle-orm";
+import { and as and44, desc as desc19, eq as eq54, inArray as inArray9 } from "drizzle-orm";
 async function buildKnowledgeContext({ campaign, businessAccountId }) {
   const blocks = [];
   if (campaign.aiUseFaqs === "true") {
-    const faqRows = await db.select({ question: faqs.question, answer: faqs.answer }).from(faqs).where(eq53(faqs.businessAccountId, businessAccountId)).limit(40);
+    const faqRows = await db.select({ question: faqs.question, answer: faqs.answer }).from(faqs).where(eq54(faqs.businessAccountId, businessAccountId)).limit(40);
     if (faqRows.length > 0) {
       blocks.push(
         "FAQS:\n" + faqRows.map((f) => `Q: ${f.question}
@@ -46893,7 +46893,7 @@ A: ${f.answer}`).join("\n\n")
       summary: trainingDocuments.summary,
       content: trainingDocuments.extractedText
     }).from(trainingDocuments).where(
-      allowedIds.length > 0 ? and43(eq53(trainingDocuments.businessAccountId, businessAccountId), inArray9(trainingDocuments.id, allowedIds)) : eq53(trainingDocuments.businessAccountId, businessAccountId)
+      allowedIds.length > 0 ? and44(eq54(trainingDocuments.businessAccountId, businessAccountId), inArray9(trainingDocuments.id, allowedIds)) : eq54(trainingDocuments.businessAccountId, businessAccountId)
     ).limit(allowedIds.length > 0 ? allowedIds.length : 8);
     if (docRows.length > 0) {
       blocks.push(
@@ -46910,7 +46910,7 @@ ${body.substring(0, 4e3)}`;
       name: products.name,
       description: products.description,
       price: products.price
-    }).from(products).where(eq53(products.businessAccountId, businessAccountId)).limit(30);
+    }).from(products).where(eq54(products.businessAccountId, businessAccountId)).limit(30);
     if (productRows.length > 0) {
       blocks.push(
         "PRODUCT CATALOG (for offers and recommendations):\n" + productRows.map((p) => `- ${p.name}${p.price ? ` (\u20B9${p.price})` : ""}${p.description ? `: ${(p.description || "").substring(0, 200)}` : ""}`).join("\n")
@@ -47037,27 +47037,27 @@ var init_campaignAiService = __esm({
        */
       async classifyAndStore(campaignId, recipientId, inboundText) {
         try {
-          const [campaign] = await db.select().from(marketingCampaigns).where(eq53(marketingCampaigns.id, campaignId)).limit(1);
+          const [campaign] = await db.select().from(marketingCampaigns).where(eq54(marketingCampaigns.id, campaignId)).limit(1);
           if (!campaign) return;
           const classifications = campaign.replyClassifications || [];
           if (classifications.length === 0) return;
-          const text2 = (inboundText || "").trim();
-          if (!text2) return;
+          const text3 = (inboundText || "").trim();
+          if (!text3) return;
           const budget = await marketingCampaignService.checkClassificationBudget(campaignId);
           if (!budget.allowed) {
             console.log(`[CampaignAI] Skipping classification for ${recipientId}: ${budget.reason}`);
             return;
           }
-          const [recipient] = await db.select({ attributes: marketingCampaignRecipients.attributes }).from(marketingCampaignRecipients).where(eq53(marketingCampaignRecipients.id, recipientId)).limit(1);
+          const [recipient] = await db.select({ attributes: marketingCampaignRecipients.attributes }).from(marketingCampaignRecipients).where(eq54(marketingCampaignRecipients.id, recipientId)).limit(1);
           if (!recipient) return;
-          const [biz] = await db.select().from(businessAccounts).where(eq53(businessAccounts.id, campaign.businessAccountId)).limit(1);
+          const [biz] = await db.select().from(businessAccounts).where(eq54(businessAccounts.id, campaign.businessAccountId)).limit(1);
           if (!biz) return;
           const apiKey = biz.openaiApiKey ? safeDecrypt(biz.openaiApiKey) : process.env.OPENAI_API_KEY;
           if (!apiKey) return;
           const result = await classifyInboundReply({
             apiKey,
             classifications,
-            inboundText: text2,
+            inboundText: text3,
             recipientAttributes: recipient.attributes,
             onTokens: (n) => marketingCampaignService.addAiTokensUsed(campaignId, n)
           });
@@ -47072,10 +47072,10 @@ var init_campaignAiService = __esm({
       },
       async generateReply(campaignId, recipientId, inboundText) {
         try {
-          const [campaign] = await db.select().from(marketingCampaigns).where(eq53(marketingCampaigns.id, campaignId)).limit(1);
+          const [campaign] = await db.select().from(marketingCampaigns).where(eq54(marketingCampaigns.id, campaignId)).limit(1);
           if (!campaign) return null;
           if (campaign.aiEnabled !== "true") return null;
-          const [recipient] = await db.select().from(marketingCampaignRecipients).where(eq53(marketingCampaignRecipients.id, recipientId)).limit(1);
+          const [recipient] = await db.select().from(marketingCampaignRecipients).where(eq54(marketingCampaignRecipients.id, recipientId)).limit(1);
           if (!recipient) return null;
           const budget = await marketingCampaignService.checkAiBudget(campaignId, recipientId);
           if (!budget.allowed) {
@@ -47083,19 +47083,19 @@ var init_campaignAiService = __esm({
             return { text: "", blockedReason: budget.reason };
           }
           const inboundClipped = (inboundText || "").substring(0, 2e3);
-          const [biz] = await db.select().from(businessAccounts).where(eq53(businessAccounts.id, campaign.businessAccountId)).limit(1);
+          const [biz] = await db.select().from(businessAccounts).where(eq54(businessAccounts.id, campaign.businessAccountId)).limit(1);
           if (!biz) return null;
           const apiKey = biz.openaiApiKey ? safeDecrypt(biz.openaiApiKey) : process.env.OPENAI_API_KEY;
           if (!apiKey) {
             console.error("[CampaignAI] No OpenAI API key available for business", biz.id);
             return null;
           }
-          const [template] = await db.select().from(whatsappTemplates).where(eq53(whatsappTemplates.id, campaign.templateId)).limit(1);
+          const [template] = await db.select().from(whatsappTemplates).where(eq54(whatsappTemplates.id, campaign.templateId)).limit(1);
           const knowledge = await buildKnowledgeContext({
             campaign,
             businessAccountId: campaign.businessAccountId
           });
-          const history = await db.select().from(marketingCampaignMessages).where(eq53(marketingCampaignMessages.recipientId, recipientId)).orderBy(desc19(marketingCampaignMessages.createdAt)).limit(20);
+          const history = await db.select().from(marketingCampaignMessages).where(eq54(marketingCampaignMessages.recipientId, recipientId)).orderBy(desc19(marketingCampaignMessages.createdAt)).limit(20);
           const ordered = history.slice().reverse();
           const persona = (campaign.aiSystemPrompt || "").trim() || `You are ${campaign.aiAgentName || "an assistant"} for ${biz.name}, replying to someone who has responded to a WhatsApp message we sent them. Be warm, concise and helpful. Answer using only the recipient details and knowledge below, and finish with a clear next step. Never invent amounts, dates, prices, policies or product details.`;
           const recipientContext = buildRecipientContext(recipient.attributes);
@@ -47134,11 +47134,11 @@ ${knowledge}` : ""
             temperature: 0.5,
             max_tokens: 250
           });
-          const text2 = completion.choices[0]?.message?.content?.trim();
+          const text3 = completion.choices[0]?.message?.content?.trim();
           const usedTokens = completion.usage?.total_tokens ?? 0;
           await marketingCampaignService.addAiTokensUsed(campaignId, usedTokens);
-          if (!text2) return null;
-          return { text: text2 };
+          if (!text3) return null;
+          return { text: text3 };
         } catch (err) {
           console.error("[CampaignAI] generateReply error:", err);
           return null;
@@ -47159,18 +47159,18 @@ __export(marketingCampaignService_exports, {
   startCampaignScheduler: () => startCampaignScheduler,
   validateTemplateParams: () => validateTemplateParams
 });
-import { and as and44, desc as desc20, eq as eq54, inArray as inArray10, sql as sql30 } from "drizzle-orm";
+import { and as and45, desc as desc20, eq as eq55, inArray as inArray10, sql as sql30 } from "drizzle-orm";
 async function parkUnsendableCampaign(campaignId, businessAccountId, currentStatus, reason) {
   if (currentStatus !== "scheduled" && currentStatus !== "sending") return;
   const [dispatched] = await db.select({ n: sql30`count(*)::int` }).from(marketingCampaignRecipients).where(
-    and44(
-      eq54(marketingCampaignRecipients.campaignId, campaignId),
+    and45(
+      eq55(marketingCampaignRecipients.campaignId, campaignId),
       inArray10(marketingCampaignRecipients.status, ["sent", "delivered", "read", "replied"])
     )
   );
   const alreadySent = (dispatched?.n ?? 0) > 0;
   const parkedStatus = alreadySent ? "failed" : "draft";
-  await db.update(marketingCampaigns).set({ status: parkedStatus, heartbeatAt: null, updatedAt: /* @__PURE__ */ new Date() }).where(and44(eq54(marketingCampaigns.id, campaignId), eq54(marketingCampaigns.businessAccountId, businessAccountId)));
+  await db.update(marketingCampaigns).set({ status: parkedStatus, heartbeatAt: null, updatedAt: /* @__PURE__ */ new Date() }).where(and45(eq55(marketingCampaigns.id, campaignId), eq55(marketingCampaigns.businessAccountId, businessAccountId)));
   console.warn(
     `[Campaign] ${campaignId} parked as ${parkedStatus}` + (alreadySent ? ` after ${dispatched?.n} message(s) already sent` : "") + ` \u2014 ${reason}`
   );
@@ -47228,7 +47228,7 @@ function classificationCondition(classification) {
   if (classification === UNCLASSIFIED_FILTER) {
     return sql30`first_reply_at IS NOT NULL AND primary_classification IS NULL`;
   }
-  return eq54(marketingCampaignRecipients.primaryClassification, classification);
+  return eq55(marketingCampaignRecipients.primaryClassification, classification);
 }
 function csvCell2(value) {
   const s = value === null || value === void 0 ? "" : String(value);
@@ -47341,7 +47341,7 @@ async function recordOptOut(businessAccountId, phone, reason = "user_stop", camp
   const normalized = normalizePhone5(phone);
   if (!normalized) return;
   const last10 = normalized.slice(-10);
-  const existing = await db.select().from(whatsappOptOuts).where(and44(eq54(whatsappOptOuts.businessAccountId, businessAccountId), eq54(whatsappOptOuts.phone, normalized))).limit(1);
+  const existing = await db.select().from(whatsappOptOuts).where(and45(eq55(whatsappOptOuts.businessAccountId, businessAccountId), eq55(whatsappOptOuts.phone, normalized))).limit(1);
   if (existing.length === 0) {
     await db.insert(whatsappOptOuts).values({
       businessAccountId,
@@ -47350,8 +47350,8 @@ async function recordOptOut(businessAccountId, phone, reason = "user_stop", camp
       campaignId: campaignId || null
     });
   }
-  await db.update(marketingCampaignRecipients).set({ status: "opted_out" }).where(and44(
-    eq54(marketingCampaignRecipients.businessAccountId, businessAccountId),
+  await db.update(marketingCampaignRecipients).set({ status: "opted_out" }).where(and45(
+    eq55(marketingCampaignRecipients.businessAccountId, businessAccountId),
     inArray10(marketingCampaignRecipients.status, ["pending", "claimed", "queued", "sent", "delivered", "read", "replied"]),
     sql30`(${marketingCampaignRecipients.sendPhone} = ${normalized}
            OR ${marketingCampaignRecipients.phone} = ${normalized}
@@ -47403,10 +47403,10 @@ var init_marketingCampaignService = __esm({
     VALID_FIELD_TYPES = /* @__PURE__ */ new Set(["text", "date", "boolean"]);
     marketingCampaignService = {
       async list(businessAccountId) {
-        return db.select().from(marketingCampaigns).where(eq54(marketingCampaigns.businessAccountId, businessAccountId)).orderBy(desc20(marketingCampaigns.createdAt));
+        return db.select().from(marketingCampaigns).where(eq55(marketingCampaigns.businessAccountId, businessAccountId)).orderBy(desc20(marketingCampaigns.createdAt));
       },
       async get(businessAccountId, id) {
-        const [row] = await db.select().from(marketingCampaigns).where(and44(eq54(marketingCampaigns.id, id), eq54(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
+        const [row] = await db.select().from(marketingCampaigns).where(and45(eq55(marketingCampaigns.id, id), eq55(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
         return row;
       },
       async create(businessAccountId, payload) {
@@ -47415,7 +47415,7 @@ var init_marketingCampaignService = __esm({
           groupIds: payload.groupIds
         });
         if (missing) throw new CampaignPrerequisiteError(missing);
-        const [tpl] = await db.select().from(whatsappTemplates).where(and44(eq54(whatsappTemplates.id, payload.templateId), eq54(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
+        const [tpl] = await db.select().from(whatsappTemplates).where(and45(eq55(whatsappTemplates.id, payload.templateId), eq55(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!tpl) throw new Error("Template not found for this business");
         const paramError = validateTemplateParams(tpl, payload.templateParams);
         if (paramError) throw new Error(paramError);
@@ -47456,7 +47456,7 @@ var init_marketingCampaignService = __esm({
           const current = await this.get(businessAccountId, id);
           if (!current) return void 0;
           const templateId = payload.templateId ?? current.templateId;
-          const [tpl] = await db.select().from(whatsappTemplates).where(and44(eq54(whatsappTemplates.id, templateId), eq54(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
+          const [tpl] = await db.select().from(whatsappTemplates).where(and45(eq55(whatsappTemplates.id, templateId), eq55(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
           if (!tpl) throw new Error("Template not found for this business");
           const values = payload.templateParams ?? current.templateParams;
           const paramError = validateTemplateParams(tpl, values);
@@ -47487,24 +47487,24 @@ var init_marketingCampaignService = __esm({
           set.replyClassifications = normalizeClassifications(payload.replyClassifications);
         }
         if (payload.status !== void 0) set.status = payload.status;
-        const [row] = await db.update(marketingCampaigns).set(set).where(and44(
-          eq54(marketingCampaigns.id, id),
-          eq54(marketingCampaigns.businessAccountId, businessAccountId),
+        const [row] = await db.update(marketingCampaigns).set(set).where(and45(
+          eq55(marketingCampaigns.id, id),
+          eq55(marketingCampaigns.businessAccountId, businessAccountId),
           ...opts?.onlyIfStatusIn ? [inArray10(marketingCampaigns.status, opts.onlyIfStatusIn)] : []
         )).returning();
         return row;
       },
       async remove(businessAccountId, id) {
-        const result = await db.delete(marketingCampaigns).where(and44(eq54(marketingCampaigns.id, id), eq54(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
+        const result = await db.delete(marketingCampaigns).where(and45(eq55(marketingCampaigns.id, id), eq55(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
         return result.length > 0;
       },
       async listRecipients(businessAccountId, campaignId, opts) {
         const limit = Math.min(Math.max(opts?.limit ?? 200, 1), 1e3);
         const offset = Math.max(opts?.offset ?? 0, 0);
-        const statusCondition = opts?.status ? opts.status === "pending" ? inArray10(marketingCampaignRecipients.status, ["pending", "claimed"]) : eq54(marketingCampaignRecipients.status, opts.status) : void 0;
-        const where = and44(
-          eq54(marketingCampaignRecipients.campaignId, campaignId),
-          eq54(marketingCampaignRecipients.businessAccountId, businessAccountId),
+        const statusCondition = opts?.status ? opts.status === "pending" ? inArray10(marketingCampaignRecipients.status, ["pending", "claimed"]) : eq55(marketingCampaignRecipients.status, opts.status) : void 0;
+        const where = and45(
+          eq55(marketingCampaignRecipients.campaignId, campaignId),
+          eq55(marketingCampaignRecipients.businessAccountId, businessAccountId),
           statusCondition,
           classificationCondition(opts?.classification)
         );
@@ -47521,9 +47521,9 @@ var init_marketingCampaignService = __esm({
         const rows = await db.select({
           status: marketingCampaignRecipients.status,
           cnt: sql30`COUNT(*)::int`
-        }).from(marketingCampaignRecipients).where(and44(
-          eq54(marketingCampaignRecipients.campaignId, campaignId),
-          eq54(marketingCampaignRecipients.businessAccountId, businessAccountId),
+        }).from(marketingCampaignRecipients).where(and45(
+          eq55(marketingCampaignRecipients.campaignId, campaignId),
+          eq55(marketingCampaignRecipients.businessAccountId, businessAccountId),
           classificationCondition(opts?.classification)
         )).groupBy(marketingCampaignRecipients.status);
         const out = { total: 0, pending: 0, queued: 0, sent: 0, delivered: 0, read: 0, failed: 0, expired: 0, replied: 0, opted_out: 0 };
@@ -47539,18 +47539,18 @@ var init_marketingCampaignService = __esm({
        * recipient belongs to this campaign+business — closes the IDOR gap in the previous version.
        */
       async getMessagesForRecipient(businessAccountId, campaignId, recipientId) {
-        const [campaign] = await db.select({ id: marketingCampaigns.id }).from(marketingCampaigns).where(and44(eq54(marketingCampaigns.id, campaignId), eq54(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
+        const [campaign] = await db.select({ id: marketingCampaigns.id }).from(marketingCampaigns).where(and45(eq55(marketingCampaigns.id, campaignId), eq55(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
         if (!campaign) return null;
-        const [recipient] = await db.select({ id: marketingCampaignRecipients.id }).from(marketingCampaignRecipients).where(and44(
-          eq54(marketingCampaignRecipients.id, recipientId),
-          eq54(marketingCampaignRecipients.campaignId, campaignId),
-          eq54(marketingCampaignRecipients.businessAccountId, businessAccountId)
+        const [recipient] = await db.select({ id: marketingCampaignRecipients.id }).from(marketingCampaignRecipients).where(and45(
+          eq55(marketingCampaignRecipients.id, recipientId),
+          eq55(marketingCampaignRecipients.campaignId, campaignId),
+          eq55(marketingCampaignRecipients.businessAccountId, businessAccountId)
         )).limit(1);
         if (!recipient) return null;
-        return db.select().from(marketingCampaignMessages).where(and44(
-          eq54(marketingCampaignMessages.recipientId, recipientId),
-          eq54(marketingCampaignMessages.campaignId, campaignId),
-          eq54(marketingCampaignMessages.businessAccountId, businessAccountId)
+        return db.select().from(marketingCampaignMessages).where(and45(
+          eq55(marketingCampaignMessages.recipientId, recipientId),
+          eq55(marketingCampaignMessages.campaignId, campaignId),
+          eq55(marketingCampaignMessages.businessAccountId, businessAccountId)
         )).orderBy(marketingCampaignMessages.createdAt);
       },
       async snapshotRecipients(campaign) {
@@ -47577,7 +47577,7 @@ var init_marketingCampaignService = __esm({
             await db.insert(marketingCampaignRecipients).values(rows.slice(i, i + CHUNK));
           }
         }
-        await db.update(marketingCampaigns).set({ totalRecipients: rows.length, updatedAt: /* @__PURE__ */ new Date() }).where(eq54(marketingCampaigns.id, campaign.id));
+        await db.update(marketingCampaigns).set({ totalRecipients: rows.length, updatedAt: /* @__PURE__ */ new Date() }).where(eq55(marketingCampaigns.id, campaign.id));
         return rows.length;
       },
       /**
@@ -47677,14 +47677,14 @@ var init_marketingCampaignService = __esm({
           await parkUnsendableCampaign(campaignId, businessAccountId, campaign.status, missing.message);
           return { started: false, reason: missing.message };
         }
-        const [tpl] = await db.select().from(whatsappTemplates).where(eq54(whatsappTemplates.id, campaign.templateId)).limit(1);
+        const [tpl] = await db.select().from(whatsappTemplates).where(eq55(whatsappTemplates.id, campaign.templateId)).limit(1);
         if (!tpl) return { started: false, reason: "Template not found" };
         const paramError = validateTemplateParams(tpl, campaign.templateParams);
         if (paramError) {
           await parkUnsendableCampaign(campaignId, businessAccountId, campaign.status, paramError);
           return { started: false, reason: paramError };
         }
-        const existing = await db.select({ id: marketingCampaignRecipients.id }).from(marketingCampaignRecipients).where(eq54(marketingCampaignRecipients.campaignId, campaignId)).limit(1);
+        const existing = await db.select({ id: marketingCampaignRecipients.id }).from(marketingCampaignRecipients).where(eq55(marketingCampaignRecipients.campaignId, campaignId)).limit(1);
         if (existing.length === 0) {
           const total = await this.snapshotRecipients(campaign);
           if (total === 0) return { started: false, reason: "No eligible recipients (after de-dup and opt-outs)" };
@@ -47698,9 +47698,9 @@ var init_marketingCampaignService = __esm({
           startedAt: campaign.startedAt || /* @__PURE__ */ new Date(),
           heartbeatAt: /* @__PURE__ */ new Date(),
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(and44(
-          eq54(marketingCampaigns.id, campaignId),
-          eq54(marketingCampaigns.businessAccountId, businessAccountId),
+        }).where(and45(
+          eq55(marketingCampaigns.id, campaignId),
+          eq55(marketingCampaigns.businessAccountId, businessAccountId),
           inArray10(marketingCampaigns.status, startableStatuses)
         )).returning({ id: marketingCampaigns.id });
         if (!claimedCampaign) {
@@ -47736,8 +47736,8 @@ var init_marketingCampaignService = __esm({
           const refreshedCampaign = await this.get(businessAccountId, campaignId);
           const groupIds = (refreshedCampaign?.groupIds || []).filter(Boolean);
           if (groupIds.length > 0) {
-            const groups = await db.select({ id: contactGroups.id, code: contactGroups.defaultCountryCode }).from(contactGroups).where(and44(
-              eq54(contactGroups.businessAccountId, businessAccountId),
+            const groups = await db.select({ id: contactGroups.id, code: contactGroups.defaultCountryCode }).from(contactGroups).where(and45(
+              eq55(contactGroups.businessAccountId, businessAccountId),
               inArray10(contactGroups.id, groupIds)
             ));
             for (const g of groups) groupCodeMap.set(g.id, g.code ?? null);
@@ -47774,12 +47774,12 @@ var init_marketingCampaignService = __esm({
               const now = Date.now();
               if (now - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
                 lastHeartbeat = now;
-                await db.update(marketingCampaigns).set({ heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq54(marketingCampaigns.id, campaignId));
+                await db.update(marketingCampaigns).set({ heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq55(marketingCampaigns.id, campaignId));
               }
               try {
                 const optOuts = await contactGroupService.getOptOutSet(businessAccountId);
                 if (optOuts.has(r.phone)) {
-                  await db.update(marketingCampaignRecipients).set({ status: "opted_out", claimedAt: null }).where(eq54(marketingCampaignRecipients.id, r.id));
+                  await db.update(marketingCampaignRecipients).set({ status: "opted_out", claimedAt: null }).where(eq55(marketingCampaignRecipients.id, r.id));
                   continue;
                 }
                 const groupCode = r.groupId ? groupCodeMap.get(r.groupId) ?? null : null;
@@ -47789,7 +47789,7 @@ var init_marketingCampaignService = __esm({
                     status: "failed",
                     claimedAt: null,
                     errorMessage: normalized.error || "Invalid phone number"
-                  }).where(eq54(marketingCampaignRecipients.id, r.id));
+                  }).where(eq55(marketingCampaignRecipients.id, r.id));
                   failed++;
                   await new Promise((res) => setTimeout(res, SEND_DELAY_MS));
                   continue;
@@ -47797,7 +47797,7 @@ var init_marketingCampaignService = __esm({
                 const sendPhone = normalized.phone;
                 const { params, problems } = resolveParams(tpl, refreshed, r, knownFields);
                 if (problems.length > 0) {
-                  await db.update(marketingCampaignRecipients).set({ status: "failed", claimedAt: null, errorMessage: problems.join("; ") }).where(eq54(marketingCampaignRecipients.id, r.id));
+                  await db.update(marketingCampaignRecipients).set({ status: "failed", claimedAt: null, errorMessage: problems.join("; ") }).where(eq55(marketingCampaignRecipients.id, r.id));
                   failed++;
                   continue;
                 }
@@ -47813,7 +47813,7 @@ var init_marketingCampaignService = __esm({
                     sendPhone,
                     errorMessage: null,
                     claimedAt: null
-                  }).where(eq54(marketingCampaignRecipients.id, r.id));
+                  }).where(eq55(marketingCampaignRecipients.id, r.id));
                   const renderedBody = (tpl.bodyText || "").replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n) => params[String(n)] ?? `{{${n}}}`);
                   await db.insert(marketingCampaignMessages).values({
                     campaignId,
@@ -47831,7 +47831,7 @@ var init_marketingCampaignService = __esm({
                     providerResponse: result.raw ?? null,
                     sendPhone,
                     errorMessage: typeof result.error === "string" ? result.error : JSON.stringify(result.error || {}).substring(0, 500)
-                  }).where(eq54(marketingCampaignRecipients.id, r.id));
+                  }).where(eq55(marketingCampaignRecipients.id, r.id));
                   failed++;
                 }
               } catch (err) {
@@ -47839,7 +47839,7 @@ var init_marketingCampaignService = __esm({
                   status: "failed",
                   claimedAt: null,
                   errorMessage: (err?.message || String(err)).substring(0, 500)
-                }).where(eq54(marketingCampaignRecipients.id, r.id));
+                }).where(eq55(marketingCampaignRecipients.id, r.id));
                 failed++;
               }
               await new Promise((res) => setTimeout(res, SEND_DELAY_MS));
@@ -47850,17 +47850,17 @@ var init_marketingCampaignService = __esm({
               optedOutCount: sql30`(SELECT COUNT(*)::int FROM ${marketingCampaignRecipients} WHERE campaign_id = ${campaignId} AND status = 'opted_out')`,
               heartbeatAt: /* @__PURE__ */ new Date(),
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq54(marketingCampaigns.id, campaignId));
+            }).where(eq55(marketingCampaigns.id, campaignId));
           }
-          const [{ leftover }] = await db.select({ leftover: sql30`COUNT(*)::int` }).from(marketingCampaignRecipients).where(and44(
-            eq54(marketingCampaignRecipients.campaignId, campaignId),
+          const [{ leftover }] = await db.select({ leftover: sql30`COUNT(*)::int` }).from(marketingCampaignRecipients).where(and45(
+            eq55(marketingCampaignRecipients.campaignId, campaignId),
             inArray10(marketingCampaignRecipients.status, ["pending", "claimed"])
           ));
           if (leftover > 0) {
             console.warn(`[Campaign] ${campaignId} loop ended with ${leftover} rows still pending/claimed \u2014 leaving status='sending' for scheduler recovery`);
-            await db.update(marketingCampaigns).set({ heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq54(marketingCampaigns.id, campaignId));
+            await db.update(marketingCampaigns).set({ heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq55(marketingCampaigns.id, campaignId));
           } else {
-            await db.update(marketingCampaigns).set({ status: "completed", completedAt: /* @__PURE__ */ new Date(), heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq54(marketingCampaigns.id, campaignId));
+            await db.update(marketingCampaigns).set({ status: "completed", completedAt: /* @__PURE__ */ new Date(), heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq55(marketingCampaigns.id, campaignId));
             console.log(`[Campaign] ${campaignId} complete \u2014 sent=${sent} failed=${failed}`);
           }
         } finally {
@@ -47874,7 +47874,7 @@ var init_marketingCampaignService = __esm({
         }
       },
       async cancel(businessAccountId, campaignId) {
-        const result = await db.update(marketingCampaigns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(and44(eq54(marketingCampaigns.id, campaignId), eq54(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
+        const result = await db.update(marketingCampaigns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(and45(eq55(marketingCampaigns.id, campaignId), eq55(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
         return result.length > 0;
       },
       /**
@@ -47886,8 +47886,8 @@ var init_marketingCampaignService = __esm({
         const normalized = normalizePhone5(phone);
         if (!normalized) return null;
         const last10 = normalized.slice(-10);
-        const recipients = await db.select().from(marketingCampaignRecipients).where(and44(
-          eq54(marketingCampaignRecipients.businessAccountId, businessAccountId),
+        const recipients = await db.select().from(marketingCampaignRecipients).where(and45(
+          eq55(marketingCampaignRecipients.businessAccountId, businessAccountId),
           // 'queued' is included so that a fast inbound reply (which can land before
           // Meta's "sent" webhook) still attributes to the right recipient row.
           inArray10(marketingCampaignRecipients.status, ["queued", "sent", "delivered", "read", "replied"]),
@@ -47896,7 +47896,7 @@ var init_marketingCampaignService = __esm({
              OR ${marketingCampaignRecipients.phone} = ${last10})`
         )).orderBy(desc20(marketingCampaignRecipients.createdAt)).limit(5);
         for (const r of recipients) {
-          const [c] = await db.select().from(marketingCampaigns).where(eq54(marketingCampaigns.id, r.campaignId)).limit(1);
+          const [c] = await db.select().from(marketingCampaigns).where(eq55(marketingCampaigns.id, r.campaignId)).limit(1);
           if (!c) continue;
           if (c.status === "cancelled" || c.status === "draft" || c.status === "scheduled") continue;
           const sentAt = r.sentAt ? new Date(r.sentAt).getTime() : 0;
@@ -47923,7 +47923,7 @@ var init_marketingCampaignService = __esm({
           optedOutCount: sql30`(SELECT COUNT(*)::int FROM ${marketingCampaignRecipients} WHERE campaign_id = ${campaignId} AND status = 'opted_out')`,
           repliedCount: sql30`(SELECT COUNT(DISTINCT id)::int FROM ${marketingCampaignRecipients} WHERE campaign_id = ${campaignId} AND first_reply_at IS NOT NULL)`,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq54(marketingCampaigns.id, campaignId));
+        }).where(eq55(marketingCampaigns.id, campaignId));
       },
       /**
        * Process a delivery / read / failed receipt from the provider, keyed by msg91MessageId.
@@ -47935,9 +47935,9 @@ var init_marketingCampaignService = __esm({
       async applyDeliveryReceipt(businessAccountId, msg91MessageId, kind, errorMessage) {
         if (!msg91MessageId) return false;
         const result = await db.transaction(async (tx) => {
-          const [r] = await tx.select().from(marketingCampaignRecipients).where(and44(
-            eq54(marketingCampaignRecipients.businessAccountId, businessAccountId),
-            eq54(marketingCampaignRecipients.msg91MessageId, msg91MessageId)
+          const [r] = await tx.select().from(marketingCampaignRecipients).where(and45(
+            eq55(marketingCampaignRecipients.businessAccountId, businessAccountId),
+            eq55(marketingCampaignRecipients.msg91MessageId, msg91MessageId)
           )).for("update").limit(1);
           if (!r) return { changed: false, campaignId: null };
           const STATUS_RANK = {
@@ -47984,7 +47984,7 @@ var init_marketingCampaignService = __esm({
             if (errorMessage) updates.errorMessage = errorMessage.substring(0, 500);
           }
           if (Object.keys(updates).length === 0) return { changed: false, campaignId: r.campaignId };
-          await tx.update(marketingCampaignRecipients).set(updates).where(eq54(marketingCampaignRecipients.id, r.id));
+          await tx.update(marketingCampaignRecipients).set(updates).where(eq55(marketingCampaignRecipients.id, r.id));
           return { changed: true, campaignId: r.campaignId };
         });
         if (result.changed && result.campaignId) {
@@ -48034,17 +48034,17 @@ var init_marketingCampaignService = __esm({
           direction: "inbound",
           body
         });
-        const [r] = await db.select({ status: marketingCampaignRecipients.status, firstReplyAt: marketingCampaignRecipients.firstReplyAt }).from(marketingCampaignRecipients).where(eq54(marketingCampaignRecipients.id, recipientId)).limit(1);
+        const [r] = await db.select({ status: marketingCampaignRecipients.status, firstReplyAt: marketingCampaignRecipients.firstReplyAt }).from(marketingCampaignRecipients).where(eq55(marketingCampaignRecipients.id, recipientId)).limit(1);
         const updates = {
           replyCount: sql30`${marketingCampaignRecipients.replyCount} + 1`
         };
         if (!r?.firstReplyAt) updates.firstReplyAt = /* @__PURE__ */ new Date();
         if (r?.status === "queued" || r?.status === "sent" || r?.status === "delivered" || r?.status === "read") updates.status = "replied";
-        await db.update(marketingCampaignRecipients).set(updates).where(eq54(marketingCampaignRecipients.id, recipientId));
+        await db.update(marketingCampaignRecipients).set(updates).where(eq55(marketingCampaignRecipients.id, recipientId));
         await db.update(marketingCampaigns).set({
           repliedCount: sql30`(SELECT COUNT(DISTINCT id)::int FROM ${marketingCampaignRecipients} WHERE campaign_id = ${campaignId} AND first_reply_at IS NOT NULL)`,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq54(marketingCampaigns.id, campaignId));
+        }).where(eq55(marketingCampaigns.id, campaignId));
         void (async () => {
           try {
             const { campaignAiService: campaignAiService2 } = await Promise.resolve().then(() => (init_campaignAiService(), campaignAiService_exports));
@@ -48063,11 +48063,11 @@ var init_marketingCampaignService = __esm({
        * only the campaign's shared daily token budget.
        */
       async checkClassificationBudget(campaignId) {
-        const [campaign] = await db.select().from(marketingCampaigns).where(eq54(marketingCampaigns.id, campaignId)).limit(1);
+        const [campaign] = await db.select().from(marketingCampaigns).where(eq55(marketingCampaigns.id, campaignId)).limit(1);
         if (!campaign) return { allowed: false, reason: "campaign_missing" };
         const today = todayBucket();
         if (campaign.aiUsageDate !== today) {
-          await db.update(marketingCampaigns).set({ aiUsageDate: today, aiTokensUsedToday: 0 }).where(eq54(marketingCampaigns.id, campaignId));
+          await db.update(marketingCampaigns).set({ aiUsageDate: today, aiTokensUsedToday: 0 }).where(eq55(marketingCampaigns.id, campaignId));
           campaign.aiTokensUsedToday = 0;
         }
         if ((campaign.aiTokensUsedToday ?? 0) >= (campaign.aiDailyTokenBudget ?? 0)) {
@@ -48095,7 +48095,7 @@ var init_marketingCampaignService = __esm({
           callbackReason: result.callbackRequired ? result.callbackReason : sql30`${marketingCampaignRecipients.callbackReason}`,
           customerFeedback: sql30`COALESCE(${result.customerFeedback}, ${marketingCampaignRecipients.customerFeedback})`,
           classifiedAt: /* @__PURE__ */ new Date()
-        }).where(eq54(marketingCampaignRecipients.id, recipientId));
+        }).where(eq55(marketingCampaignRecipients.id, recipientId));
       },
       /**
        * Aggregate campaign outcomes for the dashboard and the CSV export.
@@ -48122,16 +48122,16 @@ var init_marketingCampaignService = __esm({
           classified: sql30`COUNT(*) FILTER (WHERE primary_classification IS NOT NULL)::int`,
           unclassifiedReplies: sql30`COUNT(*) FILTER (WHERE first_reply_at IS NOT NULL AND primary_classification IS NULL)::int`,
           callbacksPending: sql30`COUNT(*) FILTER (WHERE callback_required = true)::int`
-        }).from(marketingCampaignRecipients).where(and44(
-          eq54(marketingCampaignRecipients.campaignId, campaignId),
-          eq54(marketingCampaignRecipients.businessAccountId, businessAccountId)
+        }).from(marketingCampaignRecipients).where(and45(
+          eq55(marketingCampaignRecipients.campaignId, campaignId),
+          eq55(marketingCampaignRecipients.businessAccountId, businessAccountId)
         ));
         const grouped = await db.select({
           key: marketingCampaignRecipients.primaryClassification,
           count: sql30`COUNT(*)::int`
-        }).from(marketingCampaignRecipients).where(and44(
-          eq54(marketingCampaignRecipients.campaignId, campaignId),
-          eq54(marketingCampaignRecipients.businessAccountId, businessAccountId),
+        }).from(marketingCampaignRecipients).where(and45(
+          eq55(marketingCampaignRecipients.campaignId, campaignId),
+          eq55(marketingCampaignRecipients.businessAccountId, businessAccountId),
           sql30`primary_classification IS NOT NULL`
         )).groupBy(marketingCampaignRecipients.primaryClassification);
         const counts = new Map(grouped.map((g) => [g.key, g.count]));
@@ -48204,9 +48204,9 @@ var init_marketingCampaignService = __esm({
           "sent_at"
         ];
         yield header.map(csvCell2).join(",") + "\n";
-        const fetchBatch = (offset2) => db.select().from(marketingCampaignRecipients).where(and44(
-          eq54(marketingCampaignRecipients.campaignId, campaignId),
-          eq54(marketingCampaignRecipients.businessAccountId, businessAccountId)
+        const fetchBatch = (offset2) => db.select().from(marketingCampaignRecipients).where(and45(
+          eq55(marketingCampaignRecipients.campaignId, campaignId),
+          eq55(marketingCampaignRecipients.businessAccountId, businessAccountId)
         )).orderBy(marketingCampaignRecipients.createdAt).limit(BATCH).offset(offset2);
         let offset = 0;
         let batch = await fetchBatch(offset);
@@ -48246,26 +48246,26 @@ var init_marketingCampaignService = __esm({
           body,
           metadata: metadata || {}
         });
-        await db.update(marketingCampaignRecipients).set({ aiReplyCount: sql30`${marketingCampaignRecipients.aiReplyCount} + 1` }).where(eq54(marketingCampaignRecipients.id, recipientId));
+        await db.update(marketingCampaignRecipients).set({ aiReplyCount: sql30`${marketingCampaignRecipients.aiReplyCount} + 1` }).where(eq55(marketingCampaignRecipients.id, recipientId));
       },
       /**
        * AI guardrails — must be called BEFORE generating a reply.
        * Resets daily token bucket atomically when the day rolls over.
        */
       async checkAiBudget(campaignId, recipientId) {
-        const [campaign] = await db.select().from(marketingCampaigns).where(eq54(marketingCampaigns.id, campaignId)).limit(1);
+        const [campaign] = await db.select().from(marketingCampaigns).where(eq55(marketingCampaigns.id, campaignId)).limit(1);
         if (!campaign) return { allowed: false, reason: "campaign_missing" };
         if (campaign.aiEnabled !== "true") return { allowed: false, reason: "ai_disabled" };
         const today = todayBucket();
         if (campaign.aiUsageDate !== today) {
-          await db.update(marketingCampaigns).set({ aiUsageDate: today, aiTokensUsedToday: 0 }).where(eq54(marketingCampaigns.id, campaignId));
+          await db.update(marketingCampaigns).set({ aiUsageDate: today, aiTokensUsedToday: 0 }).where(eq55(marketingCampaigns.id, campaignId));
           campaign.aiTokensUsedToday = 0;
           campaign.aiUsageDate = today;
         }
         if ((campaign.aiTokensUsedToday ?? 0) >= (campaign.aiDailyTokenBudget ?? 0)) {
           return { allowed: false, reason: "daily_token_budget_exhausted" };
         }
-        const [recipient] = await db.select({ aiReplyCount: marketingCampaignRecipients.aiReplyCount }).from(marketingCampaignRecipients).where(eq54(marketingCampaignRecipients.id, recipientId)).limit(1);
+        const [recipient] = await db.select({ aiReplyCount: marketingCampaignRecipients.aiReplyCount }).from(marketingCampaignRecipients).where(eq55(marketingCampaignRecipients.id, recipientId)).limit(1);
         if (!recipient) return { allowed: false, reason: "recipient_missing" };
         if ((recipient.aiReplyCount ?? 0) >= (campaign.aiMaxRepliesPerRecipient ?? 0)) {
           return { allowed: false, reason: "per_recipient_cap_reached" };
@@ -48274,7 +48274,7 @@ var init_marketingCampaignService = __esm({
       },
       async addAiTokensUsed(campaignId, tokens) {
         if (!tokens || tokens <= 0) return;
-        await db.update(marketingCampaigns).set({ aiTokensUsedToday: sql30`${marketingCampaigns.aiTokensUsedToday} + ${Math.floor(tokens)}` }).where(eq54(marketingCampaigns.id, campaignId));
+        await db.update(marketingCampaigns).set({ aiTokensUsedToday: sql30`${marketingCampaigns.aiTokensUsedToday} + ${Math.floor(tokens)}` }).where(eq55(marketingCampaigns.id, campaignId));
       },
       /**
        * Operator-initiated retry for a single recipient row. Flips a 'failed' or
@@ -48306,9 +48306,9 @@ var init_marketingCampaignService = __esm({
         const rows = result?.rows ?? [];
         if (rows.length > 0) {
           await this.recomputeCampaignAggregates(campaignId);
-          const [c] = await db.select({ status: marketingCampaigns.status }).from(marketingCampaigns).where(and44(eq54(marketingCampaigns.id, campaignId), eq54(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
+          const [c] = await db.select({ status: marketingCampaigns.status }).from(marketingCampaigns).where(and45(eq55(marketingCampaigns.id, campaignId), eq55(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
           if (c && (c.status === "completed" || c.status === "draft" || c.status === "scheduled")) {
-            await db.update(marketingCampaigns).set({ status: "sending", completedAt: null, heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(and44(eq54(marketingCampaigns.id, campaignId), eq54(marketingCampaigns.businessAccountId, businessAccountId)));
+            await db.update(marketingCampaigns).set({ status: "sending", completedAt: null, heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(and45(eq55(marketingCampaigns.id, campaignId), eq55(marketingCampaigns.businessAccountId, businessAccountId)));
           }
         }
         return { requeued: rows.length };
@@ -48339,9 +48339,9 @@ var init_marketingCampaignService = __esm({
         const rows = result?.rows ?? [];
         if (rows.length === 0) return { requeued: 0 };
         await this.recomputeCampaignAggregates(campaignId);
-        const [c] = await db.select({ status: marketingCampaigns.status }).from(marketingCampaigns).where(and44(eq54(marketingCampaigns.id, campaignId), eq54(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
+        const [c] = await db.select({ status: marketingCampaigns.status }).from(marketingCampaigns).where(and45(eq55(marketingCampaigns.id, campaignId), eq55(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
         if (c && (c.status === "completed" || c.status === "draft" || c.status === "scheduled")) {
-          await db.update(marketingCampaigns).set({ status: "sending", completedAt: null, heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(and44(eq54(marketingCampaigns.id, campaignId), eq54(marketingCampaigns.businessAccountId, businessAccountId)));
+          await db.update(marketingCampaigns).set({ status: "sending", completedAt: null, heartbeatAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(and45(eq55(marketingCampaigns.id, campaignId), eq55(marketingCampaigns.businessAccountId, businessAccountId)));
         }
         this.startSend(businessAccountId, campaignId, { forceResume: true }).catch((err) => {
           console.error(`[Campaign] requeueAllFailed \u2192 startSend(${campaignId}) error:`, err);
@@ -48366,9 +48366,9 @@ var init_marketingCampaignService = __esm({
           id: marketingCampaignRecipients.id,
           msgId: marketingCampaignRecipients.msg91MessageId,
           createdAt: marketingCampaignRecipients.createdAt
-        }).from(marketingCampaignRecipients).where(and44(
-          eq54(marketingCampaignRecipients.businessAccountId, businessAccountId),
-          eq54(marketingCampaignRecipients.campaignId, campaignId),
+        }).from(marketingCampaignRecipients).where(and45(
+          eq55(marketingCampaignRecipients.businessAccountId, businessAccountId),
+          eq55(marketingCampaignRecipients.campaignId, campaignId),
           inArray10(marketingCampaignRecipients.status, ["queued", "sent"]),
           sql30`${marketingCampaignRecipients.msg91MessageId} IS NOT NULL`
         ));
@@ -48453,8 +48453,8 @@ var init_marketingCampaignService = __esm({
         } catch (err) {
           console.error("[CampaignScheduler] expireStaleQueued error:", err);
         }
-        const due = await db.select().from(marketingCampaigns).where(and44(
-          eq54(marketingCampaigns.status, "scheduled"),
+        const due = await db.select().from(marketingCampaigns).where(and45(
+          eq55(marketingCampaigns.status, "scheduled"),
           sql30`${marketingCampaigns.scheduledAt} <= ${now}`
         )).limit(20);
         for (const c of due) {
@@ -48466,8 +48466,8 @@ var init_marketingCampaignService = __esm({
           }
         }
         const heartbeatCutoff = new Date(Date.now() - STALE_CAMPAIGN_HEARTBEAT_MS);
-        const stuck = await db.select().from(marketingCampaigns).where(and44(
-          eq54(marketingCampaigns.status, "sending"),
+        const stuck = await db.select().from(marketingCampaigns).where(and45(
+          eq55(marketingCampaigns.status, "sending"),
           sql30`(${marketingCampaigns.heartbeatAt} IS NULL OR ${marketingCampaigns.heartbeatAt} <= ${heartbeatCutoff})`
         )).limit(20);
         for (const c of stuck) {
@@ -48535,11 +48535,11 @@ var readiness_exports = {};
 __export(readiness_exports, {
   computeWhatsappReadiness: () => computeWhatsappReadiness
 });
-import { and as and45, eq as eq55, sql as sql31, desc as desc21 } from "drizzle-orm";
+import { and as and46, eq as eq56, sql as sql31, desc as desc21 } from "drizzle-orm";
 async function countRows(table, businessAccountId, extra) {
-  const conditions = [eq55(table.businessAccountId, businessAccountId)];
+  const conditions = [eq56(table.businessAccountId, businessAccountId)];
   if (extra) conditions.push(extra);
-  const [row] = await db.select({ n: sql31`count(*)::int` }).from(table).where(and45(...conditions));
+  const [row] = await db.select({ n: sql31`count(*)::int` }).from(table).where(and46(...conditions));
   return row?.n ?? 0;
 }
 async function computeWhatsappReadiness(businessAccountId, settings, opts) {
@@ -48551,10 +48551,10 @@ async function computeWhatsappReadiness(businessAccountId, settings, opts) {
     [businessAccount]
   ] = await Promise.all([
     countRows(whatsappWhitelist, businessAccountId),
-    countRows(whatsappFlows, businessAccountId, eq55(whatsappFlows.isActive, "true")),
+    countRows(whatsappFlows, businessAccountId, eq56(whatsappFlows.isActive, "true")),
     countRows(smartReplies, businessAccountId),
-    db.select({ lastUserMessageAt: whatsappSessions.lastUserMessageAt }).from(whatsappSessions).where(eq55(whatsappSessions.businessAccountId, businessAccountId)).orderBy(desc21(whatsappSessions.lastUserMessageAt)).limit(1),
-    db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq55(businessAccounts.id, businessAccountId)).limit(1)
+    db.select({ lastUserMessageAt: whatsappSessions.lastUserMessageAt }).from(whatsappSessions).where(eq56(whatsappSessions.businessAccountId, businessAccountId)).orderBy(desc21(whatsappSessions.lastUserMessageAt)).limit(1),
+    db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq56(businessAccounts.id, businessAccountId)).limit(1)
   ]);
   const marketing = opts.marketingEnabled ? await (async () => {
     const [usableTemplates, usableAudiences, totalTemplates, totalAudiences] = await Promise.all([
@@ -48704,7 +48704,7 @@ __export(instagramService_exports, {
   InstagramService: () => InstagramService,
   instagramService: () => instagramService
 });
-import { eq as eq56, and as and46, desc as desc22, sql as sql32, asc as asc9, count as count2 } from "drizzle-orm";
+import { eq as eq57, and as and47, desc as desc22, sql as sql32, asc as asc9, count as count2 } from "drizzle-orm";
 var IG_API_BASE, IG_TEXT_LIMIT, InstagramService, instagramService;
 var init_instagramService = __esm({
   "server/services/instagramService.ts"() {
@@ -48716,7 +48716,7 @@ var init_instagramService = __esm({
     IG_TEXT_LIMIT = 1e3;
     InstagramService = class {
       async getSettings(businessAccountId) {
-        const [settings] = await db.select().from(instagramSettings).where(eq56(instagramSettings.businessAccountId, businessAccountId)).limit(1);
+        const [settings] = await db.select().from(instagramSettings).where(eq57(instagramSettings.businessAccountId, businessAccountId)).limit(1);
         return settings || null;
       }
       async updateSettings(businessAccountId, data) {
@@ -48727,7 +48727,7 @@ var init_instagramService = __esm({
         if (data.appSecret !== void 0 && data.appSecret !== null) {
           updateData.appSecret = encrypt(data.appSecret);
         }
-        const [updated] = await db.update(instagramSettings).set(updateData).where(eq56(instagramSettings.businessAccountId, businessAccountId)).returning();
+        const [updated] = await db.update(instagramSettings).set(updateData).where(eq57(instagramSettings.businessAccountId, businessAccountId)).returning();
         return updated;
       }
       async createSettings(businessAccountId, data = {}) {
@@ -48892,13 +48892,13 @@ var init_instagramService = __esm({
       async getConversationBySenderId(businessAccountId, senderId, options = {}) {
         const { limit = 50, before } = options;
         const conditions = [
-          eq56(instagramMessages.businessAccountId, businessAccountId),
-          eq56(instagramMessages.senderId, senderId)
+          eq57(instagramMessages.businessAccountId, businessAccountId),
+          eq57(instagramMessages.senderId, senderId)
         ];
         if (before) {
           conditions.push(sql32`${instagramMessages.createdAt} < ${before}::timestamp`);
         }
-        const messages2 = await db.select().from(instagramMessages).where(and46(...conditions)).orderBy(desc22(instagramMessages.createdAt)).limit(limit + 1);
+        const messages2 = await db.select().from(instagramMessages).where(and47(...conditions)).orderBy(desc22(instagramMessages.createdAt)).limit(limit + 1);
         const hasMore = messages2.length > limit;
         const result = hasMore ? messages2.slice(0, limit) : messages2;
         result.reverse();
@@ -48906,9 +48906,9 @@ var init_instagramService = __esm({
       }
       async deleteConversation(businessAccountId, senderId) {
         const result = await db.delete(instagramMessages).where(
-          and46(
-            eq56(instagramMessages.businessAccountId, businessAccountId),
-            eq56(instagramMessages.senderId, senderId)
+          and47(
+            eq57(instagramMessages.businessAccountId, businessAccountId),
+            eq57(instagramMessages.senderId, senderId)
           )
         ).returning();
         console.log(`[Instagram] Deleted ${result.length} messages for sender ${senderId}`);
@@ -48937,16 +48937,16 @@ var init_instagramService = __esm({
         }
       }
       async findBusinessByIgAccountId(igAccountId) {
-        const [settings] = await db.select().from(instagramSettings).where(eq56(instagramSettings.igAccountId, igAccountId)).limit(1);
+        const [settings] = await db.select().from(instagramSettings).where(eq57(instagramSettings.igAccountId, igAccountId)).limit(1);
         if (!settings) return null;
         return { businessAccountId: settings.businessAccountId, settings };
       }
       async findSettingsByVerifyToken(verifyToken) {
-        const [settings] = await db.select().from(instagramSettings).where(eq56(instagramSettings.webhookVerifyToken, verifyToken)).limit(1);
+        const [settings] = await db.select().from(instagramSettings).where(eq57(instagramSettings.webhookVerifyToken, verifyToken)).limit(1);
         return settings || null;
       }
       async findMessageByIgId(igMessageId) {
-        const [message] = await db.select().from(instagramMessages).where(eq56(instagramMessages.igMessageId, igMessageId)).limit(1);
+        const [message] = await db.select().from(instagramMessages).where(eq57(instagramMessages.igMessageId, igMessageId)).limit(1);
         return message || null;
       }
       async saveSettings(businessAccountId, data) {
@@ -49016,20 +49016,20 @@ var init_instagramService = __esm({
       }
       async getInstagramLeads(businessAccountId, options = {}) {
         const { limit = 20, offset = 0 } = options;
-        const [totalResult] = await db.select({ count: count2() }).from(instagramLeads).where(eq56(instagramLeads.businessAccountId, businessAccountId));
-        const leads3 = await db.select().from(instagramLeads).where(eq56(instagramLeads.businessAccountId, businessAccountId)).orderBy(desc22(instagramLeads.receivedAt)).limit(limit).offset(offset);
+        const [totalResult] = await db.select({ count: count2() }).from(instagramLeads).where(eq57(instagramLeads.businessAccountId, businessAccountId));
+        const leads3 = await db.select().from(instagramLeads).where(eq57(instagramLeads.businessAccountId, businessAccountId)).orderBy(desc22(instagramLeads.receivedAt)).limit(limit).offset(offset);
         return { leads: leads3, total: totalResult?.count || 0 };
       }
       async deleteInstagramLead(businessAccountId, leadId) {
         await db.delete(instagramLeads).where(
-          and46(
-            eq56(instagramLeads.id, leadId),
-            eq56(instagramLeads.businessAccountId, businessAccountId)
+          and47(
+            eq57(instagramLeads.id, leadId),
+            eq57(instagramLeads.businessAccountId, businessAccountId)
           )
         );
       }
       async getInstagramLeadFields(businessAccountId) {
-        let fields = await db.select().from(instagramLeadFields).where(eq56(instagramLeadFields.businessAccountId, businessAccountId)).orderBy(asc9(instagramLeadFields.displayOrder));
+        let fields = await db.select().from(instagramLeadFields).where(eq57(instagramLeadFields.businessAccountId, businessAccountId)).orderBy(asc9(instagramLeadFields.displayOrder));
         if (fields.length === 0) {
           const defaults = [
             { businessAccountId, fieldKey: "customer_name", fieldLabel: "Customer Name", fieldType: "text", isRequired: true, isDefault: true, isEnabled: true, displayOrder: 0 },
@@ -49041,7 +49041,7 @@ var init_instagramService = __esm({
         return fields;
       }
       async createInstagramLeadField(businessAccountId, data) {
-        const maxOrder = await db.select({ max: sql32`COALESCE(MAX(${instagramLeadFields.displayOrder}), -1)` }).from(instagramLeadFields).where(eq56(instagramLeadFields.businessAccountId, businessAccountId));
+        const maxOrder = await db.select({ max: sql32`COALESCE(MAX(${instagramLeadFields.displayOrder}), -1)` }).from(instagramLeadFields).where(eq57(instagramLeadFields.businessAccountId, businessAccountId));
         const [field] = await db.insert(instagramLeadFields).values({
           businessAccountId,
           fieldKey: data.fieldKey,
@@ -49061,19 +49061,19 @@ var init_instagramService = __esm({
         if (data.isRequired !== void 0) updateData.isRequired = data.isRequired;
         if (data.isEnabled !== void 0) updateData.isEnabled = data.isEnabled;
         const [field] = await db.update(instagramLeadFields).set(updateData).where(
-          and46(
-            eq56(instagramLeadFields.id, fieldId),
-            eq56(instagramLeadFields.businessAccountId, businessAccountId)
+          and47(
+            eq57(instagramLeadFields.id, fieldId),
+            eq57(instagramLeadFields.businessAccountId, businessAccountId)
           )
         ).returning();
         return field;
       }
       async deleteInstagramLeadField(businessAccountId, fieldId) {
         await db.delete(instagramLeadFields).where(
-          and46(
-            eq56(instagramLeadFields.id, fieldId),
-            eq56(instagramLeadFields.businessAccountId, businessAccountId),
-            eq56(instagramLeadFields.isDefault, false)
+          and47(
+            eq57(instagramLeadFields.id, fieldId),
+            eq57(instagramLeadFields.businessAccountId, businessAccountId),
+            eq57(instagramLeadFields.isDefault, false)
           )
         );
       }
@@ -49199,9 +49199,9 @@ var init_instagramService = __esm({
       }
       async findCommentByIgId(businessAccountId, commentId) {
         const [comment] = await db.select().from(instagramComments).where(
-          and46(
-            eq56(instagramComments.businessAccountId, businessAccountId),
-            eq56(instagramComments.commentId, commentId)
+          and47(
+            eq57(instagramComments.businessAccountId, businessAccountId),
+            eq57(instagramComments.commentId, commentId)
           )
         ).limit(1);
         return comment || null;
@@ -49263,7 +49263,7 @@ __export(instagramAutoReplyService_exports, {
   InstagramAutoReplyService: () => InstagramAutoReplyService,
   instagramAutoReplyService: () => instagramAutoReplyService
 });
-import { eq as eq57, and as and47, desc as desc23, sql as sql33 } from "drizzle-orm";
+import { eq as eq58, and as and48, desc as desc23, sql as sql33 } from "drizzle-orm";
 import OpenAI32 from "openai";
 function getFieldDisplayName2(fieldId) {
   const fieldIdLower = fieldId.toLowerCase();
@@ -49398,7 +49398,7 @@ var init_instagramAutoReplyService = __esm({
       async generateAndSendReply(businessAccountId, senderId, userMessage) {
         try {
           console.log(`[Instagram Auto-Reply] Processing message from ${senderId}`);
-          const [settings] = await db.select().from(instagramSettings).where(eq57(instagramSettings.businessAccountId, businessAccountId)).limit(1);
+          const [settings] = await db.select().from(instagramSettings).where(eq58(instagramSettings.businessAccountId, businessAccountId)).limit(1);
           if (!settings) {
             console.error(`[Instagram Auto-Reply] No Instagram settings found for business: ${businessAccountId}`);
             return { success: false, error: "Instagram settings not configured" };
@@ -49408,7 +49408,7 @@ var init_instagramAutoReplyService = __esm({
             return { success: false, error: "Auto-reply is disabled" };
           }
           const businessAccount = await db.query.businessAccounts.findFirst({
-            where: eq57(businessAccounts.id, businessAccountId)
+            where: eq58(businessAccounts.id, businessAccountId)
           });
           if (!businessAccount) {
             console.error(`[Instagram Auto-Reply] Business account not found: ${businessAccountId}`);
@@ -49450,9 +49450,9 @@ var init_instagramAutoReplyService = __esm({
           let persistedExtractedData = {};
           try {
             const existingLeads = await db.select().from(instagramLeads).where(
-              and47(
-                eq57(instagramLeads.businessAccountId, businessAccountId),
-                eq57(instagramLeads.senderId, senderId)
+              and48(
+                eq58(instagramLeads.businessAccountId, businessAccountId),
+                eq58(instagramLeads.senderId, senderId)
               )
             ).orderBy(desc23(instagramLeads.createdAt)).limit(1);
             persistedExtractedData = existingLeads.length > 0 ? existingLeads[0].extractedData : {};
@@ -49810,9 +49810,9 @@ IMPORTANT:
             }
           }
           const existingLeads = await db.select().from(instagramLeads).where(
-            and47(
-              eq57(instagramLeads.businessAccountId, businessAccountId),
-              eq57(instagramLeads.senderId, senderId)
+            and48(
+              eq58(instagramLeads.businessAccountId, businessAccountId),
+              eq58(instagramLeads.senderId, senderId)
             )
           ).orderBy(desc23(instagramLeads.createdAt)).limit(1);
           const senderUsername = await this.getSenderUsername(businessAccountId, senderId);
@@ -49832,7 +49832,7 @@ IMPORTANT:
                 extractedData: mergedData,
                 senderUsername: senderUsername || existingLead.senderUsername,
                 updatedAt: /* @__PURE__ */ new Date()
-              }).where(eq57(instagramLeads.id, existingLead.id));
+              }).where(eq58(instagramLeads.id, existingLead.id));
               console.log(`[Instagram Lead Capture] Updated existing lead ${existingLead.id} with new data`);
             } else {
               console.log(`[Instagram Lead Capture] No new data to update for existing lead ${existingLead.id}`);
@@ -49852,17 +49852,17 @@ IMPORTANT:
       }
       async getSenderUsername(businessAccountId, senderId) {
         const [msg] = await db.select({ senderUsername: instagramMessages.senderUsername }).from(instagramMessages).where(
-          and47(
-            eq57(instagramMessages.businessAccountId, businessAccountId),
-            eq57(instagramMessages.senderId, senderId),
+          and48(
+            eq58(instagramMessages.businessAccountId, businessAccountId),
+            eq58(instagramMessages.senderId, senderId),
             sql33`${instagramMessages.senderUsername} IS NOT NULL AND ${instagramMessages.senderUsername} != ''`
           )
         ).orderBy(desc23(instagramMessages.createdAt)).limit(1);
         if (msg?.senderUsername) return msg.senderUsername;
         const [existingLead] = await db.select({ senderUsername: instagramLeads.senderUsername }).from(instagramLeads).where(
-          and47(
-            eq57(instagramLeads.businessAccountId, businessAccountId),
-            eq57(instagramLeads.senderId, senderId),
+          and48(
+            eq58(instagramLeads.businessAccountId, businessAccountId),
+            eq58(instagramLeads.senderId, senderId),
             sql33`${instagramLeads.senderUsername} IS NOT NULL AND ${instagramLeads.senderUsername} != ''`
           )
         ).limit(1);
@@ -49891,9 +49891,9 @@ IMPORTANT:
           direction: instagramMessages.direction,
           createdAt: instagramMessages.createdAt
         }).from(instagramMessages).where(
-          and47(
-            eq57(instagramMessages.businessAccountId, businessAccountId),
-            eq57(instagramMessages.senderId, senderId)
+          and48(
+            eq58(instagramMessages.businessAccountId, businessAccountId),
+            eq58(instagramMessages.senderId, senderId)
           )
         ).orderBy(desc23(instagramMessages.createdAt)).limit(10);
         return recentMessages.reverse().filter((msg) => msg.messageText).map((msg) => ({
@@ -49921,9 +49921,9 @@ IMPORTANT:
               trainingDocsResult
             ] = await Promise.allSettled([
               db.query.businessAccounts.findFirst({
-                where: eq57(businessAccounts.id, businessAccountId)
+                where: eq58(businessAccounts.id, businessAccountId)
               }),
-              db.select().from(widgetSettings).where(eq57(widgetSettings.businessAccountId, businessAccountId)).limit(1),
+              db.select().from(widgetSettings).where(eq58(widgetSettings.businessAccountId, businessAccountId)).limit(1),
               (async () => {
                 const { websiteAnalysisService: websiteAnalysisService2 } = await Promise.resolve().then(() => (init_websiteAnalysisService(), websiteAnalysisService_exports));
                 return await websiteAnalysisService2.getAnalyzedContent(businessAccountId);
@@ -50101,7 +50101,7 @@ ${websiteContent.uniqueSellingPoints.map((u) => `- ${u}`).join("\n")}
           });
           context += cachedStaticContext.staticContext;
           widgetCustomInstructions = cachedStaticContext.customInstructions;
-          const [widgetSetting] = await db.select().from(widgetSettings).where(eq57(widgetSettings.businessAccountId, businessAccountId)).limit(1);
+          const [widgetSetting] = await db.select().from(widgetSettings).where(eq58(widgetSettings.businessAccountId, businessAccountId)).limit(1);
           if (widgetSetting?.leadTrainingConfig) {
             leadTrainingConfig = widgetSetting.leadTrainingConfig;
             console.log(`[Instagram Auto-Reply] Loaded lead training config with ${leadTrainingConfig?.fields?.length || 0} fields (fresh, not cached)`);
@@ -50490,10 +50490,10 @@ ${productSummaries.join("\n")}`;
                 temperature: 0.3,
                 max_tokens: isNumberSelection ? 800 : 500
               });
-              const text3 = followUpResponse.choices[0]?.message?.content;
-              if (!text3) return null;
+              const text4 = followUpResponse.choices[0]?.message?.content;
+              if (!text4) return null;
               return {
-                text: text3,
+                text: text4,
                 productImages: collectedProductImages.length > 0 ? collectedProductImages : void 0,
                 productCards: collectedProductCards.length > 0 ? collectedProductCards : void 0,
                 isProductSelection: isNumberSelection
@@ -50503,9 +50503,9 @@ ${productSummaries.join("\n")}`;
               return { text: "I'm having trouble fetching product details right now. Please try again in a moment!" };
             }
           }
-          const text2 = assistantMessage?.content;
-          if (!text2) return null;
-          return { text: text2 };
+          const text3 = assistantMessage?.content;
+          if (!text3) return null;
+          return { text: text3 };
         } catch (error) {
           console.error(`[Instagram Auto-Reply] OpenAI error:`, error);
           return null;
@@ -50551,7 +50551,7 @@ __export(instagramCommentReplyService_exports, {
   InstagramCommentReplyService: () => InstagramCommentReplyService,
   instagramCommentReplyService: () => instagramCommentReplyService
 });
-import { eq as eq58, and as and48, sql as sql34 } from "drizzle-orm";
+import { eq as eq59, and as and49, sql as sql34 } from "drizzle-orm";
 import OpenAI33 from "openai";
 var InstagramCommentReplyService, instagramCommentReplyService;
 var init_instagramCommentReplyService = __esm({
@@ -50608,7 +50608,7 @@ var init_instagramCommentReplyService = __esm({
           }
           await this.storeComment(businessAccountId, commentData, null, null, "pending");
           const businessAccount = await db.query.businessAccounts.findFirst({
-            where: eq58(businessAccounts.id, businessAccountId)
+            where: eq59(businessAccounts.id, businessAccountId)
           });
           if (!businessAccount) {
             await this.updateCommentStatus(businessAccountId, commentData.commentId, "failed", null, null);
@@ -50685,9 +50685,9 @@ var init_instagramCommentReplyService = __esm({
       }
       async findCommentByIgId(businessAccountId, commentId) {
         const [existing] = await db.select().from(instagramComments).where(
-          and48(
-            eq58(instagramComments.businessAccountId, businessAccountId),
-            eq58(instagramComments.commentId, commentId)
+          and49(
+            eq59(instagramComments.businessAccountId, businessAccountId),
+            eq59(instagramComments.commentId, commentId)
           )
         ).limit(1);
         return existing || null;
@@ -50697,18 +50697,18 @@ var init_instagramCommentReplyService = __esm({
         if (replyText !== null) updateData.replyText = replyText;
         if (replyCommentId !== null) updateData.replyCommentId = replyCommentId;
         await db.update(instagramComments).set(updateData).where(
-          and48(
-            eq58(instagramComments.businessAccountId, businessAccountId),
-            eq58(instagramComments.commentId, commentId)
+          and49(
+            eq59(instagramComments.businessAccountId, businessAccountId),
+            eq59(instagramComments.commentId, commentId)
           )
         );
       }
       async getReplyCountForPost(businessAccountId, postId) {
         const [result] = await db.select({ count: sql34`count(*)` }).from(instagramComments).where(
-          and48(
-            eq58(instagramComments.businessAccountId, businessAccountId),
-            eq58(instagramComments.postId, postId),
-            eq58(instagramComments.status, "replied")
+          and49(
+            eq59(instagramComments.businessAccountId, businessAccountId),
+            eq59(instagramComments.postId, postId),
+            eq59(instagramComments.status, "replied")
           )
         );
         return result?.count || 0;
@@ -50721,9 +50721,9 @@ var init_instagramCommentReplyService = __esm({
             let staticContext = "";
             const [businessAccount, widgetSettingArr, trainingDocs] = await Promise.all([
               db.query.businessAccounts.findFirst({
-                where: eq58(businessAccounts.id, businessAccountId)
+                where: eq59(businessAccounts.id, businessAccountId)
               }),
-              db.select().from(widgetSettings).where(eq58(widgetSettings.businessAccountId, businessAccountId)).limit(1),
+              db.select().from(widgetSettings).where(eq59(widgetSettings.businessAccountId, businessAccountId)).limit(1),
               storage.getTrainingDocuments(businessAccountId)
             ]);
             if (businessAccount?.description) {
@@ -50772,7 +50772,7 @@ A: ${faq.answer}
         return context;
       }
       isAmbiguousComment(commentText) {
-        const text2 = commentText.toLowerCase().trim();
+        const text3 = commentText.toLowerCase().trim();
         const ambiguousPatterns = [
           /^(what|how|why|where|when|which)\b/,
           /\b(how much|price|cost|rate|kitna|kya hai|ye kya|what is this|what does|what's this)\b/,
@@ -50783,7 +50783,7 @@ A: ${faq.answer}
           /^(nice|wow|love|beautiful|amazing|great|good|awesome|superb|best|fab|lovely)[\s!.]*$/i,
           /^(interested|available|dm|inbox)\b/i
         ];
-        return ambiguousPatterns.some((p) => p.test(text2));
+        return ambiguousPatterns.some((p) => p.test(text3));
       }
       async runVisionAnalysis(mediaUrl, apiKey, postId) {
         try {
@@ -50958,9 +50958,9 @@ Write a brief, appropriate reply.`;
         const updateData = { dmStatus };
         if (dmText !== null) updateData.dmText = dmText;
         await db.update(instagramComments).set(updateData).where(
-          and48(
-            eq58(instagramComments.businessAccountId, businessAccountId),
-            eq58(instagramComments.commentId, commentId)
+          and49(
+            eq59(instagramComments.businessAccountId, businessAccountId),
+            eq59(instagramComments.commentId, commentId)
           )
         );
       }
@@ -51016,7 +51016,7 @@ __export(instagramFlowService_exports, {
   InstagramFlowService: () => InstagramFlowService,
   instagramFlowService: () => instagramFlowService
 });
-import { eq as eq59, and as and49, desc as desc24, sql as sql35, asc as asc10, ne as ne5, gte as gte10 } from "drizzle-orm";
+import { eq as eq60, and as and50, desc as desc24, sql as sql35, asc as asc10, ne as ne5, gte as gte10 } from "drizzle-orm";
 import OpenAI34 from "openai";
 var InstagramFlowService, instagramFlowService;
 var init_instagramFlowService = __esm({
@@ -51046,7 +51046,7 @@ var init_instagramFlowService = __esm({
         if (cached) {
           return cached;
         }
-        const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey, name: businessAccounts.name }).from(businessAccounts).where(eq59(businessAccounts.id, businessAccountId)).limit(1);
+        const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey, name: businessAccounts.name }).from(businessAccounts).where(eq60(businessAccounts.id, businessAccountId)).limit(1);
         const result = { apiKey: account?.openaiApiKey || null, name: account?.name || null };
         this.apiKeyCache.set(businessAccountId, { data: result, ts: Date.now() });
         return result;
@@ -51261,9 +51261,9 @@ Return ONLY a valid JSON object:
           return cached;
         }
         const [flow] = await db.select().from(instagramFlows).where(
-          and49(
-            eq59(instagramFlows.businessAccountId, businessAccountId),
-            eq59(instagramFlows.isActive, "true")
+          and50(
+            eq60(instagramFlows.businessAccountId, businessAccountId),
+            eq60(instagramFlows.isActive, "true")
           )
         ).limit(1);
         const result = flow || null;
@@ -51275,25 +51275,25 @@ Return ONLY a valid JSON object:
         if (cached !== void 0) {
           return cached;
         }
-        const steps = await db.select().from(instagramFlowSteps).where(eq59(instagramFlowSteps.flowId, flowId)).orderBy(asc10(instagramFlowSteps.stepOrder));
+        const steps = await db.select().from(instagramFlowSteps).where(eq60(instagramFlowSteps.flowId, flowId)).orderBy(asc10(instagramFlowSteps.stepOrder));
         this.stepsCache.set(flowId, { data: steps, ts: Date.now() });
         return steps;
       }
       async getStepByKey(flowId, stepKey) {
         const [step] = await db.select().from(instagramFlowSteps).where(
-          and49(
-            eq59(instagramFlowSteps.flowId, flowId),
-            eq59(instagramFlowSteps.stepKey, stepKey)
+          and50(
+            eq60(instagramFlowSteps.flowId, flowId),
+            eq60(instagramFlowSteps.stepKey, stepKey)
           )
         ).limit(1);
         return step || null;
       }
       async getActiveSession(businessAccountId, senderId) {
         const [session] = await db.select().from(instagramFlowSessions).where(
-          and49(
-            eq59(instagramFlowSessions.businessAccountId, businessAccountId),
-            eq59(instagramFlowSessions.senderId, senderId),
-            eq59(instagramFlowSessions.status, "active")
+          and50(
+            eq60(instagramFlowSessions.businessAccountId, businessAccountId),
+            eq60(instagramFlowSessions.senderId, senderId),
+            eq60(instagramFlowSessions.status, "active")
           )
         ).orderBy(desc24(instagramFlowSessions.createdAt)).limit(1);
         if (!session) return null;
@@ -51316,15 +51316,15 @@ Return ONLY a valid JSON object:
       }
       async startSession(businessAccountId, flowId, senderId, startStepKey, sessionTimeoutMinutes) {
         await db.update(instagramFlowSessions).set({ status: "abandoned" }).where(
-          and49(
-            eq59(instagramFlowSessions.businessAccountId, businessAccountId),
-            eq59(instagramFlowSessions.senderId, senderId),
-            eq59(instagramFlowSessions.status, "active")
+          and50(
+            eq60(instagramFlowSessions.businessAccountId, businessAccountId),
+            eq60(instagramFlowSessions.senderId, senderId),
+            eq60(instagramFlowSessions.status, "active")
           )
         );
         let timeoutMinutes = sessionTimeoutMinutes;
         if (!timeoutMinutes) {
-          const [flow] = await db.select().from(instagramFlows).where(eq59(instagramFlows.id, flowId)).limit(1);
+          const [flow] = await db.select().from(instagramFlows).where(eq60(instagramFlows.id, flowId)).limit(1);
           timeoutMinutes = flow?.sessionTimeout || this.DEFAULT_SESSION_TIMEOUT_MINUTES;
         }
         const expiresAt = /* @__PURE__ */ new Date();
@@ -51347,7 +51347,7 @@ Return ONLY a valid JSON object:
           currentStepKey: nextStepKey,
           collectedData,
           lastMessageAt: /* @__PURE__ */ new Date()
-        }).where(eq59(instagramFlowSessions.id, sessionId));
+        }).where(eq60(instagramFlowSessions.id, sessionId));
         console.log(`[Instagram Flow] Advanced session ${sessionId} to step: ${nextStepKey}`);
       }
       async completeSession(sessionId, collectedData) {
@@ -51355,17 +51355,17 @@ Return ONLY a valid JSON object:
           status: "completed",
           collectedData,
           lastMessageAt: /* @__PURE__ */ new Date()
-        }).where(eq59(instagramFlowSessions.id, sessionId));
+        }).where(eq60(instagramFlowSessions.id, sessionId));
         console.log(`[Instagram Flow] Completed session ${sessionId}`);
       }
       async expireSession(sessionId) {
-        await db.update(instagramFlowSessions).set({ status: "expired" }).where(eq59(instagramFlowSessions.id, sessionId));
+        await db.update(instagramFlowSessions).set({ status: "expired" }).where(eq60(instagramFlowSessions.id, sessionId));
       }
       async expireSessionsBySender(businessAccountId, senderId) {
         await db.update(instagramFlowSessions).set({ status: "expired" }).where(
-          and49(
-            eq59(instagramFlowSessions.businessAccountId, businessAccountId),
-            eq59(instagramFlowSessions.senderId, senderId),
+          and50(
+            eq60(instagramFlowSessions.businessAccountId, businessAccountId),
+            eq60(instagramFlowSessions.senderId, senderId),
             ne5(instagramFlowSessions.status, "expired")
           )
         );
@@ -51373,10 +51373,10 @@ Return ONLY a valid JSON object:
       async hasCompletedSessionRecently(businessAccountId, senderId) {
         const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1e3);
         const [session] = await db.select({ id: instagramFlowSessions.id }).from(instagramFlowSessions).where(
-          and49(
-            eq59(instagramFlowSessions.businessAccountId, businessAccountId),
-            eq59(instagramFlowSessions.senderId, senderId),
-            eq59(instagramFlowSessions.status, "completed"),
+          and50(
+            eq60(instagramFlowSessions.businessAccountId, businessAccountId),
+            eq60(instagramFlowSessions.senderId, senderId),
+            eq60(instagramFlowSessions.status, "completed"),
             gte10(instagramFlowSessions.lastMessageAt, twentyFourHoursAgo)
           )
         ).limit(1);
@@ -51701,7 +51701,7 @@ ${repromptResponse.text}`;
         };
       }
       async getAllFlows(businessAccountId) {
-        return await db.select().from(instagramFlows).where(eq59(instagramFlows.businessAccountId, businessAccountId)).orderBy(desc24(instagramFlows.createdAt));
+        return await db.select().from(instagramFlows).where(eq60(instagramFlows.businessAccountId, businessAccountId)).orderBy(desc24(instagramFlows.createdAt));
       }
       async createFlow(businessAccountId, name, description, completionMessage) {
         const [flow] = await db.insert(instagramFlows).values({
@@ -51718,23 +51718,23 @@ ${repromptResponse.text}`;
       }
       async updateFlow(flowId, updates) {
         if (updates.isActive === "true") {
-          const [flow] = await db.select().from(instagramFlows).where(eq59(instagramFlows.id, flowId));
+          const [flow] = await db.select().from(instagramFlows).where(eq60(instagramFlows.id, flowId));
           if (flow) {
             await db.update(instagramFlows).set({ isActive: "false" }).where(
-              and49(
-                eq59(instagramFlows.businessAccountId, flow.businessAccountId),
+              and50(
+                eq60(instagramFlows.businessAccountId, flow.businessAccountId),
                 sql35`${instagramFlows.id} != ${flowId}`
               )
             );
           }
         }
-        const [updated] = await db.update(instagramFlows).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq59(instagramFlows.id, flowId)).returning();
+        const [updated] = await db.update(instagramFlows).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq60(instagramFlows.id, flowId)).returning();
         if (updated) this.invalidateFlowCache(updated.businessAccountId);
         return updated || null;
       }
       async deleteFlow(flowId) {
-        const [flow] = await db.select({ bid: instagramFlows.businessAccountId }).from(instagramFlows).where(eq59(instagramFlows.id, flowId)).limit(1);
-        await db.delete(instagramFlows).where(eq59(instagramFlows.id, flowId));
+        const [flow] = await db.select({ bid: instagramFlows.businessAccountId }).from(instagramFlows).where(eq60(instagramFlows.id, flowId)).limit(1);
+        await db.delete(instagramFlows).where(eq60(instagramFlows.id, flowId));
         if (flow) this.invalidateFlowCache(flow.bid);
         console.log(`[Instagram Flow] Deleted flow: ${flowId}`);
       }
@@ -51748,21 +51748,21 @@ ${repromptResponse.text}`;
         return step;
       }
       async updateStep(stepId, updates) {
-        const [updated] = await db.update(instagramFlowSteps).set(updates).where(eq59(instagramFlowSteps.id, stepId)).returning();
+        const [updated] = await db.update(instagramFlowSteps).set(updates).where(eq60(instagramFlowSteps.id, stepId)).returning();
         if (updated) this.stepsCache.delete(updated.flowId);
         return updated || null;
       }
       async deleteStep(stepId) {
-        const [stepToDelete] = await db.select().from(instagramFlowSteps).where(eq59(instagramFlowSteps.id, stepId)).limit(1);
+        const [stepToDelete] = await db.select().from(instagramFlowSteps).where(eq60(instagramFlowSteps.id, stepId)).limit(1);
         if (!stepToDelete) {
           console.log(`[Instagram Flow] Step not found for deletion: ${stepId}`);
           return;
         }
         const flowId = stepToDelete.flowId;
         const deletedStepKey = stepToDelete.stepKey;
-        await db.delete(instagramFlowSteps).where(eq59(instagramFlowSteps.id, stepId));
+        await db.delete(instagramFlowSteps).where(eq60(instagramFlowSteps.id, stepId));
         console.log(`[Instagram Flow] Deleted step: ${stepId}`);
-        const remainingSteps = await db.select().from(instagramFlowSteps).where(eq59(instagramFlowSteps.flowId, flowId)).orderBy(instagramFlowSteps.stepOrder);
+        const remainingSteps = await db.select().from(instagramFlowSteps).where(eq60(instagramFlowSteps.flowId, flowId)).orderBy(instagramFlowSteps.stepOrder);
         const keyMapping = {};
         for (let i = 0; i < remainingSteps.length; i++) {
           const oldKey = remainingSteps[i].stepKey;
@@ -51773,14 +51773,14 @@ ${repromptResponse.text}`;
         }
         for (let i = 0; i < remainingSteps.length; i++) {
           const newKey = String(i + 1);
-          await db.update(instagramFlowSteps).set({ stepOrder: i, stepKey: newKey }).where(eq59(instagramFlowSteps.id, remainingSteps[i].id));
+          await db.update(instagramFlowSteps).set({ stepOrder: i, stepKey: newKey }).where(eq60(instagramFlowSteps.id, remainingSteps[i].id));
         }
         await this.updateGoToReferences(flowId, keyMapping, deletedStepKey);
         this.stepsCache.delete(flowId);
         console.log(`[Instagram Flow] Renumbered ${remainingSteps.length} remaining steps with new stepKeys`);
       }
       async updateGoToReferences(flowId, keyMapping, deletedStepKey) {
-        const steps = await db.select().from(instagramFlowSteps).where(eq59(instagramFlowSteps.flowId, flowId)).orderBy(instagramFlowSteps.stepOrder);
+        const steps = await db.select().from(instagramFlowSteps).where(eq60(instagramFlowSteps.flowId, flowId)).orderBy(instagramFlowSteps.stepOrder);
         const getNextStepKey = (currentStepOrder) => {
           const nextStep = steps.find((s) => s.stepOrder === currentStepOrder + 1);
           return nextStep ? keyMapping[nextStep.stepKey] || nextStep.stepKey : null;
@@ -51836,20 +51836,20 @@ ${repromptResponse.text}`;
             }
             if (mappingNeedsUpdate) {
               needsUpdate = true;
-              await db.update(instagramFlowSteps).set({ nextStepMapping: updatedMapping }).where(eq59(instagramFlowSteps.id, step.id));
+              await db.update(instagramFlowSteps).set({ nextStepMapping: updatedMapping }).where(eq60(instagramFlowSteps.id, step.id));
             }
           }
           if (needsUpdate) {
             await db.update(instagramFlowSteps).set({
               options: updatedOptions,
               defaultNextStep: updatedDefaultNextStep
-            }).where(eq59(instagramFlowSteps.id, step.id));
+            }).where(eq60(instagramFlowSteps.id, step.id));
             console.log(`[Instagram Flow] Updated Go-to references in step ${step.id}`);
           }
         }
       }
       async reorderSteps(flowId, stepIds) {
-        const existingSteps = await db.select().from(instagramFlowSteps).where(eq59(instagramFlowSteps.flowId, flowId));
+        const existingSteps = await db.select().from(instagramFlowSteps).where(eq60(instagramFlowSteps.flowId, flowId));
         const existingIds = new Set(existingSteps.map((s) => s.id));
         const stepMap = new Map(existingSteps.map((s) => [s.id, s]));
         const validStepIds = stepIds.filter((id) => existingIds.has(id));
@@ -51871,9 +51871,9 @@ ${repromptResponse.text}`;
         for (let i = 0; i < validStepIds.length; i++) {
           const newKey = String(i + 1);
           await db.update(instagramFlowSteps).set({ stepOrder: i, stepKey: newKey }).where(
-            and49(
-              eq59(instagramFlowSteps.id, validStepIds[i]),
-              eq59(instagramFlowSteps.flowId, flowId)
+            and50(
+              eq60(instagramFlowSteps.id, validStepIds[i]),
+              eq60(instagramFlowSteps.flowId, flowId)
             )
           );
         }
@@ -51908,7 +51908,7 @@ __export(facebookService_exports, {
   FacebookService: () => FacebookService,
   facebookService: () => facebookService
 });
-import { eq as eq60, and as and50, desc as desc25, sql as sql36, asc as asc11, count as count3 } from "drizzle-orm";
+import { eq as eq61, and as and51, desc as desc25, sql as sql36, asc as asc11, count as count3 } from "drizzle-orm";
 var FB_API_BASE, FB_TEXT_LIMIT, FacebookService, facebookService;
 var init_facebookService = __esm({
   "server/services/facebookService.ts"() {
@@ -51920,7 +51920,7 @@ var init_facebookService = __esm({
     FB_TEXT_LIMIT = 2e3;
     FacebookService = class {
       async getSettings(businessAccountId) {
-        const [settings] = await db.select().from(facebookSettings).where(eq60(facebookSettings.businessAccountId, businessAccountId)).limit(1);
+        const [settings] = await db.select().from(facebookSettings).where(eq61(facebookSettings.businessAccountId, businessAccountId)).limit(1);
         return settings || null;
       }
       async updateSettings(businessAccountId, data) {
@@ -51931,7 +51931,7 @@ var init_facebookService = __esm({
         if (data.appSecret !== void 0 && data.appSecret !== null) {
           updateData.appSecret = encrypt(data.appSecret);
         }
-        const [updated] = await db.update(facebookSettings).set(updateData).where(eq60(facebookSettings.businessAccountId, businessAccountId)).returning();
+        const [updated] = await db.update(facebookSettings).set(updateData).where(eq61(facebookSettings.businessAccountId, businessAccountId)).returning();
         return updated;
       }
       async createSettings(businessAccountId, data = {}) {
@@ -52157,14 +52157,14 @@ var init_facebookService = __esm({
         }
       }
       async findMessageByFbId(fbMessageId) {
-        const [message] = await db.select().from(facebookMessages).where(eq60(facebookMessages.fbMessageId, fbMessageId)).limit(1);
+        const [message] = await db.select().from(facebookMessages).where(eq61(facebookMessages.fbMessageId, fbMessageId)).limit(1);
         return message || null;
       }
       async findCommentByFbId(businessAccountId, commentId) {
         const [comment] = await db.select().from(facebookComments).where(
-          and50(
-            eq60(facebookComments.businessAccountId, businessAccountId),
-            eq60(facebookComments.commentId, commentId)
+          and51(
+            eq61(facebookComments.businessAccountId, businessAccountId),
+            eq61(facebookComments.commentId, commentId)
           )
         ).limit(1);
         return comment || null;
@@ -52216,13 +52216,13 @@ var init_facebookService = __esm({
       async getConversationBySenderId(businessAccountId, senderId, options = {}) {
         const { limit = 50, before } = options;
         const conditions = [
-          eq60(facebookMessages.businessAccountId, businessAccountId),
-          eq60(facebookMessages.senderId, senderId)
+          eq61(facebookMessages.businessAccountId, businessAccountId),
+          eq61(facebookMessages.senderId, senderId)
         ];
         if (before) {
           conditions.push(sql36`${facebookMessages.createdAt} < ${before}::timestamp`);
         }
-        const messages2 = await db.select().from(facebookMessages).where(and50(...conditions)).orderBy(desc25(facebookMessages.createdAt)).limit(limit + 1);
+        const messages2 = await db.select().from(facebookMessages).where(and51(...conditions)).orderBy(desc25(facebookMessages.createdAt)).limit(limit + 1);
         const hasMore = messages2.length > limit;
         const result = hasMore ? messages2.slice(0, limit) : messages2;
         result.reverse();
@@ -52230,9 +52230,9 @@ var init_facebookService = __esm({
       }
       async deleteConversation(businessAccountId, senderId) {
         const result = await db.delete(facebookMessages).where(
-          and50(
-            eq60(facebookMessages.businessAccountId, businessAccountId),
-            eq60(facebookMessages.senderId, senderId)
+          and51(
+            eq61(facebookMessages.businessAccountId, businessAccountId),
+            eq61(facebookMessages.senderId, senderId)
           )
         ).returning();
         console.log(`[Facebook] Deleted ${result.length} messages for sender ${senderId}`);
@@ -52262,12 +52262,12 @@ var init_facebookService = __esm({
         }
       }
       async findBusinessByPageId(pageId) {
-        const [settings] = await db.select().from(facebookSettings).where(eq60(facebookSettings.pageId, pageId)).limit(1);
+        const [settings] = await db.select().from(facebookSettings).where(eq61(facebookSettings.pageId, pageId)).limit(1);
         if (!settings) return null;
         return { businessAccountId: settings.businessAccountId, settings };
       }
       async findSettingsByVerifyToken(verifyToken) {
-        const [settings] = await db.select().from(facebookSettings).where(eq60(facebookSettings.webhookVerifyToken, verifyToken)).limit(1);
+        const [settings] = await db.select().from(facebookSettings).where(eq61(facebookSettings.webhookVerifyToken, verifyToken)).limit(1);
         return settings || null;
       }
       async createFacebookLead(businessAccountId, data) {
@@ -52284,20 +52284,20 @@ var init_facebookService = __esm({
       }
       async getFacebookLeads(businessAccountId, options = {}) {
         const { limit = 20, offset = 0 } = options;
-        const [totalResult] = await db.select({ count: count3() }).from(facebookLeads).where(eq60(facebookLeads.businessAccountId, businessAccountId));
-        const leads3 = await db.select().from(facebookLeads).where(eq60(facebookLeads.businessAccountId, businessAccountId)).orderBy(desc25(facebookLeads.receivedAt)).limit(limit).offset(offset);
+        const [totalResult] = await db.select({ count: count3() }).from(facebookLeads).where(eq61(facebookLeads.businessAccountId, businessAccountId));
+        const leads3 = await db.select().from(facebookLeads).where(eq61(facebookLeads.businessAccountId, businessAccountId)).orderBy(desc25(facebookLeads.receivedAt)).limit(limit).offset(offset);
         return { leads: leads3, total: totalResult?.count || 0 };
       }
       async deleteFacebookLead(businessAccountId, leadId) {
         await db.delete(facebookLeads).where(
-          and50(
-            eq60(facebookLeads.id, leadId),
-            eq60(facebookLeads.businessAccountId, businessAccountId)
+          and51(
+            eq61(facebookLeads.id, leadId),
+            eq61(facebookLeads.businessAccountId, businessAccountId)
           )
         );
       }
       async getFacebookLeadFields(businessAccountId) {
-        let fields = await db.select().from(facebookLeadFields).where(eq60(facebookLeadFields.businessAccountId, businessAccountId)).orderBy(asc11(facebookLeadFields.displayOrder));
+        let fields = await db.select().from(facebookLeadFields).where(eq61(facebookLeadFields.businessAccountId, businessAccountId)).orderBy(asc11(facebookLeadFields.displayOrder));
         if (fields.length === 0) {
           const defaults = [
             { businessAccountId, fieldKey: "customer_name", fieldLabel: "Customer Name", fieldType: "text", isRequired: true, isDefault: true, isEnabled: true, displayOrder: 0 },
@@ -52309,7 +52309,7 @@ var init_facebookService = __esm({
         return fields;
       }
       async createFacebookLeadField(businessAccountId, data) {
-        const maxOrder = await db.select({ max: sql36`COALESCE(MAX(${facebookLeadFields.displayOrder}), -1)` }).from(facebookLeadFields).where(eq60(facebookLeadFields.businessAccountId, businessAccountId));
+        const maxOrder = await db.select({ max: sql36`COALESCE(MAX(${facebookLeadFields.displayOrder}), -1)` }).from(facebookLeadFields).where(eq61(facebookLeadFields.businessAccountId, businessAccountId));
         const [field] = await db.insert(facebookLeadFields).values({
           businessAccountId,
           fieldKey: data.fieldKey,
@@ -52329,19 +52329,19 @@ var init_facebookService = __esm({
         if (data.isRequired !== void 0) updateData.isRequired = data.isRequired;
         if (data.isEnabled !== void 0) updateData.isEnabled = data.isEnabled;
         const [field] = await db.update(facebookLeadFields).set(updateData).where(
-          and50(
-            eq60(facebookLeadFields.id, fieldId),
-            eq60(facebookLeadFields.businessAccountId, businessAccountId)
+          and51(
+            eq61(facebookLeadFields.id, fieldId),
+            eq61(facebookLeadFields.businessAccountId, businessAccountId)
           )
         ).returning();
         return field;
       }
       async deleteFacebookLeadField(businessAccountId, fieldId) {
         await db.delete(facebookLeadFields).where(
-          and50(
-            eq60(facebookLeadFields.id, fieldId),
-            eq60(facebookLeadFields.businessAccountId, businessAccountId),
-            eq60(facebookLeadFields.isDefault, false)
+          and51(
+            eq61(facebookLeadFields.id, fieldId),
+            eq61(facebookLeadFields.businessAccountId, businessAccountId),
+            eq61(facebookLeadFields.isDefault, false)
           )
         );
       }
@@ -52398,7 +52398,7 @@ __export(facebookAutoReplyService_exports, {
   FacebookAutoReplyService: () => FacebookAutoReplyService,
   facebookAutoReplyService: () => facebookAutoReplyService
 });
-import { eq as eq61, and as and51, desc as desc26, sql as sql37 } from "drizzle-orm";
+import { eq as eq62, and as and52, desc as desc26, sql as sql37 } from "drizzle-orm";
 import OpenAI35 from "openai";
 function getFieldDisplayName3(fieldId) {
   const fieldIdLower = fieldId.toLowerCase();
@@ -52530,7 +52530,7 @@ var init_facebookAutoReplyService = __esm({
       async generateAndSendReply(businessAccountId, senderId, userMessage) {
         try {
           console.log(`[Facebook Auto-Reply] Processing message from ${senderId}`);
-          const [settings] = await db.select().from(facebookSettings).where(eq61(facebookSettings.businessAccountId, businessAccountId)).limit(1);
+          const [settings] = await db.select().from(facebookSettings).where(eq62(facebookSettings.businessAccountId, businessAccountId)).limit(1);
           if (!settings) {
             console.error(`[Facebook Auto-Reply] No Facebook settings found for business: ${businessAccountId}`);
             return { success: false, error: "Facebook settings not configured" };
@@ -52540,7 +52540,7 @@ var init_facebookAutoReplyService = __esm({
             return { success: false, error: "Auto-reply is disabled" };
           }
           const businessAccount = await db.query.businessAccounts.findFirst({
-            where: eq61(businessAccounts.id, businessAccountId)
+            where: eq62(businessAccounts.id, businessAccountId)
           });
           if (!businessAccount) {
             console.error(`[Facebook Auto-Reply] Business account not found: ${businessAccountId}`);
@@ -52557,9 +52557,9 @@ var init_facebookAutoReplyService = __esm({
           let crossPlatformContext = "";
           try {
             const existingLeads = await db.select().from(facebookLeads).where(
-              and51(
-                eq61(facebookLeads.businessAccountId, businessAccountId),
-                eq61(facebookLeads.senderId, senderId)
+              and52(
+                eq62(facebookLeads.businessAccountId, businessAccountId),
+                eq62(facebookLeads.senderId, senderId)
               )
             ).orderBy(desc26(facebookLeads.createdAt)).limit(1);
             const persistedData = existingLeads.length > 0 ? existingLeads[0].extractedData : {};
@@ -52641,9 +52641,9 @@ var init_facebookAutoReplyService = __esm({
           this.tryAutoCaptureLead(businessAccountId, senderId, conversationHistory, userMessage, leadTrainingConfig, settings).catch((err) => console.error("[Facebook Auto-Reply] Lead capture error:", err));
           try {
             const existingLeads = await db.select().from(facebookLeads).where(
-              and51(
-                eq61(facebookLeads.businessAccountId, businessAccountId),
-                eq61(facebookLeads.senderId, senderId)
+              and52(
+                eq62(facebookLeads.businessAccountId, businessAccountId),
+                eq62(facebookLeads.senderId, senderId)
               )
             ).orderBy(desc26(facebookLeads.createdAt)).limit(1);
             const persistedData = existingLeads.length > 0 ? existingLeads[0].extractedData : {};
@@ -52812,9 +52812,9 @@ IMPORTANT:
             }
           }
           const existingLeads = await db.select().from(facebookLeads).where(
-            and51(
-              eq61(facebookLeads.businessAccountId, businessAccountId),
-              eq61(facebookLeads.senderId, senderId)
+            and52(
+              eq62(facebookLeads.businessAccountId, businessAccountId),
+              eq62(facebookLeads.senderId, senderId)
             )
           ).orderBy(desc26(facebookLeads.createdAt)).limit(1);
           const senderName = await this.getSenderName(businessAccountId, senderId);
@@ -52834,7 +52834,7 @@ IMPORTANT:
                 extractedData: mergedData,
                 senderName: senderName || existingLead.senderName,
                 updatedAt: /* @__PURE__ */ new Date()
-              }).where(eq61(facebookLeads.id, existingLead.id));
+              }).where(eq62(facebookLeads.id, existingLead.id));
               console.log(`[Facebook Lead Capture] Updated existing lead ${existingLead.id} with new data`);
             } else {
               console.log(`[Facebook Lead Capture] No new data to update for existing lead ${existingLead.id}`);
@@ -52854,17 +52854,17 @@ IMPORTANT:
       }
       async getSenderName(businessAccountId, senderId) {
         const [msg] = await db.select({ senderName: facebookMessages.senderName }).from(facebookMessages).where(
-          and51(
-            eq61(facebookMessages.businessAccountId, businessAccountId),
-            eq61(facebookMessages.senderId, senderId),
+          and52(
+            eq62(facebookMessages.businessAccountId, businessAccountId),
+            eq62(facebookMessages.senderId, senderId),
             sql37`${facebookMessages.senderName} IS NOT NULL AND ${facebookMessages.senderName} != ''`
           )
         ).orderBy(desc26(facebookMessages.createdAt)).limit(1);
         if (msg?.senderName) return msg.senderName;
         const [existingLead] = await db.select({ senderName: facebookLeads.senderName }).from(facebookLeads).where(
-          and51(
-            eq61(facebookLeads.businessAccountId, businessAccountId),
-            eq61(facebookLeads.senderId, senderId),
+          and52(
+            eq62(facebookLeads.businessAccountId, businessAccountId),
+            eq62(facebookLeads.senderId, senderId),
             sql37`${facebookLeads.senderName} IS NOT NULL AND ${facebookLeads.senderName} != ''`
           )
         ).limit(1);
@@ -52893,9 +52893,9 @@ IMPORTANT:
           direction: facebookMessages.direction,
           createdAt: facebookMessages.createdAt
         }).from(facebookMessages).where(
-          and51(
-            eq61(facebookMessages.businessAccountId, businessAccountId),
-            eq61(facebookMessages.senderId, senderId)
+          and52(
+            eq62(facebookMessages.businessAccountId, businessAccountId),
+            eq62(facebookMessages.senderId, senderId)
           )
         ).orderBy(desc26(facebookMessages.createdAt)).limit(10);
         return recentMessages.reverse().filter((msg) => msg.messageText).map((msg) => ({
@@ -52923,9 +52923,9 @@ IMPORTANT:
               trainingDocsResult
             ] = await Promise.allSettled([
               db.query.businessAccounts.findFirst({
-                where: eq61(businessAccounts.id, businessAccountId)
+                where: eq62(businessAccounts.id, businessAccountId)
               }),
-              db.select().from(widgetSettings).where(eq61(widgetSettings.businessAccountId, businessAccountId)).limit(1),
+              db.select().from(widgetSettings).where(eq62(widgetSettings.businessAccountId, businessAccountId)).limit(1),
               (async () => {
                 const { websiteAnalysisService: websiteAnalysisService2 } = await Promise.resolve().then(() => (init_websiteAnalysisService(), websiteAnalysisService_exports));
                 return await websiteAnalysisService2.getAnalyzedContent(businessAccountId);
@@ -53103,7 +53103,7 @@ ${websiteContent.uniqueSellingPoints.map((u) => `- ${u}`).join("\n")}
           });
           context += cachedStaticContext.staticContext;
           widgetCustomInstructions = cachedStaticContext.customInstructions;
-          const [widgetSetting] = await db.select().from(widgetSettings).where(eq61(widgetSettings.businessAccountId, businessAccountId)).limit(1);
+          const [widgetSetting] = await db.select().from(widgetSettings).where(eq62(widgetSettings.businessAccountId, businessAccountId)).limit(1);
           if (widgetSetting?.leadTrainingConfig) {
             leadTrainingConfig = widgetSetting.leadTrainingConfig;
             console.log(`[Facebook Auto-Reply] Loaded lead training config with ${leadTrainingConfig?.fields?.length || 0} fields (fresh, not cached)`);
@@ -53367,7 +53367,7 @@ __export(facebookCommentReplyService_exports, {
   FacebookCommentReplyService: () => FacebookCommentReplyService,
   facebookCommentReplyService: () => facebookCommentReplyService
 });
-import { eq as eq62, and as and52, sql as sql38 } from "drizzle-orm";
+import { eq as eq63, and as and53, sql as sql38 } from "drizzle-orm";
 import OpenAI36 from "openai";
 var FacebookCommentReplyService, facebookCommentReplyService;
 var init_facebookCommentReplyService = __esm({
@@ -53424,7 +53424,7 @@ var init_facebookCommentReplyService = __esm({
           }
           await this.storeComment(businessAccountId, commentData, null, null, "pending");
           const businessAccount = await db.query.businessAccounts.findFirst({
-            where: eq62(businessAccounts.id, businessAccountId)
+            where: eq63(businessAccounts.id, businessAccountId)
           });
           if (!businessAccount) {
             await this.updateCommentStatus(businessAccountId, commentData.commentId, "failed", null, null);
@@ -53504,18 +53504,18 @@ var init_facebookCommentReplyService = __esm({
         if (replyText !== null) updateData.replyText = replyText;
         if (replyCommentId !== null) updateData.replyCommentId = replyCommentId;
         await db.update(facebookComments).set(updateData).where(
-          and52(
-            eq62(facebookComments.businessAccountId, businessAccountId),
-            eq62(facebookComments.commentId, commentId)
+          and53(
+            eq63(facebookComments.businessAccountId, businessAccountId),
+            eq63(facebookComments.commentId, commentId)
           )
         );
       }
       async getReplyCountForPost(businessAccountId, postId) {
         const [result] = await db.select({ count: sql38`count(*)` }).from(facebookComments).where(
-          and52(
-            eq62(facebookComments.businessAccountId, businessAccountId),
-            eq62(facebookComments.postId, postId),
-            eq62(facebookComments.status, "replied")
+          and53(
+            eq63(facebookComments.businessAccountId, businessAccountId),
+            eq63(facebookComments.postId, postId),
+            eq63(facebookComments.status, "replied")
           )
         );
         return result?.count || 0;
@@ -53528,9 +53528,9 @@ var init_facebookCommentReplyService = __esm({
             let staticContext = "";
             const [businessAccount, widgetSettingArr, trainingDocs] = await Promise.all([
               db.query.businessAccounts.findFirst({
-                where: eq62(businessAccounts.id, businessAccountId)
+                where: eq63(businessAccounts.id, businessAccountId)
               }),
-              db.select().from(widgetSettings).where(eq62(widgetSettings.businessAccountId, businessAccountId)).limit(1),
+              db.select().from(widgetSettings).where(eq63(widgetSettings.businessAccountId, businessAccountId)).limit(1),
               storage.getTrainingDocuments(businessAccountId)
             ]);
             if (businessAccount?.description) {
@@ -53579,7 +53579,7 @@ A: ${faq.answer}
         return context;
       }
       isAmbiguousComment(commentText) {
-        const text2 = commentText.toLowerCase().trim();
+        const text3 = commentText.toLowerCase().trim();
         const ambiguousPatterns = [
           /^(what|how|why|where|when|which)\b/,
           /\b(how much|price|cost|rate|kitna|kya hai|ye kya|what is this|what does|what's this)\b/,
@@ -53590,7 +53590,7 @@ A: ${faq.answer}
           /^(nice|wow|love|beautiful|amazing|great|good|awesome|superb|best|fab|lovely)[\s!.]*$/i,
           /^(interested|available|dm|inbox)\b/i
         ];
-        return ambiguousPatterns.some((p) => p.test(text2));
+        return ambiguousPatterns.some((p) => p.test(text3));
       }
       async runVisionAnalysis(mediaUrl, apiKey, postId) {
         try {
@@ -53765,9 +53765,9 @@ Write a brief, appropriate reply.`;
         const updateData = { dmStatus };
         if (dmText !== null) updateData.dmText = dmText;
         await db.update(facebookComments).set(updateData).where(
-          and52(
-            eq62(facebookComments.businessAccountId, businessAccountId),
-            eq62(facebookComments.commentId, commentId)
+          and53(
+            eq63(facebookComments.businessAccountId, businessAccountId),
+            eq63(facebookComments.commentId, commentId)
           )
         );
       }
@@ -53823,7 +53823,7 @@ __export(facebookFlowService_exports, {
   FacebookFlowService: () => FacebookFlowService,
   facebookFlowService: () => facebookFlowService
 });
-import { eq as eq63, and as and53, desc as desc27, sql as sql39, asc as asc12, ne as ne6, gte as gte11 } from "drizzle-orm";
+import { eq as eq64, and as and54, desc as desc27, sql as sql39, asc as asc12, ne as ne6, gte as gte11 } from "drizzle-orm";
 import OpenAI37 from "openai";
 var FacebookFlowService, facebookFlowService;
 var init_facebookFlowService = __esm({
@@ -53853,7 +53853,7 @@ var init_facebookFlowService = __esm({
         if (cached) {
           return cached;
         }
-        const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey, name: businessAccounts.name }).from(businessAccounts).where(eq63(businessAccounts.id, businessAccountId)).limit(1);
+        const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey, name: businessAccounts.name }).from(businessAccounts).where(eq64(businessAccounts.id, businessAccountId)).limit(1);
         const result = { apiKey: account?.openaiApiKey || null, name: account?.name || null };
         this.apiKeyCache.set(businessAccountId, { data: result, ts: Date.now() });
         return result;
@@ -54068,9 +54068,9 @@ Return ONLY a valid JSON object:
           return cached;
         }
         const [flow] = await db.select().from(facebookFlows).where(
-          and53(
-            eq63(facebookFlows.businessAccountId, businessAccountId),
-            eq63(facebookFlows.isActive, "true")
+          and54(
+            eq64(facebookFlows.businessAccountId, businessAccountId),
+            eq64(facebookFlows.isActive, "true")
           )
         ).limit(1);
         const result = flow || null;
@@ -54082,25 +54082,25 @@ Return ONLY a valid JSON object:
         if (cached !== void 0) {
           return cached;
         }
-        const steps = await db.select().from(facebookFlowSteps).where(eq63(facebookFlowSteps.flowId, flowId)).orderBy(asc12(facebookFlowSteps.stepOrder));
+        const steps = await db.select().from(facebookFlowSteps).where(eq64(facebookFlowSteps.flowId, flowId)).orderBy(asc12(facebookFlowSteps.stepOrder));
         this.stepsCache.set(flowId, { data: steps, ts: Date.now() });
         return steps;
       }
       async getStepByKey(flowId, stepKey) {
         const [step] = await db.select().from(facebookFlowSteps).where(
-          and53(
-            eq63(facebookFlowSteps.flowId, flowId),
-            eq63(facebookFlowSteps.stepKey, stepKey)
+          and54(
+            eq64(facebookFlowSteps.flowId, flowId),
+            eq64(facebookFlowSteps.stepKey, stepKey)
           )
         ).limit(1);
         return step || null;
       }
       async getActiveSession(businessAccountId, senderId) {
         const [session] = await db.select().from(facebookFlowSessions).where(
-          and53(
-            eq63(facebookFlowSessions.businessAccountId, businessAccountId),
-            eq63(facebookFlowSessions.senderId, senderId),
-            eq63(facebookFlowSessions.status, "active")
+          and54(
+            eq64(facebookFlowSessions.businessAccountId, businessAccountId),
+            eq64(facebookFlowSessions.senderId, senderId),
+            eq64(facebookFlowSessions.status, "active")
           )
         ).orderBy(desc27(facebookFlowSessions.createdAt)).limit(1);
         if (!session) return null;
@@ -54123,15 +54123,15 @@ Return ONLY a valid JSON object:
       }
       async startSession(businessAccountId, flowId, senderId, startStepKey, sessionTimeoutMinutes) {
         await db.update(facebookFlowSessions).set({ status: "abandoned" }).where(
-          and53(
-            eq63(facebookFlowSessions.businessAccountId, businessAccountId),
-            eq63(facebookFlowSessions.senderId, senderId),
-            eq63(facebookFlowSessions.status, "active")
+          and54(
+            eq64(facebookFlowSessions.businessAccountId, businessAccountId),
+            eq64(facebookFlowSessions.senderId, senderId),
+            eq64(facebookFlowSessions.status, "active")
           )
         );
         let timeoutMinutes = sessionTimeoutMinutes;
         if (!timeoutMinutes) {
-          const [flow] = await db.select().from(facebookFlows).where(eq63(facebookFlows.id, flowId)).limit(1);
+          const [flow] = await db.select().from(facebookFlows).where(eq64(facebookFlows.id, flowId)).limit(1);
           timeoutMinutes = flow?.sessionTimeout || this.DEFAULT_SESSION_TIMEOUT_MINUTES;
         }
         const expiresAt = /* @__PURE__ */ new Date();
@@ -54154,7 +54154,7 @@ Return ONLY a valid JSON object:
           currentStepKey: nextStepKey,
           collectedData,
           lastMessageAt: /* @__PURE__ */ new Date()
-        }).where(eq63(facebookFlowSessions.id, sessionId));
+        }).where(eq64(facebookFlowSessions.id, sessionId));
         console.log(`[Facebook Flow] Advanced session ${sessionId} to step: ${nextStepKey}`);
       }
       async completeSession(sessionId, collectedData) {
@@ -54162,17 +54162,17 @@ Return ONLY a valid JSON object:
           status: "completed",
           collectedData,
           lastMessageAt: /* @__PURE__ */ new Date()
-        }).where(eq63(facebookFlowSessions.id, sessionId));
+        }).where(eq64(facebookFlowSessions.id, sessionId));
         console.log(`[Facebook Flow] Completed session ${sessionId}`);
       }
       async expireSession(sessionId) {
-        await db.update(facebookFlowSessions).set({ status: "expired" }).where(eq63(facebookFlowSessions.id, sessionId));
+        await db.update(facebookFlowSessions).set({ status: "expired" }).where(eq64(facebookFlowSessions.id, sessionId));
       }
       async expireSessionsBySender(businessAccountId, senderId) {
         await db.update(facebookFlowSessions).set({ status: "expired" }).where(
-          and53(
-            eq63(facebookFlowSessions.businessAccountId, businessAccountId),
-            eq63(facebookFlowSessions.senderId, senderId),
+          and54(
+            eq64(facebookFlowSessions.businessAccountId, businessAccountId),
+            eq64(facebookFlowSessions.senderId, senderId),
             ne6(facebookFlowSessions.status, "expired")
           )
         );
@@ -54180,10 +54180,10 @@ Return ONLY a valid JSON object:
       async hasCompletedSessionRecently(businessAccountId, senderId) {
         const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1e3);
         const [session] = await db.select({ id: facebookFlowSessions.id }).from(facebookFlowSessions).where(
-          and53(
-            eq63(facebookFlowSessions.businessAccountId, businessAccountId),
-            eq63(facebookFlowSessions.senderId, senderId),
-            eq63(facebookFlowSessions.status, "completed"),
+          and54(
+            eq64(facebookFlowSessions.businessAccountId, businessAccountId),
+            eq64(facebookFlowSessions.senderId, senderId),
+            eq64(facebookFlowSessions.status, "completed"),
             gte11(facebookFlowSessions.lastMessageAt, twentyFourHoursAgo)
           )
         ).limit(1);
@@ -54508,7 +54508,7 @@ ${repromptResponse.text}`;
         };
       }
       async getAllFlows(businessAccountId) {
-        return await db.select().from(facebookFlows).where(eq63(facebookFlows.businessAccountId, businessAccountId)).orderBy(desc27(facebookFlows.createdAt));
+        return await db.select().from(facebookFlows).where(eq64(facebookFlows.businessAccountId, businessAccountId)).orderBy(desc27(facebookFlows.createdAt));
       }
       async createFlow(businessAccountId, name, description, completionMessage) {
         const [flow] = await db.insert(facebookFlows).values({
@@ -54525,23 +54525,23 @@ ${repromptResponse.text}`;
       }
       async updateFlow(flowId, updates) {
         if (updates.isActive === "true") {
-          const [flow] = await db.select().from(facebookFlows).where(eq63(facebookFlows.id, flowId));
+          const [flow] = await db.select().from(facebookFlows).where(eq64(facebookFlows.id, flowId));
           if (flow) {
             await db.update(facebookFlows).set({ isActive: "false" }).where(
-              and53(
-                eq63(facebookFlows.businessAccountId, flow.businessAccountId),
+              and54(
+                eq64(facebookFlows.businessAccountId, flow.businessAccountId),
                 sql39`${facebookFlows.id} != ${flowId}`
               )
             );
           }
         }
-        const [updated] = await db.update(facebookFlows).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq63(facebookFlows.id, flowId)).returning();
+        const [updated] = await db.update(facebookFlows).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq64(facebookFlows.id, flowId)).returning();
         if (updated) this.invalidateFlowCache(updated.businessAccountId);
         return updated || null;
       }
       async deleteFlow(flowId) {
-        const [flow] = await db.select({ bid: facebookFlows.businessAccountId }).from(facebookFlows).where(eq63(facebookFlows.id, flowId)).limit(1);
-        await db.delete(facebookFlows).where(eq63(facebookFlows.id, flowId));
+        const [flow] = await db.select({ bid: facebookFlows.businessAccountId }).from(facebookFlows).where(eq64(facebookFlows.id, flowId)).limit(1);
+        await db.delete(facebookFlows).where(eq64(facebookFlows.id, flowId));
         if (flow) this.invalidateFlowCache(flow.bid);
         console.log(`[Facebook Flow] Deleted flow: ${flowId}`);
       }
@@ -54555,21 +54555,21 @@ ${repromptResponse.text}`;
         return step;
       }
       async updateStep(stepId, updates) {
-        const [updated] = await db.update(facebookFlowSteps).set(updates).where(eq63(facebookFlowSteps.id, stepId)).returning();
+        const [updated] = await db.update(facebookFlowSteps).set(updates).where(eq64(facebookFlowSteps.id, stepId)).returning();
         if (updated) this.stepsCache.delete(updated.flowId);
         return updated || null;
       }
       async deleteStep(stepId) {
-        const [stepToDelete] = await db.select().from(facebookFlowSteps).where(eq63(facebookFlowSteps.id, stepId)).limit(1);
+        const [stepToDelete] = await db.select().from(facebookFlowSteps).where(eq64(facebookFlowSteps.id, stepId)).limit(1);
         if (!stepToDelete) {
           console.log(`[Facebook Flow] Step not found for deletion: ${stepId}`);
           return;
         }
         const flowId = stepToDelete.flowId;
         const deletedStepKey = stepToDelete.stepKey;
-        await db.delete(facebookFlowSteps).where(eq63(facebookFlowSteps.id, stepId));
+        await db.delete(facebookFlowSteps).where(eq64(facebookFlowSteps.id, stepId));
         console.log(`[Facebook Flow] Deleted step: ${stepId}`);
-        const remainingSteps = await db.select().from(facebookFlowSteps).where(eq63(facebookFlowSteps.flowId, flowId)).orderBy(facebookFlowSteps.stepOrder);
+        const remainingSteps = await db.select().from(facebookFlowSteps).where(eq64(facebookFlowSteps.flowId, flowId)).orderBy(facebookFlowSteps.stepOrder);
         const keyMapping = {};
         for (let i = 0; i < remainingSteps.length; i++) {
           const oldKey = remainingSteps[i].stepKey;
@@ -54580,14 +54580,14 @@ ${repromptResponse.text}`;
         }
         for (let i = 0; i < remainingSteps.length; i++) {
           const newKey = String(i + 1);
-          await db.update(facebookFlowSteps).set({ stepOrder: i, stepKey: newKey }).where(eq63(facebookFlowSteps.id, remainingSteps[i].id));
+          await db.update(facebookFlowSteps).set({ stepOrder: i, stepKey: newKey }).where(eq64(facebookFlowSteps.id, remainingSteps[i].id));
         }
         await this.updateGoToReferences(flowId, keyMapping, deletedStepKey);
         this.stepsCache.delete(flowId);
         console.log(`[Facebook Flow] Renumbered ${remainingSteps.length} remaining steps with new stepKeys`);
       }
       async updateGoToReferences(flowId, keyMapping, deletedStepKey) {
-        const steps = await db.select().from(facebookFlowSteps).where(eq63(facebookFlowSteps.flowId, flowId)).orderBy(facebookFlowSteps.stepOrder);
+        const steps = await db.select().from(facebookFlowSteps).where(eq64(facebookFlowSteps.flowId, flowId)).orderBy(facebookFlowSteps.stepOrder);
         const getNextStepKey = (currentStepOrder) => {
           const nextStep = steps.find((s) => s.stepOrder === currentStepOrder + 1);
           return nextStep ? keyMapping[nextStep.stepKey] || nextStep.stepKey : null;
@@ -54643,20 +54643,20 @@ ${repromptResponse.text}`;
             }
             if (mappingNeedsUpdate) {
               needsUpdate = true;
-              await db.update(facebookFlowSteps).set({ nextStepMapping: updatedMapping }).where(eq63(facebookFlowSteps.id, step.id));
+              await db.update(facebookFlowSteps).set({ nextStepMapping: updatedMapping }).where(eq64(facebookFlowSteps.id, step.id));
             }
           }
           if (needsUpdate) {
             await db.update(facebookFlowSteps).set({
               options: updatedOptions,
               defaultNextStep: updatedDefaultNextStep
-            }).where(eq63(facebookFlowSteps.id, step.id));
+            }).where(eq64(facebookFlowSteps.id, step.id));
             console.log(`[Facebook Flow] Updated Go-to references in step ${step.id}`);
           }
         }
       }
       async reorderSteps(flowId, stepIds) {
-        const existingSteps = await db.select().from(facebookFlowSteps).where(eq63(facebookFlowSteps.flowId, flowId));
+        const existingSteps = await db.select().from(facebookFlowSteps).where(eq64(facebookFlowSteps.flowId, flowId));
         const existingIds = new Set(existingSteps.map((s) => s.id));
         const stepMap = new Map(existingSteps.map((s) => [s.id, s]));
         const validStepIds = stepIds.filter((id) => existingIds.has(id));
@@ -54678,9 +54678,9 @@ ${repromptResponse.text}`;
         for (let i = 0; i < validStepIds.length; i++) {
           const newKey = String(i + 1);
           await db.update(facebookFlowSteps).set({ stepOrder: i, stepKey: newKey }).where(
-            and53(
-              eq63(facebookFlowSteps.id, validStepIds[i]),
-              eq63(facebookFlowSteps.flowId, flowId)
+            and54(
+              eq64(facebookFlowSteps.id, validStepIds[i]),
+              eq64(facebookFlowSteps.flowId, flowId)
             )
           );
         }
@@ -54715,7 +54715,7 @@ __export(whatsappTemplateService_exports, {
   countTemplateParams: () => countParams,
   whatsappTemplateService: () => whatsappTemplateService
 });
-import { and as and54, desc as desc28, eq as eq64 } from "drizzle-orm";
+import { and as and55, desc as desc28, eq as eq65 } from "drizzle-orm";
 function countParams(body) {
   const matches = body.match(/\{\{\s*\d+\s*\}\}/g);
   if (!matches) return 0;
@@ -54732,10 +54732,10 @@ var init_whatsappTemplateService = __esm({
     init_schema();
     whatsappTemplateService = {
       async list(businessAccountId) {
-        return db.select().from(whatsappTemplates).where(eq64(whatsappTemplates.businessAccountId, businessAccountId)).orderBy(desc28(whatsappTemplates.updatedAt));
+        return db.select().from(whatsappTemplates).where(eq65(whatsappTemplates.businessAccountId, businessAccountId)).orderBy(desc28(whatsappTemplates.updatedAt));
       },
       async get(businessAccountId, id) {
-        const [row] = await db.select().from(whatsappTemplates).where(and54(eq64(whatsappTemplates.id, id), eq64(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
+        const [row] = await db.select().from(whatsappTemplates).where(and55(eq65(whatsappTemplates.id, id), eq65(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         return row;
       },
       async create(businessAccountId, payload) {
@@ -54785,11 +54785,11 @@ var init_whatsappTemplateService = __esm({
         if (payload.bodyText !== void 0) {
           updates.paramCount = countParams(payload.bodyText || "");
         }
-        const [row] = await db.update(whatsappTemplates).set(updates).where(and54(eq64(whatsappTemplates.id, id), eq64(whatsappTemplates.businessAccountId, businessAccountId))).returning();
+        const [row] = await db.update(whatsappTemplates).set(updates).where(and55(eq65(whatsappTemplates.id, id), eq65(whatsappTemplates.businessAccountId, businessAccountId))).returning();
         return row;
       },
       async remove(businessAccountId, id) {
-        const result = await db.delete(whatsappTemplates).where(and54(eq64(whatsappTemplates.id, id), eq64(whatsappTemplates.businessAccountId, businessAccountId))).returning({ id: whatsappTemplates.id });
+        const result = await db.delete(whatsappTemplates).where(and55(eq65(whatsappTemplates.id, id), eq65(whatsappTemplates.businessAccountId, businessAccountId))).returning({ id: whatsappTemplates.id });
         return result.length > 0;
       },
       /**
@@ -54874,14 +54874,14 @@ var init_whatsappTemplateService = __esm({
                 namespace: remote.namespace || variant.namespace || null
               };
               const existing = await db.select().from(whatsappTemplates).where(
-                and54(
-                  eq64(whatsappTemplates.businessAccountId, businessAccountId),
-                  eq64(whatsappTemplates.name, name),
-                  eq64(whatsappTemplates.language, language)
+                and55(
+                  eq65(whatsappTemplates.businessAccountId, businessAccountId),
+                  eq65(whatsappTemplates.name, name),
+                  eq65(whatsappTemplates.language, language)
                 )
               ).limit(1);
               if (existing.length > 0) {
-                await db.update(whatsappTemplates).set({ ...payload, updatedAt: /* @__PURE__ */ new Date() }).where(eq64(whatsappTemplates.id, existing[0].id));
+                await db.update(whatsappTemplates).set({ ...payload, updatedAt: /* @__PURE__ */ new Date() }).where(eq65(whatsappTemplates.id, existing[0].id));
               } else {
                 await db.insert(whatsappTemplates).values(payload);
               }
@@ -54943,7 +54943,7 @@ var init_whatsappTemplateService = __esm({
             const bodyText = remote.body || remote.bodyText || remote.components?.find?.((c) => c.type === "BODY")?.text || "";
             const headerComp = remote.components?.find?.((c) => c.type === "HEADER");
             const footerComp = remote.components?.find?.((c) => c.type === "FOOTER");
-            const existing = await db.select().from(whatsappTemplates).where(and54(eq64(whatsappTemplates.businessAccountId, businessAccountId), eq64(whatsappTemplates.name, name))).limit(1);
+            const existing = await db.select().from(whatsappTemplates).where(and55(eq65(whatsappTemplates.businessAccountId, businessAccountId), eq65(whatsappTemplates.name, name))).limit(1);
             const payload = {
               businessAccountId,
               name,
@@ -54958,7 +54958,7 @@ var init_whatsappTemplateService = __esm({
               msg91TemplateId: remote.id || remote.template_id || null
             };
             if (existing.length > 0) {
-              await db.update(whatsappTemplates).set({ ...payload, updatedAt: /* @__PURE__ */ new Date() }).where(eq64(whatsappTemplates.id, existing[0].id));
+              await db.update(whatsappTemplates).set({ ...payload, updatedAt: /* @__PURE__ */ new Date() }).where(eq65(whatsappTemplates.id, existing[0].id));
             } else {
               await db.insert(whatsappTemplates).values(payload);
             }
@@ -54980,7 +54980,7 @@ __export(campaignAutomationMappingService_exports, {
   suggestAutomationMappings: () => suggestAutomationMappings
 });
 import OpenAI38 from "openai";
-import { and as and55, eq as eq65 } from "drizzle-orm";
+import { and as and56, eq as eq66 } from "drizzle-orm";
 function confidence(value) {
   return value === "high" || value === "medium" || value === "low" ? value : "low";
 }
@@ -55027,13 +55027,13 @@ async function suggestAutomationMappings(businessAccountId, input) {
     [template] = await db.select({
       bodyText: whatsappTemplates.bodyText,
       paramCount: whatsappTemplates.paramCount
-    }).from(whatsappTemplates).where(and55(
-      eq65(whatsappTemplates.id, input.templateId),
-      eq65(whatsappTemplates.businessAccountId, businessAccountId)
+    }).from(whatsappTemplates).where(and56(
+      eq66(whatsappTemplates.id, input.templateId),
+      eq66(whatsappTemplates.businessAccountId, businessAccountId)
     )).limit(1);
   }
   const templateParamCount = template?.paramCount || 0;
-  const [business] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq65(businessAccounts.id, businessAccountId)).limit(1);
+  const [business] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq66(businessAccounts.id, businessAccountId)).limit(1);
   const apiKey = business?.openaiApiKey ? safeDecrypt(business.openaiApiKey) : process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return { available: false, suggestions: unavailable(templateParamCount, "AI suggestions are unavailable until an OpenAI key is configured. You can still map columns manually.") };
@@ -55100,7 +55100,7 @@ var campaignAutomationService_exports = {};
 __export(campaignAutomationService_exports, {
   campaignAutomationService: () => campaignAutomationService
 });
-import { and as and56, desc as desc29, eq as eq66, inArray as inArray11, isNull as isNull10 } from "drizzle-orm";
+import { and as and57, desc as desc29, eq as eq67, inArray as inArray11, isNull as isNull10 } from "drizzle-orm";
 function canonical(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -55163,8 +55163,8 @@ function validateColumns(config, columns) {
   }
 }
 function parseDateOnly(raw) {
-  const text2 = raw.trim();
-  const iso = text2.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
+  const text3 = raw.trim();
+  const iso = text3.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
   if (iso) {
     const year = Number(iso[1]), month = Number(iso[2]), day = Number(iso[3]);
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
@@ -55174,7 +55174,7 @@ function parseDateOnly(raw) {
       }
     }
   }
-  const dmy = text2.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s.*)?$/);
+  const dmy = text3.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s.*)?$/);
   if (dmy) {
     const day = Number(dmy[1]), month = Number(dmy[2]), year = Number(dmy[3]);
     const check = new Date(Date.UTC(year, month - 1, day));
@@ -55256,8 +55256,8 @@ async function existingDispatchKeys(automationId, keys) {
   const found = /* @__PURE__ */ new Set();
   const uniqueKeys = Array.from(new Set(keys));
   for (let i = 0; i < uniqueKeys.length; i += 500) {
-    const rows = await db.select({ recordKey: whatsappCampaignAutomationDispatches.recordKey }).from(whatsappCampaignAutomationDispatches).where(and56(
-      eq66(whatsappCampaignAutomationDispatches.automationId, automationId),
+    const rows = await db.select({ recordKey: whatsappCampaignAutomationDispatches.recordKey }).from(whatsappCampaignAutomationDispatches).where(and57(
+      eq67(whatsappCampaignAutomationDispatches.automationId, automationId),
       inArray11(whatsappCampaignAutomationDispatches.recordKey, uniqueKeys.slice(i, i + 500))
     ));
     rows.forEach((row) => found.add(row.recordKey));
@@ -55366,22 +55366,22 @@ var init_campaignAutomationService = __esm({
     ALLOWED_SEND_MODES = /* @__PURE__ */ new Set(["review", "automatic"]);
     campaignAutomationService = {
       async list(businessAccountId) {
-        return db.select().from(whatsappCampaignAutomations).where(and56(
-          eq66(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+        return db.select().from(whatsappCampaignAutomations).where(and57(
+          eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
           isNull10(whatsappCampaignAutomations.deletedAt)
         )).orderBy(desc29(whatsappCampaignAutomations.updatedAt));
       },
       async get(businessAccountId, id) {
-        const [row] = await db.select().from(whatsappCampaignAutomations).where(and56(
-          eq66(whatsappCampaignAutomations.id, id),
-          eq66(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+        const [row] = await db.select().from(whatsappCampaignAutomations).where(and57(
+          eq67(whatsappCampaignAutomations.id, id),
+          eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
           isNull10(whatsappCampaignAutomations.deletedAt)
         )).limit(1);
         return row;
       },
       async create(businessAccountId, input) {
         const config = cleanConfig(input);
-        const [template] = await db.select().from(whatsappTemplates).where(and56(eq66(whatsappTemplates.id, config.templateId), eq66(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
+        const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, config.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         assertTemplateMapping(template, config.templateParams || []);
         const [row] = await db.insert(whatsappCampaignAutomations).values({
@@ -55408,31 +55408,31 @@ var init_campaignAutomationService = __esm({
         const existing = await this.get(businessAccountId, id);
         if (!existing) return void 0;
         const config = cleanConfig({ ...existing, ...input });
-        const [template] = await db.select().from(whatsappTemplates).where(and56(eq66(whatsappTemplates.id, config.templateId), eq66(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
+        const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, config.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         assertTemplateMapping(template, config.templateParams || []);
         const [row] = await db.update(whatsappCampaignAutomations).set({
           ...config,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(and56(eq66(whatsappCampaignAutomations.id, id), eq66(whatsappCampaignAutomations.businessAccountId, businessAccountId))).returning();
+        }).where(and57(eq67(whatsappCampaignAutomations.id, id), eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId))).returning();
         return row;
       },
       async delete(businessAccountId, id) {
         return db.transaction(async (tx) => {
-          const [automation] = await tx.select().from(whatsappCampaignAutomations).where(and56(
-            eq66(whatsappCampaignAutomations.id, id),
-            eq66(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          const [automation] = await tx.select().from(whatsappCampaignAutomations).where(and57(
+            eq67(whatsappCampaignAutomations.id, id),
+            eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
             isNull10(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!automation) return void 0;
-          const activeRuns = await tx.select().from(whatsappCampaignAutomationRuns).where(and56(
-            eq66(whatsappCampaignAutomationRuns.automationId, id),
-            eq66(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+          const activeRuns = await tx.select().from(whatsappCampaignAutomationRuns).where(and57(
+            eq67(whatsappCampaignAutomationRuns.automationId, id),
+            eq67(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
             inArray11(whatsappCampaignAutomationRuns.status, ["awaiting_review", "scheduled"])
           ));
           const campaignIds = activeRuns.map((run) => run.campaignId).filter((campaignId) => Boolean(campaignId));
-          const campaigns = campaignIds.length ? await tx.select({ id: marketingCampaigns.id, status: marketingCampaigns.status }).from(marketingCampaigns).where(and56(
-            eq66(marketingCampaigns.businessAccountId, businessAccountId),
+          const campaigns = campaignIds.length ? await tx.select({ id: marketingCampaigns.id, status: marketingCampaigns.status }).from(marketingCampaigns).where(and57(
+            eq67(marketingCampaigns.businessAccountId, businessAccountId),
             inArray11(marketingCampaigns.id, campaignIds)
           )).for("update") : [];
           const campaignById = new Map(campaigns.map((campaign) => [campaign.id, campaign]));
@@ -55446,28 +55446,28 @@ var init_campaignAutomationService = __esm({
           const deletedAt = /* @__PURE__ */ new Date();
           for (const run of activeRuns) {
             if (run.campaignId) {
-              await tx.update(marketingCampaigns).set({ status: "cancelled", updatedAt: deletedAt }).where(and56(
-                eq66(marketingCampaigns.id, run.campaignId),
-                eq66(marketingCampaigns.businessAccountId, businessAccountId),
+              await tx.update(marketingCampaigns).set({ status: "cancelled", updatedAt: deletedAt }).where(and57(
+                eq67(marketingCampaigns.id, run.campaignId),
+                eq67(marketingCampaigns.businessAccountId, businessAccountId),
                 inArray11(marketingCampaigns.status, ["draft", "scheduled"])
               ));
             }
-            await tx.delete(whatsappCampaignAutomationDispatches).where(and56(
-              eq66(whatsappCampaignAutomationDispatches.runId, run.id),
-              eq66(whatsappCampaignAutomationDispatches.businessAccountId, businessAccountId)
+            await tx.delete(whatsappCampaignAutomationDispatches).where(and57(
+              eq67(whatsappCampaignAutomationDispatches.runId, run.id),
+              eq67(whatsappCampaignAutomationDispatches.businessAccountId, businessAccountId)
             ));
-            await tx.update(whatsappCampaignAutomationRuns).set({ status: "cancelled", updatedAt: deletedAt }).where(and56(
-              eq66(whatsappCampaignAutomationRuns.id, run.id),
-              eq66(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId)
+            await tx.update(whatsappCampaignAutomationRuns).set({ status: "cancelled", updatedAt: deletedAt }).where(and57(
+              eq67(whatsappCampaignAutomationRuns.id, run.id),
+              eq67(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId)
             ));
           }
           const [deleted] = await tx.update(whatsappCampaignAutomations).set({
             enabled: false,
             deletedAt,
             updatedAt: deletedAt
-          }).where(and56(
-            eq66(whatsappCampaignAutomations.id, id),
-            eq66(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          }).where(and57(
+            eq67(whatsappCampaignAutomations.id, id),
+            eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
             isNull10(whatsappCampaignAutomations.deletedAt)
           )).returning();
           return deleted;
@@ -55494,7 +55494,7 @@ var init_campaignAutomationService = __esm({
         const automation = await this.get(businessAccountId, id);
         if (!automation) throw new Error("Automation not found");
         if (!automation.enabled) throw new Error("This automation is paused");
-        const [template] = await db.select().from(whatsappTemplates).where(and56(eq66(whatsappTemplates.id, automation.templateId), eq66(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
+        const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, automation.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("The selected template is no longer approved");
         assertTemplateMapping(template, automation.templateParams || []);
         const evaluated = await evaluateUpload(automation, payload);
@@ -55505,10 +55505,10 @@ var init_campaignAutomationService = __esm({
         const automatic = automation.sendMode === "automatic";
         const safeFileName = String(sourceFileName || "spreadsheet").slice(0, 200);
         const result = await db.transaction(async (tx) => {
-          const [activeAutomation] = await tx.select().from(whatsappCampaignAutomations).where(and56(
-            eq66(whatsappCampaignAutomations.id, id),
-            eq66(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-            eq66(whatsappCampaignAutomations.enabled, true),
+          const [activeAutomation] = await tx.select().from(whatsappCampaignAutomations).where(and57(
+            eq67(whatsappCampaignAutomations.id, id),
+            eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+            eq67(whatsappCampaignAutomations.enabled, true),
             isNull10(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be created");
@@ -55573,9 +55573,9 @@ var init_campaignAutomationService = __esm({
       async listRuns(businessAccountId, automationId) {
         const automation = await this.get(businessAccountId, automationId);
         if (!automation) throw new Error("Automation not found");
-        const runs = await db.select().from(whatsappCampaignAutomationRuns).where(and56(
-          eq66(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
-          eq66(whatsappCampaignAutomationRuns.automationId, automationId)
+        const runs = await db.select().from(whatsappCampaignAutomationRuns).where(and57(
+          eq67(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+          eq67(whatsappCampaignAutomationRuns.automationId, automationId)
         )).orderBy(desc29(whatsappCampaignAutomationRuns.createdAt)).limit(100);
         const campaignIds = runs.map((run) => run.campaignId).filter((id) => Boolean(id));
         const campaigns = campaignIds.length ? await db.select().from(marketingCampaigns).where(inArray11(marketingCampaigns.id, campaignIds)) : [];
@@ -55583,20 +55583,20 @@ var init_campaignAutomationService = __esm({
         return runs.map((run) => ({ ...run, campaign: run.campaignId ? byId.get(run.campaignId) || null : null }));
       },
       async approveRun(businessAccountId, automationId, runId) {
-        const [run] = await db.select().from(whatsappCampaignAutomationRuns).where(and56(
-          eq66(whatsappCampaignAutomationRuns.id, runId),
-          eq66(whatsappCampaignAutomationRuns.automationId, automationId),
-          eq66(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId)
+        const [run] = await db.select().from(whatsappCampaignAutomationRuns).where(and57(
+          eq67(whatsappCampaignAutomationRuns.id, runId),
+          eq67(whatsappCampaignAutomationRuns.automationId, automationId),
+          eq67(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId)
         )).limit(1);
         if (!run) throw new Error("Automation run not found");
         if (run.status !== "awaiting_review" || !run.campaignId) throw new Error("This run is not awaiting review");
         const automation = await this.get(businessAccountId, automationId);
         if (!automation) throw new Error("Automation not found");
         const updated = await db.transaction(async (tx) => {
-          const [activeAutomation] = await tx.select().from(whatsappCampaignAutomations).where(and56(
-            eq66(whatsappCampaignAutomations.id, automationId),
-            eq66(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-            eq66(whatsappCampaignAutomations.enabled, true),
+          const [activeAutomation] = await tx.select().from(whatsappCampaignAutomations).where(and57(
+            eq67(whatsappCampaignAutomations.id, automationId),
+            eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+            eq67(whatsappCampaignAutomations.enabled, true),
             isNull10(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be scheduled");
@@ -55605,9 +55605,9 @@ var init_campaignAutomationService = __esm({
             phone: contactGroupContacts.phone,
             name: contactGroupContacts.name,
             attributes: contactGroupContacts.attributes
-          }).from(contactGroupContacts).where(and56(
-            eq66(contactGroupContacts.groupId, run.contactGroupId),
-            eq66(contactGroupContacts.businessAccountId, businessAccountId)
+          }).from(contactGroupContacts).where(and57(
+            eq67(contactGroupContacts.groupId, run.contactGroupId),
+            eq67(contactGroupContacts.businessAccountId, businessAccountId)
           ));
           const dispatches = contacts.map((contact) => ({
             automationId,
@@ -55626,10 +55626,10 @@ var init_campaignAutomationService = __esm({
             status: "scheduled",
             scheduledAt,
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(and56(
-            eq66(marketingCampaigns.id, run.campaignId),
-            eq66(marketingCampaigns.businessAccountId, businessAccountId),
-            eq66(marketingCampaigns.status, "draft")
+          }).where(and57(
+            eq67(marketingCampaigns.id, run.campaignId),
+            eq67(marketingCampaigns.businessAccountId, businessAccountId),
+            eq67(marketingCampaigns.status, "draft")
           )).returning();
           if (!campaign) throw new Error("The generated campaign is no longer available for scheduling");
           const [savedRun] = await tx.update(whatsappCampaignAutomationRuns).set({
@@ -55637,7 +55637,7 @@ var init_campaignAutomationService = __esm({
             scheduledAt,
             approvedAt: /* @__PURE__ */ new Date(),
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq66(whatsappCampaignAutomationRuns.id, run.id)).returning();
+          }).where(eq67(whatsappCampaignAutomationRuns.id, run.id)).returning();
           return { run: savedRun, campaign };
         });
         return updated;
@@ -55645,26 +55645,26 @@ var init_campaignAutomationService = __esm({
       async cancelRun(businessAccountId, automationId, runId) {
         const automation = await this.get(businessAccountId, automationId);
         if (!automation) return false;
-        const [run] = await db.select().from(whatsappCampaignAutomationRuns).where(and56(
-          eq66(whatsappCampaignAutomationRuns.id, runId),
-          eq66(whatsappCampaignAutomationRuns.automationId, automationId),
-          eq66(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId)
+        const [run] = await db.select().from(whatsappCampaignAutomationRuns).where(and57(
+          eq67(whatsappCampaignAutomationRuns.id, runId),
+          eq67(whatsappCampaignAutomationRuns.automationId, automationId),
+          eq67(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId)
         )).limit(1);
         if (!run) return false;
         if (!["awaiting_review", "scheduled"].includes(run.status)) throw new Error("This run can no longer be cancelled");
-        const campaign = run.campaignId ? await db.select().from(marketingCampaigns).where(and56(eq66(marketingCampaigns.id, run.campaignId), eq66(marketingCampaigns.businessAccountId, businessAccountId))).then((rows) => rows[0]) : null;
+        const campaign = run.campaignId ? await db.select().from(marketingCampaigns).where(and57(eq67(marketingCampaigns.id, run.campaignId), eq67(marketingCampaigns.businessAccountId, businessAccountId))).then((rows) => rows[0]) : null;
         if (campaign && !["draft", "scheduled"].includes(campaign.status)) {
           throw new Error(`This run's campaign is already ${campaign.status} and can no longer be cancelled`);
         }
         await db.transaction(async (tx) => {
           if (run.campaignId) {
-            await tx.update(marketingCampaigns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(and56(eq66(marketingCampaigns.id, run.campaignId), eq66(marketingCampaigns.businessAccountId, businessAccountId)));
+            await tx.update(marketingCampaigns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(and57(eq67(marketingCampaigns.id, run.campaignId), eq67(marketingCampaigns.businessAccountId, businessAccountId)));
           }
-          await tx.delete(whatsappCampaignAutomationDispatches).where(and56(
-            eq66(whatsappCampaignAutomationDispatches.runId, run.id),
-            eq66(whatsappCampaignAutomationDispatches.businessAccountId, businessAccountId)
+          await tx.delete(whatsappCampaignAutomationDispatches).where(and57(
+            eq67(whatsappCampaignAutomationDispatches.runId, run.id),
+            eq67(whatsappCampaignAutomationDispatches.businessAccountId, businessAccountId)
           ));
-          await tx.update(whatsappCampaignAutomationRuns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(eq66(whatsappCampaignAutomationRuns.id, run.id));
+          await tx.update(whatsappCampaignAutomationRuns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(eq67(whatsappCampaignAutomationRuns.id, run.id));
         });
         return true;
       }
@@ -55678,38 +55678,38 @@ __export(embedJobPoller_exports, {
   processPendingEmbedJobs: () => processPendingEmbedJobs,
   startEmbedJobPoller: () => startEmbedJobPoller
 });
-import { and as and60, eq as eq71, inArray as inArray13, ne as ne7, sql as sql45 } from "drizzle-orm";
+import { and as and61, eq as eq72, inArray as inArray13, ne as ne7, sql as sql45 } from "drizzle-orm";
 async function syncJobStatus(jobId, businessAccountId, cpId, processed) {
   await db.update(topscholarContentSync).set({ processedCount: processed, updatedAt: /* @__PURE__ */ new Date() }).where(
-    and60(
-      eq71(topscholarContentSync.businessAccountId, businessAccountId),
-      eq71(topscholarContentSync.cpId, cpId),
-      eq71(topscholarContentSync.embedJobId, jobId)
+    and61(
+      eq72(topscholarContentSync.businessAccountId, businessAccountId),
+      eq72(topscholarContentSync.cpId, cpId),
+      eq72(topscholarContentSync.embedJobId, jobId)
     )
   );
 }
 async function finalizeFailed(job, message) {
-  await db.update(topscholarEmbedJobs).set({ status: "failed", error: message, updatedAt: /* @__PURE__ */ new Date() }).where(eq71(topscholarEmbedJobs.id, job.id));
+  await db.update(topscholarEmbedJobs).set({ status: "failed", error: message, updatedAt: /* @__PURE__ */ new Date() }).where(eq72(topscholarEmbedJobs.id, job.id));
   await db.update(topscholarContentSync).set({ status: "failed", lastError: message, embedJobId: null, updatedAt: /* @__PURE__ */ new Date() }).where(
-    and60(
-      eq71(topscholarContentSync.businessAccountId, job.businessAccountId),
-      eq71(topscholarContentSync.cpId, job.cpId),
-      eq71(topscholarContentSync.embedJobId, job.id)
+    and61(
+      eq72(topscholarContentSync.businessAccountId, job.businessAccountId),
+      eq72(topscholarContentSync.cpId, job.cpId),
+      eq72(topscholarContentSync.embedJobId, job.id)
     )
   );
   console.error(`[TopScholar EmbedPoller] Job ${job.id} failed: ${message}`);
 }
 async function completeJob(job) {
-  const [account] = await db.select().from(businessAccounts).where(eq71(businessAccounts.id, job.businessAccountId));
+  const [account] = await db.select().from(businessAccounts).where(eq72(businessAccounts.id, job.businessAccountId));
   if (!account) {
     await finalizeFailed(job, "Business account no longer exists.");
     return;
   }
   const cfg = getTopscholarConfig(account);
   await withCpLock(job.businessAccountId, job.cpId, async () => {
-    const [{ staged: stagedCount } = { staged: 0 }] = await db.select({ staged: sql45`count(*)::int` }).from(topscholarEmbedStaging).where(eq71(topscholarEmbedStaging.jobId, job.id));
+    const [{ staged: stagedCount } = { staged: 0 }] = await db.select({ staged: sql45`count(*)::int` }).from(topscholarEmbedStaging).where(eq72(topscholarEmbedStaging.jobId, job.id));
     if (!stagedCount) {
-      await db.update(topscholarEmbedJobs).set({ status: "completed", error: null, updatedAt: /* @__PURE__ */ new Date() }).where(and60(eq71(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled")));
+      await db.update(topscholarEmbedJobs).set({ status: "completed", error: null, updatedAt: /* @__PURE__ */ new Date() }).where(and61(eq72(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled")));
       console.log(`[TopScholar EmbedPoller] Job ${job.id} already landed (no staging); marked completed.`);
       return;
     }
@@ -55719,7 +55719,7 @@ async function completeJob(job) {
     const flush = async () => {
       if (buffer2.length === 0) return;
       const pageIds = buffer2.map((b) => b.customId);
-      const rows = await db.select().from(topscholarEmbedStaging).where(and60(eq71(topscholarEmbedStaging.jobId, job.id), inArray13(topscholarEmbedStaging.customId, pageIds)));
+      const rows = await db.select().from(topscholarEmbedStaging).where(and61(eq72(topscholarEmbedStaging.jobId, job.id), inArray13(topscholarEmbedStaging.customId, pageIds)));
       const stagedById = new Map(rows.map((r) => [r.customId, r]));
       const chunks = [];
       for (const { customId, embedding } of buffer2) {
@@ -55768,7 +55768,7 @@ async function completeJob(job) {
       return;
     }
     const partialWarning = written < stagedCount ? `Partial sync: embedded ${written} of ${stagedCount} chunks (some embedding requests failed). Re-run to fill the gap.` : null;
-    await db.update(topscholarEmbedJobs).set({ status: "completed", completedCount: written, error: partialWarning, updatedAt: /* @__PURE__ */ new Date() }).where(and60(eq71(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled")));
+    await db.update(topscholarEmbedJobs).set({ status: "completed", completedCount: written, error: partialWarning, updatedAt: /* @__PURE__ */ new Date() }).where(and61(eq72(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled")));
     await db.update(topscholarContentSync).set({
       status: "completed",
       chunkCount: written,
@@ -55778,13 +55778,13 @@ async function completeJob(job) {
       embedJobId: null,
       updatedAt: /* @__PURE__ */ new Date()
     }).where(
-      and60(
-        eq71(topscholarContentSync.businessAccountId, job.businessAccountId),
-        eq71(topscholarContentSync.cpId, job.cpId),
-        eq71(topscholarContentSync.embedJobId, job.id)
+      and61(
+        eq72(topscholarContentSync.businessAccountId, job.businessAccountId),
+        eq72(topscholarContentSync.cpId, job.cpId),
+        eq72(topscholarContentSync.embedJobId, job.id)
       )
     );
-    await db.delete(topscholarEmbedStaging).where(eq71(topscholarEmbedStaging.jobId, job.id));
+    await db.delete(topscholarEmbedStaging).where(eq72(topscholarEmbedStaging.jobId, job.id));
     console.log(`[TopScholar EmbedPoller] Job ${job.id} completed: wrote ${written} chunk(s) to ${cfg.storeType} for cp_id ${job.cpId}`);
   });
 }
@@ -55814,7 +55814,7 @@ async function advanceJob(job) {
     batches: updatedBatches,
     status: allTerminal ? job.status : "in_progress",
     updatedAt: /* @__PURE__ */ new Date()
-  }).where(and60(eq71(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled"))).returning({ id: topscholarEmbedJobs.id });
+  }).where(and61(eq72(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled"))).returning({ id: topscholarEmbedJobs.id });
   if (advanced.length === 0) {
     return;
   }
@@ -55954,7 +55954,7 @@ init_auth();
 init_schema();
 import { createServer } from "http";
 import bcrypt2 from "bcrypt";
-import { eq as eq67, and as and57, isNotNull as isNotNull6, sql as sql40, inArray as inArray12, desc as desc30, asc as asc13, gte as gte12, lte as lte5, count as count4 } from "drizzle-orm";
+import { eq as eq68, and as and58, isNotNull as isNotNull6, sql as sql40, inArray as inArray12, desc as desc30, asc as asc13, gte as gte12, lte as lte5, count as count4 } from "drizzle-orm";
 import OpenAI39 from "openai";
 import { z as z2 } from "zod";
 
@@ -56756,19 +56756,19 @@ Respond with JSON:
       }
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
       const { leads: leads3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { or: or8, eq: eq72, and: and61 } = await import("drizzle-orm");
-      const conditions = [eq72(leads3.businessAccountId, businessAccountId)];
+      const { or: or8, eq: eq73, and: and62 } = await import("drizzle-orm");
+      const conditions = [eq73(leads3.businessAccountId, businessAccountId)];
       const contactConditions = [];
       if (email) {
-        contactConditions.push(eq72(leads3.email, email));
+        contactConditions.push(eq73(leads3.email, email));
       }
       if (phone) {
-        contactConditions.push(eq72(leads3.phone, phone));
+        contactConditions.push(eq73(leads3.phone, phone));
       }
       if (contactConditions.length > 0) {
         conditions.push(or8(...contactConditions));
       }
-      const existingLeads = await db2.select().from(leads3).where(and61(...conditions)).limit(1);
+      const existingLeads = await db2.select().from(leads3).where(and62(...conditions)).limit(1);
       if (existingLeads.length > 0) {
         console.log("[Duplicate Detection] Found existing lead:", existingLeads[0].id);
         return existingLeads[0];
@@ -56791,12 +56791,12 @@ Respond with JSON:
       }
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
       const { leads: leads3, journeyResponses: journeyResponses2, journeySteps: journeySteps2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq72, and: and61 } = await import("drizzle-orm");
+      const { eq: eq73, and: and62 } = await import("drizzle-orm");
       const responses = await db2.select({
         response: journeyResponses2.response,
         fieldName: journeySteps2.fieldName,
         questionType: journeySteps2.questionType
-      }).from(journeyResponses2).innerJoin(journeySteps2, eq72(journeyResponses2.stepId, journeySteps2.id)).where(eq72(journeyResponses2.sessionId, journeyState.sessionId));
+      }).from(journeyResponses2).innerJoin(journeySteps2, eq73(journeyResponses2.stepId, journeySteps2.id)).where(eq73(journeyResponses2.sessionId, journeyState.sessionId));
       console.log("[Lead Capture] Journey responses:", responses);
       let name = null;
       let phone = null;
@@ -56817,9 +56817,9 @@ Respond with JSON:
       }
       console.log("[Lead Capture] Extracted from journey:", { name, phone, email });
       const existingLeads = await db2.select().from(leads3).where(
-        and61(
-          eq72(leads3.businessAccountId, businessAccountId),
-          eq72(leads3.conversationId, conversationId)
+        and62(
+          eq73(leads3.businessAccountId, businessAccountId),
+          eq73(leads3.conversationId, conversationId)
         )
       ).limit(1);
       if (existingLeads.length > 0) {
@@ -56830,7 +56830,7 @@ Respond with JSON:
         await db2.update(leads3).set({
           ...updateData,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq72(leads3.id, existingLeads[0].id));
+        }).where(eq73(leads3.id, existingLeads[0].id));
         console.log("[Lead Capture] \u2713 Updated existing lead:", existingLeads[0].id);
       } else {
         const newLead = await db2.insert(leads3).values({
@@ -56901,7 +56901,7 @@ Respond with JSON:
       console.log(`[Lead Capture] \u{1F514} AI detected contact info: ${name ? "name" : ""} ${phone ? "phone" : ""} ${email ? "email" : ""}`.trim());
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
       const { leads: leads3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq72, and: and61, or: or8 } = await import("drizzle-orm");
+      const { eq: eq73, and: and62, or: or8 } = await import("drizzle-orm");
       const normalizePhone6 = (phoneNum) => {
         const cleaned = phoneNum.replace(/[^\d+]/g, "");
         return cleaned.startsWith("+") ? cleaned : cleaned.replace(/\+/g, "");
@@ -56914,44 +56914,44 @@ Respond with JSON:
         await db2.update(leads3).set({
           ...updateData,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq72(leads3.id, journeyState.leadId));
+        }).where(eq73(leads3.id, journeyState.leadId));
         console.log(`[Lead Capture] \u2713 Updated existing journey lead: ${journeyState.leadId}`);
         return;
       }
       if (email || phone) {
-        const conditions = [eq72(leads3.businessAccountId, businessAccountId)];
+        const conditions = [eq73(leads3.businessAccountId, businessAccountId)];
         const contactConditions = [];
         if (email && updateData.email) {
-          contactConditions.push(eq72(leads3.email, updateData.email));
+          contactConditions.push(eq73(leads3.email, updateData.email));
         }
         if (phone && updateData.phone) {
-          contactConditions.push(eq72(leads3.phone, updateData.phone));
+          contactConditions.push(eq73(leads3.phone, updateData.phone));
         }
         if (contactConditions.length > 0) {
           conditions.push(or8(...contactConditions));
         }
-        const existingLeads = await db2.select().from(leads3).where(and61(...conditions)).limit(1);
+        const existingLeads = await db2.select().from(leads3).where(and62(...conditions)).limit(1);
         if (existingLeads.length > 0) {
           await db2.update(leads3).set({
             ...updateData,
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq72(leads3.id, existingLeads[0].id));
+          }).where(eq73(leads3.id, existingLeads[0].id));
           journeyState.leadId = existingLeads[0].id;
           console.log(`[Lead Capture] \u2713 Updated duplicate lead: ${existingLeads[0].id}`);
           return;
         }
       }
       const conversationLeads = await db2.select().from(leads3).where(
-        and61(
-          eq72(leads3.businessAccountId, businessAccountId),
-          eq72(leads3.conversationId, conversationId)
+        and62(
+          eq73(leads3.businessAccountId, businessAccountId),
+          eq73(leads3.conversationId, conversationId)
         )
       ).limit(1);
       if (conversationLeads.length > 0) {
         await db2.update(leads3).set({
           ...updateData,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq72(leads3.id, conversationLeads[0].id));
+        }).where(eq73(leads3.id, conversationLeads[0].id));
         journeyState.leadId = conversationLeads[0].id;
         console.log(`[Lead Capture] \u2713 Updated conversation lead: ${conversationLeads[0].id}`);
         return;
@@ -57785,10 +57785,10 @@ var ChatService = class {
   mirrorMessageToDoubt(conversationId, role, content) {
     const target = doubtSyncTargets.get(conversationId);
     if (!target) return;
-    const text2 = String(content || "").trim();
-    if (!text2) return;
+    const text3 = String(content || "").trim();
+    if (!text3) return;
     const from = role === "user" ? "student" : "sme";
-    void pushTextMessage(target.baseUrl, target.doubtId, from, text2).catch((err) => {
+    void pushTextMessage(target.baseUrl, target.doubtId, from, text3).catch((err) => {
       console.warn("[Chat] TopScholar doubt-sync message mirror failed (non-fatal):", err?.message || err);
     });
   }
@@ -62426,9 +62426,9 @@ Respond with JSON:
   /**
    * Helper to truncate text at word boundary
    */
-  truncateAtWord(text2, maxLength) {
-    if (text2.length <= maxLength) return text2;
-    const truncated = text2.substring(0, maxLength);
+  truncateAtWord(text3, maxLength) {
+    if (text3.length <= maxLength) return text3;
+    const truncated = text3.substring(0, maxLength);
     const lastSpace = truncated.lastIndexOf(" ");
     return lastSpace > maxLength * 0.7 ? truncated.substring(0, lastSpace) + "..." : truncated + "...";
   }
@@ -62624,8 +62624,8 @@ OUTPUT \u2014 strict JSON only, no prose outside it, with the keys in EXACTLY th
  - If isStem is false and you place no diagrams, still return the complete
    formattedMarkdown with only structure added.`;
 var TOKEN_SEPARATORS = /[^0-9a-z\u00C0-\u0963\u0966-\u1FFF\u2C00-\uD7FF]+/;
-function tokenize(text2) {
-  return text2.toLowerCase().split(TOKEN_SEPARATORS).filter(Boolean);
+function tokenize(text3) {
+  return text3.toLowerCase().split(TOKEN_SEPARATORS).filter(Boolean);
 }
 function looksFaithful(original, produced, isStem) {
   const originalTokens = tokenize(original);
@@ -63376,20 +63376,20 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
       this.handleOpenAIDisconnection(conversationId, "error");
     }
   }
-  detectLanguageFromText(text2) {
-    if (!text2 || text2.trim().length === 0) {
+  detectLanguageFromText(text3) {
+    if (!text3 || text3.trim().length === 0) {
       return { language: "en", languageName: "English" };
     }
-    const devanagariCount = (text2.match(/[\u0900-\u097F]/g) || []).length;
-    const arabicUrduCount = (text2.match(/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/g) || []).length;
-    const tamilCount = (text2.match(/[\u0B80-\u0BFF]/g) || []).length;
-    const teluguCount = (text2.match(/[\u0C00-\u0C7F]/g) || []).length;
-    const kannadaCount = (text2.match(/[\u0C80-\u0CFF]/g) || []).length;
-    const malayalamCount = (text2.match(/[\u0D00-\u0D7F]/g) || []).length;
-    const bengaliCount = (text2.match(/[\u0980-\u09FF]/g) || []).length;
-    const gujaratiCount = (text2.match(/[\u0A80-\u0AFF]/g) || []).length;
-    const gurmukhiCount = (text2.match(/[\u0A00-\u0A7F]/g) || []).length;
-    const odiaCount = (text2.match(/[\u0B00-\u0B7F]/g) || []).length;
+    const devanagariCount = (text3.match(/[\u0900-\u097F]/g) || []).length;
+    const arabicUrduCount = (text3.match(/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/g) || []).length;
+    const tamilCount = (text3.match(/[\u0B80-\u0BFF]/g) || []).length;
+    const teluguCount = (text3.match(/[\u0C00-\u0C7F]/g) || []).length;
+    const kannadaCount = (text3.match(/[\u0C80-\u0CFF]/g) || []).length;
+    const malayalamCount = (text3.match(/[\u0D00-\u0D7F]/g) || []).length;
+    const bengaliCount = (text3.match(/[\u0980-\u09FF]/g) || []).length;
+    const gujaratiCount = (text3.match(/[\u0A80-\u0AFF]/g) || []).length;
+    const gurmukhiCount = (text3.match(/[\u0A00-\u0A7F]/g) || []).length;
+    const odiaCount = (text3.match(/[\u0B00-\u0B7F]/g) || []).length;
     const marathiCount = devanagariCount;
     const scriptCounts = [
       [devanagariCount, "hi", "Hindi"],
@@ -63451,10 +63451,10 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
     };
     return map[code] || "English";
   }
-  isPrimarilyLatinScript(text2) {
+  isPrimarilyLatinScript(text3) {
     let latinCount = 0;
     let nonLatinCount = 0;
-    for (const char of text2) {
+    for (const char of text3) {
       const code = char.codePointAt(0);
       if (code >= 65 && code <= 90 || code >= 97 && code <= 122 || code >= 192 && code <= 591) {
         latinCount++;
@@ -63514,14 +63514,14 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
     try {
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
       const { messages: messages2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq72, and: and61, desc: desc31 } = await import("drizzle-orm");
-      const recentMessages = await db2.select().from(messages2).where(and61(
-        eq72(messages2.conversationId, conversationId),
-        eq72(messages2.role, "user")
+      const { eq: eq73, and: and62, desc: desc31 } = await import("drizzle-orm");
+      const recentMessages = await db2.select().from(messages2).where(and62(
+        eq73(messages2.conversationId, conversationId),
+        eq73(messages2.role, "user")
       )).orderBy(desc31(messages2.createdAt)).limit(5);
       const matchingMsg = recentMessages.find((m) => m.content === originalText);
       if (matchingMsg) {
-        await db2.update(messages2).set({ content: correctedText }).where(eq72(messages2.id, matchingMsg.id));
+        await db2.update(messages2).set({ content: correctedText }).where(eq73(messages2.id, matchingMsg.id));
         console.log("[RealtimeVoice] Updated message in DB with corrected transcript");
       }
     } catch (error) {
@@ -64699,11 +64699,11 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
    * Catches written emails, phone-number-like digit runs, and explicit
    * "my name/number/email is …" style intros.
    */
-  looksLikeContactInfo(text2) {
-    if (/[^\s@]+@[^\s@]+\.[^\s@]+/.test(text2)) return true;
-    const digits = text2.replace(/\D/g, "");
-    if (digits.length >= 7 && digits.length <= 15 && /\d[\d\s().+-]{5,}\d/.test(text2)) return true;
-    const t = text2.toLowerCase();
+  looksLikeContactInfo(text3) {
+    if (/[^\s@]+@[^\s@]+\.[^\s@]+/.test(text3)) return true;
+    const digits = text3.replace(/\D/g, "");
+    if (digits.length >= 7 && digits.length <= 15 && /\d[\d\s().+-]{5,}\d/.test(text3)) return true;
+    const t = text3.toLowerCase();
     if (/\b(my name is|i am called|i'?m called|call me at|call me on|my mobile|my phone|my number|my contact|my email|my mail|reach me|contact me)\b/.test(t)) return true;
     return false;
   }
@@ -65183,9 +65183,9 @@ ${curriculum}` : `The curriculum lookup for the student's question "${query}" ha
    * student through `pendingCurriculumMedia` and the on-screen bubble instead, so
    * the model never needs to see a URL.
    */
-  stripMediaMarkdown(text2) {
-    if (typeof text2 !== "string" || !text2) return "";
-    return text2.replace(/\s+xmlns(?::\w+)?="[^"]*"/gi, "").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[[^\]]*\]\((https?:\/\/[^)]+\.(?:png|jpe?g|gif|webp|svg)[^)]*)\)/gi, " ").replace(/https?:\/\/\S+/gi, " ").replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  stripMediaMarkdown(text3) {
+    if (typeof text3 !== "string" || !text3) return "";
+    return text3.replace(/\s+xmlns(?::\w+)?="[^"]*"/gi, "").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[[^\]]*\]\((https?:\/\/[^)]+\.(?:png|jpe?g|gif|webp|svg)[^)]*)\)/gi, " ").replace(/https?:\/\/\S+/gi, " ").replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
   }
   /**
    * Deep-clean a tool result before it is handed to the voice model: drop media
@@ -65292,8 +65292,8 @@ ${curriculum}` : `The curriculum lookup for the student's question "${query}" ha
    * on K12 content-only academic turns. This avoids ever dropping a genuine
    * answer that merely happens to be JSON. Only consulted on the K12 path.
    */
-  looksLikeToolCallPayload(text2) {
-    const t = (text2 || "").trim();
+  looksLikeToolCallPayload(text3) {
+    const t = (text3 || "").trim();
     if (!(t.startsWith("{") && t.endsWith("}"))) return false;
     try {
       const obj = JSON.parse(t);
@@ -65701,9 +65701,9 @@ ${curriculum}` : `The curriculum lookup for the student's question "${query}" ha
   }
   // Queue a complete sentence for sequential synthesis. The drainer guarantees
   // only one synth streams PCM to the client at a time, in order.
-  enqueueSentenceForTts(conversation, text2, responseId) {
+  enqueueSentenceForTts(conversation, text3, responseId) {
     if (!conversation.elevenlabsApiKey || !conversation.elevenlabsVoiceId) return;
-    const t = (text2 || "").trim();
+    const t = (text3 || "").trim();
     if (!t) return;
     if (!conversation.ttsQueue) conversation.ttsQueue = [];
     conversation.ttsQueue.push({ text: t, responseId: responseId || "" });
@@ -65744,7 +65744,7 @@ ${curriculum}` : `The curriculum lookup for the student's question "${query}" ha
   // Stream one sentence's PCM to the client. Unlike synthesizeWithElevenLabs
   // this does NOT abort a previous synth (the drainer already serialized them),
   // but it registers its abort controller so a barge-in can stop it instantly.
-  async streamSentenceTts(conversation, text2, responseId) {
+  async streamSentenceTts(conversation, text3, responseId) {
     if (!conversation.elevenlabsApiKey || !conversation.elevenlabsVoiceId) return;
     const abortController = new AbortController();
     conversation.activeElevenLabsAbort = abortController;
@@ -65755,7 +65755,7 @@ ${curriculum}` : `The curriculum lookup for the student's question "${query}" ha
         {
           apiKey: conversation.elevenlabsApiKey,
           voiceId: conversation.elevenlabsVoiceId,
-          text: text2,
+          text: text3,
           outputFormat: "pcm_24000",
           signal: abortController.signal
         },
@@ -65787,8 +65787,8 @@ ${curriculum}` : `The curriculum lookup for the student's question "${query}" ha
    * deliberately not asked to author or restate the answer: the exact
    * speech-safe script is the TTS input.
    */
-  async synthesizeWithOpenAI(conversation, text2, responseId) {
-    if (!text2.trim()) return;
+  async synthesizeWithOpenAI(conversation, text3, responseId) {
+    if (!text3.trim()) return;
     if (conversation.activeOpenAITtsAbort) {
       try {
         conversation.activeOpenAITtsAbort.abort();
@@ -65814,7 +65814,7 @@ ${curriculum}` : `The curriculum lookup for the student's question "${query}" ha
     ]);
     const voice = supportedVoices.has(conversation.selectedVoice || "") ? conversation.selectedVoice : "shimmer";
     const chunks = [];
-    let remaining = text2.trim();
+    let remaining = text3.trim();
     while (remaining.length > 3500) {
       const window = remaining.slice(0, 3500);
       const sentenceBreak = Math.max(
@@ -65862,7 +65862,7 @@ ${curriculum}` : `The curriculum lookup for the student's question "${query}" ha
       }
     }
   }
-  async synthesizeWithElevenLabs(conversation, text2) {
+  async synthesizeWithElevenLabs(conversation, text3) {
     if (!conversation.elevenlabsApiKey || !conversation.elevenlabsVoiceId) return;
     if (conversation.activeElevenLabsAbort) {
       console.log("[RealtimeVoice] Aborting previous ElevenLabs synth (responseId:", conversation.activeElevenLabsResponseId, ") before starting new one");
@@ -65876,7 +65876,7 @@ ${curriculum}` : `The curriculum lookup for the student's question "${query}" ha
     conversation.activeElevenLabsAbort = abortController;
     conversation.activeElevenLabsResponseId = synthResponseId;
     try {
-      console.log("[RealtimeVoice] Streaming ElevenLabs TTS, text length:", text2.length, "responseId:", synthResponseId);
+      console.log("[RealtimeVoice] Streaming ElevenLabs TTS, text length:", text3.length, "responseId:", synthResponseId);
       let leftover = null;
       let totalBytesIn = 0;
       let totalBytesOut = 0;
@@ -65885,7 +65885,7 @@ ${curriculum}` : `The curriculum lookup for the student's question "${query}" ha
         {
           apiKey: conversation.elevenlabsApiKey,
           voiceId: conversation.elevenlabsVoiceId,
-          text: text2,
+          text: text3,
           outputFormat: "pcm_24000",
           signal: abortController.signal
         },
@@ -66693,9 +66693,9 @@ var DatabaseBackupService = class {
         reject(new Error(`${label} timed out`));
       }, PG_DUMP_TIMEOUT_MS);
       psql.stderr.on("data", (chunk) => {
-        const text2 = chunk.toString();
-        if (!text2.includes("NOTICE:")) {
-          errorChunks.push(text2);
+        const text3 = chunk.toString();
+        if (!text3.includes("NOTICE:")) {
+          errorChunks.push(text3);
         }
       });
       psql.on("close", (code) => {
@@ -67120,13 +67120,13 @@ END$$;
         this.setRestoreProgress("Restoring Data", 5, 8, progress, detail);
       }, 2e3);
       pgRestore.stdout.on("data", (chunk) => {
-        const text2 = chunk.toString().trim();
-        if (text2) this.log("RESTORE_PG", `pg_restore stdout: ${text2}`);
+        const text3 = chunk.toString().trim();
+        if (text3) this.log("RESTORE_PG", `pg_restore stdout: ${text3}`);
       });
       pgRestore.stderr.on("data", (chunk) => {
-        const text2 = chunk.toString();
-        pgRestoreStderr.push(text2);
-        const lines = text2.split("\n");
+        const text3 = chunk.toString();
+        pgRestoreStderr.push(text3);
+        const lines = text3.split("\n");
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
@@ -67371,9 +67371,9 @@ TRUNCATE TABLE "${tableName}" CASCADE;`, "RECOVERY_TRUNCATE");
         else resolve();
       };
       psql.stderr.on("data", (chunk) => {
-        const text2 = chunk.toString();
-        if (text2.includes("FATAL") || text2.includes("ERROR")) {
-          this.log("RESTORE_DATA", `Recovery psql error for "${tableName}": ${text2.trim()}`);
+        const text3 = chunk.toString();
+        if (text3.includes("FATAL") || text3.includes("ERROR")) {
+          this.log("RESTORE_DATA", `Recovery psql error for "${tableName}": ${text3.trim()}`);
         }
       });
       psql.on("error", (error) => {
@@ -67486,18 +67486,18 @@ TRUNCATE TABLE "${tableName}" CASCADE;`, "RECOVERY_TRUNCATE");
         finish(new Error("Streaming data restore timed out"));
       }, PG_DUMP_TIMEOUT_MS);
       psql.stderr.on("data", (chunk) => {
-        const text2 = chunk.toString();
-        if (text2.includes("FATAL")) {
-          sampleErrors.push(text2.trim());
+        const text3 = chunk.toString();
+        if (text3.includes("FATAL")) {
+          sampleErrors.push(text3.trim());
           psql.kill("SIGTERM");
           gunzipStream.destroy();
-          finish(new Error(`Data restore fatal error: ${text2.trim()}`));
+          finish(new Error(`Data restore fatal error: ${text3.trim()}`));
           return;
         }
-        if (text2.includes("ERROR")) {
+        if (text3.includes("ERROR")) {
           errorCount++;
           if (errorCount <= 10) {
-            sampleErrors.push(text2.trim());
+            sampleErrors.push(text3.trim());
           }
         }
       });
@@ -68894,11 +68894,11 @@ import { eq as eq27, and as and22, desc as desc8, sql as sql18, or as or3 } from
 // server/services/erpClient.ts
 import crypto6 from "crypto";
 var ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "default-encryption-key-32chars!";
-function encrypt2(text2) {
+function encrypt2(text3) {
   const iv = crypto6.randomBytes(16);
   const key = crypto6.scryptSync(ENCRYPTION_KEY, "salt", 32);
   const cipher = crypto6.createCipheriv("aes-256-cbc", key, iv);
-  let encrypted = cipher.update(text2, "utf8", "hex");
+  let encrypted = cipher.update(text3, "utf8", "hex");
   encrypted += cipher.final("hex");
   return iv.toString("hex") + ":" + encrypted;
 }
@@ -72010,7 +72010,7 @@ init_encryptionService();
 init_ingestionService();
 init_mongoContentDb();
 import { Router as Router4 } from "express";
-import { and as and26, eq as eq34, desc as desc10, gt as gt2, isNotNull as isNotNull3, inArray as inArray5, ilike as ilike3, sql as sql20 } from "drizzle-orm";
+import { and as and27, eq as eq35, desc as desc10, gt as gt2, isNotNull as isNotNull3, inArray as inArray5, ilike as ilike3, sql as sql20 } from "drizzle-orm";
 
 // server/services/topscholar/contentReader.ts
 init_db();
@@ -72022,9 +72022,9 @@ function buildLabel(board, medium, grade) {
   const parts = [board, medium, grade].filter(Boolean);
   return parts.length ? parts.join(" \xB7 ") : null;
 }
-async function safeQuery(pool2, text2, params) {
+async function safeQuery(pool2, text3, params) {
   try {
-    return await pool2.query(text2, params);
+    return await pool2.query(text3, params);
   } catch (e) {
     if (e?.code === "42P01") return { rows: [] };
     throw e;
@@ -72288,6 +72288,113 @@ async function getMongoChunks(cfg, businessAccountId, opts) {
 // server/routes/topscholar.ts
 init_mongoContentDb();
 init_scopeResolver();
+
+// server/services/topscholar/testerContentScopes.ts
+init_db();
+init_schema();
+init_contentDb();
+init_mongoContentDb();
+import { and as and25, eq as eq33 } from "drizzle-orm";
+function text2(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+async function reconcileSubjectNamesFromContentStore(cfg, businessAccountId) {
+  const mappings = await db.select({
+    cpId: topscholarCpMappings.cpId,
+    subject: topscholarCpMappings.subject
+  }).from(topscholarCpMappings).where(eq33(topscholarCpMappings.businessAccountId, businessAccountId));
+  const mappingByCpId = new Map(
+    mappings.map((mapping) => [text2(mapping.cpId), text2(mapping.subject)])
+  );
+  let rows;
+  if (cfg.storeType === "mongodb") {
+    if (!cfg.contentDbUrl) throw new Error("MongoDB content DB URL is not configured.");
+    const collection = await getMongoCollection(
+      cfg.contentDbUrl,
+      cfg.contentDbName,
+      cfg.contentDbCollection
+    );
+    const storedRows = await collection.aggregate([
+      { $match: { business_account_id: businessAccountId } },
+      {
+        $project: {
+          _id: 0,
+          cpId: { $trim: { input: { $ifNull: ["$cp_id", ""] } } },
+          subject: { $trim: { input: { $ifNull: ["$subject", ""] } } }
+        }
+      },
+      { $match: { cpId: { $ne: "" }, subject: { $ne: "" } } },
+      {
+        $group: {
+          _id: { cpId: "$cpId", subject: "$subject" },
+          cpId: { $first: "$cpId" },
+          subject: { $first: "$subject" }
+        }
+      },
+      { $project: { _id: 0, cpId: 1, subject: 1 } }
+    ]).toArray();
+    rows = storedRows.map((row) => ({ cpId: text2(row.cpId), subject: text2(row.subject) }));
+  } else {
+    const pool2 = getContentPool(cfg.contentDbUrl);
+    const result = await pool2.query(
+      `SELECT DISTINCT
+         btrim(cp_id) AS "cpId",
+         btrim(subject) AS subject
+       FROM topscholar_content_chunks
+       WHERE business_account_id = $1
+         AND cp_id IS NOT NULL AND btrim(cp_id) <> ''
+         AND subject IS NOT NULL AND btrim(subject) <> ''`,
+      [businessAccountId]
+    );
+    rows = result.rows.map((row) => ({ cpId: text2(row.cpId), subject: text2(row.subject) }));
+  }
+  const subjectsByCpId = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    if (!row.cpId || !row.subject) continue;
+    const subjects = subjectsByCpId.get(row.cpId) || /* @__PURE__ */ new Set();
+    subjects.add(row.subject);
+    subjectsByCpId.set(row.cpId, subjects);
+  }
+  let updatedMappings = 0;
+  let unchangedMappings = 0;
+  let unmatchedCpIds = 0;
+  let conflictingSubjects = 0;
+  await db.transaction(async (tx) => {
+    for (const [cpId, subjects] of subjectsByCpId) {
+      if (!mappingByCpId.has(cpId)) {
+        unmatchedCpIds++;
+        continue;
+      }
+      if (subjects.size !== 1) {
+        conflictingSubjects++;
+        continue;
+      }
+      const subject = Array.from(subjects)[0];
+      const currentSubject = mappingByCpId.get(cpId) || "";
+      if (currentSubject === subject) {
+        unchangedMappings++;
+        continue;
+      }
+      await tx.update(topscholarCpMappings).set({ subject, updatedAt: /* @__PURE__ */ new Date() }).where(
+        and25(
+          eq33(topscholarCpMappings.businessAccountId, businessAccountId),
+          eq33(topscholarCpMappings.cpId, cpId)
+        )
+      );
+      updatedMappings++;
+    }
+  });
+  return {
+    scannedRows: rows.length,
+    usableSubjects: subjectsByCpId.size,
+    updatedMappings,
+    unchangedMappings,
+    unmatchedCpIds,
+    conflictingSubjects
+  };
+}
+
+// server/routes/topscholar.ts
 init_cmsConnector();
 init_embeddingBatchService();
 init_cpLock();
@@ -72357,7 +72464,7 @@ function completedPlanEmbeddingCondition(businessAccountId) {
   `;
 }
 async function loadAccount(businessAccountId) {
-  const [account] = await db.select().from(businessAccounts).where(eq34(businessAccounts.id, businessAccountId));
+  const [account] = await db.select().from(businessAccounts).where(eq35(businessAccounts.id, businessAccountId));
   return account || null;
 }
 function buildLabel2(board, medium, grade) {
@@ -72476,7 +72583,7 @@ router4.put("/api/topscholar/config", ...topscholarGuards, async (req, res) => {
   }
   if (typeof tokenSecret === "string" && tokenSecret.trim()) patch.topscholarTokenSecret = tokenSecret.trim();
   if (typeof apiToken === "string" && apiToken.trim()) patch.topscholarApiToken = apiToken.trim();
-  await db.update(businessAccounts).set(patch).where(eq34(businessAccounts.id, businessAccountId));
+  await db.update(businessAccounts).set(patch).where(eq35(businessAccounts.id, businessAccountId));
   const updated = await loadAccount(businessAccountId);
   const cfg = getTopscholarConfig(updated);
   res.json({ ...configResponse(cfg), warning: saveWarning });
@@ -72504,6 +72611,30 @@ router4.post("/api/topscholar/test-mongo", ...topscholarGuards, async (req, res)
   const result = await testMongoConnection({ connectionString, dbName, collection, indexName });
   res.json(result);
 });
+router4.post("/api/topscholar/reconcile-subjects", ...topscholarGuards, async (req, res) => {
+  const businessAccountId = getBusinessAccountId3(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+  const account = await loadAccount(businessAccountId);
+  if (!account) return res.status(404).json({ error: "Business account not found" });
+  try {
+    const cfg = getTopscholarConfig(account);
+    if (cfg.externalContentDbDisabled || !cfg.contentDbUrl) {
+      return res.status(400).json({
+        error: "Enable and save the external client content database before importing subject names."
+      });
+    }
+    const result = await reconcileSubjectNamesFromContentStore(
+      cfg,
+      businessAccountId
+    );
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error("[TopScholar] Subject reconciliation failed:", error);
+    res.status(502).json({
+      error: error?.message || "Could not read subject names from the configured content store."
+    });
+  }
+});
 router4.post("/api/topscholar/test-content-bundle", ...topscholarGuards, async (req, res) => {
   const businessAccountId = getBusinessAccountId3(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
@@ -72517,7 +72648,7 @@ router4.post("/api/topscholar/test-content-bundle", ...topscholarGuards, async (
   if (!apiBaseUrl) {
     return res.status(400).json({ success: false, message: "No API Endpoint URL provided." });
   }
-  const [samplePlan] = await db.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(eq34(topscholarPlanIds.businessAccountId, businessAccountId)).orderBy(desc10(topscholarPlanIds.updatedAt)).limit(1);
+  const [samplePlan] = await db.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(eq35(topscholarPlanIds.businessAccountId, businessAccountId)).orderBy(desc10(topscholarPlanIds.updatedAt)).limit(1);
   const result = await testContentBundleConnection(apiBaseUrl, apiToken, samplePlan?.planId ?? null);
   res.json(result);
 });
@@ -72528,8 +72659,8 @@ router4.get("/api/topscholar/sync", ...topscholarGuards, async (req, res) => {
   const q = parseSearch(req);
   const status = typeof req.query?.status === "string" ? req.query.status.trim() : "";
   const planFilter = typeof req.query?.planId === "string" ? req.query.planId.trim() : "";
-  const conds = [eq34(topscholarContentSync.businessAccountId, businessAccountId)];
-  if (status) conds.push(eq34(topscholarContentSync.status, status));
+  const conds = [eq35(topscholarContentSync.businessAccountId, businessAccountId)];
+  if (status) conds.push(eq35(topscholarContentSync.status, status));
   if (q) conds.push(ilike3(topscholarContentSync.cpId, `%${q}%`));
   if (planFilter) {
     const effectivePlan = sql20`COALESCE(
@@ -72546,7 +72677,7 @@ router4.get("/api/topscholar/sync", ...topscholarGuards, async (req, res) => {
       conds.push(sql20`${effectivePlan} = ${planFilter}`);
     }
   }
-  const where = and26(...conds);
+  const where = and27(...conds);
   const [rows, totalRow] = await Promise.all([
     db.select().from(topscholarContentSync).where(where).orderBy(desc10(topscholarContentSync.updatedAt)).limit(limit).offset(offset),
     db.select({ count: sql20`count(*)::int` }).from(topscholarContentSync).where(where)
@@ -72565,7 +72696,7 @@ router4.get("/api/topscholar/sync", ...topscholarGuards, async (req, res) => {
       medium: topscholarPlanCpResolutions.medium,
       subject: topscholarPlanCpResolutions.subject,
       lastResolvedAt: topscholarPlanCpResolutions.lastResolvedAt
-    }).from(topscholarPlanCpResolutions).where(and26(eq34(topscholarPlanCpResolutions.businessAccountId, businessAccountId), inArray5(topscholarPlanCpResolutions.cpId, pageCpIds))).orderBy(sql20`${topscholarPlanCpResolutions.lastResolvedAt} DESC NULLS LAST`, desc10(topscholarPlanCpResolutions.updatedAt));
+    }).from(topscholarPlanCpResolutions).where(and27(eq35(topscholarPlanCpResolutions.businessAccountId, businessAccountId), inArray5(topscholarPlanCpResolutions.cpId, pageCpIds))).orderBy(sql20`${topscholarPlanCpResolutions.lastResolvedAt} DESC NULLS LAST`, desc10(topscholarPlanCpResolutions.updatedAt));
     const mappings = await db.select({
       planId: topscholarCpMappings.planId,
       cpId: topscholarCpMappings.cpId,
@@ -72575,7 +72706,7 @@ router4.get("/api/topscholar/sync", ...topscholarGuards, async (req, res) => {
       grade: topscholarCpMappings.grade,
       medium: topscholarCpMappings.medium,
       subject: topscholarCpMappings.subject
-    }).from(topscholarCpMappings).where(and26(eq34(topscholarCpMappings.businessAccountId, businessAccountId), inArray5(topscholarCpMappings.cpId, pageCpIds)));
+    }).from(topscholarCpMappings).where(and27(eq35(topscholarCpMappings.businessAccountId, businessAccountId), inArray5(topscholarCpMappings.cpId, pageCpIds)));
     const composeLabel = (r) => curriculumLabel(r) || r.label || null;
     const resByCp = /* @__PURE__ */ new Map();
     const planCountByCp = /* @__PURE__ */ new Map();
@@ -72677,15 +72808,15 @@ router4.post("/api/topscholar/sync", ...topscholarGuards, async (req, res) => {
   }
   let planId = (req.body?.planId || "").trim();
   if (!planId) {
-    const [resolution] = await db.select({ planId: topscholarPlanCpResolutions.planId }).from(topscholarPlanCpResolutions).where(and26(eq34(topscholarPlanCpResolutions.businessAccountId, businessAccountId), eq34(topscholarPlanCpResolutions.cpId, cpId))).orderBy(sql20`${topscholarPlanCpResolutions.lastResolvedAt} DESC NULLS LAST`, desc10(topscholarPlanCpResolutions.updatedAt)).limit(1);
+    const [resolution] = await db.select({ planId: topscholarPlanCpResolutions.planId }).from(topscholarPlanCpResolutions).where(and27(eq35(topscholarPlanCpResolutions.businessAccountId, businessAccountId), eq35(topscholarPlanCpResolutions.cpId, cpId))).orderBy(sql20`${topscholarPlanCpResolutions.lastResolvedAt} DESC NULLS LAST`, desc10(topscholarPlanCpResolutions.updatedAt)).limit(1);
     if (resolution?.planId) {
       planId = resolution.planId;
     } else {
-      const [mapping] = await db.select({ planId: topscholarCpMappings.planId }).from(topscholarCpMappings).where(and26(eq34(topscholarCpMappings.businessAccountId, businessAccountId), eq34(topscholarCpMappings.cpId, cpId)));
+      const [mapping] = await db.select({ planId: topscholarCpMappings.planId }).from(topscholarCpMappings).where(and27(eq35(topscholarCpMappings.businessAccountId, businessAccountId), eq35(topscholarCpMappings.cpId, cpId)));
       if (mapping?.planId) {
         planId = mapping.planId;
       } else {
-        const [plan] = await db.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(and26(eq34(topscholarPlanIds.businessAccountId, businessAccountId), eq34(topscholarPlanIds.lastCpId, cpId)));
+        const [plan] = await db.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(and27(eq35(topscholarPlanIds.businessAccountId, businessAccountId), eq35(topscholarPlanIds.lastCpId, cpId)));
         if (plan?.planId) planId = plan.planId;
       }
     }
@@ -72706,13 +72837,13 @@ router4.post("/api/topscholar/sync", ...topscholarGuards, async (req, res) => {
   }
 });
 async function cancelCpSyncLocked(businessAccountId, cpId) {
-  const [row] = await db.select().from(topscholarContentSync).where(and26(eq34(topscholarContentSync.businessAccountId, businessAccountId), eq34(topscholarContentSync.cpId, cpId)));
+  const [row] = await db.select().from(topscholarContentSync).where(and27(eq35(topscholarContentSync.businessAccountId, businessAccountId), eq35(topscholarContentSync.cpId, cpId)));
   if (!row) return { existed: false, alreadyTerminal: false, status: null };
   if (row.status !== "syncing") return { existed: true, alreadyTerminal: true, status: row.status };
   const [job] = await db.select().from(topscholarEmbedJobs).where(
-    and26(
-      eq34(topscholarEmbedJobs.businessAccountId, businessAccountId),
-      eq34(topscholarEmbedJobs.cpId, cpId),
+    and27(
+      eq35(topscholarEmbedJobs.businessAccountId, businessAccountId),
+      eq35(topscholarEmbedJobs.cpId, cpId),
       inArray5(topscholarEmbedJobs.status, ["preparing", "submitted", "in_progress"])
     )
   ).orderBy(desc10(topscholarEmbedJobs.createdAt));
@@ -72720,14 +72851,14 @@ async function cancelCpSyncLocked(businessAccountId, cpId) {
     for (const b of job.batches) {
       if (b.batchId) await cancelBatch(businessAccountId, b.batchId);
     }
-    await db.update(topscholarEmbedJobs).set({ status: "cancelled", error: "Cancelled by admin.", updatedAt: /* @__PURE__ */ new Date() }).where(eq34(topscholarEmbedJobs.id, job.id));
-    await db.delete(topscholarEmbedStaging).where(eq34(topscholarEmbedStaging.jobId, job.id));
+    await db.update(topscholarEmbedJobs).set({ status: "cancelled", error: "Cancelled by admin.", updatedAt: /* @__PURE__ */ new Date() }).where(eq35(topscholarEmbedJobs.id, job.id));
+    await db.delete(topscholarEmbedStaging).where(eq35(topscholarEmbedStaging.jobId, job.id));
   }
   await db.update(topscholarContentSync).set({ status: "cancelled", lastError: "Cancelled by admin.", embedJobId: null, updatedAt: /* @__PURE__ */ new Date() }).where(
-    and26(
-      eq34(topscholarContentSync.businessAccountId, businessAccountId),
-      eq34(topscholarContentSync.cpId, cpId),
-      eq34(topscholarContentSync.status, "syncing")
+    and27(
+      eq35(topscholarContentSync.businessAccountId, businessAccountId),
+      eq35(topscholarContentSync.cpId, cpId),
+      eq35(topscholarContentSync.status, "syncing")
     )
   );
   return { existed: true, alreadyTerminal: false, status: "cancelled" };
@@ -72736,13 +72867,13 @@ async function deleteCpContent(cfg, businessAccountId, cpId) {
   await withCpLock(businessAccountId, cpId, async () => {
     await cancelCpSyncLocked(businessAccountId, cpId);
     await deleteCpChunks(cfg, businessAccountId, cpId);
-    await db.delete(topscholarContentSync).where(and26(eq34(topscholarContentSync.businessAccountId, businessAccountId), eq34(topscholarContentSync.cpId, cpId)));
+    await db.delete(topscholarContentSync).where(and27(eq35(topscholarContentSync.businessAccountId, businessAccountId), eq35(topscholarContentSync.cpId, cpId)));
   });
 }
 async function resolveCpIdsForPlan(businessAccountId, planId) {
   const [resolved, mapped] = await Promise.all([
-    db.select({ cpId: topscholarPlanCpResolutions.cpId }).from(topscholarPlanCpResolutions).where(and26(eq34(topscholarPlanCpResolutions.businessAccountId, businessAccountId), eq34(topscholarPlanCpResolutions.planId, planId))),
-    db.select({ cpId: topscholarCpMappings.cpId }).from(topscholarCpMappings).where(and26(eq34(topscholarCpMappings.businessAccountId, businessAccountId), eq34(topscholarCpMappings.planId, planId)))
+    db.select({ cpId: topscholarPlanCpResolutions.cpId }).from(topscholarPlanCpResolutions).where(and27(eq35(topscholarPlanCpResolutions.businessAccountId, businessAccountId), eq35(topscholarPlanCpResolutions.planId, planId))),
+    db.select({ cpId: topscholarCpMappings.cpId }).from(topscholarCpMappings).where(and27(eq35(topscholarCpMappings.businessAccountId, businessAccountId), eq35(topscholarCpMappings.planId, planId)))
   ]);
   return Array.from(/* @__PURE__ */ new Set([...resolved.map((r) => r.cpId), ...mapped.map((m) => m.cpId)]));
 }
@@ -72755,15 +72886,15 @@ router4.post("/api/topscholar/sync/cancel", ...topscholarGuards, async (req, res
   if (!account) return res.status(404).json({ error: "Business account not found" });
   const cancelCfg = getTopscholarConfig(account);
   if (cancelCfg.contentDbUrl) {
-    const [existing] = await db.select({ status: topscholarContentSync.status }).from(topscholarContentSync).where(and26(eq34(topscholarContentSync.businessAccountId, businessAccountId), eq34(topscholarContentSync.cpId, cpId)));
+    const [existing] = await db.select({ status: topscholarContentSync.status }).from(topscholarContentSync).where(and27(eq35(topscholarContentSync.businessAccountId, businessAccountId), eq35(topscholarContentSync.cpId, cpId)));
     if (!existing) return res.status(404).json({ error: "No sync found for that cp_id." });
     if (existing.status !== "syncing") {
       return res.json({ success: true, status: existing.status, alreadyTerminal: true });
     }
-    await db.update(topscholarContentSync).set({ status: "cancelled", lastError: "Cancelled by admin.", embedJobId: null, updatedAt: /* @__PURE__ */ new Date() }).where(and26(
-      eq34(topscholarContentSync.businessAccountId, businessAccountId),
-      eq34(topscholarContentSync.cpId, cpId),
-      eq34(topscholarContentSync.status, "syncing")
+    await db.update(topscholarContentSync).set({ status: "cancelled", lastError: "Cancelled by admin.", embedJobId: null, updatedAt: /* @__PURE__ */ new Date() }).where(and27(
+      eq35(topscholarContentSync.businessAccountId, businessAccountId),
+      eq35(topscholarContentSync.cpId, cpId),
+      eq35(topscholarContentSync.status, "syncing")
     ));
     return res.json({ success: true, status: "cancelled" });
   }
@@ -72818,15 +72949,15 @@ router4.get("/api/topscholar/plan-ids", ...topscholarGuards, async (req, res) =>
   const { limit, offset } = parsePageParams(req, 25, 200);
   const q = parseSearch(req);
   const embeddingStatus = parsePlanEmbeddingFilter(req);
-  const baseWhere = q ? and26(eq34(topscholarPlanIds.businessAccountId, businessAccountId), ilike3(topscholarPlanIds.planId, `%${q}%`)) : eq34(topscholarPlanIds.businessAccountId, businessAccountId);
+  const baseWhere = q ? and27(eq35(topscholarPlanIds.businessAccountId, businessAccountId), ilike3(topscholarPlanIds.planId, `%${q}%`)) : eq35(topscholarPlanIds.businessAccountId, businessAccountId);
   const completedWhere = completedPlanEmbeddingCondition(businessAccountId);
   const statusWhere = embeddingStatus === "completed" ? completedWhere : embeddingStatus === "pending" ? sql20`NOT (${completedWhere})` : void 0;
-  const where = statusWhere ? and26(baseWhere, statusWhere) : baseWhere;
+  const where = statusWhere ? and27(baseWhere, statusWhere) : baseWhere;
   const [rows, totalRow, allTotalRow, completedTotalRow] = await Promise.all([
     db.select().from(topscholarPlanIds).where(where).orderBy(desc10(topscholarPlanIds.updatedAt)).limit(limit).offset(offset),
     db.select({ count: sql20`count(*)::int` }).from(topscholarPlanIds).where(where),
     db.select({ count: sql20`count(*)::int` }).from(topscholarPlanIds).where(baseWhere),
-    db.select({ count: sql20`count(*)::int` }).from(topscholarPlanIds).where(and26(baseWhere, completedWhere))
+    db.select({ count: sql20`count(*)::int` }).from(topscholarPlanIds).where(and27(baseWhere, completedWhere))
   ]);
   const total = totalRow[0]?.count ?? 0;
   const all = allTotalRow[0]?.count ?? 0;
@@ -72834,7 +72965,7 @@ router4.get("/api/topscholar/plan-ids", ...topscholarGuards, async (req, res) =>
   const pagePlanIds = rows.map((r) => r.planId);
   const countByPlan = /* @__PURE__ */ new Map();
   if (pagePlanIds.length > 0) {
-    const counts = await db.select({ planId: topscholarPlanCpResolutions.planId, count: sql20`count(*)::int` }).from(topscholarPlanCpResolutions).where(and26(eq34(topscholarPlanCpResolutions.businessAccountId, businessAccountId), inArray5(topscholarPlanCpResolutions.planId, pagePlanIds))).groupBy(topscholarPlanCpResolutions.planId);
+    const counts = await db.select({ planId: topscholarPlanCpResolutions.planId, count: sql20`count(*)::int` }).from(topscholarPlanCpResolutions).where(and27(eq35(topscholarPlanCpResolutions.businessAccountId, businessAccountId), inArray5(topscholarPlanCpResolutions.planId, pagePlanIds))).groupBy(topscholarPlanCpResolutions.planId);
     for (const c of counts) countByPlan.set(c.planId, c.count);
   }
   const enriched = rows.map((r) => ({ ...r, resolvedCpCount: countByPlan.get(r.planId) ?? 0 }));
@@ -72858,21 +72989,21 @@ router4.put("/api/topscholar/plan-ids", ...topscholarGuards, async (req, res) =>
   const planIds = Array.from(new Set(raw.map((p) => p.trim()).filter(Boolean)));
   await db.transaction(async (tx) => {
     if (planIds.length === 0) {
-      await tx.delete(topscholarPlanIds).where(eq34(topscholarPlanIds.businessAccountId, businessAccountId));
-      await tx.delete(topscholarPlanCpResolutions).where(eq34(topscholarPlanCpResolutions.businessAccountId, businessAccountId));
+      await tx.delete(topscholarPlanIds).where(eq35(topscholarPlanIds.businessAccountId, businessAccountId));
+      await tx.delete(topscholarPlanCpResolutions).where(eq35(topscholarPlanCpResolutions.businessAccountId, businessAccountId));
       return;
     }
-    const existing = await tx.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(eq34(topscholarPlanIds.businessAccountId, businessAccountId));
+    const existing = await tx.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(eq35(topscholarPlanIds.businessAccountId, businessAccountId));
     const toDelete = existing.map((e) => e.planId).filter((p) => !planIds.includes(p));
     if (toDelete.length > 0) {
-      await tx.delete(topscholarPlanIds).where(and26(eq34(topscholarPlanIds.businessAccountId, businessAccountId), inArray5(topscholarPlanIds.planId, toDelete)));
-      await tx.delete(topscholarPlanCpResolutions).where(and26(eq34(topscholarPlanCpResolutions.businessAccountId, businessAccountId), inArray5(topscholarPlanCpResolutions.planId, toDelete)));
+      await tx.delete(topscholarPlanIds).where(and27(eq35(topscholarPlanIds.businessAccountId, businessAccountId), inArray5(topscholarPlanIds.planId, toDelete)));
+      await tx.delete(topscholarPlanCpResolutions).where(and27(eq35(topscholarPlanCpResolutions.businessAccountId, businessAccountId), inArray5(topscholarPlanCpResolutions.planId, toDelete)));
     }
     for (const planId of planIds) {
       await tx.insert(topscholarPlanIds).values({ businessAccountId, planId }).onConflictDoNothing({ target: [topscholarPlanIds.businessAccountId, topscholarPlanIds.planId] });
     }
   });
-  const rows = await db.select().from(topscholarPlanIds).where(eq34(topscholarPlanIds.businessAccountId, businessAccountId)).orderBy(desc10(topscholarPlanIds.updatedAt));
+  const rows = await db.select().from(topscholarPlanIds).where(eq35(topscholarPlanIds.businessAccountId, businessAccountId)).orderBy(desc10(topscholarPlanIds.updatedAt));
   res.json({ success: true, count: rows.length, rows });
 });
 router4.post("/api/topscholar/plan-ids/add", ...topscholarGuards, async (req, res) => {
@@ -72906,8 +73037,8 @@ router4.post("/api/topscholar/plan-ids/remove", ...topscholarGuards, async (req,
     await deleteCpContent(cfg, businessAccountId, cpId);
   }
   await db.transaction(async (tx) => {
-    await tx.delete(topscholarPlanIds).where(and26(eq34(topscholarPlanIds.businessAccountId, businessAccountId), eq34(topscholarPlanIds.planId, planId)));
-    await tx.delete(topscholarPlanCpResolutions).where(and26(eq34(topscholarPlanCpResolutions.businessAccountId, businessAccountId), eq34(topscholarPlanCpResolutions.planId, planId)));
+    await tx.delete(topscholarPlanIds).where(and27(eq35(topscholarPlanIds.businessAccountId, businessAccountId), eq35(topscholarPlanIds.planId, planId)));
+    await tx.delete(topscholarPlanCpResolutions).where(and27(eq35(topscholarPlanCpResolutions.businessAccountId, businessAccountId), eq35(topscholarPlanCpResolutions.planId, planId)));
   });
   res.json({ success: true, purgedCpCount: cpIds.length });
 });
@@ -72969,7 +73100,7 @@ router4.post("/api/topscholar/sync-now", ...topscholarGuards, async (req, res) =
   if (Array.isArray(req.body?.planIds) && req.body.planIds.length > 0) {
     planIds = req.body.planIds.map((p) => String(p).trim()).filter(Boolean);
   } else {
-    const saved = await db.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(and26(eq34(topscholarPlanIds.businessAccountId, businessAccountId), eq34(topscholarPlanIds.enabled, "true")));
+    const saved = await db.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(and27(eq35(topscholarPlanIds.businessAccountId, businessAccountId), eq35(topscholarPlanIds.enabled, "true")));
     planIds = saved.map((s) => s.planId);
   }
   if (planIds.length === 0) {
@@ -73009,11 +73140,11 @@ router4.post("/api/topscholar/plan-bulk-sync", ...topscholarGuards, async (req, 
   if (scope !== "pending" && scope !== "all") {
     return res.status(400).json({ error: "Bulk sync scope must be 'pending' or 'all'." });
   }
-  const baseWhere = and26(
-    eq34(topscholarPlanIds.businessAccountId, businessAccountId),
-    eq34(topscholarPlanIds.enabled, "true")
+  const baseWhere = and27(
+    eq35(topscholarPlanIds.businessAccountId, businessAccountId),
+    eq35(topscholarPlanIds.enabled, "true")
   );
-  const where = scope === "pending" ? and26(baseWhere, sql20`NOT (${completedPlanEmbeddingCondition(businessAccountId)})`) : baseWhere;
+  const where = scope === "pending" ? and27(baseWhere, sql20`NOT (${completedPlanEmbeddingCondition(businessAccountId)})`) : baseWhere;
   const selectedPlans = await db.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(where);
   const planIds = selectedPlans.map((plan) => plan.planId);
   if (planIds.length === 0) {
@@ -73042,14 +73173,14 @@ router4.get("/api/topscholar/resolutions", ...topscholarGuards, async (req, res)
   const { limit, offset } = parsePageParams(req, 50, 500);
   const q = parseSearch(req);
   const planId = typeof req.query?.planId === "string" ? req.query.planId.trim() : "";
-  const conds = [eq34(topscholarPlanCpResolutions.businessAccountId, businessAccountId)];
-  if (planId) conds.push(eq34(topscholarPlanCpResolutions.planId, planId));
+  const conds = [eq35(topscholarPlanCpResolutions.businessAccountId, businessAccountId)];
+  if (planId) conds.push(eq35(topscholarPlanCpResolutions.planId, planId));
   if (q) {
     conds.push(
       sql20`(${topscholarPlanCpResolutions.cpId} ILIKE ${`%${q}%`} OR ${topscholarPlanCpResolutions.cpName} ILIKE ${`%${q}%`} OR ${topscholarPlanCpResolutions.label} ILIKE ${`%${q}%`})`
     );
   }
-  const where = and26(...conds);
+  const where = and27(...conds);
   const [rows, totalRow] = await Promise.all([
     db.select().from(topscholarPlanCpResolutions).where(where).orderBy(sql20`${topscholarPlanCpResolutions.lastResolvedAt} DESC NULLS LAST`, desc10(topscholarPlanCpResolutions.updatedAt)).limit(limit).offset(offset),
     db.select({ count: sql20`count(*)::int` }).from(topscholarPlanCpResolutions).where(where)
@@ -73061,13 +73192,13 @@ router4.get("/api/topscholar/resolutions", ...topscholarGuards, async (req, res)
       cpId: topscholarContentSync.cpId,
       status: topscholarContentSync.status,
       lastError: topscholarContentSync.lastError
-    }).from(topscholarContentSync).where(and26(
-      eq34(topscholarContentSync.businessAccountId, businessAccountId),
+    }).from(topscholarContentSync).where(and27(
+      eq35(topscholarContentSync.businessAccountId, businessAccountId),
       inArray5(topscholarContentSync.cpId, cpIds)
     )),
-    planId ? db.select({ id: topscholarPlanRuns.id }).from(topscholarPlanRuns).where(and26(
-      eq34(topscholarPlanRuns.businessAccountId, businessAccountId),
-      eq34(topscholarPlanRuns.planId, planId)
+    planId ? db.select({ id: topscholarPlanRuns.id }).from(topscholarPlanRuns).where(and27(
+      eq35(topscholarPlanRuns.businessAccountId, businessAccountId),
+      eq35(topscholarPlanRuns.planId, planId)
     )).orderBy(desc10(topscholarPlanRuns.updatedAt)).limit(1) : Promise.resolve([])
   ]);
   const syncByCpId = new Map(syncRows.map((row) => [row.cpId, row]));
@@ -73076,8 +73207,8 @@ router4.get("/api/topscholar/resolutions", ...topscholarGuards, async (req, res)
     cpId: topscholarPlanRunItems.cpId,
     status: topscholarPlanRunItems.status,
     error: topscholarPlanRunItems.error
-  }).from(topscholarPlanRunItems).where(and26(
-    eq34(topscholarPlanRunItems.runId, latestRunId),
+  }).from(topscholarPlanRunItems).where(and27(
+    eq35(topscholarPlanRunItems.runId, latestRunId),
     inArray5(topscholarPlanRunItems.cpId, cpIds)
   )) : [];
   const itemByCpId = new Map(itemRows.map((row) => [row.cpId, row]));
@@ -73111,7 +73242,7 @@ router4.post("/api/topscholar/resolve", ...topscholarGuards, async (req, res) =>
   } else if (typeof req.body?.text === "string") {
     planIds = req.body.text.split(/[\r\n,]+/).map((p) => p.trim()).filter(Boolean);
   } else {
-    const saved = await db.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(eq34(topscholarPlanIds.businessAccountId, businessAccountId));
+    const saved = await db.select({ planId: topscholarPlanIds.planId }).from(topscholarPlanIds).where(eq35(topscholarPlanIds.businessAccountId, businessAccountId));
     planIds = saved.map((s) => s.planId);
   }
   planIds = Array.from(new Set(planIds));
@@ -73188,8 +73319,8 @@ router4.get("/api/topscholar/students", ...topscholarGuards, async (req, res) =>
     cpId: conversations.topscholarCpId,
     createdAt: conversations.createdAt,
     updatedAt: conversations.updatedAt
-  }).from(conversations).where(and26(eq34(conversations.businessAccountId, businessAccountId), isNotNull3(conversations.topscholarCpId))).orderBy(desc10(conversations.updatedAt)).limit(200);
-  const mappings = await db.select().from(topscholarCpMappings).where(eq34(topscholarCpMappings.businessAccountId, businessAccountId));
+  }).from(conversations).where(and27(eq35(conversations.businessAccountId, businessAccountId), isNotNull3(conversations.topscholarCpId))).orderBy(desc10(conversations.updatedAt)).limit(200);
+  const mappings = await db.select().from(topscholarCpMappings).where(eq35(topscholarCpMappings.businessAccountId, businessAccountId));
   const byCp = new Map(mappings.map((m) => [m.cpId, m]));
   const students = rows.map((r) => {
     const m = r.cpId ? byCp.get(r.cpId) : void 0;
@@ -73222,14 +73353,14 @@ async function listTesterScopeMetadata(businessAccountId) {
     cpName: topscholarCpMappings.cpName
   }).from(topscholarCpMappings).innerJoin(
     topscholarContentSync,
-    and26(
-      eq34(topscholarContentSync.businessAccountId, topscholarCpMappings.businessAccountId),
-      eq34(topscholarContentSync.cpId, topscholarCpMappings.cpId)
+    and27(
+      eq35(topscholarContentSync.businessAccountId, topscholarCpMappings.businessAccountId),
+      eq35(topscholarContentSync.cpId, topscholarCpMappings.cpId)
     )
   ).where(
-    and26(
-      eq34(topscholarCpMappings.businessAccountId, businessAccountId),
-      eq34(topscholarContentSync.status, "completed"),
+    and27(
+      eq35(topscholarCpMappings.businessAccountId, businessAccountId),
+      eq35(topscholarContentSync.status, "completed"),
       gt2(topscholarContentSync.chunkCount, 0)
     )
   );
@@ -73494,13 +73625,13 @@ init_config();
 init_tokenService();
 import { Router as Router5 } from "express";
 import crypto10 from "crypto";
-import { eq as eq37 } from "drizzle-orm";
+import { eq as eq38 } from "drizzle-orm";
 
 // server/services/topscholar/analyticsService.ts
 init_db();
 init_schema();
 init_scopeResolver();
-import { and as and27, eq as eq35, sql as sql21, desc as desc11, asc as asc4, isNotNull as isNotNull4, inArray as inArray6, gte as gte5, lte as lte3 } from "drizzle-orm";
+import { and as and28, eq as eq36, sql as sql21, desc as desc11, asc as asc4, isNotNull as isNotNull4, inArray as inArray6, gte as gte5, lte as lte3 } from "drizzle-orm";
 var buildLabel3 = (board, medium, grade) => [board, medium, grade].filter(Boolean).join(" \xB7 ");
 async function resolveScopeCpIds(businessAccountId, scope) {
   if (scope && hasScope(scope)) {
@@ -73510,9 +73641,9 @@ async function resolveScopeCpIds(businessAccountId, scope) {
 }
 function baseConversationConditions(businessAccountId, cpIds, filters) {
   const conds = [
-    eq35(conversations.businessAccountId, businessAccountId),
+    eq36(conversations.businessAccountId, businessAccountId),
     isNotNull4(conversations.topscholarCpId),
-    eq35(conversations.awaitingVerification, false),
+    eq36(conversations.awaitingVerification, false),
     sql21`${conversations.isInternalTest} = 'false'`
   ];
   if (cpIds && cpIds.length > 0) conds.push(inArray6(conversations.topscholarCpId, cpIds));
@@ -73618,15 +73749,15 @@ async function getOverview(businessAccountId, filters) {
     closedSessions: sql21`count(*) filter (where ${conversations.closedAt} is not null)::int`,
     avgDurationSeconds: sql21`coalesce(avg(extract(epoch from (${conversations.closedAt} - ${conversations.createdAt}))) filter (where ${conversations.closedAt} is not null), 0)::float`,
     medianDurationSeconds: sql21`coalesce(percentile_cont(0.5) within group (order by extract(epoch from (${conversations.closedAt} - ${conversations.createdAt}))) filter (where ${conversations.closedAt} is not null), 0)::float`
-  }).from(conversations).where(and27(...conds));
+  }).from(conversations).where(and28(...conds));
   const escalationBySubject = await db.select({
     subject: sql21`coalesce(${conversations.subject}, 'Unspecified')`,
     count: sql21`count(*)::int`
-  }).from(conversations).where(and27(ESCALATED, ...conds)).groupBy(sql21`coalesce(${conversations.subject}, 'Unspecified')`).orderBy(sql21`count(*) desc`);
-  const [qAgg] = await db.select({ totalQuestions: sql21`count(*)::int` }).from(messages).innerJoin(conversations, eq35(messages.conversationId, conversations.id)).where(and27(eq35(messages.role, "user"), ...conds));
+  }).from(conversations).where(and28(ESCALATED, ...conds)).groupBy(sql21`coalesce(${conversations.subject}, 'Unspecified')`).orderBy(sql21`count(*) desc`);
+  const [qAgg] = await db.select({ totalQuestions: sql21`count(*)::int` }).from(messages).innerJoin(conversations, eq36(messages.conversationId, conversations.id)).where(and28(eq36(messages.role, "user"), ...conds));
   const spans = db.select({
     span: sql21`extract(epoch from (max(${messages.createdAt}) - min(${messages.createdAt})))`.as("span")
-  }).from(messages).innerJoin(conversations, eq35(messages.conversationId, conversations.id)).where(and27(...conds)).groupBy(conversations.id).as("spans");
+  }).from(messages).innerJoin(conversations, eq36(messages.conversationId, conversations.id)).where(and28(...conds)).groupBy(conversations.id).as("spans");
   const [activeAgg] = await db.select({
     sessions: sql21`count(*)::int`,
     avgActiveSeconds: sql21`coalesce(avg(${spans.span}), 0)::float`,
@@ -73683,12 +73814,12 @@ async function getTopQuestions(businessAccountId, filters, limit = 10) {
   const cpIds = await resolveScopeCpIds(businessAccountId, filters.scope);
   if (cpIds && cpIds.length === 0) return { topics: [], subtopics: [], questions: [] };
   const conds = baseConversationConditions(businessAccountId, cpIds, filters);
-  const topicRows = await db.select({ label: conversations.category, count: sql21`count(*)::int` }).from(conversations).where(and27(...conds, isNotNull4(conversations.category))).groupBy(conversations.category).orderBy(desc11(sql21`count(*)`)).limit(limit);
-  const subtopicRows = await db.select({ label: conversations.subcategory, count: sql21`count(*)::int` }).from(conversations).where(and27(...conds, isNotNull4(conversations.subcategory))).groupBy(conversations.subcategory).orderBy(desc11(sql21`count(*)`)).limit(limit);
+  const topicRows = await db.select({ label: conversations.category, count: sql21`count(*)::int` }).from(conversations).where(and28(...conds, isNotNull4(conversations.category))).groupBy(conversations.category).orderBy(desc11(sql21`count(*)`)).limit(limit);
+  const subtopicRows = await db.select({ label: conversations.subcategory, count: sql21`count(*)::int` }).from(conversations).where(and28(...conds, isNotNull4(conversations.subcategory))).groupBy(conversations.subcategory).orderBy(desc11(sql21`count(*)`)).limit(limit);
   const questionRows = await db.select({
     text: sql21`min(${messages.content})`,
     count: sql21`count(*)::int`
-  }).from(messages).innerJoin(conversations, eq35(messages.conversationId, conversations.id)).where(and27(eq35(messages.role, "user"), sql21`length(trim(${messages.content})) > 0`, ...conds)).groupBy(sql21`lower(trim(${messages.content}))`).orderBy(desc11(sql21`count(*)`)).limit(limit);
+  }).from(messages).innerJoin(conversations, eq36(messages.conversationId, conversations.id)).where(and28(eq36(messages.role, "user"), sql21`length(trim(${messages.content})) > 0`, ...conds)).groupBy(sql21`lower(trim(${messages.content}))`).orderBy(desc11(sql21`count(*)`)).limit(limit);
   return {
     topics: topicRows.map((r) => ({ label: r.label || "Uncategorized", count: r.count })),
     subtopics: subtopicRows.map((r) => ({ label: r.label || "Other", count: r.count })),
@@ -73720,10 +73851,10 @@ async function getCurriculumBreakdown(businessAccountId, filters) {
     count: sql21`count(*)::int`,
     resolved: sql21`count(*) filter (where ${RESOLVED_FIRST_PASS} or ${RESOLVED_AFTER_RETRY})::int`,
     escalated: sql21`count(*) filter (where ${ESCALATED})::int`
-  }).from(conversations).where(and27(...conds)).groupBy(conversations.topscholarCpId);
-  const perCpQ = await db.select({ cpId: conversations.topscholarCpId, count: sql21`count(*)::int` }).from(messages).innerJoin(conversations, eq35(messages.conversationId, conversations.id)).where(and27(eq35(messages.role, "user"), ...conds)).groupBy(conversations.topscholarCpId);
+  }).from(conversations).where(and28(...conds)).groupBy(conversations.topscholarCpId);
+  const perCpQ = await db.select({ cpId: conversations.topscholarCpId, count: sql21`count(*)::int` }).from(messages).innerJoin(conversations, eq36(messages.conversationId, conversations.id)).where(and28(eq36(messages.role, "user"), ...conds)).groupBy(conversations.topscholarCpId);
   const qByCp = new Map(perCpQ.map((r) => [r.cpId, r.count]));
-  const mappings = await db.select().from(topscholarCpMappings).where(eq35(topscholarCpMappings.businessAccountId, businessAccountId));
+  const mappings = await db.select().from(topscholarCpMappings).where(eq36(topscholarCpMappings.businessAccountId, businessAccountId));
   const byCp = new Map(mappings.map((m) => [m.cpId, m]));
   const subjects = /* @__PURE__ */ new Map();
   const grades = /* @__PURE__ */ new Map();
@@ -73748,7 +73879,7 @@ async function getCurriculumBreakdown(businessAccountId, filters) {
     foldInto(boards, board, add);
     foldInto(mediums, medium, add);
   }
-  const topicRows = await db.select({ label: conversations.subcategory, count: sql21`count(*)::int` }).from(conversations).where(and27(...conds, isNotNull4(conversations.subcategory))).groupBy(conversations.subcategory).orderBy(desc11(sql21`count(*)`)).limit(15);
+  const topicRows = await db.select({ label: conversations.subcategory, count: sql21`count(*)::int` }).from(conversations).where(and28(...conds, isNotNull4(conversations.subcategory))).groupBy(conversations.subcategory).orderBy(desc11(sql21`count(*)`)).limit(15);
   return {
     bySubject: toSortedRows(subjects),
     byGrade: toSortedRows(grades),
@@ -73765,11 +73896,11 @@ async function getEngagementTrends(businessAccountId, filters, bucket = "day") {
   const convRows = await db.select({
     bucket: sql21`to_char(date_trunc(${unit}, ${conversations.createdAt}), 'YYYY-MM-DD')`,
     count: sql21`count(*)::int`
-  }).from(conversations).where(and27(...conds)).groupBy(sql21`date_trunc(${unit}, ${conversations.createdAt})`).orderBy(sql21`date_trunc(${unit}, ${conversations.createdAt})`);
+  }).from(conversations).where(and28(...conds)).groupBy(sql21`date_trunc(${unit}, ${conversations.createdAt})`).orderBy(sql21`date_trunc(${unit}, ${conversations.createdAt})`);
   const qRows = await db.select({
     bucket: sql21`to_char(date_trunc(${unit}, ${messages.createdAt}), 'YYYY-MM-DD')`,
     count: sql21`count(*)::int`
-  }).from(messages).innerJoin(conversations, eq35(messages.conversationId, conversations.id)).where(and27(eq35(messages.role, "user"), ...conds)).groupBy(sql21`date_trunc(${unit}, ${messages.createdAt})`).orderBy(sql21`date_trunc(${unit}, ${messages.createdAt})`);
+  }).from(messages).innerJoin(conversations, eq36(messages.conversationId, conversations.id)).where(and28(eq36(messages.role, "user"), ...conds)).groupBy(sql21`date_trunc(${unit}, ${messages.createdAt})`).orderBy(sql21`date_trunc(${unit}, ${messages.createdAt})`);
   const qByBucket = new Map(qRows.map((r) => [r.bucket, r.count]));
   return convRows.map((r) => ({
     bucket: r.bucket,
@@ -73797,17 +73928,17 @@ async function getAdoption(businessAccountId, filters) {
     dau: sql21`count(distinct ${STUDENT_KEY}) filter (where ${messages.createdAt} > ${asOf}::timestamp - interval '1 day')::int`,
     wau: sql21`count(distinct ${STUDENT_KEY}) filter (where ${messages.createdAt} > ${asOf}::timestamp - interval '7 days')::int`,
     mau: sql21`count(distinct ${STUDENT_KEY}) filter (where ${messages.createdAt} > ${asOf}::timestamp - interval '30 days')::int`
-  }).from(messages).innerJoin(conversations, eq35(messages.conversationId, conversations.id)).where(and27(eq35(messages.role, "user"), lte3(messages.createdAt, asOf), ...scopeOnly));
+  }).from(messages).innerJoin(conversations, eq36(messages.conversationId, conversations.id)).where(and28(eq36(messages.role, "user"), lte3(messages.createdAt, asOf), ...scopeOnly));
   const dailyConds = [...scopeOnly];
   if (filters.from) dailyConds.push(gte5(messages.createdAt, filters.from));
   if (filters.to) dailyConds.push(lte3(messages.createdAt, filters.to));
   const daily = await db.select({
     bucket: sql21`to_char(date_trunc('day', ${messages.createdAt}), 'YYYY-MM-DD')`,
     activeStudents: sql21`count(distinct ${STUDENT_KEY})::int`
-  }).from(messages).innerJoin(conversations, eq35(messages.conversationId, conversations.id)).where(and27(eq35(messages.role, "user"), ...dailyConds)).groupBy(sql21`date_trunc('day', ${messages.createdAt})`).orderBy(sql21`date_trunc('day', ${messages.createdAt})`);
+  }).from(messages).innerJoin(conversations, eq36(messages.conversationId, conversations.id)).where(and28(eq36(messages.role, "user"), ...dailyConds)).groupBy(sql21`date_trunc('day', ${messages.createdAt})`).orderBy(sql21`date_trunc('day', ${messages.createdAt})`);
   const rangeStart = filters.from ?? null;
-  const scopeWhere = and27(...scopeOnly);
-  const rangeWhere = and27(...baseConversationConditions(businessAccountId, cpIds, filters));
+  const scopeWhere = and28(...scopeOnly);
+  const rangeWhere = and28(...baseConversationConditions(businessAccountId, cpIds, filters));
   const cohortResult = await db.execute(sql21`
     with first_seen as (
       select ${STUDENT_KEY} as student, min(${conversations.createdAt}) as first_at
@@ -73856,8 +73987,8 @@ async function getDoubtsExport(businessAccountId, filters, limit = DOUBT_EXPORT_
     retryStatus: conversations.doubtRetryStatus,
     conversationId: conversations.id,
     doubtText: messages.content
-  }).from(messages).innerJoin(conversations, eq35(messages.conversationId, conversations.id)).where(and27(eq35(messages.role, "user"), sql21`length(trim(${messages.content})) > 0`, ...conds)).orderBy(desc11(messages.createdAt)).limit(Math.min(limit, DOUBT_EXPORT_MAX_ROWS));
-  const mappings = await db.select().from(topscholarCpMappings).where(eq35(topscholarCpMappings.businessAccountId, businessAccountId));
+  }).from(messages).innerJoin(conversations, eq36(messages.conversationId, conversations.id)).where(and28(eq36(messages.role, "user"), sql21`length(trim(${messages.content})) > 0`, ...conds)).orderBy(desc11(messages.createdAt)).limit(Math.min(limit, DOUBT_EXPORT_MAX_ROWS));
+  const mappings = await db.select().from(topscholarCpMappings).where(eq36(topscholarCpMappings.businessAccountId, businessAccountId));
   const byCp = new Map(mappings.map((m) => [m.cpId, m]));
   return rows.map((r) => {
     const m = byCp.get(r.cpId || "");
@@ -73899,8 +74030,8 @@ async function getStudentRoster(businessAccountId, filters, opts = {}) {
     questionCount: sql21`coalesce(sum((select count(*) from ${messages} m where m.conversation_id = ${conversations.id} and m.role = 'user')), 0)::int`,
     lastActive: sql21`max(${conversations.updatedAt})`,
     cpId: sql21`max(${conversations.topscholarCpId})`
-  }).from(conversations).where(and27(...conds)).groupBy(sql21`coalesce(${conversations.studentId}, ${conversations.id})`).orderBy(desc11(sql21`max(${conversations.updatedAt})`)).limit(limit);
-  const mappings = await db.select().from(topscholarCpMappings).where(eq35(topscholarCpMappings.businessAccountId, businessAccountId));
+  }).from(conversations).where(and28(...conds)).groupBy(sql21`coalesce(${conversations.studentId}, ${conversations.id})`).orderBy(desc11(sql21`max(${conversations.updatedAt})`)).limit(limit);
+  const mappings = await db.select().from(topscholarCpMappings).where(eq36(topscholarCpMappings.businessAccountId, businessAccountId));
   const byCp = new Map(mappings.map((m) => [m.cpId, m]));
   return rows.map((r) => {
     const m = r.cpId ? byCp.get(r.cpId) : void 0;
@@ -73944,12 +74075,12 @@ async function getStudentRosterPage(businessAccountId, filters, opts = {}) {
     questionCount: sql21`coalesce(sum((select count(*) from ${messages} m where m.conversation_id = ${conversations.id} and m.role = 'user')), 0)::int`,
     lastActive: sql21`date_trunc('milliseconds', max(${conversations.updatedAt}))`,
     cpId: sql21`max(${conversations.topscholarCpId})`
-  }).from(conversations).where(and27(...conds)).groupBy(sql21`coalesce(${conversations.studentId}, ${conversations.id})`).having(having.length ? and27(...having) : sql21`true`).orderBy(desc11(maxUpdated), desc11(studentKey)).limit(PORTAL_CHUNK_SIZE + 1);
+  }).from(conversations).where(and28(...conds)).groupBy(sql21`coalesce(${conversations.studentId}, ${conversations.id})`).having(having.length ? and28(...having) : sql21`true`).orderBy(desc11(maxUpdated), desc11(studentKey)).limit(PORTAL_CHUNK_SIZE + 1);
   const hasMore = rows.length > PORTAL_CHUNK_SIZE;
   const pageRows = hasMore ? rows.slice(0, PORTAL_CHUNK_SIZE) : rows;
   const last = pageRows[pageRows.length - 1];
   const nextCursor = hasMore && last ? encodePortalCursor(last.lastActive, last.studentKey) : null;
-  const mappings = await db.select().from(topscholarCpMappings).where(eq35(topscholarCpMappings.businessAccountId, businessAccountId));
+  const mappings = await db.select().from(topscholarCpMappings).where(eq36(topscholarCpMappings.businessAccountId, businessAccountId));
   const byCp = new Map(mappings.map((m) => [m.cpId, m]));
   return {
     items: pageRows.map((r) => {
@@ -73982,11 +74113,11 @@ async function getStudentReport(businessAccountId, studentId, filters = {}, opts
     if (effectiveCpIds.length === 0) return null;
   }
   const conds = [
-    eq35(conversations.businessAccountId, businessAccountId),
+    eq36(conversations.businessAccountId, businessAccountId),
     isNotNull4(conversations.topscholarCpId),
-    eq35(conversations.awaitingVerification, false),
+    eq36(conversations.awaitingVerification, false),
     sql21`${conversations.isInternalTest} = 'false'`,
-    eq35(conversations.studentId, sid)
+    eq36(conversations.studentId, sid)
   ];
   if (effectiveCpIds) conds.push(inArray6(conversations.topscholarCpId, effectiveCpIds));
   if (filters.from) conds.push(gte5(conversations.createdAt, filters.from));
@@ -73998,19 +74129,19 @@ async function getStudentReport(businessAccountId, studentId, filters = {}, opts
     sentiment: conversations.sentiment,
     createdAt: conversations.createdAt,
     updatedAt: conversations.updatedAt
-  }).from(conversations).where(and27(...conds)).orderBy(desc11(conversations.updatedAt));
+  }).from(conversations).where(and28(...conds)).orderBy(desc11(conversations.updatedAt));
   if (convRows.length === 0) return null;
   const convIds = convRows.map((r) => r.id);
-  const [qAgg] = await db.select({ count: sql21`count(*)::int` }).from(messages).where(and27(eq35(messages.role, "user"), inArray6(messages.conversationId, convIds)));
+  const [qAgg] = await db.select({ count: sql21`count(*)::int` }).from(messages).where(and28(eq36(messages.role, "user"), inArray6(messages.conversationId, convIds)));
   const history = await db.select({
     text: messages.content,
     createdAt: messages.createdAt,
     conversationId: messages.conversationId
-  }).from(messages).where(and27(eq35(messages.role, "user"), inArray6(messages.conversationId, convIds))).orderBy(desc11(messages.createdAt)).limit(100);
-  const mappings = await db.select().from(topscholarCpMappings).where(eq35(topscholarCpMappings.businessAccountId, businessAccountId));
+  }).from(messages).where(and28(eq36(messages.role, "user"), inArray6(messages.conversationId, convIds))).orderBy(desc11(messages.createdAt)).limit(100);
+  const mappings = await db.select().from(topscholarCpMappings).where(eq36(topscholarCpMappings.businessAccountId, businessAccountId));
   const byCp = new Map(mappings.map((m) => [m.cpId, m]));
   const sentimentByConv = new Map(convRows.map((r) => [r.id, r.sentiment]));
-  const qPerConv = await db.select({ conversationId: messages.conversationId, count: sql21`count(*)::int` }).from(messages).where(and27(eq35(messages.role, "user"), inArray6(messages.conversationId, convIds))).groupBy(messages.conversationId);
+  const qPerConv = await db.select({ conversationId: messages.conversationId, count: sql21`count(*)::int` }).from(messages).where(and28(eq36(messages.role, "user"), inArray6(messages.conversationId, convIds))).groupBy(messages.conversationId);
   const qByConv = new Map(qPerConv.map((r) => [r.conversationId, r.count]));
   const subjects = /* @__PURE__ */ new Map();
   const sentiment = { positive: 0, neutral: 0, confused: 0, unlabeled: 0 };
@@ -74059,7 +74190,7 @@ async function getStudentConversations(businessAccountId, studentId, filters = {
   const cpIds = await resolveScopeCpIds(businessAccountId, filters.scope);
   if (cpIds && cpIds.length === 0) return empty;
   const conds = baseConversationConditions(businessAccountId, cpIds, filters);
-  conds.push(eq35(conversations.studentId, sid));
+  conds.push(eq36(conversations.studentId, sid));
   const sortTs = sql21`date_trunc('milliseconds', ${conversations.updatedAt})`;
   if (opts.updatedAfter) {
     conds.push(sql21`${sortTs} >= ${opts.updatedAfter}`);
@@ -74077,7 +74208,7 @@ async function getStudentConversations(businessAccountId, studentId, filters = {
     sentiment: conversations.sentiment,
     startedAt: conversations.createdAt,
     lastActive: sql21`date_trunc('milliseconds', ${conversations.updatedAt})`
-  }).from(conversations).where(and27(...conds)).orderBy(desc11(sortTs), desc11(conversations.id)).limit(PORTAL_CHUNK_SIZE + 1);
+  }).from(conversations).where(and28(...conds)).orderBy(desc11(sortTs), desc11(conversations.id)).limit(PORTAL_CHUNK_SIZE + 1);
   const hasMore = fetched.length > PORTAL_CHUNK_SIZE;
   const rows = hasMore ? fetched.slice(0, PORTAL_CHUNK_SIZE) : fetched;
   const lastRow = rows[rows.length - 1];
@@ -74090,7 +74221,7 @@ async function getStudentConversations(businessAccountId, studentId, filters = {
     questionCount: sql21`count(*) filter (where ${messages.role} = 'user')::int`
   }).from(messages).where(inArray6(messages.conversationId, convIds)).groupBy(messages.conversationId);
   const byConv = new Map(counts.map((c) => [c.conversationId, c]));
-  const mappings = await db.select().from(topscholarCpMappings).where(eq35(topscholarCpMappings.businessAccountId, businessAccountId));
+  const mappings = await db.select().from(topscholarCpMappings).where(eq36(topscholarCpMappings.businessAccountId, businessAccountId));
   const byCp = new Map(mappings.map((m) => [m.cpId, m]));
   return {
     items: rows.map((r) => {
@@ -74118,8 +74249,8 @@ async function getConversationTranscript(businessAccountId, studentId, conversat
   const cpIds = await resolveScopeCpIds(businessAccountId, filters.scope);
   if (cpIds && cpIds.length === 0) return null;
   const conds = baseConversationConditions(businessAccountId, cpIds, filters);
-  conds.push(eq35(conversations.studentId, sid));
-  conds.push(eq35(conversations.id, cid));
+  conds.push(eq36(conversations.studentId, sid));
+  conds.push(eq36(conversations.id, cid));
   const [conv] = await db.select({
     id: conversations.id,
     title: conversations.title,
@@ -74128,15 +74259,15 @@ async function getConversationTranscript(businessAccountId, studentId, conversat
     sentiment: conversations.sentiment,
     startedAt: conversations.createdAt,
     lastActive: conversations.updatedAt
-  }).from(conversations).where(and27(...conds));
+  }).from(conversations).where(and28(...conds));
   if (!conv) return null;
   const msgs = await db.select({
     role: messages.role,
     content: messages.content,
     imageUrl: messages.imageUrl,
     createdAt: messages.createdAt
-  }).from(messages).where(eq35(messages.conversationId, cid)).orderBy(asc4(messages.createdAt));
-  const mappings = await db.select().from(topscholarCpMappings).where(eq35(topscholarCpMappings.businessAccountId, businessAccountId));
+  }).from(messages).where(eq36(messages.conversationId, cid)).orderBy(asc4(messages.createdAt));
+  const mappings = await db.select().from(topscholarCpMappings).where(eq36(topscholarCpMappings.businessAccountId, businessAccountId));
   const m = conv.cpId ? new Map(mappings.map((x) => [x.cpId, x])).get(conv.cpId) : void 0;
   return {
     conversationId: conv.id,
@@ -74161,16 +74292,16 @@ async function getConversationTranscript(businessAccountId, studentId, conversat
 init_db();
 init_schema();
 import OpenAI20 from "openai";
-import { and as and28, eq as eq36, isNull as isNull8, isNotNull as isNotNull5, desc as desc12, sql as sql22 } from "drizzle-orm";
+import { and as and29, eq as eq37, isNull as isNull8, isNotNull as isNotNull5, desc as desc12, sql as sql22 } from "drizzle-orm";
 var VALID = /* @__PURE__ */ new Set(["positive", "neutral", "confused"]);
 var inFlight = /* @__PURE__ */ new Set();
-function extractLabel(text2) {
-  const t = (text2 || "").toLowerCase();
+function extractLabel(text3) {
+  const t = (text3 || "").toLowerCase();
   const m = t.match(/positive|neutral|confused/);
   return m && VALID.has(m[0]) ? m[0] : null;
 }
 async function classifyOne(conversationId, openai, model) {
-  const msgs = await db.select({ role: messages.role, content: messages.content }).from(messages).where(eq36(messages.conversationId, conversationId)).orderBy(messages.createdAt).limit(30);
+  const msgs = await db.select({ role: messages.role, content: messages.content }).from(messages).where(eq37(messages.conversationId, conversationId)).orderBy(messages.createdAt).limit(30);
   if (msgs.length === 0) return null;
   const transcript = msgs.map((m) => `${m.role}: ${(m.content || "").substring(0, 200)}`).join("\n");
   const response = await openai.chat.completions.create({
@@ -74192,10 +74323,10 @@ One word:` }
 }
 async function batchEnrichSentiment(businessAccountId, limit = 15) {
   const pending = await db.select({ id: conversations.id }).from(conversations).where(
-    and28(
-      eq36(conversations.businessAccountId, businessAccountId),
+    and29(
+      eq37(conversations.businessAccountId, businessAccountId),
       isNotNull5(conversations.topscholarCpId),
-      eq36(conversations.awaitingVerification, false),
+      eq37(conversations.awaitingVerification, false),
       sql22`${conversations.isInternalTest} = 'false'`,
       isNull8(conversations.sentiment)
     )
@@ -74224,7 +74355,7 @@ async function batchEnrichSentiment(businessAccountId, limit = 15) {
     try {
       const label = await classifyOne(row.id, openai, model);
       if (label) {
-        await db.update(conversations).set({ sentiment: label }).where(eq36(conversations.id, row.id));
+        await db.update(conversations).set({ sentiment: label }).where(eq37(conversations.id, row.id));
         processed++;
       } else {
         failed++;
@@ -74410,7 +74541,7 @@ router5.get("/api/topscholar/analytics/students/:studentId", ...adminGuards, asy
 router5.get("/api/topscholar/analytics/student-report", async (req, res) => {
   const token = typeof req.query.token === "string" ? req.query.token : "";
   if (!token) return res.status(401).json({ error: "A student report token is required." });
-  const [account] = await db.select().from(businessAccounts).where(eq37(businessAccounts.id, TOPSCHOLAR_ACCOUNT_ID));
+  const [account] = await db.select().from(businessAccounts).where(eq38(businessAccounts.id, TOPSCHOLAR_ACCOUNT_ID));
   if (!account) return res.status(403).json({ error: "TopScholar is not configured." });
   const cfg = getTopscholarConfig(account);
   if (!cfg.tokenSecret) return res.status(403).json({ error: "Student reports are not enabled." });
@@ -74445,7 +74576,7 @@ async function requirePortalAuth(req, res, next) {
   if (!provided) {
     return res.status(401).json({ error: "Missing portal API credential." });
   }
-  const [account] = await db.select().from(businessAccounts).where(eq37(businessAccounts.id, TOPSCHOLAR_ACCOUNT_ID));
+  const [account] = await db.select().from(businessAccounts).where(eq38(businessAccounts.id, TOPSCHOLAR_ACCOUNT_ID));
   if (!account) return res.status(403).json({ error: "TopScholar is not configured." });
   const cfg = getTopscholarConfig(account);
   if (!cfg.tokenSecret) {
@@ -74459,7 +74590,7 @@ async function requirePortalAuth(req, res, next) {
 }
 router5.get("/api/topscholar/portal/self-test", ...adminGuards, async (req, res) => {
   const businessAccountId = getBusinessAccountId4(req);
-  const [account] = await db.select().from(businessAccounts).where(eq37(businessAccounts.id, businessAccountId));
+  const [account] = await db.select().from(businessAccounts).where(eq38(businessAccounts.id, businessAccountId));
   const cfg = account ? getTopscholarConfig(account) : null;
   if (!cfg?.tokenSecret) {
     return res.json({
@@ -74537,13 +74668,13 @@ init_schema();
 init_auth();
 init_verification();
 import { Router as Router6 } from "express";
-import { and as and35, eq as eq45 } from "drizzle-orm";
+import { and as and36, eq as eq46 } from "drizzle-orm";
 import { z } from "zod";
 
 // server/services/verification/seed.ts
 init_db();
 init_schema();
-import { and as and30, eq as eq39 } from "drizzle-orm";
+import { and as and31, eq as eq40 } from "drizzle-orm";
 var SEED_NAME = "Student Admission";
 var SEED_DESCRIPTION = "Demo rule set for student admission verification. Clone or edit to customise.";
 var LEGACY_SEED_NAMES = ["Student Admission \u2014 Jain Online"];
@@ -74609,21 +74740,21 @@ var SEED_RULES = [
   }
 ];
 async function ensureSeedRuleSet(businessAccountId) {
-  const existingRows = await db.select().from(verificationRuleSets).where(and30(
-    eq39(verificationRuleSets.businessAccountId, businessAccountId),
-    eq39(verificationRuleSets.isSystemSeed, true)
+  const existingRows = await db.select().from(verificationRuleSets).where(and31(
+    eq40(verificationRuleSets.businessAccountId, businessAccountId),
+    eq40(verificationRuleSets.isSystemSeed, true)
   ));
   let existing = existingRows.find((r) => r.name === SEED_NAME) ?? existingRows.find((r) => LEGACY_SEED_NAMES.includes(r.name));
   if (!existing) {
-    const [legacyByName] = await db.select().from(verificationRuleSets).where(and30(
-      eq39(verificationRuleSets.businessAccountId, businessAccountId),
-      eq39(verificationRuleSets.name, SEED_NAME)
+    const [legacyByName] = await db.select().from(verificationRuleSets).where(and31(
+      eq40(verificationRuleSets.businessAccountId, businessAccountId),
+      eq40(verificationRuleSets.name, SEED_NAME)
     )).limit(1);
     existing = legacyByName;
   }
   if (existing) {
     if (existing.name !== SEED_NAME) {
-      await db.update(verificationRuleSets).set({ name: SEED_NAME, description: SEED_DESCRIPTION }).where(eq39(verificationRuleSets.id, existing.id));
+      await db.update(verificationRuleSets).set({ name: SEED_NAME, description: SEED_DESCRIPTION }).where(eq40(verificationRuleSets.id, existing.id));
     }
     return existing.id;
   }
@@ -74662,7 +74793,7 @@ function getBusinessAccountId5(req) {
 async function requireWhatsappEnabled(req, res, next) {
   const businessAccountId = getBusinessAccountId5(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
-  const [acct] = await db.select({ whatsappEnabled: businessAccounts.whatsappEnabled }).from(businessAccounts).where(eq45(businessAccounts.id, businessAccountId));
+  const [acct] = await db.select({ whatsappEnabled: businessAccounts.whatsappEnabled }).from(businessAccounts).where(eq46(businessAccounts.id, businessAccountId));
   if (!acct || acct.whatsappEnabled !== "true") {
     return res.status(403).json({ error: "WhatsApp is not enabled for this business account" });
   }
@@ -74671,7 +74802,7 @@ async function requireWhatsappEnabled(req, res, next) {
 }
 async function loadOwnedRuleSet(req, res, ruleSetId) {
   const businessAccountId = req.businessAccountId;
-  const [rs] = await db.select().from(verificationRuleSets).where(and35(eq45(verificationRuleSets.id, ruleSetId), eq45(verificationRuleSets.businessAccountId, businessAccountId))).limit(1);
+  const [rs] = await db.select().from(verificationRuleSets).where(and36(eq46(verificationRuleSets.id, ruleSetId), eq46(verificationRuleSets.businessAccountId, businessAccountId))).limit(1);
   if (!rs) {
     res.status(404).json({ error: "Rule set not found" });
     return null;
@@ -74735,7 +74866,7 @@ router6.patch(
       if (typeof name === "string") patch.name = name;
       if (typeof description === "string" || description === null) patch.description = description;
       if (typeof isActive === "boolean") patch.isActive = isActive;
-      const [updated] = await db.update(verificationRuleSets).set(patch).where(eq45(verificationRuleSets.id, req.params.id)).returning();
+      const [updated] = await db.update(verificationRuleSets).set(patch).where(eq46(verificationRuleSets.id, req.params.id)).returning();
       res.json({ ruleSet: updated });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -74751,7 +74882,7 @@ router6.delete(
     try {
       const existing = await loadOwnedRuleSet(req, res, req.params.id);
       if (!existing) return;
-      await db.delete(verificationRuleSets).where(eq45(verificationRuleSets.id, req.params.id));
+      await db.delete(verificationRuleSets).where(eq46(verificationRuleSets.id, req.params.id));
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -74804,7 +74935,7 @@ router6.patch(
     try {
       const owner = await loadOwnedRuleSet(req, res, req.params.ruleSetId);
       if (!owner) return;
-      const [rule] = await db.select().from(verificationRules).where(and35(eq45(verificationRules.id, req.params.ruleId), eq45(verificationRules.ruleSetId, req.params.ruleSetId))).limit(1);
+      const [rule] = await db.select().from(verificationRules).where(and36(eq46(verificationRules.id, req.params.ruleId), eq46(verificationRules.ruleSetId, req.params.ruleSetId))).limit(1);
       if (!rule) return res.status(404).json({ error: "Rule not found" });
       const { name, severity, messageTemplate, config, sortOrder, isActive, ruleType } = req.body || {};
       const patch = { updatedAt: /* @__PURE__ */ new Date() };
@@ -74821,7 +74952,7 @@ router6.patch(
       if (config && typeof config === "object") patch.config = config;
       if (typeof sortOrder === "number") patch.sortOrder = sortOrder;
       if (typeof isActive === "boolean") patch.isActive = isActive;
-      const [updated] = await db.update(verificationRules).set(patch).where(eq45(verificationRules.id, req.params.ruleId)).returning();
+      const [updated] = await db.update(verificationRules).set(patch).where(eq46(verificationRules.id, req.params.ruleId)).returning();
       res.json({ rule: updated });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -74837,7 +74968,7 @@ router6.delete(
     try {
       const owner = await loadOwnedRuleSet(req, res, req.params.ruleSetId);
       if (!owner) return;
-      const result = await db.delete(verificationRules).where(and35(eq45(verificationRules.id, req.params.ruleId), eq45(verificationRules.ruleSetId, req.params.ruleSetId))).returning({ id: verificationRules.id });
+      const result = await db.delete(verificationRules).where(and36(eq46(verificationRules.id, req.params.ruleId), eq46(verificationRules.ruleSetId, req.params.ruleSetId))).returning({ id: verificationRules.id });
       if (result.length === 0) return res.status(404).json({ error: "Rule not found" });
       res.json({ success: true });
     } catch (err) {
@@ -74854,7 +74985,7 @@ router6.post(
     try {
       const businessAccountId = req.businessAccountId;
       const { ruleSetId, notify } = req.body || {};
-      const [lead] = await db.select().from(whatsappLeads).where(and35(eq45(whatsappLeads.id, req.params.leadId), eq45(whatsappLeads.businessAccountId, businessAccountId))).limit(1);
+      const [lead] = await db.select().from(whatsappLeads).where(and36(eq46(whatsappLeads.id, req.params.leadId), eq46(whatsappLeads.businessAccountId, businessAccountId))).limit(1);
       if (!lead) return res.status(404).json({ error: "Lead not found" });
       if (!ruleSetId || typeof ruleSetId !== "string") return res.status(400).json({ error: "ruleSetId required" });
       const result = await runVerification({ leadId: lead.id, ruleSetId });
@@ -74881,7 +75012,7 @@ router6.get(
   async (req, res) => {
     try {
       const businessAccountId = req.businessAccountId;
-      const [lead] = await db.select().from(whatsappLeads).where(and35(eq45(whatsappLeads.id, req.params.leadId), eq45(whatsappLeads.businessAccountId, businessAccountId))).limit(1);
+      const [lead] = await db.select().from(whatsappLeads).where(and36(eq46(whatsappLeads.id, req.params.leadId), eq46(whatsappLeads.businessAccountId, businessAccountId))).limit(1);
       if (!lead) return res.status(404).json({ error: "Lead not found" });
       const result = await getLeadVerification(lead.id);
       res.json({ result });
@@ -75159,28 +75290,28 @@ var WIDGET_LANGUAGE_NAMES = {
   "ms": "Malay",
   "tr": "Turkish"
 };
-async function translateWidgetText(businessAccountId, text2, targetLanguage) {
+async function translateWidgetText(businessAccountId, text3, targetLanguage) {
   const lang = (targetLanguage ?? "").toString().trim();
-  if (!lang || lang === "auto" || lang === "en") return text2;
+  if (!lang || lang === "auto" || lang === "en") return text3;
   const langName = WIDGET_LANGUAGE_NAMES[lang];
-  if (!langName) return text2;
+  if (!langName) return text3;
   try {
     const businessAccount = await storage.getBusinessAccount(businessAccountId);
-    if (!businessAccount || !businessAccount.openaiApiKey) return text2;
+    if (!businessAccount || !businessAccount.openaiApiKey) return text3;
     const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: `Translate the following text to ${langName}. Return ONLY the translated text, nothing else. Keep the tone and meaning intact.` },
-        { role: "user", content: text2 }
+        { role: "user", content: text3 }
       ],
       temperature: 0.3,
       max_tokens: 200
     });
-    return completion.choices[0]?.message?.content?.trim() || text2;
+    return completion.choices[0]?.message?.content?.trim() || text3;
   } catch (err) {
     console.error("[translateWidgetText] Failed:", err);
-    return text2;
+    return text3;
   }
 }
 async function resolveTopscholarHistoryScope(businessAccountId, token, plainStudentId) {
@@ -75221,7 +75352,7 @@ async function resolveTopscholarHistoryScope(businessAccountId, token, plainStud
 }
 async function registerRoutes(app2) {
   try {
-    const legacyK12Accounts = await db.update(businessAccounts).set({ k12EducationEnabled: "true", systemMode: "full" }).where(eq67(businessAccounts.systemMode, "education_k12")).returning({ id: businessAccounts.id, name: businessAccounts.name });
+    const legacyK12Accounts = await db.update(businessAccounts).set({ k12EducationEnabled: "true", systemMode: "full" }).where(eq68(businessAccounts.systemMode, "education_k12")).returning({ id: businessAccounts.id, name: businessAccounts.name });
     if (legacyK12Accounts.length > 0) {
       console.log(`[Migration] Converted ${legacyK12Accounts.length} legacy education_k12 accounts to k12EducationEnabled:`, legacyK12Accounts.map((a) => a.name).join(", "));
     }
@@ -75782,11 +75913,11 @@ async function registerRoutes(app2) {
           }
           return variants;
         };
-        const matchesWithBoundary = (text2, word) => {
+        const matchesWithBoundary = (text3, word) => {
           const variants = normalizeWord(word);
           return variants.some((variant) => {
             const regex = new RegExp(`\\b${variant}\\b`, "i");
-            return regex.test(text2);
+            return regex.test(text3);
           });
         };
         filteredProducts = productsWithMeta.filter((p) => {
@@ -76656,9 +76787,9 @@ You are a friendly AI assistant. Generate a warm, welcoming message for a return
         "ms": "Malay",
         "tr": "Turkish"
       };
-      const translateText = async (text2, targetLang) => {
-        if (!targetLang || targetLang === "auto" || targetLang === "en") return text2;
-        if (!businessAccount.openaiApiKey) return text2;
+      const translateText = async (text3, targetLang) => {
+        if (!targetLang || targetLang === "auto" || targetLang === "en") return text3;
+        if (!businessAccount.openaiApiKey) return text3;
         const langName = LANGUAGE_NAMES[targetLang] || targetLang;
         try {
           const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
@@ -76666,15 +76797,15 @@ You are a friendly AI assistant. Generate a warm, welcoming message for a return
             model: "gpt-4o-mini",
             messages: [
               { role: "system", content: `Translate the following text to ${langName}. Return ONLY the translated text, nothing else. Keep the tone and meaning intact.` },
-              { role: "user", content: text2 }
+              { role: "user", content: text3 }
             ],
             temperature: 0.3,
             max_tokens: 200
           });
-          return completion.choices[0]?.message?.content?.trim() || text2;
+          return completion.choices[0]?.message?.content?.trim() || text3;
         } catch (error) {
           console.error("[Translation] Failed:", error);
-          return text2;
+          return text3;
         }
       };
       const journeys = await storage.getAllJourneys(businessAccountId);
@@ -77027,16 +77158,16 @@ You are a friendly AI assistant. Generate a warm, welcoming message for a return
   });
   app2.post("/api/chat/widget/translate", async (req, res) => {
     try {
-      const { businessAccountId, text: text2, targetLanguage } = req.body;
-      if (!businessAccountId || !text2) {
+      const { businessAccountId, text: text3, targetLanguage } = req.body;
+      if (!businessAccountId || !text3) {
         return res.status(400).json({ error: "businessAccountId and text required" });
       }
       if (!targetLanguage || targetLanguage === "auto" || targetLanguage === "en") {
-        return res.json({ translatedText: text2 });
+        return res.json({ translatedText: text3 });
       }
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
       if (!businessAccount || !businessAccount.openaiApiKey) {
-        return res.json({ translatedText: text2 });
+        return res.json({ translatedText: text3 });
       }
       const LANGUAGE_NAMES = {
         "en": "English",
@@ -77072,7 +77203,7 @@ You are a friendly AI assistant. Generate a warm, welcoming message for a return
       };
       const langName = LANGUAGE_NAMES[targetLanguage];
       if (!langName) {
-        return res.json({ translatedText: text2 });
+        return res.json({ translatedText: text3 });
       }
       try {
         const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
@@ -77080,16 +77211,16 @@ You are a friendly AI assistant. Generate a warm, welcoming message for a return
           model: "gpt-4o-mini",
           messages: [
             { role: "system", content: `Translate the following text to ${langName}. Return ONLY the translated text, nothing else. Keep the tone and meaning intact.` },
-            { role: "user", content: text2 }
+            { role: "user", content: text3 }
           ],
           temperature: 0.3,
           max_tokens: 200
         });
-        const translatedText = completion.choices[0]?.message?.content?.trim() || text2;
+        const translatedText = completion.choices[0]?.message?.content?.trim() || text3;
         return res.json({ translatedText });
       } catch (error) {
         console.error("[Translation] Failed:", error);
-        return res.json({ translatedText: text2 });
+        return res.json({ translatedText: text3 });
       }
     } catch (error) {
       console.error("[Widget Translate] Error:", error);
@@ -77313,16 +77444,16 @@ ${product.description}`;
       const normalizedEmail = email ? email.trim().toLowerCase() : null;
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1e3);
       const conditions = [
-        eq67(leads.businessAccountId, businessAccountId),
+        eq68(leads.businessAccountId, businessAccountId),
         gte12(leads.createdAt, twentyFourHoursAgo)
       ];
       let existingLead = null;
       if (normalizedPhone) {
-        const recentLeads = await db.select().from(leads).where(and57(...conditions, isNotNull6(leads.phone))).limit(50);
+        const recentLeads = await db.select().from(leads).where(and58(...conditions, isNotNull6(leads.phone))).limit(50);
         existingLead = recentLeads.find((l) => l.phone && l.phone.replace(/\D/g, "").slice(-10) === normalizedPhone) || null;
       }
       if (!existingLead && normalizedEmail) {
-        const [found] = await db.select().from(leads).where(and57(...conditions, sql40`LOWER(TRIM(${leads.email})) = ${normalizedEmail}`)).limit(1);
+        const [found] = await db.select().from(leads).where(and58(...conditions, sql40`LOWER(TRIM(${leads.email})) = ${normalizedEmail}`)).limit(1);
         existingLead = found || null;
       }
       let promotedLead = null;
@@ -77333,10 +77464,10 @@ ${product.description}`;
             leadsquaredSyncError: null,
             leadsquaredRetryCount: "0",
             leadsquaredNextRetryAt: null
-          }).where(and57(
-            eq67(leads.id, existingLead.id),
-            eq67(leads.businessAccountId, businessAccountId),
-            eq67(leads.leadsquaredSyncStatus, "disqualified")
+          }).where(and58(
+            eq68(leads.id, existingLead.id),
+            eq68(leads.businessAccountId, businessAccountId),
+            eq68(leads.leadsquaredSyncStatus, "disqualified")
           )).returning();
           if (promoted) {
             console.log("[Widget Lead Capture] Duplicate now qualifies, promoting existing lead:", promoted.id);
@@ -77587,9 +77718,9 @@ ${product.description}`;
             const priorMessages = await storage.getMessagesByConversation(conversationId, businessAccountId);
             if (priorMessages.length > 0) {
               const baseText = "Thank you for providing your mobile number! How can I help you today?";
-              const text2 = await translateWidgetText(businessAccountId, baseText, (req.body?.language ?? "").toString());
-              await storage.createMessage({ conversationId, role: "assistant", content: text2 });
-              confirmationMessage = text2;
+              const text3 = await translateWidgetText(businessAccountId, baseText, (req.body?.language ?? "").toString());
+              await storage.createMessage({ conversationId, role: "assistant", content: text3 });
+              confirmationMessage = text3;
             }
           }
         } catch (confErr) {
@@ -78113,10 +78244,10 @@ ${product.description}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(403).json({ error: "no_business_account" });
       const { messagingCredentials: messagingCredentials2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq72, and: and61 } = await import("drizzle-orm");
-      const rows = await db.select().from(messagingCredentials2).where(and61(
-        eq72(messagingCredentials2.businessAccountId, businessAccountId),
-        eq72(messagingCredentials2.provider, "msg91")
+      const { eq: eq73, and: and62 } = await import("drizzle-orm");
+      const rows = await db.select().from(messagingCredentials2).where(and62(
+        eq73(messagingCredentials2.businessAccountId, businessAccountId),
+        eq73(messagingCredentials2.provider, "msg91")
       )).limit(1);
       const row = rows[0];
       const envFallbackConfigured = !!(process.env.MSG91_AUTH_KEY && process.env.MSG91_SENDER_ID && process.env.MSG91_TEMPLATE_ID);
@@ -78181,7 +78312,7 @@ ${product.description}`;
       if (!businessAccountId) return res.status(403).json({ error: "no_business_account" });
       const { authKey, senderId, templateId, otpTemplateBody, whatsappOtpTemplateName, otpChannelPreference } = req.body || {};
       const { messagingCredentials: messagingCredentials2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq72, and: and61 } = await import("drizzle-orm");
+      const { eq: eq73, and: and62 } = await import("drizzle-orm");
       const { encrypt: encrypt3 } = await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports));
       if (senderId !== void 0 && senderId !== null && typeof senderId !== "string") {
         return res.status(400).json({ error: "senderId must be a string" });
@@ -78206,9 +78337,9 @@ ${product.description}`;
           return res.status(400).json({ error: "otpChannelPreference must be 'sms' | 'whatsapp' | 'both'" });
         }
       }
-      const existing = (await db.select().from(messagingCredentials2).where(and61(
-        eq72(messagingCredentials2.businessAccountId, businessAccountId),
-        eq72(messagingCredentials2.provider, "msg91")
+      const existing = (await db.select().from(messagingCredentials2).where(and62(
+        eq73(messagingCredentials2.businessAccountId, businessAccountId),
+        eq73(messagingCredentials2.provider, "msg91")
       )).limit(1))[0];
       const updates = { updatedAt: /* @__PURE__ */ new Date() };
       if (typeof senderId === "string") updates.msg91SenderId = senderId.trim() || null;
@@ -78220,7 +78351,7 @@ ${product.description}`;
         updates.msg91AuthKeyEncrypted = encrypt3(authKey.trim());
       }
       if (existing) {
-        await db.update(messagingCredentials2).set(updates).where(eq72(messagingCredentials2.id, existing.id));
+        await db.update(messagingCredentials2).set(updates).where(eq73(messagingCredentials2.id, existing.id));
       } else {
         await db.insert(messagingCredentials2).values({
           businessAccountId,
@@ -79015,8 +79146,8 @@ If you cannot determine the category or the image doesn't match any category, re
               imageHash: products.imageHash,
               distance: sql40`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`
             }).from(products).where(
-              and57(
-                eq67(products.businessAccountId, businessAccountId),
+              and58(
+                eq68(products.businessAccountId, businessAccountId),
                 sql40`${products.fullImageEmbedding} IS NOT NULL`
               )
             ).orderBy(sql40`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`).limit(1);
@@ -79570,8 +79701,8 @@ If you cannot determine the category or the image doesn't match any category, re
           imageHash: products.imageHash,
           distance: sql40`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`
         }).from(products).where(
-          and57(
-            eq67(products.businessAccountId, businessAccountId),
+          and58(
+            eq68(products.businessAccountId, businessAccountId),
             sql40`${products.fullImageEmbedding} IS NOT NULL`
           )
         ).orderBy(sql40`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`).limit(1);
@@ -79880,8 +80011,8 @@ data: ${JSON.stringify({ message: error.message })}
           imageHash: products.imageHash,
           distance: sql40`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`
         }).from(products).where(
-          and57(
-            eq67(products.businessAccountId, businessAccountId),
+          and58(
+            eq68(products.businessAccountId, businessAccountId),
             sql40`${products.fullImageEmbedding} IS NOT NULL`
           )
         ).orderBy(sql40`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`).limit(1);
@@ -80268,8 +80399,8 @@ data: ${JSON.stringify({ message: error.message })}
               imageUrl: products.imageUrl,
               imageHash: products.imageHash
             }).from(products).where(
-              and57(
-                eq67(products.businessAccountId, businessAccountId),
+              and58(
+                eq68(products.businessAccountId, businessAccountId),
                 sql40`${products.imageHash} IS NOT NULL`
               )
             ).limit(100);
@@ -80309,8 +80440,8 @@ data: ${JSON.stringify({ message: error.message })}
             imageHash: products.imageHash,
             distance: sql40`${products.fullImageEmbedding} <=> ${JSON.stringify(fullImageEmbeddingResult.embedding)}::vector`
           }).from(products).where(
-            and57(
-              eq67(products.businessAccountId, businessAccountId),
+            and58(
+              eq68(products.businessAccountId, businessAccountId),
               sql40`${products.fullImageEmbedding} IS NOT NULL`
             )
           ).orderBy(sql40`${products.fullImageEmbedding} <=> ${JSON.stringify(fullImageEmbeddingResult.embedding)}::vector`).limit(3);
@@ -80571,8 +80702,8 @@ data: ${JSON.stringify({ message: error.message })}
         console.log("[Adjusted Boundary Search] No type detected, using broad search");
         jewelryTypeFilterConditions = sql40`1=1`;
       }
-      const baseConditions = and57(
-        eq67(productJewelryEmbeddings.businessAccountId, businessAccountId),
+      const baseConditions = and58(
+        eq68(productJewelryEmbeddings.businessAccountId, businessAccountId),
         sql40`${productJewelryEmbeddings.embedding} IS NOT NULL`,
         jewelryTypeFilterConditions
       );
@@ -80586,7 +80717,7 @@ data: ${JSON.stringify({ message: error.message })}
           message: results2.length > 0 ? "Found exact match" : "No similar products found in Vision Warehouse"
         });
       }
-      const queryConditions = visionWarehouseCandidateIds && visionWarehouseCandidateIds.length > 0 ? and57(baseConditions, inArray12(products.id, visionWarehouseCandidateIds)) : baseConditions;
+      const queryConditions = visionWarehouseCandidateIds && visionWarehouseCandidateIds.length > 0 ? and58(baseConditions, inArray12(products.id, visionWarehouseCandidateIds)) : baseConditions;
       let candidateProducts = await db.select({
         id: products.id,
         name: products.name,
@@ -80595,7 +80726,7 @@ data: ${JSON.stringify({ message: error.message })}
         imageUrl: products.imageUrl,
         detectedJewelryType: productJewelryEmbeddings.jewelryType,
         distance: sql40`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`
-      }).from(productJewelryEmbeddings).innerJoin(products, eq67(productJewelryEmbeddings.productId, products.id)).where(queryConditions).orderBy(sql40`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`).limit(30);
+      }).from(productJewelryEmbeddings).innerJoin(products, eq68(productJewelryEmbeddings.productId, products.id)).where(queryConditions).orderBy(sql40`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`).limit(30);
       if (visionWarehouseCandidateIds) {
         console.log(`[Adjusted Boundary Search] Vision Warehouse pre-filtered to ${visionWarehouseCandidateIds.length} candidates, found ${candidateProducts.length} with embeddings matching type filter`);
       } else {
@@ -80896,8 +81027,8 @@ data: ${JSON.stringify({ message: error.message })}
         price: products.price,
         imageUrl: products.imageUrl,
         detectedJewelryType: products.detectedJewelryType
-      }).from(products).where(and57(
-        eq67(products.businessAccountId, businessAccountId),
+      }).from(products).where(and58(
+        eq68(products.businessAccountId, businessAccountId),
         inArray12(products.id, productIds)
       ));
       const productMap = new Map(matchedProducts.map((p) => [p.id, p]));
@@ -81070,7 +81201,7 @@ data: ${JSON.stringify({ message: error.message })}
         }
       }
       if (Object.keys(updateData).length > 0) {
-        await db.update(businessAccounts).set(updateData).where(eq67(businessAccounts.id, businessAccountId));
+        await db.update(businessAccounts).set(updateData).where(eq68(businessAccounts.id, businessAccountId));
       }
       const account = await storage.getBusinessAccount(businessAccountId);
       res.json({
@@ -82650,21 +82781,21 @@ ${instruction}`
       }
       const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
-      const { eq: eq72, and: and61, desc: desc31 } = await import("drizzle-orm");
+      const { eq: eq73, and: and62, desc: desc31 } = await import("drizzle-orm");
       let orders = [];
       const value = identifierValue.trim();
       if (identifierType === "order_id") {
         const normalizedId = "#" + value.replace(/^#/, "").toUpperCase();
-        orders = await db2.select().from(demoOrders2).where(and61(eq72(demoOrders2.businessAccountId, businessAccountId), eq72(demoOrders2.orderId, normalizedId)));
+        orders = await db2.select().from(demoOrders2).where(and62(eq73(demoOrders2.businessAccountId, businessAccountId), eq73(demoOrders2.orderId, normalizedId)));
         if (orders.length === 0) {
           const altId = value.replace(/^#/, "").toUpperCase();
-          orders = await db2.select().from(demoOrders2).where(and61(eq72(demoOrders2.businessAccountId, businessAccountId), eq72(demoOrders2.orderId, altId)));
+          orders = await db2.select().from(demoOrders2).where(and62(eq73(demoOrders2.businessAccountId, businessAccountId), eq73(demoOrders2.orderId, altId)));
         }
       } else if (identifierType === "phone") {
-        const all = await db2.select().from(demoOrders2).where(eq72(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc31(demoOrders2.orderDate), desc31(demoOrders2.createdAt));
+        const all = await db2.select().from(demoOrders2).where(eq73(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc31(demoOrders2.orderDate), desc31(demoOrders2.createdAt));
         orders = all.filter((o) => (o.customerPhone || "").replace(/\D/g, "") === value.replace(/\D/g, "")).slice(0, 3);
       } else if (identifierType === "email") {
-        const all = await db2.select().from(demoOrders2).where(eq72(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc31(demoOrders2.orderDate), desc31(demoOrders2.createdAt));
+        const all = await db2.select().from(demoOrders2).where(eq73(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc31(demoOrders2.orderDate), desc31(demoOrders2.createdAt));
         orders = all.filter((o) => (o.customerEmail || "").toLowerCase() === value.toLowerCase()).slice(0, 3);
       }
       const masked = value.length > 4 ? value.slice(0, 3) + "***" : "***";
@@ -82685,9 +82816,9 @@ ${instruction}`
         return res.status(403).json({ error: "Demo Orders module is not enabled for this account" });
       }
       const { demoOrders: demoOrders2, products: products3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const existing = await db.select({ orderId: demoOrders2.orderId }).from(demoOrders2).where(eq67(demoOrders2.businessAccountId, businessAccountId));
+      const existing = await db.select({ orderId: demoOrders2.orderId }).from(demoOrders2).where(eq68(demoOrders2.businessAccountId, businessAccountId));
       const existingIds = new Set(existing.map((o) => o.orderId));
-      const catalogueProducts = await db.select({ name: products3.name, description: products3.description, price: products3.price, imageUrl: products3.imageUrl }).from(products3).where(eq67(products3.businessAccountId, businessAccountId)).limit(10);
+      const catalogueProducts = await db.select({ name: products3.name, description: products3.description, price: products3.price, imageUrl: products3.imageUrl }).from(products3).where(eq68(products3.businessAccountId, businessAccountId)).limit(10);
       if (catalogueProducts.length === 0) {
         return res.status(422).json({ error: "No products found in your catalogue. Please add products first, then seed demo orders." });
       }
@@ -82737,7 +82868,7 @@ ${instruction}`
         return res.status(403).json({ error: "Demo Orders module is not enabled for this account" });
       }
       const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const orders = await db.select().from(demoOrders2).where(eq67(demoOrders2.businessAccountId, businessAccountId)).orderBy(demoOrders2.createdAt);
+      const orders = await db.select().from(demoOrders2).where(eq68(demoOrders2.businessAccountId, businessAccountId)).orderBy(demoOrders2.createdAt);
       res.json(orders);
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -82779,7 +82910,7 @@ ${instruction}`
       for (const field of ALLOWED_FIELDS) {
         if (field in req.body) safePayload[field] = req.body[field];
       }
-      const [order] = await db.update(demoOrders2).set({ ...safePayload, updatedAt: /* @__PURE__ */ new Date() }).where(and57(eq67(demoOrders2.id, req.params.id), eq67(demoOrders2.businessAccountId, businessAccountId))).returning();
+      const [order] = await db.update(demoOrders2).set({ ...safePayload, updatedAt: /* @__PURE__ */ new Date() }).where(and58(eq68(demoOrders2.id, req.params.id), eq68(demoOrders2.businessAccountId, businessAccountId))).returning();
       if (!order) return res.status(404).json({ error: "Order not found" });
       res.json(order);
     } catch (error) {
@@ -82797,8 +82928,8 @@ ${instruction}`
       }
       const { demoOrders: demoOrders2, products: products3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
       const { isNull: isNull14 } = await import("drizzle-orm");
-      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and57(eq67(demoOrders2.businessAccountId, businessAccountId), isNull14(demoOrders2.productImageUrl)));
-      const allProducts = await db.select({ name: products3.name, imageUrl: products3.imageUrl }).from(products3).where(eq67(products3.businessAccountId, businessAccountId));
+      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and58(eq68(demoOrders2.businessAccountId, businessAccountId), isNull14(demoOrders2.productImageUrl)));
+      const allProducts = await db.select({ name: products3.name, imageUrl: products3.imageUrl }).from(products3).where(eq68(products3.businessAccountId, businessAccountId));
       const imageByName = new Map(
         allProducts.filter((p) => p.imageUrl).map((p) => [p.name.toLowerCase(), p.imageUrl])
       );
@@ -82806,7 +82937,7 @@ ${instruction}`
       for (const order of allOrders) {
         const imgUrl = imageByName.get(order.productName.toLowerCase());
         if (imgUrl) {
-          await db.update(demoOrders2).set({ productImageUrl: imgUrl, updatedAt: /* @__PURE__ */ new Date() }).where(and57(eq67(demoOrders2.id, order.id), eq67(demoOrders2.businessAccountId, businessAccountId)));
+          await db.update(demoOrders2).set({ productImageUrl: imgUrl, updatedAt: /* @__PURE__ */ new Date() }).where(and58(eq68(demoOrders2.id, order.id), eq68(demoOrders2.businessAccountId, businessAccountId)));
           updated++;
         }
       }
@@ -82831,9 +82962,9 @@ ${instruction}`
         return res.status(400).json({ error: "ids must be a non-empty array" });
       }
       const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const deleted = await db.delete(demoOrders2).where(and57(
+      const deleted = await db.delete(demoOrders2).where(and58(
         inArray12(demoOrders2.id, ids),
-        eq67(demoOrders2.businessAccountId, businessAccountId)
+        eq68(demoOrders2.businessAccountId, businessAccountId)
       )).returning({ id: demoOrders2.id });
       res.json({ success: true, deleted: deleted.length });
     } catch (error) {
@@ -82850,7 +82981,7 @@ ${instruction}`
         return res.status(403).json({ error: "Demo Orders module is not enabled for this account" });
       }
       const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      await db.delete(demoOrders2).where(and57(eq67(demoOrders2.id, req.params.id), eq67(demoOrders2.businessAccountId, businessAccountId)));
+      await db.delete(demoOrders2).where(and58(eq68(demoOrders2.id, req.params.id), eq68(demoOrders2.businessAccountId, businessAccountId)));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -82899,7 +83030,7 @@ ${instruction}`
       if (!name || !adminEmail || !adminPassword) {
         return res.status(400).json({ error: "Name, admin email, and password are required" });
       }
-      const existingUser = await db.select().from(users).where(eq67(users.username, adminEmail.toLowerCase())).limit(1);
+      const existingUser = await db.select().from(users).where(eq68(users.username, adminEmail.toLowerCase())).limit(1);
       if (existingUser.length > 0) {
         return res.status(400).json({ error: "An account with this email already exists" });
       }
@@ -82939,7 +83070,7 @@ ${instruction}`
         tempPasswordExpiry
       });
       if (options?.copyWidgetSettings) {
-        const sourceWidgetSettings = await db.select().from(widgetSettings).where(eq67(widgetSettings.businessAccountId, sourceBusinessId)).limit(1);
+        const sourceWidgetSettings = await db.select().from(widgetSettings).where(eq68(widgetSettings.businessAccountId, sourceBusinessId)).limit(1);
         if (sourceWidgetSettings.length > 0) {
           const { id, businessAccountId, ...settingsData } = sourceWidgetSettings[0];
           await db.insert(widgetSettings).values({
@@ -82952,7 +83083,7 @@ ${instruction}`
       let categoryIdMap = {};
       let productIdMap = {};
       if (options?.copyProducts) {
-        const sourceCategories = await db.select().from(categories).where(eq67(categories.businessAccountId, sourceBusinessId));
+        const sourceCategories = await db.select().from(categories).where(eq68(categories.businessAccountId, sourceBusinessId));
         for (const cat of sourceCategories) {
           const newCategoryId = randomUUID2();
           categoryIdMap[cat.id] = newCategoryId;
@@ -82962,7 +83093,7 @@ ${instruction}`
             businessAccountId: newBusinessId
           });
         }
-        const sourceProducts = await db.select().from(products).where(eq67(products.businessAccountId, sourceBusinessId));
+        const sourceProducts = await db.select().from(products).where(eq68(products.businessAccountId, sourceBusinessId));
         for (const product of sourceProducts) {
           const newProductId = randomUUID2();
           productIdMap[product.id] = newProductId;
@@ -82972,7 +83103,7 @@ ${instruction}`
             id: newProductId,
             businessAccountId: newBusinessId
           });
-          const sourceProductCategories = await db.select().from(productCategories).where(eq67(productCategories.productId, id));
+          const sourceProductCategories = await db.select().from(productCategories).where(eq68(productCategories.productId, id));
           for (const pc of sourceProductCategories) {
             const newCategoryId = categoryIdMap[pc.categoryId];
             if (newCategoryId) {
@@ -82983,7 +83114,7 @@ ${instruction}`
             }
           }
         }
-        const sourceEmbeddings = await db.select().from(productJewelryEmbeddings).where(eq67(productJewelryEmbeddings.businessAccountId, sourceBusinessId));
+        const sourceEmbeddings = await db.select().from(productJewelryEmbeddings).where(eq68(productJewelryEmbeddings.businessAccountId, sourceBusinessId));
         let embeddingsCopied = 0;
         for (const embedding of sourceEmbeddings) {
           const newProductId = productIdMap[embedding.productId];
@@ -83003,7 +83134,7 @@ ${instruction}`
         }
       }
       if (options?.copyFaqs) {
-        const sourceFaqs = await db.select().from(faqs).where(eq67(faqs.businessAccountId, sourceBusinessId));
+        const sourceFaqs = await db.select().from(faqs).where(eq68(faqs.businessAccountId, sourceBusinessId));
         for (const faq of sourceFaqs) {
           const { id, businessAccountId, ...faqData } = faq;
           await db.insert(faqs).values({
@@ -83014,7 +83145,7 @@ ${instruction}`
         }
       }
       if (options?.copyTrainingDocuments) {
-        const sourceDocuments = await db.select().from(trainingDocuments).where(eq67(trainingDocuments.businessAccountId, sourceBusinessId));
+        const sourceDocuments = await db.select().from(trainingDocuments).where(eq68(trainingDocuments.businessAccountId, sourceBusinessId));
         for (const doc of sourceDocuments) {
           const { id, businessAccountId, ...docData } = doc;
           await db.insert(trainingDocuments).values({
@@ -83025,7 +83156,7 @@ ${instruction}`
         }
       }
       if (options?.copyConversationJourneys) {
-        const sourceJourneys = await db.select().from(conversationJourneys).where(eq67(conversationJourneys.businessAccountId, sourceBusinessId));
+        const sourceJourneys = await db.select().from(conversationJourneys).where(eq68(conversationJourneys.businessAccountId, sourceBusinessId));
         for (const journey of sourceJourneys) {
           const oldJourneyId = journey.id;
           const newJourneyId = randomUUID2();
@@ -83035,7 +83166,7 @@ ${instruction}`
             id: newJourneyId,
             businessAccountId: newBusinessId
           });
-          const sourceSteps = await db.select().from(journeySteps).where(eq67(journeySteps.journeyId, oldJourneyId));
+          const sourceSteps = await db.select().from(journeySteps).where(eq68(journeySteps.journeyId, oldJourneyId));
           for (const step of sourceSteps) {
             const { id: stepId, journeyId, ...stepData } = step;
             await db.insert(journeySteps).values({
@@ -83047,7 +83178,7 @@ ${instruction}`
         }
       }
       if (options?.copyScheduleTemplates) {
-        const sourceTemplates = await db.select().from(scheduleTemplates).where(eq67(scheduleTemplates.businessAccountId, sourceBusinessId));
+        const sourceTemplates = await db.select().from(scheduleTemplates).where(eq68(scheduleTemplates.businessAccountId, sourceBusinessId));
         for (const template of sourceTemplates) {
           const { id, businessAccountId, ...templateData } = template;
           await db.insert(scheduleTemplates).values({
@@ -83325,7 +83456,7 @@ ${instruction}`
         }
       }
       if (Object.keys(updateData).length > 0) {
-        await db.update(businessAccounts).set(updateData).where(eq67(businessAccounts.id, id));
+        await db.update(businessAccounts).set(updateData).where(eq68(businessAccounts.id, id));
       }
       const updatedAccount = await storage.getBusinessAccount(id);
       res.json({
@@ -83388,7 +83519,7 @@ ${instruction}`
       if (!account) {
         return res.status(404).json({ error: "Business account not found" });
       }
-      await db.update(businessAccounts).set({ visualSearchModel: model }).where(eq67(businessAccounts.id, id));
+      await db.update(businessAccounts).set({ visualSearchModel: model }).where(eq68(businessAccounts.id, id));
       res.json({ success: true, model });
     } catch (error) {
       console.error("[SuperAdmin Visual Search Model] Error updating:", error);
@@ -83412,7 +83543,7 @@ ${instruction}`
       if (corpusId?.trim()) {
         updateData.visualSearchModel = "google_vision_warehouse";
       }
-      await db.update(businessAccounts).set(updateData).where(eq67(businessAccounts.id, id));
+      await db.update(businessAccounts).set(updateData).where(eq68(businessAccounts.id, id));
       const widgetSettingsData = {
         googleVisionWarehouseCorpusId: corpusId?.trim() || null,
         googleVisionWarehouseIndexId: indexId?.trim() || null,
@@ -83458,7 +83589,7 @@ ${instruction}`
       }
       const { encrypt: encrypt3 } = await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports));
       const encryptedCredentials = encrypt3(JSON.stringify(parsedCredentials));
-      await db.update(businessAccounts).set({ googleVisionWarehouseCredentials: encryptedCredentials }).where(eq67(businessAccounts.id, id));
+      await db.update(businessAccounts).set({ googleVisionWarehouseCredentials: encryptedCredentials }).where(eq68(businessAccounts.id, id));
       res.json({
         success: true,
         projectId: parsedCredentials.project_id,
@@ -83645,7 +83776,7 @@ ${instruction}`
       if (productSetId?.trim()) {
         updateData.visualSearchModel = "google_product_search";
       }
-      await db.update(businessAccounts).set(updateData).where(eq67(businessAccounts.id, id));
+      await db.update(businessAccounts).set(updateData).where(eq68(businessAccounts.id, id));
       const updatedAccount = await storage.getBusinessAccount(id);
       res.json({
         projectId: updatedAccount?.googleProductSearchProjectId || "",
@@ -83683,7 +83814,7 @@ ${instruction}`
       await db.update(businessAccounts).set({
         googleProductSearchCredentials: encryptedCredentials,
         googleProductSearchProjectId: parsedCredentials.project_id
-      }).where(eq67(businessAccounts.id, id));
+      }).where(eq68(businessAccounts.id, id));
       res.json({
         success: true,
         projectId: parsedCredentials.project_id,
@@ -83769,7 +83900,7 @@ ${instruction}`
       );
       if (result.success) {
         const newProductSetId = result.name?.split("/").pop() || productSetId;
-        await db.update(businessAccounts).set({ googleProductSearchProductSetId: newProductSetId }).where(eq67(businessAccounts.id, id));
+        await db.update(businessAccounts).set({ googleProductSearchProductSetId: newProductSetId }).where(eq68(businessAccounts.id, id));
         res.json({
           success: true,
           productSetId: newProductSetId,
@@ -83797,8 +83928,8 @@ ${instruction}`
         return res.status(400).json({ error: "Product Search not fully configured" });
       }
       const allProducts = await db.select().from(products).where(
-        and57(
-          eq67(products.businessAccountId, id),
+        and58(
+          eq68(products.businessAccountId, id),
           isNotNull6(products.imageUrl)
         )
       );
@@ -83807,7 +83938,7 @@ ${instruction}`
         productSearchSyncProgress: "0",
         productSearchSyncTotal: String(allProducts.length),
         productSearchSyncError: null
-      }).where(eq67(businessAccounts.id, id));
+      }).where(eq68(businessAccounts.id, id));
       res.json({
         success: true,
         message: `Starting sync of ${allProducts.length} products`,
@@ -83855,7 +83986,7 @@ ${instruction}`
             await db.update(products).set({
               productSearchProductId: createResult.name,
               productSearchSyncedAt: /* @__PURE__ */ new Date()
-            }).where(eq67(products.id, product.id));
+            }).where(eq68(products.id, product.id));
             successCount++;
           } else {
             console.error(`[ProductSearch Sync] Failed to create product ${product.id}:`, createResult.error);
@@ -83865,20 +83996,20 @@ ${instruction}`
           console.error(`[ProductSearch Sync] Error syncing product ${product.id}:`, error.message);
           errorCount++;
         }
-        await db.update(businessAccounts).set({ productSearchSyncProgress: String(i + 1) }).where(eq67(businessAccounts.id, id));
+        await db.update(businessAccounts).set({ productSearchSyncProgress: String(i + 1) }).where(eq68(businessAccounts.id, id));
       }
       await db.update(businessAccounts).set({
         productSearchSyncPhase: errorCount > 0 && successCount === 0 ? "failed" : "completed",
         productSearchSyncError: errorCount > 0 ? `${errorCount} products failed to sync` : null,
         productSearchLastSyncedAt: /* @__PURE__ */ new Date()
-      }).where(eq67(businessAccounts.id, id));
+      }).where(eq68(businessAccounts.id, id));
       console.log(`[ProductSearch Sync] Completed for ${account.name}: ${successCount} success, ${errorCount} failed`);
     } catch (error) {
       console.error("[ProductSearch Sync] Error:", error);
       await db.update(businessAccounts).set({
         productSearchSyncPhase: "failed",
         productSearchSyncError: error.message
-      }).where(eq67(businessAccounts.id, req.params.id));
+      }).where(eq68(businessAccounts.id, req.params.id));
     }
   });
   app2.get("/api/business-accounts/:id/product-search-sync-status", requireAuth, requireRole("super_admin"), async (req, res) => {
@@ -83889,14 +84020,14 @@ ${instruction}`
         return res.status(404).json({ error: "Business account not found" });
       }
       const totalProducts = await db.select({ count: sql40`count(*)::int` }).from(products).where(
-        and57(
-          eq67(products.businessAccountId, id),
+        and58(
+          eq68(products.businessAccountId, id),
           isNotNull6(products.imageUrl)
         )
       );
       const syncedProducts = await db.select({ count: sql40`count(*)::int` }).from(products).where(
-        and57(
-          eq67(products.businessAccountId, id),
+        and58(
+          eq68(products.businessAccountId, id),
           isNotNull6(products.productSearchProductId)
         )
       );
@@ -83922,35 +84053,35 @@ ${instruction}`
         return res.status(404).json({ error: "Business account not found" });
       }
       const productsWithImages = await db.select({ count: sql40`count(*)::int` }).from(products).where(
-        and57(
-          eq67(products.businessAccountId, id),
+        and58(
+          eq68(products.businessAccountId, id),
           isNotNull6(products.imageUrl)
         )
       );
       const productsWithEmbeddings = await db.select({ count: sql40`count(*)::int` }).from(products).where(
-        and57(
-          eq67(products.businessAccountId, id),
+        and58(
+          eq68(products.businessAccountId, id),
           isNotNull6(products.imageUrl),
           isNotNull6(products.imageEmbedding)
         )
       );
       const productsWithFullEmbeddings = await db.select({ count: sql40`count(*)::int` }).from(products).where(
-        and57(
-          eq67(products.businessAccountId, id),
+        and58(
+          eq68(products.businessAccountId, id),
           isNotNull6(products.imageUrl),
           isNotNull6(products.fullImageEmbedding)
         )
       );
       const productsWithAttributes = await db.select({ count: sql40`count(*)::int` }).from(productJewelryEmbeddings).where(
-        and57(
-          eq67(productJewelryEmbeddings.businessAccountId, id),
+        and58(
+          eq68(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.attributes),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl)
         )
       );
       const jewelryEmbeddingsCount = await db.select({ count: sql40`count(*)::int` }).from(productJewelryEmbeddings).where(
-        and57(
-          eq67(productJewelryEmbeddings.businessAccountId, id),
+        and58(
+          eq68(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl)
         )
       );
@@ -84016,8 +84147,8 @@ ${instruction}`
         croppedImageUrl: productJewelryEmbeddings.croppedImageUrl,
         jewelryType: productJewelryEmbeddings.jewelryType
       }).from(productJewelryEmbeddings).where(
-        and57(
-          eq67(productJewelryEmbeddings.businessAccountId, id),
+        and58(
+          eq68(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl),
           sql40`${productJewelryEmbeddings.attributes} IS NULL`
         )
@@ -84047,7 +84178,7 @@ ${instruction}`
               attributes: result.attributes,
               description: result.description || null,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq67(productJewelryEmbeddings.id, item.id));
+            }).where(eq68(productJewelryEmbeddings.id, item.id));
             processed++;
             console.log(`[SuperAdmin] Generated attributes for product ${item.productId}: ${result.type || item.jewelryType}`);
           } else {
@@ -84060,8 +84191,8 @@ ${instruction}`
         }
       }
       const remainingCount = await db.select({ count: sql40`count(*)::int` }).from(productJewelryEmbeddings).where(
-        and57(
-          eq67(productJewelryEmbeddings.businessAccountId, id),
+        and58(
+          eq68(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl),
           sql40`${productJewelryEmbeddings.attributes} IS NULL`
         )
@@ -84088,14 +84219,14 @@ ${instruction}`
         return res.status(404).json({ error: "Business account not found" });
       }
       const productsWithImages = await db.select({ count: sql40`count(*)::int` }).from(products).where(
-        and57(
-          eq67(products.businessAccountId, id),
+        and58(
+          eq68(products.businessAccountId, id),
           isNotNull6(products.imageUrl)
         )
       );
       const productsWithCroppedImages = await db.select({ count: sql40`count(*)::int` }).from(products).where(
-        and57(
-          eq67(products.businessAccountId, id),
+        and58(
+          eq68(products.businessAccountId, id),
           isNotNull6(products.imageUrl),
           isNotNull6(products.croppedJewelryUrl)
         )
@@ -84103,7 +84234,7 @@ ${instruction}`
       const productsWithMultipleEmbeddings = await db.select({
         productId: productJewelryEmbeddings.productId,
         count: sql40`count(*)::int`
-      }).from(productJewelryEmbeddings).where(eq67(productJewelryEmbeddings.businessAccountId, id)).groupBy(productJewelryEmbeddings.productId);
+      }).from(productJewelryEmbeddings).where(eq68(productJewelryEmbeddings.businessAccountId, id)).groupBy(productJewelryEmbeddings.productId);
       const multiItemProducts = productsWithMultipleEmbeddings.filter((p) => p.count > 1);
       const productsWithMultiItemEmbeddingsCount = multiItemProducts.length;
       const totalMultiItemEmbeddingsCount = multiItemProducts.reduce((sum, p) => sum + (p.count - 1), 0);
@@ -84143,7 +84274,7 @@ ${instruction}`
       const { productImageEmbeddingService: productImageEmbeddingService2 } = await Promise.resolve().then(() => (init_productImageEmbeddingService(), productImageEmbeddingService_exports));
       if (reprocessAll) {
         console.log(`[SuperAdmin] Clearing all embeddings for business: ${businessAccount.name}`);
-        await db.delete(productJewelryEmbeddings).where(eq67(productJewelryEmbeddings.businessAccountId, id));
+        await db.delete(productJewelryEmbeddings).where(eq68(productJewelryEmbeddings.businessAccountId, id));
         await db.update(products).set({
           imageEmbedding: null,
           fullImageEmbedding: null,
@@ -84152,11 +84283,11 @@ ${instruction}`
           croppedJewelryUrl: null,
           detectedJewelryType: null,
           visualDescription: null
-        }).where(eq67(products.businessAccountId, id));
+        }).where(eq68(products.businessAccountId, id));
         console.log(`[SuperAdmin] Cleared all embeddings for business: ${businessAccount.name}`);
       }
-      const totalProducts = await db.select({ count: sql40`count(*)` }).from(products).where(and57(
-        eq67(products.businessAccountId, id),
+      const totalProducts = await db.select({ count: sql40`count(*)` }).from(products).where(and58(
+        eq68(products.businessAccountId, id),
         isNotNull6(products.imageUrl)
       ));
       activeProcessingJobs.set(id, {
@@ -84633,7 +84764,7 @@ ${instruction}`
       if (name !== void 0 && name.trim()) {
         updateData.name = name.trim();
       }
-      await db.update(accountGroups).set(updateData).where(eq67(accountGroups.id, groupId));
+      await db.update(accountGroups).set(updateData).where(eq68(accountGroups.id, groupId));
       const updatedGroup = await storage.getAccountGroup(groupId);
       const members = await storage.getGroupMembers(groupId);
       res.json({
@@ -84742,14 +84873,14 @@ ${instruction}`
       if (targetMember.isPrimary === "true") {
         return res.status(400).json({ error: "Account is already the primary account" });
       }
-      await db.update(accountGroupMembers).set({ isPrimary: "false" }).where(eq67(accountGroupMembers.groupId, groupId));
-      await db.update(accountGroupMembers).set({ isPrimary: "true" }).where(eq67(accountGroupMembers.businessAccountId, businessAccountId));
+      await db.update(accountGroupMembers).set({ isPrimary: "false" }).where(eq68(accountGroupMembers.groupId, groupId));
+      await db.update(accountGroupMembers).set({ isPrimary: "true" }).where(eq68(accountGroupMembers.businessAccountId, businessAccountId));
       const newOwnerUser = await storage.getUserByBusinessAccountId(businessAccountId);
       if (newOwnerUser) {
         await db.update(accountGroups).set({
           ownerUserId: newOwnerUser.id,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq67(accountGroups.id, groupId));
+        }).where(eq68(accountGroups.id, groupId));
       }
       const updatedGroup = await storage.getAccountGroup(groupId);
       const updatedMembers = await storage.getGroupMembers(groupId);
@@ -84917,7 +85048,7 @@ ${instruction}`
         assignedAt: accountGroupAdmins.createdAt,
         userCreatedAt: users.createdAt,
         lastLoginAt: users.lastLoginAt
-      }).from(accountGroupAdmins).innerJoin(users, eq67(accountGroupAdmins.userId, users.id)).where(eq67(accountGroupAdmins.groupId, groupId));
+      }).from(accountGroupAdmins).innerJoin(users, eq68(accountGroupAdmins.userId, users.id)).where(eq68(accountGroupAdmins.groupId, groupId));
       res.json({
         admins: admins.map((a) => ({
           userId: a.userId,
@@ -84941,7 +85072,7 @@ ${instruction}`
       const adminUsers = await db.select({
         id: users.id,
         username: users.username
-      }).from(users).where(eq67(users.role, "account_group_admin"));
+      }).from(users).where(eq68(users.role, "account_group_admin"));
       res.json({ users: adminUsers });
     } catch (error) {
       console.error("[SuperAdmin Group Admins] Error listing users:", error);
@@ -84959,16 +85090,16 @@ ${instruction}`
       if (!group) {
         return res.status(404).json({ error: "Account group not found" });
       }
-      const [user] = await db.select().from(users).where(eq67(users.id, userId));
+      const [user] = await db.select().from(users).where(eq68(users.id, userId));
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
       if (user.role !== "account_group_admin") {
         return res.status(400).json({ error: "User must have account_group_admin role" });
       }
-      const [existing] = await db.select().from(accountGroupAdmins).where(and57(
-        eq67(accountGroupAdmins.groupId, groupId),
-        eq67(accountGroupAdmins.userId, userId)
+      const [existing] = await db.select().from(accountGroupAdmins).where(and58(
+        eq68(accountGroupAdmins.groupId, groupId),
+        eq68(accountGroupAdmins.userId, userId)
       ));
       if (existing) {
         return res.status(400).json({ error: "User is already an admin of this group" });
@@ -84991,9 +85122,9 @@ ${instruction}`
     try {
       const { groupId, userId } = req.params;
       const { canViewConversations, canViewLeads, canViewAnalytics, canExportData } = req.body;
-      const [existing] = await db.select().from(accountGroupAdmins).where(and57(
-        eq67(accountGroupAdmins.groupId, groupId),
-        eq67(accountGroupAdmins.userId, userId)
+      const [existing] = await db.select().from(accountGroupAdmins).where(and58(
+        eq68(accountGroupAdmins.groupId, groupId),
+        eq68(accountGroupAdmins.userId, userId)
       ));
       if (!existing) {
         return res.status(404).json({ error: "Group admin assignment not found" });
@@ -85003,9 +85134,9 @@ ${instruction}`
         canViewLeads: canViewLeads ? "true" : "false",
         canViewAnalytics: canViewAnalytics ? "true" : "false",
         canExportData: canExportData ? "true" : "false"
-      }).where(and57(
-        eq67(accountGroupAdmins.groupId, groupId),
-        eq67(accountGroupAdmins.userId, userId)
+      }).where(and58(
+        eq68(accountGroupAdmins.groupId, groupId),
+        eq68(accountGroupAdmins.userId, userId)
       ));
       res.json({ success: true, message: "Group admin permissions updated" });
     } catch (error) {
@@ -85016,16 +85147,16 @@ ${instruction}`
   app2.delete("/api/super-admin/account-groups/:groupId/admins/:userId", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const { groupId, userId } = req.params;
-      const [existing] = await db.select().from(accountGroupAdmins).where(and57(
-        eq67(accountGroupAdmins.groupId, groupId),
-        eq67(accountGroupAdmins.userId, userId)
+      const [existing] = await db.select().from(accountGroupAdmins).where(and58(
+        eq68(accountGroupAdmins.groupId, groupId),
+        eq68(accountGroupAdmins.userId, userId)
       ));
       if (!existing) {
         return res.status(404).json({ error: "Group admin assignment not found" });
       }
-      await db.delete(accountGroupAdmins).where(and57(
-        eq67(accountGroupAdmins.groupId, groupId),
-        eq67(accountGroupAdmins.userId, userId)
+      await db.delete(accountGroupAdmins).where(and58(
+        eq68(accountGroupAdmins.groupId, groupId),
+        eq68(accountGroupAdmins.userId, userId)
       ));
       res.json({ success: true, message: "Group admin removed" });
     } catch (error) {
@@ -85684,9 +85815,9 @@ ${instruction}`
       if (!newPassword || newPassword.length < 6) {
         return res.status(400).json({ error: "Password must be at least 6 characters" });
       }
-      const [user] = await db.select().from(users).where(and57(
-        eq67(users.id, userId),
-        eq67(users.role, "account_group_admin")
+      const [user] = await db.select().from(users).where(and58(
+        eq68(users.id, userId),
+        eq68(users.role, "account_group_admin")
       ));
       if (!user) {
         return res.status(404).json({ error: "Group admin user not found" });
@@ -85697,7 +85828,7 @@ ${instruction}`
         tempPassword: null,
         tempPasswordExpiry: null,
         mustChangePassword: "true"
-      }).where(eq67(users.id, userId));
+      }).where(eq68(users.id, userId));
       res.json({
         success: true,
         message: "Password reset successfully",
@@ -85942,15 +86073,15 @@ ${instruction}`
       if (accountIds.length === 0) {
         return res.json({ journeyName: null, completed: false, responses: [] });
       }
-      const { eq: eq72, and: and61, inArray: inArray14 } = await import("drizzle-orm");
+      const { eq: eq73, and: and62, inArray: inArray14 } = await import("drizzle-orm");
       const { journeySessions: journeySessions2, journeyResponses: journeyResponses2, journeySteps: journeySteps2, conversationJourneys: conversationJourneys3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
       const sessions2 = await db.select({
         sessionId: journeySessions2.id,
         journeyId: journeySessions2.journeyId,
         journeyName: conversationJourneys3.name,
         completed: journeySessions2.completed
-      }).from(journeySessions2).leftJoin(conversationJourneys3, eq72(journeySessions2.journeyId, conversationJourneys3.id)).where(and61(
-        eq72(journeySessions2.conversationId, conversationId),
+      }).from(journeySessions2).leftJoin(conversationJourneys3, eq73(journeySessions2.journeyId, conversationJourneys3.id)).where(and62(
+        eq73(journeySessions2.conversationId, conversationId),
         inArray14(journeySessions2.businessAccountId, accountIds)
       ));
       if (sessions2.length === 0) {
@@ -85961,7 +86092,7 @@ ${instruction}`
         response: journeyResponses2.response,
         questionText: journeySteps2.questionText,
         stepOrder: journeySteps2.stepOrder
-      }).from(journeyResponses2).leftJoin(journeySteps2, eq72(journeyResponses2.stepId, journeySteps2.id)).where(eq72(journeyResponses2.sessionId, session.sessionId)).orderBy(journeySteps2.stepOrder);
+      }).from(journeyResponses2).leftJoin(journeySteps2, eq73(journeyResponses2.stepId, journeySteps2.id)).where(eq73(journeyResponses2.sessionId, session.sessionId)).orderBy(journeySteps2.stepOrder);
       res.json({
         journeyName: session.journeyName || "Unknown Journey",
         completed: session.completed === "true",
@@ -85990,10 +86121,10 @@ ${instruction}`
       if (accountIds.length === 0) {
         return res.json({ journeyName: null, completed: false, responses: [] });
       }
-      const { eq: eq72, and: and61, inArray: inArray14, desc: descOrder, like } = await import("drizzle-orm");
+      const { eq: eq73, and: and62, inArray: inArray14, desc: descOrder, like } = await import("drizzle-orm");
       const { leads: leadsTable, journeySessions: journeySessions2, journeyResponses: journeyResponses2, journeySteps: journeySteps2, conversationJourneys: conversationJourneys3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const [lead] = await db.select().from(leadsTable).where(and61(
-        eq72(leadsTable.id, leadId),
+      const [lead] = await db.select().from(leadsTable).where(and62(
+        eq73(leadsTable.id, leadId),
         inArray14(leadsTable.businessAccountId, accountIds)
       ));
       if (!lead) {
@@ -86005,8 +86136,8 @@ ${instruction}`
           sessionId: journeySessions2.id,
           journeyName: conversationJourneys3.name,
           completed: journeySessions2.completed
-        }).from(journeySessions2).leftJoin(conversationJourneys3, eq72(journeySessions2.journeyId, conversationJourneys3.id)).where(and61(
-          eq72(journeySessions2.conversationId, lead.conversationId),
+        }).from(journeySessions2).leftJoin(conversationJourneys3, eq73(journeySessions2.journeyId, conversationJourneys3.id)).where(and62(
+          eq73(journeySessions2.conversationId, lead.conversationId),
           inArray14(journeySessions2.businessAccountId, accountIds)
         )).orderBy(descOrder(journeySessions2.createdAt)).limit(1);
         if (sessions2.length > 0) {
@@ -86018,8 +86149,8 @@ ${instruction}`
           sessionId: journeySessions2.id,
           journeyName: conversationJourneys3.name,
           completed: journeySessions2.completed
-        }).from(journeyResponses2).innerJoin(journeySessions2, eq72(journeyResponses2.sessionId, journeySessions2.id)).leftJoin(conversationJourneys3, eq72(journeySessions2.journeyId, conversationJourneys3.id)).where(and61(
-          eq72(journeyResponses2.response, lead.phone),
+        }).from(journeyResponses2).innerJoin(journeySessions2, eq73(journeyResponses2.sessionId, journeySessions2.id)).leftJoin(conversationJourneys3, eq73(journeySessions2.journeyId, conversationJourneys3.id)).where(and62(
+          eq73(journeyResponses2.response, lead.phone),
           inArray14(journeySessions2.businessAccountId, accountIds)
         )).orderBy(descOrder(journeySessions2.createdAt)).limit(1);
         if (phoneMatches.length > 0) {
@@ -86033,7 +86164,7 @@ ${instruction}`
         response: journeyResponses2.response,
         questionText: journeySteps2.questionText,
         stepOrder: journeySteps2.stepOrder
-      }).from(journeyResponses2).leftJoin(journeySteps2, eq72(journeyResponses2.stepId, journeySteps2.id)).where(eq72(journeyResponses2.sessionId, session.sessionId)).orderBy(journeySteps2.stepOrder);
+      }).from(journeyResponses2).leftJoin(journeySteps2, eq73(journeyResponses2.stepId, journeySteps2.id)).where(eq73(journeyResponses2.sessionId, session.sessionId)).orderBy(journeySteps2.stepOrder);
       res.json({
         journeyName: session.journeyName || "Unknown Journey",
         completed: session.completed === "true",
@@ -86125,15 +86256,15 @@ ${instruction}`
       const dateToStr = req.query.toDate;
       const dateFrom = dateFromStr ? new Date(dateFromStr) : void 0;
       const dateTo = dateToStr ? new Date(dateToStr) : void 0;
-      const leadDateConds = [eq67(leads.businessAccountId, businessAccountId)];
+      const leadDateConds = [eq68(leads.businessAccountId, businessAccountId)];
       if (dateFrom) leadDateConds.push(gte12(leads.createdAt, dateFrom));
       if (dateTo) leadDateConds.push(lte5(leads.createdAt, dateTo));
-      const convDateConds = [eq67(conversations.businessAccountId, businessAccountId)];
+      const convDateConds = [eq68(conversations.businessAccountId, businessAccountId)];
       if (dateFrom) convDateConds.push(gte12(conversations.createdAt, dateFrom));
       if (dateTo) convDateConds.push(lte5(conversations.createdAt, dateTo));
-      const allJourneyRows = await db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(eq67(journeySessions.businessAccountId, businessAccountId));
+      const allJourneyRows = await db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(eq68(journeySessions.businessAccountId, businessAccountId));
       const journeyConvIdSet = new Set(allJourneyRows.map((r) => r.conversationId));
-      const allConvIds = await db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and57(...convDateConds));
+      const allConvIds = await db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and58(...convDateConds));
       const acctLeadsRaw = await db.select({
         id: leads.id,
         conversationId: leads.conversationId,
@@ -86141,7 +86272,7 @@ ${instruction}`
         sourceUrl: leads.sourceUrl,
         email: leads.email,
         phone: leads.phone
-      }).from(leads).where(and57(...leadDateConds));
+      }).from(leads).where(and58(...leadDateConds));
       const formConvPhoneMap = /* @__PURE__ */ new Map();
       for (const l of acctLeadsRaw) {
         if (l.phone && l.conversationId && (l.topicsOfInterest || []).includes("Via Form")) {
@@ -86250,18 +86381,18 @@ ${instruction}`
       const journeyDateConds = [inArray12(journeySessions.businessAccountId, accountIds)];
       if (dateFrom) journeyDateConds.push(gte12(journeySessions.createdAt, dateFrom));
       if (dateTo) journeyDateConds.push(lte5(journeySessions.createdAt, dateTo));
-      const journeyInRange = await db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and57(...journeyDateConds));
+      const journeyInRange = await db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and58(...journeyDateConds));
       const journeyStarted = new Set(journeyInRange.map((r) => r.conversationId)).size;
       const allJourneyRows = await db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(inArray12(journeySessions.businessAccountId, accountIds));
       const journeyConvIdSet = new Set(allJourneyRows.map((r) => r.conversationId));
-      const allConvIds = await db.select({ id: conversations.id, visitorToken: conversations.visitorToken, businessAccountId: conversations.businessAccountId }).from(conversations).where(and57(...convDateConds));
+      const allConvIds = await db.select({ id: conversations.id, visitorToken: conversations.visitorToken, businessAccountId: conversations.businessAccountId }).from(conversations).where(and58(...convDateConds));
       const allLeadsRaw = await db.select({
         id: leads.id,
         conversationId: leads.conversationId,
         topicsOfInterest: leads.topicsOfInterest,
         phone: leads.phone,
         businessAccountId: leads.businessAccountId
-      }).from(leads).where(and57(...leadDateConds));
+      }).from(leads).where(and58(...leadDateConds));
       const formLeadConvIds = new Set(
         allLeadsRaw.filter((l) => (l.topicsOfInterest || []).includes("Via Form") && l.conversationId).map((l) => l.conversationId)
       );
@@ -86310,22 +86441,22 @@ ${instruction}`
       const totalConversations = journeyConvs + formConvs + chatConvs;
       const accountBreakdown = [];
       for (const accountId of accountIds) {
-        const [acct] = await db.select({ name: businessAccounts.name }).from(businessAccounts).where(eq67(businessAccounts.id, accountId));
+        const [acct] = await db.select({ name: businessAccounts.name }).from(businessAccounts).where(eq68(businessAccounts.id, accountId));
         if (!acct) continue;
-        const acctLeadConds = [eq67(leads.businessAccountId, accountId)];
+        const acctLeadConds = [eq68(leads.businessAccountId, accountId)];
         if (dateFrom) acctLeadConds.push(gte12(leads.createdAt, dateFrom));
         if (dateTo) acctLeadConds.push(lte5(leads.createdAt, dateTo));
-        const acctConvConds = [eq67(conversations.businessAccountId, accountId)];
+        const acctConvConds = [eq68(conversations.businessAccountId, accountId)];
         if (dateFrom) acctConvConds.push(gte12(conversations.createdAt, dateFrom));
         if (dateTo) acctConvConds.push(lte5(conversations.createdAt, dateTo));
-        const acctJourneyConds = [eq67(journeySessions.businessAccountId, accountId)];
+        const acctJourneyConds = [eq68(journeySessions.businessAccountId, accountId)];
         if (dateFrom) acctJourneyConds.push(gte12(journeySessions.createdAt, dateFrom));
         if (dateTo) acctJourneyConds.push(lte5(journeySessions.createdAt, dateTo));
         const [acctLeadsRaw, acctConvIds, acctJourneyInRange, acctAllJourney] = await Promise.all([
-          db.select({ id: leads.id, conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest, sourceUrl: leads.sourceUrl, email: leads.email, phone: leads.phone }).from(leads).where(and57(...acctLeadConds)),
-          db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and57(...acctConvConds)),
-          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and57(...acctJourneyConds)),
-          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(eq67(journeySessions.businessAccountId, accountId))
+          db.select({ id: leads.id, conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest, sourceUrl: leads.sourceUrl, email: leads.email, phone: leads.phone }).from(leads).where(and58(...acctLeadConds)),
+          db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and58(...acctConvConds)),
+          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and58(...acctJourneyConds)),
+          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(eq68(journeySessions.businessAccountId, accountId))
         ]);
         const acctJourneyConvSet = new Set(acctAllJourney.map((r) => r.conversationId));
         const acctJourneyStarted = new Set(acctJourneyInRange.map((r) => r.conversationId)).size;
@@ -86403,11 +86534,11 @@ ${instruction}`
         db.select({
           relevance: conversations.relevance,
           count: count4()
-        }).from(conversations).where(and57(...convDateConds)).groupBy(conversations.relevance),
+        }).from(conversations).where(and58(...convDateConds)).groupBy(conversations.relevance),
         db.select({
           category: conversations.category,
           count: count4()
-        }).from(conversations).where(and57(...convDateConds, sql40`${conversations.category} IS NOT NULL`)).groupBy(conversations.category).orderBy(desc30(count4())).limit(8)
+        }).from(conversations).where(and58(...convDateConds, sql40`${conversations.category} IS NOT NULL`)).groupBy(conversations.category).orderBy(desc30(count4())).limit(8)
       ]);
       const outcomeRawResult = await db.execute(sql40`
         SELECT
@@ -86457,7 +86588,7 @@ ${instruction}`
       const outcomesTotal = completed + abandoned + singleMessage + active;
       const [allCatCountResult] = await db.select({
         total: count4()
-      }).from(conversations).where(and57(...convDateConds, sql40`${conversations.category} IS NOT NULL`));
+      }).from(conversations).where(and58(...convDateConds, sql40`${conversations.category} IS NOT NULL`));
       const allCategorizedTotal = allCatCountResult?.total || 0;
       const topCategoriesList = categoryRows.map((r) => ({
         category: r.category,
@@ -86528,12 +86659,12 @@ ${instruction}`
         fromDate,
         toDate
       }, 1, 0);
-      const convoConditions = [eq67(conversations.businessAccountId, accountId)];
+      const convoConditions = [eq68(conversations.businessAccountId, accountId)];
       if (fromDate) convoConditions.push(gte12(conversations.createdAt, new Date(fromDate)));
       if (toDate) convoConditions.push(lte5(conversations.createdAt, new Date(toDate)));
       const [viAllConvRows, viFormLeadRows] = await Promise.all([
-        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and57(...convoConditions)),
-        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and57(eq67(leads.businessAccountId, accountId), sql40`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql40`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`))
+        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and58(...convoConditions)),
+        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and58(eq68(leads.businessAccountId, accountId), sql40`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql40`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`))
       ]);
       const viFormPhoneMap = /* @__PURE__ */ new Map();
       for (const l of viFormLeadRows) {
@@ -86629,7 +86760,7 @@ ${instruction}`
       }
       const dateFrom = fromDate ? new Date(fromDate) : void 0;
       const dateTo = toDate ? new Date(toDate) : void 0;
-      const leadConds = [eq67(leads.businessAccountId, accountId)];
+      const leadConds = [eq68(leads.businessAccountId, accountId)];
       if (dateFrom) leadConds.push(gte12(leads.createdAt, dateFrom));
       if (dateTo) leadConds.push(lte5(leads.createdAt, dateTo));
       const leadRows = await db.select({
@@ -86637,7 +86768,7 @@ ${instruction}`
         email: leads.email,
         phone: leads.phone,
         topicsOfInterest: leads.topicsOfInterest
-      }).from(leads).where(and57(...leadConds)).orderBy(desc30(leads.createdAt));
+      }).from(leads).where(and58(...leadConds)).orderBy(desc30(leads.createdAt));
       const seenLeadKeys = /* @__PURE__ */ new Set();
       const dedupedLeads = leadRows.filter((l) => {
         const key = l.email && l.email.trim() ? l.email.trim().toLowerCase() : l.phone && l.phone.trim() ? l.phone.trim() : l.id;
@@ -86722,7 +86853,7 @@ ${instruction}`
         });
       }
       if (!forceRefresh) {
-        const [cached] = await db.select().from(conversationAnalysisCache).where(eq67(conversationAnalysisCache.businessAccountId, accountId)).limit(1);
+        const [cached] = await db.select().from(conversationAnalysisCache).where(eq68(conversationAnalysisCache.businessAccountId, accountId)).limit(1);
         if (cached) {
           const cacheAge = Date.now() - new Date(cached.updatedAt).getTime();
           const cacheValid = cacheAge < 24 * 60 * 60 * 1e3;
@@ -86838,15 +86969,15 @@ Format your response as JSON with this structure:
       const dateToStr = toDate;
       const dateFrom = dateFromStr ? new Date(dateFromStr) : void 0;
       const dateTo = dateToStr ? new Date(dateToStr) : void 0;
-      const leadConds = [eq67(leads.businessAccountId, accountId)];
+      const leadConds = [eq68(leads.businessAccountId, accountId)];
       if (dateFrom) leadConds.push(gte12(leads.createdAt, dateFrom));
       if (dateTo) leadConds.push(lte5(leads.createdAt, dateTo));
-      const convConds = [eq67(conversations.businessAccountId, accountId)];
+      const convConds = [eq68(conversations.businessAccountId, accountId)];
       if (dateFrom) convConds.push(gte12(conversations.createdAt, dateFrom));
       if (dateTo) convConds.push(lte5(conversations.createdAt, dateTo));
       const [acctLeadsRaw, acctConvRows] = await Promise.all([
-        db.select({ id: leads.id, conversationId: leads.conversationId, email: leads.email, phone: leads.phone, topicsOfInterest: leads.topicsOfInterest }).from(leads).where(and57(...leadConds)),
-        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and57(...convConds))
+        db.select({ id: leads.id, conversationId: leads.conversationId, email: leads.email, phone: leads.phone, topicsOfInterest: leads.topicsOfInterest }).from(leads).where(and58(...leadConds)),
+        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and58(...convConds))
       ]);
       const seenLeadKeys = /* @__PURE__ */ new Set();
       const dedupedLeads = acctLeadsRaw.filter((l) => {
@@ -86903,7 +87034,7 @@ Format your response as JSON with this structure:
   });
   app2.post("/api/super-admin/impersonate/exit", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
-      await db.update(sessions).set({ activeBusinessAccountId: null }).where(eq67(sessions.sessionToken, req.sessionToken));
+      await db.update(sessions).set({ activeBusinessAccountId: null }).where(eq68(sessions.sessionToken, req.sessionToken));
       console.log(`[SuperAdmin] User ${req.user.username} exited impersonation mode`);
       res.json({
         success: true,
@@ -87428,7 +87559,7 @@ ${script}`
             }
             if (changed) {
               const newStepId = oldToNewStepId[step.id];
-              await tx.update(journeySteps).set({ branchingCondition: JSON.stringify(condition) }).where(eq67(journeySteps.id, newStepId));
+              await tx.update(journeySteps).set({ branchingCondition: JSON.stringify(condition) }).where(eq68(journeySteps.id, newStepId));
             }
           }
         }
@@ -87686,7 +87817,7 @@ ${script}`
         return res.status(400).json({ error: "Failed to submit step - no active form journey" });
       }
       try {
-        const [existingMsg] = await db.select({ id: messages.id }).from(messages).where(eq67(messages.conversationId, activeConversationId)).limit(1);
+        const [existingMsg] = await db.select({ id: messages.id }).from(messages).where(eq68(messages.conversationId, activeConversationId)).limit(1);
         if (!existingMsg && currentStep?.questionText) {
           await storage.createMessage({
             conversationId: activeConversationId,
@@ -87726,10 +87857,10 @@ ${script}`
         try {
           const cleanPhone = answer.replace(/\D/g, "");
           if (cleanPhone.length >= 10) {
-            const [sessionData] = await db.select().from(journeySessions).where(eq67(journeySessions.conversationId, activeConversationId)).orderBy(desc30(journeySessions.createdAt)).limit(1);
+            const [sessionData] = await db.select().from(journeySessions).where(eq68(journeySessions.conversationId, activeConversationId)).orderBy(desc30(journeySessions.createdAt)).limit(1);
             let partialName = null;
             if (sessionData) {
-              const priorResponses = await db.select({ questionType: journeySteps.questionType, response: journeyResponses.response, questionText: journeySteps.questionText }).from(journeyResponses).innerJoin(journeySteps, eq67(journeyResponses.stepId, journeySteps.id)).where(eq67(journeyResponses.sessionId, sessionData.id));
+              const priorResponses = await db.select({ questionType: journeySteps.questionType, response: journeyResponses.response, questionText: journeySteps.questionText }).from(journeyResponses).innerJoin(journeySteps, eq68(journeyResponses.stepId, journeySteps.id)).where(eq68(journeyResponses.sessionId, sessionData.id));
               for (const r of priorResponses) {
                 if (r.questionType === "text" && r.response && r.questionText?.toLowerCase().includes("name")) {
                   partialName = r.response;
@@ -87739,8 +87870,8 @@ ${script}`
             }
             const normalizedPhone = cleanPhone.slice(-10);
             const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1e3);
-            const recentLeads = await db.select().from(leads).where(and57(
-              eq67(leads.businessAccountId, businessAccountId),
+            const recentLeads = await db.select().from(leads).where(and58(
+              eq68(leads.businessAccountId, businessAccountId),
               gte12(leads.createdAt, twentyFourHoursAgo),
               isNotNull6(leads.phone)
             )).limit(50);
@@ -87782,12 +87913,12 @@ ${script}`
       }
       if (result.completed) {
         try {
-          const [sessionData] = await db.select().from(journeySessions).where(eq67(journeySessions.conversationId, activeConversationId)).orderBy(desc30(journeySessions.createdAt)).limit(1);
+          const [sessionData] = await db.select().from(journeySessions).where(eq68(journeySessions.conversationId, activeConversationId)).orderBy(desc30(journeySessions.createdAt)).limit(1);
           const resolvedJourneyId = journeyId || sessionData?.journeyId;
           console.log("[Form Journey] Lead creation check - journeyId:", resolvedJourneyId, "sessionId:", sessionData?.id);
           if (sessionData && resolvedJourneyId) {
             const steps = await storage.getJourneySteps(resolvedJourneyId);
-            const responses = await db.select({ questionType: journeySteps.questionType, response: journeyResponses.response, questionText: journeySteps.questionText }).from(journeyResponses).innerJoin(journeySteps, eq67(journeyResponses.stepId, journeySteps.id)).where(eq67(journeyResponses.sessionId, sessionData.id));
+            const responses = await db.select({ questionType: journeySteps.questionType, response: journeyResponses.response, questionText: journeySteps.questionText }).from(journeyResponses).innerJoin(journeySteps, eq68(journeyResponses.stepId, journeySteps.id)).where(eq68(journeyResponses.sessionId, sessionData.id));
             let phone = null;
             let email = null;
             let name = null;
@@ -87812,16 +87943,16 @@ ${script}`
               const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1e3);
               let existingLead = null;
               if (normalizedPhone) {
-                const recentLeads = await db.select().from(leads).where(and57(
-                  eq67(leads.businessAccountId, businessAccountId),
+                const recentLeads = await db.select().from(leads).where(and58(
+                  eq68(leads.businessAccountId, businessAccountId),
                   gte12(leads.createdAt, twentyFourHoursAgo),
                   isNotNull6(leads.phone)
                 )).limit(50);
                 existingLead = recentLeads.find((l) => l.phone && l.phone.replace(/\D/g, "").slice(-10) === normalizedPhone) || null;
               }
               if (!existingLead && normalizedEmail) {
-                const [found] = await db.select().from(leads).where(and57(
-                  eq67(leads.businessAccountId, businessAccountId),
+                const [found] = await db.select().from(leads).where(and58(
+                  eq68(leads.businessAccountId, businessAccountId),
                   gte12(leads.createdAt, twentyFourHoursAgo),
                   sql40`LOWER(TRIM(${leads.email})) = ${normalizedEmail}`
                 )).limit(1);
@@ -88227,12 +88358,12 @@ ${script}`
       const businessAccountId = user.businessAccountId;
       const { status } = req.query;
       const { aiSuggestions: aiSuggestions2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq72, and: and61, desc: desc31 } = await import("drizzle-orm");
-      let conditions = [eq72(aiSuggestions2.businessAccountId, businessAccountId)];
+      const { eq: eq73, and: and62, desc: desc31 } = await import("drizzle-orm");
+      let conditions = [eq73(aiSuggestions2.businessAccountId, businessAccountId)];
       if (status && typeof status === "string") {
-        conditions.push(eq72(aiSuggestions2.status, status));
+        conditions.push(eq73(aiSuggestions2.status, status));
       }
-      const suggestions = await db.select().from(aiSuggestions2).where(and61(...conditions)).orderBy(desc31(aiSuggestions2.createdAt));
+      const suggestions = await db.select().from(aiSuggestions2).where(and62(...conditions)).orderBy(desc31(aiSuggestions2.createdAt));
       res.json(suggestions);
     } catch (error) {
       console.error("[AI Suggestions] Error fetching suggestions:", error);
@@ -88244,11 +88375,11 @@ ${script}`
       const user = req.user;
       const businessAccountId = user.businessAccountId;
       const { aiSuggestions: aiSuggestions2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq72, and: and61, count: count5, sql: sql46 } = await import("drizzle-orm");
+      const { eq: eq73, and: and62, count: count5, sql: sql46 } = await import("drizzle-orm");
       const stats = await db.select({
         total: count5(),
         status: aiSuggestions2.status
-      }).from(aiSuggestions2).where(eq72(aiSuggestions2.businessAccountId, businessAccountId)).groupBy(aiSuggestions2.status);
+      }).from(aiSuggestions2).where(eq73(aiSuggestions2.businessAccountId, businessAccountId)).groupBy(aiSuggestions2.status);
       const result = {
         pending: 0,
         accepted: 0,
@@ -88278,10 +88409,10 @@ ${script}`
       }
       console.log(`[AI Suggestions] Starting analysis for business: ${businessAccountId}`);
       const { aiSuggestions: aiSuggestionsSchema } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq72, and: and61 } = await import("drizzle-orm");
-      const deleteResult = await db.delete(aiSuggestionsSchema).where(and61(
-        eq72(aiSuggestionsSchema.businessAccountId, businessAccountId),
-        eq72(aiSuggestionsSchema.status, "pending")
+      const { eq: eq73, and: and62 } = await import("drizzle-orm");
+      const deleteResult = await db.delete(aiSuggestionsSchema).where(and62(
+        eq73(aiSuggestionsSchema.businessAccountId, businessAccountId),
+        eq73(aiSuggestionsSchema.status, "pending")
       ));
       console.log(`[AI Suggestions] Deleted old pending suggestions for fresh analysis`);
       const analysisResult = await conversationAnalyzer.analyzeConversations(businessAccountId, daysBack);
@@ -88307,10 +88438,10 @@ ${script}`
       const businessAccountId = user.businessAccountId;
       const { id } = req.params;
       const { aiSuggestions: aiSuggestions2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq72, and: and61 } = await import("drizzle-orm");
-      const [suggestion] = await db.select().from(aiSuggestions2).where(and61(
-        eq72(aiSuggestions2.id, id),
-        eq72(aiSuggestions2.businessAccountId, businessAccountId)
+      const { eq: eq73, and: and62 } = await import("drizzle-orm");
+      const [suggestion] = await db.select().from(aiSuggestions2).where(and62(
+        eq73(aiSuggestions2.id, id),
+        eq73(aiSuggestions2.businessAccountId, businessAccountId)
       )).limit(1);
       if (!suggestion) {
         return res.status(404).json({ error: "Suggestion not found" });
@@ -88358,7 +88489,7 @@ ${script}`
         acceptedBy: user.id,
         implementedId,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq72(aiSuggestions2.id, id));
+      }).where(eq73(aiSuggestions2.id, id));
       res.json({ success: true, implementedId });
     } catch (error) {
       console.error("[AI Suggestions] Error accepting suggestion:", error);
@@ -88372,10 +88503,10 @@ ${script}`
       const { id } = req.params;
       const { reason } = req.body;
       const { aiSuggestions: aiSuggestions2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq72, and: and61 } = await import("drizzle-orm");
-      const [suggestion] = await db.select().from(aiSuggestions2).where(and61(
-        eq72(aiSuggestions2.id, id),
-        eq72(aiSuggestions2.businessAccountId, businessAccountId)
+      const { eq: eq73, and: and62 } = await import("drizzle-orm");
+      const [suggestion] = await db.select().from(aiSuggestions2).where(and62(
+        eq73(aiSuggestions2.id, id),
+        eq73(aiSuggestions2.businessAccountId, businessAccountId)
       )).limit(1);
       if (!suggestion) {
         return res.status(404).json({ error: "Suggestion not found" });
@@ -88386,7 +88517,7 @@ ${script}`
         dismissedBy: user.id,
         dismissReason: reason || null,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq72(aiSuggestions2.id, id));
+      }).where(eq73(aiSuggestions2.id, id));
       res.json({ success: true });
     } catch (error) {
       console.error("[AI Suggestions] Error dismissing suggestion:", error);
@@ -88836,9 +88967,9 @@ ${script}`
         return res.status(400).json({ error: "Business account not found" });
       }
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
-      const { eq: eq72, and: and61, isNotNull: isNotNull8 } = await import("drizzle-orm");
-      const rows = await db2.selectDistinct({ crmFieldKey: journeySteps.crmFieldKey }).from(journeySteps).innerJoin(conversationJourneys, eq72(journeySteps.journeyId, conversationJourneys.id)).where(and61(
-        eq72(conversationJourneys.businessAccountId, businessAccountId),
+      const { eq: eq73, and: and62, isNotNull: isNotNull8 } = await import("drizzle-orm");
+      const rows = await db2.selectDistinct({ crmFieldKey: journeySteps.crmFieldKey }).from(journeySteps).innerJoin(conversationJourneys, eq73(journeySteps.journeyId, conversationJourneys.id)).where(and62(
+        eq73(conversationJourneys.businessAccountId, businessAccountId),
         isNotNull8(journeySteps.crmFieldKey)
       ));
       const keys = rows.map((r) => (r.crmFieldKey || "").trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
@@ -89276,7 +89407,7 @@ ${script}`
       fileName: whatsappLeadAttachments.fileName,
       mimeType: whatsappLeadAttachments.mimeType,
       documentCategory: whatsappLeadAttachments.documentCategory
-    }).from(whatsappLeadAttachments).where(eq67(whatsappLeadAttachments.leadId, leadId));
+    }).from(whatsappLeadAttachments).where(eq68(whatsappLeadAttachments.leadId, leadId));
     const docs = {};
     for (const att of attachments) {
       if (!att.filePath || !att.documentCategory) continue;
@@ -89302,22 +89433,22 @@ ${script}`
       const configuredLeadFields = await db.select({
         fieldKey: whatsappLeadFields.fieldKey,
         fieldLabel: whatsappLeadFields.fieldLabel
-      }).from(whatsappLeadFields).where(and57(
-        eq67(whatsappLeadFields.businessAccountId, businessAccountId),
-        eq67(whatsappLeadFields.isEnabled, true)
+      }).from(whatsappLeadFields).where(and58(
+        eq68(whatsappLeadFields.businessAccountId, businessAccountId),
+        eq68(whatsappLeadFields.isEnabled, true)
       )).orderBy(whatsappLeadFields.displayOrder);
       const defaultKeys = ["customer_name", "customer_phone", "customer_email"];
       const extractedFields = configuredLeadFields.filter((f) => !defaultKeys.includes(f.fieldKey)).map((f) => ({
         value: `extracted.${f.fieldKey}`,
         label: f.fieldLabel
       }));
-      const allFlows = await db.select({ id: whatsappFlows.id }).from(whatsappFlows).where(eq67(whatsappFlows.businessAccountId, businessAccountId));
+      const allFlows = await db.select({ id: whatsappFlows.id }).from(whatsappFlows).where(eq68(whatsappFlows.businessAccountId, businessAccountId));
       const documentFields = [];
       if (allFlows.length > 0) {
         const flowIds = allFlows.map((f) => f.id);
-        const uploadSteps = await db.select({ options: whatsappFlowSteps.options }).from(whatsappFlowSteps).where(and57(
+        const uploadSteps = await db.select({ options: whatsappFlowSteps.options }).from(whatsappFlowSteps).where(and58(
           inArray12(whatsappFlowSteps.flowId, flowIds),
-          eq67(whatsappFlowSteps.type, "upload")
+          eq68(whatsappFlowSteps.type, "upload")
         ));
         const seenDocTypes = /* @__PURE__ */ new Set();
         for (const step of uploadSteps) {
@@ -89350,11 +89481,11 @@ ${script}`
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const leadFields = await db.select().from(whatsappLeadFields).where(and57(
-        eq67(whatsappLeadFields.businessAccountId, businessAccountId),
-        eq67(whatsappLeadFields.isEnabled, true)
+      const leadFields = await db.select().from(whatsappLeadFields).where(and58(
+        eq68(whatsappLeadFields.businessAccountId, businessAccountId),
+        eq68(whatsappLeadFields.isEnabled, true)
       )).orderBy(whatsappLeadFields.displayOrder);
-      const existingMappings = await db.select({ id: customCrmFieldMappings.id, sourceField: customCrmFieldMappings.sourceField, crmField: customCrmFieldMappings.crmField, isAutoManaged: customCrmFieldMappings.isAutoManaged }).from(customCrmFieldMappings).where(eq67(customCrmFieldMappings.businessAccountId, businessAccountId));
+      const existingMappings = await db.select({ id: customCrmFieldMappings.id, sourceField: customCrmFieldMappings.sourceField, crmField: customCrmFieldMappings.crmField, isAutoManaged: customCrmFieldMappings.isAutoManaged }).from(customCrmFieldMappings).where(eq68(customCrmFieldMappings.businessAccountId, businessAccountId));
       const existingBySourceField = new Map(existingMappings.map((m) => [m.sourceField, m]));
       const toCreate = [];
       const toUpdate = [];
@@ -89374,10 +89505,10 @@ ${script}`
       let updated = 0;
       const skipped = leadFields.length - toCreate.length - toUpdate.length;
       for (const item of toUpdate) {
-        await db.update(customCrmFieldMappings).set({ crmField: item.crmFieldKey }).where(eq67(customCrmFieldMappings.id, item.id));
+        await db.update(customCrmFieldMappings).set({ crmField: item.crmFieldKey }).where(eq68(customCrmFieldMappings.id, item.id));
         updated++;
       }
-      const maxSortResult = await db.select({ maxOrder: sql40`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq67(customCrmFieldMappings.businessAccountId, businessAccountId));
+      const maxSortResult = await db.select({ maxOrder: sql40`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq68(customCrmFieldMappings.businessAccountId, businessAccountId));
       let nextSortOrder = (maxSortResult[0]?.maxOrder || 0) + 1;
       for (const item of toCreate) {
         const isDefaultField = defaultFieldKeys.includes(item.fieldKey);
@@ -89404,7 +89535,7 @@ ${script}`
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const [customCrmRow] = await db.select({ name: customCrmSettings.name, authType: customCrmSettings.authType, enabled: customCrmSettings.enabled }).from(customCrmSettings).where(eq67(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [customCrmRow] = await db.select({ name: customCrmSettings.name, authType: customCrmSettings.authType, enabled: customCrmSettings.enabled }).from(customCrmSettings).where(eq68(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       const isCaprion = customCrmRow?.authType === "checksum_caprion";
       const customCrmEntry = isCaprion ? {
         id: "custom-crm",
@@ -89470,7 +89601,7 @@ ${script}`
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const [existing] = await db.select().from(customCrmSettings).where(eq67(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [existing] = await db.select().from(customCrmSettings).where(eq68(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       if (!existing) {
         return res.json({ enabled: false, name: "Custom CRM" });
       }
@@ -89500,7 +89631,7 @@ ${script}`
       const user = req.user;
       const businessAccountId = user.businessAccountId;
       const { enabled, name, apiBaseUrl, apiEndpoint, httpMethod, contentType, authType, authKey, authHeaderName, autoSyncEnabled, callbackUrl, relayUrl } = req.body;
-      const [existing] = await db.select().from(customCrmSettings).where(eq67(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [existing] = await db.select().from(customCrmSettings).where(eq68(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       const { encrypt: encrypt3 } = await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports));
       const settingsData = {
         enabled: !!enabled,
@@ -89522,7 +89653,7 @@ ${script}`
         settingsData.authKey = existing.authKey;
       }
       if (existing) {
-        await db.update(customCrmSettings).set(settingsData).where(eq67(customCrmSettings.id, existing.id));
+        await db.update(customCrmSettings).set(settingsData).where(eq68(customCrmSettings.id, existing.id));
       } else {
         settingsData.businessAccountId = businessAccountId;
         await db.insert(customCrmSettings).values(settingsData);
@@ -89649,7 +89780,7 @@ ${script}`
       const user = req.user;
       const businessAccountId = user.businessAccountId;
       const { apiBaseUrl, apiEndpoint, authType, authKey, authHeaderName } = req.body;
-      const [existing] = await db.select().from(customCrmSettings).where(eq67(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [existing] = await db.select().from(customCrmSettings).where(eq68(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       const testBaseUrl = apiBaseUrl || existing?.apiBaseUrl;
       const testEndpoint = apiEndpoint || existing?.apiEndpoint;
       if (!testBaseUrl || !testEndpoint) {
@@ -89676,7 +89807,7 @@ ${script}`
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const mappings = await db.select().from(customCrmFieldMappings).where(eq67(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
+      const mappings = await db.select().from(customCrmFieldMappings).where(eq68(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
       res.json(mappings);
     } catch (error) {
       console.error("[Custom CRM] Get field mappings error:", error);
@@ -89711,9 +89842,9 @@ ${script}`
       const businessAccountId = user.businessAccountId;
       const { id } = req.params;
       const { crmField, sourceType, sourceField, customValue, displayName, isEnabled, sortOrder, isAutoManaged } = req.body;
-      const [existing] = await db.select().from(customCrmFieldMappings).where(and57(
-        eq67(customCrmFieldMappings.id, id),
-        eq67(customCrmFieldMappings.businessAccountId, businessAccountId)
+      const [existing] = await db.select().from(customCrmFieldMappings).where(and58(
+        eq68(customCrmFieldMappings.id, id),
+        eq68(customCrmFieldMappings.businessAccountId, businessAccountId)
       )).limit(1);
       if (!existing) {
         return res.status(404).json({ error: "Field mapping not found" });
@@ -89727,7 +89858,7 @@ ${script}`
       if (isEnabled !== void 0) safeUpdate.isEnabled = isEnabled;
       if (sortOrder !== void 0) safeUpdate.sortOrder = sortOrder;
       if (isAutoManaged !== void 0) safeUpdate.isAutoManaged = isAutoManaged;
-      const [updated] = await db.update(customCrmFieldMappings).set(safeUpdate).where(eq67(customCrmFieldMappings.id, id)).returning();
+      const [updated] = await db.update(customCrmFieldMappings).set(safeUpdate).where(eq68(customCrmFieldMappings.id, id)).returning();
       res.json(updated);
     } catch (error) {
       console.error("[Custom CRM] Update field mapping error:", error);
@@ -89739,9 +89870,9 @@ ${script}`
       const user = req.user;
       const businessAccountId = user.businessAccountId;
       const { id } = req.params;
-      await db.delete(customCrmFieldMappings).where(and57(
-        eq67(customCrmFieldMappings.id, id),
-        eq67(customCrmFieldMappings.businessAccountId, businessAccountId)
+      await db.delete(customCrmFieldMappings).where(and58(
+        eq68(customCrmFieldMappings.id, id),
+        eq68(customCrmFieldMappings.businessAccountId, businessAccountId)
       ));
       res.json({ success: true });
     } catch (error) {
@@ -89755,18 +89886,18 @@ ${script}`
       const businessAccountId = user.businessAccountId;
       const { leadId } = req.params;
       const { leadType } = req.body;
-      const [settings] = await db.select().from(customCrmSettings).where(eq67(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [settings] = await db.select().from(customCrmSettings).where(eq68(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       if (!settings || !settings.enabled) {
         return res.status(400).json({ error: "Custom CRM integration is not enabled" });
       }
       if (!settings.apiBaseUrl || !settings.apiEndpoint) {
         return res.status(400).json({ error: "Custom CRM API URL not configured" });
       }
-      const fieldMappings = await db.select().from(customCrmFieldMappings).where(eq67(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
+      const fieldMappings = await db.select().from(customCrmFieldMappings).where(eq68(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
       if (leadType === "whatsapp") {
-        const [whatsappLead] = await db.select().from(whatsappLeads).where(and57(
-          eq67(whatsappLeads.id, leadId),
-          eq67(whatsappLeads.businessAccountId, businessAccountId)
+        const [whatsappLead] = await db.select().from(whatsappLeads).where(and58(
+          eq68(whatsappLeads.id, leadId),
+          eq68(whatsappLeads.businessAccountId, businessAccountId)
         )).limit(1);
         if (!whatsappLead) {
           return res.status(404).json({ error: "WhatsApp lead not found" });
@@ -89788,9 +89919,9 @@ ${script}`
         const dealerName = extractedData.dealer_name || extractedData.dealerName || extractedData.dealer;
         const cityName = extractedData.city || extractedData.city_name || extractedData.dealer_city || extractedData.dealerCity;
         if (storeName || dealerName) {
-          const storeCreds = await db.select().from(crmStoreCredentials).where(and57(
-            eq67(crmStoreCredentials.businessAccountId, businessAccountId),
-            eq67(crmStoreCredentials.isActive, true)
+          const storeCreds = await db.select().from(crmStoreCredentials).where(and58(
+            eq68(crmStoreCredentials.businessAccountId, businessAccountId),
+            eq68(crmStoreCredentials.isActive, true)
           ));
           const norm2 = (s) => s ? s.trim().toLowerCase() : "";
           const nStore = norm2(storeName);
@@ -89814,7 +89945,7 @@ ${script}`
           if (!storeCredential && storeCreds.length > 0 && (nStore || nDealer)) {
             try {
               const OpenAI40 = (await import("openai")).default;
-              const [bizAcct] = await db.select().from(businessAccounts).where(eq67(businessAccounts.id, businessAccountId)).limit(1);
+              const [bizAcct] = await db.select().from(businessAccounts).where(eq68(businessAccounts.id, businessAccountId)).limit(1);
               const openaiApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
               if (openaiApiKey) {
                 const openaiClient = new OpenAI40({ apiKey: openaiApiKey, timeout: 15e3 });
@@ -89865,7 +89996,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             customCrmSyncError: null,
             customCrmSyncPayload: result.payload,
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq67(whatsappLeads.id, leadId));
+          }).where(eq68(whatsappLeads.id, leadId));
           res.json({ success: true, message: result.message, crmLeadId: result.leadId, applicationId: result.applicationId, documentResults: result.documentResults });
         } else {
           await db.update(whatsappLeads).set({
@@ -89873,7 +90004,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             customCrmSyncError: result.message,
             customCrmSyncPayload: result.payload,
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq67(whatsappLeads.id, leadId));
+          }).where(eq68(whatsappLeads.id, leadId));
           res.status(400).json({ success: false, error: result.message });
         }
       } else {
@@ -89918,27 +90049,27 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const [settings] = await db.select().from(customCrmSettings).where(eq67(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [settings] = await db.select().from(customCrmSettings).where(eq68(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       if (!settings || !settings.enabled) {
         return res.status(400).json({ error: "Custom CRM integration is not enabled" });
       }
       if (!settings.apiBaseUrl || !settings.apiEndpoint) {
         return res.status(400).json({ error: "Custom CRM API URL not configured" });
       }
-      const fieldMappings = await db.select().from(customCrmFieldMappings).where(eq67(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
+      const fieldMappings = await db.select().from(customCrmFieldMappings).where(eq68(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
       if (fieldMappings.length === 0) {
         return res.status(400).json({ error: "No field mappings configured" });
       }
-      const unsyncedLeads = await db.select().from(whatsappLeads).where(and57(
-        eq67(whatsappLeads.businessAccountId, businessAccountId),
+      const unsyncedLeads = await db.select().from(whatsappLeads).where(and58(
+        eq68(whatsappLeads.businessAccountId, businessAccountId),
         sql40`(${whatsappLeads.customCrmSyncStatus} IS NULL OR ${whatsappLeads.customCrmSyncStatus} = 'failed')`
       )).orderBy(desc30(whatsappLeads.createdAt));
       if (unsyncedLeads.length === 0) {
         return res.json({ success: true, message: "No unsynced leads found", synced: 0, failed: 0, total: 0 });
       }
-      const storeCreds = await db.select().from(crmStoreCredentials).where(and57(
-        eq67(crmStoreCredentials.businessAccountId, businessAccountId),
-        eq67(crmStoreCredentials.isActive, true)
+      const storeCreds = await db.select().from(crmStoreCredentials).where(and58(
+        eq68(crmStoreCredentials.businessAccountId, businessAccountId),
+        eq68(crmStoreCredentials.isActive, true)
       ));
       const { syncLeadWithDocuments: syncLeadWithDocuments2 } = await Promise.resolve().then(() => (init_customCrmService(), customCrmService_exports));
       let syncedCount = 0;
@@ -89978,7 +90109,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             if (!storeCredential && storeCreds.length > 0 && (nS || nD)) {
               try {
                 const OpenAI40 = (await import("openai")).default;
-                const [bizAcct] = await db.select().from(businessAccounts).where(eq67(businessAccounts.id, businessAccountId)).limit(1);
+                const [bizAcct] = await db.select().from(businessAccounts).where(eq68(businessAccounts.id, businessAccountId)).limit(1);
                 const openaiApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
                 if (openaiApiKey) {
                   const openaiClient = new OpenAI40({ apiKey: openaiApiKey, timeout: 15e3 });
@@ -90025,7 +90156,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               customCrmSyncError: null,
               customCrmSyncPayload: result.payload,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq67(whatsappLeads.id, lead.id));
+            }).where(eq68(whatsappLeads.id, lead.id));
             syncedCount++;
           } else {
             await db.update(whatsappLeads).set({
@@ -90033,7 +90164,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               customCrmSyncError: result.message,
               customCrmSyncPayload: result.payload,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq67(whatsappLeads.id, lead.id));
+            }).where(eq68(whatsappLeads.id, lead.id));
             failedCount++;
           }
         } catch (err) {
@@ -90042,7 +90173,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             customCrmSyncStatus: "failed",
             customCrmSyncError: err.message || "Unknown error",
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq67(whatsappLeads.id, lead.id));
+          }).where(eq68(whatsappLeads.id, lead.id));
           failedCount++;
         }
       }
@@ -90062,14 +90193,14 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const activeFlow2 = await db.select({ id: whatsappFlows.id, name: whatsappFlows.name }).from(whatsappFlows).where(and57(
-        eq67(whatsappFlows.businessAccountId, businessAccountId),
-        eq67(whatsappFlows.isActive, "true")
+      const activeFlow2 = await db.select({ id: whatsappFlows.id, name: whatsappFlows.name }).from(whatsappFlows).where(and58(
+        eq68(whatsappFlows.businessAccountId, businessAccountId),
+        eq68(whatsappFlows.isActive, "true")
       )).limit(1);
       if (activeFlow2.length === 0) {
         return res.status(404).json({ error: "No active WhatsApp flow found for this account" });
       }
-      const steps = await db.select().from(whatsappFlowSteps).where(eq67(whatsappFlowSteps.flowId, activeFlow2[0].id)).orderBy(whatsappFlowSteps.stepOrder);
+      const steps = await db.select().from(whatsappFlowSteps).where(eq68(whatsappFlowSteps.flowId, activeFlow2[0].id)).orderBy(whatsappFlowSteps.stepOrder);
       const dropdownSteps = steps.filter((s) => s.type === "dropdown" || s.type === "list");
       const stepByField = /* @__PURE__ */ new Map();
       for (const s of dropdownSteps) {
@@ -90156,9 +90287,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         city: crmStoreCredentials.city,
         storeId: crmStoreCredentials.storeId,
         sid: crmStoreCredentials.sid
-      }).from(crmStoreCredentials).where(and57(
-        eq67(crmStoreCredentials.businessAccountId, businessAccountId),
-        eq67(crmStoreCredentials.isActive, true)
+      }).from(crmStoreCredentials).where(and58(
+        eq68(crmStoreCredentials.businessAccountId, businessAccountId),
+        eq68(crmStoreCredentials.isActive, true)
       ));
       const credMap = /* @__PURE__ */ new Map();
       for (const c of existingCreds) {
@@ -90215,7 +90346,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         isActive: crmStoreCredentials.isActive,
         createdAt: crmStoreCredentials.createdAt,
         updatedAt: crmStoreCredentials.updatedAt
-      }).from(crmStoreCredentials).where(eq67(crmStoreCredentials.businessAccountId, businessAccountId)).orderBy(crmStoreCredentials.dealerName, crmStoreCredentials.storeName);
+      }).from(crmStoreCredentials).where(eq68(crmStoreCredentials.businessAccountId, businessAccountId)).orderBy(crmStoreCredentials.dealerName, crmStoreCredentials.storeName);
       res.json(credentials.map(({ secret, ...rest }) => ({
         ...rest,
         hasSecret: !!(secret && secret.length > 0)
@@ -90258,9 +90389,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = user.businessAccountId;
       const { id } = req.params;
       const { dealerName, storeName, city, storeId, sid, secret, isActive } = req.body;
-      const [existing] = await db.select().from(crmStoreCredentials).where(and57(
-        eq67(crmStoreCredentials.id, id),
-        eq67(crmStoreCredentials.businessAccountId, businessAccountId)
+      const [existing] = await db.select().from(crmStoreCredentials).where(and58(
+        eq68(crmStoreCredentials.id, id),
+        eq68(crmStoreCredentials.businessAccountId, businessAccountId)
       )).limit(1);
       if (!existing) {
         return res.status(404).json({ error: "Store credential not found" });
@@ -90276,7 +90407,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         const { encrypt: encrypt3 } = await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports));
         updateData.secret = encrypt3(secret);
       }
-      const [updated] = await db.update(crmStoreCredentials).set(updateData).where(eq67(crmStoreCredentials.id, id)).returning();
+      const [updated] = await db.update(crmStoreCredentials).set(updateData).where(eq68(crmStoreCredentials.id, id)).returning();
       const { secret: _, ...safeCredential } = updated;
       res.json(safeCredential);
     } catch (error) {
@@ -90289,14 +90420,14 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const user = req.user;
       const businessAccountId = user.businessAccountId;
       const { id } = req.params;
-      const [existing] = await db.select().from(crmStoreCredentials).where(and57(
-        eq67(crmStoreCredentials.id, id),
-        eq67(crmStoreCredentials.businessAccountId, businessAccountId)
+      const [existing] = await db.select().from(crmStoreCredentials).where(and58(
+        eq68(crmStoreCredentials.id, id),
+        eq68(crmStoreCredentials.businessAccountId, businessAccountId)
       )).limit(1);
       if (!existing) {
         return res.status(404).json({ error: "Store credential not found" });
       }
-      await db.delete(crmStoreCredentials).where(eq67(crmStoreCredentials.id, id));
+      await db.delete(crmStoreCredentials).where(eq68(crmStoreCredentials.id, id));
       res.json({ success: true });
     } catch (error) {
       console.error("[Store Credentials] Delete error:", error);
@@ -90315,9 +90446,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       if (uniqueIds.length === 0) {
         return res.status(400).json({ error: "No valid ids provided" });
       }
-      const deleted = await db.delete(crmStoreCredentials).where(and57(
+      const deleted = await db.delete(crmStoreCredentials).where(and58(
         inArray12(crmStoreCredentials.id, uniqueIds),
-        eq67(crmStoreCredentials.businessAccountId, businessAccountId)
+        eq68(crmStoreCredentials.businessAccountId, businessAccountId)
       )).returning({ id: crmStoreCredentials.id });
       res.json({ success: true, deleted: deleted.length, requested: uniqueIds.length });
     } catch (error) {
@@ -90329,13 +90460,13 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const allLeadFields = await db.select().from(whatsappLeadFields).where(and57(
-        eq67(whatsappLeadFields.businessAccountId, businessAccountId),
-        eq67(whatsappLeadFields.isEnabled, true)
+      const allLeadFields = await db.select().from(whatsappLeadFields).where(and58(
+        eq68(whatsappLeadFields.businessAccountId, businessAccountId),
+        eq68(whatsappLeadFields.isEnabled, true)
       )).orderBy(whatsappLeadFields.displayOrder);
-      const [storeCredential] = await db.select().from(crmStoreCredentials).where(and57(
-        eq67(crmStoreCredentials.businessAccountId, businessAccountId),
-        eq67(crmStoreCredentials.isActive, true)
+      const [storeCredential] = await db.select().from(crmStoreCredentials).where(and58(
+        eq68(crmStoreCredentials.businessAccountId, businessAccountId),
+        eq68(crmStoreCredentials.isActive, true)
       )).limit(1);
       if (!storeCredential) {
         return res.status(400).json({
@@ -90438,9 +90569,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             continue;
           }
           const encryptedSecret = encrypt3(cred.secret);
-          const [existingStore] = await db.select().from(crmStoreCredentials).where(and57(
-            eq67(crmStoreCredentials.businessAccountId, businessAccountId),
-            eq67(crmStoreCredentials.sid, cred.sid)
+          const [existingStore] = await db.select().from(crmStoreCredentials).where(and58(
+            eq68(crmStoreCredentials.businessAccountId, businessAccountId),
+            eq68(crmStoreCredentials.sid, cred.sid)
           )).limit(1);
           if (existingStore) {
             await db.update(crmStoreCredentials).set({
@@ -90451,7 +90582,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               secret: encryptedSecret,
               isActive: true,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq67(crmStoreCredentials.id, existingStore.id));
+            }).where(eq68(crmStoreCredentials.id, existingStore.id));
             results.push({ index: i, success: true, action: "updated", storeName: cred.storeName });
           } else {
             await db.insert(crmStoreCredentials).values({
@@ -90581,10 +90712,10 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         sid: r.sid,
         secret: r.secret
       }));
-      const flows = await db.select().from(whatsappFlows).where(eq67(whatsappFlows.businessAccountId, businessAccountId));
+      const flows = await db.select().from(whatsappFlows).where(eq68(whatsappFlows.businessAccountId, businessAccountId));
       const flowInfo = [];
       for (const f of flows) {
-        const steps = await db.select().from(whatsappFlowSteps).where(eq67(whatsappFlowSteps.flowId, f.id)).orderBy(whatsappFlowSteps.stepOrder);
+        const steps = await db.select().from(whatsappFlowSteps).where(eq68(whatsappFlowSteps.flowId, f.id)).orderBy(whatsappFlowSteps.stepOrder);
         const dropdowns = steps.filter((s) => s.type === "dropdown");
         if (dropdowns.length < 3) continue;
         const byField = (names) => dropdowns.find((s) => names.includes((s.saveToField || "").toLowerCase()));
@@ -90626,8 +90757,8 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       }
       const flowStepResults = { updated: 0, errors: [] };
       if (flowId && (step3Id || step4Id || step5Id)) {
-        const steps = await db.select().from(whatsappFlowSteps).where(eq67(whatsappFlowSteps.flowId, flowId));
-        const [ownFlow] = await db.select({ id: whatsappFlows.id }).from(whatsappFlows).where(and57(eq67(whatsappFlows.id, flowId), eq67(whatsappFlows.businessAccountId, businessAccountId))).limit(1);
+        const steps = await db.select().from(whatsappFlowSteps).where(eq68(whatsappFlowSteps.flowId, flowId));
+        const [ownFlow] = await db.select({ id: whatsappFlows.id }).from(whatsappFlows).where(and58(eq68(whatsappFlows.id, flowId), eq68(whatsappFlows.businessAccountId, businessAccountId))).limit(1);
         if (!ownFlow) {
           return res.status(403).json({ error: "Flow not found for this business account." });
         }
@@ -90644,7 +90775,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             delete next.dependsOnFields;
             delete next.conditionalOptions;
             delete next.fallbackOptions;
-            await db.update(whatsappFlowSteps).set({ options: next }).where(eq67(whatsappFlowSteps.id, s3.id));
+            await db.update(whatsappFlowSteps).set({ options: next }).where(eq68(whatsappFlowSteps.id, s3.id));
             flowStepResults.updated++;
           } catch (e) {
             flowStepResults.errors.push(`Dealer step: ${e.message}`);
@@ -90662,7 +90793,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             };
             delete next.dropdownItems;
             delete next.dependsOnField;
-            await db.update(whatsappFlowSteps).set({ options: next }).where(eq67(whatsappFlowSteps.id, s4.id));
+            await db.update(whatsappFlowSteps).set({ options: next }).where(eq68(whatsappFlowSteps.id, s4.id));
             flowStepResults.updated++;
           } catch (e) {
             flowStepResults.errors.push(`City step: ${e.message}`);
@@ -90680,7 +90811,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             };
             delete next.dropdownItems;
             delete next.dependsOnField;
-            await db.update(whatsappFlowSteps).set({ options: next }).where(eq67(whatsappFlowSteps.id, s5.id));
+            await db.update(whatsappFlowSteps).set({ options: next }).where(eq68(whatsappFlowSteps.id, s5.id));
             flowStepResults.updated++;
           } catch (e) {
             flowStepResults.errors.push(`Store step: ${e.message}`);
@@ -90695,7 +90826,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       for (const cred of credRows) {
         try {
           const encryptedSecret = encrypt3(cred.secret);
-          const [existingStore] = await db.select().from(crmStoreCredentials).where(and57(eq67(crmStoreCredentials.businessAccountId, businessAccountId), eq67(crmStoreCredentials.sid, cred.sid))).limit(1);
+          const [existingStore] = await db.select().from(crmStoreCredentials).where(and58(eq68(crmStoreCredentials.businessAccountId, businessAccountId), eq68(crmStoreCredentials.sid, cred.sid))).limit(1);
           if (existingStore) {
             await db.update(crmStoreCredentials).set({
               dealerName: cred.dealerName,
@@ -90705,7 +90836,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               secret: encryptedSecret,
               isActive: true,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq67(crmStoreCredentials.id, existingStore.id));
+            }).where(eq68(crmStoreCredentials.id, existingStore.id));
             credResults.updated++;
           } else {
             await db.insert(crmStoreCredentials).values({
@@ -90741,7 +90872,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       }
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const [businessAccount] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq67(businessAccounts.id, businessAccountId)).limit(1);
+      const [businessAccount] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq68(businessAccounts.id, businessAccountId)).limit(1);
       const apiKey = businessAccount?.openaiApiKey || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         return res.status(400).json({ error: "No AI API key configured" });
@@ -90827,9 +90958,9 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
       if (!loan_id || !status || !checksum || !business_account_id) {
         return res.status(400).json({ error: "Missing required fields" });
       }
-      const [storeCred] = await db.select().from(crmStoreCredentials).where(and57(
-        eq67(crmStoreCredentials.businessAccountId, business_account_id),
-        ...sid ? [eq67(crmStoreCredentials.sid, sid)] : []
+      const [storeCred] = await db.select().from(crmStoreCredentials).where(and58(
+        eq68(crmStoreCredentials.businessAccountId, business_account_id),
+        ...sid ? [eq68(crmStoreCredentials.sid, sid)] : []
       )).limit(1);
       if (!storeCred) {
         console.error(`[CRM Webhook] No store credential found for account ${business_account_id}, SID ${sid}`);
@@ -90857,9 +90988,9 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         console.error(`[CRM Webhook] Checksum verification failed for loan ${loan_id}`);
         return res.status(401).json({ error: "Invalid checksum" });
       }
-      const leadsWithLoanId = await db.select().from(whatsappLeads).where(and57(
-        eq67(whatsappLeads.businessAccountId, business_account_id),
-        eq67(whatsappLeads.customCrmLeadId, loan_id)
+      const leadsWithLoanId = await db.select().from(whatsappLeads).where(and58(
+        eq68(whatsappLeads.businessAccountId, business_account_id),
+        eq68(whatsappLeads.customCrmLeadId, loan_id)
       )).limit(1);
       if (leadsWithLoanId.length > 0) {
         const lead = leadsWithLoanId[0];
@@ -90873,7 +91004,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
             _crmStatusUpdatedAt: timestamp2 || (/* @__PURE__ */ new Date()).toISOString()
           },
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq67(whatsappLeads.id, lead.id));
+        }).where(eq68(whatsappLeads.id, lead.id));
         console.log(`[CRM Webhook] Updated lead ${lead.id} with loan status: ${status}`);
       } else {
         console.log(`[CRM Webhook] No lead found for loan_id: ${loan_id}, storing event`);
@@ -92434,7 +92565,7 @@ Strict Requirements:
         // Use SQL expressions to check if embeddings exist without fetching them
         hasImageEmbedding: sql40`CASE WHEN ${products.imageEmbedding} IS NOT NULL THEN true ELSE false END`,
         hasFullImageEmbedding: sql40`CASE WHEN ${products.fullImageEmbedding} IS NOT NULL THEN true ELSE false END`
-      }).from(products).where(eq67(products.businessAccountId, businessAccountId)).orderBy(desc30(products.updatedAt)).limit(100);
+      }).from(products).where(eq68(products.businessAccountId, businessAccountId)).orderBy(desc30(products.updatedAt)).limit(100);
       const productIds = allProducts.map((p) => p.id);
       const allEmbeddings = productIds.length > 0 ? await db.select({
         id: productJewelryEmbeddings.id,
@@ -92452,8 +92583,8 @@ Strict Requirements:
         // Check embedding existence without fetching the vectors
         hasEmbedding: sql40`CASE WHEN ${productJewelryEmbeddings.embedding} IS NOT NULL THEN true ELSE false END`,
         hasDescriptionEmbedding: sql40`CASE WHEN ${productJewelryEmbeddings.descriptionEmbedding} IS NOT NULL THEN true ELSE false END`
-      }).from(productJewelryEmbeddings).where(and57(
-        eq67(productJewelryEmbeddings.businessAccountId, businessAccountId),
+      }).from(productJewelryEmbeddings).where(and58(
+        eq68(productJewelryEmbeddings.businessAccountId, businessAccountId),
         inArray12(productJewelryEmbeddings.productId, productIds)
       )) : [];
       const embeddingsByProduct = /* @__PURE__ */ new Map();
@@ -93184,9 +93315,9 @@ Strict Requirements:
             jewelryType: row.jewelryType
           });
         }
-        const matchesAnyTerm = (text2, terms) => {
-          if (!text2) return false;
-          const lowerText = text2.toLowerCase();
+        const matchesAnyTerm = (text3, terms) => {
+          if (!text3) return false;
+          const lowerText = text3.toLowerCase();
           return terms.some((term) => lowerText.includes(term));
         };
         const getAttributeSearchText = (attributes) => {
@@ -93230,7 +93361,7 @@ Strict Requirements:
         console.log(`[Product Search] Query "${query}" matched ${allProducts.length} products (ALL terms must match in name, description, AI data, or attributes)`);
       }
       if (categoryId) {
-        const categoryProducts = await db.select({ productId: productCategories.productId }).from(productCategories).where(eq67(productCategories.categoryId, categoryId));
+        const categoryProducts = await db.select({ productId: productCategories.productId }).from(productCategories).where(eq68(productCategories.categoryId, categoryId));
         const productIdsWithCategory = new Set(categoryProducts.map((pc) => pc.productId));
         allProducts = allProducts.filter((product) => productIdsWithCategory.has(product.id));
       }
@@ -93567,7 +93698,7 @@ Strict Requirements:
       if (!["whatsapp", "instagram", "website"].includes(channel)) {
         return res.status(400).json({ error: "Invalid channel. Must be whatsapp, instagram, or website" });
       }
-      const results = await db.select().from(smartReplies).where(and57(eq67(smartReplies.businessAccountId, businessAccountId), eq67(smartReplies.channel, channel))).orderBy(smartReplies.priority);
+      const results = await db.select().from(smartReplies).where(and58(eq68(smartReplies.businessAccountId, businessAccountId), eq68(smartReplies.channel, channel))).orderBy(smartReplies.priority);
       res.json({ smartReplies: results });
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -93611,7 +93742,7 @@ Strict Requirements:
       if (responseUrl !== void 0) updates.responseUrl = responseUrl;
       if (priority !== void 0) updates.priority = priority;
       if (isActive !== void 0) updates.isActive = isActive;
-      const [updated] = await db.update(smartReplies).set(updates).where(and57(eq67(smartReplies.id, id), eq67(smartReplies.businessAccountId, businessAccountId))).returning();
+      const [updated] = await db.update(smartReplies).set(updates).where(and58(eq68(smartReplies.id, id), eq68(smartReplies.businessAccountId, businessAccountId))).returning();
       if (!updated) return res.status(404).json({ error: "Smart reply not found" });
       res.json(updated);
     } catch (error) {
@@ -93623,7 +93754,7 @@ Strict Requirements:
       const businessAccountId = req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
       const { id } = req.params;
-      const [deleted] = await db.delete(smartReplies).where(and57(eq67(smartReplies.id, id), eq67(smartReplies.businessAccountId, businessAccountId))).returning();
+      const [deleted] = await db.delete(smartReplies).where(and58(eq68(smartReplies.id, id), eq68(smartReplies.businessAccountId, businessAccountId))).returning();
       if (!deleted) return res.status(404).json({ error: "Smart reply not found" });
       res.json({ success: true });
     } catch (error) {
@@ -94309,10 +94440,10 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(400).json({ error: "Business account not found" });
       }
       const { leadId } = req.params;
-      const { eq: eq72, and: and61, desc: descOrder } = await import("drizzle-orm");
-      const [lead] = await db.select().from(leads).where(and61(
-        eq72(leads.id, leadId),
-        eq72(leads.businessAccountId, businessAccountId)
+      const { eq: eq73, and: and62, desc: descOrder } = await import("drizzle-orm");
+      const [lead] = await db.select().from(leads).where(and62(
+        eq73(leads.id, leadId),
+        eq73(leads.businessAccountId, businessAccountId)
       ));
       if (!lead) {
         return res.status(404).json({ error: "Lead not found" });
@@ -94323,9 +94454,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           sessionId: journeySessions.id,
           journeyName: conversationJourneys.name,
           completed: journeySessions.completed
-        }).from(journeySessions).leftJoin(conversationJourneys, eq72(journeySessions.journeyId, conversationJourneys.id)).where(and61(
-          eq72(journeySessions.conversationId, lead.conversationId),
-          eq72(journeySessions.businessAccountId, businessAccountId)
+        }).from(journeySessions).leftJoin(conversationJourneys, eq73(journeySessions.journeyId, conversationJourneys.id)).where(and62(
+          eq73(journeySessions.conversationId, lead.conversationId),
+          eq73(journeySessions.businessAccountId, businessAccountId)
         )).orderBy(descOrder(journeySessions.createdAt)).limit(1);
         if (sessions2.length > 0) {
           session = sessions2[0];
@@ -94336,9 +94467,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           sessionId: journeySessions.id,
           journeyName: conversationJourneys.name,
           completed: journeySessions.completed
-        }).from(journeyResponses).innerJoin(journeySessions, eq72(journeyResponses.sessionId, journeySessions.id)).leftJoin(conversationJourneys, eq72(journeySessions.journeyId, conversationJourneys.id)).where(and61(
-          eq72(journeyResponses.response, lead.phone),
-          eq72(journeySessions.businessAccountId, businessAccountId)
+        }).from(journeyResponses).innerJoin(journeySessions, eq73(journeyResponses.sessionId, journeySessions.id)).leftJoin(conversationJourneys, eq73(journeySessions.journeyId, conversationJourneys.id)).where(and62(
+          eq73(journeyResponses.response, lead.phone),
+          eq73(journeySessions.businessAccountId, businessAccountId)
         )).orderBy(descOrder(journeySessions.createdAt)).limit(1);
         if (phoneMatches.length > 0) {
           session = phoneMatches[0];
@@ -94351,7 +94482,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         response: journeyResponses.response,
         questionText: journeySteps.questionText,
         stepOrder: journeySteps.stepOrder
-      }).from(journeyResponses).leftJoin(journeySteps, eq72(journeyResponses.stepId, journeySteps.id)).where(eq72(journeyResponses.sessionId, session.sessionId)).orderBy(journeySteps.stepOrder);
+      }).from(journeyResponses).leftJoin(journeySteps, eq73(journeyResponses.stepId, journeySteps.id)).where(eq73(journeyResponses.sessionId, session.sessionId)).orderBy(journeySteps.stepOrder);
       res.json({
         journeyName: session.journeyName || "Unknown Journey",
         completed: session.completed === "true",
@@ -95291,8 +95422,8 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const viaFormConvIds = /* @__PURE__ */ new Set();
       if (conversationIds.length > 0) {
         const [leadRows, journeyRows] = await Promise.all([
-          db.select({ conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest }).from(leads).where(and57(eq67(leads.businessAccountId, businessAccountId), inArray12(leads.conversationId, conversationIds))),
-          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and57(eq67(journeySessions.businessAccountId, businessAccountId), inArray12(journeySessions.conversationId, conversationIds)))
+          db.select({ conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest }).from(leads).where(and58(eq68(leads.businessAccountId, businessAccountId), inArray12(leads.conversationId, conversationIds))),
+          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and58(eq68(journeySessions.businessAccountId, businessAccountId), inArray12(journeySessions.conversationId, conversationIds)))
         ]);
         for (const row of leadRows) {
           if (row.conversationId) {
@@ -95348,7 +95479,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
       const [lead, journeySession] = await Promise.all([
         storage.getLeadByConversation(conversationId, businessAccountId),
-        db.select({ id: journeySessions.id }).from(journeySessions).where(eq67(journeySessions.conversationId, conversationId)).limit(1)
+        db.select({ id: journeySessions.id }).from(journeySessions).where(eq68(journeySessions.conversationId, conversationId)).limit(1)
       ]);
       const leadTopics = lead?.topicsOfInterest || [];
       const leadBadge = lead ? leadTopics.includes("Discount Availed") ? "Discount Availed" : "Lead Captured" : null;
@@ -95382,9 +95513,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const pageNum = Math.max(1, parseInt(page) || 1);
       const limitNum = Math.max(1, Math.min(100, parseInt(limit) || 20));
       const offset = (pageNum - 1) * limitNum;
-      const { sql: dsql, eq: eq72, and: and61, gte: gte13, lte: lte7, desc: desc31, or: or8, ilike: ilike6, inArray: inArray14 } = await import("drizzle-orm");
+      const { sql: dsql, eq: eq73, and: and62, gte: gte13, lte: lte7, desc: desc31, or: or8, ilike: ilike6, inArray: inArray14 } = await import("drizzle-orm");
       const { conversationJourneys: conversationJourneys3, journeySessions: journeySessions2, journeyResponses: journeyResponses2, journeySteps: journeySteps2, conversations: conversations2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      let conditions = [eq72(journeySessions2.businessAccountId, businessAccountId)];
+      let conditions = [eq73(journeySessions2.businessAccountId, businessAccountId)];
       if (fromDate) {
         conditions.push(gte13(journeySessions2.createdAt, new Date(fromDate)));
       }
@@ -95400,7 +95531,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           )
         );
       }
-      const countResult = await db.select({ count: dsql`count(distinct ${journeySessions2.id})` }).from(journeySessions2).leftJoin(conversations2, eq72(journeySessions2.conversationId, conversations2.id)).leftJoin(conversationJourneys3, eq72(journeySessions2.journeyId, conversationJourneys3.id)).where(and61(...conditions));
+      const countResult = await db.select({ count: dsql`count(distinct ${journeySessions2.id})` }).from(journeySessions2).leftJoin(conversations2, eq73(journeySessions2.conversationId, conversations2.id)).leftJoin(conversationJourneys3, eq73(journeySessions2.journeyId, conversationJourneys3.id)).where(and62(...conditions));
       const total = Number(countResult[0]?.count || 0);
       const sessions2 = await db.select({
         sessionId: journeySessions2.id,
@@ -95410,14 +95541,14 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         conversationTitle: conversations2.title,
         completed: journeySessions2.completed,
         createdAt: journeySessions2.createdAt
-      }).from(journeySessions2).leftJoin(conversations2, eq72(journeySessions2.conversationId, conversations2.id)).leftJoin(conversationJourneys3, eq72(journeySessions2.journeyId, conversationJourneys3.id)).where(and61(...conditions)).orderBy(desc31(journeySessions2.createdAt)).limit(limitNum).offset(offset);
+      }).from(journeySessions2).leftJoin(conversations2, eq73(journeySessions2.conversationId, conversations2.id)).leftJoin(conversationJourneys3, eq73(journeySessions2.journeyId, conversationJourneys3.id)).where(and62(...conditions)).orderBy(desc31(journeySessions2.createdAt)).limit(limitNum).offset(offset);
       const sessionIds = sessions2.map((s) => s.sessionId);
       const responses = sessionIds.length > 0 ? await db.select({
         sessionId: journeyResponses2.sessionId,
         response: journeyResponses2.response,
         questionText: journeySteps2.questionText,
         stepOrder: journeySteps2.stepOrder
-      }).from(journeyResponses2).leftJoin(journeySteps2, eq72(journeyResponses2.stepId, journeySteps2.id)).where(inArray14(journeyResponses2.sessionId, sessionIds)).orderBy(journeySteps2.stepOrder) : [];
+      }).from(journeyResponses2).leftJoin(journeySteps2, eq73(journeyResponses2.stepId, journeySteps2.id)).where(inArray14(journeyResponses2.sessionId, sessionIds)).orderBy(journeySteps2.stepOrder) : [];
       const journeyLeads = sessions2.map((session) => {
         const sessionResponses = responses.filter((r) => r.sessionId === session.sessionId).map((r) => ({
           question: r.questionText || "Unknown",
@@ -97130,7 +97261,7 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
       if (!businessAccountId) {
         return res.status(400).json({ error: "Business account not found" });
       }
-      const [config] = await db.select().from(chatMenuConfigs).where(eq67(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
+      const [config] = await db.select().from(chatMenuConfigs).where(eq68(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
       if (!config) {
         return res.json({
           enabled: "false",
@@ -97193,16 +97324,16 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
       if (persistentCtaStyle !== void 0) updateData.persistentCtaStyle = persistentCtaStyle;
       if (chatInsteadStyle !== void 0) updateData.chatInsteadStyle = chatInsteadStyle;
       if (leadFormFields !== void 0) updateData.leadFormFields = leadFormFields;
-      const [existing] = await db.select().from(chatMenuConfigs).where(eq67(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
+      const [existing] = await db.select().from(chatMenuConfigs).where(eq68(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
       if (existing) {
-        await db.update(chatMenuConfigs).set(updateData).where(eq67(chatMenuConfigs.id, existing.id));
+        await db.update(chatMenuConfigs).set(updateData).where(eq68(chatMenuConfigs.id, existing.id));
       } else {
         await db.insert(chatMenuConfigs).values({
           businessAccountId,
           ...updateData
         });
       }
-      const [updated] = await db.select().from(chatMenuConfigs).where(eq67(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
+      const [updated] = await db.select().from(chatMenuConfigs).where(eq68(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
       res.json(normalizeMenuConfig(updated));
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -97214,7 +97345,7 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
       if (!businessAccountId) {
         return res.status(400).json({ error: "Business account not found" });
       }
-      const items = await db.select().from(chatMenuItems).where(eq67(chatMenuItems.businessAccountId, businessAccountId)).orderBy(asc13(chatMenuItems.sortOrder));
+      const items = await db.select().from(chatMenuItems).where(eq68(chatMenuItems.businessAccountId, businessAccountId)).orderBy(asc13(chatMenuItems.sortOrder));
       res.json(items);
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -97231,7 +97362,7 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
         return res.status(400).json({ error: "Title is required" });
       }
       if (parentId) {
-        const [parent] = await db.select().from(chatMenuItems).where(and57(eq67(chatMenuItems.id, parentId), eq67(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
+        const [parent] = await db.select().from(chatMenuItems).where(and58(eq68(chatMenuItems.id, parentId), eq68(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
         if (!parent) {
           return res.status(400).json({ error: "Parent item not found or does not belong to this business" });
         }
@@ -97263,12 +97394,12 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
       }
       const { id } = req.params;
       const { title, subtitle, icon, iconBgColor, iconColor, sortOrder, itemType, actionValue, parentId, isActive, leadFormFields } = req.body;
-      const [existing] = await db.select().from(chatMenuItems).where(and57(eq67(chatMenuItems.id, id), eq67(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
+      const [existing] = await db.select().from(chatMenuItems).where(and58(eq68(chatMenuItems.id, id), eq68(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
       if (!existing) {
         return res.status(404).json({ error: "Menu item not found" });
       }
       if (parentId && parentId !== existing.parentId) {
-        const [parent] = await db.select().from(chatMenuItems).where(and57(eq67(chatMenuItems.id, parentId), eq67(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
+        const [parent] = await db.select().from(chatMenuItems).where(and58(eq68(chatMenuItems.id, parentId), eq68(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
         if (!parent) {
           return res.status(400).json({ error: "Parent item not found or does not belong to this business" });
         }
@@ -97285,8 +97416,8 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
       if (leadFormFields !== void 0) updateData.leadFormFields = leadFormFields;
       if (parentId !== void 0) updateData.parentId = parentId;
       if (isActive !== void 0) updateData.isActive = isActive;
-      await db.update(chatMenuItems).set(updateData).where(eq67(chatMenuItems.id, id));
-      const [updated] = await db.select().from(chatMenuItems).where(eq67(chatMenuItems.id, id)).limit(1);
+      await db.update(chatMenuItems).set(updateData).where(eq68(chatMenuItems.id, id));
+      const [updated] = await db.select().from(chatMenuItems).where(eq68(chatMenuItems.id, id)).limit(1);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -97299,12 +97430,12 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
         return res.status(400).json({ error: "Business account not found" });
       }
       const { id } = req.params;
-      const [existing] = await db.select().from(chatMenuItems).where(and57(eq67(chatMenuItems.id, id), eq67(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
+      const [existing] = await db.select().from(chatMenuItems).where(and58(eq68(chatMenuItems.id, id), eq68(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
       if (!existing) {
         return res.status(404).json({ error: "Menu item not found" });
       }
-      await db.delete(chatMenuItems).where(and57(eq67(chatMenuItems.parentId, id), eq67(chatMenuItems.businessAccountId, businessAccountId)));
-      await db.delete(chatMenuItems).where(eq67(chatMenuItems.id, id));
+      await db.delete(chatMenuItems).where(and58(eq68(chatMenuItems.parentId, id), eq68(chatMenuItems.businessAccountId, businessAccountId)));
+      await db.delete(chatMenuItems).where(eq68(chatMenuItems.id, id));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -97328,13 +97459,13 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
           }
         }
       }
-      const [config] = await db.select().from(chatMenuConfigs).where(eq67(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
+      const [config] = await db.select().from(chatMenuConfigs).where(eq68(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
       if (!config || config.enabled !== "true") {
         return res.json({ enabled: false });
       }
-      const items = await db.select().from(chatMenuItems).where(and57(
-        eq67(chatMenuItems.businessAccountId, businessAccountId),
-        eq67(chatMenuItems.isActive, "true")
+      const items = await db.select().from(chatMenuItems).where(and58(
+        eq68(chatMenuItems.businessAccountId, businessAccountId),
+        eq68(chatMenuItems.isActive, "true")
       )).orderBy(asc13(chatMenuItems.sortOrder));
       const buildTree = (parentId) => {
         return items.filter((item) => item.parentId === parentId).map((item) => ({
@@ -97584,18 +97715,18 @@ ${reviewText}`
         toDate
       });
       const convoConditions = [
-        eq67(conversations.businessAccountId, businessAccountId),
-        eq67(conversations.isInternalTest, "false")
+        eq68(conversations.businessAccountId, businessAccountId),
+        eq68(conversations.isInternalTest, "false")
       ];
       if (fromDate) convoConditions.push(gte12(conversations.createdAt, new Date(fromDate)));
       if (toDate) convoConditions.push(lte5(conversations.createdAt, new Date(toDate)));
-      const leadConditions = [eq67(leads.businessAccountId, businessAccountId)];
+      const leadConditions = [eq68(leads.businessAccountId, businessAccountId)];
       if (fromDate) leadConditions.push(gte12(leads.createdAt, new Date(fromDate)));
       if (toDate) leadConditions.push(lte5(leads.createdAt, new Date(toDate)));
       const [dashAllConvRows, dashFormLeadRows, [leadResult]] = await Promise.all([
-        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and57(...convoConditions)),
-        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and57(eq67(leads.businessAccountId, businessAccountId), sql40`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql40`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`)),
-        db.select({ total: count4() }).from(leads).where(and57(...leadConditions))
+        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and58(...convoConditions)),
+        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and58(eq68(leads.businessAccountId, businessAccountId), sql40`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql40`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`)),
+        db.select({ total: count4() }).from(leads).where(and58(...leadConditions))
       ]);
       const dashFormPhoneMap = /* @__PURE__ */ new Map();
       for (const l of dashFormLeadRows) {
@@ -98538,8 +98669,8 @@ ${reviewText}`
       const sevenDaysAgo = /* @__PURE__ */ new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
       const now = /* @__PURE__ */ new Date();
-      const convCount = await db.select({ count: sql40`count(*)::int` }).from(conversations).where(and57(
-        eq67(conversations.businessAccountId, businessAccountId),
+      const convCount = await db.select({ count: sql40`count(*)::int` }).from(conversations).where(and58(
+        eq68(conversations.businessAccountId, businessAccountId),
         gte12(conversations.createdAt, sevenDaysAgo),
         lte5(conversations.createdAt, now)
       ));
@@ -98556,7 +98687,7 @@ ${reviewText}`
         });
       }
       if (!forceRefresh) {
-        const [cached] = await db.select().from(conversationAnalysisCache).where(eq67(conversationAnalysisCache.businessAccountId, businessAccountId)).limit(1);
+        const [cached] = await db.select().from(conversationAnalysisCache).where(eq68(conversationAnalysisCache.businessAccountId, businessAccountId)).limit(1);
         if (cached) {
           const cacheAge = Date.now() - new Date(cached.updatedAt).getTime();
           const cacheValid = cacheAge < 24 * 60 * 60 * 1e3;
@@ -98685,7 +98816,7 @@ Format your response as JSON with this structure:
       if (!businessAccountId) {
         return res.status(400).json({ error: "Business account not found" });
       }
-      const [settings] = await db.select().from(conversationCategorySettings).where(eq67(conversationCategorySettings.businessAccountId, businessAccountId));
+      const [settings] = await db.select().from(conversationCategorySettings).where(eq68(conversationCategorySettings.businessAccountId, businessAccountId));
       res.json({
         categories: settings?.categories || [],
         allowOtherCategory: settings?.allowOtherCategory ?? true
@@ -98729,13 +98860,13 @@ Format your response as JSON with this structure:
           subSeen.add(subKey);
         }
       }
-      const [existing] = await db.select({ id: conversationCategorySettings.id }).from(conversationCategorySettings).where(eq67(conversationCategorySettings.businessAccountId, businessAccountId));
+      const [existing] = await db.select({ id: conversationCategorySettings.id }).from(conversationCategorySettings).where(eq68(conversationCategorySettings.businessAccountId, businessAccountId));
       if (existing) {
         await db.update(conversationCategorySettings).set({
           categories: categories2,
           allowOtherCategory: allowOtherCategory !== false,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq67(conversationCategorySettings.id, existing.id));
+        }).where(eq68(conversationCategorySettings.id, existing.id));
       } else {
         await db.insert(conversationCategorySettings).values({
           businessAccountId,
@@ -98761,11 +98892,11 @@ Format your response as JSON with this structure:
         name: businessAccounts.name,
         description: businessAccounts.description,
         website: businessAccounts.website
-      }).from(businessAccounts).where(eq67(businessAccounts.id, businessAccountId));
+      }).from(businessAccounts).where(eq68(businessAccounts.id, businessAccountId));
       if (!business) {
         return res.status(400).json({ error: "Business account not found" });
       }
-      const [widget] = await db.select({ customInstructions: widgetSettings.customInstructions }).from(widgetSettings).where(eq67(widgetSettings.businessAccountId, businessAccountId));
+      const [widget] = await db.select({ customInstructions: widgetSettings.customInstructions }).from(widgetSettings).where(eq68(widgetSettings.businessAccountId, businessAccountId));
       const contextParts = [];
       if (business.name) contextParts.push(`Business Name: ${business.name}`);
       if (business.description) contextParts.push(`Description: ${business.description}`);
@@ -98897,7 +99028,7 @@ ${businessContext}`
       if (delayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
-      const allAttachments = await db.select({ id: whatsappLeadAttachments.id, mediaUrl: whatsappLeadAttachments.mediaUrl, filePath: whatsappLeadAttachments.filePath, documentCategory: whatsappLeadAttachments.documentCategory }).from(whatsappLeadAttachments).where(eq67(whatsappLeadAttachments.leadId, leadId));
+      const allAttachments = await db.select({ id: whatsappLeadAttachments.id, mediaUrl: whatsappLeadAttachments.mediaUrl, filePath: whatsappLeadAttachments.filePath, documentCategory: whatsappLeadAttachments.documentCategory }).from(whatsappLeadAttachments).where(eq68(whatsappLeadAttachments.leadId, leadId));
       if (allAttachments.length === 0) return;
       for (const docType of Object.keys(collectedDocuments)) {
         const doc = collectedDocuments[docType];
@@ -98932,13 +99063,13 @@ ${businessContext}`
               return att && !att.documentCategory;
             });
             if (untaggedMatch) {
-              await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(eq67(whatsappLeadAttachments.id, untaggedMatch));
+              await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(eq68(whatsappLeadAttachments.id, untaggedMatch));
               const att = allAttachments.find((a) => a.id === untaggedMatch);
               if (att) att.documentCategory = docType;
               console.log(`[MSG91 Webhook] Retag: tagged attachment as ${docType} for lead ${leadId}`);
             } else {
               const sourceAttId = matchingIds[0];
-              const fullAtt = await db.select().from(whatsappLeadAttachments).where(eq67(whatsappLeadAttachments.id, sourceAttId)).then((rows) => rows[0]);
+              const fullAtt = await db.select().from(whatsappLeadAttachments).where(eq68(whatsappLeadAttachments.id, sourceAttId)).then((rows) => rows[0]);
               if (fullAtt) {
                 const newId = crypto.randomUUID();
                 await db.insert(whatsappLeadAttachments).values({
@@ -99096,7 +99227,7 @@ ${businessContext}`
         const {
           customerNumber,
           // sender phone
-          text: text2,
+          text: text3,
           // message text
           contentType,
           // text, image, document, interactive, etc.
@@ -99157,7 +99288,7 @@ ${businessContext}`
           return res.json({ status: "received", note: "no sender phone" });
         }
         const hasReliableId = !!(uuid2 || requestId);
-        const dedupId = hasReliableId ? messageId : `senderdedup:${senderPhone}:${(text2 || "").substring(0, 100)}:${contentType}`;
+        const dedupId = hasReliableId ? messageId : `senderdedup:${senderPhone}:${(text3 || "").substring(0, 100)}:${contentType}`;
         const fresh = await webhookIdempotency2.claim(
           businessId,
           "msg91",
@@ -99173,7 +99304,7 @@ ${businessContext}`
         }
         if (settings?.whitelistEnabled === "true") {
           const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-          const allWhitelisted = await db.select({ phoneNumber: whatsappWhitelist2.phoneNumber }).from(whatsappWhitelist2).where(eq67(whatsappWhitelist2.businessAccountId, businessId));
+          const allWhitelisted = await db.select({ phoneNumber: whatsappWhitelist2.phoneNumber }).from(whatsappWhitelist2).where(eq68(whatsappWhitelist2.businessAccountId, businessId));
           const isWhitelisted = allWhitelisted.some((entry) => {
             const wn = entry.phoneNumber;
             return wn === senderPhone || senderPhone.endsWith(wn) || wn.endsWith(senderPhone);
@@ -99193,14 +99324,14 @@ ${businessContext}`
         updateSession2(businessId, senderPhone).catch(
           (err) => console.error("[MSG91 Webhook] Session update error (non-fatal):", err)
         );
-        if (contentType === "text" && text2) {
+        if (contentType === "text" && text3) {
           const webhookStartTime = Date.now();
           const { whatsappFlowService: whatsappFlowService2 } = await Promise.resolve().then(() => (init_whatsappFlowService(), whatsappFlowService_exports));
           const { whatsappAutoReplyService: whatsappAutoReplyService2 } = await Promise.resolve().then(() => (init_whatsappAutoReplyService(), whatsappAutoReplyService_exports));
           if (businessAccount.whatsappMarketingEnabled === "true") {
             try {
               const { marketingCampaignService: marketingCampaignService2, recordOptOut: recordOptOut2 } = await Promise.resolve().then(() => (init_marketingCampaignService(), marketingCampaignService_exports));
-              const lower = text2.trim().toLowerCase();
+              const lower = text3.trim().toLowerCase();
               const isStop = /^(stop|unsubscribe|opt[-\s]?out)\b/i.test(lower);
               const recipientCtx = await marketingCampaignService2.findActiveRecipientForInbound(businessId, senderPhone);
               if (isStop) {
@@ -99211,7 +99342,7 @@ ${businessContext}`
                     recipientCtx.campaign.id,
                     recipientCtx.recipient.id,
                     businessId,
-                    text2
+                    text3
                   );
                 }
                 if (settings) {
@@ -99230,7 +99361,7 @@ ${businessContext}`
                   recipientCtx.campaign.id,
                   recipientCtx.recipient.id,
                   businessId,
-                  text2
+                  text3
                 );
               }
               if (recipientCtx && recipientCtx.campaign.aiEnabled === "true") {
@@ -99239,7 +99370,7 @@ ${businessContext}`
                   recipientCtx.campaign.id,
                   recipientCtx.recipient.id,
                   businessId,
-                  text2
+                  text3
                 );
                 res.json({ status: "received", note: "campaign_ai" });
                 (async () => {
@@ -99248,7 +99379,7 @@ ${businessContext}`
                     const reply = await campaignAiService2.generateReply(
                       recipientCtx.campaign.id,
                       recipientCtx.recipient.id,
-                      text2
+                      text3
                     );
                     if (!reply?.text) {
                       console.log(`[MSG91 Webhook] Campaign AI returned no text${reply?.blockedReason ? ` (blocked: ${reply.blockedReason})` : ""}`);
@@ -99291,16 +99422,16 @@ ${businessContext}`
           } else if (pendingCollected._pendingPdfUrl) {
             const activeFlow2 = await whatsappFlowService2.getActiveFlow(businessId);
             const triggerKw = activeFlow2?.triggerKeyword?.trim()?.toLowerCase();
-            const normalizedText = text2.trim().toLowerCase();
+            const normalizedText = text3.trim().toLowerCase();
             if (triggerKw && normalizedText === triggerKw) {
               console.log("[MSG91 Webhook] Trigger keyword during PDF password flow, restarting journey");
-              flowResult = await whatsappFlowService2.processMessage(businessId, senderPhone, text2, pendingSession);
+              flowResult = await whatsappFlowService2.processMessage(businessId, senderPhone, text3, pendingSession);
             } else {
               console.log("[MSG91 Webhook] Session has pending PDF, treating text as password");
-              flowResult = await whatsappFlowService2.processPdfPassword(businessId, senderPhone, text2);
+              flowResult = await whatsappFlowService2.processPdfPassword(businessId, senderPhone, text3);
             }
           } else {
-            flowResult = await whatsappFlowService2.processMessage(businessId, senderPhone, text2, pendingSession);
+            flowResult = await whatsappFlowService2.processMessage(businessId, senderPhone, text3, pendingSession);
           }
           console.log(`[MSG91 Webhook] [Timing] Flow processing: ${Date.now() - webhookStartTime}ms`);
           if (flowResult.handled) {
@@ -99312,7 +99443,7 @@ ${businessContext}`
                   businessId,
                   messageId,
                   senderPhone,
-                  text2,
+                  text3,
                   customerName,
                   flowResult.sessionId
                 );
@@ -99352,10 +99483,10 @@ ${businessContext}`
                       if (flowResult.flowCompleted) {
                         (async () => {
                           try {
-                            const [crmSettings] = await db.select().from(customCrmSettings).where(eq67(customCrmSettings.businessAccountId, businessId)).limit(1);
+                            const [crmSettings] = await db.select().from(customCrmSettings).where(eq68(customCrmSettings.businessAccountId, businessId)).limit(1);
                             if (crmSettings?.enabled && crmSettings.autoSyncEnabled && crmSettings.apiBaseUrl && crmSettings.apiEndpoint) {
                               console.log("[Custom CRM] Auto-syncing WhatsApp lead:", updatedLead.id);
-                              const crmMappings = await db.select().from(customCrmFieldMappings).where(eq67(customCrmFieldMappings.businessAccountId, businessId)).orderBy(customCrmFieldMappings.sortOrder);
+                              const crmMappings = await db.select().from(customCrmFieldMappings).where(eq68(customCrmFieldMappings.businessAccountId, businessId)).orderBy(customCrmFieldMappings.sortOrder);
                               const extractedData = updatedLead.extractedData || {};
                               const documents = await buildDocumentContext(updatedLead.id);
                               const leadContext = {
@@ -99373,7 +99504,7 @@ ${businessContext}`
                               const asDealerName = extractedData.dealer_name || extractedData.dealerName || extractedData.dealer;
                               const asCityName = extractedData.city || extractedData.city_name || extractedData.dealer_city || extractedData.dealerCity;
                               if (asStoreName || asDealerName) {
-                                const asStoreCreds = await db.select().from(crmStoreCredentials).where(and57(eq67(crmStoreCredentials.businessAccountId, businessId), eq67(crmStoreCredentials.isActive, true)));
+                                const asStoreCreds = await db.select().from(crmStoreCredentials).where(and58(eq68(crmStoreCredentials.businessAccountId, businessId), eq68(crmStoreCredentials.isActive, true)));
                                 const asNorm = (s) => s ? s.trim().toLowerCase() : "";
                                 const asNS = asNorm(asStoreName), asND = asNorm(asDealerName), asNC = asNorm(asCityName);
                                 if (asNS && asND && asNC) autoStoreCredential = asStoreCreds.find((sc) => asNorm(sc.storeName) === asNS && asNorm(sc.dealerName) === asND && asNorm(sc.city) === asNC);
@@ -99382,7 +99513,7 @@ ${businessContext}`
                                 if (!autoStoreCredential && asStoreCreds.length > 0 && (asNS || asND)) {
                                   try {
                                     const OpenAI40 = (await import("openai")).default;
-                                    const [bizAcct] = await db.select().from(businessAccounts).where(eq67(businessAccounts.id, businessId)).limit(1);
+                                    const [bizAcct] = await db.select().from(businessAccounts).where(eq68(businessAccounts.id, businessId)).limit(1);
                                     const asApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
                                     if (asApiKey) {
                                       const asOAI = new OpenAI40({ apiKey: asApiKey, timeout: 15e3 });
@@ -99425,7 +99556,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                   customCrmSyncError: null,
                                   customCrmSyncPayload: crmResult.payload,
                                   updatedAt: /* @__PURE__ */ new Date()
-                                }).where(eq67(whatsappLeads.id, updatedLead.id));
+                                }).where(eq68(whatsappLeads.id, updatedLead.id));
                                 console.log("[Custom CRM] Auto-sync success:", updatedLead.id);
                               } else {
                                 await db.update(whatsappLeads).set({
@@ -99433,7 +99564,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                   customCrmSyncError: crmResult.message,
                                   customCrmSyncPayload: crmResult.payload,
                                   updatedAt: /* @__PURE__ */ new Date()
-                                }).where(eq67(whatsappLeads.id, updatedLead.id));
+                                }).where(eq68(whatsappLeads.id, updatedLead.id));
                                 console.error("[Custom CRM] Auto-sync failed:", updatedLead.id, crmResult.message);
                               }
                             }
@@ -99456,7 +99587,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               businessId,
               messageId,
               senderPhone,
-              text2,
+              text3,
               customerName
             );
             console.log(`[MSG91 Webhook] Message stored (post-flow conversation, no lead created)`);
@@ -99468,7 +99599,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               businessId,
               messageId,
               senderPhone,
-              text2,
+              text3,
               customerName,
               flowResult.sessionId
             );
@@ -99484,14 +99615,14 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           if (flowResult.handled && flowResult.collectedData?._bankStatementPassword && flowResult.collectedData?._collectedDocuments) {
             whatsappService2.findLeadByFlowSession(businessId, flowResult.sessionId || pendingSession?.id || "").then(async (existingLead) => {
               if (existingLead) {
-                const [freshLead] = await db.select({ extractedData: whatsappLeads.extractedData }).from(whatsappLeads).where(eq67(whatsappLeads.id, existingLead.id)).limit(1);
+                const [freshLead] = await db.select({ extractedData: whatsappLeads.extractedData }).from(whatsappLeads).where(eq68(whatsappLeads.id, existingLead.id)).limit(1);
                 const currentData = freshLead?.extractedData || {};
                 currentData._documents = {
                   ...currentData._documents || {},
                   ...flowResult.collectedData._collectedDocuments
                 };
                 currentData.bank_statement_password = flowResult.collectedData._bankStatementPassword;
-                await db.update(whatsappLeads).set({ extractedData: currentData }).where(eq67(whatsappLeads.id, existingLead.id));
+                await db.update(whatsappLeads).set({ extractedData: currentData }).where(eq68(whatsappLeads.id, existingLead.id));
                 console.log("[MSG91 Webhook] Stored bank statement password and documents for lead:", existingLead.id);
                 const docs = flowResult.collectedData._collectedDocuments;
                 for (const docType of Object.keys(docs)) {
@@ -99508,8 +99639,8 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                   }
                   const newlyTaggedIds = [];
                   for (const sourceUrl of allUrls) {
-                    const tagged = await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(and57(
-                      eq67(whatsappLeadAttachments.leadId, existingLead.id),
+                    const tagged = await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(and58(
+                      eq68(whatsappLeadAttachments.leadId, existingLead.id),
                       sql40`(${whatsappLeadAttachments.mediaUrl} = ${sourceUrl} OR ${whatsappLeadAttachments.filePath} = ${sourceUrl})`
                     )).returning({ id: whatsappLeadAttachments.id });
                     if (tagged.length > 0) {
@@ -99518,9 +99649,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                     }
                   }
                   if (allUrls.length > 0) {
-                    const alreadyTaggedRows = await db.select({ id: whatsappLeadAttachments.id }).from(whatsappLeadAttachments).where(and57(
-                      eq67(whatsappLeadAttachments.leadId, existingLead.id),
-                      eq67(whatsappLeadAttachments.documentCategory, docType),
+                    const alreadyTaggedRows = await db.select({ id: whatsappLeadAttachments.id }).from(whatsappLeadAttachments).where(and58(
+                      eq68(whatsappLeadAttachments.leadId, existingLead.id),
+                      eq68(whatsappLeadAttachments.documentCategory, docType),
                       sql40`(${whatsappLeadAttachments.mediaUrl} IN (${sql40.join(allUrls.map((u) => sql40`${u}`), sql40`, `)}) OR ${whatsappLeadAttachments.filePath} IN (${sql40.join(allUrls.map((u) => sql40`${u}`), sql40`, `)}))`
                     ));
                     for (const att of alreadyTaggedRows) {
@@ -99530,9 +99661,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                     }
                   }
                   if (newlyTaggedIds.length > 0) {
-                    const deleted = await db.delete(whatsappLeadAttachments).where(and57(
-                      eq67(whatsappLeadAttachments.leadId, existingLead.id),
-                      eq67(whatsappLeadAttachments.documentCategory, docType),
+                    const deleted = await db.delete(whatsappLeadAttachments).where(and58(
+                      eq68(whatsappLeadAttachments.leadId, existingLead.id),
+                      eq68(whatsappLeadAttachments.documentCategory, docType),
                       sql40`${whatsappLeadAttachments.id} NOT IN (${sql40.join(newlyTaggedIds.map((id) => sql40`${id}`), sql40`, `)})`
                     )).returning({ id: whatsappLeadAttachments.id });
                     if (deleted.length > 0) {
@@ -99542,8 +99673,8 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                   if (allUrls.length === 0) {
                     const isPdf = docType.includes("bank") || docType.includes("statement");
                     if (isPdf) {
-                      const tagged = await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(and57(
-                        eq67(whatsappLeadAttachments.leadId, existingLead.id),
+                      const tagged = await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(and58(
+                        eq68(whatsappLeadAttachments.leadId, existingLead.id),
                         sql40`${whatsappLeadAttachments.fileName} ILIKE '%.pdf'`
                       )).returning({ id: whatsappLeadAttachments.id });
                       if (tagged.length > 0) {
@@ -99559,7 +99690,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           }
           if (flowResult.handled && flowResult.collectedData?._collectedDocuments && !flowResult.collectedData?._bankStatementPassword) {
             const updateLeadId = flowResult.collectedData?._updateExistingLeadId;
-            const findLeadPromise = updateLeadId ? db.select().from(whatsappLeads).where(eq67(whatsappLeads.id, updateLeadId)).limit(1).then((rows) => rows[0] || null) : whatsappService2.findLeadByFlowSession(businessId, flowResult.sessionId || pendingSession?.id || "");
+            const findLeadPromise = updateLeadId ? db.select().from(whatsappLeads).where(eq68(whatsappLeads.id, updateLeadId)).limit(1).then((rows) => rows[0] || null) : whatsappService2.findLeadByFlowSession(businessId, flowResult.sessionId || pendingSession?.id || "");
             findLeadPromise.then(async (existingLead) => {
               if (existingLead) {
                 await whatsappService2.syncLeadDocuments(existingLead.id, flowResult.collectedData._collectedDocuments);
@@ -99572,11 +99703,11 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               console.error("[MSG91 Webhook] Failed to sync collected documents to lead:", err);
             });
           }
-          if (flowResult.shouldFallbackToAI && settings?.autoReplyEnabled === "true" && text2) {
+          if (flowResult.shouldFallbackToAI && settings?.autoReplyEnabled === "true" && text3) {
             whatsappAutoReplyService2.generateAndSendReply(
               businessId,
               senderPhone,
-              text2,
+              text3,
               uuid2
             ).then((result) => {
               if (result.success) {
@@ -99587,11 +99718,11 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             }).catch((err) => {
               console.error("[MSG91 Webhook] Auto-reply error:", err);
             });
-          } else if (!flowResult.handled && settings?.autoReplyEnabled === "true" && text2 && aiResponseMode !== "guided_flows") {
+          } else if (!flowResult.handled && settings?.autoReplyEnabled === "true" && text3 && aiResponseMode !== "guided_flows") {
             whatsappAutoReplyService2.generateAndSendReply(
               businessId,
               senderPhone,
-              text2,
+              text3,
               uuid2
             ).then((result) => {
               if (result.success) {
@@ -99640,7 +99771,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                 const updateLeadId = flowResult.collectedData?._updateExistingLeadId;
                 let lead = null;
                 if (updateLeadId) {
-                  const [existingLead] = await db.select().from(whatsappLeads).where(eq67(whatsappLeads.id, updateLeadId)).limit(1);
+                  const [existingLead] = await db.select().from(whatsappLeads).where(eq68(whatsappLeads.id, updateLeadId)).limit(1);
                   lead = existingLead || null;
                 }
                 if (!lead && effectiveSessionId) {
@@ -99749,12 +99880,12 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                           }
                           if (matchedDocLabel && matchedDocType) {
                             const { whatsappLeadAttachments: whatsappLeadAttachments2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-                            const { eq: eq72, and: and61 } = await import("drizzle-orm");
+                            const { eq: eq73, and: and62 } = await import("drizzle-orm");
                             const docEntry = docs[matchedDocType];
                             if (docEntry?.isValid === false) {
-                              const [invalidAtt] = await db.select({ id: whatsappLeadAttachments2.id, filePath: whatsappLeadAttachments2.filePath }).from(whatsappLeadAttachments2).where(and61(
-                                eq72(whatsappLeadAttachments2.leadId, attachToLeadId),
-                                eq72(whatsappLeadAttachments2.mediaUrl, url)
+                              const [invalidAtt] = await db.select({ id: whatsappLeadAttachments2.id, filePath: whatsappLeadAttachments2.filePath }).from(whatsappLeadAttachments2).where(and62(
+                                eq73(whatsappLeadAttachments2.leadId, attachToLeadId),
+                                eq73(whatsappLeadAttachments2.mediaUrl, url)
                               ));
                               if (invalidAtt?.filePath) {
                                 const r2Key = r2Storage.extractKeyFromUrl(invalidAtt.filePath);
@@ -99762,15 +99893,15 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                   await r2Storage.deleteFile(r2Key);
                                 }
                               }
-                              await db.delete(whatsappLeadAttachments2).where(and61(
-                                eq72(whatsappLeadAttachments2.leadId, attachToLeadId),
-                                eq72(whatsappLeadAttachments2.mediaUrl, url)
+                              await db.delete(whatsappLeadAttachments2).where(and62(
+                                eq73(whatsappLeadAttachments2.leadId, attachToLeadId),
+                                eq73(whatsappLeadAttachments2.mediaUrl, url)
                               ));
                               console.log(`[MSG91 Webhook] Deleted invalid ${matchedDocType} attachment and R2 file for lead ${attachToLeadId}`);
                             } else {
-                              const taggedRows = await db.update(whatsappLeadAttachments2).set({ caption: matchedDocLabel, documentCategory: matchedDocType }).where(and61(
-                                eq72(whatsappLeadAttachments2.leadId, attachToLeadId),
-                                eq72(whatsappLeadAttachments2.mediaUrl, url)
+                              const taggedRows = await db.update(whatsappLeadAttachments2).set({ caption: matchedDocLabel, documentCategory: matchedDocType }).where(and62(
+                                eq73(whatsappLeadAttachments2.leadId, attachToLeadId),
+                                eq73(whatsappLeadAttachments2.mediaUrl, url)
                               )).returning({ id: whatsappLeadAttachments2.id });
                               console.log(`[MSG91 Webhook] Tagged attachment as: ${matchedDocLabel} (category: ${matchedDocType})`);
                               if (taggedRows.length > 0) {
@@ -99785,18 +99916,18 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                 }
                                 const taggedIds = taggedRows.map((t) => t.id);
                                 if (docAllUrls.length > 0) {
-                                  const alreadyTaggedRows2 = await db.select({ id: whatsappLeadAttachments2.id }).from(whatsappLeadAttachments2).where(and61(
-                                    eq72(whatsappLeadAttachments2.leadId, attachToLeadId),
-                                    eq72(whatsappLeadAttachments2.documentCategory, matchedDocType),
+                                  const alreadyTaggedRows2 = await db.select({ id: whatsappLeadAttachments2.id }).from(whatsappLeadAttachments2).where(and62(
+                                    eq73(whatsappLeadAttachments2.leadId, attachToLeadId),
+                                    eq73(whatsappLeadAttachments2.documentCategory, matchedDocType),
                                     sql40`(${whatsappLeadAttachments2.mediaUrl} IN (${sql40.join(docAllUrls.map((u) => sql40`${u}`), sql40`, `)}) OR ${whatsappLeadAttachments2.filePath} IN (${sql40.join(docAllUrls.map((u) => sql40`${u}`), sql40`, `)}))`
                                   ));
                                   for (const att of alreadyTaggedRows2) {
                                     if (!taggedIds.includes(att.id)) taggedIds.push(att.id);
                                   }
                                 }
-                                const deletedDups = await db.delete(whatsappLeadAttachments2).where(and61(
-                                  eq72(whatsappLeadAttachments2.leadId, attachToLeadId),
-                                  eq72(whatsappLeadAttachments2.documentCategory, matchedDocType),
+                                const deletedDups = await db.delete(whatsappLeadAttachments2).where(and62(
+                                  eq73(whatsappLeadAttachments2.leadId, attachToLeadId),
+                                  eq73(whatsappLeadAttachments2.documentCategory, matchedDocType),
                                   sql40`${whatsappLeadAttachments2.id} NOT IN (${sql40.join(taggedIds.map((id) => sql40`${id}`), sql40`, `)})`
                                 )).returning({ id: whatsappLeadAttachments2.id });
                                 if (deletedDups.length > 0) {
@@ -99976,7 +100107,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           }
         } else if (contentType === "interactive" || contentType === "button") {
           const webhookStartTime = Date.now();
-          const interactiveText = text2 || caption || "";
+          const interactiveText = text3 || caption || "";
           if (businessAccount.whatsappMarketingEnabled === "true" && interactiveText) {
             try {
               const { marketingCampaignService: marketingCampaignService2 } = await Promise.resolve().then(() => (init_marketingCampaignService(), marketingCampaignService_exports));
@@ -100099,10 +100230,10 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                 console.log(`[MSG91 Webhook] Interactive lead updated with flow data (completed=${!!flowResult.flowCompleted}):`, updatedLead.id);
                 if (flowResult.flowCompleted) {
                   try {
-                    const [crmSettings] = await db.select().from(customCrmSettings).where(eq67(customCrmSettings.businessAccountId, businessId)).limit(1);
+                    const [crmSettings] = await db.select().from(customCrmSettings).where(eq68(customCrmSettings.businessAccountId, businessId)).limit(1);
                     if (crmSettings?.enabled && crmSettings.autoSyncEnabled && crmSettings.apiBaseUrl && crmSettings.apiEndpoint) {
                       console.log("[Custom CRM] Auto-syncing interactive WhatsApp lead:", updatedLead.id);
-                      const crmMappings = await db.select().from(customCrmFieldMappings).where(eq67(customCrmFieldMappings.businessAccountId, businessId)).orderBy(customCrmFieldMappings.sortOrder);
+                      const crmMappings = await db.select().from(customCrmFieldMappings).where(eq68(customCrmFieldMappings.businessAccountId, businessId)).orderBy(customCrmFieldMappings.sortOrder);
                       const extractedData = updatedLead.extractedData || {};
                       const documents = await buildDocumentContext(updatedLead.id);
                       const leadContext = {
@@ -100120,7 +100251,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                       const iAsDealerName = extractedData.dealer_name || extractedData.dealerName || extractedData.dealer;
                       const iAsCityName = extractedData.city || extractedData.city_name || extractedData.dealer_city || extractedData.dealerCity;
                       if (iAsStoreName || iAsDealerName) {
-                        const iAsStoreCreds = await db.select().from(crmStoreCredentials).where(and57(eq67(crmStoreCredentials.businessAccountId, businessId), eq67(crmStoreCredentials.isActive, true)));
+                        const iAsStoreCreds = await db.select().from(crmStoreCredentials).where(and58(eq68(crmStoreCredentials.businessAccountId, businessId), eq68(crmStoreCredentials.isActive, true)));
                         const iAsNorm = (s) => s ? s.trim().toLowerCase() : "";
                         const iAsNS = iAsNorm(iAsStoreName), iAsND = iAsNorm(iAsDealerName), iAsNC = iAsNorm(iAsCityName);
                         if (iAsNS && iAsND && iAsNC) iAutoStoreCredential = iAsStoreCreds.find((sc) => iAsNorm(sc.storeName) === iAsNS && iAsNorm(sc.dealerName) === iAsND && iAsNorm(sc.city) === iAsNC);
@@ -100129,7 +100260,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                         if (!iAutoStoreCredential && iAsStoreCreds.length > 0 && (iAsNS || iAsND)) {
                           try {
                             const OpenAI40 = (await import("openai")).default;
-                            const [bizAcct] = await db.select().from(businessAccounts).where(eq67(businessAccounts.id, businessId)).limit(1);
+                            const [bizAcct] = await db.select().from(businessAccounts).where(eq68(businessAccounts.id, businessId)).limit(1);
                             const iAsApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
                             if (iAsApiKey) {
                               const iAsOAI = new OpenAI40({ apiKey: iAsApiKey, timeout: 15e3 });
@@ -100172,7 +100303,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                           customCrmSyncError: null,
                           customCrmSyncPayload: crmResult.payload,
                           updatedAt: /* @__PURE__ */ new Date()
-                        }).where(eq67(whatsappLeads.id, updatedLead.id));
+                        }).where(eq68(whatsappLeads.id, updatedLead.id));
                         console.log("[Custom CRM] Auto-sync success (interactive):", updatedLead.id);
                       } else {
                         await db.update(whatsappLeads).set({
@@ -100180,7 +100311,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                           customCrmSyncError: crmResult.message,
                           customCrmSyncPayload: crmResult.payload,
                           updatedAt: /* @__PURE__ */ new Date()
-                        }).where(eq67(whatsappLeads.id, updatedLead.id));
+                        }).where(eq68(whatsappLeads.id, updatedLead.id));
                         console.error("[Custom CRM] Auto-sync failed (interactive):", updatedLead.id, crmResult.message);
                       }
                     }
@@ -100212,12 +100343,12 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           return;
         } else {
           const { whatsappFlowService: whatsappFlowService2 } = await Promise.resolve().then(() => (init_whatsappFlowService(), whatsappFlowService_exports));
-          const flowResult = await whatsappFlowService2.processMessage(businessId, senderPhone, text2 || caption || "");
+          const flowResult = await whatsappFlowService2.processMessage(businessId, senderPhone, text3 || caption || "");
           const lead = await whatsappService2.processTextMessage(
             businessId,
             messageId,
             senderPhone,
-            text2 || caption || `[${contentType || "unknown"} message]`,
+            text3 || caption || `[${contentType || "unknown"} message]`,
             customerName,
             flowResult.sessionId
             // Pass the flow session ID
@@ -100232,19 +100363,19 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       }
       console.log("[MSG91 Webhook] Detected OLD format payload");
       if (payload.type === "message" && payload.payload) {
-        const { id: messageId, source: senderPhone, type: messageType, text: text2, image, document, timestamp: timestamp2 } = payload.payload;
+        const { id: messageId, source: senderPhone, type: messageType, text: text3, image, document, timestamp: timestamp2 } = payload.payload;
         if (senderPhone) {
           const { updateSession: updateSession2 } = await Promise.resolve().then(() => (init_whatsappSessionService(), whatsappSessionService_exports));
           updateSession2(businessId, senderPhone).catch(
             (err) => console.error("[MSG91 Webhook] Session update error (non-fatal):", err)
           );
         }
-        if (messageType === "text" && text2?.body) {
+        if (messageType === "text" && text3?.body) {
           const lead = await whatsappService2.processTextMessage(
             businessId,
             messageId,
             senderPhone,
-            text2.body
+            text3.body
           );
           if (lead) {
             console.log("[MSG91 Webhook] Created lead:", lead.id);
@@ -100444,7 +100575,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       if (body.whitelistEnabled !== void 0) {
         if (body.whitelistEnabled) {
           const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-          const [{ n: allowedCount }] = await db.select({ n: sql40`count(*)::int` }).from(whatsappWhitelist2).where(eq67(whatsappWhitelist2.businessAccountId, businessAccountId));
+          const [{ n: allowedCount }] = await db.select({ n: sql40`count(*)::int` }).from(whatsappWhitelist2).where(eq68(whatsappWhitelist2.businessAccountId, businessAccountId));
           if (allowedCount === 0 && body.confirmBlockAllInbound !== true) {
             return res.status(409).json({
               error: "Turning on Allowed Numbers while the list is empty will block every incoming WhatsApp message \u2014 no leads will be captured and the AI will not reply to anyone. Add at least one number first, or confirm you intend to block all incoming messages.",
@@ -100607,7 +100738,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No active business account" });
       const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const numbers = await db.select().from(whatsappWhitelist2).where(eq67(whatsappWhitelist2.businessAccountId, businessAccountId)).orderBy(desc30(whatsappWhitelist2.createdAt));
+      const numbers = await db.select().from(whatsappWhitelist2).where(eq68(whatsappWhitelist2.businessAccountId, businessAccountId)).orderBy(desc30(whatsappWhitelist2.createdAt));
       res.json({ whitelist: numbers });
     } catch (error) {
       console.error("Error fetching whitelist:", error);
@@ -100623,9 +100754,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const normalized = phoneNumber.replace(/\D/g, "");
       if (normalized.length < 7) return res.status(400).json({ error: "Invalid phone number" });
       const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const existing = await db.select().from(whatsappWhitelist2).where(and57(
-        eq67(whatsappWhitelist2.businessAccountId, businessAccountId),
-        eq67(whatsappWhitelist2.phoneNumber, normalized)
+      const existing = await db.select().from(whatsappWhitelist2).where(and58(
+        eq68(whatsappWhitelist2.businessAccountId, businessAccountId),
+        eq68(whatsappWhitelist2.phoneNumber, normalized)
       )).limit(1);
       if (existing.length > 0) return res.status(409).json({ error: "Number already whitelisted" });
       const [entry] = await db.insert(whatsappWhitelist2).values({
@@ -100646,7 +100777,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const { numbers } = req.body;
       if (!Array.isArray(numbers) || numbers.length === 0) return res.status(400).json({ error: "Numbers array is required" });
       const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const existing = await db.select({ phoneNumber: whatsappWhitelist2.phoneNumber }).from(whatsappWhitelist2).where(eq67(whatsappWhitelist2.businessAccountId, businessAccountId));
+      const existing = await db.select({ phoneNumber: whatsappWhitelist2.phoneNumber }).from(whatsappWhitelist2).where(eq68(whatsappWhitelist2.businessAccountId, businessAccountId));
       const existingSet = new Set(existing.map((e) => e.phoneNumber));
       const toInsert = [];
       let skipped = 0;
@@ -100681,9 +100812,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No active business account" });
       const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      await db.delete(whatsappWhitelist2).where(and57(
-        eq67(whatsappWhitelist2.id, req.params.id),
-        eq67(whatsappWhitelist2.businessAccountId, businessAccountId)
+      await db.delete(whatsappWhitelist2).where(and58(
+        eq68(whatsappWhitelist2.id, req.params.id),
+        eq68(whatsappWhitelist2.businessAccountId, businessAccountId)
       ));
       res.json({ success: true });
     } catch (error) {
@@ -101104,9 +101235,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         const defaultKeys = ["customer_name", "customer_phone", "customer_email"];
         const isDefaultField = defaultKeys.includes(normalizedKey);
         const sourceField = isDefaultField ? normalizedKey === "customer_name" ? "lead.customerName" : normalizedKey === "customer_phone" ? "lead.customerPhone" : "lead.customerEmail" : `extracted.${normalizedKey}`;
-        const existing = await db.select({ id: customCrmFieldMappings.id }).from(customCrmFieldMappings).where(and57(eq67(customCrmFieldMappings.businessAccountId, businessAccountId), eq67(customCrmFieldMappings.sourceField, sourceField))).limit(1);
+        const existing = await db.select({ id: customCrmFieldMappings.id }).from(customCrmFieldMappings).where(and58(eq68(customCrmFieldMappings.businessAccountId, businessAccountId), eq68(customCrmFieldMappings.sourceField, sourceField))).limit(1);
         if (existing.length === 0) {
-          const maxSort = await db.select({ maxOrder: sql40`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq67(customCrmFieldMappings.businessAccountId, businessAccountId));
+          const maxSort = await db.select({ maxOrder: sql40`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq68(customCrmFieldMappings.businessAccountId, businessAccountId));
           await db.insert(customCrmFieldMappings).values({ businessAccountId, crmField: defaultCrmFieldKey, sourceType: "dynamic", sourceField, displayName: fieldLabel || field.fieldLabel, isEnabled: "true", sortOrder: (maxSort[0]?.maxOrder || 0) + 1, isAutoManaged: true });
         }
       }
@@ -101138,9 +101269,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         const defaultKeys = ["customer_name", "customer_phone", "customer_email"];
         const isDefaultField = defaultKeys.includes(normalizedKey);
         const sourceField = isDefaultField ? normalizedKey === "customer_name" ? "lead.customerName" : normalizedKey === "customer_phone" ? "lead.customerPhone" : "lead.customerEmail" : `extracted.${normalizedKey}`;
-        const existing = await db.select({ id: customCrmFieldMappings.id }).from(customCrmFieldMappings).where(and57(eq67(customCrmFieldMappings.businessAccountId, businessAccountId), eq67(customCrmFieldMappings.sourceField, sourceField))).limit(1);
+        const existing = await db.select({ id: customCrmFieldMappings.id }).from(customCrmFieldMappings).where(and58(eq68(customCrmFieldMappings.businessAccountId, businessAccountId), eq68(customCrmFieldMappings.sourceField, sourceField))).limit(1);
         if (existing.length === 0) {
-          const maxSort = await db.select({ maxOrder: sql40`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq67(customCrmFieldMappings.businessAccountId, businessAccountId));
+          const maxSort = await db.select({ maxOrder: sql40`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq68(customCrmFieldMappings.businessAccountId, businessAccountId));
           await db.insert(customCrmFieldMappings).values({ businessAccountId, crmField: defaultCrmFieldKey, sourceType: "dynamic", sourceField, displayName: field.fieldLabel, isEnabled: "true", sortOrder: (maxSort[0]?.maxOrder || 0) + 1, isAutoManaged: true });
         }
       }
@@ -101220,14 +101351,14 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         if (rsId === "" || rsId === void 0) {
           updates.verificationRuleSetId = null;
         } else if (rsId !== null) {
-          const [{ db: db2 }, { whatsappFlows: whatsappFlows2, verificationRuleSets: verificationRuleSets2 }, { eq: eq72, and: and61 }] = await Promise.all([
+          const [{ db: db2 }, { whatsappFlows: whatsappFlows2, verificationRuleSets: verificationRuleSets2 }, { eq: eq73, and: and62 }] = await Promise.all([
             Promise.resolve().then(() => (init_db(), db_exports)),
             Promise.resolve().then(() => (init_schema(), schema_exports)),
             import("drizzle-orm")
           ]);
-          const [flowRow] = await db2.select({ businessAccountId: whatsappFlows2.businessAccountId }).from(whatsappFlows2).where(eq72(whatsappFlows2.id, flowId)).limit(1);
+          const [flowRow] = await db2.select({ businessAccountId: whatsappFlows2.businessAccountId }).from(whatsappFlows2).where(eq73(whatsappFlows2.id, flowId)).limit(1);
           if (!flowRow) return res.status(404).json({ error: "Flow not found" });
-          const [rs] = await db2.select({ id: verificationRuleSets2.id }).from(verificationRuleSets2).where(and61(eq72(verificationRuleSets2.id, rsId), eq72(verificationRuleSets2.businessAccountId, flowRow.businessAccountId))).limit(1);
+          const [rs] = await db2.select({ id: verificationRuleSets2.id }).from(verificationRuleSets2).where(and62(eq73(verificationRuleSets2.id, rsId), eq73(verificationRuleSets2.businessAccountId, flowRow.businessAccountId))).limit(1);
           if (!rs) return res.status(400).json({ error: "Verification rule set not found for this business account" });
         }
       }
@@ -101277,11 +101408,11 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
   app2.patch("/api/whatsapp/flows/:flowId/steps/:stepId/toggle-pause", requireAuth, async (req, res) => {
     try {
       const { flowId, stepId } = req.params;
-      const [step] = await db.select({ paused: whatsappFlowSteps.paused }).from(whatsappFlowSteps).where(and57(eq67(whatsappFlowSteps.id, stepId), eq67(whatsappFlowSteps.flowId, flowId))).limit(1);
+      const [step] = await db.select({ paused: whatsappFlowSteps.paused }).from(whatsappFlowSteps).where(and58(eq68(whatsappFlowSteps.id, stepId), eq68(whatsappFlowSteps.flowId, flowId))).limit(1);
       if (!step) {
         return res.status(404).json({ error: "Step not found" });
       }
-      const [updated] = await db.update(whatsappFlowSteps).set({ paused: !step.paused }).where(and57(eq67(whatsappFlowSteps.id, stepId), eq67(whatsappFlowSteps.flowId, flowId))).returning();
+      const [updated] = await db.update(whatsappFlowSteps).set({ paused: !step.paused }).where(and58(eq68(whatsappFlowSteps.id, stepId), eq68(whatsappFlowSteps.flowId, flowId))).returning();
       res.json({ step: updated });
     } catch (error) {
       console.error("Error toggling step pause:", error);
@@ -101454,7 +101585,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           );
           if (messageText) {
             const businessAccount = await db.query.businessAccounts.findFirst({
-              where: eq67(businessAccounts.id, businessAccountId)
+              where: eq68(businessAccounts.id, businessAccountId)
             });
             if (businessAccount && businessAccount.instagramEnabled === "true") {
               const { instagramFlowService: instagramFlowService2 } = await Promise.resolve().then(() => (init_instagramFlowService(), instagramFlowService_exports));
@@ -101528,7 +101659,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq67(businessAccounts.id, businessAccountId)
+        where: eq68(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.instagramEnabled !== "true") {
         return res.status(403).json({ error: "Instagram AI Agent not enabled for this account" });
@@ -101556,7 +101687,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq67(businessAccounts.id, businessAccountId)
+        where: eq68(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.instagramEnabled !== "true") {
         return res.status(403).json({ error: "Instagram AI Agent not enabled for this account" });
@@ -101577,7 +101708,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq67(businessAccounts.id, businessAccountId)
+        where: eq68(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.instagramEnabled !== "true") {
         return res.status(403).json({ error: "Instagram AI Agent not enabled for this account" });
@@ -101995,9 +102126,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
   app2.patch("/api/instagram/flows/:flowId/steps/:stepId/toggle-pause", requireAuth, async (req, res) => {
     try {
       const { flowId, stepId } = req.params;
-      const [step] = await db.select({ paused: instagramFlowSteps.paused }).from(instagramFlowSteps).where(and57(eq67(instagramFlowSteps.id, stepId), eq67(instagramFlowSteps.flowId, flowId))).limit(1);
+      const [step] = await db.select({ paused: instagramFlowSteps.paused }).from(instagramFlowSteps).where(and58(eq68(instagramFlowSteps.id, stepId), eq68(instagramFlowSteps.flowId, flowId))).limit(1);
       if (!step) return res.status(404).json({ error: "Step not found" });
-      const [updated] = await db.update(instagramFlowSteps).set({ paused: !step.paused }).where(and57(eq67(instagramFlowSteps.id, stepId), eq67(instagramFlowSteps.flowId, flowId))).returning();
+      const [updated] = await db.update(instagramFlowSteps).set({ paused: !step.paused }).where(and58(eq68(instagramFlowSteps.id, stepId), eq68(instagramFlowSteps.flowId, flowId))).returning();
       res.json({ step: updated });
     } catch (error) {
       console.error("Error toggling Instagram step pause:", error);
@@ -102139,7 +102270,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           );
           if (messageText) {
             const businessAccount = await db.query.businessAccounts.findFirst({
-              where: eq67(businessAccounts.id, businessAccountId)
+              where: eq68(businessAccounts.id, businessAccountId)
             });
             if (businessAccount && businessAccount.facebookEnabled === "true") {
               const { facebookFlowService: facebookFlowService2 } = await Promise.resolve().then(() => (init_facebookFlowService(), facebookFlowService_exports));
@@ -102213,7 +102344,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq67(businessAccounts.id, businessAccountId)
+        where: eq68(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.facebookEnabled !== "true") {
         return res.status(403).json({ error: "Facebook AI Agent not enabled for this account" });
@@ -102241,7 +102372,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq67(businessAccounts.id, businessAccountId)
+        where: eq68(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.facebookEnabled !== "true") {
         return res.status(403).json({ error: "Facebook AI Agent not enabled for this account" });
@@ -102363,7 +102494,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq67(businessAccounts.id, businessAccountId)
+        where: eq68(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.facebookEnabled !== "true") {
         return res.status(403).json({ error: "Facebook AI Agent not enabled for this account" });
@@ -102678,9 +102809,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
   app2.patch("/api/facebook/flows/:flowId/steps/:stepId/toggle-pause", requireAuth, async (req, res) => {
     try {
       const { flowId, stepId } = req.params;
-      const [step] = await db.select({ paused: facebookFlowSteps.paused }).from(facebookFlowSteps).where(and57(eq67(facebookFlowSteps.id, stepId), eq67(facebookFlowSteps.flowId, flowId))).limit(1);
+      const [step] = await db.select({ paused: facebookFlowSteps.paused }).from(facebookFlowSteps).where(and58(eq68(facebookFlowSteps.id, stepId), eq68(facebookFlowSteps.flowId, flowId))).limit(1);
       if (!step) return res.status(404).json({ error: "Step not found" });
-      const [updated] = await db.update(facebookFlowSteps).set({ paused: !step.paused }).where(and57(eq67(facebookFlowSteps.id, stepId), eq67(facebookFlowSteps.flowId, flowId))).returning();
+      const [updated] = await db.update(facebookFlowSteps).set({ paused: !step.paused }).where(and58(eq68(facebookFlowSteps.id, stepId), eq68(facebookFlowSteps.flowId, flowId))).returning();
       res.json({ step: updated });
     } catch (error) {
       console.error("Error toggling Facebook step pause:", error);
@@ -103317,7 +103448,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
     try {
       const businessAccountId = req.user.businessAccountId;
       const { whatsappOptOuts: whatsappOptOuts2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const rows = await db.select().from(whatsappOptOuts2).where(eq67(whatsappOptOuts2.businessAccountId, businessAccountId)).orderBy(desc30(whatsappOptOuts2.createdAt)).limit(500);
+      const rows = await db.select().from(whatsappOptOuts2).where(eq68(whatsappOptOuts2.businessAccountId, businessAccountId)).orderBy(desc30(whatsappOptOuts2.createdAt)).limit(500);
       res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -103330,8 +103461,8 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       if (!phone) return res.status(400).json({ error: "Phone is required" });
       const last10 = phone.slice(-10);
       const { whatsappOptOuts: whatsappOptOuts2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      await db.delete(whatsappOptOuts2).where(and57(
-        eq67(whatsappOptOuts2.businessAccountId, businessAccountId),
+      await db.delete(whatsappOptOuts2).where(and58(
+        eq68(whatsappOptOuts2.businessAccountId, businessAccountId),
         sql40`(${whatsappOptOuts2.phone} = ${phone} OR ${whatsappOptOuts2.phone} = ${last10} OR RIGHT(${whatsappOptOuts2.phone}, 10) = ${last10})`
       ));
       res.json({ success: true });
@@ -103676,7 +103807,7 @@ init_auth();
 init_jewelryImageGeneratorService();
 init_db();
 init_schema();
-import { and as and58, eq as eq68, isNull as isNull12, sql as sql41 } from "drizzle-orm";
+import { and as and59, eq as eq69, isNull as isNull12, sql as sql41 } from "drizzle-orm";
 async function initializeDatabase() {
   try {
     try {
@@ -103714,9 +103845,9 @@ async function initializeDatabase() {
         customer_email: "Email"
       };
       for (const [fieldKey, crmKey] of Object.entries(DEFAULT_CRM_KEYS)) {
-        await db.update(whatsappLeadFields).set({ defaultCrmFieldKey: crmKey }).where(and58(
-          eq68(whatsappLeadFields.fieldKey, fieldKey),
-          eq68(whatsappLeadFields.isDefault, true),
+        await db.update(whatsappLeadFields).set({ defaultCrmFieldKey: crmKey }).where(and59(
+          eq69(whatsappLeadFields.fieldKey, fieldKey),
+          eq69(whatsappLeadFields.isDefault, true),
           isNull12(whatsappLeadFields.defaultCrmFieldKey)
         ));
       }
@@ -103870,7 +104001,7 @@ init_db();
 // server/scripts/migrateK12NotesVideos.ts
 init_db();
 init_schema();
-import { eq as eq69, sql as sql42 } from "drizzle-orm";
+import { eq as eq70, sql as sql42 } from "drizzle-orm";
 function stripHtmlTags(html) {
   return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -103896,7 +104027,7 @@ async function migrateK12NotesAndVideos() {
   let videosCreated = 0;
   for (const topic of allTopics) {
     if (topic.revisionNotesHtml) {
-      const existing = await db.select({ id: k12TopicNotes.id }).from(k12TopicNotes).where(eq69(k12TopicNotes.topicId, topic.id)).limit(1);
+      const existing = await db.select({ id: k12TopicNotes.id }).from(k12TopicNotes).where(eq70(k12TopicNotes.topicId, topic.id)).limit(1);
       if (existing.length === 0) {
         const plainText = stripHtmlTags(topic.revisionNotesHtml);
         if (plainText) {
@@ -103912,7 +104043,7 @@ async function migrateK12NotesAndVideos() {
       }
     }
     if (topic.videoUrl || topic.videoTranscript) {
-      const existing = await db.select({ id: k12TopicVideos.id }).from(k12TopicVideos).where(eq69(k12TopicVideos.topicId, topic.id)).limit(1);
+      const existing = await db.select({ id: k12TopicVideos.id }).from(k12TopicVideos).where(eq70(k12TopicVideos.topicId, topic.id)).limit(1);
       if (existing.length === 0) {
         if (topic.videoUrl) {
           await db.insert(k12TopicVideos).values({
@@ -103948,7 +104079,7 @@ init_shopifySyncScheduler();
 init_storage();
 init_db();
 init_schema();
-import { and as and59, eq as eq70, lte as lte6, lt as lt3, sql as sql43, or as or7, isNull as isNull13 } from "drizzle-orm";
+import { and as and60, eq as eq71, lte as lte6, lt as lt3, sql as sql43, or as or7, isNull as isNull13 } from "drizzle-orm";
 var MAX_RETRY_COUNT = 3;
 var RETRY_DELAYS_MS = [
   1 * 60 * 1e3,
@@ -103989,8 +104120,8 @@ var LeadsquaredRetryWorker = class {
     try {
       const now = /* @__PURE__ */ new Date();
       const retryableLeads = await db.select().from(leads).where(
-        and59(
-          eq70(leads.leadsquaredSyncStatus, "failed"),
+        and60(
+          eq71(leads.leadsquaredSyncStatus, "failed"),
           lt3(sql43`COALESCE(${leads.leadsquaredRetryCount}::int, 0)`, MAX_RETRY_COUNT),
           or7(
             isNull13(leads.leadsquaredNextRetryAt),
