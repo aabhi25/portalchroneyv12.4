@@ -19,7 +19,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { WhatsAppNavSections } from "@/components/whatsapp/WhatsAppNavSections";
 import { isWhatsappLocation } from "@/components/whatsapp/sections";
 import { Button } from "@/components/ui/button";
-import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Sparkles, Settings, Brain, BarChart3, MessageSquare, ShoppingBag, Calendar, GraduationCap, ChevronRight, Presentation, FileText, Key, LifeBuoy, ClipboardList, Route, Link2, Users, DollarSign, Percent, HardDrive, Gem, Image, Database, Camera, Cloud, Globe, Lightbulb, MessageCircle, MoreHorizontal, Bot, TrendingUp, Zap, BookOpen, Library, HelpCircle as QuizIcon, Briefcase, UserCircle, Terminal, Bug, PackageOpen, Megaphone, FileCode2, UsersRound } from "lucide-react";
+import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Sparkles, Settings, Brain, BarChart3, MessageSquare, ShoppingBag, Calendar, GraduationCap, ChevronRight, Presentation, FileText, Key, LifeBuoy, ClipboardList, Route, Link2, Users, DollarSign, Percent, HardDrive, Gem, Image, Database, Camera, Cloud, Globe, Lightbulb, MessageCircle, MoreHorizontal, Bot, TrendingUp, Zap, BookOpen, Library, HelpCircle as QuizIcon, Briefcase, UserCircle, Terminal, PackageOpen, Megaphone, FileCode2, UsersRound } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
@@ -309,16 +309,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
                         testId="link-insights"
                         gradient="bg-gradient-to-br from-purple-500 to-violet-600"
                       />
-                      {isTopscholar && (
-                        <NavItem
-                          icon={Bug}
-                          label="Debug"
-                          onClick={() => setLocation("/admin/topscholar/debug")}
-                          isActive={location.startsWith("/admin/topscholar/debug")}
-                          testId="link-topscholar-debug"
-                          gradient="bg-gradient-to-br from-red-500 to-orange-600"
-                        />
-                      )}
                       {isTopscholar && (
                         <NavItem
                           icon={TrendingUp}
