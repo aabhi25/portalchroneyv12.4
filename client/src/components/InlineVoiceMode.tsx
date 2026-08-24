@@ -565,6 +565,29 @@ export function InlineVoiceMode({
         setState('thinking');
         break;
 
+      case 'voice_control_consumed':
+        // Stop commands are consumed server-side before a final transcript is
+        // emitted, so they never create a user bubble or enter chat history.
+        // Clear any audio still buffered locally even when the previous,
+        // display-ready lesson remains visible in the transcript.
+        pendingInterruptRef.current = false;
+        bufferedTranscriptRef.current = null;
+        awaitingUserTranscriptRef.current = false;
+        aiDoneReceivedRef.current = false;
+        setCurrentTranscript('');
+        if (data.responseId) {
+          markResponseInterrupted(data.responseId);
+          if (currentResponseIdRef.current === data.responseId) {
+            currentAIMessageIdRef.current = null;
+            currentResponseIdRef.current = null;
+          }
+        }
+        flushQueuedAudio();
+        finishKaraoke();
+        noteListeningActivity();
+        setState('listening');
+        break;
+
       case 'response_cancelled':
         // The server abandoned this answer — typically a barge-in it detected
         // while we were still inside our own grace window, so we never ran

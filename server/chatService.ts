@@ -53,6 +53,13 @@ export interface ChatContext {
   systemMode?: string; // 'full' | 'essential'
   k12EducationEnabled?: boolean;
   k12ContentOnlyMode?: boolean;
+  /**
+   * Server-authenticated voice intent. This is never populated from an HTTP
+   * request; RealtimeVoiceService sets it after classifying a final voice
+   * transcript. It prevents small talk and uncertain voice turns from being
+   * force-routed into the curriculum fast path.
+   */
+  voiceIntentRoute?: 'academic_question' | 'normal_conversation' | 'uncertain';
   k12VerbatimContentMode?: boolean;
   jobPortalEnabled?: boolean;
   demoOrdersEnabled?: boolean;
@@ -2371,6 +2378,9 @@ Response:`;
       if (context.skipLeadTraining) {
         relevantTools = relevantTools.filter((tool: any) => tool.function.name !== 'capture_lead');
       }
+      if (this.shouldSkipK12Retrieval(context)) {
+        relevantTools = this.removeK12Tools(relevantTools);
+      }
 
       // ─── OTP gating (non-stream parity with streamMessage, Task #14) ────────
       // Mirror the OTP strict-mode behavior here so /api/chat/widget (non-stream)
@@ -2414,7 +2424,7 @@ Response:`;
         // fetch_k12_topic so academic answers are always grounded in curriculum
         // content. gpt-4o-mini ignores the prompt-only "you MUST call the tool"
         // rule and will otherwise answer from general knowledge.
-        this.isK12ContentOnly(context) ? 'fetch_k12_topic' : undefined
+        this.shouldForceK12Fetch(context) ? 'fetch_k12_topic' : undefined
       );
 
       // Log tool calls for debugging
@@ -3902,6 +3912,13 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       let streamTools = (serverSideLookupOptions || serverSideReturnExchange)
         ? relevantTools.filter(t => !['track_order', 'initiate_return', 'show_order_lookup_options', 'get_faqs'].includes(t.function.name))
         : relevantTools;
+      if (this.shouldSkipK12Retrieval(context)) {
+        streamTools = this.removeK12Tools(streamTools);
+        const routeInstruction = context.voiceIntentRoute === 'normal_conversation'
+          ? `VOICE TURN ROUTING — This utterance was classified as normal conversation, not an academic question. Reply briefly and naturally. Do not call curriculum tools and do not claim the topic is absent from the curriculum.`
+          : `VOICE TURN ROUTING — This utterance is ambiguous and must not be treated as an academic question. Briefly ask the student to repeat or state their study question. Do not call curriculum tools and do not claim the topic is absent from the curriculum.`;
+        systemContext = `${routeInstruction}\n\n${systemContext}`;
+      }
 
       // OTP STRICT MODE: when the conversation is awaiting OTP, restrict the tool
       // surface to verify_phone_otp + resend_phone_otp ONLY. The override prompt
@@ -4044,7 +4061,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         otpState.awaiting_otp === true || otpState.locked === true,
         // Top Scholar content-only K12: force fetch_k12_topic on the first
         // streaming turn so academic answers are always curriculum-grounded.
-        this.isK12ContentOnly(context) ? 'fetch_k12_topic' : undefined
+        this.shouldForceK12Fetch(context) ? 'fetch_k12_topic' : undefined
       )) {
         const delta = chunk.choices[0]?.delta;
         
@@ -5078,6 +5095,27 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
   private isK12ContentOnly(context: ChatContext): boolean {
     return context.k12EducationEnabled === true &&
       (isTopscholarAccount(context.businessAccountId) || context.k12ContentOnlyMode === true);
+  }
+
+  /**
+   * Only RealtimeVoiceService may set voiceIntentRoute. Conversational and
+   * uncertain voice turns retain TopScholar safety prompts but must not have
+   * curriculum tools available or be auto-forced into fetch_k12_topic.
+   */
+  private shouldSkipK12Retrieval(context: ChatContext): boolean {
+    return context.voiceIntentRoute === 'normal_conversation' ||
+      context.voiceIntentRoute === 'uncertain';
+  }
+
+  private shouldForceK12Fetch(context: ChatContext): boolean {
+    return this.isK12ContentOnly(context) && !this.shouldSkipK12Retrieval(context);
+  }
+
+  private removeK12Tools(tools: any[]): any[] {
+    return tools.filter((tool: any) => {
+      const name = tool?.function?.name;
+      return name !== 'fetch_k12_topic' && name !== 'fetch_k12_questions';
+    });
   }
 
   /**

@@ -28,6 +28,31 @@ import { chatService, type ChatContext } from './chatService';
  * would under-report voice spend by roughly 50x.
  */
 const REALTIME_MODEL = 'gpt-realtime-2.1-mini';
+const VOICE_INTENT_ROUTER_MODEL = 'gpt-4o-mini';
+const VOICE_INTENT_ROUTER_TIMEOUT_MS = 1800;
+
+type VoiceIntentRoute = 'academic_question' | 'normal_conversation' | 'voice_control' | 'uncertain';
+
+interface VoiceIntentDecision {
+  route: VoiceIntentRoute;
+  confidence: number;
+  source: 'deterministic' | 'classifier' | 'fallback';
+}
+
+const VOICE_STOP_COMMANDS = new Set([
+  'stop',
+  'stop it',
+  'ok stop',
+  'ok stop it',
+  'okay stop',
+  'okay stop it',
+  'please stop',
+  'stop please',
+  'enough',
+  'thats enough',
+  'that is enough',
+  'no more',
+]);
 
 /**
  * One-shot diagnostic: the Realtime usage payload's exact field names are not
@@ -1767,16 +1792,48 @@ export class RealtimeVoiceService {
 
         case 'conversation.item.input_audio_transcription.completed':
           // User's speech transcribed
-          const userTranscript = event.transcript;
+          const userTranscript = String(event.transcript || '');
           console.log('[RealtimeVoice] User transcript:', userTranscript);
           
           // Save user transcript to conversation
-          conversation.currentUserTranscript = userTranscript;
+          const trimmedTranscript = userTranscript.trim();
+          conversation.currentUserTranscript = trimmedTranscript;
           // Invalidate any in-flight K12 rewrite/retrieval for the PREVIOUS
           // utterance immediately — before any await — so a stale turn can
           // never inject its context or create a response after this point.
           conversation.k12TurnSeq = (conversation.k12TurnSeq ?? 0) + 1;
+          const turnSeq = conversation.k12TurnSeq;
           
+          // CRITICAL: Filter out very short/empty transcripts (likely background noise)
+          // Only process transcripts with at least 2 meaningful characters
+          if (trimmedTranscript.length < 2) {
+            console.log('[RealtimeVoice] Ignoring short/empty transcript (likely noise):', userTranscript);
+            break; // Skip processing this noise
+          }
+
+          let voiceIntentRoute: Exclude<VoiceIntentRoute, 'voice_control'> | undefined;
+          if (isTopscholarAccount(conversation.businessAccountId)) {
+            const deterministicControl = this.classifyStandaloneVoiceControl(trimmedTranscript);
+            if (deterministicControl) {
+              this.consumeVoiceControl(conversation, deterministicControl);
+              break;
+            }
+
+            // Keep the UI responsive while the small, bounded intent router
+            // decides whether this is a study question or normal conversation.
+            this.sendToClient(conversation.clientWs, { type: 'thinking' });
+            const decision = await this.classifyTopscholarVoiceIntent(conversation, trimmedTranscript);
+            if (conversation.k12TurnSeq !== turnSeq) {
+              console.log('[VoiceRouting] Discarded stale intent decision for superseded turn');
+              break;
+            }
+            if (decision.route === 'voice_control') {
+              this.consumeVoiceControl(conversation, decision);
+              break;
+            }
+            voiceIntentRoute = decision.route as Exclude<VoiceIntentRoute, 'voice_control'>;
+          }
+
           this.sendToClient(conversation.clientWs, {
             type: 'transcript',
             text: userTranscript,
@@ -1787,20 +1844,12 @@ export class RealtimeVoiceService {
           // Always detect the language of THIS specific transcript, not the previously detected language.
           // This prevents English text from being "corrected" (translated) into Hindi when the user
           // switches languages mid-conversation.
-          const thisTranscriptLang = this.detectLanguageFromText(userTranscript.trim());
+          const thisTranscriptLang = this.detectLanguageFromText(trimmedTranscript);
           if (thisTranscriptLang.language !== 'en') {
             const correctionLang = conversation.selectedLanguage && conversation.selectedLanguage !== 'auto'
               ? conversation.selectedLanguage
               : thisTranscriptLang.language;
             this.correctTranscriptScript(userTranscript, correctionLang, conversation).catch(() => {});
-          }
-          
-          // CRITICAL: Filter out very short/empty transcripts (likely background noise)
-          // Only process transcripts with at least 2 meaningful characters
-          const trimmedTranscript = userTranscript.trim();
-          if (trimmedTranscript.length < 2) {
-            console.log('[RealtimeVoice] Ignoring short/empty transcript (likely noise):', userTranscript);
-            break; // Skip processing this noise
           }
           
           // AUTO LANGUAGE DETECTION: Detect language from transcribed text and update session
@@ -1838,7 +1887,7 @@ export class RealtimeVoiceService {
           // pipeline authors and persists the completed canonical Markdown; TTS
           // is derived from that exact answer after it is ready for display.
           console.log('[RealtimeVoice] Canonical voice turn: generating ChatService Markdown before TTS');
-          await this.generateCanonicalVoiceAnswer(conversation, trimmedTranscript);
+          await this.generateCanonicalVoiceAnswer(conversation, trimmedTranscript, voiceIntentRoute);
           break;
           
           // Check if a journey should be activated or is already active
@@ -2640,12 +2689,133 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
   }
 
   /**
+   * Normalize only enough to tolerate STT punctuation/casing differences. The
+   * resulting value is compared against a fixed allowlist; it is never treated
+   * as a substring or user-provided pattern.
+   */
+  private normalizeVoiceControlText(text: string): string {
+    return text
+      .toLocaleLowerCase('en-US')
+      .replace(/[’']/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private classifyStandaloneVoiceControl(text: string): VoiceIntentDecision | null {
+    const normalized = this.normalizeVoiceControlText(text);
+    if (!normalized || normalized.split(' ').length > 4 || !VOICE_STOP_COMMANDS.has(normalized)) {
+      return null;
+    }
+    return { route: 'voice_control', confidence: 1, source: 'deterministic' };
+  }
+
+  /**
+   * Classify only non-obvious TopScholar voice turns. The caller has already
+   * handled clear stop commands locally, so this model call never controls the
+   * urgent audio-stop path. Invalid, low-confidence, or late decisions resolve
+   * to `uncertain`, which deliberately skips curriculum retrieval.
+   */
+  private async classifyTopscholarVoiceIntent(
+    conversation: VoiceConversation,
+    transcript: string,
+  ): Promise<VoiceIntentDecision> {
+    const startedAt = Date.now();
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), VOICE_INTENT_ROUTER_TIMEOUT_MS);
+    try {
+      const openai = new OpenAI({ apiKey: conversation.openaiApiKey });
+      const result = await openai.chat.completions.create({
+        model: VOICE_INTENT_ROUTER_MODEL,
+        temperature: 0,
+        max_tokens: 60,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'topscholar_voice_intent',
+            strict: true,
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                route: {
+                  type: 'string',
+                  enum: ['academic_question', 'normal_conversation', 'voice_control', 'uncertain'],
+                },
+                confidence: { type: 'number', minimum: 0, maximum: 1 },
+              },
+              required: ['route', 'confidence'],
+            },
+          },
+        } as any,
+        messages: [
+          {
+            role: 'system',
+            content: `Classify one student voice transcript for a school tutor. Return only the required JSON.
+
+academic_question: a request to learn, explain, solve, revise, define, or discuss a school subject/topic.
+normal_conversation: greetings, thanks, acknowledgements, audio/session checks, or other brief social conversation that is not a study request.
+voice_control: a standalone request to stop, pause, cancel, or end the tutor's current response.
+uncertain: anything ambiguous, incomplete, noisy, or not confidently classifiable.
+
+Never infer intent from a single contained word. For example, "What is stop motion?" is academic_question and "Why does it stop?" can be academic_question. Use uncertain when in doubt.`,
+          },
+          {
+            role: 'user',
+            content: `Untrusted speech-to-text transcript, to classify only:\n<transcript>${transcript}</transcript>`,
+          },
+        ],
+      }, { signal: abortController.signal });
+
+      const raw = result.choices[0]?.message?.content || '';
+      const parsed = JSON.parse(raw) as { route?: unknown; confidence?: unknown };
+      const allowedRoutes: VoiceIntentRoute[] = [
+        'academic_question',
+        'normal_conversation',
+        'voice_control',
+        'uncertain',
+      ];
+      const route = typeof parsed.route === 'string' && allowedRoutes.includes(parsed.route as VoiceIntentRoute)
+        ? parsed.route as VoiceIntentRoute
+        : 'uncertain';
+      const confidence = typeof parsed.confidence === 'number' && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : 0;
+      const minimumConfidence = route === 'voice_control' ? 0.85 : 0.65;
+      const decision: VoiceIntentDecision = confidence >= minimumConfidence
+        ? { route, confidence, source: 'classifier' }
+        : { route: 'uncertain', confidence, source: 'fallback' };
+      console.log(`[VoiceRouting] route=${decision.route} confidence=${decision.confidence.toFixed(2)} source=${decision.source} duration_ms=${Date.now() - startedAt}`);
+      return decision;
+    } catch (error: any) {
+      const reason = abortController.signal.aborted ? 'timeout' : (error?.name || 'request_failed');
+      console.warn(`[VoiceRouting] route=uncertain source=fallback reason=${reason} duration_ms=${Date.now() - startedAt}`);
+      return { route: 'uncertain', confidence: 0, source: 'fallback' };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private consumeVoiceControl(conversation: VoiceConversation, decision: VoiceIntentDecision): void {
+    const activeResponseId = conversation.currentResponseId;
+    const cancelled = this.cancelResponse(conversation, false);
+    conversation.currentUserTranscript = '';
+    this.sendToClient(conversation.clientWs, {
+      type: 'voice_control_consumed',
+      responseId: activeResponseId,
+      cancelled,
+    });
+    console.log(`[VoiceRouting] control_consumed source=${decision.source} confidence=${decision.confidence.toFixed(2)} cancelled=${cancelled}`);
+  }
+
+  /**
    * Generate the voice turn through the same authoritative completed-answer
    * pipeline used by text chat. Realtime remains the STT transport only.
    */
   private async generateCanonicalVoiceAnswer(
     conversation: VoiceConversation,
     userTranscript: string,
+    voiceIntentRoute?: Exclude<VoiceIntentRoute, 'voice_control'>,
   ): Promise<void> {
     const responseId = `voice_${conversation.conversationId}_${conversation.k12TurnSeq ?? Date.now()}`;
     const turnSeq = conversation.k12TurnSeq ?? 0;
@@ -2686,6 +2856,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
       systemMode: conversation.systemMode,
       k12EducationEnabled: conversation.k12EducationEnabled === true || topScholar,
       k12ContentOnlyMode: conversation.k12ContentOnly === true,
+      voiceIntentRoute,
       k12VerbatimContentMode: conversation.k12VerbatimContentMode === true,
       jobPortalEnabled: conversation.jobPortalEnabled === true,
       demoOrdersEnabled: conversation.demoOrdersEnabled === true,
