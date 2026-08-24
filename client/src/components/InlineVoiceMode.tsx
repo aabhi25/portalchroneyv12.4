@@ -10,6 +10,7 @@ type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
 // arrive, which previously self-cancelled the whole answer. Kept in lockstep
 // with the server-side BARGE_IN_GRACE_MS in realtimeVoiceService.ts.
 const BARGE_IN_GRACE_MS = 700;
+const TOPSCHOLAR_LISTENING_IDLE_TIMEOUT_MS = 10_000;
 
 interface InlineVoiceModeProps {
   isActive: boolean;
@@ -136,6 +137,8 @@ export function InlineVoiceMode({
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const heartbeatTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const busyResumeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const listeningInactivityTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastListeningActivityAtRef = useRef<number>(0);
   const sessionClosedByServerRef = useRef(false);
   const currentAIMessageIdRef = useRef<string | null>(null);
   const awaitingUserTranscriptRef = useRef(false);
@@ -526,6 +529,7 @@ export function InlineVoiceMode({
         break;
 
       case 'speech_started':
+        noteListeningActivity();
         // Respect the same barge-in grace window as the local VAD: a server VAD
         // speech_started that lands in the opening of a new answer is almost
         // always the AI's own audio / echo and must not self-cancel playback.
@@ -539,6 +543,7 @@ export function InlineVoiceMode({
         break;
 
       case 'transcript':
+        noteListeningActivity();
         if (pendingInterruptRef.current && data.isFinal) {
           pendingInterruptRef.current = false;
           bufferedTranscriptRef.current = null;
@@ -987,6 +992,7 @@ export function InlineVoiceMode({
       // picks up the AI's voice as echo, so during loud playback the user must
       // be clearly louder than that echo to count as a real interruption.
       const ECHO_REJECTION_FACTOR = 0.08;
+      let speechActivityLatched = false;
 
       vadIntervalRef.current = setInterval(() => {
         if (!vadAnalyserRef.current) return;
@@ -1016,11 +1022,17 @@ export function InlineVoiceMode({
 
         if (rms > effectiveThreshold) {
           consecutiveSpeechFrames++;
-          if (consecutiveSpeechFrames >= requiredFrames && stateRef.current === 'speaking') {
-            handleInterruption();
+          if (consecutiveSpeechFrames >= requiredFrames) {
+            if (stateRef.current === 'listening' && !speechActivityLatched) {
+              speechActivityLatched = true;
+              noteListeningActivity();
+            } else if (stateRef.current === 'speaking') {
+              handleInterruption();
+            }
           }
         } else {
           consecutiveSpeechFrames = 0;
+          speechActivityLatched = false;
         }
       }, 100);
     } catch (error) {
@@ -1273,6 +1285,71 @@ export function InlineVoiceMode({
     });
   };
 
+  const clearListeningInactivityTimeout = () => {
+    if (listeningInactivityTimeoutRef.current) {
+      clearTimeout(listeningInactivityTimeoutRef.current);
+      listeningInactivityTimeoutRef.current = null;
+    }
+  };
+
+  const pauseTopScholarListening = () => {
+    if (!topscholarToken || stateRef.current !== 'listening') return;
+
+    clearListeningInactivityTimeout();
+    shouldAutoRestartRef.current = false;
+    stopVoiceActivityDetection();
+    void stopRecording();
+    setCurrentTranscript('');
+    setVoiceError(null);
+    stateRef.current = 'idle';
+    setState('idle');
+  };
+
+  const scheduleListeningInactivityTimeout = () => {
+    clearListeningInactivityTimeout();
+    if (!topscholarToken || stateRef.current !== 'listening') return;
+
+    const lastActivityAt = lastListeningActivityAtRef.current || Date.now();
+    const remaining = Math.max(
+      0,
+      TOPSCHOLAR_LISTENING_IDLE_TIMEOUT_MS - (Date.now() - lastActivityAt),
+    );
+
+    listeningInactivityTimeoutRef.current = setTimeout(() => {
+      listeningInactivityTimeoutRef.current = null;
+      if (!topscholarToken || stateRef.current !== 'listening') return;
+
+      const elapsed = Date.now() - (lastListeningActivityAtRef.current || Date.now());
+      if (elapsed < TOPSCHOLAR_LISTENING_IDLE_TIMEOUT_MS) {
+        scheduleListeningInactivityTimeout();
+        return;
+      }
+
+      pauseTopScholarListening();
+    }, remaining);
+  };
+
+  const noteListeningActivity = () => {
+    if (!topscholarToken || stateRef.current !== 'listening') return;
+    lastListeningActivityAtRef.current = Date.now();
+    scheduleListeningInactivityTimeout();
+  };
+
+  useEffect(() => {
+    if (!topscholarToken || state !== 'listening') {
+      clearListeningInactivityTimeout();
+      return;
+    }
+
+    lastListeningActivityAtRef.current = Date.now();
+    if (mediaStreamRef.current && !vadIntervalRef.current) {
+      startVoiceActivityDetection();
+    }
+    scheduleListeningInactivityTimeout();
+
+    return clearListeningInactivityTimeout;
+  }, [state, topscholarToken]);
+
   const cleanup = () => {
     shouldAutoRestartRef.current = false;
     finishKaraoke();
@@ -1287,6 +1364,7 @@ export function InlineVoiceMode({
       if (reconnectTimeoutRef.current) { clearTimeout(reconnectTimeoutRef.current); reconnectTimeoutRef.current = null; }
       if (heartbeatTimeoutRef.current) { clearTimeout(heartbeatTimeoutRef.current); heartbeatTimeoutRef.current = null; }
       if (busyResumeTimeoutRef.current) { clearTimeout(busyResumeTimeoutRef.current); busyResumeTimeoutRef.current = null; }
+      clearListeningInactivityTimeout();
       stopVoiceActivityDetection();
       stopVolumeMonitoring();
       activeSourcesRef.current.forEach((s) => { try { s.stop(); } catch {} });
@@ -1332,8 +1410,8 @@ export function InlineVoiceMode({
   const stateLabel = state === 'listening' ? (currentTranscript || 'Listening...') :
     state === 'thinking' ? 'Thinking...' :
     state === 'speaking' ? 'Speaking...' :
-    isConnecting ? 'Connecting...' :
-    voiceError ? voiceError : 'Tap to start';
+     isConnecting ? 'Connecting...' :
+     voiceError ? voiceError : topscholarToken ? 'Tap to speak' : 'Tap to start';
 
   return (
     <div className="flex items-center gap-3 px-3 py-2 min-h-[56px]">
@@ -1349,6 +1427,9 @@ export function InlineVoiceMode({
         <button
           onClick={async () => {
             if (isConnecting) return;
+            if (state === 'idle') {
+              shouldAutoRestartRef.current = true;
+            }
             // Offline covers both a refused session and a dropped one. Retry on
             // click instead of ignoring it — silently swallowing the click is
             // what made this read as an unresponsive button.
@@ -1358,7 +1439,6 @@ export function InlineVoiceMode({
               return;
             }
             if (state === 'idle') {
-              shouldAutoRestartRef.current = true;
               try { await startRecording(); } catch {}
             }
           }}
