@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Sparkles, Route, Zap, MessagesSquare, Contact, BarChart3, Link2,
   UsersRound, FileCode2, Megaphone, Settings, ShieldCheck, MessageCircle,
+  FileSpreadsheet,
 } from "lucide-react";
 
 /**
@@ -263,6 +264,17 @@ const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
     tone: "bg-emerald-50 group-hover:bg-emerald-100",
     matches: l => l.startsWith("/admin/whatsapp-campaigns"),
     blocked: r => (r.marketing && !r.marketing.canSend ? "Needs steps 1 and 2 first" : undefined),
+  },
+  {
+    key: "automations",
+    label: "Automations",
+    description: "Turn daily spreadsheets into scheduled campaigns",
+    href: "/admin/whatsapp-campaign-automations",
+    icon: FileSpreadsheet,
+    sidebarTestId: "link-wa-campaign-automations",
+    gradient: "bg-gradient-to-br from-emerald-500 to-teal-600",
+    tone: "bg-emerald-50 group-hover:bg-emerald-100",
+    matches: l => l.startsWith("/admin/whatsapp-campaign-automations"),
   },
 ];
 
