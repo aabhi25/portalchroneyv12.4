@@ -36173,6 +36173,20 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
+  app.post("/api/whatsapp/ai-workbooks/:id/link", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const campaignId = req.body?.campaignId ? String(req.body.campaignId) : null;
+      const result = await whatsappAiWorkbookService.linkToCampaign(req.user!.businessAccountId!, req.params.id, campaignId, campaignId ? {
+        expectedCurrentVersionId: String(req.body?.expectedCurrentVersionId || ""),
+        expectedRevision: Number(req.body?.expectedRevision),
+      } : undefined);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   app.post("/api/whatsapp/ai-workbooks/:id/refresh", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
       const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");

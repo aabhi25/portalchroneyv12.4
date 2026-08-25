@@ -269,6 +269,8 @@ function WorkbookEditor({ id }: { id: string }) {
   const [mappingInstruction, setMappingInstruction] = useState("");
   const [resultMappings, setResultMappings] = useState<AiWorkbookCampaignResultMapping[]>([]);
   const [mappingFeedback, setMappingFeedback] = useState<{ confidence: "low" | "medium" | "high"; warnings: string[] } | null>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkCampaignId, setLinkCampaignId] = useState("");
 
   const { data: workbook, isLoading } = useQuery<WorkbookDetail>({
     queryKey: [`/api/whatsapp/ai-workbooks/${id}`],
@@ -290,6 +292,17 @@ function WorkbookEditor({ id }: { id: string }) {
     queryKey: [`/api/whatsapp/ai-workbooks/${id}/result-syncs`],
     enabled: Boolean(workbook),
   });
+  const { data: campaigns = [] } = useQuery<Campaign[]>({
+    queryKey: ["/api/whatsapp/campaigns"],
+    enabled: Boolean(workbook) && (linkOpen || Boolean(workbook?.sourceCampaignId)),
+  });
+  const linkedCampaign = workbook?.sourceCampaignId
+    ? campaigns.find(campaign => campaign.id === workbook.sourceCampaignId) || null
+    : null;
+  const campaignIsLive = Boolean(linkedCampaign && ["running", "sending", "scheduled", "in_progress", "active"].includes(linkedCampaign.status));
+  const lastCampaignSync = workbook?.versions
+    ?.filter(version => version.source === "campaign" || version.source === "campaign_sync")
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] || null;
 
   useEffect(() => {
     if (!workbook?.currentVersion || dirty) return;
@@ -411,6 +424,25 @@ function WorkbookEditor({ id }: { id: string }) {
       toast({ title: "Workbook renamed" });
     },
     onError: (error: Error) => toast({ title: "Couldn't rename workbook", description: error.message, variant: "destructive" }),
+  });
+
+  const linkCampaign = useMutation({
+    mutationFn: (campaignId: string | null) => apiRequest("POST", `/api/whatsapp/ai-workbooks/${id}/link`, {
+      campaignId,
+      expectedCurrentVersionId: workbook?.currentVersion?.id,
+      expectedRevision: workbook?.currentVersion?.revision,
+    }),
+    onSuccess: (_result, campaignId) => {
+      setLinkOpen(false);
+      setLinkCampaignId("");
+      if (campaignId) setDirty(false);
+      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/ai-workbooks/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/ai-workbooks"] });
+      toast(campaignId
+        ? { title: "Workbook linked to campaign", description: "Campaign data was pulled in. Rows were matched by phone number and your columns were kept." }
+        : { title: "Campaign unlinked", description: "The workbook is independent again. Its data was not changed." });
+    },
+    onError: (error: Error) => toast({ title: "Couldn't update campaign link", description: error.message, variant: "destructive" }),
   });
 
   const refresh = useMutation({
@@ -574,14 +606,50 @@ function WorkbookEditor({ id }: { id: string }) {
               <Pencil className="h-4 w-4" />
             </Button>
           </div>
-          <div className="flex items-center gap-2 mt-2 text-sm text-slate-500">
-            <span>{workbook.sourceCampaignId ? "Linked campaign workbook" : "Independent workbook"}</span>
+          <div className="flex flex-wrap items-center gap-2 mt-2 text-sm text-slate-500">
+            {workbook.sourceCampaignId ? (
+              <span className="inline-flex items-center gap-1.5">
+                <Link2 className="h-3.5 w-3.5" />
+                {linkedCampaign ? `Linked to ${linkedCampaign.name}` : "Linked campaign workbook"}
+                {campaignIsLive && (
+                  <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 border-0 text-[10px]">
+                    Campaign running — new replies may arrive
+                  </Badge>
+                )}
+              </span>
+            ) : (
+              <span>Independent workbook</span>
+            )}
             <span className="text-slate-300">•</span>
             <span>Last saved {new Date(workbook.currentVersion.updatedAt).toLocaleString()}</span>
+            {lastCampaignSync && (
+              <><span className="text-slate-300">•</span><span>Last synced {new Date(lastCampaignSync.createdAt).toLocaleString()}</span></>
+            )}
             {dirty && <><span className="text-slate-300">•</span><span className="font-medium text-amber-600">Unsaved changes</span></>}
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {workbook.sourceCampaignId ? (
+            <Button
+              variant="outline"
+              className="bg-white border-slate-200 text-slate-700 shadow-sm"
+              onClick={() => refresh.mutate()}
+              disabled={refresh.isPending || dirty}
+              title={dirty ? "Save your changes before refreshing" : "Pull the latest campaign replies into this workbook"}
+              data-testid="button-refresh-outcomes"
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${refresh.isPending ? "animate-spin" : ""}`} /> Refresh outcomes
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              className="bg-white border-slate-200 text-slate-700 shadow-sm"
+              onClick={() => setLinkOpen(true)}
+              data-testid="button-link-campaign"
+            >
+              <Link2 className="h-4 w-4 mr-2" /> Link campaign
+            </Button>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" className="bg-white border-slate-200 text-slate-700 shadow-sm">
@@ -590,9 +658,14 @@ function WorkbookEditor({ id }: { id: string }) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               {workbook.sourceCampaignId && (
-                <DropdownMenuItem onSelect={() => refresh.mutate()} disabled={refresh.isPending || dirty}>
-                  <RefreshCw className={`h-4 w-4 mr-2 ${refresh.isPending ? "animate-spin" : ""}`} /> Refresh outcomes
-                </DropdownMenuItem>
+                <>
+                  <DropdownMenuItem onSelect={() => refresh.mutate()} disabled={refresh.isPending || dirty}>
+                    <RefreshCw className={`h-4 w-4 mr-2 ${refresh.isPending ? "animate-spin" : ""}`} /> Refresh outcomes
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => linkCampaign.mutate(null)} disabled={linkCampaign.isPending || dirty}>
+                    <X className="h-4 w-4 mr-2" /> Unlink campaign
+                  </DropdownMenuItem>
+                </>
               )}
               <DropdownMenuItem onSelect={() => inputRef.current?.click()}>
                 <Upload className="h-4 w-4 mr-2" /> Import Excel
@@ -632,6 +705,53 @@ function WorkbookEditor({ id }: { id: string }) {
           />
         </CardContent>
       </Card>
+
+      <Dialog open={linkOpen} onOpenChange={open => { setLinkOpen(open); if (!open) setLinkCampaignId(""); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Link this workbook to a campaign</DialogTitle>
+            <DialogDescription>
+              Campaign replies and outcomes are pulled into this workbook. Existing rows are matched by phone number, and your own columns and notes are kept. You can refresh anytime — even while the campaign is still running.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-1">
+            <Label>Campaign</Label>
+            <Select value={linkCampaignId} onValueChange={setLinkCampaignId}>
+              <SelectTrigger className="mt-1" data-testid="select-link-campaign">
+                <SelectValue placeholder="Choose a campaign…" />
+              </SelectTrigger>
+              <SelectContent>
+                {campaigns.map(campaign => (
+                  <SelectItem key={campaign.id} value={campaign.id}>
+                    <div className="flex items-center gap-2">
+                      <span className="truncate">{campaign.name}</span>
+                      <span className="text-xs text-slate-400">
+                        {campaign.totalRecipients} recipients · {campaign.status}
+                      </span>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {campaigns.length === 0 && (
+              <p className="text-xs text-slate-500 mt-2">No campaigns yet — create one from All campaigns first.</p>
+            )}
+            {dirty && (
+              <p className="text-xs text-amber-600 mt-2">You have unsaved changes. Save them first — linking creates a new workbook version.</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLinkOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => linkCampaign.mutate(linkCampaignId)}
+              disabled={!linkCampaignId || linkCampaign.isPending || dirty}
+              data-testid="button-confirm-link-campaign"
+            >
+              {linkCampaign.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Link2 className="h-4 w-4 mr-1" />} Link campaign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={mappingOpen} onOpenChange={setMappingOpen}>
         <DialogContent className="max-w-3xl">

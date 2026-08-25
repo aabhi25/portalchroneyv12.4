@@ -343,16 +343,30 @@ function mergeOperatorEdits(fresh: AiWorkbookSheet[], previous: AiWorkbookSheet[
   }
   const extraColumns = Array.from(operatorColumns.values())
     .filter(oldColumn => !current.columns.some(column => column.key === oldColumn.key));
+  const allColumns = [...current.columns, ...extraColumns];
+  const matched = new Set<AiWorkbookRow>();
+  const rows = current.rows.map(row => {
+    const prior = oldBySource.get(row.sourceRecipientId || row.id);
+    if (!prior) return row;
+    matched.add(prior);
+    const operatorValues: AiWorkbookRow["values"] = {};
+    for (const key of Array.from(operatorColumns.keys())) operatorValues[key] = prior.values[key] ?? null;
+    return { ...row, values: { ...row.values, ...operatorValues } };
+  });
+  // Rows the operator added by hand (no campaign recipient behind them) must
+  // survive a refresh — only rows sourced from the campaign are rebuilt.
+  const manualLeftovers = previous
+    .flatMap(sheet => sheet.rows)
+    .filter(row => !row.sourceRecipientId && !matched.has(row))
+    .map(row => {
+      const values: AiWorkbookRow["values"] = {};
+      for (const columnDef of allColumns) values[columnDef.key] = row.values[columnDef.key] ?? null;
+      return { ...row, values };
+    });
   return [{
     ...current,
-    columns: [...current.columns, ...extraColumns],
-    rows: current.rows.map(row => {
-      const prior = oldBySource.get(row.sourceRecipientId || row.id);
-      if (!prior) return row;
-      const operatorValues: AiWorkbookRow["values"] = {};
-      for (const key of Array.from(operatorColumns.keys())) operatorValues[key] = prior.values[key] ?? null;
-      return { ...row, values: { ...row.values, ...operatorValues } };
-    }),
+    columns: allColumns,
+    rows: [...rows, ...manualLeftovers],
   }];
 }
 
@@ -706,6 +720,121 @@ export const whatsappAiWorkbookService = {
       source: "manual",
       expectedCurrentVersionId,
       expectedRevision,
+    });
+  },
+
+  /**
+   * Link an independent workbook to an existing campaign (or unlink with
+   * campaignId = null). Linking rebuilds the sheet from the campaign and
+   * merges the workbook's existing data in: rows are matched by normalized
+   * phone number, operator columns and their values are preserved, and rows
+   * that don't match any campaign recipient are kept at the bottom.
+   */
+  async linkToCampaign(
+    businessAccountId: string,
+    workbookId: string,
+    campaignId: string | null,
+    expected?: { expectedCurrentVersionId: string; expectedRevision: number },
+  ) {
+    const [workbook] = await db.select().from(whatsappAiWorkbooks)
+      .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)))
+      .limit(1);
+    if (!workbook) throw new Error("Workbook not found");
+
+    if (!campaignId) {
+      const [updated] = await db.update(whatsappAiWorkbooks)
+        .set({ sourceCampaignId: null, updatedAt: new Date() })
+        .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)))
+        .returning();
+      return { workbook: updated, version: null };
+    }
+
+    if (!expected?.expectedCurrentVersionId || !Number.isInteger(expected.expectedRevision)) {
+      throw new Error("Current workbook version and revision are required");
+    }
+    const fresh = await buildCampaignSheets(businessAccountId, campaignId);
+
+    return db.transaction(async tx => {
+      const [current] = await tx.select().from(whatsappAiWorkbookVersions)
+        .where(and(
+          eq(whatsappAiWorkbookVersions.workbookId, workbookId),
+          eq(whatsappAiWorkbookVersions.businessAccountId, businessAccountId),
+        ))
+        .orderBy(desc(whatsappAiWorkbookVersions.versionNumber))
+        .limit(1)
+        .for("update");
+      if (!current) throw new Error("Workbook has no version");
+      if (current.id !== expected.expectedCurrentVersionId || current.revision !== expected.expectedRevision) {
+        throw new Error("This workbook changed in another session. Reload it before linking.");
+      }
+      const previous = validateSheets(current.sheets);
+
+      // Keep every operator column. When a key collides with a campaign
+      // column, retain it under a new unique key so no values are lost.
+      const freshSheet = fresh[0];
+      const usedKeys = new Set(freshSheet.columns.map(c => c.key));
+      const keptColumns: AiWorkbookColumn[] = [];
+      const keyRemap = new Map<string, string>();
+      for (const oldColumn of previous[0].columns.filter(c => c.source === "operator")) {
+        const newKey = keyFor(oldColumn.key, usedKeys);
+        keyRemap.set(oldColumn.key, newKey);
+        keptColumns.push(newKey === oldColumn.key
+          ? oldColumn
+          : { ...oldColumn, key: newKey, label: `${oldColumn.label} (workbook)` });
+      }
+      const carriedKeys = Array.from(keyRemap.entries());
+      const operatorFreshKeys = freshSheet.columns.filter(c => c.source === "operator").map(c => c.key);
+
+      const previousByPhone = new Map<string, AiWorkbookRow>();
+      for (const row of previous[0].rows) {
+        const phone = normalizePhone(String(row.values.phone ?? row.values.Phone ?? ""));
+        if (phone && !previousByPhone.has(phone)) previousByPhone.set(phone, row);
+      }
+      const matched = new Set<AiWorkbookRow>();
+      const rows = freshSheet.rows.map(row => {
+        const prior = previousByPhone.get(normalizePhone(String(row.values.phone || "")));
+        if (!prior) return row;
+        matched.add(prior);
+        const carried: AiWorkbookRow["values"] = {};
+        for (const [oldKey, newKey] of carriedKeys) {
+          const priorValue = prior.values[oldKey];
+          if (priorValue !== undefined && priorValue !== null && priorValue !== "") carried[newKey] = priorValue;
+        }
+        for (const key of operatorFreshKeys) {
+          if (carried[key] !== undefined) continue;
+          const priorValue = prior.values[key];
+          if (priorValue !== undefined && priorValue !== null && priorValue !== "") carried[key] = priorValue;
+        }
+        return { ...row, values: { ...row.values, ...carried } };
+      });
+      const unmatched = previous[0].rows
+        .filter(row => !matched.has(row))
+        .map(row => {
+          const values: AiWorkbookRow["values"] = {};
+          for (const columnDef of freshSheet.columns) values[columnDef.key] = row.values[columnDef.key] ?? null;
+          for (const [oldKey, newKey] of carriedKeys) values[newKey] = row.values[oldKey] ?? null;
+          return { ...row, sourceRecipientId: undefined, values };
+        });
+      const sheets: AiWorkbookSheet[] = [{
+        ...freshSheet,
+        id: previous[0].id,
+        columns: [...freshSheet.columns, ...keptColumns],
+        rows: [...rows, ...unmatched],
+      }];
+
+      const [updated] = await tx.update(whatsappAiWorkbooks)
+        .set({ sourceCampaignId: campaignId, updatedAt: new Date() })
+        .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)))
+        .returning();
+      const [version] = await tx.insert(whatsappAiWorkbookVersions).values({
+        workbookId,
+        businessAccountId,
+        sourceCampaignId: campaignId,
+        versionNumber: current.versionNumber + 1,
+        source: "campaign",
+        sheets,
+      }).returning();
+      return { workbook: updated, version };
     });
   },
 
