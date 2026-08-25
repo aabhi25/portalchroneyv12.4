@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,6 +30,20 @@ function toKey(input: string): string {
   return input.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
+/** Lowercase snake_case key for capture fields (e.g. "Promised Date" -> "promised_date"). */
+function toFieldKey(input: string): string {
+  return input.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+/** Make `base` unique among `taken` by suffixing _2, _3, ... */
+function uniqueKey(base: string, taken: Set<string>): string {
+  if (!base) return base;
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(`${base}_${n}`)) n++;
+  return `${base}_${n}`;
+}
+
 export function ReplyClassificationEditor({
   value,
   onChange,
@@ -39,6 +53,21 @@ export function ReplyClassificationEditor({
 }) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
+  // Keys this editor generated in the current session may be regenerated on
+  // rename. Every other key (loaded from the server, or set by a preset) is
+  // locked: stored replies may reference it, so a rename never rewrites it.
+  const generatedKeys = useRef(new Set<string>());
+  const lockedKeys = useRef(new Set<string>());
+  useEffect(() => {
+    for (const c of value) {
+      const k = toKey(c.key);
+      if (k && !generatedKeys.current.has(k)) lockedKeys.current.add(k);
+      for (const f of c.captureFields || []) {
+        if (f.fieldKey && !generatedKeys.current.has(f.fieldKey)) lockedKeys.current.add(f.fieldKey);
+      }
+    }
+  }, [value]);
+
   const toggle = (i: number) => {
     const next = new Set(expanded);
     next.has(i) ? next.delete(i) : next.add(i);
@@ -47,6 +76,52 @@ export function ReplyClassificationEditor({
 
   const update = (i: number, patch: Partial<ReplyClassification>) => {
     onChange(value.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
+  };
+
+  /** A key may be regenerated only if it is empty or was generated (not locked) in this session. */
+  const isAutoKey = (key: string) => {
+    if (!key) return true;
+    return generatedKeys.current.has(key) && !lockedKeys.current.has(key);
+  };
+
+  /**
+   * Rename a category. The key is auto-derived from the name, but only while
+   * the key was generated in this session. Preset keys (PTP, PAID, …) and keys
+   * loaded from a saved campaign are never rewritten by a rename, so stored
+   * replies keep pointing at the right category.
+   */
+  const renameCategory = (i: number, label: string) => {
+    const current = value[i];
+    if (!isAutoKey(toKey(current.key))) {
+      update(i, { label });
+      return;
+    }
+    const taken = new Set(value.filter((_, idx) => idx !== i).map(c => toKey(c.key)).filter(Boolean));
+    const next = uniqueKey(toKey(label), taken);
+    if (next) generatedKeys.current.add(next);
+    update(i, { label, key: next });
+  };
+
+  /** Same auto-key rule for a capture field's label -> fieldKey. */
+  const renameCaptureField = (i: number, fi: number, fieldLabel: string) => {
+    const fields = [...(value[i].captureFields || [])];
+    const f = fields[fi];
+    if (!isAutoKey(f.fieldKey)) {
+      fields[fi] = { ...f, fieldLabel };
+    } else {
+      const taken = new Set(
+        value.flatMap((c, ci) =>
+          (c.captureFields || [])
+            .filter((_, x) => !(ci === i && x === fi))
+            .map(x => x.fieldKey)
+            .filter(Boolean),
+        ),
+      );
+      const next = uniqueKey(toFieldKey(fieldLabel), taken);
+      if (next) generatedKeys.current.add(next);
+      fields[fi] = { ...f, fieldLabel, fieldKey: next };
+    }
+    update(i, { captureFields: fields });
   };
 
   const remove = (i: number) => {
@@ -145,11 +220,6 @@ export function ReplyClassificationEditor({
                   <span className="text-sm font-medium text-gray-800 truncate flex-1">
                     {c.label?.trim() || normKey || <span className="text-gray-400 italic">Untitled category</span>}
                   </span>
-                  {normKey && (
-                    <Badge variant="outline" className="font-mono text-[10px] shrink-0">
-                      {normKey}
-                    </Badge>
-                  )}
                   {(c.captureFields?.length || 0) > 0 && (
                     <Badge variant="secondary" className="text-[10px] shrink-0">
                       {c.captureFields!.length} field{c.captureFields!.length === 1 ? "" : "s"}
@@ -169,30 +239,21 @@ export function ReplyClassificationEditor({
 
                 {isOpen && (
                   <div className="p-3 space-y-3 border-t">
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-xs font-medium text-gray-600">Display name</label>
-                        <Input
-                          className="mt-1"
-                          value={c.label}
-                          onChange={e => update(i, { label: e.target.value })}
-                          placeholder="Promise to Pay"
-                          data-testid={`input-classification-label-${i}`}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs font-medium text-gray-600">Key</label>
-                        <Input
-                          className="mt-1 font-mono text-xs"
-                          value={c.key}
-                          onChange={e => update(i, { key: e.target.value })}
-                          placeholder="PTP"
-                          data-testid={`input-classification-key-${i}`}
-                        />
-                        {isDupe && (
-                          <p className="text-xs text-red-600 mt-1">Duplicate key — each must be unique.</p>
-                        )}
-                      </div>
+                    <div>
+                      <label className="text-xs font-medium text-gray-600">Name</label>
+                      <Input
+                        className="mt-1"
+                        value={c.label}
+                        onChange={e => renameCategory(i, e.target.value)}
+                        placeholder="Promise to Pay"
+                        data-testid={`input-classification-label-${i}`}
+                      />
+                      {isDupe && (
+                        <p className="text-xs text-red-600 mt-1">Duplicate category — each name must be unique.</p>
+                      )}
+                      {c.label.trim() !== "" && !toKey(c.label) && !toKey(c.key) && (
+                        <p className="text-xs text-red-600 mt-1">Name must include at least one letter or number.</p>
+                      )}
                     </div>
 
                     <div>
@@ -246,24 +307,9 @@ export function ReplyClassificationEditor({
                               <Input
                                 className="flex-1 h-8 text-xs"
                                 value={f.fieldLabel}
-                                onChange={e => {
-                                  const next = [...(c.captureFields || [])];
-                                  next[fi] = { ...f, fieldLabel: e.target.value };
-                                  update(i, { captureFields: next });
-                                }}
+                                onChange={e => renameCaptureField(i, fi, e.target.value)}
                                 placeholder="Promised Payment Date"
                                 data-testid={`input-capture-label-${i}-${fi}`}
-                              />
-                              <Input
-                                className="w-32 h-8 text-xs font-mono"
-                                value={f.fieldKey}
-                                onChange={e => {
-                                  const next = [...(c.captureFields || [])];
-                                  next[fi] = { ...f, fieldKey: e.target.value };
-                                  update(i, { captureFields: next });
-                                }}
-                                placeholder="ptp_date"
-                                data-testid={`input-capture-key-${i}-${fi}`}
                               />
                               <Select
                                 value={f.fieldType}
