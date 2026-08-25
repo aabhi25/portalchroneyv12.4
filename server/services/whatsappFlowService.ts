@@ -118,6 +118,16 @@ export class WhatsappFlowService {
   private stepsCache = new Map<string, { data: WhatsappFlowStep[]; ts: number }>();
   private apiKeyCache = new Map<string, { data: { apiKey: string | null; name: string | null }; ts: number }>();
 
+  private isAdaptiveJourneyEnabled(flow: WhatsappFlow, businessAccountId: string): boolean {
+    if (flow.adaptiveMode !== "true") return false;
+    if (process.env.WHATSAPP_ADAPTIVE_MODE_ENABLED === "false") return false;
+    const allowlist = process.env.WHATSAPP_ADAPTIVE_MODE_ALLOWLIST
+      ?.split(",")
+      .map(id => id.trim())
+      .filter(Boolean);
+    return !allowlist?.length || allowlist.includes(businessAccountId);
+  }
+
   private getCached<T>(cache: Map<string, { data: T; ts: number }>, key: string): T | undefined {
     const entry = cache.get(key);
     if (entry && Date.now() - entry.ts < this.CACHE_TTL_MS) {
@@ -1195,7 +1205,8 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
     businessAccountId: string,
     input: string
   ): Promise<Record<string, string>> {
-    const { apiKey } = await this.getApiKeyForBusiness(businessAccountId);
+    const { apiKey: businessApiKey } = await this.getApiKeyForBusiness(businessAccountId);
+    const apiKey = businessApiKey || process.env.OPENAI_API_KEY;
     if (!apiKey) {
       console.warn(`[WhatsApp Flow] No API key for AI update parsing, falling back to regex`);
       return this.parseUpdateDetailsFallback(input);
@@ -2502,6 +2513,68 @@ Return ONLY valid JSON (no markdown):
     }
   }
 
+  /**
+   * Resolve a typed answer to a configured interactive choice.
+   *
+   * Adaptive mode is intentionally closed-world: the model can only return an
+   * ID that already exists on this step. Branching, saved values, and follow-up
+   * prompts continue through the normal selection handlers below.
+   */
+  private async resolveAdaptiveSelection(
+    businessAccountId: string,
+    message: string,
+    step: WhatsappFlowStep,
+    collectedData: Record<string, any>
+  ): Promise<string | null> {
+    const resolvedStep = this.resolveStepOptions(step, collectedData);
+    const options = resolvedStep.options as FlowStepOptions | null;
+    const choices: Array<{ id: string; title: string; value?: string }> =
+      resolvedStep.type === "buttons"
+        ? (options?.buttons || []).map(item => ({ id: item.id, title: item.title }))
+        : resolvedStep.type === "dropdown"
+          ? (options?.dropdownItems || []).map(item => ({ id: item.id, title: item.title, value: item.value }))
+          : resolvedStep.type === "list"
+            ? (options?.sections || []).flatMap(section => section.rows || [])
+            : [];
+
+    if (choices.length === 0) return null;
+    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const normalizedMessage = normalize(message);
+    const exact = choices.find(choice =>
+      normalize(choice.id) === normalizedMessage ||
+      normalize(choice.title) === normalizedMessage ||
+      (choice.value && normalize(choice.value) === normalizedMessage)
+    );
+    if (exact) return exact.id;
+
+    const { apiKey } = await this.getApiKeyForBusiness(businessAccountId);
+    if (!apiKey || message.trim().length < 2) return null;
+
+    try {
+      const client = new OpenAI({ apiKey, timeout: 12000 });
+      const completion = await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0,
+        max_tokens: 80,
+        response_format: { type: "json_object" },
+        messages: [{
+          role: "user",
+          content: `Match the customer answer to exactly one configured WhatsApp choice. Return null when it is ambiguous, unrelated, a question, or does not clearly mean one choice. Never invent a choice or ID.
+
+Customer answer: ${JSON.stringify(message)}
+Configured choices: ${JSON.stringify(choices)}
+
+Return only JSON: {"optionId":"one configured id" | null}`,
+        }],
+      });
+      const parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
+      return choices.some(choice => choice.id === parsed.optionId) ? parsed.optionId : null;
+    } catch (error) {
+      console.warn("[WhatsApp Flow] Adaptive selection resolution failed:", error);
+      return null;
+    }
+  }
+
   async processMessage(
     businessAccountId: string,
     senderPhone: string,
@@ -2525,7 +2598,7 @@ Return ONLY valid JSON (no markdown):
       return { handled: false, shouldFallbackToAI: true };
     }
 
-    const normalizedMessage = message.trim().toLowerCase();
+    let normalizedMessage = message.trim().toLowerCase();
     
     const triggerKeyword = activeFlow.triggerKeyword?.trim() || null;
     
@@ -2860,6 +2933,24 @@ Return ONLY valid JSON (no markdown):
       }
     }
     // ── End global intent check ──
+
+    if (
+      this.isAdaptiveJourneyEnabled(activeFlow, businessAccountId) &&
+      !isInteractive &&
+      ["buttons", "dropdown", "list"].includes(currentStep.type)
+    ) {
+      const resolvedOptionId = await this.resolveAdaptiveSelection(
+        businessAccountId,
+        message,
+        currentStep,
+        collectedData
+      );
+      if (resolvedOptionId) {
+        console.log(`[WhatsApp Flow] Adaptive mode resolved typed choice at "${currentStep.stepKey}"`);
+        message = resolvedOptionId;
+        normalizedMessage = resolvedOptionId.toLowerCase();
+      }
+    }
 
     // Guard: discard interactive button responses that arrive at a non-interactive step.
     // This prevents delayed "Yes/No" button presses from poisoning phone/text fields.
@@ -3454,6 +3545,17 @@ Return ONLY valid JSON (no markdown):
         o.requiredFields.every((f: string) => this.hasFieldValue(collectedData, f))) return true;
       if (Array.isArray(o?.selectedFields) && o.selectedFields.length > 0 &&
         o.selectedFields.filter((f: any) => f.isRequired !== false).every((f: any) => this.hasFieldValue(collectedData, f.fieldKey))) return true;
+      if (s.type === "upload" && this.isAdaptiveJourneyEnabled(activeFlow, businessAccountId)) {
+        const mandatoryDocs = (o?.documentTypes || []).filter((doc: any) => doc.isMandatory).map((doc: any) => doc.docType);
+        if (mandatoryDocs.length === 0) return false;
+        const docState = this.getDocumentState(collectedData);
+        const collectedDocs = collectedData._collectedDocuments || {};
+        return mandatoryDocs.every((docType: string) => {
+          const normalized = docType.toLowerCase().replace(/_card$/, "");
+          return docState[normalized]?.status === "complete" ||
+            (collectedDocs[docType]?.isValid !== false && collectedDocs[docType]);
+        });
+      }
       return false;
     };
     let autoSkipCount = 0;
@@ -4083,6 +4185,7 @@ Return ONLY valid JSON (no markdown):
       isActive: string;
       triggerKeyword: string | null;
       fallbackToAI: string;
+      adaptiveMode: string;
       sessionTimeout: number | null;
       completionMessage: string | null;
       repeatMode: string;
@@ -5190,7 +5293,30 @@ Return ONLY valid JSON (no markdown):
       }
     }
 
-    const currentStep = steps.find((s) => s.stepKey === session.currentStepKey);
+    let currentStep = steps.find((s) => s.stepKey === session.currentStepKey);
+    const sessionData = (session.collectedData as Record<string, any>) || {};
+
+    // Adaptive journeys accept a document before the configured upload step.
+    // Keep the user's real position intact and remember the upload step only
+    // for document classification; completion resumes the original journey.
+    if (
+      this.isAdaptiveJourneyEnabled(activeFlow, businessAccountId) &&
+      currentStep &&
+      currentStep.type !== "upload" &&
+      !this.isUpdateFlowStep(session.currentStepKey)
+    ) {
+      const uploadStep = sessionData._adaptiveUploadStepKey
+        ? steps.find(step => step.stepKey === sessionData._adaptiveUploadStepKey)
+        : steps.find(step => step.type === "upload" && !(step as any).paused);
+
+      if (uploadStep?.type === "upload") {
+        sessionData._adaptiveResumeStepKey = session.currentStepKey;
+        sessionData._adaptiveUploadStepKey = uploadStep.stepKey;
+        await this.updateSessionData(session.id, sessionData);
+        currentStep = uploadStep;
+        console.log(`[WhatsApp Flow] Adaptive mode accepted an early document at "${session.currentStepKey}" using upload step "${uploadStep.stepKey}"`);
+      }
+    }
 
     if (!currentStep || currentStep.type !== "upload") {
       console.log(`[WhatsApp Flow] Current step is not an upload step`);
@@ -5242,7 +5368,10 @@ Return ONLY valid JSON (no markdown):
         decrementPending();
         return { handled: false, shouldFallbackToAI: true };
       }
-      const freshStep = steps.find((s) => s.stepKey === freshSession.currentStepKey);
+      const freshData = (freshSession.collectedData as Record<string, any>) || {};
+      const freshStep = freshData._adaptiveUploadStepKey
+        ? steps.find((s) => s.stepKey === freshData._adaptiveUploadStepKey)
+        : steps.find((s) => s.stepKey === freshSession.currentStepKey);
       if (!freshStep || freshStep.type !== "upload") {
         console.log(`[WhatsApp Flow] Step changed while queued, current step is no longer upload`);
         decrementPending();
@@ -5689,7 +5818,9 @@ Return ONLY valid JSON (no markdown):
       console.log(`[WhatsApp Flow] All documents in batch were rejected as duplicates — flagging rejectedDuplicate`);
     }
     const steps = await this.getFlowSteps(flowId);
-    const currentStep = steps.find((s) => s.stepKey === latestSession.currentStepKey);
+    const currentStep = steps.find((s) =>
+      s.stepKey === (latestData._adaptiveUploadStepKey || latestSession.currentStepKey)
+    );
 
     if (!currentStep || currentStep.type !== "upload") {
       return immediateResult;
@@ -5735,7 +5866,8 @@ Return ONLY valid JSON (no markdown):
         };
       }
 
-      const nextStepKey = currentStep.defaultNextStep || this.getNextStepKey(currentStep.stepKey, steps);
+      const adaptiveResumeStepKey = latestData._adaptiveResumeStepKey as string | undefined;
+      const nextStepKey = adaptiveResumeStepKey || currentStep.defaultNextStep || this.getNextStepKey(currentStep.stepKey, steps);
 
       let confirmationPrefix = receivedNames ? `${receivedNames} received!${docExtractionSummary ? '\n\n' + docExtractionSummary : ''}\n\n` : '';
       if (mismatchWarning) {
@@ -5758,6 +5890,9 @@ Return ONLY valid JSON (no markdown):
           resolvedNextStep = steps.find((s) => s.stepKey === resolvedNextKey);
         }
         if (!uploadTextChainEnded && resolvedNextStep) {
+          delete latestData._adaptiveResumeStepKey;
+          delete latestData._adaptiveUploadStepKey;
+          await this.updateSessionData(latestSession.id, latestData);
           await this.updateSessionStep(latestSession.id, resolvedNextKey);
           const nextResponse = this.buildStepResponse(resolvedNextStep, latestData);
           if (nextResponse && confirmationPrefix && nextResponse.text) {
@@ -6006,7 +6141,9 @@ Return ONLY valid JSON (no markdown):
           : "Details confirmed! ✅";
 
         const steps = await this.getFlowSteps(flowId);
-        const currentStep = steps.find((s) => s.stepKey === session.currentStepKey);
+        const currentStep = steps.find((s) =>
+          s.stepKey === (collectedData._adaptiveUploadStepKey || session.currentStepKey)
+        );
         if (!currentStep) return { handled: true, response: { type: "text", text: confirmedText }, sessionId: session.id };
 
         const options = currentStep.options as FlowStepOptions | null;
@@ -6023,10 +6160,14 @@ Return ONLY valid JSON (no markdown):
 
         if (missingMandatory.length === 0) {
           const activeFlow = await this.getActiveFlow(session.businessAccountId);
-          const nextStepKey = currentStep.defaultNextStep || this.getNextStepKey(currentStep.stepKey, steps);
+          const adaptiveResumeStepKey = collectedData._adaptiveResumeStepKey as string | undefined;
+          const nextStepKey = adaptiveResumeStepKey || currentStep.defaultNextStep || this.getNextStepKey(currentStep.stepKey, steps);
           if (nextStepKey) {
             const nextStep = steps.find((s) => s.stepKey === nextStepKey);
             if (nextStep) {
+              delete collectedData._adaptiveResumeStepKey;
+              delete collectedData._adaptiveUploadStepKey;
+              await this.updateSessionData(session.id, collectedData);
               await this.updateSessionStep(session.id, nextStepKey);
               return {
                 handled: true,
@@ -6195,7 +6336,9 @@ Return ONLY valid JSON (no markdown):
   ): Promise<ProcessResult> {
     const { documentIdentificationService } = await import("./documentIdentificationService");
     const steps = await this.getFlowSteps(flowId);
-    const currentStep = steps.find((s) => s.stepKey === session.currentStepKey);
+    const currentStep = steps.find((s) =>
+      s.stepKey === (collectedData._adaptiveUploadStepKey || session.currentStepKey)
+    );
     if (!currentStep) {
       return { handled: false, shouldFallbackToAI: true };
     }
@@ -6540,7 +6683,7 @@ Return ONLY valid JSON (no markdown):
       confidence: result.confidence,
       sourceMediaUrl,
     });
-    console.log(`[WhatsApp Flow] Page ${docTypeState.pages.length} extracted data for ${normalizedMatchedType} (side: ${result.side || 'unknown'}, tier: ${result._extractionTier || 'legacy'}):`, JSON.stringify(result.extractedData || {}));
+    console.log(`[WhatsApp Flow] Page ${docTypeState.pages.length} extracted for ${normalizedMatchedType} (side: ${result.side || 'unknown'}, tier: ${result._extractionTier || 'legacy'}, fields: ${Object.keys(result.extractedData || {}).length})`);
     {
       const newData = result.extractedData || {};
       const merged = { ...docTypeState.mergedData };
@@ -6658,7 +6801,8 @@ Return ONLY valid JSON (no markdown):
         };
       }
 
-      const nextStepKey = currentStep.defaultNextStep || this.getNextStepKey(currentStep.stepKey, steps);
+      const adaptiveResumeStepKey = collectedData._adaptiveResumeStepKey as string | undefined;
+      const nextStepKey = adaptiveResumeStepKey || currentStep.defaultNextStep || this.getNextStepKey(currentStep.stepKey, steps);
 
       const justReceivedType = result.documentType ? result.documentType.toLowerCase().replace(/_card$/, '') : null;
       const justReceivedTypes = justReceivedType ? [justReceivedType] : [];
@@ -6693,6 +6837,9 @@ Return ONLY valid JSON (no markdown):
           resolvedStep = steps.find((s) => s.stepKey === resolvedKey);
         }
         if (!singleDocChainEnded && resolvedStep) {
+          delete collectedData._adaptiveResumeStepKey;
+          delete collectedData._adaptiveUploadStepKey;
+          await this.updateSessionData(session.id, collectedData);
           await this.updateSessionStep(session.id, resolvedKey);
           const nextResponse = this.buildStepResponse(resolvedStep, collectedData);
           return {

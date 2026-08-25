@@ -2768,6 +2768,7 @@ export const whatsappFlows = pgTable("whatsapp_flows", {
   isActive: text("is_active").notNull().default("false"), // 'true' | 'false' - Only one flow can be active per business
   triggerKeyword: text("trigger_keyword"), // Optional keyword to trigger this flow (e.g., "hi", "start")
   fallbackToAI: text("fallback_to_ai").notNull().default("true"), // 'true' | 'false' - Fallback to AI when user goes off-script
+  adaptiveMode: text("adaptive_mode").notNull().default("false"), // 'true' | 'false' - Understand configured choices and early documents
   sessionTimeout: integer("session_timeout").default(30), // Session timeout in minutes (default 30)
   completionMessage: text("completion_message").default("Thank you! Your information has been recorded."),
   repeatMode: text("repeat_mode").notNull().default("once"), // 'once' | 'loop' - Whether users can repeat the flow after completion

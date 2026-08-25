@@ -33426,6 +33426,22 @@ Return ONLY a valid JSON object in this format:
   });
 
   // WhatsApp Flows API
+  // All flow operations below are scoped to the caller's active business account.
+  // A flow UUID alone must never authorize cross-account reads or mutations.
+  const getOwnedWhatsappFlow = async (req: AuthenticatedRequest, flowId: string) => {
+    const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
+    if (!businessAccountId) return { businessAccountId: null, flow: null };
+    const [flow] = await db
+      .select()
+      .from(whatsappFlows)
+      .where(and(
+        eq(whatsappFlows.id, flowId),
+        eq(whatsappFlows.businessAccountId, businessAccountId)
+      ))
+      .limit(1);
+    return { businessAccountId, flow: flow || null };
+  };
+
   app.get("/api/whatsapp/flows", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
@@ -33466,6 +33482,9 @@ Return ONLY a valid JSON object in this format:
   app.get("/api/whatsapp/flows/:flowId", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
+      const ownership = await getOwnedWhatsappFlow(req, flowId);
+      if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
+      if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
       const { whatsappFlowService } = await import("./services/whatsappFlowService");
       const steps = await whatsappFlowService.getFlowSteps(flowId);
       res.json({ steps });
@@ -33479,9 +33498,15 @@ Return ONLY a valid JSON object in this format:
     try {
       const { flowId } = req.params;
       const updates = req.body;
+      const ownership = await getOwnedWhatsappFlow(req, flowId);
+      if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
+      if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
 
       if (updates.repeatMode && !["once", "loop"].includes(updates.repeatMode)) {
         return res.status(400).json({ error: "repeatMode must be 'once' or 'loop'" });
+      }
+      if (updates.adaptiveMode && !["true", "false"].includes(updates.adaptiveMode)) {
+        return res.status(400).json({ error: "adaptiveMode must be 'true' or 'false'" });
       }
 
       // verificationRuleSetId must either be null/empty (detach) or a rule set
@@ -33498,12 +33523,9 @@ Return ONLY a valid JSON object in this format:
             import("@shared/schema"),
             import("drizzle-orm"),
           ]);
-          const [flowRow] = await db.select({ businessAccountId: whatsappFlows.businessAccountId })
-            .from(whatsappFlows).where(eq(whatsappFlows.id, flowId)).limit(1);
-          if (!flowRow) return res.status(404).json({ error: "Flow not found" });
           const [rs] = await db.select({ id: verificationRuleSets.id })
             .from(verificationRuleSets)
-            .where(and(eq(verificationRuleSets.id, rsId), eq(verificationRuleSets.businessAccountId, flowRow.businessAccountId)))
+            .where(and(eq(verificationRuleSets.id, rsId), eq(verificationRuleSets.businessAccountId, ownership.businessAccountId)))
             .limit(1);
           if (!rs) return res.status(400).json({ error: "Verification rule set not found for this business account" });
         }
@@ -33521,6 +33543,9 @@ Return ONLY a valid JSON object in this format:
   app.delete("/api/whatsapp/flows/:flowId", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
+      const ownership = await getOwnedWhatsappFlow(req, flowId);
+      if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
+      if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
       const { whatsappFlowService } = await import("./services/whatsappFlowService");
       await whatsappFlowService.deleteFlow(flowId);
       res.json({ success: true });
@@ -33534,6 +33559,9 @@ Return ONLY a valid JSON object in this format:
     try {
       const { flowId } = req.params;
       const stepData = req.body;
+      const ownership = await getOwnedWhatsappFlow(req, flowId);
+      if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
+      if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
 
       const { whatsappFlowService } = await import("./services/whatsappFlowService");
       const step = await whatsappFlowService.createStep(flowId, stepData);
@@ -33546,8 +33574,16 @@ Return ONLY a valid JSON object in this format:
 
   app.put("/api/whatsapp/flows/:flowId/steps/:stepId", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const { stepId } = req.params;
+      const { flowId, stepId } = req.params;
       const updates = req.body;
+      const ownership = await getOwnedWhatsappFlow(req, flowId);
+      if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
+      if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
+      const [existingStep] = await db.select({ id: whatsappFlowSteps.id })
+        .from(whatsappFlowSteps)
+        .where(and(eq(whatsappFlowSteps.id, stepId), eq(whatsappFlowSteps.flowId, flowId)))
+        .limit(1);
+      if (!existingStep) return res.status(404).json({ error: "Step not found" });
 
       const { whatsappFlowService } = await import("./services/whatsappFlowService");
       const step = await whatsappFlowService.updateStep(stepId, updates);
@@ -33561,6 +33597,9 @@ Return ONLY a valid JSON object in this format:
   app.patch("/api/whatsapp/flows/:flowId/steps/:stepId/toggle-pause", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId, stepId } = req.params;
+      const ownership = await getOwnedWhatsappFlow(req, flowId);
+      if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
+      if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
       const [step] = await db
         .select({ paused: whatsappFlowSteps.paused })
         .from(whatsappFlowSteps)
@@ -33586,7 +33625,15 @@ Return ONLY a valid JSON object in this format:
 
   app.delete("/api/whatsapp/flows/:flowId/steps/:stepId", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const { stepId } = req.params;
+      const { flowId, stepId } = req.params;
+      const ownership = await getOwnedWhatsappFlow(req, flowId);
+      if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
+      if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
+      const [existingStep] = await db.select({ id: whatsappFlowSteps.id })
+        .from(whatsappFlowSteps)
+        .where(and(eq(whatsappFlowSteps.id, stepId), eq(whatsappFlowSteps.flowId, flowId)))
+        .limit(1);
+      if (!existingStep) return res.status(404).json({ error: "Step not found" });
       const { whatsappFlowService } = await import("./services/whatsappFlowService");
       await whatsappFlowService.deleteStep(stepId);
       res.json({ success: true });
@@ -33600,6 +33647,9 @@ Return ONLY a valid JSON object in this format:
     try {
       const { flowId } = req.params;
       const { stepIds } = req.body;
+      const ownership = await getOwnedWhatsappFlow(req, flowId);
+      if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
+      if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
 
       if (!stepIds || !Array.isArray(stepIds)) {
         return res.status(400).json({ error: "stepIds array is required" });

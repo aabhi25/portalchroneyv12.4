@@ -162,6 +162,7 @@ interface WhatsappFlow {
   isActive: string;
   triggerKeyword: string | null;
   fallbackToAI: string;
+  adaptiveMode: string;
   sessionTimeout: number | null;
   completionMessage: string | null;
   createdAt: string;
@@ -3427,6 +3428,7 @@ function FlowBuilderSection() {
   const [newFlowSessionTimeout, setNewFlowSessionTimeout] = useState("30");
   const [newFlowCompletionMessage, setNewFlowCompletionMessage] = useState("Thank you! Your information has been recorded.");
   const [newFlowRepeatMode, setNewFlowRepeatMode] = useState<"once" | "loop">("once");
+  const [newFlowAdaptiveMode, setNewFlowAdaptiveMode] = useState(false);
   const [newFlowVerificationRuleSetId, setNewFlowVerificationRuleSetId] = useState<string>("__none__");
 
   const { data: verificationRuleSetsData } = useQuery<{ ruleSets: Array<{ id: string; name: string; isActive: boolean }> }>({
@@ -3549,6 +3551,7 @@ function FlowBuilderSection() {
     setNewFlowSessionTimeout(flow.sessionTimeout?.toString() || "30");
     setNewFlowCompletionMessage(flow.completionMessage || "Thank you! Your information has been recorded.");
     setNewFlowRepeatMode((flow.repeatMode as "once" | "loop") || "once");
+    setNewFlowAdaptiveMode(flow.adaptiveMode === "true");
     setNewFlowVerificationRuleSetId((flow as any).verificationRuleSetId || "__none__");
     setShowEditFlowDialog(true);
   };
@@ -3563,6 +3566,7 @@ function FlowBuilderSection() {
     setNewFlowSessionTimeout("30");
     setNewFlowCompletionMessage("Thank you! Your information has been recorded.");
     setNewFlowRepeatMode("once");
+    setNewFlowAdaptiveMode(false);
     setNewFlowVerificationRuleSetId("__none__");
   };
 
@@ -4009,6 +4013,9 @@ function FlowBuilderSection() {
                     <div>
                       <h4 className="font-medium">{flow.name}</h4>
                       {flow.description && <p className="text-sm text-gray-500">{flow.description}</p>}
+                      {flow.adaptiveMode === "true" && (
+                        <p className="text-xs text-purple-700 mt-1">Adaptive guided journey enabled</p>
+                      )}
                       {!(flow as any).verificationRuleSetId && (
                         <p className="text-xs text-amber-600 mt-1" data-testid={`text-no-rules-${flow.id}`}>
                           ⚠ No verification rules attached — uploaded documents will not be cross-checked.
@@ -4309,6 +4316,24 @@ function FlowBuilderSection() {
                 </div>
               </RadioGroup>
             </div>
+            <div className="rounded-lg border border-purple-200 bg-purple-50/60 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <Label htmlFor="adaptive-flow-mode" className="cursor-pointer">Adaptive guided journey</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Let customers type configured choices in their own words or upload configured documents before the upload step. Chroney keeps the existing validation and returns to the next missing step.
+                  </p>
+                </div>
+                <Switch
+                  id="adaptive-flow-mode"
+                  checked={newFlowAdaptiveMode}
+                  onCheckedChange={setNewFlowAdaptiveMode}
+                />
+              </div>
+              <p className="mt-3 text-xs text-purple-800">
+                When off, this flow remains strictly step-by-step.
+              </p>
+            </div>
             <div>
               <div className="flex items-center gap-2 mb-1">
                 <Label>Verification rule set</Label>
@@ -4345,6 +4370,7 @@ function FlowBuilderSection() {
                       sessionTimeout: parseInt(newFlowSessionTimeout) || 30,
                       completionMessage: newFlowCompletionMessage || null,
                       repeatMode: newFlowRepeatMode,
+                      adaptiveMode: newFlowAdaptiveMode ? "true" : "false",
                       verificationRuleSetId: newFlowVerificationRuleSetId === "__none__" ? null : newFlowVerificationRuleSetId,
                     } as Partial<WhatsappFlow>,
                   });
