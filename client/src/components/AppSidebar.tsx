@@ -342,7 +342,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
               </>
             ) : (
             <>
-            {hasMoreFeaturesAccess && (
+            {hasChroneyAccess && (
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu className="space-y-0.5">
@@ -729,7 +729,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
               </SidebarGroup>
             )}
 
-            {hasChroneyAccess && (
+            {hasMoreFeaturesAccess && (
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu className="space-y-0.5">
