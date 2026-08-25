@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Sparkles, Trash2, UserRound } from "lucide-react";
+import { Plus, Search, Sparkles, Trash2, UserRound, X } from "lucide-react";
 import type { AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
 
 interface Props {
@@ -36,6 +37,7 @@ export function AiWorkbookGrid({
   const [search, setSearch] = useState("");
   const [outcome, setOutcome] = useState("all");
   const [newColumn, setNewColumn] = useState("");
+  const [columnToRemove, setColumnToRemove] = useState<AiWorkbookColumn | null>(null);
 
   const outcomeColumn = sheet.columns.find(c => c.key === "classification_label" || c.key === "classification");
   const outcomes = useMemo(
@@ -159,7 +161,7 @@ export function AiWorkbookGrid({
               </th>
               <th className="border-r border-b px-2 py-2 text-xs text-gray-400 font-medium w-14">#</th>
               {sheet.columns.map(col => (
-                <th key={col.key} className="min-w-[160px] max-w-[260px] border-r border-b px-3 py-2 text-left whitespace-nowrap">
+                  <th key={col.key} className="group min-w-[160px] max-w-[260px] border-r border-b px-3 py-2 text-left whitespace-nowrap">
                   <div className="flex items-center gap-1.5">
                     {col.source === "ai"
                       ? <Sparkles className="h-3.5 w-3.5 text-violet-500" />
@@ -177,16 +179,12 @@ export function AiWorkbookGrid({
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="h-5 w-5 ml-auto text-gray-400 hover:text-red-600"
+                        className="h-5 w-5 ml-auto text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 focus:opacity-100"
                         title={`Remove ${col.label} column`}
                         aria-label={`Remove ${col.label} column`}
-                        onClick={() => {
-                          if (window.confirm(`Remove the "${col.label}" column? Its values will be removed when you save.`)) {
-                            onRemoveColumn(col.key);
-                          }
-                        }}
+                        onClick={() => setColumnToRemove(col)}
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        <X className="h-4 w-4" />
                       </Button>
                     )}
                   </div>
@@ -247,6 +245,28 @@ export function AiWorkbookGrid({
           </tbody>
         </table>
       </div>
+      <Dialog open={Boolean(columnToRemove)} onOpenChange={open => !open && setColumnToRemove(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove column?</DialogTitle>
+            <DialogDescription>
+              Remove “{columnToRemove?.label}” from this tab? Its values will be removed when you save this workbook.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setColumnToRemove(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (columnToRemove) onRemoveColumn?.(columnToRemove.key);
+                setColumnToRemove(null);
+              }}
+            >
+              Remove column
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

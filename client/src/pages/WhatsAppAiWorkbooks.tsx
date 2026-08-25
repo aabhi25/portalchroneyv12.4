@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Archive, ArrowLeft, Copy, Download, Eye, FileSpreadsheet, FolderOpen, History,
-  Loader2, Megaphone, Plus, RefreshCw, RotateCcw, Save, Sheet, Trash2, Upload,
+  Loader2, Megaphone, Plus, RefreshCw, RotateCcw, Save, Sheet, Upload, X,
 } from "lucide-react";
 import type { AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
 
@@ -238,6 +238,7 @@ function WorkbookEditor({ id }: { id: string }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [previewVersionId, setPreviewVersionId] = useState<string | null>(null);
   const [previewSheetId, setPreviewSheetId] = useState("");
+  const [sheetToRemove, setSheetToRemove] = useState<AiWorkbookSheet | null>(null);
 
   const { data: workbook, isLoading } = useQuery<WorkbookDetail>({
     queryKey: [`/api/whatsapp/ai-workbooks/${id}`],
@@ -281,7 +282,6 @@ function WorkbookEditor({ id }: { id: string }) {
       toast({ title: "Keep at least one tab", description: "A workbook must contain one tab.", variant: "destructive" });
       return;
     }
-    if (!window.confirm(`Remove the "${sheet.name}" tab? Its rows and columns will be removed when you save.`)) return;
     const next = sheets.filter(item => item.id !== sheetId);
     setSheets(next);
     if (activeSheetId === sheetId) setActiveSheetId(next[0].id);
@@ -538,9 +538,15 @@ function WorkbookEditor({ id }: { id: string }) {
                   size="icon"
                   className="h-7 w-7 mr-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 focus:opacity-100"
                   title={`Remove ${sheet.name} tab`}
-                  onClick={() => removeSheet(sheet.id)}
+                  onClick={() => {
+                    if (sheets.length <= 1) {
+                      toast({ title: "Keep at least one tab", description: "A workbook must contain one tab.", variant: "destructive" });
+                      return;
+                    }
+                    setSheetToRemove(sheet);
+                  }}
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <X className="h-4 w-4" />
                 </Button>
               </div>
             ))}
@@ -556,6 +562,29 @@ function WorkbookEditor({ id }: { id: string }) {
           />
         </CardContent>
       </Card>
+
+      <Dialog open={Boolean(sheetToRemove)} onOpenChange={open => !open && setSheetToRemove(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove tab?</DialogTitle>
+            <DialogDescription>
+              Remove “{sheetToRemove?.name}” and all of its rows and columns? The change will take effect when you save this workbook.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSheetToRemove(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (sheetToRemove) removeSheet(sheetToRemove.id);
+                setSheetToRemove(null);
+              }}
+            >
+              Remove tab
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={historyOpen} onOpenChange={open => {
         setHistoryOpen(open);
