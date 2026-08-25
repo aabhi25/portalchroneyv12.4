@@ -36238,6 +36238,22 @@ Return ONLY a valid JSON object in this format:
     } catch (err: any) { res.status(400).json({ error: err.message }); }
   });
 
+  // Development-only fixture for exercising campaign outcomes and transcripts
+  // without sending through MSG91/Meta. The service repeats the environment
+  // check so this route cannot be used accidentally if mounted elsewhere.
+  app.post("/api/whatsapp/dev/simulate-campaign", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    if (process.env.NODE_ENV !== "development") {
+      return res.status(404).json({ error: "Development simulator not available" });
+    }
+    try {
+      const { simulateWhatsAppCampaign } = await import("./services/whatsappCampaignSimulator");
+      const result = await simulateWhatsAppCampaign(req.user!.businessAccountId!);
+      res.status(result.created ? 201 : 200).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // ---- Campaigns ----
   app.get("/api/whatsapp/campaigns", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {

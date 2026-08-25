@@ -20,3 +20,4 @@
 - [TopScholar subject labels](topscholar-subject-labels.md) — the configured client embedding store has subject IDs but not clean subject names; its subject field can be a full CP label.
 - [Portable npm lockfiles](portable-npm-lockfiles.md) — registry hostnames persist in npm locks, and local-file overrides can make a clean `npm ci` reject the lock entirely.
 - [AI workbook single-sheet model](ai-workbook-single-sheet-model.md) — workbooks expose one consolidated sheet; keep history and campaign links internal, not as user-facing tabs.
+- [Development campaign fixtures](development-campaign-fixtures.md) — simulated campaigns must be tenant-locked, historical, and use non-dispatchable templates so fixtures can never reach a provider.

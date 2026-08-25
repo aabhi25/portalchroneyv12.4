@@ -6103,12 +6103,12 @@ async function buildJourneyCrmContext(conversationId) {
   try {
     const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
     const { journeyResponses: journeyResponses2, journeySteps: journeySteps2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-    const { eq: eq74, and: and63, isNotNull: isNotNull8, asc: asc15 } = await import("drizzle-orm");
+    const { eq: eq75, and: and64, isNotNull: isNotNull8, asc: asc15 } = await import("drizzle-orm");
     const rows = await db2.select({
       crmFieldKey: journeySteps2.crmFieldKey,
       response: journeyResponses2.response
-    }).from(journeyResponses2).innerJoin(journeySteps2, eq74(journeyResponses2.stepId, journeySteps2.id)).where(and63(
-      eq74(journeyResponses2.conversationId, conversationId),
+    }).from(journeyResponses2).innerJoin(journeySteps2, eq75(journeyResponses2.stepId, journeySteps2.id)).where(and64(
+      eq75(journeyResponses2.conversationId, conversationId),
       isNotNull8(journeySteps2.crmFieldKey)
     )).orderBy(asc15(journeyResponses2.createdAt));
     const map = {};
@@ -6128,11 +6128,11 @@ async function buildConversationCrmContext(conversationId) {
   try {
     const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
     const { conversations: conversations2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-    const { eq: eq74 } = await import("drizzle-orm");
+    const { eq: eq75 } = await import("drizzle-orm");
     const rows = await db2.select({
       summary: conversations2.summary,
       topicKeywords: conversations2.topicKeywords
-    }).from(conversations2).where(eq74(conversations2.id, conversationId)).limit(1);
+    }).from(conversations2).where(eq75(conversations2.id, conversationId)).limit(1);
     const row = rows[0];
     if (!row) return {};
     const summary = row.summary != null ? String(row.summary).trim() : "";
@@ -10259,17 +10259,17 @@ var init_storage = __esm({
       // LeadSquared URL Extraction Cache
       async getUrlExtraction(url, businessAccountId) {
         const { leadsquaredUrlExtractionCache: leadsquaredUrlExtractionCache2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { and: and63, eq: eq74 } = await import("drizzle-orm");
-        const [row] = await db.select().from(leadsquaredUrlExtractionCache2).where(and63(
-          eq74(leadsquaredUrlExtractionCache2.url, url),
-          eq74(leadsquaredUrlExtractionCache2.businessAccountId, businessAccountId)
+        const { and: and64, eq: eq75 } = await import("drizzle-orm");
+        const [row] = await db.select().from(leadsquaredUrlExtractionCache2).where(and64(
+          eq75(leadsquaredUrlExtractionCache2.url, url),
+          eq75(leadsquaredUrlExtractionCache2.businessAccountId, businessAccountId)
         )).limit(1);
         if (!row) return null;
         return { university: row.university, product: row.product };
       }
       async saveUrlExtraction(url, businessAccountId, university, product) {
         const { leadsquaredUrlExtractionCache: leadsquaredUrlExtractionCache2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { and: and63, eq: eq74 } = await import("drizzle-orm");
+        const { and: and64, eq: eq75 } = await import("drizzle-orm");
         await db.insert(leadsquaredUrlExtractionCache2).values({ url, businessAccountId, university, product }).onConflictDoUpdate({
           target: [leadsquaredUrlExtractionCache2.url, leadsquaredUrlExtractionCache2.businessAccountId],
           set: { university, product, extractedAt: /* @__PURE__ */ new Date() }
@@ -10277,8 +10277,8 @@ var init_storage = __esm({
       }
       async getUrlRules(businessAccountId) {
         const { leadsquaredUrlRules: leadsquaredUrlRules2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { eq: eq74 } = await import("drizzle-orm");
-        return db.select().from(leadsquaredUrlRules2).where(eq74(leadsquaredUrlRules2.businessAccountId, businessAccountId)).orderBy(leadsquaredUrlRules2.createdAt);
+        const { eq: eq75 } = await import("drizzle-orm");
+        return db.select().from(leadsquaredUrlRules2).where(eq75(leadsquaredUrlRules2.businessAccountId, businessAccountId)).orderBy(leadsquaredUrlRules2.createdAt);
       }
       async createUrlRule(data) {
         const { leadsquaredUrlRules: leadsquaredUrlRules2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
@@ -10292,26 +10292,26 @@ var init_storage = __esm({
       }
       async updateUrlRule(id, businessAccountId, data) {
         const { leadsquaredUrlRules: leadsquaredUrlRules2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { and: and63, eq: eq74 } = await import("drizzle-orm");
+        const { and: and64, eq: eq75 } = await import("drizzle-orm");
         const updateData = {};
         if (data.urlPattern !== void 0) updateData.urlPattern = data.urlPattern;
         if (data.university !== void 0) updateData.university = data.university || null;
         if (data.product !== void 0) updateData.product = data.product || null;
         if (data.isEnabled !== void 0) updateData.isEnabled = data.isEnabled;
-        const [rule] = await db.update(leadsquaredUrlRules2).set(updateData).where(and63(eq74(leadsquaredUrlRules2.id, id), eq74(leadsquaredUrlRules2.businessAccountId, businessAccountId))).returning();
+        const [rule] = await db.update(leadsquaredUrlRules2).set(updateData).where(and64(eq75(leadsquaredUrlRules2.id, id), eq75(leadsquaredUrlRules2.businessAccountId, businessAccountId))).returning();
         return rule;
       }
       async deleteUrlRule(id, businessAccountId) {
         const { leadsquaredUrlRules: leadsquaredUrlRules2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { and: and63, eq: eq74 } = await import("drizzle-orm");
-        await db.delete(leadsquaredUrlRules2).where(and63(eq74(leadsquaredUrlRules2.id, id), eq74(leadsquaredUrlRules2.businessAccountId, businessAccountId)));
+        const { and: and64, eq: eq75 } = await import("drizzle-orm");
+        await db.delete(leadsquaredUrlRules2).where(and64(eq75(leadsquaredUrlRules2.id, id), eq75(leadsquaredUrlRules2.businessAccountId, businessAccountId)));
       }
       async getUrlRuleByUrl(url, businessAccountId) {
         const { leadsquaredUrlRules: leadsquaredUrlRules2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-        const { and: and63, eq: eq74 } = await import("drizzle-orm");
-        const rules = await db.select().from(leadsquaredUrlRules2).where(and63(
-          eq74(leadsquaredUrlRules2.businessAccountId, businessAccountId),
-          eq74(leadsquaredUrlRules2.isEnabled, "true")
+        const { and: and64, eq: eq75 } = await import("drizzle-orm");
+        const rules = await db.select().from(leadsquaredUrlRules2).where(and64(
+          eq75(leadsquaredUrlRules2.businessAccountId, businessAccountId),
+          eq75(leadsquaredUrlRules2.isEnabled, "true")
         ));
         const normalizedUrl = url.toLowerCase().replace(/\/$/, "");
         for (const rule of rules) {
@@ -20110,7 +20110,7 @@ ${JSON.stringify(productsToTranslate)}`;
         try {
           const { embeddingService: embeddingService2 } = await Promise.resolve().then(() => (init_embeddingService(), embeddingService_exports));
           const { jobs: jobsTable } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-          const { cosineDistance, desc: desc32, eq: eq74, and: and63, sql: sqlFn } = await import("drizzle-orm");
+          const { cosineDistance, desc: desc32, eq: eq75, and: and64, sql: sqlFn } = await import("drizzle-orm");
           const queryEmbedding = await embeddingService2.generateEmbedding(query, businessAccountId);
           const similarity = sqlFn`1 - (${cosineDistance(jobsTable.textEmbedding, queryEmbedding)})`;
           const results = await db.select({
@@ -20126,9 +20126,9 @@ ${JSON.stringify(productsToTranslate)}`;
             department: jobsTable.department,
             skills: jobsTable.skills,
             similarity
-          }).from(jobsTable).where(and63(
-            eq74(jobsTable.businessAccountId, businessAccountId),
-            eq74(jobsTable.status, "active")
+          }).from(jobsTable).where(and64(
+            eq75(jobsTable.businessAccountId, businessAccountId),
+            eq75(jobsTable.status, "active")
           )).orderBy(desc32(similarity)).limit(10);
           const filteredResults = results.filter((r) => r.similarity > 0.3);
           if (filteredResults.length === 0) {
@@ -20265,7 +20265,7 @@ Return ONLY valid JSON, no markdown or explanation.`
           console.log(`[JobPortal Tool] Created applicant: ${applicant.id} name="${applicant.name}"`);
           const { embeddingService: embeddingService2 } = await Promise.resolve().then(() => (init_embeddingService(), embeddingService_exports));
           const { jobs: jobsTable } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-          const { cosineDistance, desc: desc32, eq: eq74, and: and63, sql: sqlFn } = await import("drizzle-orm");
+          const { cosineDistance, desc: desc32, eq: eq75, and: and64, sql: sqlFn } = await import("drizzle-orm");
           const skillsText = [parsed.experienceSummary, ...parsed.skills || []].filter(Boolean).join(" ");
           const resumeEmbedding = await embeddingService2.generateEmbedding(skillsText || resumeText.substring(0, 2e3), businessAccountId);
           const similarity = sqlFn`1 - (${cosineDistance(jobsTable.textEmbedding, resumeEmbedding)})`;
@@ -20282,9 +20282,9 @@ Return ONLY valid JSON, no markdown or explanation.`
             department: jobsTable.department,
             skills: jobsTable.skills,
             similarity
-          }).from(jobsTable).where(and63(
-            eq74(jobsTable.businessAccountId, businessAccountId),
-            eq74(jobsTable.status, "active")
+          }).from(jobsTable).where(and64(
+            eq75(jobsTable.businessAccountId, businessAccountId),
+            eq75(jobsTable.status, "active")
           )).orderBy(desc32(similarity)).limit(5);
           const jobResults = matchedJobs.map((j) => ({
             id: j.id,
@@ -20378,30 +20378,30 @@ Return ONLY valid JSON, no markdown or explanation.`
           }
           const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
           const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
-          const { eq: eq74, and: and63 } = await import("drizzle-orm");
+          const { eq: eq75, and: and64 } = await import("drizzle-orm");
           let orders = [];
           if (order_id) {
             const normalizedId = "#" + order_id.replace(/^#/, "").toUpperCase();
-            const exact = await db2.select().from(demoOrders2).where(and63(eq74(demoOrders2.businessAccountId, businessAccountId), eq74(demoOrders2.orderId, normalizedId)));
+            const exact = await db2.select().from(demoOrders2).where(and64(eq75(demoOrders2.businessAccountId, businessAccountId), eq75(demoOrders2.orderId, normalizedId)));
             if (exact.length === 0) {
               const altId = order_id.replace(/^#/, "").toUpperCase();
-              const altExact = await db2.select().from(demoOrders2).where(and63(eq74(demoOrders2.businessAccountId, businessAccountId), eq74(demoOrders2.orderId, altId)));
+              const altExact = await db2.select().from(demoOrders2).where(and64(eq75(demoOrders2.businessAccountId, businessAccountId), eq75(demoOrders2.orderId, altId)));
               orders = altExact;
             } else {
               orders = exact;
             }
             if (orders.length === 0) {
-              const all = await db2.select().from(demoOrders2).where(eq74(demoOrders2.businessAccountId, businessAccountId));
+              const all = await db2.select().from(demoOrders2).where(eq75(demoOrders2.businessAccountId, businessAccountId));
               const needle = order_id.replace(/^#/, "").toUpperCase();
               orders = all.filter((o) => (o.orderId || "").replace(/^#/, "").toUpperCase() === needle);
             }
           } else if (phone) {
             const { desc: desc32 } = await import("drizzle-orm");
-            const all = await db2.select().from(demoOrders2).where(eq74(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc32(demoOrders2.orderDate), desc32(demoOrders2.createdAt));
+            const all = await db2.select().from(demoOrders2).where(eq75(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc32(demoOrders2.orderDate), desc32(demoOrders2.createdAt));
             orders = all.filter((o) => (o.customerPhone || "").replace(/\D/g, "") === phone.replace(/\D/g, "")).slice(0, 3);
           } else if (email) {
             const { desc: desc32 } = await import("drizzle-orm");
-            const all = await db2.select().from(demoOrders2).where(eq74(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc32(demoOrders2.orderDate), desc32(demoOrders2.createdAt));
+            const all = await db2.select().from(demoOrders2).where(eq75(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc32(demoOrders2.orderDate), desc32(demoOrders2.createdAt));
             orders = all.filter((o) => (o.customerEmail || "").toLowerCase() === email.toLowerCase()).slice(0, 3);
           }
           if (orders.length === 0) {
@@ -20454,8 +20454,8 @@ Return ONLY valid JSON, no markdown or explanation.`
           }
           const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
           const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
-          const { eq: eq74 } = await import("drizzle-orm");
-          const all = await db2.select().from(demoOrders2).where(eq74(demoOrders2.businessAccountId, businessAccountId));
+          const { eq: eq75 } = await import("drizzle-orm");
+          const all = await db2.select().from(demoOrders2).where(eq75(demoOrders2.businessAccountId, businessAccountId));
           const normalizedId = (order_id || "").replace(/^#/, "").toUpperCase();
           const order = all.find((o) => (o.orderId || "").replace(/^#/, "").toUpperCase() === normalizedId);
           if (!order) {
@@ -20495,7 +20495,7 @@ Return ONLY valid JSON, no markdown or explanation.`
             status: "return_requested",
             notes: order.notes ? `${order.notes} | ${returnNote}` : returnNote,
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq74(demoOrders2.id, order.id));
+          }).where(eq75(demoOrders2.id, order.id));
           console.log(`[DemoOrders Tool] Order ${order.orderId} status updated to return_requested, ticket ${ticketNumber}`);
           return this.createSuccessResponse(
             `Your return request for order ${order_id} has been registered! Ticket: #${ticketNumber}. Reason: ${reason}. Resolution: ${resolution === "refund" ? "Refund" : "Exchange"}. Our team will contact you within 24-48 hours.`,
@@ -56781,44 +56781,574 @@ var init_whatsappAiWorkbookService = __esm({
   }
 });
 
+// shared/campaignPresets.ts
+var CLASSIFICATION_PRESETS;
+var init_campaignPresets = __esm({
+  "shared/campaignPresets.ts"() {
+    "use strict";
+    CLASSIFICATION_PRESETS = [
+      {
+        id: "debt_collection",
+        label: "Debt Collection / Loan Recovery",
+        description: "EMI reminders, overdue follow-up, payment recovery",
+        classifications: [
+          {
+            key: "PTP",
+            label: "Promise to Pay",
+            description: "Customer commits to paying on a specific date or timeframe.",
+            captureFields: [
+              { fieldKey: "ptp_date", fieldLabel: "Promised Payment Date", fieldType: "date" }
+            ]
+          },
+          {
+            key: "PAID",
+            label: "Paid / Payment Already Made",
+            description: "Customer states the payment has already been made.",
+            captureFields: [
+              { fieldKey: "payment_reference", fieldLabel: "Payment Reference", fieldType: "text" },
+              { fieldKey: "payment_date", fieldLabel: "Payment Date", fieldType: "date" }
+            ]
+          },
+          {
+            key: "PAYMENT_ISSUE",
+            label: "Payment Issue",
+            description: "Payment failed, NACH/auto-debit issue, bank problem, or broken payment link.",
+            captureFields: [
+              { fieldKey: "payment_issue_type", fieldLabel: "Issue Type", fieldType: "text" }
+            ]
+          },
+          {
+            key: "CANNOT_PAY",
+            label: "Can't Pay",
+            description: "Insufficient funds, salary delay, job loss, or general financial difficulty.",
+            captureFields: [
+              { fieldKey: "reason", fieldLabel: "Reason", fieldType: "text" },
+              { fieldKey: "expected_date", fieldLabel: "Expected Payment Date", fieldType: "date" }
+            ]
+          },
+          {
+            key: "DUE_DATE_QUERY",
+            label: "Due Date Query",
+            description: "Customer asks when the payment is due or says they were unaware of the due date."
+          },
+          {
+            key: "ACCOUNT_QUERY",
+            label: "Outstanding / Account Query",
+            description: "Customer disputes the amount or asks for account details."
+          },
+          {
+            key: "REFUSAL",
+            label: "Refusal / Not Willing to Pay",
+            description: "Customer explicitly refuses to pay.",
+            captureFields: [
+              { fieldKey: "reason", fieldLabel: "Stated Reason", fieldType: "text" }
+            ]
+          },
+          {
+            key: "WRONG_NUMBER",
+            label: "Wrong Number",
+            description: "The contact is not the borrower; wrong person or invalid contact."
+          },
+          {
+            key: "OTHER",
+            label: "Other",
+            description: "Any meaningful response that does not fit the categories above."
+          }
+        ]
+      },
+      {
+        id: "event_rsvp",
+        label: "Event RSVP / Invitations",
+        description: "Conferences, webinars, open houses, launch events",
+        classifications: [
+          {
+            key: "CONFIRMED",
+            label: "Attending",
+            description: "Customer confirms they will attend.",
+            captureFields: [
+              { fieldKey: "guest_count", fieldLabel: "Number of Guests", fieldType: "text" }
+            ]
+          },
+          {
+            key: "DECLINED",
+            label: "Not Attending",
+            description: "Customer declines the invitation.",
+            captureFields: [{ fieldKey: "reason", fieldLabel: "Reason", fieldType: "text" }]
+          },
+          {
+            key: "TENTATIVE",
+            label: "Maybe / Tentative",
+            description: "Customer is interested but has not committed."
+          },
+          {
+            key: "RESCHEDULE",
+            label: "Wants Different Date",
+            description: "Customer wants to attend but on a different date or slot.",
+            captureFields: [
+              { fieldKey: "preferred_date", fieldLabel: "Preferred Date", fieldType: "date" }
+            ]
+          },
+          {
+            key: "WRONG_CONTACT",
+            label: "Wrong Contact",
+            description: "Not the intended invitee."
+          },
+          { key: "OTHER", label: "Other", description: "Any response not fitting the above." }
+        ]
+      },
+      {
+        id: "sales_qualification",
+        label: "Sales / Lead Qualification",
+        description: "Product enquiries, demo booking, cart recovery",
+        classifications: [
+          {
+            key: "INTERESTED",
+            label: "Interested \u2014 Ready to Buy",
+            description: "Customer wants to proceed with a purchase or booking."
+          },
+          {
+            key: "WANTS_DEMO",
+            label: "Wants Demo / Callback",
+            description: "Customer wants a demo, site visit, or call before deciding.",
+            captureFields: [
+              { fieldKey: "preferred_time", fieldLabel: "Preferred Time", fieldType: "text" }
+            ]
+          },
+          {
+            key: "NEED_INFO",
+            label: "Needs More Information",
+            description: "Customer has questions before deciding.",
+            captureFields: [{ fieldKey: "question", fieldLabel: "Question Asked", fieldType: "text" }]
+          },
+          {
+            key: "PRICE_CONCERN",
+            label: "Price Concern",
+            description: "Customer is interested but finds the price too high or wants a discount."
+          },
+          {
+            key: "NOT_INTERESTED",
+            label: "Not Interested",
+            description: "Customer does not want the product or service.",
+            captureFields: [{ fieldKey: "reason", fieldLabel: "Reason", fieldType: "text" }]
+          },
+          {
+            key: "ALREADY_PURCHASED",
+            label: "Already Purchased",
+            description: "Customer already bought this or an equivalent elsewhere."
+          },
+          { key: "OTHER", label: "Other", description: "Any response not fitting the above." }
+        ]
+      },
+      {
+        id: "appointment_scheduling",
+        label: "Appointments / Scheduling",
+        description: "Clinics, interviews, service visits, consultations",
+        classifications: [
+          {
+            key: "CONFIRMED",
+            label: "Appointment Confirmed",
+            description: "Customer confirms the scheduled appointment."
+          },
+          {
+            key: "RESCHEDULE",
+            label: "Reschedule Requested",
+            description: "Customer wants to move the appointment to a different time.",
+            captureFields: [
+              { fieldKey: "preferred_date", fieldLabel: "Preferred Date", fieldType: "date" },
+              { fieldKey: "preferred_time", fieldLabel: "Preferred Time", fieldType: "text" }
+            ]
+          },
+          {
+            key: "CANCELLED",
+            label: "Cancelled",
+            description: "Customer cancels the appointment.",
+            captureFields: [{ fieldKey: "reason", fieldLabel: "Reason", fieldType: "text" }]
+          },
+          {
+            key: "RUNNING_LATE",
+            label: "Running Late",
+            description: "Customer will attend but arrive late."
+          },
+          {
+            key: "WRONG_CONTACT",
+            label: "Wrong Contact",
+            description: "Not the intended person."
+          },
+          { key: "OTHER", label: "Other", description: "Any response not fitting the above." }
+        ]
+      }
+    ];
+  }
+});
+
+// server/services/whatsappCampaignSimulator.ts
+var whatsappCampaignSimulator_exports = {};
+__export(whatsappCampaignSimulator_exports, {
+  simulateWhatsAppCampaign: () => simulateWhatsAppCampaign
+});
+import { and as and59, eq as eq69, sql as sql41 } from "drizzle-orm";
+import { randomUUID as randomUUID3 } from "node:crypto";
+function buildCaseSequence() {
+  return CASE_PLAN.flatMap(({ key, count: count5 }) => Array.from({ length: count5 }, () => key));
+}
+function fixtureName(index2) {
+  const firstNames = ["Aarav", "Diya", "Kabir", "Meera", "Rohan", "Ananya", "Vikram", "Isha", "Arjun", "Nisha"];
+  const lastNames = ["Sharma", "Patel", "Nair", "Verma", "Kapoor"];
+  return `${firstNames[index2 % firstNames.length]} ${lastNames[Math.floor(index2 / firstNames.length) % lastNames.length]}`;
+}
+function fixturePhone(index2) {
+  return `120255501${String(index2 + 1).padStart(2, "0")}`;
+}
+function replyFor(simulationCase, index2) {
+  return simulationCase.replies[index2 % simulationCase.replies.length];
+}
+function aiReplyFor(simulationCase, index2) {
+  return simulationCase.aiReplies[index2 % simulationCase.aiReplies.length];
+}
+async function simulateWhatsAppCampaign(businessAccountId) {
+  if (process.env.NODE_ENV !== "development") {
+    throw new Error("The WhatsApp campaign simulator is available only in development");
+  }
+  const caseSequence = buildCaseSequence();
+  if (caseSequence.length !== SIMULATION_SIZE) {
+    throw new Error(`Simulation fixture must contain exactly ${SIMULATION_SIZE} recipients`);
+  }
+  const classificationByKey = new Map(LOAN_RECOVERY_CLASSIFICATIONS.map((item) => [item.key, item]));
+  const missingClassification = caseSequence.find((key) => !classificationByKey.has(key));
+  if (missingClassification) throw new Error(`Simulation classification is not configured: ${missingClassification}`);
+  const templateBody = "Hi {{1}}, this is a development-only payment reminder. Please reply with your payment update.";
+  return db.transaction(async (tx) => {
+    await tx.execute(sql41`SELECT pg_advisory_xact_lock(hashtext(${`whatsapp-campaign-simulation:${businessAccountId}`}))`);
+    const [existing] = await tx.select({ id: marketingCampaigns.id, totalRecipients: marketingCampaigns.totalRecipients, repliedCount: marketingCampaigns.repliedCount }).from(marketingCampaigns).where(and59(
+      eq69(marketingCampaigns.businessAccountId, businessAccountId),
+      eq69(marketingCampaigns.name, SIMULATION_CAMPAIGN_NAME)
+    )).limit(1);
+    if (existing) {
+      const outcomeCounts2 = Object.fromEntries(CASE_PLAN.map(({ key }) => [key, 0]));
+      const existingRows = await tx.select({ primaryClassification: marketingCampaignRecipients.primaryClassification }).from(marketingCampaignRecipients).where(and59(
+        eq69(marketingCampaignRecipients.businessAccountId, businessAccountId),
+        eq69(marketingCampaignRecipients.campaignId, existing.id)
+      ));
+      for (const row of existingRows) {
+        if (row.primaryClassification && outcomeCounts2[row.primaryClassification] !== void 0) {
+          outcomeCounts2[row.primaryClassification]++;
+        }
+      }
+      return {
+        campaignId: existing.id,
+        created: false,
+        recipientCount: existing.totalRecipients,
+        repliedCount: existing.repliedCount,
+        outcomeCounts: outcomeCounts2
+      };
+    }
+    const now = /* @__PURE__ */ new Date();
+    const completedAt = new Date(now.getTime() - 5 * 60 * 1e3);
+    const startedAt = new Date(completedAt.getTime() - (SIMULATION_SIZE * 4 + 5) * 60 * 1e3);
+    const [template] = await tx.select().from(whatsappTemplates).where(and59(
+      eq69(whatsappTemplates.businessAccountId, businessAccountId),
+      eq69(whatsappTemplates.name, SIMULATION_TEMPLATE_NAME)
+    )).limit(1);
+    const simulationTemplate = template ? template.status === "draft" ? template : (await tx.update(whatsappTemplates).set({ status: "draft", updatedAt: now }).where(eq69(whatsappTemplates.id, template.id)).returning())[0] : (await tx.insert(whatsappTemplates).values({
+      businessAccountId,
+      name: SIMULATION_TEMPLATE_NAME,
+      language: "en",
+      category: "UTILITY",
+      bodyText: templateBody,
+      paramCount: 1,
+      // Fixture templates remain visible for the simulated campaign preview
+      // but cannot be selected by the normal, provider-backed send flow.
+      status: "draft",
+      buttons: []
+    }).returning())[0];
+    const [campaign] = await tx.insert(marketingCampaigns).values({
+      businessAccountId,
+      name: SIMULATION_CAMPAIGN_NAME,
+      templateId: simulationTemplate.id,
+      templateParams: ["{{name}}"],
+      groupIds: [],
+      status: "completed",
+      startedAt,
+      completedAt,
+      totalRecipients: SIMULATION_SIZE,
+      sentCount: SIMULATION_SIZE,
+      failedCount: 0,
+      repliedCount: SIMULATION_SIZE,
+      optedOutCount: 0,
+      aiEnabled: "true",
+      aiAgentName: "Dev Simulation Agent",
+      aiSystemPrompt: "Development fixture only. No WhatsApp provider calls were made.",
+      aiUseFaqs: "false",
+      aiUseDocs: "false",
+      aiUseProducts: "false",
+      aiKnowledgeDocIds: [],
+      replyClassifications: LOAN_RECOVERY_CLASSIFICATIONS
+    }).returning();
+    const recipients = [];
+    const messages2 = [];
+    const outcomeCounts = Object.fromEntries(CASE_PLAN.map(({ key }) => [key, 0]));
+    for (let index2 = 0; index2 < SIMULATION_SIZE; index2++) {
+      const classificationKey = caseSequence[index2];
+      const simulationCase = CASE_BY_KEY.get(classificationKey);
+      const inboundBody = replyFor(simulationCase, index2);
+      const sentAt = new Date(startedAt.getTime() + index2 * 4 * 60 * 1e3);
+      const replyAt = new Date(sentAt.getTime() + 2 * 60 * 1e3);
+      const aiAt = new Date(sentAt.getTime() + 3 * 60 * 1e3);
+      const phone = fixturePhone(index2);
+      outcomeCounts[classificationKey]++;
+      recipients.push({
+        id: randomUUID3(),
+        campaignId: campaign.id,
+        businessAccountId,
+        phone,
+        sendPhone: phone,
+        name: fixtureName(index2),
+        attributes: {
+          account_reference: `SIM-ACCT-${String(index2 + 1).padStart(3, "0")}`,
+          outstanding_amount: `\u20B9${(4200 + index2 * 275).toLocaleString("en-IN")}`,
+          fixture: "development"
+        },
+        status: "replied",
+        msg91MessageId: `dev-simulation-${String(index2 + 1).padStart(3, "0")}`,
+        providerResponse: { simulated: true, providerCallMade: false },
+        sentAt,
+        deliveredAt: new Date(sentAt.getTime() + 30 * 1e3),
+        readAt: new Date(sentAt.getTime() + 60 * 1e3),
+        firstReplyAt: replyAt,
+        replyCount: 1,
+        aiReplyCount: 1,
+        primaryClassification: classificationKey,
+        dispositionData: simulationCase.capture || {},
+        callbackRequired: simulationCase.callbackRequired || false,
+        callbackReason: simulationCase.callbackReason || null,
+        customerFeedback: inboundBody,
+        classifiedAt: replyAt
+      });
+      messages2.push(
+        {
+          campaignId: campaign.id,
+          recipientId: recipients[recipients.length - 1].id,
+          businessAccountId,
+          direction: "outbound_template",
+          body: templateBody.replace("{{1}}", fixtureName(index2)),
+          metadata: { simulated: true, providerCallMade: false, templateName: simulationTemplate.name },
+          createdAt: sentAt
+        },
+        {
+          campaignId: campaign.id,
+          recipientId: recipients[recipients.length - 1].id,
+          businessAccountId,
+          direction: "inbound",
+          body: inboundBody,
+          metadata: { simulated: true, classification: classificationKey },
+          createdAt: replyAt
+        },
+        {
+          campaignId: campaign.id,
+          recipientId: recipients[recipients.length - 1].id,
+          businessAccountId,
+          direction: "outbound_ai",
+          body: aiReplyFor(simulationCase, index2),
+          metadata: { simulated: true, classification: classificationKey, providerCallMade: false },
+          createdAt: aiAt
+        }
+      );
+    }
+    await tx.insert(marketingCampaignRecipients).values(recipients);
+    const messageRows = messages2;
+    await tx.insert(marketingCampaignMessages).values(messageRows);
+    return {
+      campaignId: campaign.id,
+      created: true,
+      recipientCount: SIMULATION_SIZE,
+      repliedCount: SIMULATION_SIZE,
+      outcomeCounts
+    };
+  });
+}
+var SIMULATION_CAMPAIGN_NAME, SIMULATION_TEMPLATE_NAME, SIMULATION_SIZE, LOAN_RECOVERY_CLASSIFICATIONS, CASE_PLAN, SIMULATION_CASES, CASE_BY_KEY;
+var init_whatsappCampaignSimulator = __esm({
+  "server/services/whatsappCampaignSimulator.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_campaignPresets();
+    SIMULATION_CAMPAIGN_NAME = "DEV SIMULATION \u2014 Loan Recovery (50 replies)";
+    SIMULATION_TEMPLATE_NAME = "dev_loan_recovery_simulation_v1";
+    SIMULATION_SIZE = 50;
+    LOAN_RECOVERY_CLASSIFICATIONS = CLASSIFICATION_PRESETS.find((preset) => preset.id === "debt_collection")?.classifications || [];
+    CASE_PLAN = [
+      { key: "PTP", count: 8 },
+      { key: "PAID", count: 8 },
+      { key: "PAYMENT_ISSUE", count: 7 },
+      { key: "CANNOT_PAY", count: 7 },
+      { key: "DUE_DATE_QUERY", count: 6 },
+      { key: "ACCOUNT_QUERY", count: 6 },
+      { key: "REFUSAL", count: 4 },
+      { key: "WRONG_NUMBER", count: 2 },
+      { key: "OTHER", count: 2 }
+    ];
+    SIMULATION_CASES = [
+      {
+        key: "PTP",
+        replies: [
+          "I will pay the outstanding EMI on the 5th of next month.",
+          "Please give me until Friday, I promise to make the payment.",
+          "I can clear this amount after my salary comes in next week."
+        ],
+        aiReplies: [
+          "Thank you for confirming. We have noted your promised payment date and will send a reminder before then.",
+          "Thanks, your promise to pay has been recorded. Please use the payment link when you are ready."
+        ],
+        capture: { ptp_date: "2026-09-05" }
+      },
+      {
+        key: "PAID",
+        replies: [
+          "I already paid this instalment yesterday. Please check your records.",
+          "Payment was made through UPI this morning.",
+          "I have completed the payment. The reference is SIM-PAY-0042."
+        ],
+        aiReplies: [
+          "Thank you. We have recorded that payment was already made and will verify it against the account.",
+          "Thanks for letting us know. We will reconcile the payment and update the account shortly."
+        ],
+        capture: { payment_reference: "SIM-PAY-0042", payment_date: "2026-08-25" }
+      },
+      {
+        key: "PAYMENT_ISSUE",
+        replies: [
+          "The payment link keeps failing when I try to pay.",
+          "My auto-debit did not go through even though the balance was available.",
+          "The bank declined the transaction. Can you share another way to pay?"
+        ],
+        aiReplies: [
+          "Sorry about the trouble. We have recorded the payment issue and a support team member will help you with another payment option.",
+          "We have noted the failed payment attempt. Please try the alternate payment link while our team checks the issue."
+        ],
+        capture: { payment_issue_type: "Payment link or bank transaction failed" },
+        callbackRequired: true,
+        callbackReason: "Customer reported a payment failure and needs payment assistance."
+      },
+      {
+        key: "CANNOT_PAY",
+        replies: [
+          "I cannot pay this week because my salary is delayed.",
+          "I am short of funds right now. I should be able to pay after the 10th.",
+          "I lost my job recently and need some time before I can make the payment."
+        ],
+        aiReplies: [
+          "We understand. Your situation has been recorded, and a support team member will contact you to discuss the available options.",
+          "Thank you for explaining. We have noted the expected payment timeframe for a follow-up."
+        ],
+        capture: { reason: "Temporary financial difficulty", expected_date: "2026-09-12" },
+        callbackRequired: true,
+        callbackReason: "Customer says they cannot pay and needs a repayment discussion."
+      },
+      {
+        key: "DUE_DATE_QUERY",
+        replies: [
+          "When is my next payment due?",
+          "Please tell me the due date for this instalment.",
+          "I am not sure when the EMI is due. Can you confirm?"
+        ],
+        aiReplies: [
+          "Your account team can confirm the exact due date and payment schedule. We have noted your question for follow-up.",
+          "We have recorded your due-date question. Please check the account statement or contact support for the schedule."
+        ]
+      },
+      {
+        key: "ACCOUNT_QUERY",
+        replies: [
+          "Why is the outstanding amount different from my statement?",
+          "Please share the account balance and the instalment details.",
+          "I want a breakdown of what is still outstanding on my account."
+        ],
+        aiReplies: [
+          "We have recorded your account question. A support representative will review the balance and share the breakdown.",
+          "Thanks, we have noted the outstanding-balance query for account verification."
+        ],
+        callbackRequired: true,
+        callbackReason: "Customer requested an account balance or outstanding-amount review."
+      },
+      {
+        key: "REFUSAL",
+        replies: [
+          "I am not willing to pay this amount because I disagree with the charges.",
+          "I will not make this payment until the account is corrected.",
+          "I refuse to pay until someone explains these fees."
+        ],
+        aiReplies: [
+          "We have recorded your concern. A support representative will review the charges with you.",
+          "Your dispute has been noted and will be routed to the account support team."
+        ],
+        capture: { reason: "Disputes the amount or charges" },
+        callbackRequired: true,
+        callbackReason: "Customer refused payment and raised a dispute."
+      },
+      {
+        key: "WRONG_NUMBER",
+        replies: [
+          "This is the wrong number. I do not know this person.",
+          "You have contacted the wrong person."
+        ],
+        aiReplies: [
+          "Sorry for the inconvenience. We have recorded that this may be the wrong number."
+        ]
+      },
+      {
+        key: "OTHER",
+        replies: [
+          "Can someone call me about this message?",
+          "I received your reminder, thank you."
+        ],
+        aiReplies: [
+          "Thanks for your reply. We have recorded it and a team member can follow up if needed."
+        ]
+      }
+    ];
+    CASE_BY_KEY = new Map(SIMULATION_CASES.map((item) => [item.key, item]));
+  }
+});
+
 // server/services/topscholar/embedJobPoller.ts
 var embedJobPoller_exports = {};
 __export(embedJobPoller_exports, {
   processPendingEmbedJobs: () => processPendingEmbedJobs,
   startEmbedJobPoller: () => startEmbedJobPoller
 });
-import { and as and62, eq as eq73, inArray as inArray14, ne as ne7, sql as sql46 } from "drizzle-orm";
+import { and as and63, eq as eq74, inArray as inArray14, ne as ne7, sql as sql47 } from "drizzle-orm";
 async function syncJobStatus(jobId, businessAccountId, cpId, processed) {
   await db.update(topscholarContentSync).set({ processedCount: processed, updatedAt: /* @__PURE__ */ new Date() }).where(
-    and62(
-      eq73(topscholarContentSync.businessAccountId, businessAccountId),
-      eq73(topscholarContentSync.cpId, cpId),
-      eq73(topscholarContentSync.embedJobId, jobId)
+    and63(
+      eq74(topscholarContentSync.businessAccountId, businessAccountId),
+      eq74(topscholarContentSync.cpId, cpId),
+      eq74(topscholarContentSync.embedJobId, jobId)
     )
   );
 }
 async function finalizeFailed(job, message) {
-  await db.update(topscholarEmbedJobs).set({ status: "failed", error: message, updatedAt: /* @__PURE__ */ new Date() }).where(eq73(topscholarEmbedJobs.id, job.id));
+  await db.update(topscholarEmbedJobs).set({ status: "failed", error: message, updatedAt: /* @__PURE__ */ new Date() }).where(eq74(topscholarEmbedJobs.id, job.id));
   await db.update(topscholarContentSync).set({ status: "failed", lastError: message, embedJobId: null, updatedAt: /* @__PURE__ */ new Date() }).where(
-    and62(
-      eq73(topscholarContentSync.businessAccountId, job.businessAccountId),
-      eq73(topscholarContentSync.cpId, job.cpId),
-      eq73(topscholarContentSync.embedJobId, job.id)
+    and63(
+      eq74(topscholarContentSync.businessAccountId, job.businessAccountId),
+      eq74(topscholarContentSync.cpId, job.cpId),
+      eq74(topscholarContentSync.embedJobId, job.id)
     )
   );
   console.error(`[TopScholar EmbedPoller] Job ${job.id} failed: ${message}`);
 }
 async function completeJob(job) {
-  const [account] = await db.select().from(businessAccounts).where(eq73(businessAccounts.id, job.businessAccountId));
+  const [account] = await db.select().from(businessAccounts).where(eq74(businessAccounts.id, job.businessAccountId));
   if (!account) {
     await finalizeFailed(job, "Business account no longer exists.");
     return;
   }
   const cfg = getTopscholarConfig(account);
   await withCpLock(job.businessAccountId, job.cpId, async () => {
-    const [{ staged: stagedCount } = { staged: 0 }] = await db.select({ staged: sql46`count(*)::int` }).from(topscholarEmbedStaging).where(eq73(topscholarEmbedStaging.jobId, job.id));
+    const [{ staged: stagedCount } = { staged: 0 }] = await db.select({ staged: sql47`count(*)::int` }).from(topscholarEmbedStaging).where(eq74(topscholarEmbedStaging.jobId, job.id));
     if (!stagedCount) {
-      await db.update(topscholarEmbedJobs).set({ status: "completed", error: null, updatedAt: /* @__PURE__ */ new Date() }).where(and62(eq73(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled")));
+      await db.update(topscholarEmbedJobs).set({ status: "completed", error: null, updatedAt: /* @__PURE__ */ new Date() }).where(and63(eq74(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled")));
       console.log(`[TopScholar EmbedPoller] Job ${job.id} already landed (no staging); marked completed.`);
       return;
     }
@@ -56828,7 +57358,7 @@ async function completeJob(job) {
     const flush = async () => {
       if (buffer2.length === 0) return;
       const pageIds = buffer2.map((b) => b.customId);
-      const rows = await db.select().from(topscholarEmbedStaging).where(and62(eq73(topscholarEmbedStaging.jobId, job.id), inArray14(topscholarEmbedStaging.customId, pageIds)));
+      const rows = await db.select().from(topscholarEmbedStaging).where(and63(eq74(topscholarEmbedStaging.jobId, job.id), inArray14(topscholarEmbedStaging.customId, pageIds)));
       const stagedById = new Map(rows.map((r) => [r.customId, r]));
       const chunks = [];
       for (const { customId, embedding } of buffer2) {
@@ -56877,7 +57407,7 @@ async function completeJob(job) {
       return;
     }
     const partialWarning = written < stagedCount ? `Partial sync: embedded ${written} of ${stagedCount} chunks (some embedding requests failed). Re-run to fill the gap.` : null;
-    await db.update(topscholarEmbedJobs).set({ status: "completed", completedCount: written, error: partialWarning, updatedAt: /* @__PURE__ */ new Date() }).where(and62(eq73(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled")));
+    await db.update(topscholarEmbedJobs).set({ status: "completed", completedCount: written, error: partialWarning, updatedAt: /* @__PURE__ */ new Date() }).where(and63(eq74(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled")));
     await db.update(topscholarContentSync).set({
       status: "completed",
       chunkCount: written,
@@ -56887,13 +57417,13 @@ async function completeJob(job) {
       embedJobId: null,
       updatedAt: /* @__PURE__ */ new Date()
     }).where(
-      and62(
-        eq73(topscholarContentSync.businessAccountId, job.businessAccountId),
-        eq73(topscholarContentSync.cpId, job.cpId),
-        eq73(topscholarContentSync.embedJobId, job.id)
+      and63(
+        eq74(topscholarContentSync.businessAccountId, job.businessAccountId),
+        eq74(topscholarContentSync.cpId, job.cpId),
+        eq74(topscholarContentSync.embedJobId, job.id)
       )
     );
-    await db.delete(topscholarEmbedStaging).where(eq73(topscholarEmbedStaging.jobId, job.id));
+    await db.delete(topscholarEmbedStaging).where(eq74(topscholarEmbedStaging.jobId, job.id));
     console.log(`[TopScholar EmbedPoller] Job ${job.id} completed: wrote ${written} chunk(s) to ${cfg.storeType} for cp_id ${job.cpId}`);
   });
 }
@@ -56923,7 +57453,7 @@ async function advanceJob(job) {
     batches: updatedBatches,
     status: allTerminal ? job.status : "in_progress",
     updatedAt: /* @__PURE__ */ new Date()
-  }).where(and62(eq73(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled"))).returning({ id: topscholarEmbedJobs.id });
+  }).where(and63(eq74(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled"))).returning({ id: topscholarEmbedJobs.id });
   if (advanced.length === 0) {
     return;
   }
@@ -57063,7 +57593,7 @@ init_auth();
 init_schema();
 import { createServer } from "http";
 import bcrypt2 from "bcrypt";
-import { eq as eq69, and as and59, isNotNull as isNotNull6, sql as sql41, inArray as inArray13, desc as desc31, asc as asc14, gte as gte12, lte as lte5, count as count4 } from "drizzle-orm";
+import { eq as eq70, and as and60, isNotNull as isNotNull6, sql as sql42, inArray as inArray13, desc as desc31, asc as asc14, gte as gte12, lte as lte5, count as count4 } from "drizzle-orm";
 import OpenAI40 from "openai";
 import { z as z2 } from "zod";
 
@@ -57865,19 +58395,19 @@ Respond with JSON:
       }
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
       const { leads: leads3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { or: or8, eq: eq74, and: and63 } = await import("drizzle-orm");
-      const conditions = [eq74(leads3.businessAccountId, businessAccountId)];
+      const { or: or8, eq: eq75, and: and64 } = await import("drizzle-orm");
+      const conditions = [eq75(leads3.businessAccountId, businessAccountId)];
       const contactConditions = [];
       if (email) {
-        contactConditions.push(eq74(leads3.email, email));
+        contactConditions.push(eq75(leads3.email, email));
       }
       if (phone) {
-        contactConditions.push(eq74(leads3.phone, phone));
+        contactConditions.push(eq75(leads3.phone, phone));
       }
       if (contactConditions.length > 0) {
         conditions.push(or8(...contactConditions));
       }
-      const existingLeads = await db2.select().from(leads3).where(and63(...conditions)).limit(1);
+      const existingLeads = await db2.select().from(leads3).where(and64(...conditions)).limit(1);
       if (existingLeads.length > 0) {
         console.log("[Duplicate Detection] Found existing lead:", existingLeads[0].id);
         return existingLeads[0];
@@ -57900,12 +58430,12 @@ Respond with JSON:
       }
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
       const { leads: leads3, journeyResponses: journeyResponses2, journeySteps: journeySteps2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq74, and: and63 } = await import("drizzle-orm");
+      const { eq: eq75, and: and64 } = await import("drizzle-orm");
       const responses = await db2.select({
         response: journeyResponses2.response,
         fieldName: journeySteps2.fieldName,
         questionType: journeySteps2.questionType
-      }).from(journeyResponses2).innerJoin(journeySteps2, eq74(journeyResponses2.stepId, journeySteps2.id)).where(eq74(journeyResponses2.sessionId, journeyState.sessionId));
+      }).from(journeyResponses2).innerJoin(journeySteps2, eq75(journeyResponses2.stepId, journeySteps2.id)).where(eq75(journeyResponses2.sessionId, journeyState.sessionId));
       console.log("[Lead Capture] Journey responses:", responses);
       let name = null;
       let phone = null;
@@ -57926,9 +58456,9 @@ Respond with JSON:
       }
       console.log("[Lead Capture] Extracted from journey:", { name, phone, email });
       const existingLeads = await db2.select().from(leads3).where(
-        and63(
-          eq74(leads3.businessAccountId, businessAccountId),
-          eq74(leads3.conversationId, conversationId)
+        and64(
+          eq75(leads3.businessAccountId, businessAccountId),
+          eq75(leads3.conversationId, conversationId)
         )
       ).limit(1);
       if (existingLeads.length > 0) {
@@ -57939,7 +58469,7 @@ Respond with JSON:
         await db2.update(leads3).set({
           ...updateData,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq74(leads3.id, existingLeads[0].id));
+        }).where(eq75(leads3.id, existingLeads[0].id));
         console.log("[Lead Capture] \u2713 Updated existing lead:", existingLeads[0].id);
       } else {
         const newLead = await db2.insert(leads3).values({
@@ -58010,7 +58540,7 @@ Respond with JSON:
       console.log(`[Lead Capture] \u{1F514} AI detected contact info: ${name ? "name" : ""} ${phone ? "phone" : ""} ${email ? "email" : ""}`.trim());
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
       const { leads: leads3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq74, and: and63, or: or8 } = await import("drizzle-orm");
+      const { eq: eq75, and: and64, or: or8 } = await import("drizzle-orm");
       const normalizePhone6 = (phoneNum) => {
         const cleaned = phoneNum.replace(/[^\d+]/g, "");
         return cleaned.startsWith("+") ? cleaned : cleaned.replace(/\+/g, "");
@@ -58023,44 +58553,44 @@ Respond with JSON:
         await db2.update(leads3).set({
           ...updateData,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq74(leads3.id, journeyState.leadId));
+        }).where(eq75(leads3.id, journeyState.leadId));
         console.log(`[Lead Capture] \u2713 Updated existing journey lead: ${journeyState.leadId}`);
         return;
       }
       if (email || phone) {
-        const conditions = [eq74(leads3.businessAccountId, businessAccountId)];
+        const conditions = [eq75(leads3.businessAccountId, businessAccountId)];
         const contactConditions = [];
         if (email && updateData.email) {
-          contactConditions.push(eq74(leads3.email, updateData.email));
+          contactConditions.push(eq75(leads3.email, updateData.email));
         }
         if (phone && updateData.phone) {
-          contactConditions.push(eq74(leads3.phone, updateData.phone));
+          contactConditions.push(eq75(leads3.phone, updateData.phone));
         }
         if (contactConditions.length > 0) {
           conditions.push(or8(...contactConditions));
         }
-        const existingLeads = await db2.select().from(leads3).where(and63(...conditions)).limit(1);
+        const existingLeads = await db2.select().from(leads3).where(and64(...conditions)).limit(1);
         if (existingLeads.length > 0) {
           await db2.update(leads3).set({
             ...updateData,
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq74(leads3.id, existingLeads[0].id));
+          }).where(eq75(leads3.id, existingLeads[0].id));
           journeyState.leadId = existingLeads[0].id;
           console.log(`[Lead Capture] \u2713 Updated duplicate lead: ${existingLeads[0].id}`);
           return;
         }
       }
       const conversationLeads = await db2.select().from(leads3).where(
-        and63(
-          eq74(leads3.businessAccountId, businessAccountId),
-          eq74(leads3.conversationId, conversationId)
+        and64(
+          eq75(leads3.businessAccountId, businessAccountId),
+          eq75(leads3.conversationId, conversationId)
         )
       ).limit(1);
       if (conversationLeads.length > 0) {
         await db2.update(leads3).set({
           ...updateData,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq74(leads3.id, conversationLeads[0].id));
+        }).where(eq75(leads3.id, conversationLeads[0].id));
         journeyState.leadId = conversationLeads[0].id;
         console.log(`[Lead Capture] \u2713 Updated conversation lead: ${conversationLeads[0].id}`);
         return;
@@ -63726,7 +64256,7 @@ init_aiUsageLogger();
 import multer from "multer";
 import path5 from "path";
 import { fileURLToPath } from "url";
-import { randomUUID as randomUUID3, randomBytes as randomBytes2 } from "crypto";
+import { randomUUID as randomUUID4, randomBytes as randomBytes2 } from "crypto";
 import fs3 from "fs";
 import net2 from "net";
 import { exec } from "child_process";
@@ -64769,14 +65299,14 @@ var RealtimeVoiceService = class _RealtimeVoiceService {
     try {
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
       const { messages: messages2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq74, and: and63, desc: desc32 } = await import("drizzle-orm");
-      const recentMessages = await db2.select().from(messages2).where(and63(
-        eq74(messages2.conversationId, conversationId),
-        eq74(messages2.role, "user")
+      const { eq: eq75, and: and64, desc: desc32 } = await import("drizzle-orm");
+      const recentMessages = await db2.select().from(messages2).where(and64(
+        eq75(messages2.conversationId, conversationId),
+        eq75(messages2.role, "user")
       )).orderBy(desc32(messages2.createdAt)).limit(5);
       const matchingMsg = recentMessages.find((m) => m.content === originalText);
       if (matchingMsg) {
-        await db2.update(messages2).set({ content: correctedText }).where(eq74(messages2.id, matchingMsg.id));
+        await db2.update(messages2).set({ content: correctedText }).where(eq75(messages2.id, matchingMsg.id));
         console.log("[RealtimeVoice] Updated message in DB with corrected transcript");
       }
     } catch (error) {
@@ -68064,7 +68594,7 @@ var DatabaseBackupService = class {
     }
     return "Restore failed. Please try again or contact support.";
   }
-  async runPsqlCommand(databaseUrl, sql47, label) {
+  async runPsqlCommand(databaseUrl, sql48, label) {
     return new Promise((resolve, reject) => {
       const errorChunks = [];
       const psql = spawn("psql", [databaseUrl, "-v", "ON_ERROR_STOP=1"], {
@@ -68097,13 +68627,13 @@ var DatabaseBackupService = class {
         clearTimeout(timeoutId);
         reject(new Error(`${label} process error: ${error.message}`));
       });
-      psql.stdin.write(sql47);
+      psql.stdin.write(sql48);
       psql.stdin.end();
     });
   }
-  async runPsqlQuery(databaseUrl, sql47, label) {
+  async runPsqlQuery(databaseUrl, sql48, label) {
     return new Promise((resolve, reject) => {
-      const psql = spawn("psql", [databaseUrl, "-t", "-A", "-F", "	", "-c", sql47], {
+      const psql = spawn("psql", [databaseUrl, "-t", "-A", "-F", "	", "-c", sql48], {
         stdio: ["ignore", "pipe", "pipe"]
       });
       let stdout = "";
@@ -68132,14 +68662,14 @@ var DatabaseBackupService = class {
    */
   async assertCanModifyTables(databaseUrl, tables) {
     if (tables.length === 0) return;
-    const sql47 = `
+    const sql48 = `
       SELECT t.tablename,
              has_table_privilege(current_user, format('public.%I', t.tablename)::regclass, 'TRUNCATE') AS can_truncate,
              (t.tableowner = current_user) AS is_owner
       FROM pg_tables t
       WHERE t.schemaname = 'public'
     `;
-    const out = await this.runPsqlQuery(databaseUrl, sql47, "RESTORE_PREFLIGHT");
+    const out = await this.runPsqlQuery(databaseUrl, sql48, "RESTORE_PREFLIGHT");
     const lacking = [];
     for (const line of out.trim().split("\n")) {
       if (!line.trim()) continue;
@@ -68160,7 +68690,7 @@ var DatabaseBackupService = class {
    */
   async snapshotForeignKeys(databaseUrl, tableName) {
     const filter = tableName ? `AND conrelid = format('public.%I', '${tableName.replace(/'/g, "''")}')::regclass` : "";
-    const sql47 = `
+    const sql48 = `
       SELECT conname,
              (SELECT relname FROM pg_class WHERE oid = conrelid) AS table_name,
              pg_get_constraintdef(oid) AS definition
@@ -68170,7 +68700,7 @@ var DatabaseBackupService = class {
         ${filter}
       ORDER BY conname
     `;
-    const out = await this.runPsqlQuery(databaseUrl, sql47, "RESTORE_SNAPSHOT_FKS");
+    const out = await this.runPsqlQuery(databaseUrl, sql48, "RESTORE_SNAPSHOT_FKS");
     const fks = [];
     for (const line of out.trim().split("\n")) {
       if (!line.trim()) continue;
@@ -68186,8 +68716,8 @@ var DatabaseBackupService = class {
   }
   async dropForeignKeys(databaseUrl, fks) {
     if (fks.length === 0) return;
-    const sql47 = fks.map((fk) => `ALTER TABLE "${fk.tableName}" DROP CONSTRAINT IF EXISTS "${fk.conname}";`).join("\n");
-    await this.runPsqlCommand(databaseUrl, sql47, "RESTORE_DROP_FKS");
+    const sql48 = fks.map((fk) => `ALTER TABLE "${fk.tableName}" DROP CONSTRAINT IF EXISTS "${fk.conname}";`).join("\n");
+    await this.runPsqlCommand(databaseUrl, sql48, "RESTORE_DROP_FKS");
   }
   /**
    * Recreate FKs as NOT VALID first (instant, restores write-time enforcement),
@@ -68209,21 +68739,21 @@ var DatabaseBackupService = class {
     } catch (e) {
       this.log("RESTORE_RECREATE_FKS", `Batch add failed (${e.message}); falling back to per-FK add`);
       for (const fk of fks) {
-        const sql47 = this.buildAddFkSql(fk);
+        const sql48 = this.buildAddFkSql(fk);
         try {
-          await this.runPsqlCommand(databaseUrl, sql47, "RESTORE_RECREATE_FK");
+          await this.runPsqlCommand(databaseUrl, sql48, "RESTORE_RECREATE_FK");
           added.push(fk);
         } catch (innerErr) {
-          failures.push({ conname: fk.conname, tableName: fk.tableName, error: innerErr.message, sql: sql47 });
+          failures.push({ conname: fk.conname, tableName: fk.tableName, error: innerErr.message, sql: sql48 });
         }
       }
     }
     for (const fk of added) {
-      const sql47 = `ALTER TABLE "${fk.tableName}" VALIDATE CONSTRAINT "${fk.conname}";`;
+      const sql48 = `ALTER TABLE "${fk.tableName}" VALIDATE CONSTRAINT "${fk.conname}";`;
       try {
-        await this.runPsqlCommand(databaseUrl, sql47, "RESTORE_VALIDATE_FK");
+        await this.runPsqlCommand(databaseUrl, sql48, "RESTORE_VALIDATE_FK");
       } catch (e) {
-        failures.push({ conname: fk.conname, tableName: fk.tableName, error: e.message, sql: sql47 });
+        failures.push({ conname: fk.conname, tableName: fk.tableName, error: e.message, sql: sql48 });
       }
     }
     return { failures };
@@ -76979,7 +77509,7 @@ async function resolveTopscholarHistoryScope(businessAccountId, token, plainStud
 }
 async function registerRoutes(app2) {
   try {
-    const legacyK12Accounts = await db.update(businessAccounts).set({ k12EducationEnabled: "true", systemMode: "full" }).where(eq69(businessAccounts.systemMode, "education_k12")).returning({ id: businessAccounts.id, name: businessAccounts.name });
+    const legacyK12Accounts = await db.update(businessAccounts).set({ k12EducationEnabled: "true", systemMode: "full" }).where(eq70(businessAccounts.systemMode, "education_k12")).returning({ id: businessAccounts.id, name: businessAccounts.name });
     if (legacyK12Accounts.length > 0) {
       console.log(`[Migration] Converted ${legacyK12Accounts.length} legacy education_k12 accounts to k12EducationEnabled:`, legacyK12Accounts.map((a) => a.name).join(", "));
     }
@@ -76987,12 +77517,12 @@ async function registerRoutes(app2) {
     console.error("[Migration] Failed to migrate legacy education_k12 accounts:", err);
   }
   try {
-    await db.execute(sql41`ALTER TABLE business_accounts ADD COLUMN IF NOT EXISTS job_import_config jsonb`);
+    await db.execute(sql42`ALTER TABLE business_accounts ADD COLUMN IF NOT EXISTS job_import_config jsonb`);
   } catch (err) {
     console.error("[Migration] Failed to add job_import_config column:", err);
   }
   try {
-    const updated = await db.execute(sql41`
+    const updated = await db.execute(sql42`
       UPDATE widget_settings 
       SET avatar_type = 'none' 
       WHERE avatar_type IN ('preset-animated-1', 'preset-animated-2', 'preset-animated-3')
@@ -77984,7 +78514,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         const escalateIntent = /\b(escalate|real person|live (agent|person|support)|talk to (a |the )?(human|teacher|someone|support|agent|person|team)|speak (to|with) (a |the )?(human|teacher|someone|support|agent|person|team)|connect (me )?(to|with) (a |the )?(human|teacher|support|agent|team)|support team|raise (a )?(ticket|complaint)|not (a |an )?(bot|ai))\b/i.test(String(message || ""));
         if (escalateIntent) {
           try {
-            await db.execute(sql41`
+            await db.execute(sql42`
               UPDATE conversations SET doubt_retry_status = 'attempted'
                WHERE business_account_id = ${businessAccountId}
                  AND topscholar_doubt_id = ${topscholarDoubtId}
@@ -78022,7 +78552,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
     if (!isTopscholarAccount2(businessAccountId)) {
       return { ok: false, status: 403, error: "Doubt actions are not available for this account" };
     }
-    const lookup = await db.execute(sql41`
+    const lookup = await db.execute(sql42`
       SELECT c.topscholar_doubt_id AS doubt_id,
              c.doubt_retry_status AS retry_status,
              c.topscholar_plan_id AS plan_id,
@@ -78154,7 +78684,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       if (!ctx.ok) return res.status(ctx.status).json({ error: ctx.error, lockState: ctx.lockState });
       const { closeDoubt: closeDoubt2 } = await Promise.resolve().then(() => (init_doubtSyncService(), doubtSyncService_exports));
       const { DOUBT_RESOLVED_FIRST_PASS: DOUBT_RESOLVED_FIRST_PASS2, DOUBT_RESOLVED_AFTER_RETRY: DOUBT_RESOLVED_AFTER_RETRY2, DOUBT_RETRY_ATTEMPTED: DOUBT_RETRY_ATTEMPTED2, doubtLockStateFor: doubtLockStateFor2 } = await Promise.resolve().then(() => (init_doubtStatus(), doubtStatus_exports));
-      const claim = await db.execute(sql41`
+      const claim = await db.execute(sql42`
         UPDATE conversations
            SET doubt_retry_status = CASE WHEN doubt_retry_status = ${DOUBT_RETRY_ATTEMPTED2}
                                          THEN ${DOUBT_RESOLVED_AFTER_RETRY2}
@@ -78191,7 +78721,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       const ctx = await resolveDoubtActionContext(businessAccountId, conversationId, token);
       if (!ctx.ok) return res.status(ctx.status).json({ error: ctx.error, lockState: ctx.lockState });
       if (ctx.retryStatus === null) {
-        const claimed = await db.execute(sql41`
+        const claimed = await db.execute(sql42`
           UPDATE conversations SET doubt_retry_status = 'attempted'
            WHERE id = ${conversationId} AND business_account_id = ${businessAccountId}
              AND doubt_retry_status IS NULL
@@ -78230,7 +78760,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         }
       }
       const { DOUBT_ESCALATED: DOUBT_ESCALATED2, DOUBT_RETRY_ATTEMPTED: DOUBT_RETRY_ATTEMPTED2, doubtLockStateFor: doubtLockStateFor2 } = await Promise.resolve().then(() => (init_doubtStatus(), doubtStatus_exports));
-      const escalationClaim = await db.execute(sql41`
+      const escalationClaim = await db.execute(sql42`
         UPDATE conversations SET doubt_retry_status = ${DOUBT_ESCALATED2}
          WHERE id = ${conversationId} AND business_account_id = ${businessAccountId}
            AND doubt_retry_status = ${DOUBT_RETRY_ATTEMPTED2}
@@ -79071,16 +79601,16 @@ ${product.description}`;
       const normalizedEmail = email ? email.trim().toLowerCase() : null;
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1e3);
       const conditions = [
-        eq69(leads.businessAccountId, businessAccountId),
+        eq70(leads.businessAccountId, businessAccountId),
         gte12(leads.createdAt, twentyFourHoursAgo)
       ];
       let existingLead = null;
       if (normalizedPhone) {
-        const recentLeads = await db.select().from(leads).where(and59(...conditions, isNotNull6(leads.phone))).limit(50);
+        const recentLeads = await db.select().from(leads).where(and60(...conditions, isNotNull6(leads.phone))).limit(50);
         existingLead = recentLeads.find((l) => l.phone && l.phone.replace(/\D/g, "").slice(-10) === normalizedPhone) || null;
       }
       if (!existingLead && normalizedEmail) {
-        const [found] = await db.select().from(leads).where(and59(...conditions, sql41`LOWER(TRIM(${leads.email})) = ${normalizedEmail}`)).limit(1);
+        const [found] = await db.select().from(leads).where(and60(...conditions, sql42`LOWER(TRIM(${leads.email})) = ${normalizedEmail}`)).limit(1);
         existingLead = found || null;
       }
       let promotedLead = null;
@@ -79091,10 +79621,10 @@ ${product.description}`;
             leadsquaredSyncError: null,
             leadsquaredRetryCount: "0",
             leadsquaredNextRetryAt: null
-          }).where(and59(
-            eq69(leads.id, existingLead.id),
-            eq69(leads.businessAccountId, businessAccountId),
-            eq69(leads.leadsquaredSyncStatus, "disqualified")
+          }).where(and60(
+            eq70(leads.id, existingLead.id),
+            eq70(leads.businessAccountId, businessAccountId),
+            eq70(leads.leadsquaredSyncStatus, "disqualified")
           )).returning();
           if (promoted) {
             console.log("[Widget Lead Capture] Duplicate now qualifies, promoting existing lead:", promoted.id);
@@ -79471,10 +80001,10 @@ ${product.description}`;
       if (lockKey >= 1n << 63n) lockKey -= 1n << 64n;
       let conversationId = "";
       await db.transaction(async (tx) => {
-        await tx.execute(sql41`SELECT pg_advisory_xact_lock(${lockKey.toString()}::bigint)`);
+        await tx.execute(sql42`SELECT pg_advisory_xact_lock(${lockKey.toString()}::bigint)`);
         let voiceIsInternalTest = false;
         if (sessionToken) {
-          const existing = await tx.execute(sql41`
+          const existing = await tx.execute(sql42`
             SELECT c.id
               FROM conversations c
              WHERE c.business_account_id = ${businessAccountId}
@@ -79492,7 +80022,7 @@ ${product.description}`;
           }
         }
         if (!conversationId) {
-          const inserted = await tx.execute(sql41`
+          const inserted = await tx.execute(sql42`
             INSERT INTO conversations (business_account_id, title, visitor_city, visitor_token, is_internal_test, awaiting_verification)
             VALUES (${businessAccountId}, ${"Pending verification"}, ${null}, ${sessionToken || null}, ${"false"}, true)
             RETURNING id
@@ -79729,9 +80259,9 @@ ${product.description}`;
       if (lockKey >= 1n << 63n) lockKey -= 1n << 64n;
       let conversationId = "";
       await db.transaction(async (tx) => {
-        await tx.execute(sql41`SELECT pg_advisory_xact_lock(${lockKey.toString()}::bigint)`);
+        await tx.execute(sql42`SELECT pg_advisory_xact_lock(${lockKey.toString()}::bigint)`);
         if (sessionToken) {
-          const existing = await tx.execute(sql41`
+          const existing = await tx.execute(sql42`
             SELECT c.id
               FROM conversations c
              WHERE c.business_account_id = ${businessAccountId}
@@ -79748,7 +80278,7 @@ ${product.description}`;
           }
         }
         if (!conversationId) {
-          const inserted = await tx.execute(sql41`
+          const inserted = await tx.execute(sql42`
             INSERT INTO conversations (business_account_id, title, visitor_city, visitor_token, is_internal_test, awaiting_verification)
             VALUES (${businessAccountId}, ${"Pending verification"}, ${null}, ${sessionToken || null}, ${"false"}, true)
             RETURNING id
@@ -79871,10 +80401,10 @@ ${product.description}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(403).json({ error: "no_business_account" });
       const { messagingCredentials: messagingCredentials2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq74, and: and63 } = await import("drizzle-orm");
-      const rows = await db.select().from(messagingCredentials2).where(and63(
-        eq74(messagingCredentials2.businessAccountId, businessAccountId),
-        eq74(messagingCredentials2.provider, "msg91")
+      const { eq: eq75, and: and64 } = await import("drizzle-orm");
+      const rows = await db.select().from(messagingCredentials2).where(and64(
+        eq75(messagingCredentials2.businessAccountId, businessAccountId),
+        eq75(messagingCredentials2.provider, "msg91")
       )).limit(1);
       const row = rows[0];
       const envFallbackConfigured = !!(process.env.MSG91_AUTH_KEY && process.env.MSG91_SENDER_ID && process.env.MSG91_TEMPLATE_ID);
@@ -79939,7 +80469,7 @@ ${product.description}`;
       if (!businessAccountId) return res.status(403).json({ error: "no_business_account" });
       const { authKey, senderId, templateId, otpTemplateBody, whatsappOtpTemplateName, otpChannelPreference } = req.body || {};
       const { messagingCredentials: messagingCredentials2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq74, and: and63 } = await import("drizzle-orm");
+      const { eq: eq75, and: and64 } = await import("drizzle-orm");
       const { encrypt: encrypt3 } = await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports));
       if (senderId !== void 0 && senderId !== null && typeof senderId !== "string") {
         return res.status(400).json({ error: "senderId must be a string" });
@@ -79964,9 +80494,9 @@ ${product.description}`;
           return res.status(400).json({ error: "otpChannelPreference must be 'sms' | 'whatsapp' | 'both'" });
         }
       }
-      const existing = (await db.select().from(messagingCredentials2).where(and63(
-        eq74(messagingCredentials2.businessAccountId, businessAccountId),
-        eq74(messagingCredentials2.provider, "msg91")
+      const existing = (await db.select().from(messagingCredentials2).where(and64(
+        eq75(messagingCredentials2.businessAccountId, businessAccountId),
+        eq75(messagingCredentials2.provider, "msg91")
       )).limit(1))[0];
       const updates = { updatedAt: /* @__PURE__ */ new Date() };
       if (typeof senderId === "string") updates.msg91SenderId = senderId.trim() || null;
@@ -79978,7 +80508,7 @@ ${product.description}`;
         updates.msg91AuthKeyEncrypted = encrypt3(authKey.trim());
       }
       if (existing) {
-        await db.update(messagingCredentials2).set(updates).where(eq74(messagingCredentials2.id, existing.id));
+        await db.update(messagingCredentials2).set(updates).where(eq75(messagingCredentials2.id, existing.id));
       } else {
         await db.insert(messagingCredentials2).values({
           businessAccountId,
@@ -80341,8 +80871,8 @@ ${product.description}`;
         () => checkResumeRateLimit(clientIp, true)
       );
       if (result.status !== "failed" && result.text) {
-        const { randomUUID: randomUUID4 } = await import("crypto");
-        const resumeContextId = randomUUID4();
+        const { randomUUID: randomUUID5 } = await import("crypto");
+        const resumeContextId = randomUUID5();
         let resumeFileUrl;
         try {
           const { r2Storage: r2Storage2 } = await Promise.resolve().then(() => (init_r2StorageService(), r2StorageService_exports));
@@ -80452,8 +80982,8 @@ ${product.description}`;
         openaiApiKey || void 0
       );
       if (result.status === "success" && result.text) {
-        const { randomUUID: randomUUID4 } = await import("crypto");
-        const imageContextId = randomUUID4();
+        const { randomUUID: randomUUID5 } = await import("crypto");
+        const imageContextId = randomUUID5();
         imageTextCache.set(imageContextId, {
           text: result.text.substring(0, 8e3),
           businessAccountId,
@@ -80510,7 +81040,7 @@ ${product.description}`;
             if (!fs3.existsSync(correctDir)) {
               fs3.mkdirSync(correctDir, { recursive: true });
             }
-            const uniqueName = `${Date.now()}-${randomUUID4()}${path5.extname(req.file.originalname)}`;
+            const uniqueName = `${Date.now()}-${randomUUID5()}${path5.extname(req.file.originalname)}`;
             fs3.writeFileSync(path5.join(correctDir, uniqueName), req.file.buffer);
             imageUrl = `/uploads/business-photos/${businessAccountId}/${uniqueName}`;
           }
@@ -80577,7 +81107,7 @@ ${product.description}`;
           fs3.mkdirSync(correctDir, { recursive: true });
         }
         const timestamp2 = Date.now();
-        const uniqueName = `${timestamp2}-${randomUUID3()}${path5.extname(req.file.originalname)}`;
+        const uniqueName = `${timestamp2}-${randomUUID4()}${path5.extname(req.file.originalname)}`;
         const correctPath = path5.join(correctDir, uniqueName);
         fs3.writeFileSync(correctPath, req.file.buffer);
         imageUrl = `/uploads/business-photos/${businessAccountId}/${uniqueName}`;
@@ -80771,13 +81301,13 @@ If you cannot determine the category or the image doesn't match any category, re
               price: products.price,
               imageUrl: products.imageUrl,
               imageHash: products.imageHash,
-              distance: sql41`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`
+              distance: sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`
             }).from(products).where(
-              and59(
-                eq69(products.businessAccountId, businessAccountId),
-                sql41`${products.fullImageEmbedding} IS NOT NULL`
+              and60(
+                eq70(products.businessAccountId, businessAccountId),
+                sql42`${products.fullImageEmbedding} IS NOT NULL`
               )
-            ).orderBy(sql41`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`).limit(1);
+            ).orderBy(sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`).limit(1);
             if (exactMatchResults.length > 0) {
               const topMatch = exactMatchResults[0];
               const similarity = Math.max(0, 1 - topMatch.distance);
@@ -81024,7 +81554,7 @@ If you cannot determine the category or the image doesn't match any category, re
             descriptionEmbedding: productJewelryEmbeddings.descriptionEmbedding,
             jewelryType: productJewelryEmbeddings.jewelryType,
             attributes: productJewelryEmbeddings.attributes
-          }).from(productJewelryEmbeddings).where(sql41`${productJewelryEmbeddings.productId} = ANY(${productIds})`);
+          }).from(productJewelryEmbeddings).where(sql42`${productJewelryEmbeddings.productId} = ANY(${productIds})`);
           for (const row of descEmbeddingRows) {
             if (row.descriptionEmbedding && row.description) {
               productDescriptionEmbeddings.set(row.productId, {
@@ -81285,7 +81815,7 @@ If you cannot determine the category or the image doesn't match any category, re
           fs3.mkdirSync(correctDir, { recursive: true });
         }
         const timestamp2 = Date.now();
-        const uniqueName = `${timestamp2}-${randomUUID3()}${path5.extname(req.file.originalname)}`;
+        const uniqueName = `${timestamp2}-${randomUUID4()}${path5.extname(req.file.originalname)}`;
         const correctPath = path5.join(correctDir, uniqueName);
         fs3.writeFileSync(correctPath, req.file.buffer);
         const localUrl = `/uploads/business-photos/${businessAccountId}/${uniqueName}`;
@@ -81326,13 +81856,13 @@ If you cannot determine the category or the image doesn't match any category, re
           price: products.price,
           imageUrl: products.imageUrl,
           imageHash: products.imageHash,
-          distance: sql41`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`
+          distance: sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`
         }).from(products).where(
-          and59(
-            eq69(products.businessAccountId, businessAccountId),
-            sql41`${products.fullImageEmbedding} IS NOT NULL`
+          and60(
+            eq70(products.businessAccountId, businessAccountId),
+            sql42`${products.fullImageEmbedding} IS NOT NULL`
           )
-        ).orderBy(sql41`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`).limit(1);
+        ).orderBy(sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`).limit(1);
         if (exactMatchResults.length > 0) {
           const topMatch = exactMatchResults[0];
           const similarity = Math.max(0, 1 - topMatch.distance);
@@ -81636,13 +82166,13 @@ data: ${JSON.stringify({ message: error.message })}
           price: products.price,
           imageUrl: products.imageUrl,
           imageHash: products.imageHash,
-          distance: sql41`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`
+          distance: sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`
         }).from(products).where(
-          and59(
-            eq69(products.businessAccountId, businessAccountId),
-            sql41`${products.fullImageEmbedding} IS NOT NULL`
+          and60(
+            eq70(products.businessAccountId, businessAccountId),
+            sql42`${products.fullImageEmbedding} IS NOT NULL`
           )
-        ).orderBy(sql41`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`).limit(1);
+        ).orderBy(sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`).limit(1);
         if (exactMatchResults.length > 0) {
           const topMatch = exactMatchResults[0];
           const similarity = Math.max(0, 1 - topMatch.distance);
@@ -82026,9 +82556,9 @@ data: ${JSON.stringify({ message: error.message })}
               imageUrl: products.imageUrl,
               imageHash: products.imageHash
             }).from(products).where(
-              and59(
-                eq69(products.businessAccountId, businessAccountId),
-                sql41`${products.imageHash} IS NOT NULL`
+              and60(
+                eq70(products.businessAccountId, businessAccountId),
+                sql42`${products.imageHash} IS NOT NULL`
               )
             ).limit(100);
             for (const candidate of pHashCandidates) {
@@ -82065,13 +82595,13 @@ data: ${JSON.stringify({ message: error.message })}
             price: products.price,
             imageUrl: products.imageUrl,
             imageHash: products.imageHash,
-            distance: sql41`${products.fullImageEmbedding} <=> ${JSON.stringify(fullImageEmbeddingResult.embedding)}::vector`
+            distance: sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(fullImageEmbeddingResult.embedding)}::vector`
           }).from(products).where(
-            and59(
-              eq69(products.businessAccountId, businessAccountId),
-              sql41`${products.fullImageEmbedding} IS NOT NULL`
+            and60(
+              eq70(products.businessAccountId, businessAccountId),
+              sql42`${products.fullImageEmbedding} IS NOT NULL`
             )
-          ).orderBy(sql41`${products.fullImageEmbedding} <=> ${JSON.stringify(fullImageEmbeddingResult.embedding)}::vector`).limit(3);
+          ).orderBy(sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(fullImageEmbeddingResult.embedding)}::vector`).limit(3);
           if (exactMatchResults.length > 0) {
             for (const topMatch of exactMatchResults) {
               const similarity = Math.max(0, 1 - topMatch.distance);
@@ -82324,14 +82854,14 @@ data: ${JSON.stringify({ message: error.message })}
       }
       let jewelryTypeFilterConditions;
       if (compatibleTypes.length > 0 && detectedType) {
-        jewelryTypeFilterConditions = sql41`(LOWER(REPLACE(${productJewelryEmbeddings.jewelryType}, ' ', '-')) IN (${sql41.join(compatibleTypes.map((t) => sql41`${t}`), sql41`, `)}) OR LOWER(${productJewelryEmbeddings.jewelryType}) = 'others')`;
+        jewelryTypeFilterConditions = sql42`(LOWER(REPLACE(${productJewelryEmbeddings.jewelryType}, ' ', '-')) IN (${sql42.join(compatibleTypes.map((t) => sql42`${t}`), sql42`, `)}) OR LOWER(${productJewelryEmbeddings.jewelryType}) = 'others')`;
       } else {
         console.log("[Adjusted Boundary Search] No type detected, using broad search");
-        jewelryTypeFilterConditions = sql41`1=1`;
+        jewelryTypeFilterConditions = sql42`1=1`;
       }
-      const baseConditions = and59(
-        eq69(productJewelryEmbeddings.businessAccountId, businessAccountId),
-        sql41`${productJewelryEmbeddings.embedding} IS NOT NULL`,
+      const baseConditions = and60(
+        eq70(productJewelryEmbeddings.businessAccountId, businessAccountId),
+        sql42`${productJewelryEmbeddings.embedding} IS NOT NULL`,
         jewelryTypeFilterConditions
       );
       if (useVisionWarehouse && (!visionWarehouseCandidateIds || visionWarehouseCandidateIds.length === 0)) {
@@ -82344,7 +82874,7 @@ data: ${JSON.stringify({ message: error.message })}
           message: results2.length > 0 ? "Found exact match" : "No similar products found in Vision Warehouse"
         });
       }
-      const queryConditions = visionWarehouseCandidateIds && visionWarehouseCandidateIds.length > 0 ? and59(baseConditions, inArray13(products.id, visionWarehouseCandidateIds)) : baseConditions;
+      const queryConditions = visionWarehouseCandidateIds && visionWarehouseCandidateIds.length > 0 ? and60(baseConditions, inArray13(products.id, visionWarehouseCandidateIds)) : baseConditions;
       let candidateProducts = await db.select({
         id: products.id,
         name: products.name,
@@ -82352,8 +82882,8 @@ data: ${JSON.stringify({ message: error.message })}
         price: products.price,
         imageUrl: products.imageUrl,
         detectedJewelryType: productJewelryEmbeddings.jewelryType,
-        distance: sql41`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`
-      }).from(productJewelryEmbeddings).innerJoin(products, eq69(productJewelryEmbeddings.productId, products.id)).where(queryConditions).orderBy(sql41`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`).limit(30);
+        distance: sql42`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`
+      }).from(productJewelryEmbeddings).innerJoin(products, eq70(productJewelryEmbeddings.productId, products.id)).where(queryConditions).orderBy(sql42`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`).limit(30);
       if (visionWarehouseCandidateIds) {
         console.log(`[Adjusted Boundary Search] Vision Warehouse pre-filtered to ${visionWarehouseCandidateIds.length} candidates, found ${candidateProducts.length} with embeddings matching type filter`);
       } else {
@@ -82654,8 +83184,8 @@ data: ${JSON.stringify({ message: error.message })}
         price: products.price,
         imageUrl: products.imageUrl,
         detectedJewelryType: products.detectedJewelryType
-      }).from(products).where(and59(
-        eq69(products.businessAccountId, businessAccountId),
+      }).from(products).where(and60(
+        eq70(products.businessAccountId, businessAccountId),
         inArray13(products.id, productIds)
       ));
       const productMap = new Map(matchedProducts.map((p) => [p.id, p]));
@@ -82828,7 +83358,7 @@ data: ${JSON.stringify({ message: error.message })}
         }
       }
       if (Object.keys(updateData).length > 0) {
-        await db.update(businessAccounts).set(updateData).where(eq69(businessAccounts.id, businessAccountId));
+        await db.update(businessAccounts).set(updateData).where(eq70(businessAccounts.id, businessAccountId));
       }
       const account = await storage.getBusinessAccount(businessAccountId);
       res.json({
@@ -84408,21 +84938,21 @@ ${instruction}`
       }
       const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
-      const { eq: eq74, and: and63, desc: desc32 } = await import("drizzle-orm");
+      const { eq: eq75, and: and64, desc: desc32 } = await import("drizzle-orm");
       let orders = [];
       const value = identifierValue.trim();
       if (identifierType === "order_id") {
         const normalizedId = "#" + value.replace(/^#/, "").toUpperCase();
-        orders = await db2.select().from(demoOrders2).where(and63(eq74(demoOrders2.businessAccountId, businessAccountId), eq74(demoOrders2.orderId, normalizedId)));
+        orders = await db2.select().from(demoOrders2).where(and64(eq75(demoOrders2.businessAccountId, businessAccountId), eq75(demoOrders2.orderId, normalizedId)));
         if (orders.length === 0) {
           const altId = value.replace(/^#/, "").toUpperCase();
-          orders = await db2.select().from(demoOrders2).where(and63(eq74(demoOrders2.businessAccountId, businessAccountId), eq74(demoOrders2.orderId, altId)));
+          orders = await db2.select().from(demoOrders2).where(and64(eq75(demoOrders2.businessAccountId, businessAccountId), eq75(demoOrders2.orderId, altId)));
         }
       } else if (identifierType === "phone") {
-        const all = await db2.select().from(demoOrders2).where(eq74(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc32(demoOrders2.orderDate), desc32(demoOrders2.createdAt));
+        const all = await db2.select().from(demoOrders2).where(eq75(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc32(demoOrders2.orderDate), desc32(demoOrders2.createdAt));
         orders = all.filter((o) => (o.customerPhone || "").replace(/\D/g, "") === value.replace(/\D/g, "")).slice(0, 3);
       } else if (identifierType === "email") {
-        const all = await db2.select().from(demoOrders2).where(eq74(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc32(demoOrders2.orderDate), desc32(demoOrders2.createdAt));
+        const all = await db2.select().from(demoOrders2).where(eq75(demoOrders2.businessAccountId, businessAccountId)).orderBy(desc32(demoOrders2.orderDate), desc32(demoOrders2.createdAt));
         orders = all.filter((o) => (o.customerEmail || "").toLowerCase() === value.toLowerCase()).slice(0, 3);
       }
       const masked = value.length > 4 ? value.slice(0, 3) + "***" : "***";
@@ -84443,9 +84973,9 @@ ${instruction}`
         return res.status(403).json({ error: "Demo Orders module is not enabled for this account" });
       }
       const { demoOrders: demoOrders2, products: products3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const existing = await db.select({ orderId: demoOrders2.orderId }).from(demoOrders2).where(eq69(demoOrders2.businessAccountId, businessAccountId));
+      const existing = await db.select({ orderId: demoOrders2.orderId }).from(demoOrders2).where(eq70(demoOrders2.businessAccountId, businessAccountId));
       const existingIds = new Set(existing.map((o) => o.orderId));
-      const catalogueProducts = await db.select({ name: products3.name, description: products3.description, price: products3.price, imageUrl: products3.imageUrl }).from(products3).where(eq69(products3.businessAccountId, businessAccountId)).limit(10);
+      const catalogueProducts = await db.select({ name: products3.name, description: products3.description, price: products3.price, imageUrl: products3.imageUrl }).from(products3).where(eq70(products3.businessAccountId, businessAccountId)).limit(10);
       if (catalogueProducts.length === 0) {
         return res.status(422).json({ error: "No products found in your catalogue. Please add products first, then seed demo orders." });
       }
@@ -84495,7 +85025,7 @@ ${instruction}`
         return res.status(403).json({ error: "Demo Orders module is not enabled for this account" });
       }
       const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const orders = await db.select().from(demoOrders2).where(eq69(demoOrders2.businessAccountId, businessAccountId)).orderBy(demoOrders2.createdAt);
+      const orders = await db.select().from(demoOrders2).where(eq70(demoOrders2.businessAccountId, businessAccountId)).orderBy(demoOrders2.createdAt);
       res.json(orders);
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -84537,7 +85067,7 @@ ${instruction}`
       for (const field of ALLOWED_FIELDS) {
         if (field in req.body) safePayload[field] = req.body[field];
       }
-      const [order] = await db.update(demoOrders2).set({ ...safePayload, updatedAt: /* @__PURE__ */ new Date() }).where(and59(eq69(demoOrders2.id, req.params.id), eq69(demoOrders2.businessAccountId, businessAccountId))).returning();
+      const [order] = await db.update(demoOrders2).set({ ...safePayload, updatedAt: /* @__PURE__ */ new Date() }).where(and60(eq70(demoOrders2.id, req.params.id), eq70(demoOrders2.businessAccountId, businessAccountId))).returning();
       if (!order) return res.status(404).json({ error: "Order not found" });
       res.json(order);
     } catch (error) {
@@ -84555,8 +85085,8 @@ ${instruction}`
       }
       const { demoOrders: demoOrders2, products: products3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
       const { isNull: isNull15 } = await import("drizzle-orm");
-      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and59(eq69(demoOrders2.businessAccountId, businessAccountId), isNull15(demoOrders2.productImageUrl)));
-      const allProducts = await db.select({ name: products3.name, imageUrl: products3.imageUrl }).from(products3).where(eq69(products3.businessAccountId, businessAccountId));
+      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and60(eq70(demoOrders2.businessAccountId, businessAccountId), isNull15(demoOrders2.productImageUrl)));
+      const allProducts = await db.select({ name: products3.name, imageUrl: products3.imageUrl }).from(products3).where(eq70(products3.businessAccountId, businessAccountId));
       const imageByName = new Map(
         allProducts.filter((p) => p.imageUrl).map((p) => [p.name.toLowerCase(), p.imageUrl])
       );
@@ -84564,7 +85094,7 @@ ${instruction}`
       for (const order of allOrders) {
         const imgUrl = imageByName.get(order.productName.toLowerCase());
         if (imgUrl) {
-          await db.update(demoOrders2).set({ productImageUrl: imgUrl, updatedAt: /* @__PURE__ */ new Date() }).where(and59(eq69(demoOrders2.id, order.id), eq69(demoOrders2.businessAccountId, businessAccountId)));
+          await db.update(demoOrders2).set({ productImageUrl: imgUrl, updatedAt: /* @__PURE__ */ new Date() }).where(and60(eq70(demoOrders2.id, order.id), eq70(demoOrders2.businessAccountId, businessAccountId)));
           updated++;
         }
       }
@@ -84589,9 +85119,9 @@ ${instruction}`
         return res.status(400).json({ error: "ids must be a non-empty array" });
       }
       const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const deleted = await db.delete(demoOrders2).where(and59(
+      const deleted = await db.delete(demoOrders2).where(and60(
         inArray13(demoOrders2.id, ids),
-        eq69(demoOrders2.businessAccountId, businessAccountId)
+        eq70(demoOrders2.businessAccountId, businessAccountId)
       )).returning({ id: demoOrders2.id });
       res.json({ success: true, deleted: deleted.length });
     } catch (error) {
@@ -84608,7 +85138,7 @@ ${instruction}`
         return res.status(403).json({ error: "Demo Orders module is not enabled for this account" });
       }
       const { demoOrders: demoOrders2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      await db.delete(demoOrders2).where(and59(eq69(demoOrders2.id, req.params.id), eq69(demoOrders2.businessAccountId, businessAccountId)));
+      await db.delete(demoOrders2).where(and60(eq70(demoOrders2.id, req.params.id), eq70(demoOrders2.businessAccountId, businessAccountId)));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -84657,7 +85187,7 @@ ${instruction}`
       if (!name || !adminEmail || !adminPassword) {
         return res.status(400).json({ error: "Name, admin email, and password are required" });
       }
-      const existingUser = await db.select().from(users).where(eq69(users.username, adminEmail.toLowerCase())).limit(1);
+      const existingUser = await db.select().from(users).where(eq70(users.username, adminEmail.toLowerCase())).limit(1);
       if (existingUser.length > 0) {
         return res.status(400).json({ error: "An account with this email already exists" });
       }
@@ -84665,7 +85195,7 @@ ${instruction}`
       if (!sourceAccount) {
         return res.status(404).json({ error: "Source business account not found" });
       }
-      const newBusinessId = randomUUID3();
+      const newBusinessId = randomUUID4();
       const [newBusiness] = await db.insert(businessAccounts).values({
         id: newBusinessId,
         name: name.trim(),
@@ -84684,7 +85214,7 @@ ${instruction}`
         vistaImageProvider: sourceAccount.vistaImageProvider || "openai"
       }).returning();
       const hashedPwd = await bcrypt2.hash(adminPassword, 10);
-      const newUserId = randomUUID3();
+      const newUserId = randomUUID4();
       const tempPasswordExpiry = /* @__PURE__ */ new Date();
       tempPasswordExpiry.setDate(tempPasswordExpiry.getDate() + 30);
       await db.insert(users).values({
@@ -84697,12 +85227,12 @@ ${instruction}`
         tempPasswordExpiry
       });
       if (options?.copyWidgetSettings) {
-        const sourceWidgetSettings = await db.select().from(widgetSettings).where(eq69(widgetSettings.businessAccountId, sourceBusinessId)).limit(1);
+        const sourceWidgetSettings = await db.select().from(widgetSettings).where(eq70(widgetSettings.businessAccountId, sourceBusinessId)).limit(1);
         if (sourceWidgetSettings.length > 0) {
           const { id, businessAccountId, ...settingsData } = sourceWidgetSettings[0];
           await db.insert(widgetSettings).values({
             ...settingsData,
-            id: randomUUID3(),
+            id: randomUUID4(),
             businessAccountId: newBusinessId
           });
         }
@@ -84710,9 +85240,9 @@ ${instruction}`
       let categoryIdMap = {};
       let productIdMap = {};
       if (options?.copyProducts) {
-        const sourceCategories = await db.select().from(categories).where(eq69(categories.businessAccountId, sourceBusinessId));
+        const sourceCategories = await db.select().from(categories).where(eq70(categories.businessAccountId, sourceBusinessId));
         for (const cat of sourceCategories) {
-          const newCategoryId = randomUUID3();
+          const newCategoryId = randomUUID4();
           categoryIdMap[cat.id] = newCategoryId;
           await db.insert(categories).values({
             ...cat,
@@ -84720,9 +85250,9 @@ ${instruction}`
             businessAccountId: newBusinessId
           });
         }
-        const sourceProducts = await db.select().from(products).where(eq69(products.businessAccountId, sourceBusinessId));
+        const sourceProducts = await db.select().from(products).where(eq70(products.businessAccountId, sourceBusinessId));
         for (const product of sourceProducts) {
-          const newProductId = randomUUID3();
+          const newProductId = randomUUID4();
           productIdMap[product.id] = newProductId;
           const { id, businessAccountId, ...productData } = product;
           await db.insert(products).values({
@@ -84730,7 +85260,7 @@ ${instruction}`
             id: newProductId,
             businessAccountId: newBusinessId
           });
-          const sourceProductCategories = await db.select().from(productCategories).where(eq69(productCategories.productId, id));
+          const sourceProductCategories = await db.select().from(productCategories).where(eq70(productCategories.productId, id));
           for (const pc of sourceProductCategories) {
             const newCategoryId = categoryIdMap[pc.categoryId];
             if (newCategoryId) {
@@ -84741,7 +85271,7 @@ ${instruction}`
             }
           }
         }
-        const sourceEmbeddings = await db.select().from(productJewelryEmbeddings).where(eq69(productJewelryEmbeddings.businessAccountId, sourceBusinessId));
+        const sourceEmbeddings = await db.select().from(productJewelryEmbeddings).where(eq70(productJewelryEmbeddings.businessAccountId, sourceBusinessId));
         let embeddingsCopied = 0;
         for (const embedding of sourceEmbeddings) {
           const newProductId = productIdMap[embedding.productId];
@@ -84749,7 +85279,7 @@ ${instruction}`
             const { id, productId, businessAccountId, ...embeddingData } = embedding;
             await db.insert(productJewelryEmbeddings).values({
               ...embeddingData,
-              id: randomUUID3(),
+              id: randomUUID4(),
               productId: newProductId,
               businessAccountId: newBusinessId
             });
@@ -84761,56 +85291,56 @@ ${instruction}`
         }
       }
       if (options?.copyFaqs) {
-        const sourceFaqs = await db.select().from(faqs).where(eq69(faqs.businessAccountId, sourceBusinessId));
+        const sourceFaqs = await db.select().from(faqs).where(eq70(faqs.businessAccountId, sourceBusinessId));
         for (const faq of sourceFaqs) {
           const { id, businessAccountId, ...faqData } = faq;
           await db.insert(faqs).values({
             ...faqData,
-            id: randomUUID3(),
+            id: randomUUID4(),
             businessAccountId: newBusinessId
           });
         }
       }
       if (options?.copyTrainingDocuments) {
-        const sourceDocuments = await db.select().from(trainingDocuments).where(eq69(trainingDocuments.businessAccountId, sourceBusinessId));
+        const sourceDocuments = await db.select().from(trainingDocuments).where(eq70(trainingDocuments.businessAccountId, sourceBusinessId));
         for (const doc of sourceDocuments) {
           const { id, businessAccountId, ...docData } = doc;
           await db.insert(trainingDocuments).values({
             ...docData,
-            id: randomUUID3(),
+            id: randomUUID4(),
             businessAccountId: newBusinessId
           });
         }
       }
       if (options?.copyConversationJourneys) {
-        const sourceJourneys = await db.select().from(conversationJourneys).where(eq69(conversationJourneys.businessAccountId, sourceBusinessId));
+        const sourceJourneys = await db.select().from(conversationJourneys).where(eq70(conversationJourneys.businessAccountId, sourceBusinessId));
         for (const journey of sourceJourneys) {
           const oldJourneyId = journey.id;
-          const newJourneyId = randomUUID3();
+          const newJourneyId = randomUUID4();
           const { id, businessAccountId, ...journeyData } = journey;
           await db.insert(conversationJourneys).values({
             ...journeyData,
             id: newJourneyId,
             businessAccountId: newBusinessId
           });
-          const sourceSteps = await db.select().from(journeySteps).where(eq69(journeySteps.journeyId, oldJourneyId));
+          const sourceSteps = await db.select().from(journeySteps).where(eq70(journeySteps.journeyId, oldJourneyId));
           for (const step of sourceSteps) {
             const { id: stepId, journeyId, ...stepData } = step;
             await db.insert(journeySteps).values({
               ...stepData,
-              id: randomUUID3(),
+              id: randomUUID4(),
               journeyId: newJourneyId
             });
           }
         }
       }
       if (options?.copyScheduleTemplates) {
-        const sourceTemplates = await db.select().from(scheduleTemplates).where(eq69(scheduleTemplates.businessAccountId, sourceBusinessId));
+        const sourceTemplates = await db.select().from(scheduleTemplates).where(eq70(scheduleTemplates.businessAccountId, sourceBusinessId));
         for (const template of sourceTemplates) {
           const { id, businessAccountId, ...templateData } = template;
           await db.insert(scheduleTemplates).values({
             ...templateData,
-            id: randomUUID3(),
+            id: randomUUID4(),
             businessAccountId: newBusinessId
           });
         }
@@ -85083,7 +85613,7 @@ ${instruction}`
         }
       }
       if (Object.keys(updateData).length > 0) {
-        await db.update(businessAccounts).set(updateData).where(eq69(businessAccounts.id, id));
+        await db.update(businessAccounts).set(updateData).where(eq70(businessAccounts.id, id));
       }
       const updatedAccount = await storage.getBusinessAccount(id);
       res.json({
@@ -85146,7 +85676,7 @@ ${instruction}`
       if (!account) {
         return res.status(404).json({ error: "Business account not found" });
       }
-      await db.update(businessAccounts).set({ visualSearchModel: model }).where(eq69(businessAccounts.id, id));
+      await db.update(businessAccounts).set({ visualSearchModel: model }).where(eq70(businessAccounts.id, id));
       res.json({ success: true, model });
     } catch (error) {
       console.error("[SuperAdmin Visual Search Model] Error updating:", error);
@@ -85170,7 +85700,7 @@ ${instruction}`
       if (corpusId?.trim()) {
         updateData.visualSearchModel = "google_vision_warehouse";
       }
-      await db.update(businessAccounts).set(updateData).where(eq69(businessAccounts.id, id));
+      await db.update(businessAccounts).set(updateData).where(eq70(businessAccounts.id, id));
       const widgetSettingsData = {
         googleVisionWarehouseCorpusId: corpusId?.trim() || null,
         googleVisionWarehouseIndexId: indexId?.trim() || null,
@@ -85216,7 +85746,7 @@ ${instruction}`
       }
       const { encrypt: encrypt3 } = await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports));
       const encryptedCredentials = encrypt3(JSON.stringify(parsedCredentials));
-      await db.update(businessAccounts).set({ googleVisionWarehouseCredentials: encryptedCredentials }).where(eq69(businessAccounts.id, id));
+      await db.update(businessAccounts).set({ googleVisionWarehouseCredentials: encryptedCredentials }).where(eq70(businessAccounts.id, id));
       res.json({
         success: true,
         projectId: parsedCredentials.project_id,
@@ -85403,7 +85933,7 @@ ${instruction}`
       if (productSetId?.trim()) {
         updateData.visualSearchModel = "google_product_search";
       }
-      await db.update(businessAccounts).set(updateData).where(eq69(businessAccounts.id, id));
+      await db.update(businessAccounts).set(updateData).where(eq70(businessAccounts.id, id));
       const updatedAccount = await storage.getBusinessAccount(id);
       res.json({
         projectId: updatedAccount?.googleProductSearchProjectId || "",
@@ -85441,7 +85971,7 @@ ${instruction}`
       await db.update(businessAccounts).set({
         googleProductSearchCredentials: encryptedCredentials,
         googleProductSearchProjectId: parsedCredentials.project_id
-      }).where(eq69(businessAccounts.id, id));
+      }).where(eq70(businessAccounts.id, id));
       res.json({
         success: true,
         projectId: parsedCredentials.project_id,
@@ -85527,7 +86057,7 @@ ${instruction}`
       );
       if (result.success) {
         const newProductSetId = result.name?.split("/").pop() || productSetId;
-        await db.update(businessAccounts).set({ googleProductSearchProductSetId: newProductSetId }).where(eq69(businessAccounts.id, id));
+        await db.update(businessAccounts).set({ googleProductSearchProductSetId: newProductSetId }).where(eq70(businessAccounts.id, id));
         res.json({
           success: true,
           productSetId: newProductSetId,
@@ -85555,8 +86085,8 @@ ${instruction}`
         return res.status(400).json({ error: "Product Search not fully configured" });
       }
       const allProducts = await db.select().from(products).where(
-        and59(
-          eq69(products.businessAccountId, id),
+        and60(
+          eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl)
         )
       );
@@ -85565,7 +86095,7 @@ ${instruction}`
         productSearchSyncProgress: "0",
         productSearchSyncTotal: String(allProducts.length),
         productSearchSyncError: null
-      }).where(eq69(businessAccounts.id, id));
+      }).where(eq70(businessAccounts.id, id));
       res.json({
         success: true,
         message: `Starting sync of ${allProducts.length} products`,
@@ -85613,7 +86143,7 @@ ${instruction}`
             await db.update(products).set({
               productSearchProductId: createResult.name,
               productSearchSyncedAt: /* @__PURE__ */ new Date()
-            }).where(eq69(products.id, product.id));
+            }).where(eq70(products.id, product.id));
             successCount++;
           } else {
             console.error(`[ProductSearch Sync] Failed to create product ${product.id}:`, createResult.error);
@@ -85623,20 +86153,20 @@ ${instruction}`
           console.error(`[ProductSearch Sync] Error syncing product ${product.id}:`, error.message);
           errorCount++;
         }
-        await db.update(businessAccounts).set({ productSearchSyncProgress: String(i + 1) }).where(eq69(businessAccounts.id, id));
+        await db.update(businessAccounts).set({ productSearchSyncProgress: String(i + 1) }).where(eq70(businessAccounts.id, id));
       }
       await db.update(businessAccounts).set({
         productSearchSyncPhase: errorCount > 0 && successCount === 0 ? "failed" : "completed",
         productSearchSyncError: errorCount > 0 ? `${errorCount} products failed to sync` : null,
         productSearchLastSyncedAt: /* @__PURE__ */ new Date()
-      }).where(eq69(businessAccounts.id, id));
+      }).where(eq70(businessAccounts.id, id));
       console.log(`[ProductSearch Sync] Completed for ${account.name}: ${successCount} success, ${errorCount} failed`);
     } catch (error) {
       console.error("[ProductSearch Sync] Error:", error);
       await db.update(businessAccounts).set({
         productSearchSyncPhase: "failed",
         productSearchSyncError: error.message
-      }).where(eq69(businessAccounts.id, req.params.id));
+      }).where(eq70(businessAccounts.id, req.params.id));
     }
   });
   app2.get("/api/business-accounts/:id/product-search-sync-status", requireAuth, requireRole("super_admin"), async (req, res) => {
@@ -85646,15 +86176,15 @@ ${instruction}`
       if (!account) {
         return res.status(404).json({ error: "Business account not found" });
       }
-      const totalProducts = await db.select({ count: sql41`count(*)::int` }).from(products).where(
-        and59(
-          eq69(products.businessAccountId, id),
+      const totalProducts = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+        and60(
+          eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl)
         )
       );
-      const syncedProducts = await db.select({ count: sql41`count(*)::int` }).from(products).where(
-        and59(
-          eq69(products.businessAccountId, id),
+      const syncedProducts = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+        and60(
+          eq70(products.businessAccountId, id),
           isNotNull6(products.productSearchProductId)
         )
       );
@@ -85679,36 +86209,36 @@ ${instruction}`
       if (!businessAccount) {
         return res.status(404).json({ error: "Business account not found" });
       }
-      const productsWithImages = await db.select({ count: sql41`count(*)::int` }).from(products).where(
-        and59(
-          eq69(products.businessAccountId, id),
+      const productsWithImages = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+        and60(
+          eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl)
         )
       );
-      const productsWithEmbeddings = await db.select({ count: sql41`count(*)::int` }).from(products).where(
-        and59(
-          eq69(products.businessAccountId, id),
+      const productsWithEmbeddings = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+        and60(
+          eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl),
           isNotNull6(products.imageEmbedding)
         )
       );
-      const productsWithFullEmbeddings = await db.select({ count: sql41`count(*)::int` }).from(products).where(
-        and59(
-          eq69(products.businessAccountId, id),
+      const productsWithFullEmbeddings = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+        and60(
+          eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl),
           isNotNull6(products.fullImageEmbedding)
         )
       );
-      const productsWithAttributes = await db.select({ count: sql41`count(*)::int` }).from(productJewelryEmbeddings).where(
-        and59(
-          eq69(productJewelryEmbeddings.businessAccountId, id),
+      const productsWithAttributes = await db.select({ count: sql42`count(*)::int` }).from(productJewelryEmbeddings).where(
+        and60(
+          eq70(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.attributes),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl)
         )
       );
-      const jewelryEmbeddingsCount = await db.select({ count: sql41`count(*)::int` }).from(productJewelryEmbeddings).where(
-        and59(
-          eq69(productJewelryEmbeddings.businessAccountId, id),
+      const jewelryEmbeddingsCount = await db.select({ count: sql42`count(*)::int` }).from(productJewelryEmbeddings).where(
+        and60(
+          eq70(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl)
         )
       );
@@ -85774,10 +86304,10 @@ ${instruction}`
         croppedImageUrl: productJewelryEmbeddings.croppedImageUrl,
         jewelryType: productJewelryEmbeddings.jewelryType
       }).from(productJewelryEmbeddings).where(
-        and59(
-          eq69(productJewelryEmbeddings.businessAccountId, id),
+        and60(
+          eq70(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl),
-          sql41`${productJewelryEmbeddings.attributes} IS NULL`
+          sql42`${productJewelryEmbeddings.attributes} IS NULL`
         )
       ).limit(50);
       if (productsNeedingAttributes.length === 0) {
@@ -85805,7 +86335,7 @@ ${instruction}`
               attributes: result.attributes,
               description: result.description || null,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq69(productJewelryEmbeddings.id, item.id));
+            }).where(eq70(productJewelryEmbeddings.id, item.id));
             processed++;
             console.log(`[SuperAdmin] Generated attributes for product ${item.productId}: ${result.type || item.jewelryType}`);
           } else {
@@ -85817,11 +86347,11 @@ ${instruction}`
           console.error(`[SuperAdmin] Error processing ${item.productId}:`, itemError.message);
         }
       }
-      const remainingCount = await db.select({ count: sql41`count(*)::int` }).from(productJewelryEmbeddings).where(
-        and59(
-          eq69(productJewelryEmbeddings.businessAccountId, id),
+      const remainingCount = await db.select({ count: sql42`count(*)::int` }).from(productJewelryEmbeddings).where(
+        and60(
+          eq70(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl),
-          sql41`${productJewelryEmbeddings.attributes} IS NULL`
+          sql42`${productJewelryEmbeddings.attributes} IS NULL`
         )
       );
       const remaining = remainingCount[0]?.count || 0;
@@ -85845,23 +86375,23 @@ ${instruction}`
       if (!businessAccount) {
         return res.status(404).json({ error: "Business account not found" });
       }
-      const productsWithImages = await db.select({ count: sql41`count(*)::int` }).from(products).where(
-        and59(
-          eq69(products.businessAccountId, id),
+      const productsWithImages = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+        and60(
+          eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl)
         )
       );
-      const productsWithCroppedImages = await db.select({ count: sql41`count(*)::int` }).from(products).where(
-        and59(
-          eq69(products.businessAccountId, id),
+      const productsWithCroppedImages = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+        and60(
+          eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl),
           isNotNull6(products.croppedJewelryUrl)
         )
       );
       const productsWithMultipleEmbeddings = await db.select({
         productId: productJewelryEmbeddings.productId,
-        count: sql41`count(*)::int`
-      }).from(productJewelryEmbeddings).where(eq69(productJewelryEmbeddings.businessAccountId, id)).groupBy(productJewelryEmbeddings.productId);
+        count: sql42`count(*)::int`
+      }).from(productJewelryEmbeddings).where(eq70(productJewelryEmbeddings.businessAccountId, id)).groupBy(productJewelryEmbeddings.productId);
       const multiItemProducts = productsWithMultipleEmbeddings.filter((p) => p.count > 1);
       const productsWithMultiItemEmbeddingsCount = multiItemProducts.length;
       const totalMultiItemEmbeddingsCount = multiItemProducts.reduce((sum, p) => sum + (p.count - 1), 0);
@@ -85901,7 +86431,7 @@ ${instruction}`
       const { productImageEmbeddingService: productImageEmbeddingService2 } = await Promise.resolve().then(() => (init_productImageEmbeddingService(), productImageEmbeddingService_exports));
       if (reprocessAll) {
         console.log(`[SuperAdmin] Clearing all embeddings for business: ${businessAccount.name}`);
-        await db.delete(productJewelryEmbeddings).where(eq69(productJewelryEmbeddings.businessAccountId, id));
+        await db.delete(productJewelryEmbeddings).where(eq70(productJewelryEmbeddings.businessAccountId, id));
         await db.update(products).set({
           imageEmbedding: null,
           fullImageEmbedding: null,
@@ -85910,11 +86440,11 @@ ${instruction}`
           croppedJewelryUrl: null,
           detectedJewelryType: null,
           visualDescription: null
-        }).where(eq69(products.businessAccountId, id));
+        }).where(eq70(products.businessAccountId, id));
         console.log(`[SuperAdmin] Cleared all embeddings for business: ${businessAccount.name}`);
       }
-      const totalProducts = await db.select({ count: sql41`count(*)` }).from(products).where(and59(
-        eq69(products.businessAccountId, id),
+      const totalProducts = await db.select({ count: sql42`count(*)` }).from(products).where(and60(
+        eq70(products.businessAccountId, id),
         isNotNull6(products.imageUrl)
       ));
       activeProcessingJobs.set(id, {
@@ -86391,7 +86921,7 @@ ${instruction}`
       if (name !== void 0 && name.trim()) {
         updateData.name = name.trim();
       }
-      await db.update(accountGroups).set(updateData).where(eq69(accountGroups.id, groupId));
+      await db.update(accountGroups).set(updateData).where(eq70(accountGroups.id, groupId));
       const updatedGroup = await storage.getAccountGroup(groupId);
       const members = await storage.getGroupMembers(groupId);
       res.json({
@@ -86500,14 +87030,14 @@ ${instruction}`
       if (targetMember.isPrimary === "true") {
         return res.status(400).json({ error: "Account is already the primary account" });
       }
-      await db.update(accountGroupMembers).set({ isPrimary: "false" }).where(eq69(accountGroupMembers.groupId, groupId));
-      await db.update(accountGroupMembers).set({ isPrimary: "true" }).where(eq69(accountGroupMembers.businessAccountId, businessAccountId));
+      await db.update(accountGroupMembers).set({ isPrimary: "false" }).where(eq70(accountGroupMembers.groupId, groupId));
+      await db.update(accountGroupMembers).set({ isPrimary: "true" }).where(eq70(accountGroupMembers.businessAccountId, businessAccountId));
       const newOwnerUser = await storage.getUserByBusinessAccountId(businessAccountId);
       if (newOwnerUser) {
         await db.update(accountGroups).set({
           ownerUserId: newOwnerUser.id,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq69(accountGroups.id, groupId));
+        }).where(eq70(accountGroups.id, groupId));
       }
       const updatedGroup = await storage.getAccountGroup(groupId);
       const updatedMembers = await storage.getGroupMembers(groupId);
@@ -86675,7 +87205,7 @@ ${instruction}`
         assignedAt: accountGroupAdmins.createdAt,
         userCreatedAt: users.createdAt,
         lastLoginAt: users.lastLoginAt
-      }).from(accountGroupAdmins).innerJoin(users, eq69(accountGroupAdmins.userId, users.id)).where(eq69(accountGroupAdmins.groupId, groupId));
+      }).from(accountGroupAdmins).innerJoin(users, eq70(accountGroupAdmins.userId, users.id)).where(eq70(accountGroupAdmins.groupId, groupId));
       res.json({
         admins: admins.map((a) => ({
           userId: a.userId,
@@ -86699,7 +87229,7 @@ ${instruction}`
       const adminUsers = await db.select({
         id: users.id,
         username: users.username
-      }).from(users).where(eq69(users.role, "account_group_admin"));
+      }).from(users).where(eq70(users.role, "account_group_admin"));
       res.json({ users: adminUsers });
     } catch (error) {
       console.error("[SuperAdmin Group Admins] Error listing users:", error);
@@ -86717,16 +87247,16 @@ ${instruction}`
       if (!group) {
         return res.status(404).json({ error: "Account group not found" });
       }
-      const [user] = await db.select().from(users).where(eq69(users.id, userId));
+      const [user] = await db.select().from(users).where(eq70(users.id, userId));
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
       if (user.role !== "account_group_admin") {
         return res.status(400).json({ error: "User must have account_group_admin role" });
       }
-      const [existing] = await db.select().from(accountGroupAdmins).where(and59(
-        eq69(accountGroupAdmins.groupId, groupId),
-        eq69(accountGroupAdmins.userId, userId)
+      const [existing] = await db.select().from(accountGroupAdmins).where(and60(
+        eq70(accountGroupAdmins.groupId, groupId),
+        eq70(accountGroupAdmins.userId, userId)
       ));
       if (existing) {
         return res.status(400).json({ error: "User is already an admin of this group" });
@@ -86749,9 +87279,9 @@ ${instruction}`
     try {
       const { groupId, userId } = req.params;
       const { canViewConversations, canViewLeads, canViewAnalytics, canExportData } = req.body;
-      const [existing] = await db.select().from(accountGroupAdmins).where(and59(
-        eq69(accountGroupAdmins.groupId, groupId),
-        eq69(accountGroupAdmins.userId, userId)
+      const [existing] = await db.select().from(accountGroupAdmins).where(and60(
+        eq70(accountGroupAdmins.groupId, groupId),
+        eq70(accountGroupAdmins.userId, userId)
       ));
       if (!existing) {
         return res.status(404).json({ error: "Group admin assignment not found" });
@@ -86761,9 +87291,9 @@ ${instruction}`
         canViewLeads: canViewLeads ? "true" : "false",
         canViewAnalytics: canViewAnalytics ? "true" : "false",
         canExportData: canExportData ? "true" : "false"
-      }).where(and59(
-        eq69(accountGroupAdmins.groupId, groupId),
-        eq69(accountGroupAdmins.userId, userId)
+      }).where(and60(
+        eq70(accountGroupAdmins.groupId, groupId),
+        eq70(accountGroupAdmins.userId, userId)
       ));
       res.json({ success: true, message: "Group admin permissions updated" });
     } catch (error) {
@@ -86774,16 +87304,16 @@ ${instruction}`
   app2.delete("/api/super-admin/account-groups/:groupId/admins/:userId", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const { groupId, userId } = req.params;
-      const [existing] = await db.select().from(accountGroupAdmins).where(and59(
-        eq69(accountGroupAdmins.groupId, groupId),
-        eq69(accountGroupAdmins.userId, userId)
+      const [existing] = await db.select().from(accountGroupAdmins).where(and60(
+        eq70(accountGroupAdmins.groupId, groupId),
+        eq70(accountGroupAdmins.userId, userId)
       ));
       if (!existing) {
         return res.status(404).json({ error: "Group admin assignment not found" });
       }
-      await db.delete(accountGroupAdmins).where(and59(
-        eq69(accountGroupAdmins.groupId, groupId),
-        eq69(accountGroupAdmins.userId, userId)
+      await db.delete(accountGroupAdmins).where(and60(
+        eq70(accountGroupAdmins.groupId, groupId),
+        eq70(accountGroupAdmins.userId, userId)
       ));
       res.json({ success: true, message: "Group admin removed" });
     } catch (error) {
@@ -87442,9 +87972,9 @@ ${instruction}`
       if (!newPassword || newPassword.length < 6) {
         return res.status(400).json({ error: "Password must be at least 6 characters" });
       }
-      const [user] = await db.select().from(users).where(and59(
-        eq69(users.id, userId),
-        eq69(users.role, "account_group_admin")
+      const [user] = await db.select().from(users).where(and60(
+        eq70(users.id, userId),
+        eq70(users.role, "account_group_admin")
       ));
       if (!user) {
         return res.status(404).json({ error: "Group admin user not found" });
@@ -87455,7 +87985,7 @@ ${instruction}`
         tempPassword: null,
         tempPasswordExpiry: null,
         mustChangePassword: "true"
-      }).where(eq69(users.id, userId));
+      }).where(eq70(users.id, userId));
       res.json({
         success: true,
         message: "Password reset successfully",
@@ -87700,15 +88230,15 @@ ${instruction}`
       if (accountIds.length === 0) {
         return res.json({ journeyName: null, completed: false, responses: [] });
       }
-      const { eq: eq74, and: and63, inArray: inArray15 } = await import("drizzle-orm");
+      const { eq: eq75, and: and64, inArray: inArray15 } = await import("drizzle-orm");
       const { journeySessions: journeySessions2, journeyResponses: journeyResponses2, journeySteps: journeySteps2, conversationJourneys: conversationJourneys3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
       const sessions2 = await db.select({
         sessionId: journeySessions2.id,
         journeyId: journeySessions2.journeyId,
         journeyName: conversationJourneys3.name,
         completed: journeySessions2.completed
-      }).from(journeySessions2).leftJoin(conversationJourneys3, eq74(journeySessions2.journeyId, conversationJourneys3.id)).where(and63(
-        eq74(journeySessions2.conversationId, conversationId),
+      }).from(journeySessions2).leftJoin(conversationJourneys3, eq75(journeySessions2.journeyId, conversationJourneys3.id)).where(and64(
+        eq75(journeySessions2.conversationId, conversationId),
         inArray15(journeySessions2.businessAccountId, accountIds)
       ));
       if (sessions2.length === 0) {
@@ -87719,7 +88249,7 @@ ${instruction}`
         response: journeyResponses2.response,
         questionText: journeySteps2.questionText,
         stepOrder: journeySteps2.stepOrder
-      }).from(journeyResponses2).leftJoin(journeySteps2, eq74(journeyResponses2.stepId, journeySteps2.id)).where(eq74(journeyResponses2.sessionId, session.sessionId)).orderBy(journeySteps2.stepOrder);
+      }).from(journeyResponses2).leftJoin(journeySteps2, eq75(journeyResponses2.stepId, journeySteps2.id)).where(eq75(journeyResponses2.sessionId, session.sessionId)).orderBy(journeySteps2.stepOrder);
       res.json({
         journeyName: session.journeyName || "Unknown Journey",
         completed: session.completed === "true",
@@ -87748,10 +88278,10 @@ ${instruction}`
       if (accountIds.length === 0) {
         return res.json({ journeyName: null, completed: false, responses: [] });
       }
-      const { eq: eq74, and: and63, inArray: inArray15, desc: descOrder, like } = await import("drizzle-orm");
+      const { eq: eq75, and: and64, inArray: inArray15, desc: descOrder, like } = await import("drizzle-orm");
       const { leads: leadsTable, journeySessions: journeySessions2, journeyResponses: journeyResponses2, journeySteps: journeySteps2, conversationJourneys: conversationJourneys3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const [lead] = await db.select().from(leadsTable).where(and63(
-        eq74(leadsTable.id, leadId),
+      const [lead] = await db.select().from(leadsTable).where(and64(
+        eq75(leadsTable.id, leadId),
         inArray15(leadsTable.businessAccountId, accountIds)
       ));
       if (!lead) {
@@ -87763,8 +88293,8 @@ ${instruction}`
           sessionId: journeySessions2.id,
           journeyName: conversationJourneys3.name,
           completed: journeySessions2.completed
-        }).from(journeySessions2).leftJoin(conversationJourneys3, eq74(journeySessions2.journeyId, conversationJourneys3.id)).where(and63(
-          eq74(journeySessions2.conversationId, lead.conversationId),
+        }).from(journeySessions2).leftJoin(conversationJourneys3, eq75(journeySessions2.journeyId, conversationJourneys3.id)).where(and64(
+          eq75(journeySessions2.conversationId, lead.conversationId),
           inArray15(journeySessions2.businessAccountId, accountIds)
         )).orderBy(descOrder(journeySessions2.createdAt)).limit(1);
         if (sessions2.length > 0) {
@@ -87776,8 +88306,8 @@ ${instruction}`
           sessionId: journeySessions2.id,
           journeyName: conversationJourneys3.name,
           completed: journeySessions2.completed
-        }).from(journeyResponses2).innerJoin(journeySessions2, eq74(journeyResponses2.sessionId, journeySessions2.id)).leftJoin(conversationJourneys3, eq74(journeySessions2.journeyId, conversationJourneys3.id)).where(and63(
-          eq74(journeyResponses2.response, lead.phone),
+        }).from(journeyResponses2).innerJoin(journeySessions2, eq75(journeyResponses2.sessionId, journeySessions2.id)).leftJoin(conversationJourneys3, eq75(journeySessions2.journeyId, conversationJourneys3.id)).where(and64(
+          eq75(journeyResponses2.response, lead.phone),
           inArray15(journeySessions2.businessAccountId, accountIds)
         )).orderBy(descOrder(journeySessions2.createdAt)).limit(1);
         if (phoneMatches.length > 0) {
@@ -87791,7 +88321,7 @@ ${instruction}`
         response: journeyResponses2.response,
         questionText: journeySteps2.questionText,
         stepOrder: journeySteps2.stepOrder
-      }).from(journeyResponses2).leftJoin(journeySteps2, eq74(journeyResponses2.stepId, journeySteps2.id)).where(eq74(journeyResponses2.sessionId, session.sessionId)).orderBy(journeySteps2.stepOrder);
+      }).from(journeyResponses2).leftJoin(journeySteps2, eq75(journeyResponses2.stepId, journeySteps2.id)).where(eq75(journeyResponses2.sessionId, session.sessionId)).orderBy(journeySteps2.stepOrder);
       res.json({
         journeyName: session.journeyName || "Unknown Journey",
         completed: session.completed === "true",
@@ -87883,15 +88413,15 @@ ${instruction}`
       const dateToStr = req.query.toDate;
       const dateFrom = dateFromStr ? new Date(dateFromStr) : void 0;
       const dateTo = dateToStr ? new Date(dateToStr) : void 0;
-      const leadDateConds = [eq69(leads.businessAccountId, businessAccountId)];
+      const leadDateConds = [eq70(leads.businessAccountId, businessAccountId)];
       if (dateFrom) leadDateConds.push(gte12(leads.createdAt, dateFrom));
       if (dateTo) leadDateConds.push(lte5(leads.createdAt, dateTo));
-      const convDateConds = [eq69(conversations.businessAccountId, businessAccountId)];
+      const convDateConds = [eq70(conversations.businessAccountId, businessAccountId)];
       if (dateFrom) convDateConds.push(gte12(conversations.createdAt, dateFrom));
       if (dateTo) convDateConds.push(lte5(conversations.createdAt, dateTo));
-      const allJourneyRows = await db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(eq69(journeySessions.businessAccountId, businessAccountId));
+      const allJourneyRows = await db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(eq70(journeySessions.businessAccountId, businessAccountId));
       const journeyConvIdSet = new Set(allJourneyRows.map((r) => r.conversationId));
-      const allConvIds = await db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and59(...convDateConds));
+      const allConvIds = await db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and60(...convDateConds));
       const acctLeadsRaw = await db.select({
         id: leads.id,
         conversationId: leads.conversationId,
@@ -87899,7 +88429,7 @@ ${instruction}`
         sourceUrl: leads.sourceUrl,
         email: leads.email,
         phone: leads.phone
-      }).from(leads).where(and59(...leadDateConds));
+      }).from(leads).where(and60(...leadDateConds));
       const formConvPhoneMap = /* @__PURE__ */ new Map();
       for (const l of acctLeadsRaw) {
         if (l.phone && l.conversationId && (l.topicsOfInterest || []).includes("Via Form")) {
@@ -88008,18 +88538,18 @@ ${instruction}`
       const journeyDateConds = [inArray13(journeySessions.businessAccountId, accountIds)];
       if (dateFrom) journeyDateConds.push(gte12(journeySessions.createdAt, dateFrom));
       if (dateTo) journeyDateConds.push(lte5(journeySessions.createdAt, dateTo));
-      const journeyInRange = await db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and59(...journeyDateConds));
+      const journeyInRange = await db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and60(...journeyDateConds));
       const journeyStarted = new Set(journeyInRange.map((r) => r.conversationId)).size;
       const allJourneyRows = await db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(inArray13(journeySessions.businessAccountId, accountIds));
       const journeyConvIdSet = new Set(allJourneyRows.map((r) => r.conversationId));
-      const allConvIds = await db.select({ id: conversations.id, visitorToken: conversations.visitorToken, businessAccountId: conversations.businessAccountId }).from(conversations).where(and59(...convDateConds));
+      const allConvIds = await db.select({ id: conversations.id, visitorToken: conversations.visitorToken, businessAccountId: conversations.businessAccountId }).from(conversations).where(and60(...convDateConds));
       const allLeadsRaw = await db.select({
         id: leads.id,
         conversationId: leads.conversationId,
         topicsOfInterest: leads.topicsOfInterest,
         phone: leads.phone,
         businessAccountId: leads.businessAccountId
-      }).from(leads).where(and59(...leadDateConds));
+      }).from(leads).where(and60(...leadDateConds));
       const formLeadConvIds = new Set(
         allLeadsRaw.filter((l) => (l.topicsOfInterest || []).includes("Via Form") && l.conversationId).map((l) => l.conversationId)
       );
@@ -88068,22 +88598,22 @@ ${instruction}`
       const totalConversations = journeyConvs + formConvs + chatConvs;
       const accountBreakdown = [];
       for (const accountId of accountIds) {
-        const [acct] = await db.select({ name: businessAccounts.name }).from(businessAccounts).where(eq69(businessAccounts.id, accountId));
+        const [acct] = await db.select({ name: businessAccounts.name }).from(businessAccounts).where(eq70(businessAccounts.id, accountId));
         if (!acct) continue;
-        const acctLeadConds = [eq69(leads.businessAccountId, accountId)];
+        const acctLeadConds = [eq70(leads.businessAccountId, accountId)];
         if (dateFrom) acctLeadConds.push(gte12(leads.createdAt, dateFrom));
         if (dateTo) acctLeadConds.push(lte5(leads.createdAt, dateTo));
-        const acctConvConds = [eq69(conversations.businessAccountId, accountId)];
+        const acctConvConds = [eq70(conversations.businessAccountId, accountId)];
         if (dateFrom) acctConvConds.push(gte12(conversations.createdAt, dateFrom));
         if (dateTo) acctConvConds.push(lte5(conversations.createdAt, dateTo));
-        const acctJourneyConds = [eq69(journeySessions.businessAccountId, accountId)];
+        const acctJourneyConds = [eq70(journeySessions.businessAccountId, accountId)];
         if (dateFrom) acctJourneyConds.push(gte12(journeySessions.createdAt, dateFrom));
         if (dateTo) acctJourneyConds.push(lte5(journeySessions.createdAt, dateTo));
         const [acctLeadsRaw, acctConvIds, acctJourneyInRange, acctAllJourney] = await Promise.all([
-          db.select({ id: leads.id, conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest, sourceUrl: leads.sourceUrl, email: leads.email, phone: leads.phone }).from(leads).where(and59(...acctLeadConds)),
-          db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and59(...acctConvConds)),
-          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and59(...acctJourneyConds)),
-          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(eq69(journeySessions.businessAccountId, accountId))
+          db.select({ id: leads.id, conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest, sourceUrl: leads.sourceUrl, email: leads.email, phone: leads.phone }).from(leads).where(and60(...acctLeadConds)),
+          db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and60(...acctConvConds)),
+          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and60(...acctJourneyConds)),
+          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(eq70(journeySessions.businessAccountId, accountId))
         ]);
         const acctJourneyConvSet = new Set(acctAllJourney.map((r) => r.conversationId));
         const acctJourneyStarted = new Set(acctJourneyInRange.map((r) => r.conversationId)).size;
@@ -88161,13 +88691,13 @@ ${instruction}`
         db.select({
           relevance: conversations.relevance,
           count: count4()
-        }).from(conversations).where(and59(...convDateConds)).groupBy(conversations.relevance),
+        }).from(conversations).where(and60(...convDateConds)).groupBy(conversations.relevance),
         db.select({
           category: conversations.category,
           count: count4()
-        }).from(conversations).where(and59(...convDateConds, sql41`${conversations.category} IS NOT NULL`)).groupBy(conversations.category).orderBy(desc31(count4())).limit(8)
+        }).from(conversations).where(and60(...convDateConds, sql42`${conversations.category} IS NOT NULL`)).groupBy(conversations.category).orderBy(desc31(count4())).limit(8)
       ]);
-      const outcomeRawResult = await db.execute(sql41`
+      const outcomeRawResult = await db.execute(sql42`
         SELECT
           c.id,
           COUNT(m.id)::int AS msg_count,
@@ -88177,9 +88707,9 @@ ${instruction}`
           (SELECT m2.content FROM messages m2 WHERE m2.conversation_id = c.id AND m2.role = 'user' ORDER BY m2.created_at DESC LIMIT 1) AS last_user_content
         FROM conversations c
         LEFT JOIN messages m ON m.conversation_id = c.id
-        WHERE c.business_account_id IN (${sql41.join(accountIds.map((id) => sql41`${id}`), sql41`, `)})
-          ${dateFrom ? sql41`AND c.created_at >= ${dateFrom}` : sql41``}
-          ${dateTo ? sql41`AND c.created_at <= ${dateTo}` : sql41``}
+        WHERE c.business_account_id IN (${sql42.join(accountIds.map((id) => sql42`${id}`), sql42`, `)})
+          ${dateFrom ? sql42`AND c.created_at >= ${dateFrom}` : sql42``}
+          ${dateTo ? sql42`AND c.created_at <= ${dateTo}` : sql42``}
         GROUP BY c.id
       `);
       const outcomeRows = outcomeRawResult.rows;
@@ -88215,7 +88745,7 @@ ${instruction}`
       const outcomesTotal = completed + abandoned + singleMessage + active;
       const [allCatCountResult] = await db.select({
         total: count4()
-      }).from(conversations).where(and59(...convDateConds, sql41`${conversations.category} IS NOT NULL`));
+      }).from(conversations).where(and60(...convDateConds, sql42`${conversations.category} IS NOT NULL`));
       const allCategorizedTotal = allCatCountResult?.total || 0;
       const topCategoriesList = categoryRows.map((r) => ({
         category: r.category,
@@ -88286,12 +88816,12 @@ ${instruction}`
         fromDate,
         toDate
       }, 1, 0);
-      const convoConditions = [eq69(conversations.businessAccountId, accountId)];
+      const convoConditions = [eq70(conversations.businessAccountId, accountId)];
       if (fromDate) convoConditions.push(gte12(conversations.createdAt, new Date(fromDate)));
       if (toDate) convoConditions.push(lte5(conversations.createdAt, new Date(toDate)));
       const [viAllConvRows, viFormLeadRows] = await Promise.all([
-        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and59(...convoConditions)),
-        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and59(eq69(leads.businessAccountId, accountId), sql41`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql41`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`))
+        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and60(...convoConditions)),
+        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and60(eq70(leads.businessAccountId, accountId), sql42`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql42`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`))
       ]);
       const viFormPhoneMap = /* @__PURE__ */ new Map();
       for (const l of viFormLeadRows) {
@@ -88387,7 +88917,7 @@ ${instruction}`
       }
       const dateFrom = fromDate ? new Date(fromDate) : void 0;
       const dateTo = toDate ? new Date(toDate) : void 0;
-      const leadConds = [eq69(leads.businessAccountId, accountId)];
+      const leadConds = [eq70(leads.businessAccountId, accountId)];
       if (dateFrom) leadConds.push(gte12(leads.createdAt, dateFrom));
       if (dateTo) leadConds.push(lte5(leads.createdAt, dateTo));
       const leadRows = await db.select({
@@ -88395,7 +88925,7 @@ ${instruction}`
         email: leads.email,
         phone: leads.phone,
         topicsOfInterest: leads.topicsOfInterest
-      }).from(leads).where(and59(...leadConds)).orderBy(desc31(leads.createdAt));
+      }).from(leads).where(and60(...leadConds)).orderBy(desc31(leads.createdAt));
       const seenLeadKeys = /* @__PURE__ */ new Set();
       const dedupedLeads = leadRows.filter((l) => {
         const key = l.email && l.email.trim() ? l.email.trim().toLowerCase() : l.phone && l.phone.trim() ? l.phone.trim() : l.id;
@@ -88480,7 +89010,7 @@ ${instruction}`
         });
       }
       if (!forceRefresh) {
-        const [cached] = await db.select().from(conversationAnalysisCache).where(eq69(conversationAnalysisCache.businessAccountId, accountId)).limit(1);
+        const [cached] = await db.select().from(conversationAnalysisCache).where(eq70(conversationAnalysisCache.businessAccountId, accountId)).limit(1);
         if (cached) {
           const cacheAge = Date.now() - new Date(cached.updatedAt).getTime();
           const cacheValid = cacheAge < 24 * 60 * 60 * 1e3;
@@ -88596,15 +89126,15 @@ Format your response as JSON with this structure:
       const dateToStr = toDate;
       const dateFrom = dateFromStr ? new Date(dateFromStr) : void 0;
       const dateTo = dateToStr ? new Date(dateToStr) : void 0;
-      const leadConds = [eq69(leads.businessAccountId, accountId)];
+      const leadConds = [eq70(leads.businessAccountId, accountId)];
       if (dateFrom) leadConds.push(gte12(leads.createdAt, dateFrom));
       if (dateTo) leadConds.push(lte5(leads.createdAt, dateTo));
-      const convConds = [eq69(conversations.businessAccountId, accountId)];
+      const convConds = [eq70(conversations.businessAccountId, accountId)];
       if (dateFrom) convConds.push(gte12(conversations.createdAt, dateFrom));
       if (dateTo) convConds.push(lte5(conversations.createdAt, dateTo));
       const [acctLeadsRaw, acctConvRows] = await Promise.all([
-        db.select({ id: leads.id, conversationId: leads.conversationId, email: leads.email, phone: leads.phone, topicsOfInterest: leads.topicsOfInterest }).from(leads).where(and59(...leadConds)),
-        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and59(...convConds))
+        db.select({ id: leads.id, conversationId: leads.conversationId, email: leads.email, phone: leads.phone, topicsOfInterest: leads.topicsOfInterest }).from(leads).where(and60(...leadConds)),
+        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and60(...convConds))
       ]);
       const seenLeadKeys = /* @__PURE__ */ new Set();
       const dedupedLeads = acctLeadsRaw.filter((l) => {
@@ -88661,7 +89191,7 @@ Format your response as JSON with this structure:
   });
   app2.post("/api/super-admin/impersonate/exit", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
-      await db.update(sessions).set({ activeBusinessAccountId: null }).where(eq69(sessions.sessionToken, req.sessionToken));
+      await db.update(sessions).set({ activeBusinessAccountId: null }).where(eq70(sessions.sessionToken, req.sessionToken));
       console.log(`[SuperAdmin] User ${req.user.username} exited impersonation mode`);
       res.json({
         success: true,
@@ -89186,7 +89716,7 @@ ${script}`
             }
             if (changed) {
               const newStepId = oldToNewStepId[step.id];
-              await tx.update(journeySteps).set({ branchingCondition: JSON.stringify(condition) }).where(eq69(journeySteps.id, newStepId));
+              await tx.update(journeySteps).set({ branchingCondition: JSON.stringify(condition) }).where(eq70(journeySteps.id, newStepId));
             }
           }
         }
@@ -89444,7 +89974,7 @@ ${script}`
         return res.status(400).json({ error: "Failed to submit step - no active form journey" });
       }
       try {
-        const [existingMsg] = await db.select({ id: messages.id }).from(messages).where(eq69(messages.conversationId, activeConversationId)).limit(1);
+        const [existingMsg] = await db.select({ id: messages.id }).from(messages).where(eq70(messages.conversationId, activeConversationId)).limit(1);
         if (!existingMsg && currentStep?.questionText) {
           await storage.createMessage({
             conversationId: activeConversationId,
@@ -89484,10 +90014,10 @@ ${script}`
         try {
           const cleanPhone = answer.replace(/\D/g, "");
           if (cleanPhone.length >= 10) {
-            const [sessionData] = await db.select().from(journeySessions).where(eq69(journeySessions.conversationId, activeConversationId)).orderBy(desc31(journeySessions.createdAt)).limit(1);
+            const [sessionData] = await db.select().from(journeySessions).where(eq70(journeySessions.conversationId, activeConversationId)).orderBy(desc31(journeySessions.createdAt)).limit(1);
             let partialName = null;
             if (sessionData) {
-              const priorResponses = await db.select({ questionType: journeySteps.questionType, response: journeyResponses.response, questionText: journeySteps.questionText }).from(journeyResponses).innerJoin(journeySteps, eq69(journeyResponses.stepId, journeySteps.id)).where(eq69(journeyResponses.sessionId, sessionData.id));
+              const priorResponses = await db.select({ questionType: journeySteps.questionType, response: journeyResponses.response, questionText: journeySteps.questionText }).from(journeyResponses).innerJoin(journeySteps, eq70(journeyResponses.stepId, journeySteps.id)).where(eq70(journeyResponses.sessionId, sessionData.id));
               for (const r of priorResponses) {
                 if (r.questionType === "text" && r.response && r.questionText?.toLowerCase().includes("name")) {
                   partialName = r.response;
@@ -89497,8 +90027,8 @@ ${script}`
             }
             const normalizedPhone = cleanPhone.slice(-10);
             const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1e3);
-            const recentLeads = await db.select().from(leads).where(and59(
-              eq69(leads.businessAccountId, businessAccountId),
+            const recentLeads = await db.select().from(leads).where(and60(
+              eq70(leads.businessAccountId, businessAccountId),
               gte12(leads.createdAt, twentyFourHoursAgo),
               isNotNull6(leads.phone)
             )).limit(50);
@@ -89540,12 +90070,12 @@ ${script}`
       }
       if (result.completed) {
         try {
-          const [sessionData] = await db.select().from(journeySessions).where(eq69(journeySessions.conversationId, activeConversationId)).orderBy(desc31(journeySessions.createdAt)).limit(1);
+          const [sessionData] = await db.select().from(journeySessions).where(eq70(journeySessions.conversationId, activeConversationId)).orderBy(desc31(journeySessions.createdAt)).limit(1);
           const resolvedJourneyId = journeyId || sessionData?.journeyId;
           console.log("[Form Journey] Lead creation check - journeyId:", resolvedJourneyId, "sessionId:", sessionData?.id);
           if (sessionData && resolvedJourneyId) {
             const steps = await storage.getJourneySteps(resolvedJourneyId);
-            const responses = await db.select({ questionType: journeySteps.questionType, response: journeyResponses.response, questionText: journeySteps.questionText }).from(journeyResponses).innerJoin(journeySteps, eq69(journeyResponses.stepId, journeySteps.id)).where(eq69(journeyResponses.sessionId, sessionData.id));
+            const responses = await db.select({ questionType: journeySteps.questionType, response: journeyResponses.response, questionText: journeySteps.questionText }).from(journeyResponses).innerJoin(journeySteps, eq70(journeyResponses.stepId, journeySteps.id)).where(eq70(journeyResponses.sessionId, sessionData.id));
             let phone = null;
             let email = null;
             let name = null;
@@ -89570,18 +90100,18 @@ ${script}`
               const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1e3);
               let existingLead = null;
               if (normalizedPhone) {
-                const recentLeads = await db.select().from(leads).where(and59(
-                  eq69(leads.businessAccountId, businessAccountId),
+                const recentLeads = await db.select().from(leads).where(and60(
+                  eq70(leads.businessAccountId, businessAccountId),
                   gte12(leads.createdAt, twentyFourHoursAgo),
                   isNotNull6(leads.phone)
                 )).limit(50);
                 existingLead = recentLeads.find((l) => l.phone && l.phone.replace(/\D/g, "").slice(-10) === normalizedPhone) || null;
               }
               if (!existingLead && normalizedEmail) {
-                const [found] = await db.select().from(leads).where(and59(
-                  eq69(leads.businessAccountId, businessAccountId),
+                const [found] = await db.select().from(leads).where(and60(
+                  eq70(leads.businessAccountId, businessAccountId),
                   gte12(leads.createdAt, twentyFourHoursAgo),
-                  sql41`LOWER(TRIM(${leads.email})) = ${normalizedEmail}`
+                  sql42`LOWER(TRIM(${leads.email})) = ${normalizedEmail}`
                 )).limit(1);
                 existingLead = found || null;
               }
@@ -89985,12 +90515,12 @@ ${script}`
       const businessAccountId = user.businessAccountId;
       const { status } = req.query;
       const { aiSuggestions: aiSuggestions2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq74, and: and63, desc: desc32 } = await import("drizzle-orm");
-      let conditions = [eq74(aiSuggestions2.businessAccountId, businessAccountId)];
+      const { eq: eq75, and: and64, desc: desc32 } = await import("drizzle-orm");
+      let conditions = [eq75(aiSuggestions2.businessAccountId, businessAccountId)];
       if (status && typeof status === "string") {
-        conditions.push(eq74(aiSuggestions2.status, status));
+        conditions.push(eq75(aiSuggestions2.status, status));
       }
-      const suggestions = await db.select().from(aiSuggestions2).where(and63(...conditions)).orderBy(desc32(aiSuggestions2.createdAt));
+      const suggestions = await db.select().from(aiSuggestions2).where(and64(...conditions)).orderBy(desc32(aiSuggestions2.createdAt));
       res.json(suggestions);
     } catch (error) {
       console.error("[AI Suggestions] Error fetching suggestions:", error);
@@ -90002,11 +90532,11 @@ ${script}`
       const user = req.user;
       const businessAccountId = user.businessAccountId;
       const { aiSuggestions: aiSuggestions2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq74, and: and63, count: count5, sql: sql47 } = await import("drizzle-orm");
+      const { eq: eq75, and: and64, count: count5, sql: sql48 } = await import("drizzle-orm");
       const stats = await db.select({
         total: count5(),
         status: aiSuggestions2.status
-      }).from(aiSuggestions2).where(eq74(aiSuggestions2.businessAccountId, businessAccountId)).groupBy(aiSuggestions2.status);
+      }).from(aiSuggestions2).where(eq75(aiSuggestions2.businessAccountId, businessAccountId)).groupBy(aiSuggestions2.status);
       const result = {
         pending: 0,
         accepted: 0,
@@ -90036,10 +90566,10 @@ ${script}`
       }
       console.log(`[AI Suggestions] Starting analysis for business: ${businessAccountId}`);
       const { aiSuggestions: aiSuggestionsSchema } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq74, and: and63 } = await import("drizzle-orm");
-      const deleteResult = await db.delete(aiSuggestionsSchema).where(and63(
-        eq74(aiSuggestionsSchema.businessAccountId, businessAccountId),
-        eq74(aiSuggestionsSchema.status, "pending")
+      const { eq: eq75, and: and64 } = await import("drizzle-orm");
+      const deleteResult = await db.delete(aiSuggestionsSchema).where(and64(
+        eq75(aiSuggestionsSchema.businessAccountId, businessAccountId),
+        eq75(aiSuggestionsSchema.status, "pending")
       ));
       console.log(`[AI Suggestions] Deleted old pending suggestions for fresh analysis`);
       const analysisResult = await conversationAnalyzer.analyzeConversations(businessAccountId, daysBack);
@@ -90065,10 +90595,10 @@ ${script}`
       const businessAccountId = user.businessAccountId;
       const { id } = req.params;
       const { aiSuggestions: aiSuggestions2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq74, and: and63 } = await import("drizzle-orm");
-      const [suggestion] = await db.select().from(aiSuggestions2).where(and63(
-        eq74(aiSuggestions2.id, id),
-        eq74(aiSuggestions2.businessAccountId, businessAccountId)
+      const { eq: eq75, and: and64 } = await import("drizzle-orm");
+      const [suggestion] = await db.select().from(aiSuggestions2).where(and64(
+        eq75(aiSuggestions2.id, id),
+        eq75(aiSuggestions2.businessAccountId, businessAccountId)
       )).limit(1);
       if (!suggestion) {
         return res.status(404).json({ error: "Suggestion not found" });
@@ -90098,11 +90628,11 @@ ${script}`
           }
         } catch {
           if (currentInstructions.trim()) {
-            instructions = [{ id: randomUUID3(), text: currentInstructions }];
+            instructions = [{ id: randomUUID4(), text: currentInstructions }];
           }
         }
         instructions.push({
-          id: randomUUID3(),
+          id: randomUUID4(),
           text: content.instruction
         });
         await storage.upsertWidgetSettings(businessAccountId, {
@@ -90116,7 +90646,7 @@ ${script}`
         acceptedBy: user.id,
         implementedId,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq74(aiSuggestions2.id, id));
+      }).where(eq75(aiSuggestions2.id, id));
       res.json({ success: true, implementedId });
     } catch (error) {
       console.error("[AI Suggestions] Error accepting suggestion:", error);
@@ -90130,10 +90660,10 @@ ${script}`
       const { id } = req.params;
       const { reason } = req.body;
       const { aiSuggestions: aiSuggestions2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq74, and: and63 } = await import("drizzle-orm");
-      const [suggestion] = await db.select().from(aiSuggestions2).where(and63(
-        eq74(aiSuggestions2.id, id),
-        eq74(aiSuggestions2.businessAccountId, businessAccountId)
+      const { eq: eq75, and: and64 } = await import("drizzle-orm");
+      const [suggestion] = await db.select().from(aiSuggestions2).where(and64(
+        eq75(aiSuggestions2.id, id),
+        eq75(aiSuggestions2.businessAccountId, businessAccountId)
       )).limit(1);
       if (!suggestion) {
         return res.status(404).json({ error: "Suggestion not found" });
@@ -90144,7 +90674,7 @@ ${script}`
         dismissedBy: user.id,
         dismissReason: reason || null,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq74(aiSuggestions2.id, id));
+      }).where(eq75(aiSuggestions2.id, id));
       res.json({ success: true });
     } catch (error) {
       console.error("[AI Suggestions] Error dismissing suggestion:", error);
@@ -90594,9 +91124,9 @@ ${script}`
         return res.status(400).json({ error: "Business account not found" });
       }
       const { db: db2 } = await Promise.resolve().then(() => (init_db(), db_exports));
-      const { eq: eq74, and: and63, isNotNull: isNotNull8 } = await import("drizzle-orm");
-      const rows = await db2.selectDistinct({ crmFieldKey: journeySteps.crmFieldKey }).from(journeySteps).innerJoin(conversationJourneys, eq74(journeySteps.journeyId, conversationJourneys.id)).where(and63(
-        eq74(conversationJourneys.businessAccountId, businessAccountId),
+      const { eq: eq75, and: and64, isNotNull: isNotNull8 } = await import("drizzle-orm");
+      const rows = await db2.selectDistinct({ crmFieldKey: journeySteps.crmFieldKey }).from(journeySteps).innerJoin(conversationJourneys, eq75(journeySteps.journeyId, conversationJourneys.id)).where(and64(
+        eq75(conversationJourneys.businessAccountId, businessAccountId),
         isNotNull8(journeySteps.crmFieldKey)
       ));
       const keys = rows.map((r) => (r.crmFieldKey || "").trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
@@ -91034,7 +91564,7 @@ ${script}`
       fileName: whatsappLeadAttachments.fileName,
       mimeType: whatsappLeadAttachments.mimeType,
       documentCategory: whatsappLeadAttachments.documentCategory
-    }).from(whatsappLeadAttachments).where(eq69(whatsappLeadAttachments.leadId, leadId));
+    }).from(whatsappLeadAttachments).where(eq70(whatsappLeadAttachments.leadId, leadId));
     const docs = {};
     for (const att of attachments) {
       if (!att.filePath || !att.documentCategory) continue;
@@ -91060,22 +91590,22 @@ ${script}`
       const configuredLeadFields = await db.select({
         fieldKey: whatsappLeadFields.fieldKey,
         fieldLabel: whatsappLeadFields.fieldLabel
-      }).from(whatsappLeadFields).where(and59(
-        eq69(whatsappLeadFields.businessAccountId, businessAccountId),
-        eq69(whatsappLeadFields.isEnabled, true)
+      }).from(whatsappLeadFields).where(and60(
+        eq70(whatsappLeadFields.businessAccountId, businessAccountId),
+        eq70(whatsappLeadFields.isEnabled, true)
       )).orderBy(whatsappLeadFields.displayOrder);
       const defaultKeys = ["customer_name", "customer_phone", "customer_email"];
       const extractedFields = configuredLeadFields.filter((f) => !defaultKeys.includes(f.fieldKey)).map((f) => ({
         value: `extracted.${f.fieldKey}`,
         label: f.fieldLabel
       }));
-      const allFlows = await db.select({ id: whatsappFlows.id }).from(whatsappFlows).where(eq69(whatsappFlows.businessAccountId, businessAccountId));
+      const allFlows = await db.select({ id: whatsappFlows.id }).from(whatsappFlows).where(eq70(whatsappFlows.businessAccountId, businessAccountId));
       const documentFields = [];
       if (allFlows.length > 0) {
         const flowIds = allFlows.map((f) => f.id);
-        const uploadSteps = await db.select({ options: whatsappFlowSteps.options }).from(whatsappFlowSteps).where(and59(
+        const uploadSteps = await db.select({ options: whatsappFlowSteps.options }).from(whatsappFlowSteps).where(and60(
           inArray13(whatsappFlowSteps.flowId, flowIds),
-          eq69(whatsappFlowSteps.type, "upload")
+          eq70(whatsappFlowSteps.type, "upload")
         ));
         const seenDocTypes = /* @__PURE__ */ new Set();
         for (const step of uploadSteps) {
@@ -91108,11 +91638,11 @@ ${script}`
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const leadFields = await db.select().from(whatsappLeadFields).where(and59(
-        eq69(whatsappLeadFields.businessAccountId, businessAccountId),
-        eq69(whatsappLeadFields.isEnabled, true)
+      const leadFields = await db.select().from(whatsappLeadFields).where(and60(
+        eq70(whatsappLeadFields.businessAccountId, businessAccountId),
+        eq70(whatsappLeadFields.isEnabled, true)
       )).orderBy(whatsappLeadFields.displayOrder);
-      const existingMappings = await db.select({ id: customCrmFieldMappings.id, sourceField: customCrmFieldMappings.sourceField, crmField: customCrmFieldMappings.crmField, isAutoManaged: customCrmFieldMappings.isAutoManaged }).from(customCrmFieldMappings).where(eq69(customCrmFieldMappings.businessAccountId, businessAccountId));
+      const existingMappings = await db.select({ id: customCrmFieldMappings.id, sourceField: customCrmFieldMappings.sourceField, crmField: customCrmFieldMappings.crmField, isAutoManaged: customCrmFieldMappings.isAutoManaged }).from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId));
       const existingBySourceField = new Map(existingMappings.map((m) => [m.sourceField, m]));
       const toCreate = [];
       const toUpdate = [];
@@ -91132,10 +91662,10 @@ ${script}`
       let updated = 0;
       const skipped = leadFields.length - toCreate.length - toUpdate.length;
       for (const item of toUpdate) {
-        await db.update(customCrmFieldMappings).set({ crmField: item.crmFieldKey }).where(eq69(customCrmFieldMappings.id, item.id));
+        await db.update(customCrmFieldMappings).set({ crmField: item.crmFieldKey }).where(eq70(customCrmFieldMappings.id, item.id));
         updated++;
       }
-      const maxSortResult = await db.select({ maxOrder: sql41`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq69(customCrmFieldMappings.businessAccountId, businessAccountId));
+      const maxSortResult = await db.select({ maxOrder: sql42`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId));
       let nextSortOrder = (maxSortResult[0]?.maxOrder || 0) + 1;
       for (const item of toCreate) {
         const isDefaultField = defaultFieldKeys.includes(item.fieldKey);
@@ -91162,7 +91692,7 @@ ${script}`
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const [customCrmRow] = await db.select({ name: customCrmSettings.name, authType: customCrmSettings.authType, enabled: customCrmSettings.enabled }).from(customCrmSettings).where(eq69(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [customCrmRow] = await db.select({ name: customCrmSettings.name, authType: customCrmSettings.authType, enabled: customCrmSettings.enabled }).from(customCrmSettings).where(eq70(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       const isCaprion = customCrmRow?.authType === "checksum_caprion";
       const customCrmEntry = isCaprion ? {
         id: "custom-crm",
@@ -91228,7 +91758,7 @@ ${script}`
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const [existing] = await db.select().from(customCrmSettings).where(eq69(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [existing] = await db.select().from(customCrmSettings).where(eq70(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       if (!existing) {
         return res.json({ enabled: false, name: "Custom CRM" });
       }
@@ -91258,7 +91788,7 @@ ${script}`
       const user = req.user;
       const businessAccountId = user.businessAccountId;
       const { enabled, name, apiBaseUrl, apiEndpoint, httpMethod, contentType, authType, authKey, authHeaderName, autoSyncEnabled, callbackUrl, relayUrl } = req.body;
-      const [existing] = await db.select().from(customCrmSettings).where(eq69(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [existing] = await db.select().from(customCrmSettings).where(eq70(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       const { encrypt: encrypt3 } = await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports));
       const settingsData = {
         enabled: !!enabled,
@@ -91280,7 +91810,7 @@ ${script}`
         settingsData.authKey = existing.authKey;
       }
       if (existing) {
-        await db.update(customCrmSettings).set(settingsData).where(eq69(customCrmSettings.id, existing.id));
+        await db.update(customCrmSettings).set(settingsData).where(eq70(customCrmSettings.id, existing.id));
       } else {
         settingsData.businessAccountId = businessAccountId;
         await db.insert(customCrmSettings).values(settingsData);
@@ -91407,7 +91937,7 @@ ${script}`
       const user = req.user;
       const businessAccountId = user.businessAccountId;
       const { apiBaseUrl, apiEndpoint, authType, authKey, authHeaderName } = req.body;
-      const [existing] = await db.select().from(customCrmSettings).where(eq69(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [existing] = await db.select().from(customCrmSettings).where(eq70(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       const testBaseUrl = apiBaseUrl || existing?.apiBaseUrl;
       const testEndpoint = apiEndpoint || existing?.apiEndpoint;
       if (!testBaseUrl || !testEndpoint) {
@@ -91434,7 +91964,7 @@ ${script}`
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const mappings = await db.select().from(customCrmFieldMappings).where(eq69(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
+      const mappings = await db.select().from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
       res.json(mappings);
     } catch (error) {
       console.error("[Custom CRM] Get field mappings error:", error);
@@ -91469,9 +91999,9 @@ ${script}`
       const businessAccountId = user.businessAccountId;
       const { id } = req.params;
       const { crmField, sourceType, sourceField, customValue, displayName, isEnabled, sortOrder, isAutoManaged } = req.body;
-      const [existing] = await db.select().from(customCrmFieldMappings).where(and59(
-        eq69(customCrmFieldMappings.id, id),
-        eq69(customCrmFieldMappings.businessAccountId, businessAccountId)
+      const [existing] = await db.select().from(customCrmFieldMappings).where(and60(
+        eq70(customCrmFieldMappings.id, id),
+        eq70(customCrmFieldMappings.businessAccountId, businessAccountId)
       )).limit(1);
       if (!existing) {
         return res.status(404).json({ error: "Field mapping not found" });
@@ -91485,7 +92015,7 @@ ${script}`
       if (isEnabled !== void 0) safeUpdate.isEnabled = isEnabled;
       if (sortOrder !== void 0) safeUpdate.sortOrder = sortOrder;
       if (isAutoManaged !== void 0) safeUpdate.isAutoManaged = isAutoManaged;
-      const [updated] = await db.update(customCrmFieldMappings).set(safeUpdate).where(eq69(customCrmFieldMappings.id, id)).returning();
+      const [updated] = await db.update(customCrmFieldMappings).set(safeUpdate).where(eq70(customCrmFieldMappings.id, id)).returning();
       res.json(updated);
     } catch (error) {
       console.error("[Custom CRM] Update field mapping error:", error);
@@ -91497,9 +92027,9 @@ ${script}`
       const user = req.user;
       const businessAccountId = user.businessAccountId;
       const { id } = req.params;
-      await db.delete(customCrmFieldMappings).where(and59(
-        eq69(customCrmFieldMappings.id, id),
-        eq69(customCrmFieldMappings.businessAccountId, businessAccountId)
+      await db.delete(customCrmFieldMappings).where(and60(
+        eq70(customCrmFieldMappings.id, id),
+        eq70(customCrmFieldMappings.businessAccountId, businessAccountId)
       ));
       res.json({ success: true });
     } catch (error) {
@@ -91513,18 +92043,18 @@ ${script}`
       const businessAccountId = user.businessAccountId;
       const { leadId } = req.params;
       const { leadType } = req.body;
-      const [settings] = await db.select().from(customCrmSettings).where(eq69(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [settings] = await db.select().from(customCrmSettings).where(eq70(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       if (!settings || !settings.enabled) {
         return res.status(400).json({ error: "Custom CRM integration is not enabled" });
       }
       if (!settings.apiBaseUrl || !settings.apiEndpoint) {
         return res.status(400).json({ error: "Custom CRM API URL not configured" });
       }
-      const fieldMappings = await db.select().from(customCrmFieldMappings).where(eq69(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
+      const fieldMappings = await db.select().from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
       if (leadType === "whatsapp") {
-        const [whatsappLead] = await db.select().from(whatsappLeads).where(and59(
-          eq69(whatsappLeads.id, leadId),
-          eq69(whatsappLeads.businessAccountId, businessAccountId)
+        const [whatsappLead] = await db.select().from(whatsappLeads).where(and60(
+          eq70(whatsappLeads.id, leadId),
+          eq70(whatsappLeads.businessAccountId, businessAccountId)
         )).limit(1);
         if (!whatsappLead) {
           return res.status(404).json({ error: "WhatsApp lead not found" });
@@ -91546,9 +92076,9 @@ ${script}`
         const dealerName = extractedData.dealer_name || extractedData.dealerName || extractedData.dealer;
         const cityName = extractedData.city || extractedData.city_name || extractedData.dealer_city || extractedData.dealerCity;
         if (storeName || dealerName) {
-          const storeCreds = await db.select().from(crmStoreCredentials).where(and59(
-            eq69(crmStoreCredentials.businessAccountId, businessAccountId),
-            eq69(crmStoreCredentials.isActive, true)
+          const storeCreds = await db.select().from(crmStoreCredentials).where(and60(
+            eq70(crmStoreCredentials.businessAccountId, businessAccountId),
+            eq70(crmStoreCredentials.isActive, true)
           ));
           const norm2 = (s) => s ? s.trim().toLowerCase() : "";
           const nStore = norm2(storeName);
@@ -91572,7 +92102,7 @@ ${script}`
           if (!storeCredential && storeCreds.length > 0 && (nStore || nDealer)) {
             try {
               const OpenAI41 = (await import("openai")).default;
-              const [bizAcct] = await db.select().from(businessAccounts).where(eq69(businessAccounts.id, businessAccountId)).limit(1);
+              const [bizAcct] = await db.select().from(businessAccounts).where(eq70(businessAccounts.id, businessAccountId)).limit(1);
               const openaiApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
               if (openaiApiKey) {
                 const openaiClient = new OpenAI41({ apiKey: openaiApiKey, timeout: 15e3 });
@@ -91623,7 +92153,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             customCrmSyncError: null,
             customCrmSyncPayload: result.payload,
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq69(whatsappLeads.id, leadId));
+          }).where(eq70(whatsappLeads.id, leadId));
           res.json({ success: true, message: result.message, crmLeadId: result.leadId, applicationId: result.applicationId, documentResults: result.documentResults });
         } else {
           await db.update(whatsappLeads).set({
@@ -91631,7 +92161,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             customCrmSyncError: result.message,
             customCrmSyncPayload: result.payload,
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq69(whatsappLeads.id, leadId));
+          }).where(eq70(whatsappLeads.id, leadId));
           res.status(400).json({ success: false, error: result.message });
         }
       } else {
@@ -91676,27 +92206,27 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const [settings] = await db.select().from(customCrmSettings).where(eq69(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
+      const [settings] = await db.select().from(customCrmSettings).where(eq70(customCrmSettings.businessAccountId, businessAccountId)).limit(1);
       if (!settings || !settings.enabled) {
         return res.status(400).json({ error: "Custom CRM integration is not enabled" });
       }
       if (!settings.apiBaseUrl || !settings.apiEndpoint) {
         return res.status(400).json({ error: "Custom CRM API URL not configured" });
       }
-      const fieldMappings = await db.select().from(customCrmFieldMappings).where(eq69(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
+      const fieldMappings = await db.select().from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId)).orderBy(customCrmFieldMappings.sortOrder);
       if (fieldMappings.length === 0) {
         return res.status(400).json({ error: "No field mappings configured" });
       }
-      const unsyncedLeads = await db.select().from(whatsappLeads).where(and59(
-        eq69(whatsappLeads.businessAccountId, businessAccountId),
-        sql41`(${whatsappLeads.customCrmSyncStatus} IS NULL OR ${whatsappLeads.customCrmSyncStatus} = 'failed')`
+      const unsyncedLeads = await db.select().from(whatsappLeads).where(and60(
+        eq70(whatsappLeads.businessAccountId, businessAccountId),
+        sql42`(${whatsappLeads.customCrmSyncStatus} IS NULL OR ${whatsappLeads.customCrmSyncStatus} = 'failed')`
       )).orderBy(desc31(whatsappLeads.createdAt));
       if (unsyncedLeads.length === 0) {
         return res.json({ success: true, message: "No unsynced leads found", synced: 0, failed: 0, total: 0 });
       }
-      const storeCreds = await db.select().from(crmStoreCredentials).where(and59(
-        eq69(crmStoreCredentials.businessAccountId, businessAccountId),
-        eq69(crmStoreCredentials.isActive, true)
+      const storeCreds = await db.select().from(crmStoreCredentials).where(and60(
+        eq70(crmStoreCredentials.businessAccountId, businessAccountId),
+        eq70(crmStoreCredentials.isActive, true)
       ));
       const { syncLeadWithDocuments: syncLeadWithDocuments2 } = await Promise.resolve().then(() => (init_customCrmService(), customCrmService_exports));
       let syncedCount = 0;
@@ -91736,7 +92266,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             if (!storeCredential && storeCreds.length > 0 && (nS || nD)) {
               try {
                 const OpenAI41 = (await import("openai")).default;
-                const [bizAcct] = await db.select().from(businessAccounts).where(eq69(businessAccounts.id, businessAccountId)).limit(1);
+                const [bizAcct] = await db.select().from(businessAccounts).where(eq70(businessAccounts.id, businessAccountId)).limit(1);
                 const openaiApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
                 if (openaiApiKey) {
                   const openaiClient = new OpenAI41({ apiKey: openaiApiKey, timeout: 15e3 });
@@ -91783,7 +92313,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               customCrmSyncError: null,
               customCrmSyncPayload: result.payload,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq69(whatsappLeads.id, lead.id));
+            }).where(eq70(whatsappLeads.id, lead.id));
             syncedCount++;
           } else {
             await db.update(whatsappLeads).set({
@@ -91791,7 +92321,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               customCrmSyncError: result.message,
               customCrmSyncPayload: result.payload,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq69(whatsappLeads.id, lead.id));
+            }).where(eq70(whatsappLeads.id, lead.id));
             failedCount++;
           }
         } catch (err) {
@@ -91800,7 +92330,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             customCrmSyncStatus: "failed",
             customCrmSyncError: err.message || "Unknown error",
             updatedAt: /* @__PURE__ */ new Date()
-          }).where(eq69(whatsappLeads.id, lead.id));
+          }).where(eq70(whatsappLeads.id, lead.id));
           failedCount++;
         }
       }
@@ -91820,14 +92350,14 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const activeFlow2 = await db.select({ id: whatsappFlows.id, name: whatsappFlows.name }).from(whatsappFlows).where(and59(
-        eq69(whatsappFlows.businessAccountId, businessAccountId),
-        eq69(whatsappFlows.isActive, "true")
+      const activeFlow2 = await db.select({ id: whatsappFlows.id, name: whatsappFlows.name }).from(whatsappFlows).where(and60(
+        eq70(whatsappFlows.businessAccountId, businessAccountId),
+        eq70(whatsappFlows.isActive, "true")
       )).limit(1);
       if (activeFlow2.length === 0) {
         return res.status(404).json({ error: "No active WhatsApp flow found for this account" });
       }
-      const steps = await db.select().from(whatsappFlowSteps).where(eq69(whatsappFlowSteps.flowId, activeFlow2[0].id)).orderBy(whatsappFlowSteps.stepOrder);
+      const steps = await db.select().from(whatsappFlowSteps).where(eq70(whatsappFlowSteps.flowId, activeFlow2[0].id)).orderBy(whatsappFlowSteps.stepOrder);
       const dropdownSteps = steps.filter((s) => s.type === "dropdown" || s.type === "list");
       const stepByField = /* @__PURE__ */ new Map();
       for (const s of dropdownSteps) {
@@ -91914,9 +92444,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         city: crmStoreCredentials.city,
         storeId: crmStoreCredentials.storeId,
         sid: crmStoreCredentials.sid
-      }).from(crmStoreCredentials).where(and59(
-        eq69(crmStoreCredentials.businessAccountId, businessAccountId),
-        eq69(crmStoreCredentials.isActive, true)
+      }).from(crmStoreCredentials).where(and60(
+        eq70(crmStoreCredentials.businessAccountId, businessAccountId),
+        eq70(crmStoreCredentials.isActive, true)
       ));
       const credMap = /* @__PURE__ */ new Map();
       for (const c of existingCreds) {
@@ -91973,7 +92503,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         isActive: crmStoreCredentials.isActive,
         createdAt: crmStoreCredentials.createdAt,
         updatedAt: crmStoreCredentials.updatedAt
-      }).from(crmStoreCredentials).where(eq69(crmStoreCredentials.businessAccountId, businessAccountId)).orderBy(crmStoreCredentials.dealerName, crmStoreCredentials.storeName);
+      }).from(crmStoreCredentials).where(eq70(crmStoreCredentials.businessAccountId, businessAccountId)).orderBy(crmStoreCredentials.dealerName, crmStoreCredentials.storeName);
       res.json(credentials.map(({ secret, ...rest }) => ({
         ...rest,
         hasSecret: !!(secret && secret.length > 0)
@@ -92016,9 +92546,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = user.businessAccountId;
       const { id } = req.params;
       const { dealerName, storeName, city, storeId, sid, secret, isActive } = req.body;
-      const [existing] = await db.select().from(crmStoreCredentials).where(and59(
-        eq69(crmStoreCredentials.id, id),
-        eq69(crmStoreCredentials.businessAccountId, businessAccountId)
+      const [existing] = await db.select().from(crmStoreCredentials).where(and60(
+        eq70(crmStoreCredentials.id, id),
+        eq70(crmStoreCredentials.businessAccountId, businessAccountId)
       )).limit(1);
       if (!existing) {
         return res.status(404).json({ error: "Store credential not found" });
@@ -92034,7 +92564,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         const { encrypt: encrypt3 } = await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports));
         updateData.secret = encrypt3(secret);
       }
-      const [updated] = await db.update(crmStoreCredentials).set(updateData).where(eq69(crmStoreCredentials.id, id)).returning();
+      const [updated] = await db.update(crmStoreCredentials).set(updateData).where(eq70(crmStoreCredentials.id, id)).returning();
       const { secret: _, ...safeCredential } = updated;
       res.json(safeCredential);
     } catch (error) {
@@ -92047,14 +92577,14 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const user = req.user;
       const businessAccountId = user.businessAccountId;
       const { id } = req.params;
-      const [existing] = await db.select().from(crmStoreCredentials).where(and59(
-        eq69(crmStoreCredentials.id, id),
-        eq69(crmStoreCredentials.businessAccountId, businessAccountId)
+      const [existing] = await db.select().from(crmStoreCredentials).where(and60(
+        eq70(crmStoreCredentials.id, id),
+        eq70(crmStoreCredentials.businessAccountId, businessAccountId)
       )).limit(1);
       if (!existing) {
         return res.status(404).json({ error: "Store credential not found" });
       }
-      await db.delete(crmStoreCredentials).where(eq69(crmStoreCredentials.id, id));
+      await db.delete(crmStoreCredentials).where(eq70(crmStoreCredentials.id, id));
       res.json({ success: true });
     } catch (error) {
       console.error("[Store Credentials] Delete error:", error);
@@ -92073,9 +92603,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       if (uniqueIds.length === 0) {
         return res.status(400).json({ error: "No valid ids provided" });
       }
-      const deleted = await db.delete(crmStoreCredentials).where(and59(
+      const deleted = await db.delete(crmStoreCredentials).where(and60(
         inArray13(crmStoreCredentials.id, uniqueIds),
-        eq69(crmStoreCredentials.businessAccountId, businessAccountId)
+        eq70(crmStoreCredentials.businessAccountId, businessAccountId)
       )).returning({ id: crmStoreCredentials.id });
       res.json({ success: true, deleted: deleted.length, requested: uniqueIds.length });
     } catch (error) {
@@ -92087,13 +92617,13 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
     try {
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const allLeadFields = await db.select().from(whatsappLeadFields).where(and59(
-        eq69(whatsappLeadFields.businessAccountId, businessAccountId),
-        eq69(whatsappLeadFields.isEnabled, true)
+      const allLeadFields = await db.select().from(whatsappLeadFields).where(and60(
+        eq70(whatsappLeadFields.businessAccountId, businessAccountId),
+        eq70(whatsappLeadFields.isEnabled, true)
       )).orderBy(whatsappLeadFields.displayOrder);
-      const [storeCredential] = await db.select().from(crmStoreCredentials).where(and59(
-        eq69(crmStoreCredentials.businessAccountId, businessAccountId),
-        eq69(crmStoreCredentials.isActive, true)
+      const [storeCredential] = await db.select().from(crmStoreCredentials).where(and60(
+        eq70(crmStoreCredentials.businessAccountId, businessAccountId),
+        eq70(crmStoreCredentials.isActive, true)
       )).limit(1);
       if (!storeCredential) {
         return res.status(400).json({
@@ -92196,9 +92726,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             continue;
           }
           const encryptedSecret = encrypt3(cred.secret);
-          const [existingStore] = await db.select().from(crmStoreCredentials).where(and59(
-            eq69(crmStoreCredentials.businessAccountId, businessAccountId),
-            eq69(crmStoreCredentials.sid, cred.sid)
+          const [existingStore] = await db.select().from(crmStoreCredentials).where(and60(
+            eq70(crmStoreCredentials.businessAccountId, businessAccountId),
+            eq70(crmStoreCredentials.sid, cred.sid)
           )).limit(1);
           if (existingStore) {
             await db.update(crmStoreCredentials).set({
@@ -92209,7 +92739,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               secret: encryptedSecret,
               isActive: true,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq69(crmStoreCredentials.id, existingStore.id));
+            }).where(eq70(crmStoreCredentials.id, existingStore.id));
             results.push({ index: i, success: true, action: "updated", storeName: cred.storeName });
           } else {
             await db.insert(crmStoreCredentials).values({
@@ -92339,10 +92869,10 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         sid: r.sid,
         secret: r.secret
       }));
-      const flows = await db.select().from(whatsappFlows).where(eq69(whatsappFlows.businessAccountId, businessAccountId));
+      const flows = await db.select().from(whatsappFlows).where(eq70(whatsappFlows.businessAccountId, businessAccountId));
       const flowInfo = [];
       for (const f of flows) {
-        const steps = await db.select().from(whatsappFlowSteps).where(eq69(whatsappFlowSteps.flowId, f.id)).orderBy(whatsappFlowSteps.stepOrder);
+        const steps = await db.select().from(whatsappFlowSteps).where(eq70(whatsappFlowSteps.flowId, f.id)).orderBy(whatsappFlowSteps.stepOrder);
         const dropdowns = steps.filter((s) => s.type === "dropdown");
         if (dropdowns.length < 3) continue;
         const byField = (names) => dropdowns.find((s) => names.includes((s.saveToField || "").toLowerCase()));
@@ -92384,8 +92914,8 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       }
       const flowStepResults = { updated: 0, errors: [] };
       if (flowId && (step3Id || step4Id || step5Id)) {
-        const steps = await db.select().from(whatsappFlowSteps).where(eq69(whatsappFlowSteps.flowId, flowId));
-        const [ownFlow] = await db.select({ id: whatsappFlows.id }).from(whatsappFlows).where(and59(eq69(whatsappFlows.id, flowId), eq69(whatsappFlows.businessAccountId, businessAccountId))).limit(1);
+        const steps = await db.select().from(whatsappFlowSteps).where(eq70(whatsappFlowSteps.flowId, flowId));
+        const [ownFlow] = await db.select({ id: whatsappFlows.id }).from(whatsappFlows).where(and60(eq70(whatsappFlows.id, flowId), eq70(whatsappFlows.businessAccountId, businessAccountId))).limit(1);
         if (!ownFlow) {
           return res.status(403).json({ error: "Flow not found for this business account." });
         }
@@ -92402,7 +92932,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             delete next.dependsOnFields;
             delete next.conditionalOptions;
             delete next.fallbackOptions;
-            await db.update(whatsappFlowSteps).set({ options: next }).where(eq69(whatsappFlowSteps.id, s3.id));
+            await db.update(whatsappFlowSteps).set({ options: next }).where(eq70(whatsappFlowSteps.id, s3.id));
             flowStepResults.updated++;
           } catch (e) {
             flowStepResults.errors.push(`Dealer step: ${e.message}`);
@@ -92420,7 +92950,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             };
             delete next.dropdownItems;
             delete next.dependsOnField;
-            await db.update(whatsappFlowSteps).set({ options: next }).where(eq69(whatsappFlowSteps.id, s4.id));
+            await db.update(whatsappFlowSteps).set({ options: next }).where(eq70(whatsappFlowSteps.id, s4.id));
             flowStepResults.updated++;
           } catch (e) {
             flowStepResults.errors.push(`City step: ${e.message}`);
@@ -92438,7 +92968,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             };
             delete next.dropdownItems;
             delete next.dependsOnField;
-            await db.update(whatsappFlowSteps).set({ options: next }).where(eq69(whatsappFlowSteps.id, s5.id));
+            await db.update(whatsappFlowSteps).set({ options: next }).where(eq70(whatsappFlowSteps.id, s5.id));
             flowStepResults.updated++;
           } catch (e) {
             flowStepResults.errors.push(`Store step: ${e.message}`);
@@ -92453,7 +92983,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       for (const cred of credRows) {
         try {
           const encryptedSecret = encrypt3(cred.secret);
-          const [existingStore] = await db.select().from(crmStoreCredentials).where(and59(eq69(crmStoreCredentials.businessAccountId, businessAccountId), eq69(crmStoreCredentials.sid, cred.sid))).limit(1);
+          const [existingStore] = await db.select().from(crmStoreCredentials).where(and60(eq70(crmStoreCredentials.businessAccountId, businessAccountId), eq70(crmStoreCredentials.sid, cred.sid))).limit(1);
           if (existingStore) {
             await db.update(crmStoreCredentials).set({
               dealerName: cred.dealerName,
@@ -92463,7 +92993,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
               secret: encryptedSecret,
               isActive: true,
               updatedAt: /* @__PURE__ */ new Date()
-            }).where(eq69(crmStoreCredentials.id, existingStore.id));
+            }).where(eq70(crmStoreCredentials.id, existingStore.id));
             credResults.updated++;
           } else {
             await db.insert(crmStoreCredentials).values({
@@ -92499,7 +93029,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       }
       const user = req.user;
       const businessAccountId = user.businessAccountId;
-      const [businessAccount] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq69(businessAccounts.id, businessAccountId)).limit(1);
+      const [businessAccount] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq70(businessAccounts.id, businessAccountId)).limit(1);
       const apiKey = businessAccount?.openaiApiKey || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         return res.status(400).json({ error: "No AI API key configured" });
@@ -92585,9 +93115,9 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
       if (!loan_id || !status || !checksum || !business_account_id) {
         return res.status(400).json({ error: "Missing required fields" });
       }
-      const [storeCred] = await db.select().from(crmStoreCredentials).where(and59(
-        eq69(crmStoreCredentials.businessAccountId, business_account_id),
-        ...sid ? [eq69(crmStoreCredentials.sid, sid)] : []
+      const [storeCred] = await db.select().from(crmStoreCredentials).where(and60(
+        eq70(crmStoreCredentials.businessAccountId, business_account_id),
+        ...sid ? [eq70(crmStoreCredentials.sid, sid)] : []
       )).limit(1);
       if (!storeCred) {
         console.error(`[CRM Webhook] No store credential found for account ${business_account_id}, SID ${sid}`);
@@ -92615,9 +93145,9 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         console.error(`[CRM Webhook] Checksum verification failed for loan ${loan_id}`);
         return res.status(401).json({ error: "Invalid checksum" });
       }
-      const leadsWithLoanId = await db.select().from(whatsappLeads).where(and59(
-        eq69(whatsappLeads.businessAccountId, business_account_id),
-        eq69(whatsappLeads.customCrmLeadId, loan_id)
+      const leadsWithLoanId = await db.select().from(whatsappLeads).where(and60(
+        eq70(whatsappLeads.businessAccountId, business_account_id),
+        eq70(whatsappLeads.customCrmLeadId, loan_id)
       )).limit(1);
       if (leadsWithLoanId.length > 0) {
         const lead = leadsWithLoanId[0];
@@ -92631,7 +93161,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
             _crmStatusUpdatedAt: timestamp2 || (/* @__PURE__ */ new Date()).toISOString()
           },
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq69(whatsappLeads.id, lead.id));
+        }).where(eq70(whatsappLeads.id, lead.id));
         console.log(`[CRM Webhook] Updated lead ${lead.id} with loan status: ${status}`);
       } else {
         console.log(`[CRM Webhook] No lead found for loan_id: ${loan_id}, storing event`);
@@ -92860,8 +93390,8 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         () => checkResumeRateLimit(clientIp, true)
       );
       if (result.status !== "failed" && result.text) {
-        const { randomUUID: randomUUID4 } = await import("crypto");
-        const resumeContextId = randomUUID4();
+        const { randomUUID: randomUUID5 } = await import("crypto");
+        const resumeContextId = randomUUID5();
         let resumeFileUrl;
         try {
           const { r2Storage: r2Storage2 } = await Promise.resolve().then(() => (init_r2StorageService(), r2StorageService_exports));
@@ -92955,8 +93485,8 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         openaiApiKey || void 0
       );
       if (result.status === "success" && result.text) {
-        const { randomUUID: randomUUID4 } = await import("crypto");
-        const imageContextId = randomUUID4();
+        const { randomUUID: randomUUID5 } = await import("crypto");
+        const imageContextId = randomUUID5();
         imageTextCache.set(imageContextId, {
           text: result.text.substring(0, 8e3),
           businessAccountId,
@@ -92984,7 +93514,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
             if (!fs3.existsSync(correctDir)) {
               fs3.mkdirSync(correctDir, { recursive: true });
             }
-            const uniqueName = `${Date.now()}-${randomUUID4()}${path5.extname(req.file.originalname)}`;
+            const uniqueName = `${Date.now()}-${randomUUID5()}${path5.extname(req.file.originalname)}`;
             fs3.writeFileSync(path5.join(correctDir, uniqueName), req.file.buffer);
             imageUrl = `/uploads/business-photos/${businessAccountId}/${uniqueName}`;
           }
@@ -93153,7 +93683,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         return res.status(400).json({ error: "No image file provided" });
       }
       const businessAccountId = link.businessAccountId;
-      const fileName = `public-chat-${Date.now()}-${randomUUID3()}.${req.file.mimetype.split("/")[1]}`;
+      const fileName = `public-chat-${Date.now()}-${randomUUID4()}.${req.file.mimetype.split("/")[1]}`;
       const uploadPath = path5.join(__dirname, "../uploads/chat-images", fileName);
       await fs3.promises.mkdir(path5.dirname(uploadPath), { recursive: true });
       await fs3.promises.writeFile(uploadPath, req.file.buffer);
@@ -93318,7 +93848,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
           message: "If an account exists with this email, a password reset link has been sent"
         });
       }
-      const resetToken = randomUUID3();
+      const resetToken = randomUUID4();
       const expiresAt = /* @__PURE__ */ new Date();
       expiresAt.setHours(expiresAt.getHours() + 1);
       await storage.createPasswordResetToken({
@@ -93939,7 +94469,7 @@ Strict Requirements:
         if (!fs3.existsSync(businessDir)) {
           fs3.mkdirSync(businessDir, { recursive: true });
         }
-        const uniqueName = `${randomUUID3()}${path5.extname(req.file.originalname)}`;
+        const uniqueName = `${randomUUID4()}${path5.extname(req.file.originalname)}`;
         const filepath = path5.join(businessDir, uniqueName);
         fs3.writeFileSync(filepath, req.file.buffer);
         imageUrl = `/portfolio/${businessAccountId}/${uniqueName}`;
@@ -94190,9 +94720,9 @@ Strict Requirements:
         detectedJewelryType: products.detectedJewelryType,
         croppedJewelryUrl: products.croppedJewelryUrl,
         // Use SQL expressions to check if embeddings exist without fetching them
-        hasImageEmbedding: sql41`CASE WHEN ${products.imageEmbedding} IS NOT NULL THEN true ELSE false END`,
-        hasFullImageEmbedding: sql41`CASE WHEN ${products.fullImageEmbedding} IS NOT NULL THEN true ELSE false END`
-      }).from(products).where(eq69(products.businessAccountId, businessAccountId)).orderBy(desc31(products.updatedAt)).limit(100);
+        hasImageEmbedding: sql42`CASE WHEN ${products.imageEmbedding} IS NOT NULL THEN true ELSE false END`,
+        hasFullImageEmbedding: sql42`CASE WHEN ${products.fullImageEmbedding} IS NOT NULL THEN true ELSE false END`
+      }).from(products).where(eq70(products.businessAccountId, businessAccountId)).orderBy(desc31(products.updatedAt)).limit(100);
       const productIds = allProducts.map((p) => p.id);
       const allEmbeddings = productIds.length > 0 ? await db.select({
         id: productJewelryEmbeddings.id,
@@ -94208,10 +94738,10 @@ Strict Requirements:
         createdAt: productJewelryEmbeddings.createdAt,
         updatedAt: productJewelryEmbeddings.updatedAt,
         // Check embedding existence without fetching the vectors
-        hasEmbedding: sql41`CASE WHEN ${productJewelryEmbeddings.embedding} IS NOT NULL THEN true ELSE false END`,
-        hasDescriptionEmbedding: sql41`CASE WHEN ${productJewelryEmbeddings.descriptionEmbedding} IS NOT NULL THEN true ELSE false END`
-      }).from(productJewelryEmbeddings).where(and59(
-        eq69(productJewelryEmbeddings.businessAccountId, businessAccountId),
+        hasEmbedding: sql42`CASE WHEN ${productJewelryEmbeddings.embedding} IS NOT NULL THEN true ELSE false END`,
+        hasDescriptionEmbedding: sql42`CASE WHEN ${productJewelryEmbeddings.descriptionEmbedding} IS NOT NULL THEN true ELSE false END`
+      }).from(productJewelryEmbeddings).where(and60(
+        eq70(productJewelryEmbeddings.businessAccountId, businessAccountId),
         inArray13(productJewelryEmbeddings.productId, productIds)
       )) : [];
       const embeddingsByProduct = /* @__PURE__ */ new Map();
@@ -94323,7 +94853,7 @@ Strict Requirements:
       if (!businessAccountId) {
         return res.status(400).json({ error: "Business account not found" });
       }
-      const result = await db.execute(sql41`
+      const result = await db.execute(sql42`
         SELECT 
           COUNT(*) as total,
           COUNT(text_embedding) as embedded,
@@ -94988,7 +95518,7 @@ Strict Requirements:
         console.log(`[Product Search] Query "${query}" matched ${allProducts.length} products (ALL terms must match in name, description, AI data, or attributes)`);
       }
       if (categoryId) {
-        const categoryProducts = await db.select({ productId: productCategories.productId }).from(productCategories).where(eq69(productCategories.categoryId, categoryId));
+        const categoryProducts = await db.select({ productId: productCategories.productId }).from(productCategories).where(eq70(productCategories.categoryId, categoryId));
         const productIdsWithCategory = new Set(categoryProducts.map((pc) => pc.productId));
         allProducts = allProducts.filter((product) => productIdsWithCategory.has(product.id));
       }
@@ -95325,7 +95855,7 @@ Strict Requirements:
       if (!["whatsapp", "instagram", "website"].includes(channel)) {
         return res.status(400).json({ error: "Invalid channel. Must be whatsapp, instagram, or website" });
       }
-      const results = await db.select().from(smartReplies).where(and59(eq69(smartReplies.businessAccountId, businessAccountId), eq69(smartReplies.channel, channel))).orderBy(smartReplies.priority);
+      const results = await db.select().from(smartReplies).where(and60(eq70(smartReplies.businessAccountId, businessAccountId), eq70(smartReplies.channel, channel))).orderBy(smartReplies.priority);
       res.json({ smartReplies: results });
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -95369,7 +95899,7 @@ Strict Requirements:
       if (responseUrl !== void 0) updates.responseUrl = responseUrl;
       if (priority !== void 0) updates.priority = priority;
       if (isActive !== void 0) updates.isActive = isActive;
-      const [updated] = await db.update(smartReplies).set(updates).where(and59(eq69(smartReplies.id, id), eq69(smartReplies.businessAccountId, businessAccountId))).returning();
+      const [updated] = await db.update(smartReplies).set(updates).where(and60(eq70(smartReplies.id, id), eq70(smartReplies.businessAccountId, businessAccountId))).returning();
       if (!updated) return res.status(404).json({ error: "Smart reply not found" });
       res.json(updated);
     } catch (error) {
@@ -95381,7 +95911,7 @@ Strict Requirements:
       const businessAccountId = req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
       const { id } = req.params;
-      const [deleted] = await db.delete(smartReplies).where(and59(eq69(smartReplies.id, id), eq69(smartReplies.businessAccountId, businessAccountId))).returning();
+      const [deleted] = await db.delete(smartReplies).where(and60(eq70(smartReplies.id, id), eq70(smartReplies.businessAccountId, businessAccountId))).returning();
       if (!deleted) return res.status(404).json({ error: "Smart reply not found" });
       res.json({ success: true });
     } catch (error) {
@@ -95633,7 +96163,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           return res.status(500).json({ error: "Failed to upload training document" });
         }
       } else {
-        const uniqueName = `${randomUUID3()}${path5.extname(req.file.originalname)}`;
+        const uniqueName = `${randomUUID4()}${path5.extname(req.file.originalname)}`;
         const localDir = path5.join(trainingDocsDir, businessAccountId);
         if (!fs3.existsSync(localDir)) {
           fs3.mkdirSync(localDir, { recursive: true });
@@ -96067,10 +96597,10 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(400).json({ error: "Business account not found" });
       }
       const { leadId } = req.params;
-      const { eq: eq74, and: and63, desc: descOrder } = await import("drizzle-orm");
-      const [lead] = await db.select().from(leads).where(and63(
-        eq74(leads.id, leadId),
-        eq74(leads.businessAccountId, businessAccountId)
+      const { eq: eq75, and: and64, desc: descOrder } = await import("drizzle-orm");
+      const [lead] = await db.select().from(leads).where(and64(
+        eq75(leads.id, leadId),
+        eq75(leads.businessAccountId, businessAccountId)
       ));
       if (!lead) {
         return res.status(404).json({ error: "Lead not found" });
@@ -96081,9 +96611,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           sessionId: journeySessions.id,
           journeyName: conversationJourneys.name,
           completed: journeySessions.completed
-        }).from(journeySessions).leftJoin(conversationJourneys, eq74(journeySessions.journeyId, conversationJourneys.id)).where(and63(
-          eq74(journeySessions.conversationId, lead.conversationId),
-          eq74(journeySessions.businessAccountId, businessAccountId)
+        }).from(journeySessions).leftJoin(conversationJourneys, eq75(journeySessions.journeyId, conversationJourneys.id)).where(and64(
+          eq75(journeySessions.conversationId, lead.conversationId),
+          eq75(journeySessions.businessAccountId, businessAccountId)
         )).orderBy(descOrder(journeySessions.createdAt)).limit(1);
         if (sessions2.length > 0) {
           session = sessions2[0];
@@ -96094,9 +96624,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           sessionId: journeySessions.id,
           journeyName: conversationJourneys.name,
           completed: journeySessions.completed
-        }).from(journeyResponses).innerJoin(journeySessions, eq74(journeyResponses.sessionId, journeySessions.id)).leftJoin(conversationJourneys, eq74(journeySessions.journeyId, conversationJourneys.id)).where(and63(
-          eq74(journeyResponses.response, lead.phone),
-          eq74(journeySessions.businessAccountId, businessAccountId)
+        }).from(journeyResponses).innerJoin(journeySessions, eq75(journeyResponses.sessionId, journeySessions.id)).leftJoin(conversationJourneys, eq75(journeySessions.journeyId, conversationJourneys.id)).where(and64(
+          eq75(journeyResponses.response, lead.phone),
+          eq75(journeySessions.businessAccountId, businessAccountId)
         )).orderBy(descOrder(journeySessions.createdAt)).limit(1);
         if (phoneMatches.length > 0) {
           session = phoneMatches[0];
@@ -96109,7 +96639,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         response: journeyResponses.response,
         questionText: journeySteps.questionText,
         stepOrder: journeySteps.stepOrder
-      }).from(journeyResponses).leftJoin(journeySteps, eq74(journeyResponses.stepId, journeySteps.id)).where(eq74(journeyResponses.sessionId, session.sessionId)).orderBy(journeySteps.stepOrder);
+      }).from(journeyResponses).leftJoin(journeySteps, eq75(journeyResponses.stepId, journeySteps.id)).where(eq75(journeyResponses.sessionId, session.sessionId)).orderBy(journeySteps.stepOrder);
       res.json({
         journeyName: session.journeyName || "Unknown Journey",
         completed: session.completed === "true",
@@ -97049,8 +97579,8 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const viaFormConvIds = /* @__PURE__ */ new Set();
       if (conversationIds.length > 0) {
         const [leadRows, journeyRows] = await Promise.all([
-          db.select({ conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest }).from(leads).where(and59(eq69(leads.businessAccountId, businessAccountId), inArray13(leads.conversationId, conversationIds))),
-          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and59(eq69(journeySessions.businessAccountId, businessAccountId), inArray13(journeySessions.conversationId, conversationIds)))
+          db.select({ conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest }).from(leads).where(and60(eq70(leads.businessAccountId, businessAccountId), inArray13(leads.conversationId, conversationIds))),
+          db.select({ conversationId: journeySessions.conversationId }).from(journeySessions).where(and60(eq70(journeySessions.businessAccountId, businessAccountId), inArray13(journeySessions.conversationId, conversationIds)))
         ]);
         for (const row of leadRows) {
           if (row.conversationId) {
@@ -97106,7 +97636,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
       const [lead, journeySession] = await Promise.all([
         storage.getLeadByConversation(conversationId, businessAccountId),
-        db.select({ id: journeySessions.id }).from(journeySessions).where(eq69(journeySessions.conversationId, conversationId)).limit(1)
+        db.select({ id: journeySessions.id }).from(journeySessions).where(eq70(journeySessions.conversationId, conversationId)).limit(1)
       ]);
       const leadTopics = lead?.topicsOfInterest || [];
       const leadBadge = lead ? leadTopics.includes("Discount Availed") ? "Discount Availed" : "Lead Captured" : null;
@@ -97140,9 +97670,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const pageNum = Math.max(1, parseInt(page) || 1);
       const limitNum = Math.max(1, Math.min(100, parseInt(limit) || 20));
       const offset = (pageNum - 1) * limitNum;
-      const { sql: dsql, eq: eq74, and: and63, gte: gte13, lte: lte7, desc: desc32, or: or8, ilike: ilike6, inArray: inArray15 } = await import("drizzle-orm");
+      const { sql: dsql, eq: eq75, and: and64, gte: gte13, lte: lte7, desc: desc32, or: or8, ilike: ilike6, inArray: inArray15 } = await import("drizzle-orm");
       const { conversationJourneys: conversationJourneys3, journeySessions: journeySessions2, journeyResponses: journeyResponses2, journeySteps: journeySteps2, conversations: conversations2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      let conditions = [eq74(journeySessions2.businessAccountId, businessAccountId)];
+      let conditions = [eq75(journeySessions2.businessAccountId, businessAccountId)];
       if (fromDate) {
         conditions.push(gte13(journeySessions2.createdAt, new Date(fromDate)));
       }
@@ -97158,7 +97688,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           )
         );
       }
-      const countResult = await db.select({ count: dsql`count(distinct ${journeySessions2.id})` }).from(journeySessions2).leftJoin(conversations2, eq74(journeySessions2.conversationId, conversations2.id)).leftJoin(conversationJourneys3, eq74(journeySessions2.journeyId, conversationJourneys3.id)).where(and63(...conditions));
+      const countResult = await db.select({ count: dsql`count(distinct ${journeySessions2.id})` }).from(journeySessions2).leftJoin(conversations2, eq75(journeySessions2.conversationId, conversations2.id)).leftJoin(conversationJourneys3, eq75(journeySessions2.journeyId, conversationJourneys3.id)).where(and64(...conditions));
       const total = Number(countResult[0]?.count || 0);
       const sessions2 = await db.select({
         sessionId: journeySessions2.id,
@@ -97168,14 +97698,14 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         conversationTitle: conversations2.title,
         completed: journeySessions2.completed,
         createdAt: journeySessions2.createdAt
-      }).from(journeySessions2).leftJoin(conversations2, eq74(journeySessions2.conversationId, conversations2.id)).leftJoin(conversationJourneys3, eq74(journeySessions2.journeyId, conversationJourneys3.id)).where(and63(...conditions)).orderBy(desc32(journeySessions2.createdAt)).limit(limitNum).offset(offset);
+      }).from(journeySessions2).leftJoin(conversations2, eq75(journeySessions2.conversationId, conversations2.id)).leftJoin(conversationJourneys3, eq75(journeySessions2.journeyId, conversationJourneys3.id)).where(and64(...conditions)).orderBy(desc32(journeySessions2.createdAt)).limit(limitNum).offset(offset);
       const sessionIds = sessions2.map((s) => s.sessionId);
       const responses = sessionIds.length > 0 ? await db.select({
         sessionId: journeyResponses2.sessionId,
         response: journeyResponses2.response,
         questionText: journeySteps2.questionText,
         stepOrder: journeySteps2.stepOrder
-      }).from(journeyResponses2).leftJoin(journeySteps2, eq74(journeyResponses2.stepId, journeySteps2.id)).where(inArray15(journeyResponses2.sessionId, sessionIds)).orderBy(journeySteps2.stepOrder) : [];
+      }).from(journeyResponses2).leftJoin(journeySteps2, eq75(journeyResponses2.stepId, journeySteps2.id)).where(inArray15(journeyResponses2.sessionId, sessionIds)).orderBy(journeySteps2.stepOrder) : [];
       const journeyLeads = sessions2.map((session) => {
         const sessionResponses = responses.filter((r) => r.sessionId === session.sessionId).map((r) => ({
           question: r.questionText || "Unknown",
@@ -97431,7 +97961,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           return res.status(500).json({ error: "Failed to upload avatar" });
         }
       } else {
-        const uniqueName = `avatar_${Date.now()}_${randomUUID3()}${path5.extname(req.file.originalname)}`;
+        const uniqueName = `avatar_${Date.now()}_${randomUUID4()}${path5.extname(req.file.originalname)}`;
         const filepath = path5.join(avatarDir, uniqueName);
         fs3.writeFileSync(filepath, req.file.buffer);
         avatarUrl = `/avatars/custom/${uniqueName}`;
@@ -97564,7 +98094,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           return res.status(500).json({ error: "Failed to upload logo" });
         }
       } else {
-        const uniqueName = `showcase_logo_${Date.now()}_${randomUUID3()}${path5.extname(req.file.originalname)}`;
+        const uniqueName = `showcase_logo_${Date.now()}_${randomUUID4()}${path5.extname(req.file.originalname)}`;
         const filepath = path5.join(avatarDir, uniqueName);
         fs3.writeFileSync(filepath, req.file.buffer);
         logoUrl = `/avatars/custom/${uniqueName}`;
@@ -98888,7 +99418,7 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
       if (!businessAccountId) {
         return res.status(400).json({ error: "Business account not found" });
       }
-      const [config] = await db.select().from(chatMenuConfigs).where(eq69(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
+      const [config] = await db.select().from(chatMenuConfigs).where(eq70(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
       if (!config) {
         return res.json({
           enabled: "false",
@@ -98951,16 +99481,16 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
       if (persistentCtaStyle !== void 0) updateData.persistentCtaStyle = persistentCtaStyle;
       if (chatInsteadStyle !== void 0) updateData.chatInsteadStyle = chatInsteadStyle;
       if (leadFormFields !== void 0) updateData.leadFormFields = leadFormFields;
-      const [existing] = await db.select().from(chatMenuConfigs).where(eq69(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
+      const [existing] = await db.select().from(chatMenuConfigs).where(eq70(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
       if (existing) {
-        await db.update(chatMenuConfigs).set(updateData).where(eq69(chatMenuConfigs.id, existing.id));
+        await db.update(chatMenuConfigs).set(updateData).where(eq70(chatMenuConfigs.id, existing.id));
       } else {
         await db.insert(chatMenuConfigs).values({
           businessAccountId,
           ...updateData
         });
       }
-      const [updated] = await db.select().from(chatMenuConfigs).where(eq69(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
+      const [updated] = await db.select().from(chatMenuConfigs).where(eq70(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
       res.json(normalizeMenuConfig(updated));
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -98972,7 +99502,7 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
       if (!businessAccountId) {
         return res.status(400).json({ error: "Business account not found" });
       }
-      const items = await db.select().from(chatMenuItems).where(eq69(chatMenuItems.businessAccountId, businessAccountId)).orderBy(asc14(chatMenuItems.sortOrder));
+      const items = await db.select().from(chatMenuItems).where(eq70(chatMenuItems.businessAccountId, businessAccountId)).orderBy(asc14(chatMenuItems.sortOrder));
       res.json(items);
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -98989,7 +99519,7 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
         return res.status(400).json({ error: "Title is required" });
       }
       if (parentId) {
-        const [parent] = await db.select().from(chatMenuItems).where(and59(eq69(chatMenuItems.id, parentId), eq69(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
+        const [parent] = await db.select().from(chatMenuItems).where(and60(eq70(chatMenuItems.id, parentId), eq70(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
         if (!parent) {
           return res.status(400).json({ error: "Parent item not found or does not belong to this business" });
         }
@@ -99021,12 +99551,12 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
       }
       const { id } = req.params;
       const { title, subtitle, icon, iconBgColor, iconColor, sortOrder, itemType, actionValue, parentId, isActive, leadFormFields } = req.body;
-      const [existing] = await db.select().from(chatMenuItems).where(and59(eq69(chatMenuItems.id, id), eq69(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
+      const [existing] = await db.select().from(chatMenuItems).where(and60(eq70(chatMenuItems.id, id), eq70(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
       if (!existing) {
         return res.status(404).json({ error: "Menu item not found" });
       }
       if (parentId && parentId !== existing.parentId) {
-        const [parent] = await db.select().from(chatMenuItems).where(and59(eq69(chatMenuItems.id, parentId), eq69(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
+        const [parent] = await db.select().from(chatMenuItems).where(and60(eq70(chatMenuItems.id, parentId), eq70(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
         if (!parent) {
           return res.status(400).json({ error: "Parent item not found or does not belong to this business" });
         }
@@ -99043,8 +99573,8 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
       if (leadFormFields !== void 0) updateData.leadFormFields = leadFormFields;
       if (parentId !== void 0) updateData.parentId = parentId;
       if (isActive !== void 0) updateData.isActive = isActive;
-      await db.update(chatMenuItems).set(updateData).where(eq69(chatMenuItems.id, id));
-      const [updated] = await db.select().from(chatMenuItems).where(eq69(chatMenuItems.id, id)).limit(1);
+      await db.update(chatMenuItems).set(updateData).where(eq70(chatMenuItems.id, id));
+      const [updated] = await db.select().from(chatMenuItems).where(eq70(chatMenuItems.id, id)).limit(1);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -99057,12 +99587,12 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
         return res.status(400).json({ error: "Business account not found" });
       }
       const { id } = req.params;
-      const [existing] = await db.select().from(chatMenuItems).where(and59(eq69(chatMenuItems.id, id), eq69(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
+      const [existing] = await db.select().from(chatMenuItems).where(and60(eq70(chatMenuItems.id, id), eq70(chatMenuItems.businessAccountId, businessAccountId))).limit(1);
       if (!existing) {
         return res.status(404).json({ error: "Menu item not found" });
       }
-      await db.delete(chatMenuItems).where(and59(eq69(chatMenuItems.parentId, id), eq69(chatMenuItems.businessAccountId, businessAccountId)));
-      await db.delete(chatMenuItems).where(eq69(chatMenuItems.id, id));
+      await db.delete(chatMenuItems).where(and60(eq70(chatMenuItems.parentId, id), eq70(chatMenuItems.businessAccountId, businessAccountId)));
+      await db.delete(chatMenuItems).where(eq70(chatMenuItems.id, id));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -99086,13 +99616,13 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
           }
         }
       }
-      const [config] = await db.select().from(chatMenuConfigs).where(eq69(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
+      const [config] = await db.select().from(chatMenuConfigs).where(eq70(chatMenuConfigs.businessAccountId, businessAccountId)).limit(1);
       if (!config || config.enabled !== "true") {
         return res.json({ enabled: false });
       }
-      const items = await db.select().from(chatMenuItems).where(and59(
-        eq69(chatMenuItems.businessAccountId, businessAccountId),
-        eq69(chatMenuItems.isActive, "true")
+      const items = await db.select().from(chatMenuItems).where(and60(
+        eq70(chatMenuItems.businessAccountId, businessAccountId),
+        eq70(chatMenuItems.isActive, "true")
       )).orderBy(asc14(chatMenuItems.sortOrder));
       const buildTree = (parentId) => {
         return items.filter((item) => item.parentId === parentId).map((item) => ({
@@ -99342,18 +99872,18 @@ ${reviewText}`
         toDate
       });
       const convoConditions = [
-        eq69(conversations.businessAccountId, businessAccountId),
-        eq69(conversations.isInternalTest, "false")
+        eq70(conversations.businessAccountId, businessAccountId),
+        eq70(conversations.isInternalTest, "false")
       ];
       if (fromDate) convoConditions.push(gte12(conversations.createdAt, new Date(fromDate)));
       if (toDate) convoConditions.push(lte5(conversations.createdAt, new Date(toDate)));
-      const leadConditions = [eq69(leads.businessAccountId, businessAccountId)];
+      const leadConditions = [eq70(leads.businessAccountId, businessAccountId)];
       if (fromDate) leadConditions.push(gte12(leads.createdAt, new Date(fromDate)));
       if (toDate) leadConditions.push(lte5(leads.createdAt, new Date(toDate)));
       const [dashAllConvRows, dashFormLeadRows, [leadResult]] = await Promise.all([
-        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and59(...convoConditions)),
-        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and59(eq69(leads.businessAccountId, businessAccountId), sql41`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql41`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`)),
-        db.select({ total: count4() }).from(leads).where(and59(...leadConditions))
+        db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and60(...convoConditions)),
+        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and60(eq70(leads.businessAccountId, businessAccountId), sql42`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql42`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`)),
+        db.select({ total: count4() }).from(leads).where(and60(...leadConditions))
       ]);
       const dashFormPhoneMap = /* @__PURE__ */ new Map();
       for (const l of dashFormLeadRows) {
@@ -99889,7 +100419,7 @@ ${reviewText}`
         return res.json([]);
       }
       const [visitorRows, leadRows, convoRows] = await Promise.all([
-        db.execute(sql41`
+        db.execute(sql42`
           SELECT business_account_id,
             SUM(CASE WHEN date >= ${mtdStartIST} THEN opened_chat_count ELSE 0 END)::int AS mtd,
             SUM(CASE WHEN date = ${todayIST} THEN opened_chat_count ELSE 0 END)::int AS today
@@ -99897,7 +100427,7 @@ ${reviewText}`
           WHERE date >= ${mtdStartIST}
           GROUP BY business_account_id
         `),
-        db.execute(sql41`
+        db.execute(sql42`
           SELECT business_account_id,
             COUNT(CASE WHEN created_at >= ${mtdStartIST}::date THEN 1 END)::int AS mtd,
             COUNT(CASE WHEN created_at >= ${todayIST}::date AND created_at < (${todayIST}::date + interval '1 day') THEN 1 END)::int AS today
@@ -99905,7 +100435,7 @@ ${reviewText}`
           WHERE created_at >= ${mtdStartIST}::date
           GROUP BY business_account_id
         `),
-        db.execute(sql41`
+        db.execute(sql42`
           SELECT business_account_id,
             COUNT(CASE WHEN created_at >= ${mtdStartIST}::date THEN 1 END)::int AS mtd,
             COUNT(CASE WHEN created_at >= ${todayIST}::date AND created_at < (${todayIST}::date + interval '1 day') THEN 1 END)::int AS today
@@ -100296,8 +100826,8 @@ ${reviewText}`
       const sevenDaysAgo = /* @__PURE__ */ new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
       const now = /* @__PURE__ */ new Date();
-      const convCount = await db.select({ count: sql41`count(*)::int` }).from(conversations).where(and59(
-        eq69(conversations.businessAccountId, businessAccountId),
+      const convCount = await db.select({ count: sql42`count(*)::int` }).from(conversations).where(and60(
+        eq70(conversations.businessAccountId, businessAccountId),
         gte12(conversations.createdAt, sevenDaysAgo),
         lte5(conversations.createdAt, now)
       ));
@@ -100314,7 +100844,7 @@ ${reviewText}`
         });
       }
       if (!forceRefresh) {
-        const [cached] = await db.select().from(conversationAnalysisCache).where(eq69(conversationAnalysisCache.businessAccountId, businessAccountId)).limit(1);
+        const [cached] = await db.select().from(conversationAnalysisCache).where(eq70(conversationAnalysisCache.businessAccountId, businessAccountId)).limit(1);
         if (cached) {
           const cacheAge = Date.now() - new Date(cached.updatedAt).getTime();
           const cacheValid = cacheAge < 24 * 60 * 60 * 1e3;
@@ -100443,7 +100973,7 @@ Format your response as JSON with this structure:
       if (!businessAccountId) {
         return res.status(400).json({ error: "Business account not found" });
       }
-      const [settings] = await db.select().from(conversationCategorySettings).where(eq69(conversationCategorySettings.businessAccountId, businessAccountId));
+      const [settings] = await db.select().from(conversationCategorySettings).where(eq70(conversationCategorySettings.businessAccountId, businessAccountId));
       res.json({
         categories: settings?.categories || [],
         allowOtherCategory: settings?.allowOtherCategory ?? true
@@ -100487,13 +101017,13 @@ Format your response as JSON with this structure:
           subSeen.add(subKey);
         }
       }
-      const [existing] = await db.select({ id: conversationCategorySettings.id }).from(conversationCategorySettings).where(eq69(conversationCategorySettings.businessAccountId, businessAccountId));
+      const [existing] = await db.select({ id: conversationCategorySettings.id }).from(conversationCategorySettings).where(eq70(conversationCategorySettings.businessAccountId, businessAccountId));
       if (existing) {
         await db.update(conversationCategorySettings).set({
           categories: categories2,
           allowOtherCategory: allowOtherCategory !== false,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq69(conversationCategorySettings.id, existing.id));
+        }).where(eq70(conversationCategorySettings.id, existing.id));
       } else {
         await db.insert(conversationCategorySettings).values({
           businessAccountId,
@@ -100519,11 +101049,11 @@ Format your response as JSON with this structure:
         name: businessAccounts.name,
         description: businessAccounts.description,
         website: businessAccounts.website
-      }).from(businessAccounts).where(eq69(businessAccounts.id, businessAccountId));
+      }).from(businessAccounts).where(eq70(businessAccounts.id, businessAccountId));
       if (!business) {
         return res.status(400).json({ error: "Business account not found" });
       }
-      const [widget] = await db.select({ customInstructions: widgetSettings.customInstructions }).from(widgetSettings).where(eq69(widgetSettings.businessAccountId, businessAccountId));
+      const [widget] = await db.select({ customInstructions: widgetSettings.customInstructions }).from(widgetSettings).where(eq70(widgetSettings.businessAccountId, businessAccountId));
       const contextParts = [];
       if (business.name) contextParts.push(`Business Name: ${business.name}`);
       if (business.description) contextParts.push(`Description: ${business.description}`);
@@ -100655,7 +101185,7 @@ ${businessContext}`
       if (delayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
-      const allAttachments = await db.select({ id: whatsappLeadAttachments.id, mediaUrl: whatsappLeadAttachments.mediaUrl, filePath: whatsappLeadAttachments.filePath, documentCategory: whatsappLeadAttachments.documentCategory }).from(whatsappLeadAttachments).where(eq69(whatsappLeadAttachments.leadId, leadId));
+      const allAttachments = await db.select({ id: whatsappLeadAttachments.id, mediaUrl: whatsappLeadAttachments.mediaUrl, filePath: whatsappLeadAttachments.filePath, documentCategory: whatsappLeadAttachments.documentCategory }).from(whatsappLeadAttachments).where(eq70(whatsappLeadAttachments.leadId, leadId));
       if (allAttachments.length === 0) return;
       for (const docType of Object.keys(collectedDocuments)) {
         const doc = collectedDocuments[docType];
@@ -100690,13 +101220,13 @@ ${businessContext}`
               return att && !att.documentCategory;
             });
             if (untaggedMatch) {
-              await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(eq69(whatsappLeadAttachments.id, untaggedMatch));
+              await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(eq70(whatsappLeadAttachments.id, untaggedMatch));
               const att = allAttachments.find((a) => a.id === untaggedMatch);
               if (att) att.documentCategory = docType;
               console.log(`[MSG91 Webhook] Retag: tagged attachment as ${docType} for lead ${leadId}`);
             } else {
               const sourceAttId = matchingIds[0];
-              const fullAtt = await db.select().from(whatsappLeadAttachments).where(eq69(whatsappLeadAttachments.id, sourceAttId)).then((rows) => rows[0]);
+              const fullAtt = await db.select().from(whatsappLeadAttachments).where(eq70(whatsappLeadAttachments.id, sourceAttId)).then((rows) => rows[0]);
               if (fullAtt) {
                 const newId = crypto.randomUUID();
                 await db.insert(whatsappLeadAttachments).values({
@@ -100728,7 +101258,7 @@ ${businessContext}`
           );
           if (staleAttachments.length > 0) {
             const staleIds = staleAttachments.map((a) => a.id);
-            await db.delete(whatsappLeadAttachments).where(sql41`${whatsappLeadAttachments.id} IN (${sql41.join(staleIds.map((id) => sql41`${id}`), sql41`, `)})`);
+            await db.delete(whatsappLeadAttachments).where(sql42`${whatsappLeadAttachments.id} IN (${sql42.join(staleIds.map((id) => sql42`${id}`), sql42`, `)})`);
             console.log(`[MSG91 Webhook] Retag cleanup: removed ${staleIds.length} superseded ${docType} attachment(s) for lead ${leadId}`);
           }
         }
@@ -100746,7 +101276,7 @@ ${businessContext}`
         }
         if (invalidAtts.length > 0) {
           const invalidIds = invalidAtts.map((a) => a.id);
-          await db.delete(whatsappLeadAttachments).where(sql41`${whatsappLeadAttachments.id} IN (${sql41.join(invalidIds.map((id) => sql41`${id}`), sql41`, `)})`);
+          await db.delete(whatsappLeadAttachments).where(sql42`${whatsappLeadAttachments.id} IN (${sql42.join(invalidIds.map((id) => sql42`${id}`), sql42`, `)})`);
           console.log(`[MSG91 Webhook] Retag: deleted ${invalidAtts.length} invalid ${invalidType} attachment(s) and R2 files for lead ${leadId}`);
         }
       }
@@ -100931,7 +101461,7 @@ ${businessContext}`
         }
         if (settings?.whitelistEnabled === "true") {
           const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-          const allWhitelisted = await db.select({ phoneNumber: whatsappWhitelist2.phoneNumber }).from(whatsappWhitelist2).where(eq69(whatsappWhitelist2.businessAccountId, businessId));
+          const allWhitelisted = await db.select({ phoneNumber: whatsappWhitelist2.phoneNumber }).from(whatsappWhitelist2).where(eq70(whatsappWhitelist2.businessAccountId, businessId));
           const isWhitelisted = allWhitelisted.some((entry) => {
             const wn = entry.phoneNumber;
             return wn === senderPhone || senderPhone.endsWith(wn) || wn.endsWith(senderPhone);
@@ -101110,10 +101640,10 @@ ${businessContext}`
                       if (flowResult.flowCompleted) {
                         (async () => {
                           try {
-                            const [crmSettings] = await db.select().from(customCrmSettings).where(eq69(customCrmSettings.businessAccountId, businessId)).limit(1);
+                            const [crmSettings] = await db.select().from(customCrmSettings).where(eq70(customCrmSettings.businessAccountId, businessId)).limit(1);
                             if (crmSettings?.enabled && crmSettings.autoSyncEnabled && crmSettings.apiBaseUrl && crmSettings.apiEndpoint) {
                               console.log("[Custom CRM] Auto-syncing WhatsApp lead:", updatedLead.id);
-                              const crmMappings = await db.select().from(customCrmFieldMappings).where(eq69(customCrmFieldMappings.businessAccountId, businessId)).orderBy(customCrmFieldMappings.sortOrder);
+                              const crmMappings = await db.select().from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessId)).orderBy(customCrmFieldMappings.sortOrder);
                               const extractedData = updatedLead.extractedData || {};
                               const documents = await buildDocumentContext(updatedLead.id);
                               const leadContext = {
@@ -101131,7 +101661,7 @@ ${businessContext}`
                               const asDealerName = extractedData.dealer_name || extractedData.dealerName || extractedData.dealer;
                               const asCityName = extractedData.city || extractedData.city_name || extractedData.dealer_city || extractedData.dealerCity;
                               if (asStoreName || asDealerName) {
-                                const asStoreCreds = await db.select().from(crmStoreCredentials).where(and59(eq69(crmStoreCredentials.businessAccountId, businessId), eq69(crmStoreCredentials.isActive, true)));
+                                const asStoreCreds = await db.select().from(crmStoreCredentials).where(and60(eq70(crmStoreCredentials.businessAccountId, businessId), eq70(crmStoreCredentials.isActive, true)));
                                 const asNorm = (s) => s ? s.trim().toLowerCase() : "";
                                 const asNS = asNorm(asStoreName), asND = asNorm(asDealerName), asNC = asNorm(asCityName);
                                 if (asNS && asND && asNC) autoStoreCredential = asStoreCreds.find((sc) => asNorm(sc.storeName) === asNS && asNorm(sc.dealerName) === asND && asNorm(sc.city) === asNC);
@@ -101140,7 +101670,7 @@ ${businessContext}`
                                 if (!autoStoreCredential && asStoreCreds.length > 0 && (asNS || asND)) {
                                   try {
                                     const OpenAI41 = (await import("openai")).default;
-                                    const [bizAcct] = await db.select().from(businessAccounts).where(eq69(businessAccounts.id, businessId)).limit(1);
+                                    const [bizAcct] = await db.select().from(businessAccounts).where(eq70(businessAccounts.id, businessId)).limit(1);
                                     const asApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
                                     if (asApiKey) {
                                       const asOAI = new OpenAI41({ apiKey: asApiKey, timeout: 15e3 });
@@ -101183,7 +101713,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                   customCrmSyncError: null,
                                   customCrmSyncPayload: crmResult.payload,
                                   updatedAt: /* @__PURE__ */ new Date()
-                                }).where(eq69(whatsappLeads.id, updatedLead.id));
+                                }).where(eq70(whatsappLeads.id, updatedLead.id));
                                 console.log("[Custom CRM] Auto-sync success:", updatedLead.id);
                               } else {
                                 await db.update(whatsappLeads).set({
@@ -101191,7 +101721,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                   customCrmSyncError: crmResult.message,
                                   customCrmSyncPayload: crmResult.payload,
                                   updatedAt: /* @__PURE__ */ new Date()
-                                }).where(eq69(whatsappLeads.id, updatedLead.id));
+                                }).where(eq70(whatsappLeads.id, updatedLead.id));
                                 console.error("[Custom CRM] Auto-sync failed:", updatedLead.id, crmResult.message);
                               }
                             }
@@ -101242,14 +101772,14 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           if (flowResult.handled && flowResult.collectedData?._bankStatementPassword && flowResult.collectedData?._collectedDocuments) {
             whatsappService2.findLeadByFlowSession(businessId, flowResult.sessionId || pendingSession?.id || "").then(async (existingLead) => {
               if (existingLead) {
-                const [freshLead] = await db.select({ extractedData: whatsappLeads.extractedData }).from(whatsappLeads).where(eq69(whatsappLeads.id, existingLead.id)).limit(1);
+                const [freshLead] = await db.select({ extractedData: whatsappLeads.extractedData }).from(whatsappLeads).where(eq70(whatsappLeads.id, existingLead.id)).limit(1);
                 const currentData = freshLead?.extractedData || {};
                 currentData._documents = {
                   ...currentData._documents || {},
                   ...flowResult.collectedData._collectedDocuments
                 };
                 currentData.bank_statement_password = flowResult.collectedData._bankStatementPassword;
-                await db.update(whatsappLeads).set({ extractedData: currentData }).where(eq69(whatsappLeads.id, existingLead.id));
+                await db.update(whatsappLeads).set({ extractedData: currentData }).where(eq70(whatsappLeads.id, existingLead.id));
                 console.log("[MSG91 Webhook] Stored bank statement password and documents for lead:", existingLead.id);
                 const docs = flowResult.collectedData._collectedDocuments;
                 for (const docType of Object.keys(docs)) {
@@ -101266,9 +101796,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                   }
                   const newlyTaggedIds = [];
                   for (const sourceUrl of allUrls) {
-                    const tagged = await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(and59(
-                      eq69(whatsappLeadAttachments.leadId, existingLead.id),
-                      sql41`(${whatsappLeadAttachments.mediaUrl} = ${sourceUrl} OR ${whatsappLeadAttachments.filePath} = ${sourceUrl})`
+                    const tagged = await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(and60(
+                      eq70(whatsappLeadAttachments.leadId, existingLead.id),
+                      sql42`(${whatsappLeadAttachments.mediaUrl} = ${sourceUrl} OR ${whatsappLeadAttachments.filePath} = ${sourceUrl})`
                     )).returning({ id: whatsappLeadAttachments.id });
                     if (tagged.length > 0) {
                       newlyTaggedIds.push(...tagged.map((t) => t.id));
@@ -101276,10 +101806,10 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                     }
                   }
                   if (allUrls.length > 0) {
-                    const alreadyTaggedRows = await db.select({ id: whatsappLeadAttachments.id }).from(whatsappLeadAttachments).where(and59(
-                      eq69(whatsappLeadAttachments.leadId, existingLead.id),
-                      eq69(whatsappLeadAttachments.documentCategory, docType),
-                      sql41`(${whatsappLeadAttachments.mediaUrl} IN (${sql41.join(allUrls.map((u) => sql41`${u}`), sql41`, `)}) OR ${whatsappLeadAttachments.filePath} IN (${sql41.join(allUrls.map((u) => sql41`${u}`), sql41`, `)}))`
+                    const alreadyTaggedRows = await db.select({ id: whatsappLeadAttachments.id }).from(whatsappLeadAttachments).where(and60(
+                      eq70(whatsappLeadAttachments.leadId, existingLead.id),
+                      eq70(whatsappLeadAttachments.documentCategory, docType),
+                      sql42`(${whatsappLeadAttachments.mediaUrl} IN (${sql42.join(allUrls.map((u) => sql42`${u}`), sql42`, `)}) OR ${whatsappLeadAttachments.filePath} IN (${sql42.join(allUrls.map((u) => sql42`${u}`), sql42`, `)}))`
                     ));
                     for (const att of alreadyTaggedRows) {
                       if (!newlyTaggedIds.includes(att.id)) {
@@ -101288,10 +101818,10 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                     }
                   }
                   if (newlyTaggedIds.length > 0) {
-                    const deleted = await db.delete(whatsappLeadAttachments).where(and59(
-                      eq69(whatsappLeadAttachments.leadId, existingLead.id),
-                      eq69(whatsappLeadAttachments.documentCategory, docType),
-                      sql41`${whatsappLeadAttachments.id} NOT IN (${sql41.join(newlyTaggedIds.map((id) => sql41`${id}`), sql41`, `)})`
+                    const deleted = await db.delete(whatsappLeadAttachments).where(and60(
+                      eq70(whatsappLeadAttachments.leadId, existingLead.id),
+                      eq70(whatsappLeadAttachments.documentCategory, docType),
+                      sql42`${whatsappLeadAttachments.id} NOT IN (${sql42.join(newlyTaggedIds.map((id) => sql42`${id}`), sql42`, `)})`
                     )).returning({ id: whatsappLeadAttachments.id });
                     if (deleted.length > 0) {
                       console.log(`[MSG91 Webhook] Removed ${deleted.length} stale ${docType} attachment(s) for lead ${existingLead.id}`);
@@ -101300,9 +101830,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                   if (allUrls.length === 0) {
                     const isPdf = docType.includes("bank") || docType.includes("statement");
                     if (isPdf) {
-                      const tagged = await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(and59(
-                        eq69(whatsappLeadAttachments.leadId, existingLead.id),
-                        sql41`${whatsappLeadAttachments.fileName} ILIKE '%.pdf'`
+                      const tagged = await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(and60(
+                        eq70(whatsappLeadAttachments.leadId, existingLead.id),
+                        sql42`${whatsappLeadAttachments.fileName} ILIKE '%.pdf'`
                       )).returning({ id: whatsappLeadAttachments.id });
                       if (tagged.length > 0) {
                         console.log(`[MSG91 Webhook] Tagged ${tagged.length} PDF attachment(s) as: ${docCapitalized} (category: ${docType})`);
@@ -101317,7 +101847,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           }
           if (flowResult.handled && flowResult.collectedData?._collectedDocuments && !flowResult.collectedData?._bankStatementPassword) {
             const updateLeadId = flowResult.collectedData?._updateExistingLeadId;
-            const findLeadPromise = updateLeadId ? db.select().from(whatsappLeads).where(eq69(whatsappLeads.id, updateLeadId)).limit(1).then((rows) => rows[0] || null) : whatsappService2.findLeadByFlowSession(businessId, flowResult.sessionId || pendingSession?.id || "");
+            const findLeadPromise = updateLeadId ? db.select().from(whatsappLeads).where(eq70(whatsappLeads.id, updateLeadId)).limit(1).then((rows) => rows[0] || null) : whatsappService2.findLeadByFlowSession(businessId, flowResult.sessionId || pendingSession?.id || "");
             findLeadPromise.then(async (existingLead) => {
               if (existingLead) {
                 await whatsappService2.syncLeadDocuments(existingLead.id, flowResult.collectedData._collectedDocuments);
@@ -101398,7 +101928,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                 const updateLeadId = flowResult.collectedData?._updateExistingLeadId;
                 let lead = null;
                 if (updateLeadId) {
-                  const [existingLead] = await db.select().from(whatsappLeads).where(eq69(whatsappLeads.id, updateLeadId)).limit(1);
+                  const [existingLead] = await db.select().from(whatsappLeads).where(eq70(whatsappLeads.id, updateLeadId)).limit(1);
                   lead = existingLead || null;
                 }
                 if (!lead && effectiveSessionId) {
@@ -101507,12 +102037,12 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                           }
                           if (matchedDocLabel && matchedDocType) {
                             const { whatsappLeadAttachments: whatsappLeadAttachments2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-                            const { eq: eq74, and: and63 } = await import("drizzle-orm");
+                            const { eq: eq75, and: and64 } = await import("drizzle-orm");
                             const docEntry = docs[matchedDocType];
                             if (docEntry?.isValid === false) {
-                              const [invalidAtt] = await db.select({ id: whatsappLeadAttachments2.id, filePath: whatsappLeadAttachments2.filePath }).from(whatsappLeadAttachments2).where(and63(
-                                eq74(whatsappLeadAttachments2.leadId, attachToLeadId),
-                                eq74(whatsappLeadAttachments2.mediaUrl, url)
+                              const [invalidAtt] = await db.select({ id: whatsappLeadAttachments2.id, filePath: whatsappLeadAttachments2.filePath }).from(whatsappLeadAttachments2).where(and64(
+                                eq75(whatsappLeadAttachments2.leadId, attachToLeadId),
+                                eq75(whatsappLeadAttachments2.mediaUrl, url)
                               ));
                               if (invalidAtt?.filePath) {
                                 const r2Key = r2Storage.extractKeyFromUrl(invalidAtt.filePath);
@@ -101520,15 +102050,15 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                   await r2Storage.deleteFile(r2Key);
                                 }
                               }
-                              await db.delete(whatsappLeadAttachments2).where(and63(
-                                eq74(whatsappLeadAttachments2.leadId, attachToLeadId),
-                                eq74(whatsappLeadAttachments2.mediaUrl, url)
+                              await db.delete(whatsappLeadAttachments2).where(and64(
+                                eq75(whatsappLeadAttachments2.leadId, attachToLeadId),
+                                eq75(whatsappLeadAttachments2.mediaUrl, url)
                               ));
                               console.log(`[MSG91 Webhook] Deleted invalid ${matchedDocType} attachment and R2 file for lead ${attachToLeadId}`);
                             } else {
-                              const taggedRows = await db.update(whatsappLeadAttachments2).set({ caption: matchedDocLabel, documentCategory: matchedDocType }).where(and63(
-                                eq74(whatsappLeadAttachments2.leadId, attachToLeadId),
-                                eq74(whatsappLeadAttachments2.mediaUrl, url)
+                              const taggedRows = await db.update(whatsappLeadAttachments2).set({ caption: matchedDocLabel, documentCategory: matchedDocType }).where(and64(
+                                eq75(whatsappLeadAttachments2.leadId, attachToLeadId),
+                                eq75(whatsappLeadAttachments2.mediaUrl, url)
                               )).returning({ id: whatsappLeadAttachments2.id });
                               console.log(`[MSG91 Webhook] Tagged attachment as: ${matchedDocLabel} (category: ${matchedDocType})`);
                               if (taggedRows.length > 0) {
@@ -101543,19 +102073,19 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                 }
                                 const taggedIds = taggedRows.map((t) => t.id);
                                 if (docAllUrls.length > 0) {
-                                  const alreadyTaggedRows2 = await db.select({ id: whatsappLeadAttachments2.id }).from(whatsappLeadAttachments2).where(and63(
-                                    eq74(whatsappLeadAttachments2.leadId, attachToLeadId),
-                                    eq74(whatsappLeadAttachments2.documentCategory, matchedDocType),
-                                    sql41`(${whatsappLeadAttachments2.mediaUrl} IN (${sql41.join(docAllUrls.map((u) => sql41`${u}`), sql41`, `)}) OR ${whatsappLeadAttachments2.filePath} IN (${sql41.join(docAllUrls.map((u) => sql41`${u}`), sql41`, `)}))`
+                                  const alreadyTaggedRows2 = await db.select({ id: whatsappLeadAttachments2.id }).from(whatsappLeadAttachments2).where(and64(
+                                    eq75(whatsappLeadAttachments2.leadId, attachToLeadId),
+                                    eq75(whatsappLeadAttachments2.documentCategory, matchedDocType),
+                                    sql42`(${whatsappLeadAttachments2.mediaUrl} IN (${sql42.join(docAllUrls.map((u) => sql42`${u}`), sql42`, `)}) OR ${whatsappLeadAttachments2.filePath} IN (${sql42.join(docAllUrls.map((u) => sql42`${u}`), sql42`, `)}))`
                                   ));
                                   for (const att of alreadyTaggedRows2) {
                                     if (!taggedIds.includes(att.id)) taggedIds.push(att.id);
                                   }
                                 }
-                                const deletedDups = await db.delete(whatsappLeadAttachments2).where(and63(
-                                  eq74(whatsappLeadAttachments2.leadId, attachToLeadId),
-                                  eq74(whatsappLeadAttachments2.documentCategory, matchedDocType),
-                                  sql41`${whatsappLeadAttachments2.id} NOT IN (${sql41.join(taggedIds.map((id) => sql41`${id}`), sql41`, `)})`
+                                const deletedDups = await db.delete(whatsappLeadAttachments2).where(and64(
+                                  eq75(whatsappLeadAttachments2.leadId, attachToLeadId),
+                                  eq75(whatsappLeadAttachments2.documentCategory, matchedDocType),
+                                  sql42`${whatsappLeadAttachments2.id} NOT IN (${sql42.join(taggedIds.map((id) => sql42`${id}`), sql42`, `)})`
                                 )).returning({ id: whatsappLeadAttachments2.id });
                                 if (deletedDups.length > 0) {
                                   console.log(`[MSG91 Webhook] Removed ${deletedDups.length} stale ${matchedDocType} attachment(s) for lead ${attachToLeadId}`);
@@ -101857,10 +102387,10 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                 console.log(`[MSG91 Webhook] Interactive lead updated with flow data (completed=${!!flowResult.flowCompleted}):`, updatedLead.id);
                 if (flowResult.flowCompleted) {
                   try {
-                    const [crmSettings] = await db.select().from(customCrmSettings).where(eq69(customCrmSettings.businessAccountId, businessId)).limit(1);
+                    const [crmSettings] = await db.select().from(customCrmSettings).where(eq70(customCrmSettings.businessAccountId, businessId)).limit(1);
                     if (crmSettings?.enabled && crmSettings.autoSyncEnabled && crmSettings.apiBaseUrl && crmSettings.apiEndpoint) {
                       console.log("[Custom CRM] Auto-syncing interactive WhatsApp lead:", updatedLead.id);
-                      const crmMappings = await db.select().from(customCrmFieldMappings).where(eq69(customCrmFieldMappings.businessAccountId, businessId)).orderBy(customCrmFieldMappings.sortOrder);
+                      const crmMappings = await db.select().from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessId)).orderBy(customCrmFieldMappings.sortOrder);
                       const extractedData = updatedLead.extractedData || {};
                       const documents = await buildDocumentContext(updatedLead.id);
                       const leadContext = {
@@ -101878,7 +102408,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                       const iAsDealerName = extractedData.dealer_name || extractedData.dealerName || extractedData.dealer;
                       const iAsCityName = extractedData.city || extractedData.city_name || extractedData.dealer_city || extractedData.dealerCity;
                       if (iAsStoreName || iAsDealerName) {
-                        const iAsStoreCreds = await db.select().from(crmStoreCredentials).where(and59(eq69(crmStoreCredentials.businessAccountId, businessId), eq69(crmStoreCredentials.isActive, true)));
+                        const iAsStoreCreds = await db.select().from(crmStoreCredentials).where(and60(eq70(crmStoreCredentials.businessAccountId, businessId), eq70(crmStoreCredentials.isActive, true)));
                         const iAsNorm = (s) => s ? s.trim().toLowerCase() : "";
                         const iAsNS = iAsNorm(iAsStoreName), iAsND = iAsNorm(iAsDealerName), iAsNC = iAsNorm(iAsCityName);
                         if (iAsNS && iAsND && iAsNC) iAutoStoreCredential = iAsStoreCreds.find((sc) => iAsNorm(sc.storeName) === iAsNS && iAsNorm(sc.dealerName) === iAsND && iAsNorm(sc.city) === iAsNC);
@@ -101887,7 +102417,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                         if (!iAutoStoreCredential && iAsStoreCreds.length > 0 && (iAsNS || iAsND)) {
                           try {
                             const OpenAI41 = (await import("openai")).default;
-                            const [bizAcct] = await db.select().from(businessAccounts).where(eq69(businessAccounts.id, businessId)).limit(1);
+                            const [bizAcct] = await db.select().from(businessAccounts).where(eq70(businessAccounts.id, businessId)).limit(1);
                             const iAsApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
                             if (iAsApiKey) {
                               const iAsOAI = new OpenAI41({ apiKey: iAsApiKey, timeout: 15e3 });
@@ -101930,7 +102460,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                           customCrmSyncError: null,
                           customCrmSyncPayload: crmResult.payload,
                           updatedAt: /* @__PURE__ */ new Date()
-                        }).where(eq69(whatsappLeads.id, updatedLead.id));
+                        }).where(eq70(whatsappLeads.id, updatedLead.id));
                         console.log("[Custom CRM] Auto-sync success (interactive):", updatedLead.id);
                       } else {
                         await db.update(whatsappLeads).set({
@@ -101938,7 +102468,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                           customCrmSyncError: crmResult.message,
                           customCrmSyncPayload: crmResult.payload,
                           updatedAt: /* @__PURE__ */ new Date()
-                        }).where(eq69(whatsappLeads.id, updatedLead.id));
+                        }).where(eq70(whatsappLeads.id, updatedLead.id));
                         console.error("[Custom CRM] Auto-sync failed (interactive):", updatedLead.id, crmResult.message);
                       }
                     }
@@ -102202,7 +102732,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       if (body.whitelistEnabled !== void 0) {
         if (body.whitelistEnabled) {
           const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-          const [{ n: allowedCount }] = await db.select({ n: sql41`count(*)::int` }).from(whatsappWhitelist2).where(eq69(whatsappWhitelist2.businessAccountId, businessAccountId));
+          const [{ n: allowedCount }] = await db.select({ n: sql42`count(*)::int` }).from(whatsappWhitelist2).where(eq70(whatsappWhitelist2.businessAccountId, businessAccountId));
           if (allowedCount === 0 && body.confirmBlockAllInbound !== true) {
             return res.status(409).json({
               error: "Turning on Allowed Numbers while the list is empty will block every incoming WhatsApp message \u2014 no leads will be captured and the AI will not reply to anyone. Add at least one number first, or confirm you intend to block all incoming messages.",
@@ -102365,7 +102895,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No active business account" });
       const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const numbers = await db.select().from(whatsappWhitelist2).where(eq69(whatsappWhitelist2.businessAccountId, businessAccountId)).orderBy(desc31(whatsappWhitelist2.createdAt));
+      const numbers = await db.select().from(whatsappWhitelist2).where(eq70(whatsappWhitelist2.businessAccountId, businessAccountId)).orderBy(desc31(whatsappWhitelist2.createdAt));
       res.json({ whitelist: numbers });
     } catch (error) {
       console.error("Error fetching whitelist:", error);
@@ -102381,9 +102911,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const normalized = phoneNumber.replace(/\D/g, "");
       if (normalized.length < 7) return res.status(400).json({ error: "Invalid phone number" });
       const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const existing = await db.select().from(whatsappWhitelist2).where(and59(
-        eq69(whatsappWhitelist2.businessAccountId, businessAccountId),
-        eq69(whatsappWhitelist2.phoneNumber, normalized)
+      const existing = await db.select().from(whatsappWhitelist2).where(and60(
+        eq70(whatsappWhitelist2.businessAccountId, businessAccountId),
+        eq70(whatsappWhitelist2.phoneNumber, normalized)
       )).limit(1);
       if (existing.length > 0) return res.status(409).json({ error: "Number already whitelisted" });
       const [entry] = await db.insert(whatsappWhitelist2).values({
@@ -102404,7 +102934,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const { numbers } = req.body;
       if (!Array.isArray(numbers) || numbers.length === 0) return res.status(400).json({ error: "Numbers array is required" });
       const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const existing = await db.select({ phoneNumber: whatsappWhitelist2.phoneNumber }).from(whatsappWhitelist2).where(eq69(whatsappWhitelist2.businessAccountId, businessAccountId));
+      const existing = await db.select({ phoneNumber: whatsappWhitelist2.phoneNumber }).from(whatsappWhitelist2).where(eq70(whatsappWhitelist2.businessAccountId, businessAccountId));
       const existingSet = new Set(existing.map((e) => e.phoneNumber));
       const toInsert = [];
       let skipped = 0;
@@ -102439,9 +102969,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No active business account" });
       const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      await db.delete(whatsappWhitelist2).where(and59(
-        eq69(whatsappWhitelist2.id, req.params.id),
-        eq69(whatsappWhitelist2.businessAccountId, businessAccountId)
+      await db.delete(whatsappWhitelist2).where(and60(
+        eq70(whatsappWhitelist2.id, req.params.id),
+        eq70(whatsappWhitelist2.businessAccountId, businessAccountId)
       ));
       res.json({ success: true });
     } catch (error) {
@@ -102475,9 +103005,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       } else if (period === "90d") {
         startDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1e3);
       }
-      const dateFilter = startDate ? endDate ? sql41`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql41`AND created_at >= ${startDate}` : sql41``;
-      const dateFilterReceived = startDate ? endDate ? sql41`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql41`AND received_at >= ${startDate}` : sql41``;
-      const sessionsRows = await db.execute(sql41`
+      const dateFilter = startDate ? endDate ? sql42`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql42`AND created_at >= ${startDate}` : sql42``;
+      const dateFilterReceived = startDate ? endDate ? sql42`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql42`AND received_at >= ${startDate}` : sql42``;
+      const sessionsRows = await db.execute(sql42`
         SELECT 
           COUNT(*) as total,
           COUNT(*) FILTER (WHERE status = 'completed') as completed,
@@ -102487,7 +103017,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilter}
       `);
       const sessionsResult = sessionsRows.rows?.[0] || sessionsRows[0] || {};
-      const leadsRows = await db.execute(sql41`
+      const leadsRows = await db.execute(sql42`
         SELECT 
           COUNT(*) FILTER (WHERE status != 'message_only' AND direction = 'incoming') as qualified_leads,
           COUNT(*) FILTER (WHERE direction = 'incoming') as total_incoming,
@@ -102497,19 +103027,19 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilterReceived}
       `);
       const leadsResult = leadsRows.rows?.[0] || leadsRows[0] || {};
-      const docsRows = await db.execute(sql41`
+      const docsRows = await db.execute(sql42`
         SELECT COUNT(*) as total_docs
         FROM whatsapp_lead_attachments a
         JOIN whatsapp_leads l ON a.lead_id = l.id
         WHERE l.business_account_id = ${businessAccountId}
-        ${startDate ? sql41`AND a.created_at >= ${startDate}` : sql41``}
-        ${endDate ? sql41`AND a.created_at < ${endDate}` : sql41``}
+        ${startDate ? sql42`AND a.created_at >= ${startDate}` : sql42``}
+        ${endDate ? sql42`AND a.created_at < ${endDate}` : sql42``}
       `);
       const docsResult = docsRows.rows?.[0] || docsRows[0] || {};
       const chartDays = period === "today" ? 1 : period === "yesterday" ? 1 : period === "7d" ? 7 : period === "90d" ? 90 : 30;
       const chartStart = period === "today" ? startDate : period === "yesterday" ? startDate : new Date(now.getTime() - chartDays * 24 * 60 * 60 * 1e3);
       const chartEnd = endDate;
-      const dailySessionsRows = await db.execute(sql41`
+      const dailySessionsRows = await db.execute(sql42`
         SELECT 
           DATE(created_at) as date,
           COUNT(*) as sessions,
@@ -102517,32 +103047,32 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         FROM whatsapp_flow_sessions
         WHERE business_account_id = ${businessAccountId}
           AND created_at >= ${chartStart}
-          ${chartEnd ? sql41`AND created_at < ${chartEnd}` : sql41``}
+          ${chartEnd ? sql42`AND created_at < ${chartEnd}` : sql42``}
         GROUP BY DATE(created_at)
         ORDER BY date
       `);
       const dailySessions = dailySessionsRows.rows || dailySessionsRows;
-      const dailyLeadsRows = await db.execute(sql41`
+      const dailyLeadsRows = await db.execute(sql42`
         SELECT 
           DATE(received_at) as date,
           COUNT(*) FILTER (WHERE status != 'message_only' AND direction = 'incoming') as leads
         FROM whatsapp_leads
         WHERE business_account_id = ${businessAccountId}
           AND received_at >= ${chartStart}
-          ${chartEnd ? sql41`AND received_at < ${chartEnd}` : sql41``}
+          ${chartEnd ? sql42`AND received_at < ${chartEnd}` : sql42``}
         GROUP BY DATE(received_at)
         ORDER BY date
       `);
       const dailyLeads = dailyLeadsRows.rows || dailyLeadsRows;
-      const docTypesRows = await db.execute(sql41`
+      const docTypesRows = await db.execute(sql42`
         SELECT 
           COALESCE(a.document_category, 'other') as doc_type,
           COUNT(*) as count
         FROM whatsapp_lead_attachments a
         JOIN whatsapp_leads l ON a.lead_id = l.id
         WHERE l.business_account_id = ${businessAccountId}
-        ${startDate ? sql41`AND a.created_at >= ${startDate}` : sql41``}
-        ${endDate ? sql41`AND a.created_at < ${endDate}` : sql41``}
+        ${startDate ? sql42`AND a.created_at >= ${startDate}` : sql42``}
+        ${endDate ? sql42`AND a.created_at < ${endDate}` : sql42``}
         GROUP BY COALESCE(a.document_category, 'other')
         ORDER BY count DESC
       `);
@@ -102594,7 +103124,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       if (!businessAccountId) {
         return res.status(400).json({ error: "No active business account" });
       }
-      const rows = await db.execute(sql41`
+      const rows = await db.execute(sql42`
         (
           SELECT 
             'lead' as type,
@@ -102862,9 +103392,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         const defaultKeys = ["customer_name", "customer_phone", "customer_email"];
         const isDefaultField = defaultKeys.includes(normalizedKey);
         const sourceField = isDefaultField ? normalizedKey === "customer_name" ? "lead.customerName" : normalizedKey === "customer_phone" ? "lead.customerPhone" : "lead.customerEmail" : `extracted.${normalizedKey}`;
-        const existing = await db.select({ id: customCrmFieldMappings.id }).from(customCrmFieldMappings).where(and59(eq69(customCrmFieldMappings.businessAccountId, businessAccountId), eq69(customCrmFieldMappings.sourceField, sourceField))).limit(1);
+        const existing = await db.select({ id: customCrmFieldMappings.id }).from(customCrmFieldMappings).where(and60(eq70(customCrmFieldMappings.businessAccountId, businessAccountId), eq70(customCrmFieldMappings.sourceField, sourceField))).limit(1);
         if (existing.length === 0) {
-          const maxSort = await db.select({ maxOrder: sql41`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq69(customCrmFieldMappings.businessAccountId, businessAccountId));
+          const maxSort = await db.select({ maxOrder: sql42`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId));
           await db.insert(customCrmFieldMappings).values({ businessAccountId, crmField: defaultCrmFieldKey, sourceType: "dynamic", sourceField, displayName: fieldLabel || field.fieldLabel, isEnabled: "true", sortOrder: (maxSort[0]?.maxOrder || 0) + 1, isAutoManaged: true });
         }
       }
@@ -102896,9 +103426,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         const defaultKeys = ["customer_name", "customer_phone", "customer_email"];
         const isDefaultField = defaultKeys.includes(normalizedKey);
         const sourceField = isDefaultField ? normalizedKey === "customer_name" ? "lead.customerName" : normalizedKey === "customer_phone" ? "lead.customerPhone" : "lead.customerEmail" : `extracted.${normalizedKey}`;
-        const existing = await db.select({ id: customCrmFieldMappings.id }).from(customCrmFieldMappings).where(and59(eq69(customCrmFieldMappings.businessAccountId, businessAccountId), eq69(customCrmFieldMappings.sourceField, sourceField))).limit(1);
+        const existing = await db.select({ id: customCrmFieldMappings.id }).from(customCrmFieldMappings).where(and60(eq70(customCrmFieldMappings.businessAccountId, businessAccountId), eq70(customCrmFieldMappings.sourceField, sourceField))).limit(1);
         if (existing.length === 0) {
-          const maxSort = await db.select({ maxOrder: sql41`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq69(customCrmFieldMappings.businessAccountId, businessAccountId));
+          const maxSort = await db.select({ maxOrder: sql42`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId));
           await db.insert(customCrmFieldMappings).values({ businessAccountId, crmField: defaultCrmFieldKey, sourceType: "dynamic", sourceField, displayName: field.fieldLabel, isEnabled: "true", sortOrder: (maxSort[0]?.maxOrder || 0) + 1, isAutoManaged: true });
         }
       }
@@ -102926,9 +103456,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
   const getOwnedWhatsappFlow = async (req, flowId) => {
     const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
     if (!businessAccountId) return { businessAccountId: null, flow: null };
-    const [flow] = await db.select().from(whatsappFlows).where(and59(
-      eq69(whatsappFlows.id, flowId),
-      eq69(whatsappFlows.businessAccountId, businessAccountId)
+    const [flow] = await db.select().from(whatsappFlows).where(and60(
+      eq70(whatsappFlows.id, flowId),
+      eq70(whatsappFlows.businessAccountId, businessAccountId)
     )).limit(1);
     return { businessAccountId, flow: flow || null };
   };
@@ -102996,12 +103526,12 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         if (rsId === "" || rsId === void 0) {
           updates.verificationRuleSetId = null;
         } else if (rsId !== null) {
-          const [{ db: db2 }, { whatsappFlows: whatsappFlows2, verificationRuleSets: verificationRuleSets2 }, { eq: eq74, and: and63 }] = await Promise.all([
+          const [{ db: db2 }, { whatsappFlows: whatsappFlows2, verificationRuleSets: verificationRuleSets2 }, { eq: eq75, and: and64 }] = await Promise.all([
             Promise.resolve().then(() => (init_db(), db_exports)),
             Promise.resolve().then(() => (init_schema(), schema_exports)),
             import("drizzle-orm")
           ]);
-          const [rs] = await db2.select({ id: verificationRuleSets2.id }).from(verificationRuleSets2).where(and63(eq74(verificationRuleSets2.id, rsId), eq74(verificationRuleSets2.businessAccountId, ownership.businessAccountId))).limit(1);
+          const [rs] = await db2.select({ id: verificationRuleSets2.id }).from(verificationRuleSets2).where(and64(eq75(verificationRuleSets2.id, rsId), eq75(verificationRuleSets2.businessAccountId, ownership.businessAccountId))).limit(1);
           if (!rs) return res.status(400).json({ error: "Verification rule set not found for this business account" });
         }
       }
@@ -103049,7 +103579,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const ownership = await getOwnedWhatsappFlow(req, flowId);
       if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
       if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
-      const [existingStep] = await db.select({ id: whatsappFlowSteps.id }).from(whatsappFlowSteps).where(and59(eq69(whatsappFlowSteps.id, stepId), eq69(whatsappFlowSteps.flowId, flowId))).limit(1);
+      const [existingStep] = await db.select({ id: whatsappFlowSteps.id }).from(whatsappFlowSteps).where(and60(eq70(whatsappFlowSteps.id, stepId), eq70(whatsappFlowSteps.flowId, flowId))).limit(1);
       if (!existingStep) return res.status(404).json({ error: "Step not found" });
       const { whatsappFlowService: whatsappFlowService2 } = await Promise.resolve().then(() => (init_whatsappFlowService(), whatsappFlowService_exports));
       const step = await whatsappFlowService2.updateStep(stepId, updates);
@@ -103065,11 +103595,11 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const ownership = await getOwnedWhatsappFlow(req, flowId);
       if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
       if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
-      const [step] = await db.select({ paused: whatsappFlowSteps.paused }).from(whatsappFlowSteps).where(and59(eq69(whatsappFlowSteps.id, stepId), eq69(whatsappFlowSteps.flowId, flowId))).limit(1);
+      const [step] = await db.select({ paused: whatsappFlowSteps.paused }).from(whatsappFlowSteps).where(and60(eq70(whatsappFlowSteps.id, stepId), eq70(whatsappFlowSteps.flowId, flowId))).limit(1);
       if (!step) {
         return res.status(404).json({ error: "Step not found" });
       }
-      const [updated] = await db.update(whatsappFlowSteps).set({ paused: !step.paused }).where(and59(eq69(whatsappFlowSteps.id, stepId), eq69(whatsappFlowSteps.flowId, flowId))).returning();
+      const [updated] = await db.update(whatsappFlowSteps).set({ paused: !step.paused }).where(and60(eq70(whatsappFlowSteps.id, stepId), eq70(whatsappFlowSteps.flowId, flowId))).returning();
       res.json({ step: updated });
     } catch (error) {
       console.error("Error toggling step pause:", error);
@@ -103082,7 +103612,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const ownership = await getOwnedWhatsappFlow(req, flowId);
       if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
       if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
-      const [existingStep] = await db.select({ id: whatsappFlowSteps.id }).from(whatsappFlowSteps).where(and59(eq69(whatsappFlowSteps.id, stepId), eq69(whatsappFlowSteps.flowId, flowId))).limit(1);
+      const [existingStep] = await db.select({ id: whatsappFlowSteps.id }).from(whatsappFlowSteps).where(and60(eq70(whatsappFlowSteps.id, stepId), eq70(whatsappFlowSteps.flowId, flowId))).limit(1);
       if (!existingStep) return res.status(404).json({ error: "Step not found" });
       const { whatsappFlowService: whatsappFlowService2 } = await Promise.resolve().then(() => (init_whatsappFlowService(), whatsappFlowService_exports));
       await whatsappFlowService2.deleteStep(stepId);
@@ -103250,7 +103780,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           );
           if (messageText) {
             const businessAccount = await db.query.businessAccounts.findFirst({
-              where: eq69(businessAccounts.id, businessAccountId)
+              where: eq70(businessAccounts.id, businessAccountId)
             });
             if (businessAccount && businessAccount.instagramEnabled === "true") {
               const { instagramFlowService: instagramFlowService2 } = await Promise.resolve().then(() => (init_instagramFlowService(), instagramFlowService_exports));
@@ -103324,7 +103854,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq69(businessAccounts.id, businessAccountId)
+        where: eq70(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.instagramEnabled !== "true") {
         return res.status(403).json({ error: "Instagram AI Agent not enabled for this account" });
@@ -103352,7 +103882,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq69(businessAccounts.id, businessAccountId)
+        where: eq70(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.instagramEnabled !== "true") {
         return res.status(403).json({ error: "Instagram AI Agent not enabled for this account" });
@@ -103373,7 +103903,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq69(businessAccounts.id, businessAccountId)
+        where: eq70(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.instagramEnabled !== "true") {
         return res.status(403).json({ error: "Instagram AI Agent not enabled for this account" });
@@ -103481,9 +104011,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       } else if (period === "90d") {
         startDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1e3);
       }
-      const dateFilter = startDate ? endDate ? sql41`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql41`AND created_at >= ${startDate}` : sql41``;
-      const dateFilterReceived = startDate ? endDate ? sql41`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql41`AND received_at >= ${startDate}` : sql41``;
-      const sessionsRows = await db.execute(sql41`
+      const dateFilter = startDate ? endDate ? sql42`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql42`AND created_at >= ${startDate}` : sql42``;
+      const dateFilterReceived = startDate ? endDate ? sql42`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql42`AND received_at >= ${startDate}` : sql42``;
+      const sessionsRows = await db.execute(sql42`
         SELECT 
           COUNT(*) as total,
           COUNT(*) FILTER (WHERE status = 'completed') as completed,
@@ -103493,7 +104023,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilter}
       `);
       const sessionsResult = sessionsRows.rows?.[0] || sessionsRows[0] || {};
-      const leadsRows = await db.execute(sql41`
+      const leadsRows = await db.execute(sql42`
         SELECT 
           COUNT(*) as total_leads,
           COUNT(DISTINCT sender_id) as unique_senders
@@ -103501,7 +104031,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilterReceived}
       `);
       const leadsResult = leadsRows.rows?.[0] || leadsRows[0] || {};
-      const messagesRows = await db.execute(sql41`
+      const messagesRows = await db.execute(sql42`
         SELECT 
           COUNT(*) FILTER (WHERE direction = 'incoming') as total_incoming,
           COUNT(*) FILTER (WHERE direction = 'outgoing') as total_outgoing
@@ -103509,17 +104039,17 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilter}
       `);
       const messagesResult = messagesRows.rows?.[0] || messagesRows[0] || {};
-      const chartStartFilter = period === "all" ? sql41`` : (() => {
+      const chartStartFilter = period === "all" ? sql42`` : (() => {
         const chartDays = period === "today" ? 1 : period === "yesterday" ? 1 : period === "7d" ? 7 : period === "90d" ? 90 : 30;
         const chartStart = period === "today" || period === "yesterday" ? startDate : new Date(now.getTime() - chartDays * 24 * 60 * 60 * 1e3);
-        return sql41`AND created_at >= ${chartStart}`;
+        return sql42`AND created_at >= ${chartStart}`;
       })();
-      const chartStartFilterReceived = period === "all" ? sql41`` : (() => {
+      const chartStartFilterReceived = period === "all" ? sql42`` : (() => {
         const chartDays = period === "today" ? 1 : period === "yesterday" ? 1 : period === "7d" ? 7 : period === "90d" ? 90 : 30;
         const chartStart = period === "today" || period === "yesterday" ? startDate : new Date(now.getTime() - chartDays * 24 * 60 * 60 * 1e3);
-        return sql41`AND received_at >= ${chartStart}`;
+        return sql42`AND received_at >= ${chartStart}`;
       })();
-      const dailySessionsRows = await db.execute(sql41`
+      const dailySessionsRows = await db.execute(sql42`
         SELECT 
           DATE(created_at) as date,
           COUNT(*) as sessions,
@@ -103527,19 +104057,19 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         FROM instagram_flow_sessions
         WHERE business_account_id = ${businessAccountId}
           ${chartStartFilter}
-          ${endDate ? sql41`AND created_at < ${endDate}` : sql41``}
+          ${endDate ? sql42`AND created_at < ${endDate}` : sql42``}
         GROUP BY DATE(created_at)
         ORDER BY date
       `);
       const dailySessions = dailySessionsRows.rows || dailySessionsRows;
-      const dailyLeadsRows = await db.execute(sql41`
+      const dailyLeadsRows = await db.execute(sql42`
         SELECT 
           DATE(received_at) as date,
           COUNT(*) as leads
         FROM instagram_leads
         WHERE business_account_id = ${businessAccountId}
           ${chartStartFilterReceived}
-          ${endDate ? sql41`AND received_at < ${endDate}` : sql41``}
+          ${endDate ? sql42`AND received_at < ${endDate}` : sql42``}
         GROUP BY DATE(received_at)
         ORDER BY date
       `);
@@ -103791,9 +104321,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
   app2.patch("/api/instagram/flows/:flowId/steps/:stepId/toggle-pause", requireAuth, async (req, res) => {
     try {
       const { flowId, stepId } = req.params;
-      const [step] = await db.select({ paused: instagramFlowSteps.paused }).from(instagramFlowSteps).where(and59(eq69(instagramFlowSteps.id, stepId), eq69(instagramFlowSteps.flowId, flowId))).limit(1);
+      const [step] = await db.select({ paused: instagramFlowSteps.paused }).from(instagramFlowSteps).where(and60(eq70(instagramFlowSteps.id, stepId), eq70(instagramFlowSteps.flowId, flowId))).limit(1);
       if (!step) return res.status(404).json({ error: "Step not found" });
-      const [updated] = await db.update(instagramFlowSteps).set({ paused: !step.paused }).where(and59(eq69(instagramFlowSteps.id, stepId), eq69(instagramFlowSteps.flowId, flowId))).returning();
+      const [updated] = await db.update(instagramFlowSteps).set({ paused: !step.paused }).where(and60(eq70(instagramFlowSteps.id, stepId), eq70(instagramFlowSteps.flowId, flowId))).returning();
       res.json({ step: updated });
     } catch (error) {
       console.error("Error toggling Instagram step pause:", error);
@@ -103935,7 +104465,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
           );
           if (messageText) {
             const businessAccount = await db.query.businessAccounts.findFirst({
-              where: eq69(businessAccounts.id, businessAccountId)
+              where: eq70(businessAccounts.id, businessAccountId)
             });
             if (businessAccount && businessAccount.facebookEnabled === "true") {
               const { facebookFlowService: facebookFlowService2 } = await Promise.resolve().then(() => (init_facebookFlowService(), facebookFlowService_exports));
@@ -104009,7 +104539,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq69(businessAccounts.id, businessAccountId)
+        where: eq70(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.facebookEnabled !== "true") {
         return res.status(403).json({ error: "Facebook AI Agent not enabled for this account" });
@@ -104037,7 +104567,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq69(businessAccounts.id, businessAccountId)
+        where: eq70(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.facebookEnabled !== "true") {
         return res.status(403).json({ error: "Facebook AI Agent not enabled for this account" });
@@ -104159,7 +104689,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const businessAccountId = req.user.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "No business account" });
       const businessAccount = await db.query.businessAccounts.findFirst({
-        where: eq69(businessAccounts.id, businessAccountId)
+        where: eq70(businessAccounts.id, businessAccountId)
       });
       if (!businessAccount || businessAccount.facebookEnabled !== "true") {
         return res.status(403).json({ error: "Facebook AI Agent not enabled for this account" });
@@ -104288,9 +104818,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       } else if (period === "90d") {
         startDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1e3);
       }
-      const dateFilter = startDate ? endDate ? sql41`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql41`AND created_at >= ${startDate}` : sql41``;
-      const dateFilterReceived = startDate ? endDate ? sql41`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql41`AND received_at >= ${startDate}` : sql41``;
-      const sessionsRows = await db.execute(sql41`
+      const dateFilter = startDate ? endDate ? sql42`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql42`AND created_at >= ${startDate}` : sql42``;
+      const dateFilterReceived = startDate ? endDate ? sql42`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql42`AND received_at >= ${startDate}` : sql42``;
+      const sessionsRows = await db.execute(sql42`
         SELECT 
           COUNT(*) as total,
           COUNT(*) FILTER (WHERE status = 'completed') as completed,
@@ -104300,7 +104830,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilter}
       `);
       const sessionsResult = sessionsRows.rows?.[0] || sessionsRows[0] || {};
-      const leadsRows = await db.execute(sql41`
+      const leadsRows = await db.execute(sql42`
         SELECT 
           COUNT(*) as total_leads,
           COUNT(DISTINCT sender_id) as unique_senders
@@ -104308,7 +104838,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilterReceived}
       `);
       const leadsResult = leadsRows.rows?.[0] || leadsRows[0] || {};
-      const messagesRows = await db.execute(sql41`
+      const messagesRows = await db.execute(sql42`
         SELECT 
           COUNT(*) FILTER (WHERE direction = 'incoming') as total_incoming,
           COUNT(*) FILTER (WHERE direction = 'outgoing') as total_outgoing
@@ -104316,17 +104846,17 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilter}
       `);
       const messagesResult = messagesRows.rows?.[0] || messagesRows[0] || {};
-      const chartStartFilter = period === "all" ? sql41`` : (() => {
+      const chartStartFilter = period === "all" ? sql42`` : (() => {
         const chartDays = period === "today" ? 1 : period === "yesterday" ? 1 : period === "7d" ? 7 : period === "90d" ? 90 : 30;
         const chartStart = period === "today" || period === "yesterday" ? startDate : new Date(now.getTime() - chartDays * 24 * 60 * 60 * 1e3);
-        return sql41`AND created_at >= ${chartStart}`;
+        return sql42`AND created_at >= ${chartStart}`;
       })();
-      const chartStartFilterReceived = period === "all" ? sql41`` : (() => {
+      const chartStartFilterReceived = period === "all" ? sql42`` : (() => {
         const chartDays = period === "today" ? 1 : period === "yesterday" ? 1 : period === "7d" ? 7 : period === "90d" ? 90 : 30;
         const chartStart = period === "today" || period === "yesterday" ? startDate : new Date(now.getTime() - chartDays * 24 * 60 * 60 * 1e3);
-        return sql41`AND received_at >= ${chartStart}`;
+        return sql42`AND received_at >= ${chartStart}`;
       })();
-      const dailySessionsRows = await db.execute(sql41`
+      const dailySessionsRows = await db.execute(sql42`
         SELECT 
           DATE(created_at) as date,
           COUNT(*) as sessions,
@@ -104334,19 +104864,19 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         FROM facebook_flow_sessions
         WHERE business_account_id = ${businessAccountId}
           ${chartStartFilter}
-          ${endDate ? sql41`AND created_at < ${endDate}` : sql41``}
+          ${endDate ? sql42`AND created_at < ${endDate}` : sql42``}
         GROUP BY DATE(created_at)
         ORDER BY date
       `);
       const dailySessions = dailySessionsRows.rows || dailySessionsRows;
-      const dailyLeadsRows = await db.execute(sql41`
+      const dailyLeadsRows = await db.execute(sql42`
         SELECT 
           DATE(received_at) as date,
           COUNT(*) as leads
         FROM facebook_leads
         WHERE business_account_id = ${businessAccountId}
           ${chartStartFilterReceived}
-          ${endDate ? sql41`AND received_at < ${endDate}` : sql41``}
+          ${endDate ? sql42`AND received_at < ${endDate}` : sql42``}
         GROUP BY DATE(received_at)
         ORDER BY date
       `);
@@ -104474,9 +105004,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
   app2.patch("/api/facebook/flows/:flowId/steps/:stepId/toggle-pause", requireAuth, async (req, res) => {
     try {
       const { flowId, stepId } = req.params;
-      const [step] = await db.select({ paused: facebookFlowSteps.paused }).from(facebookFlowSteps).where(and59(eq69(facebookFlowSteps.id, stepId), eq69(facebookFlowSteps.flowId, flowId))).limit(1);
+      const [step] = await db.select({ paused: facebookFlowSteps.paused }).from(facebookFlowSteps).where(and60(eq70(facebookFlowSteps.id, stepId), eq70(facebookFlowSteps.flowId, flowId))).limit(1);
       if (!step) return res.status(404).json({ error: "Step not found" });
-      const [updated] = await db.update(facebookFlowSteps).set({ paused: !step.paused }).where(and59(eq69(facebookFlowSteps.id, stepId), eq69(facebookFlowSteps.flowId, flowId))).returning();
+      const [updated] = await db.update(facebookFlowSteps).set({ paused: !step.paused }).where(and60(eq70(facebookFlowSteps.id, stepId), eq70(facebookFlowSteps.flowId, flowId))).returning();
       res.json({ step: updated });
     } catch (error) {
       console.error("Error toggling Facebook step pause:", error);
@@ -105113,7 +105643,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
     try {
       const businessAccountId = req.user.businessAccountId;
       const { whatsappOptOuts: whatsappOptOuts2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const rows = await db.select().from(whatsappOptOuts2).where(eq69(whatsappOptOuts2.businessAccountId, businessAccountId)).orderBy(desc31(whatsappOptOuts2.createdAt)).limit(500);
+      const rows = await db.select().from(whatsappOptOuts2).where(eq70(whatsappOptOuts2.businessAccountId, businessAccountId)).orderBy(desc31(whatsappOptOuts2.createdAt)).limit(500);
       res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -105126,9 +105656,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       if (!phone) return res.status(400).json({ error: "Phone is required" });
       const last10 = phone.slice(-10);
       const { whatsappOptOuts: whatsappOptOuts2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      await db.delete(whatsappOptOuts2).where(and59(
-        eq69(whatsappOptOuts2.businessAccountId, businessAccountId),
-        sql41`(${whatsappOptOuts2.phone} = ${phone} OR ${whatsappOptOuts2.phone} = ${last10} OR RIGHT(${whatsappOptOuts2.phone}, 10) = ${last10})`
+      await db.delete(whatsappOptOuts2).where(and60(
+        eq70(whatsappOptOuts2.businessAccountId, businessAccountId),
+        sql42`(${whatsappOptOuts2.phone} = ${phone} OR ${whatsappOptOuts2.phone} = ${last10} OR RIGHT(${whatsappOptOuts2.phone}, 10) = ${last10})`
       ));
       res.json({ success: true });
     } catch (err) {
@@ -105325,6 +105855,18 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         req.body || {}
       );
       res.status(201).json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+  app2.post("/api/whatsapp/dev/simulate-campaign", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    if (process.env.NODE_ENV !== "development") {
+      return res.status(404).json({ error: "Development simulator not available" });
+    }
+    try {
+      const { simulateWhatsAppCampaign: simulateWhatsAppCampaign2 } = await Promise.resolve().then(() => (init_whatsappCampaignSimulator(), whatsappCampaignSimulator_exports));
+      const result = await simulateWhatsAppCampaign2(req.user.businessAccountId);
+      res.status(result.created ? 201 : 200).json(result);
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -105672,7 +106214,7 @@ init_auth();
 init_jewelryImageGeneratorService();
 init_db();
 init_schema();
-import { and as and60, eq as eq70, isNull as isNull13, sql as sql42 } from "drizzle-orm";
+import { and as and61, eq as eq71, isNull as isNull13, sql as sql43 } from "drizzle-orm";
 async function initializeDatabase() {
   try {
     try {
@@ -105710,9 +106252,9 @@ async function initializeDatabase() {
         customer_email: "Email"
       };
       for (const [fieldKey, crmKey] of Object.entries(DEFAULT_CRM_KEYS)) {
-        await db.update(whatsappLeadFields).set({ defaultCrmFieldKey: crmKey }).where(and60(
-          eq70(whatsappLeadFields.fieldKey, fieldKey),
-          eq70(whatsappLeadFields.isDefault, true),
+        await db.update(whatsappLeadFields).set({ defaultCrmFieldKey: crmKey }).where(and61(
+          eq71(whatsappLeadFields.fieldKey, fieldKey),
+          eq71(whatsappLeadFields.isDefault, true),
           isNull13(whatsappLeadFields.defaultCrmFieldKey)
         ));
       }
@@ -105720,64 +106262,64 @@ async function initializeDatabase() {
       console.error("[INIT] Error backfilling default CRM field keys:", err);
     }
     try {
-      await db.execute(sql42`ALTER TABLE crm_store_credentials ADD COLUMN IF NOT EXISTS city TEXT`);
+      await db.execute(sql43`ALTER TABLE crm_store_credentials ADD COLUMN IF NOT EXISTS city TEXT`);
     } catch (err) {
       console.error("[INIT] Error adding city column to crm_store_credentials:", err);
     }
     try {
-      await db.execute(sql42`ALTER TABLE custom_crm_settings ADD COLUMN IF NOT EXISTS callback_url TEXT`);
+      await db.execute(sql43`ALTER TABLE custom_crm_settings ADD COLUMN IF NOT EXISTS callback_url TEXT`);
     } catch (err) {
       console.error("[INIT] Error adding callback_url column to custom_crm_settings:", err);
     }
     try {
-      await db.execute(sql42`ALTER TABLE custom_crm_settings ADD COLUMN IF NOT EXISTS relay_url TEXT`);
+      await db.execute(sql43`ALTER TABLE custom_crm_settings ADD COLUMN IF NOT EXISTS relay_url TEXT`);
     } catch (err) {
       console.error("[INIT] Error adding relay_url column to custom_crm_settings:", err);
     }
     try {
       await db.execute(
-        sql42`UPDATE whatsapp_templates SET status = 'approved' WHERE status IS DISTINCT FROM 'approved'`
+        sql43`UPDATE whatsapp_templates SET status = 'approved' WHERE status IS DISTINCT FROM 'approved'`
       );
     } catch (err) {
       console.error("[INIT] Error backfilling whatsapp_templates status:", err);
     }
     try {
-      await db.execute(sql42`ALTER TABLE contact_groups ADD COLUMN IF NOT EXISTS default_country_code TEXT`);
+      await db.execute(sql43`ALTER TABLE contact_groups ADD COLUMN IF NOT EXISTS default_country_code TEXT`);
     } catch (err) {
       console.error("[INIT] Error adding default_country_code column to contact_groups:", err);
     }
     try {
-      await db.execute(sql42`ALTER TABLE marketing_campaign_recipients ADD COLUMN IF NOT EXISTS provider_response JSONB`);
+      await db.execute(sql43`ALTER TABLE marketing_campaign_recipients ADD COLUMN IF NOT EXISTS provider_response JSONB`);
     } catch (err) {
       console.error("[INIT] Error adding provider_response column to marketing_campaign_recipients:", err);
     }
     try {
-      await db.execute(sql42`ALTER TABLE marketing_campaign_recipients ADD COLUMN IF NOT EXISTS send_phone TEXT`);
-      await db.execute(sql42`CREATE INDEX IF NOT EXISTS mkt_recipients_biz_send_phone_idx ON marketing_campaign_recipients (business_account_id, send_phone)`);
+      await db.execute(sql43`ALTER TABLE marketing_campaign_recipients ADD COLUMN IF NOT EXISTS send_phone TEXT`);
+      await db.execute(sql43`CREATE INDEX IF NOT EXISTS mkt_recipients_biz_send_phone_idx ON marketing_campaign_recipients (business_account_id, send_phone)`);
     } catch (err) {
       console.error("[INIT] Error adding send_phone column/index to marketing_campaign_recipients:", err);
     }
     try {
-      await db.execute(sql42`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS conversion_fired BOOLEAN NOT NULL DEFAULT false`);
+      await db.execute(sql43`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS conversion_fired BOOLEAN NOT NULL DEFAULT false`);
     } catch (err) {
       console.error("[INIT] Error adding conversion_fired column to conversations:", err);
     }
     try {
-      await db.execute(sql42`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summarized_at TIMESTAMP`);
-      await db.execute(sql42`CREATE INDEX IF NOT EXISTS conversations_summarized_sweep_idx ON conversations (updated_at, summarized_at)`);
+      await db.execute(sql43`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summarized_at TIMESTAMP`);
+      await db.execute(sql43`CREATE INDEX IF NOT EXISTS conversations_summarized_sweep_idx ON conversations (updated_at, summarized_at)`);
     } catch (err) {
       console.error("[INIT] Error adding summarized_at column/index to conversations:", err);
     }
     try {
-      await db.execute(sql42`ALTER TABLE topscholar_cp_mappings ADD COLUMN IF NOT EXISTS subject TEXT`);
-      await db.execute(sql42`ALTER TABLE topscholar_cp_mappings ADD COLUMN IF NOT EXISTS subject_id TEXT`);
-      await db.execute(sql42`ALTER TABLE topscholar_plan_cp_resolutions ADD COLUMN IF NOT EXISTS subject TEXT`);
-      await db.execute(sql42`ALTER TABLE topscholar_plan_cp_resolutions ADD COLUMN IF NOT EXISTS subject_id TEXT`);
+      await db.execute(sql43`ALTER TABLE topscholar_cp_mappings ADD COLUMN IF NOT EXISTS subject TEXT`);
+      await db.execute(sql43`ALTER TABLE topscholar_cp_mappings ADD COLUMN IF NOT EXISTS subject_id TEXT`);
+      await db.execute(sql43`ALTER TABLE topscholar_plan_cp_resolutions ADD COLUMN IF NOT EXISTS subject TEXT`);
+      await db.execute(sql43`ALTER TABLE topscholar_plan_cp_resolutions ADD COLUMN IF NOT EXISTS subject_id TEXT`);
     } catch (err) {
       console.error("[INIT] Error adding subject columns to topscholar mapping/resolution tables:", err);
     }
     try {
-      await db.execute(sql42`
+      await db.execute(sql43`
         CREATE TABLE IF NOT EXISTS topscholar_plan_runs (
           id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
           business_account_id VARCHAR NOT NULL REFERENCES business_accounts(id) ON DELETE CASCADE,
@@ -105796,7 +106338,7 @@ async function initializeDatabase() {
           updated_at TIMESTAMP NOT NULL DEFAULT NOW()
         )
       `);
-      await db.execute(sql42`
+      await db.execute(sql43`
         CREATE TABLE IF NOT EXISTS topscholar_plan_run_items (
           id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
           run_id VARCHAR NOT NULL REFERENCES topscholar_plan_runs(id) ON DELETE CASCADE,
@@ -105813,7 +106355,7 @@ async function initializeDatabase() {
           CONSTRAINT topscholar_plan_run_items_run_cp_key UNIQUE (run_id, cp_id)
         )
       `);
-      await db.execute(sql42`
+      await db.execute(sql43`
         CREATE TABLE IF NOT EXISTS topscholar_plan_sync_leases (
           business_account_id VARCHAR PRIMARY KEY REFERENCES business_accounts(id) ON DELETE CASCADE,
           owner TEXT NOT NULL,
@@ -105821,31 +106363,31 @@ async function initializeDatabase() {
           updated_at TIMESTAMP NOT NULL DEFAULT NOW()
         )
       `);
-      await db.execute(sql42`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS lease_owner TEXT`);
-      await db.execute(sql42`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMP`);
-      await db.execute(sql42`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS requested_cp_id TEXT`);
-      await db.execute(sql42`CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_plan_updated_idx ON topscholar_plan_runs (business_account_id, plan_id, updated_at)`);
-      await db.execute(sql42`CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_status_idx ON topscholar_plan_runs (business_account_id, status)`);
-      await db.execute(sql42`CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_run_status_idx ON topscholar_plan_run_items (run_id, status)`);
-      await db.execute(sql42`CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_account_cp_idx ON topscholar_plan_run_items (business_account_id, cp_id)`);
-      await db.execute(sql42`CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_plan_unique ON topscholar_plan_runs (business_account_id, plan_id) WHERE requested_cp_id IS NULL AND status IN ('queued', 'resolving', 'running')`);
-      await db.execute(sql42`CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_cp_unique ON topscholar_plan_runs (business_account_id, plan_id, requested_cp_id) WHERE requested_cp_id IS NOT NULL AND status IN ('queued', 'resolving', 'running')`);
+      await db.execute(sql43`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS lease_owner TEXT`);
+      await db.execute(sql43`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMP`);
+      await db.execute(sql43`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS requested_cp_id TEXT`);
+      await db.execute(sql43`CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_plan_updated_idx ON topscholar_plan_runs (business_account_id, plan_id, updated_at)`);
+      await db.execute(sql43`CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_status_idx ON topscholar_plan_runs (business_account_id, status)`);
+      await db.execute(sql43`CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_run_status_idx ON topscholar_plan_run_items (run_id, status)`);
+      await db.execute(sql43`CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_account_cp_idx ON topscholar_plan_run_items (business_account_id, cp_id)`);
+      await db.execute(sql43`CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_plan_unique ON topscholar_plan_runs (business_account_id, plan_id) WHERE requested_cp_id IS NULL AND status IN ('queued', 'resolving', 'running')`);
+      await db.execute(sql43`CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_cp_unique ON topscholar_plan_runs (business_account_id, plan_id, requested_cp_id) WHERE requested_cp_id IS NOT NULL AND status IN ('queued', 'resolving', 'running')`);
     } catch (err) {
       console.error("[INIT] Error creating TopScholar Plan sync queue tables:", err);
     }
     try {
-      await db.execute(sql42`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
-      await db.execute(sql42`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_output_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
-      await db.execute(sql42`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
-      await db.execute(sql42`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql43`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql43`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_output_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql43`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql43`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
     } catch (err) {
       console.error("[INIT] Error adding token breakdown columns to ai_usage_events:", err);
     }
     try {
-      await db.execute(sql42`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS cached_input_cost_per_1k NUMERIC(10, 6)`);
-      await db.execute(sql42`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_input_cost_per_1k NUMERIC(10, 6)`);
-      await db.execute(sql42`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_cached_input_cost_per_1k NUMERIC(10, 6)`);
-      await db.execute(sql42`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_output_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql43`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS cached_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql43`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql43`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_cached_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql43`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_output_cost_per_1k NUMERIC(10, 6)`);
     } catch (err) {
       console.error("[INIT] Error adding audio/cached rate columns to model_pricing:", err);
     }
@@ -105866,13 +106408,13 @@ init_db();
 // server/scripts/migrateK12NotesVideos.ts
 init_db();
 init_schema();
-import { eq as eq71, sql as sql43 } from "drizzle-orm";
+import { eq as eq72, sql as sql44 } from "drizzle-orm";
 function stripHtmlTags(html) {
   return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 async function migrateK12NotesAndVideos() {
   console.log("[K12 Migration] Starting migration of legacy notes and videos...");
-  const tableCheck = await db.execute(sql43`
+  const tableCheck = await db.execute(sql44`
     SELECT EXISTS (
       SELECT FROM information_schema.tables WHERE table_name = 'k12_topic_notes'
     ) AS notes_exists,
@@ -105892,7 +106434,7 @@ async function migrateK12NotesAndVideos() {
   let videosCreated = 0;
   for (const topic of allTopics) {
     if (topic.revisionNotesHtml) {
-      const existing = await db.select({ id: k12TopicNotes.id }).from(k12TopicNotes).where(eq71(k12TopicNotes.topicId, topic.id)).limit(1);
+      const existing = await db.select({ id: k12TopicNotes.id }).from(k12TopicNotes).where(eq72(k12TopicNotes.topicId, topic.id)).limit(1);
       if (existing.length === 0) {
         const plainText = stripHtmlTags(topic.revisionNotesHtml);
         if (plainText) {
@@ -105908,7 +106450,7 @@ async function migrateK12NotesAndVideos() {
       }
     }
     if (topic.videoUrl || topic.videoTranscript) {
-      const existing = await db.select({ id: k12TopicVideos.id }).from(k12TopicVideos).where(eq71(k12TopicVideos.topicId, topic.id)).limit(1);
+      const existing = await db.select({ id: k12TopicVideos.id }).from(k12TopicVideos).where(eq72(k12TopicVideos.topicId, topic.id)).limit(1);
       if (existing.length === 0) {
         if (topic.videoUrl) {
           await db.insert(k12TopicVideos).values({
@@ -105944,7 +106486,7 @@ init_shopifySyncScheduler();
 init_storage();
 init_db();
 init_schema();
-import { and as and61, eq as eq72, lte as lte6, lt as lt3, sql as sql44, or as or7, isNull as isNull14 } from "drizzle-orm";
+import { and as and62, eq as eq73, lte as lte6, lt as lt3, sql as sql45, or as or7, isNull as isNull14 } from "drizzle-orm";
 var MAX_RETRY_COUNT = 3;
 var RETRY_DELAYS_MS = [
   1 * 60 * 1e3,
@@ -105985,9 +106527,9 @@ var LeadsquaredRetryWorker = class {
     try {
       const now = /* @__PURE__ */ new Date();
       const retryableLeads = await db.select().from(leads).where(
-        and61(
-          eq72(leads.leadsquaredSyncStatus, "failed"),
-          lt3(sql44`COALESCE(${leads.leadsquaredRetryCount}::int, 0)`, MAX_RETRY_COUNT),
+        and62(
+          eq73(leads.leadsquaredSyncStatus, "failed"),
+          lt3(sql45`COALESCE(${leads.leadsquaredRetryCount}::int, 0)`, MAX_RETRY_COUNT),
           or7(
             isNull14(leads.leadsquaredNextRetryAt),
             lte6(leads.leadsquaredNextRetryAt, now)
@@ -106120,7 +106662,7 @@ var leadsquaredRetryWorker = new LeadsquaredRetryWorker();
 // server/services/crmSyncRecoveryWorker.ts
 init_db();
 init_whatsappFlowService();
-import { sql as sql45 } from "drizzle-orm";
+import { sql as sql46 } from "drizzle-orm";
 var CHECK_INTERVAL_MS2 = 5 * 60 * 1e3;
 var INITIAL_DELAY_MS = 9e4;
 var LOOKBACK_DAYS = 3;
@@ -106152,7 +106694,7 @@ var CrmSyncRecoveryWorker = class {
     if (this.isProcessing) return;
     this.isProcessing = true;
     try {
-      const rows = await db.execute(sql45`
+      const rows = await db.execute(sql46`
         SELECT DISTINCT ON (wfs.id)
           wfs.id            AS session_id,
           wfs.collected_data

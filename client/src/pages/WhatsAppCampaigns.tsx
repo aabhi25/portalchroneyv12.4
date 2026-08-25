@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, FileSpreadsheet, Table2 } from "lucide-react";
+import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, FileSpreadsheet, Table2, FlaskConical } from "lucide-react";
 
 interface Campaign {
   id: string;
@@ -79,6 +79,24 @@ export default function WhatsAppCampaigns() {
     onError: (e: any) => toast({ title: "Workbook creation failed", description: e.message, variant: "destructive" }),
   });
 
+  const simulateMutation = useMutation<{
+    campaignId: string;
+    created: boolean;
+    recipientCount: number;
+    repliedCount: number;
+  }>({
+    mutationFn: async () => apiRequest("POST", "/api/whatsapp/dev/simulate-campaign"),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/campaigns"] });
+      toast({
+        title: result.created ? "50-reply demo campaign created" : "Demo campaign already exists",
+        description: `${result.recipientCount} synthetic recipients with ${result.repliedCount} replies are ready.`,
+      });
+      setLocation(`/admin/whatsapp-campaigns/${result.campaignId}`);
+    },
+    onError: (e: any) => toast({ title: "Demo campaign failed", description: e.message, variant: "destructive" }),
+  });
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-6">
@@ -89,6 +107,18 @@ export default function WhatsAppCampaigns() {
           <p className="text-sm text-gray-600 mt-1">Send template blasts to contact groups; AI negotiates replies per-campaign.</p>
         </div>
         <div className="flex items-center gap-2">
+          {import.meta.env.DEV && (
+            <Button
+              variant="outline"
+              onClick={() => simulateMutation.mutate()}
+              disabled={simulateMutation.isPending}
+              data-testid="button-simulate-campaign"
+              title="Create a provider-free development campaign with 50 synthetic replies"
+            >
+              <FlaskConical className="h-4 w-4 mr-1" />
+              {simulateMutation.isPending ? "Preparing…" : "Seed 50-reply demo"}
+            </Button>
+          )}
           <Button variant="outline" onClick={() => setLocation("/admin/whatsapp-ai-workbooks")} data-testid="button-ai-workbooks">
             <Table2 className="h-4 w-4 mr-1" /> AI Workbooks
           </Button>
