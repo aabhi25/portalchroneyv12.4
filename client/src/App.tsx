@@ -418,7 +418,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/url-training" component={UrlTraining} />
                 <Route path="/admin/website" component={WebsiteAgent} />
                 <Route path="/admin/widget-settings" component={WidgetSettings} />
-                <Route path="/admin/more" component={MoreFeatures} />
+                <Route path="/admin/more">{() => <MoreFeatures user={user} />}</Route>
                 <Route path="/admin/menu-builder" component={MenuBuilder} />
                 <Route path="/admin/smart-replies">
                   <SmartReplies channel="website" headerContent={<TrainingNavTabs />} />

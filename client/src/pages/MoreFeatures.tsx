@@ -1,12 +1,13 @@
 import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { LayoutGrid, Sparkles, ClipboardList, Percent, Lightbulb, Link2 } from "lucide-react";
+import type { MeResponseDto } from "@shared/dto";
 
 const features = [
   {
     id: "crm",
     title: "CRM",
-    description: "Connect your CRM to automatically sync leads captured by Chroney",
+    description: "Connect your CRM to automatically sync captured leads",
     icon: Link2,
     path: "/admin/crm",
     color: "bg-purple-100",
@@ -59,8 +60,14 @@ const features = [
   },
 ];
 
-export default function MoreFeatures() {
+export default function MoreFeatures({ user }: { user: MeResponseDto | null }) {
   const [, setLocation] = useLocation();
+  const isWhatsappOnly =
+    user?.businessAccount?.whatsappEnabled === true &&
+    user?.businessAccount?.chroneyEnabled !== true;
+  const visibleFeatures = isWhatsappOnly
+    ? features.filter((feature) => feature.id === "crm")
+    : features;
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -72,7 +79,7 @@ export default function MoreFeatures() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {features.map((feature) => (
+        {visibleFeatures.map((feature) => (
           <Card
             key={feature.id}
             className="cursor-pointer hover:shadow-md transition-shadow"
