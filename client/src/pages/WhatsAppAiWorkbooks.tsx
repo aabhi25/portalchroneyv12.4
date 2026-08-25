@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   Archive, ArrowLeft, Copy, Download, Eye, FileSpreadsheet, FolderOpen, History,
-  Loader2, Megaphone, MoreHorizontal, Plus, RefreshCw, RotateCcw, Save, Sheet, Upload, X,
+  Loader2, Megaphone, MoreHorizontal, Pencil, Plus, RefreshCw, RotateCcw, Save, Sheet, Upload, X,
 } from "lucide-react";
 import type { AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
 
@@ -242,6 +242,8 @@ function WorkbookEditor({ id }: { id: string }) {
   const [previewVersionId, setPreviewVersionId] = useState<string | null>(null);
   const [previewSheetId, setPreviewSheetId] = useState("");
   const [sheetToRemove, setSheetToRemove] = useState<AiWorkbookSheet | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
 
   const { data: workbook, isLoading } = useQuery<WorkbookDetail>({
     queryKey: [`/api/whatsapp/ai-workbooks/${id}`],
@@ -368,6 +370,23 @@ function WorkbookEditor({ id }: { id: string }) {
     onError: (error: Error) => toast({ title: "Couldn't restore version", description: error.message, variant: "destructive" }),
   });
 
+  const rename = useMutation({
+    mutationFn: () => apiRequest<{ id: string; name: string; updatedAt: string }>(
+      "PATCH",
+      `/api/whatsapp/ai-workbooks/${id}`,
+      { name: renameValue.trim() },
+    ),
+    onSuccess: updated => {
+      setRenameOpen(false);
+      queryClient.setQueryData<WorkbookDetail>([`/api/whatsapp/ai-workbooks/${id}`], current => current
+        ? { ...current, name: updated.name, updatedAt: updated.updatedAt }
+        : current);
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/ai-workbooks"] });
+      toast({ title: "Workbook renamed" });
+    },
+    onError: (error: Error) => toast({ title: "Couldn't rename workbook", description: error.message, variant: "destructive" }),
+  });
+
   const refresh = useMutation({
     mutationFn: () => apiRequest("POST", `/api/whatsapp/ai-workbooks/${id}/refresh`),
     onSuccess: () => {
@@ -481,6 +500,19 @@ function WorkbookEditor({ id }: { id: string }) {
           </Button>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-slate-900 truncate">{workbook.name}</h1>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0 text-slate-400 hover:bg-violet-50 hover:text-violet-700"
+              title="Rename workbook"
+              aria-label="Rename workbook"
+              onClick={() => {
+                setRenameValue(workbook.name);
+                setRenameOpen(true);
+              }}
+            >
+              <Pencil className="h-4 w-4" />
+            </Button>
             <Badge variant="outline" className="rounded-full bg-white px-2.5 font-medium text-slate-600">v{workbook.currentVersion.versionNumber}</Badge>
           </div>
           <div className="flex items-center gap-2 mt-2 text-sm text-slate-500">
@@ -578,6 +610,30 @@ function WorkbookEditor({ id }: { id: string }) {
           />
         </CardContent>
       </Card>
+
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename workbook</DialogTitle>
+            <DialogDescription>Choose a clear name your team will recognize in the workbook library.</DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            value={renameValue}
+            onChange={event => setRenameValue(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === "Enter" && renameValue.trim() && !rename.isPending) rename.mutate();
+            }}
+            placeholder="e.g. April Promise-to-Pay follow-up"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameOpen(false)}>Cancel</Button>
+            <Button onClick={() => rename.mutate()} disabled={!renameValue.trim() || rename.isPending}>
+              {rename.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />} Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(sheetToRemove)} onOpenChange={open => !open && setSheetToRemove(null)}>
         <DialogContent>
