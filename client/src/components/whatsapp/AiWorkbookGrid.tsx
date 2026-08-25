@@ -1,0 +1,230 @@
+import { useEffect, useMemo, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Plus, Search, Sparkles, Trash2, UserRound } from "lucide-react";
+import type { AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
+
+interface Props {
+  sheet: AiWorkbookSheet;
+  onChange: (sheet: AiWorkbookSheet) => void;
+  selectedRows: Set<string>;
+  onSelectedRowsChange: (rows: Set<string>) => void;
+  onFilteredRowsChange?: (rows: AiWorkbookRow[]) => void;
+}
+
+function safeKey(label: string, columns: AiWorkbookColumn[]) {
+  const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "column";
+  let key = base;
+  for (let n = 2; columns.some(c => c.key === key); n++) key = `${base}_${n}`;
+  return key;
+}
+
+export function AiWorkbookGrid({
+  sheet,
+  onChange,
+  selectedRows,
+  onSelectedRowsChange,
+  onFilteredRowsChange,
+}: Props) {
+  const [search, setSearch] = useState("");
+  const [outcome, setOutcome] = useState("all");
+  const [newColumn, setNewColumn] = useState("");
+
+  const outcomeColumn = sheet.columns.find(c => c.key === "classification_label" || c.key === "classification");
+  const outcomes = useMemo(
+    () => outcomeColumn
+      ? Array.from(new Set(sheet.rows.map(r => String(r.values[outcomeColumn.key] || "")).filter(Boolean))).sort()
+      : [],
+    [sheet.rows, outcomeColumn?.key],
+  );
+  const filteredRows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    const rows = sheet.rows.filter(row => {
+      if (outcome !== "all" && outcomeColumn && String(row.values[outcomeColumn.key] || "") !== outcome) return false;
+      if (!needle) return true;
+      return sheet.columns.some(col => String(row.values[col.key] ?? "").toLowerCase().includes(needle));
+    });
+    return rows;
+  }, [sheet, search, outcome, outcomeColumn?.key]);
+
+  useEffect(() => {
+    onFilteredRowsChange?.(filteredRows);
+  }, [filteredRows, onFilteredRowsChange]);
+
+  const updateCell = (rowId: string, key: string, value: string | boolean) => {
+    onChange({
+      ...sheet,
+      rows: sheet.rows.map(row => row.id === rowId
+        ? { ...row, values: { ...row.values, [key]: value }, updatedAt: new Date().toISOString() }
+        : row),
+    });
+  };
+
+  const addColumn = () => {
+    const label = newColumn.trim();
+    if (!label) return;
+    const key = safeKey(label, sheet.columns);
+    onChange({
+      ...sheet,
+      columns: [...sheet.columns, { key, label, type: "text", source: "operator", editable: true }],
+      rows: sheet.rows.map(row => ({ ...row, values: { ...row.values, [key]: "" } })),
+    });
+    setNewColumn("");
+  };
+
+  const addRow = () => {
+    const values = Object.fromEntries(sheet.columns.map(c => [c.key, ""]));
+    onChange({
+      ...sheet,
+      rows: [...sheet.rows, { id: crypto.randomUUID(), values, updatedAt: new Date().toISOString() }],
+    });
+  };
+
+  const deleteSelected = () => {
+    if (selectedRows.size === 0) return;
+    onChange({ ...sheet, rows: sheet.rows.filter(row => !selectedRows.has(row.id)) });
+    onSelectedRowsChange(new Set());
+  };
+
+  const allVisibleSelected = filteredRows.length > 0 && filteredRows.every(row => selectedRows.has(row.id));
+  const setAllVisible = (checked: boolean) => {
+    const next = new Set(selectedRows);
+    for (const row of filteredRows) checked ? next.add(row.id) : next.delete(row.id);
+    onSelectedRowsChange(next);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[220px] max-w-md">
+          <Search className="h-4 w-4 absolute left-3 top-2.5 text-gray-400" />
+          <Input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search this tab…"
+            className="pl-9"
+          />
+        </div>
+        {outcomeColumn && outcomes.length > 0 && (
+          <Select value={outcome} onValueChange={setOutcome}>
+            <SelectTrigger className="w-[210px]" data-testid="select-workbook-outcome-filter">
+              <SelectValue placeholder="All reply outcomes" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All reply outcomes</SelectItem>
+              {outcomes.map(value => <SelectItem key={value} value={value}>{value}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
+        <div className="flex items-center gap-1 ml-auto">
+          <Input
+            value={newColumn}
+            onChange={e => setNewColumn(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") addColumn(); }}
+            placeholder="New team column"
+            className="w-[170px]"
+          />
+          <Button variant="outline" size="sm" onClick={addColumn} disabled={!newColumn.trim()}>
+            <Plus className="h-4 w-4 mr-1" /> Column
+          </Button>
+          <Button variant="outline" size="sm" onClick={addRow}>
+            <Plus className="h-4 w-4 mr-1" /> Row
+          </Button>
+          {selectedRows.size > 0 && (
+            <Button variant="outline" size="sm" onClick={deleteSelected} className="text-red-600">
+              <Trash2 className="h-4 w-4 mr-1" /> Delete
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="text-xs text-gray-500 flex items-center justify-between">
+        <span>{filteredRows.length.toLocaleString()} of {sheet.rows.length.toLocaleString()} rows</span>
+        <span>{selectedRows.size.toLocaleString()} selected</span>
+      </div>
+
+      <div className="border rounded-lg overflow-auto max-h-[62vh] bg-white">
+        <table className="w-full text-sm border-collapse">
+          <thead className="sticky top-0 z-20 bg-slate-50 shadow-sm">
+            <tr>
+              <th className="sticky left-0 z-30 bg-slate-50 border-r border-b w-11 px-3 py-2">
+                <Checkbox checked={allVisibleSelected} onCheckedChange={v => setAllVisible(v === true)} />
+              </th>
+              <th className="border-r border-b px-2 py-2 text-xs text-gray-400 font-medium w-14">#</th>
+              {sheet.columns.map(col => (
+                <th key={col.key} className="min-w-[160px] max-w-[260px] border-r border-b px-3 py-2 text-left whitespace-nowrap">
+                  <div className="flex items-center gap-1.5">
+                    {col.source === "ai"
+                      ? <Sparkles className="h-3.5 w-3.5 text-violet-500" />
+                      : col.source === "operator"
+                        ? <UserRound className="h-3.5 w-3.5 text-blue-500" />
+                        : null}
+                    <span className="font-semibold text-gray-700">{col.label}</span>
+                    {col.source !== "system" && (
+                      <Badge variant="outline" className="text-[9px] px-1 py-0">
+                        {col.source === "ai" ? "AI" : "Team"}
+                      </Badge>
+                    )}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filteredRows.map((row, index) => (
+              <tr key={row.id} className={selectedRows.has(row.id) ? "bg-violet-50/70" : "hover:bg-slate-50"}>
+                <td className="sticky left-0 z-10 bg-inherit border-r border-b px-3 py-2">
+                  <Checkbox
+                    checked={selectedRows.has(row.id)}
+                    onCheckedChange={v => {
+                      const next = new Set(selectedRows);
+                      v === true ? next.add(row.id) : next.delete(row.id);
+                      onSelectedRowsChange(next);
+                    }}
+                  />
+                </td>
+                <td className="border-r border-b px-2 py-2 text-xs text-gray-400 text-center">{index + 1}</td>
+                {sheet.columns.map(col => {
+                  const value = row.values[col.key];
+                  return (
+                    <td key={col.key} className="border-r border-b p-0 min-w-[160px] max-w-[260px]">
+                      {col.editable ? (
+                        col.type === "boolean" ? (
+                          <div className="px-3 py-2">
+                            <Checkbox
+                              checked={value === true || value === "true"}
+                              onCheckedChange={v => updateCell(row.id, col.key, v === true)}
+                            />
+                          </div>
+                        ) : (
+                          <input
+                            type={col.type === "date" ? "date" : col.type === "number" ? "number" : "text"}
+                            value={value == null ? "" : String(value).slice(0, col.type === "date" ? 10 : undefined)}
+                            onChange={e => updateCell(row.id, col.key, e.target.value)}
+                            className="w-full min-w-[160px] bg-transparent px-3 py-2 outline-none focus:ring-2 focus:ring-inset focus:ring-violet-400"
+                          />
+                        )
+                      ) : (
+                        <div className="px-3 py-2 truncate" title={value == null ? "" : String(value)}>
+                          {col.type === "boolean"
+                            ? (value === true || value === "true" ? "Yes" : "No")
+                            : value == null || value === "" ? <span className="text-gray-300">—</span> : String(value)}
+                        </div>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+            {filteredRows.length === 0 && (
+              <tr><td colSpan={sheet.columns.length + 2} className="text-center text-gray-400 py-12">No rows match this filter.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

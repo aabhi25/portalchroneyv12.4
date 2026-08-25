@@ -2990,6 +2990,30 @@ export interface ReplyClassification {
   captureFields?: ClassificationCaptureField[]; // extra structured fields to extract
 }
 
+export interface AiWorkbookColumn {
+  key: string;
+  label: string;
+  type: "text" | "number" | "date" | "boolean";
+  source: "system" | "ai" | "operator";
+  editable: boolean;
+}
+
+export interface AiWorkbookRow {
+  id: string;
+  sourceRecipientId?: string;
+  values: Record<string, string | number | boolean | null>;
+  aiValues?: Record<string, string | number | boolean | null>;
+  updatedAt?: string;
+}
+
+export interface AiWorkbookSheet {
+  id: string;
+  name: string;
+  kind: "recipients" | "outcomes" | "custom";
+  columns: AiWorkbookColumn[];
+  rows: AiWorkbookRow[];
+}
+
 // Marketing campaign — a planned send to one or more groups
 export const marketingCampaigns = pgTable("marketing_campaigns", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -3193,6 +3217,40 @@ export const marketingCampaignMessages = pgTable("marketing_campaign_messages", 
   campaignCreatedIdx: index("mkt_messages_campaign_created_idx").on(table.campaignId, table.createdAt),
 }));
 
+// Editable, versioned spreadsheet workspaces built from campaign recipients and outcomes.
+// Campaign rows remain immutable; workbook versions hold independent snapshots and operator edits.
+export const whatsappAiWorkbooks = pgTable("whatsapp_ai_workbooks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description").default(""),
+  sourceCampaignId: varchar("source_campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
+  status: text("status").notNull().default("active"), // active | archived
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  businessUpdatedIdx: index("wa_ai_workbooks_business_updated_idx").on(table.businessAccountId, table.updatedAt),
+  sourceCampaignIdx: index("wa_ai_workbooks_source_campaign_idx").on(table.sourceCampaignId),
+}));
+
+export const whatsappAiWorkbookVersions = pgTable("whatsapp_ai_workbook_versions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workbookId: varchar("workbook_id").notNull().references(() => whatsappAiWorkbooks.id, { onDelete: "cascade" }),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  sourceCampaignId: varchar("source_campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
+  versionNumber: integer("version_number").notNull(),
+  revision: integer("revision").notNull().default(1),
+  source: text("source").notNull().default("manual"), // campaign | manual | import | duplicate
+  sourceFileName: text("source_file_name"),
+  sheets: jsonb("sheets").$type<AiWorkbookSheet[]>().notNull().default([]),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  workbookVersionUniq: uniqueIndex("wa_ai_workbook_versions_workbook_version_uniq").on(table.workbookId, table.versionNumber),
+  workbookCreatedIdx: index("wa_ai_workbook_versions_workbook_created_idx").on(table.workbookId, table.createdAt),
+  businessIdx: index("wa_ai_workbook_versions_business_idx").on(table.businessAccountId),
+}));
+
 // Persistent webhook idempotency store — replaces in-memory dedup so it works across pods/restarts
 export const webhookEvents = pgTable("webhook_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -3241,6 +3299,8 @@ export type InsertMarketingCampaignRecipient = z.infer<typeof insertMarketingCam
 export type MarketingCampaignRecipient = typeof marketingCampaignRecipients.$inferSelect;
 export type InsertMarketingCampaignMessage = z.infer<typeof insertMarketingCampaignMessageSchema>;
 export type MarketingCampaignMessage = typeof marketingCampaignMessages.$inferSelect;
+export type WhatsappAiWorkbook = typeof whatsappAiWorkbooks.$inferSelect;
+export type WhatsappAiWorkbookVersion = typeof whatsappAiWorkbookVersions.$inferSelect;
 export type InsertWhatsappOptOut = z.infer<typeof insertWhatsappOptOutSchema>;
 export type WhatsappOptOut = typeof whatsappOptOuts.$inferSelect;
 

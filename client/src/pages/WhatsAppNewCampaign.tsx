@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Send, Clock, Copy } from "lucide-react";
 import CampaignForm, {
   CampaignNotice,
+  EMPTY_CAMPAIGN_FORM,
   campaignToFormValues,
   toDateTimeLocal,
   type CampaignFormValues,
@@ -62,6 +63,8 @@ export default function WhatsAppNewCampaign() {
   const { toast } = useToast();
 
   const sourceId = new URLSearchParams(search).get("from");
+  const workbookGroupId = new URLSearchParams(search).get("group");
+  const workbookName = new URLSearchParams(search).get("workbook");
   const listPath = "/admin/whatsapp-campaigns";
 
   // These keys are shared with the list and detail pages and the client caches indefinitely, so
@@ -116,7 +119,11 @@ export default function WhatsAppNewCampaign() {
       },
     };
   }
-  const initialValues = seeded.current?.values;
+  const initialValues = seeded.current?.values || (workbookGroupId ? {
+    ...EMPTY_CAMPAIGN_FORM,
+    name: `${workbookName || "AI Workbook"} Campaign`,
+    groupIds: [workbookGroupId],
+  } : undefined);
 
   if (sourceId && sourceError) {
     const notFound = (sourceError as Error & { status?: number }).status === 404;
@@ -141,8 +148,8 @@ export default function WhatsAppNewCampaign() {
 
   return (
     <CampaignForm
-      key={sourceId ?? "new"}
-      heading={source ? `Duplicate: ${source.name}` : "New WhatsApp Campaign"}
+      key={sourceId ?? workbookGroupId ?? "new"}
+      heading={source ? `Duplicate: ${source.name}` : workbookGroupId ? "Campaign from AI Workbook" : "New WhatsApp Campaign"}
       initialValues={initialValues}
       submitting={createMutation.isPending}
       pendingLabel="Creating..."

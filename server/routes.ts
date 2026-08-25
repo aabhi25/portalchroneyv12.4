@@ -36048,6 +36048,134 @@ Return ONLY a valid JSON object in this format:
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
+  // ---- AI Workbooks ----
+  app.get("/api/whatsapp/ai-workbooks", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const rows = await whatsappAiWorkbookService.list(
+        req.user!.businessAccountId!,
+        req.query.includeArchived === "true",
+      );
+      res.json(rows);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/whatsapp/ai-workbooks", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const workbook = await whatsappAiWorkbookService.create(req.user!.businessAccountId!, {
+        name: req.body?.name,
+        description: req.body?.description,
+        sourceCampaignId: req.body?.sourceCampaignId || null,
+      });
+      res.status(201).json(workbook);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.get("/api/whatsapp/ai-workbooks/:id", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const workbook = await whatsappAiWorkbookService.get(req.user!.businessAccountId!, req.params.id);
+      if (!workbook) return res.status(404).json({ error: "Workbook not found" });
+      res.json(workbook);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.patch("/api/whatsapp/ai-workbooks/:id", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const workbook = await whatsappAiWorkbookService.updateWorkbook(
+        req.user!.businessAccountId!,
+        req.params.id,
+        req.body || {},
+      );
+      if (!workbook) return res.status(404).json({ error: "Workbook not found" });
+      res.json(workbook);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post("/api/whatsapp/ai-workbooks/:id/duplicate", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const copy = await whatsappAiWorkbookService.duplicate(
+        req.user!.businessAccountId!,
+        req.params.id,
+        req.body?.name,
+      );
+      res.status(201).json(copy);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post("/api/whatsapp/ai-workbooks/:id/versions", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const version = await whatsappAiWorkbookService.createVersion(
+        req.user!.businessAccountId!,
+        req.params.id,
+        {
+          sheets: req.body?.sheets,
+          source: req.body?.source || "manual",
+          sourceFileName: req.body?.sourceFileName || null,
+          expectedCurrentVersionId: req.body?.expectedCurrentVersionId,
+          expectedRevision: Number(req.body?.expectedRevision),
+        },
+      );
+      res.status(201).json(version);
+    } catch (err: any) {
+      res.status(String(err.message).includes("another session") ? 409 : 400).json({ error: err.message });
+    }
+  });
+
+  app.put("/api/whatsapp/ai-workbooks/:id/versions/:versionId", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const revision = Number(req.body?.revision);
+      if (!Number.isInteger(revision) || revision < 1) return res.status(400).json({ error: "Valid revision required" });
+      const version = await whatsappAiWorkbookService.saveSheets(
+        req.user!.businessAccountId!,
+        req.params.id,
+        req.params.versionId,
+        revision,
+        req.body?.sheets,
+      );
+      res.json(version);
+    } catch (err: any) {
+      res.status(String(err.message).includes("another session") ? 409 : 400).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/whatsapp/ai-workbooks/:id/refresh", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const version = await whatsappAiWorkbookService.refreshFromCampaign(req.user!.businessAccountId!, req.params.id);
+      res.status(201).json(version);
+    } catch (err: any) {
+      res.status(String(err.message).includes("another session") ? 409 : 400).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/whatsapp/ai-workbooks/:id/export.xlsx", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const output = await whatsappAiWorkbookService.exportXlsx(req.user!.businessAccountId!, req.params.id);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${output.fileName}"`);
+      res.send(output.buffer);
+    } catch (err: any) { res.status(404).json({ error: err.message }); }
+  });
+
+  app.post("/api/whatsapp/ai-workbooks/:id/audience", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const result = await whatsappAiWorkbookService.createAudience(
+        req.user!.businessAccountId!,
+        req.params.id,
+        req.body || {},
+      );
+      res.status(201).json(result);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
   // ---- Campaigns ----
   app.get("/api/whatsapp/campaigns", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {

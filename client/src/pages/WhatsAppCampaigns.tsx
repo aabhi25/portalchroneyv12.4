@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, FileSpreadsheet } from "lucide-react";
+import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, FileSpreadsheet, Table2 } from "lucide-react";
 
 interface Campaign {
   id: string;
@@ -66,6 +66,19 @@ export default function WhatsAppCampaigns() {
     },
   });
 
+  const workbookMutation = useMutation({
+    mutationFn: async (campaign: Campaign) => apiRequest<{ id: string }>("POST", "/api/whatsapp/ai-workbooks", {
+      name: `${campaign.name} Workbook`,
+      sourceCampaignId: campaign.id,
+    }),
+    onSuccess: workbook => {
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/ai-workbooks"] });
+      toast({ title: "AI workbook created" });
+      setLocation(`/admin/whatsapp-ai-workbooks/${workbook.id}`);
+    },
+    onError: (e: any) => toast({ title: "Workbook creation failed", description: e.message, variant: "destructive" }),
+  });
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-6">
@@ -76,6 +89,9 @@ export default function WhatsAppCampaigns() {
           <p className="text-sm text-gray-600 mt-1">Send template blasts to contact groups; AI negotiates replies per-campaign.</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setLocation("/admin/whatsapp-ai-workbooks")} data-testid="button-ai-workbooks">
+            <Table2 className="h-4 w-4 mr-1" /> AI Workbooks
+          </Button>
           <Button variant="outline" onClick={() => setLocation("/admin/whatsapp-campaign-automations")} data-testid="button-campaign-automations">
             <FileSpreadsheet className="h-4 w-4 mr-1" /> Automations
           </Button>
@@ -111,6 +127,16 @@ export default function WhatsAppCampaigns() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => workbookMutation.mutate(c)}
+                      disabled={workbookMutation.isPending}
+                      title="Create an AI workbook from this campaign"
+                      data-testid={`button-create-workbook-${c.id}`}
+                    >
+                      <Table2 className="h-4 w-4 mr-1" /> Workbook
+                    </Button>
                     {(c.status === "draft" || c.status === "scheduled") && (
                       <Button size="sm" variant="default" onClick={() => sendMutation.mutate(c.id)} disabled={sendMutation.isPending} data-testid={`button-send-${c.id}`}>
                         <Send className="h-4 w-4 mr-1" /> Send Now

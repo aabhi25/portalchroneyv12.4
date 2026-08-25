@@ -16,6 +16,7 @@ import WhatsAppCampaignAutomationDetail from "@/pages/WhatsAppCampaignAutomation
 import WhatsAppNewCampaign from "@/pages/WhatsAppNewCampaign";
 import WhatsAppCampaignDetail from "@/pages/WhatsAppCampaignDetail";
 import WhatsAppCampaignConversations from "@/pages/WhatsAppCampaignConversations";
+import WhatsAppAiWorkbooks from "@/pages/WhatsAppAiWorkbooks";
 import WhatsAppEditCampaign from "@/pages/WhatsAppEditCampaign";
 import WhatsAppTemplates from "@/pages/WhatsAppTemplates";
 import WhatsAppContactGroups from "@/pages/WhatsAppContactGroups";
@@ -381,6 +382,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/whatsapp-config" component={WhatsApp} />
                 <Route path="/admin/whatsapp-smart-replies">{() => <SmartReplies channel="whatsapp" />}</Route>
                 <Route path="/admin/whatsapp-campaign-conversations">{() => <RequireWhatsappMarketing><WhatsAppCampaignConversations /></RequireWhatsappMarketing>}</Route>
+                <Route path="/admin/whatsapp-ai-workbooks/:id">{({ id }) => <RequireWhatsappMarketing><WhatsAppAiWorkbooks id={id} /></RequireWhatsappMarketing>}</Route>
+                <Route path="/admin/whatsapp-ai-workbooks">{() => <RequireWhatsappMarketing><WhatsAppAiWorkbooks /></RequireWhatsappMarketing>}</Route>
                  <Route path="/admin/whatsapp-campaign-automations/new">{() => <RequireWhatsappMarketing><WhatsAppCampaignAutomationForm /></RequireWhatsappMarketing>}</Route>
                  <Route path="/admin/whatsapp-campaign-automations/:id/edit">{({ id }) => <RequireWhatsappMarketing><WhatsAppCampaignAutomationForm id={id} /></RequireWhatsappMarketing>}</Route>
                  <Route path="/admin/whatsapp-campaign-automations/:id">{({ id }) => <RequireWhatsappMarketing><WhatsAppCampaignAutomationDetail id={id} /></RequireWhatsappMarketing>}</Route>
