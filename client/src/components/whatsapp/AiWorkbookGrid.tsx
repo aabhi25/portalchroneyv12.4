@@ -5,6 +5,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Plus, Search, Sparkles, Trash2, UserRound, X } from "lucide-react";
 import type { AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
 
@@ -38,6 +41,7 @@ export function AiWorkbookGrid({
   const [outcome, setOutcome] = useState("all");
   const [newColumn, setNewColumn] = useState("");
   const [columnToRemove, setColumnToRemove] = useState<AiWorkbookColumn | null>(null);
+  const [addColumnOpen, setAddColumnOpen] = useState(false);
 
   const outcomeColumn = sheet.columns.find(c => c.key === "classification_label" || c.key === "classification");
   const outcomes = useMemo(
@@ -79,6 +83,7 @@ export function AiWorkbookGrid({
       rows: sheet.rows.map(row => ({ ...row, values: { ...row.values, [key]: "" } })),
     });
     setNewColumn("");
+    setAddColumnOpen(false);
   };
 
   const addRow = () => {
@@ -104,19 +109,19 @@ export function AiWorkbookGrid({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[220px] max-w-md">
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2">
+        <div className="relative flex-1 min-w-[220px]">
           <Search className="h-4 w-4 absolute left-3 top-2.5 text-gray-400" />
           <Input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search this tab…"
-            className="pl-9"
+            className="pl-9 bg-white border-slate-200"
           />
         </div>
         {outcomeColumn && outcomes.length > 0 && (
           <Select value={outcome} onValueChange={setOutcome}>
-            <SelectTrigger className="w-[210px]" data-testid="select-workbook-outcome-filter">
+            <SelectTrigger className="w-[210px] bg-white border-slate-200" data-testid="select-workbook-outcome-filter">
               <SelectValue placeholder="All reply outcomes" />
             </SelectTrigger>
             <SelectContent>
@@ -126,22 +131,24 @@ export function AiWorkbookGrid({
           </Select>
         )}
         {!readOnly && <div className="flex items-center gap-1 ml-auto">
-          <Input
-            value={newColumn}
-            onChange={e => setNewColumn(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") addColumn(); }}
-            placeholder="New team column"
-            className="w-[170px]"
-          />
-          <Button variant="outline" size="sm" onClick={addColumn} disabled={!newColumn.trim()}>
-            <Plus className="h-4 w-4 mr-1" /> Column
-          </Button>
-          <Button variant="outline" size="sm" onClick={addRow}>
-            <Plus className="h-4 w-4 mr-1" /> Row
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="bg-white border-slate-200">
+                <Plus className="h-4 w-4 mr-1" /> Add
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => setAddColumnOpen(true)}>
+                <Plus className="h-4 w-4 mr-2" /> Team column
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={addRow}>
+                <Plus className="h-4 w-4 mr-2" /> Row
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {selectedRows.size > 0 && (
-            <Button variant="outline" size="sm" onClick={deleteSelected} className="text-red-600">
-              <Trash2 className="h-4 w-4 mr-1" /> Delete
+            <Button variant="ghost" size="sm" onClick={deleteSelected} className="text-red-600 hover:text-red-700 hover:bg-red-50">
+              <Trash2 className="h-4 w-4 mr-1" /> Remove selected
             </Button>
           )}
         </div>}
@@ -149,7 +156,7 @@ export function AiWorkbookGrid({
 
       <div className="text-xs text-gray-500 flex items-center justify-between">
         <span>{filteredRows.length.toLocaleString()} of {sheet.rows.length.toLocaleString()} rows</span>
-        <span>{selectedRows.size.toLocaleString()} selected</span>
+        {selectedRows.size > 0 ? <span>{selectedRows.size.toLocaleString()} selected</span> : <span> </span>}
       </div>
 
       <div className="border rounded-lg overflow-auto max-h-[62vh] bg-white">
@@ -245,6 +252,25 @@ export function AiWorkbookGrid({
           </tbody>
         </table>
       </div>
+      <Dialog open={addColumnOpen} onOpenChange={setAddColumnOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add team column</DialogTitle>
+            <DialogDescription>Add a field for your team to update while reviewing this tab.</DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            value={newColumn}
+            onChange={e => setNewColumn(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && newColumn.trim()) addColumn(); }}
+            placeholder="e.g. Follow-up owner"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddColumnOpen(false)}>Cancel</Button>
+            <Button onClick={addColumn} disabled={!newColumn.trim()}>Add column</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={Boolean(columnToRemove)} onOpenChange={open => !open && setColumnToRemove(null)}>
         <DialogContent>
           <DialogHeader>

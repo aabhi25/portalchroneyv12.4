@@ -12,8 +12,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Archive, ArrowLeft, Copy, Download, Eye, FileSpreadsheet, FolderOpen, History,
-  Loader2, Megaphone, Plus, RefreshCw, RotateCcw, Save, Sheet, Upload, X,
+  Loader2, Megaphone, MoreHorizontal, Plus, RefreshCw, RotateCcw, Save, Sheet, Upload, X,
 } from "lucide-react";
 import type { AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
 
@@ -469,59 +472,72 @@ function WorkbookEditor({ id }: { id: string }) {
   if (!workbook.currentVersion || !activeSheet) return <div className="p-6">This workbook has no editable version.</div>;
 
   return (
-    <div className="p-4 md:p-6 max-w-[1800px] mx-auto">
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+    <div className="min-h-screen bg-slate-50/60 p-4 md:p-8">
+      <div className="max-w-[1800px] mx-auto">
+      <div className="flex flex-wrap items-end justify-between gap-5 mb-6">
         <div className="min-w-0">
-          <Button variant="ghost" size="sm" className="-ml-2 mb-1" onClick={() => setLocation("/admin/whatsapp-ai-workbooks")}>
+          <Button variant="ghost" size="sm" className="-ml-2 mb-3 text-slate-500 hover:text-slate-900" onClick={() => setLocation("/admin/whatsapp-ai-workbooks")}>
             <ArrowLeft className="h-4 w-4 mr-1" /> AI Workbooks
           </Button>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl md:text-2xl font-bold truncate">{workbook.name}</h1>
-            <Badge variant="outline">v{workbook.currentVersion.versionNumber}</Badge>
-            {dirty && <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Unsaved</Badge>}
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-slate-900 truncate">{workbook.name}</h1>
+            <Badge variant="outline" className="rounded-full bg-white px-2.5 font-medium text-slate-600">v{workbook.currentVersion.versionNumber}</Badge>
           </div>
-          <p className="text-xs text-gray-500 mt-1">
-            {workbook.sourceCampaignId ? "Linked campaign workbook" : "Independent workbook"} · revision {workbook.currentVersion.revision}
-          </p>
+          <div className="flex items-center gap-2 mt-2 text-sm text-slate-500">
+            <span>{workbook.sourceCampaignId ? "Linked campaign workbook" : "Independent workbook"}</span>
+            <span className="text-slate-300">•</span>
+            <span>Revision {workbook.currentVersion.revision}</span>
+            {dirty && <><span className="text-slate-300">•</span><span className="font-medium text-amber-600">Unsaved changes</span></>}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {workbook.sourceCampaignId && (
-            <Button variant="outline" onClick={() => refresh.mutate()} disabled={refresh.isPending || dirty}>
-              <RefreshCw className={`h-4 w-4 mr-1 ${refresh.isPending ? "animate-spin" : ""}`} /> Refresh outcomes
-            </Button>
-          )}
-          <Button variant="outline" onClick={() => inputRef.current?.click()}>
-            <Upload className="h-4 w-4 mr-1" /> Import Excel
-          </Button>
+        <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="bg-white border-slate-200 text-slate-700 shadow-sm">
+                <MoreHorizontal className="h-4 w-4 mr-2" /> More
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {workbook.sourceCampaignId && (
+                <DropdownMenuItem onSelect={() => refresh.mutate()} disabled={refresh.isPending || dirty}>
+                  <RefreshCw className={`h-4 w-4 mr-2 ${refresh.isPending ? "animate-spin" : ""}`} /> Refresh outcomes
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onSelect={() => inputRef.current?.click()}>
+                <Upload className="h-4 w-4 mr-2" /> Import Excel
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href={`/api/whatsapp/ai-workbooks/${id}/export.xlsx`}><Download className="h-4 w-4 mr-2" /> Export Excel</a>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setHistoryOpen(true)}>
+                <Eye className="h-4 w-4 mr-2" /> Version history
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => createVersion.mutate({ sheets, source: "manual" })} disabled={createVersion.isPending}>
+                <History className="h-4 w-4 mr-2" /> Save as version
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => {
             const file = e.target.files?.[0];
             if (file) void importExcel(file);
           }} />
-          <Button variant="outline" asChild>
-            <a href={`/api/whatsapp/ai-workbooks/${id}/export.xlsx`}><Download className="h-4 w-4 mr-1" /> Export Excel</a>
-          </Button>
-          <Button variant="outline" onClick={() => setHistoryOpen(true)}>
-            <Eye className="h-4 w-4 mr-1" /> Version history
-          </Button>
-          <Button variant="outline" onClick={() => createVersion.mutate({ sheets, source: "manual" })} disabled={createVersion.isPending}>
-            <History className="h-4 w-4 mr-1" /> Save as version
-          </Button>
-          <Button onClick={() => save.mutate()} disabled={!dirty || save.isPending}>
-            {save.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />} Save
+          <Button onClick={() => save.mutate()} disabled={!dirty || save.isPending} className="min-w-[104px] shadow-sm">
+            {save.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />} {save.isPending ? "Saving" : "Save"}
           </Button>
         </div>
       </div>
 
-      <Card>
-        <CardContent className="p-3 md:p-4">
-          <div className="flex items-center gap-1 border-b mb-3 overflow-x-auto">
+      <Card className="border-slate-200/80 shadow-sm">
+        <CardContent className="p-3 md:p-5">
+          <div className="flex items-center gap-1 border-b border-slate-200 mb-4 overflow-x-auto">
             {sheets.map(sheet => (
               <div
                 key={sheet.id}
                 className={`group flex items-center border-b-2 transition-colors ${
                   activeSheet.id === sheet.id
                     ? "border-violet-600 text-violet-700 font-semibold bg-violet-50/60"
-                    : "border-transparent text-gray-600 hover:bg-gray-50"
+                    : "border-transparent text-slate-600 hover:bg-slate-50"
                 }`}
               >
                 <button
@@ -679,19 +695,23 @@ function WorkbookEditor({ id }: { id: string }) {
         </DialogContent>
       </Dialog>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-violet-50/60 p-4">
-        <div>
-          <div className="font-semibold flex items-center gap-1.5"><Megaphone className="h-4 w-4 text-violet-600" /> Run another campaign</div>
-          <p className="text-xs text-gray-600 mt-0.5">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-violet-100 bg-white p-4 shadow-sm">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 rounded-lg bg-violet-50 p-2"><Megaphone className="h-4 w-4 text-violet-600" /></div>
+          <div>
+          <div className="font-semibold text-slate-900">Run another campaign</div>
+          <p className="text-xs text-slate-500 mt-0.5">
             {selectedRows.size > 0
               ? `Create a protected campaign audience from ${selectedRows.size.toLocaleString()} selected rows.`
               : `Create a protected campaign audience from ${filteredRows.length.toLocaleString()} currently filtered rows.`}
           </p>
+          </div>
         </div>
-        <Button onClick={() => createAudience.mutate()} disabled={createAudience.isPending || (selectedRows.size === 0 && filteredRows.length === 0)}>
+        <Button variant="outline" className="border-violet-200 text-violet-700 hover:bg-violet-50" onClick={() => createAudience.mutate()} disabled={createAudience.isPending || (selectedRows.size === 0 && filteredRows.length === 0)}>
           {createAudience.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
-          Create Campaign from Workbook
+          Create campaign
         </Button>
+      </div>
       </div>
     </div>
   );
