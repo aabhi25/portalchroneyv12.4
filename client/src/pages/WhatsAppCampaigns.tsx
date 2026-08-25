@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, FileSpreadsheet, Table2, FlaskConical } from "lucide-react";
+import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, Table2, FlaskConical } from "lucide-react";
 
 interface Campaign {
   id: string;
@@ -119,12 +119,6 @@ export default function WhatsAppCampaigns() {
               {simulateMutation.isPending ? "Preparing…" : "Seed 50-reply demo"}
             </Button>
           )}
-          <Button variant="outline" onClick={() => setLocation("/admin/whatsapp-ai-workbooks")} data-testid="button-ai-workbooks">
-            <Table2 className="h-4 w-4 mr-1" /> AI Workbooks
-          </Button>
-          <Button variant="outline" onClick={() => setLocation("/admin/whatsapp-campaign-automations")} data-testid="button-campaign-automations">
-            <FileSpreadsheet className="h-4 w-4 mr-1" /> Automations
-          </Button>
           <Button onClick={() => setLocation("/admin/whatsapp-campaigns/new")} data-testid="button-new-campaign">
             <Plus className="h-4 w-4 mr-1" /> New Campaign
           </Button>
