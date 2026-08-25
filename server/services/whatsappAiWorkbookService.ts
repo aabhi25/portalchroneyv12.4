@@ -381,6 +381,28 @@ export const whatsappAiWorkbookService = {
 
   async saveSheets(businessAccountId: string, workbookId: string, versionId: string, revision: number, sheets: unknown) {
     const normalized = validateSheets(sheets);
+    const [current] = await db.select({ sheets: whatsappAiWorkbookVersions.sheets, revision: whatsappAiWorkbookVersions.revision })
+      .from(whatsappAiWorkbookVersions)
+      .where(and(
+        eq(whatsappAiWorkbookVersions.id, versionId),
+        eq(whatsappAiWorkbookVersions.workbookId, workbookId),
+        eq(whatsappAiWorkbookVersions.businessAccountId, businessAccountId),
+      ))
+      .limit(1);
+    if (!current) throw new Error("Workbook version not found");
+    if (current.revision !== revision) throw new Error("This workbook changed in another session. Reload it before saving.");
+    const nextById = new Map(normalized.map(sheet => [sheet.id, sheet]));
+    for (const previousSheet of current.sheets as AiWorkbookSheet[]) {
+      const nextSheet = nextById.get(previousSheet.id);
+      if (!nextSheet || !["recipients", "outcomes"].includes(previousSheet.kind)) continue;
+      const nextKeys = new Set(nextSheet.columns.map(column => column.key));
+      const removedProtected = previousSheet.columns
+        .filter(column => column.source !== "operator" && !nextKeys.has(column.key))
+        .map(column => column.label);
+      if (removedProtected.length > 0) {
+        throw new Error(`These campaign columns cannot be removed: ${removedProtected.join(", ")}`);
+      }
+    }
     const [updated] = await db.update(whatsappAiWorkbookVersions)
       .set({ sheets: normalized, revision: sql`${whatsappAiWorkbookVersions.revision} + 1`, updatedAt: new Date() })
       .where(and(
@@ -395,6 +417,17 @@ export const whatsappAiWorkbookService = {
       .set({ updatedAt: new Date() })
       .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)));
     return updated;
+  },
+
+  async getVersion(businessAccountId: string, workbookId: string, versionId: string) {
+    const [version] = await db.select().from(whatsappAiWorkbookVersions)
+      .where(and(
+        eq(whatsappAiWorkbookVersions.id, versionId),
+        eq(whatsappAiWorkbookVersions.workbookId, workbookId),
+        eq(whatsappAiWorkbookVersions.businessAccountId, businessAccountId),
+      ))
+      .limit(1);
+    return version;
   },
 
   async createVersion(
@@ -434,6 +467,19 @@ export const whatsappAiWorkbookService = {
       if (current.id !== input.expectedCurrentVersionId || current.revision !== input.expectedRevision) {
         throw new Error("This workbook changed in another session. Reload it before creating a new version.");
       }
+      const nextSheets = (requestedSheets ?? current.sheets) as AiWorkbookSheet[];
+      const nextById = new Map(nextSheets.map(sheet => [sheet.id, sheet]));
+      for (const previousSheet of current.sheets as AiWorkbookSheet[]) {
+        const nextSheet = nextById.get(previousSheet.id);
+        if (!nextSheet || !["recipients", "outcomes"].includes(previousSheet.kind)) continue;
+        const nextKeys = new Set(nextSheet.columns.map(column => column.key));
+        const removedProtected = previousSheet.columns
+          .filter(column => column.source !== "operator" && !nextKeys.has(column.key))
+          .map(column => column.label);
+        if (removedProtected.length > 0) {
+          throw new Error(`These campaign columns cannot be removed: ${removedProtected.join(", ")}`);
+        }
+      }
       const [version] = await tx.insert(whatsappAiWorkbookVersions).values({
         workbookId,
         businessAccountId,
@@ -441,11 +487,22 @@ export const whatsappAiWorkbookService = {
         versionNumber: current.versionNumber + 1,
         source,
         sourceFileName: input.sourceFileName || null,
-        sheets: requestedSheets ?? current.sheets,
+        sheets: nextSheets,
       }).returning();
       await tx.update(whatsappAiWorkbooks).set({ updatedAt: new Date() })
         .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)));
       return version;
+    });
+  },
+
+  async restoreVersion(businessAccountId: string, workbookId: string, versionId: string, expectedCurrentVersionId: string, expectedRevision: number) {
+    const version = await this.getVersion(businessAccountId, workbookId, versionId);
+    if (!version) throw new Error("Workbook version not found");
+    return this.createVersion(businessAccountId, workbookId, {
+      sheets: version.sheets,
+      source: "manual",
+      expectedCurrentVersionId,
+      expectedRevision,
     });
   },
 

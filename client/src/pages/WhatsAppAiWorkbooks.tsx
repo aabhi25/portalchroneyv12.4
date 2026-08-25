@@ -12,8 +12,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  Archive, ArrowLeft, Copy, Download, FileSpreadsheet, FolderOpen, History,
-  Loader2, Megaphone, Plus, RefreshCw, Save, Sheet, Upload,
+  Archive, ArrowLeft, Copy, Download, Eye, FileSpreadsheet, FolderOpen, History,
+  Loader2, Megaphone, Plus, RefreshCw, RotateCcw, Save, Sheet, Trash2, Upload,
 } from "lucide-react";
 import type { AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
 
@@ -235,10 +235,25 @@ function WorkbookEditor({ id }: { id: string }) {
   const [dirty, setDirty] = useState(false);
   const [selectedRows, setSelectedRows] = useState(new Set<string>());
   const [filteredRows, setFilteredRows] = useState<AiWorkbookRow[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [previewVersionId, setPreviewVersionId] = useState<string | null>(null);
+  const [previewSheetId, setPreviewSheetId] = useState("");
 
   const { data: workbook, isLoading } = useQuery<WorkbookDetail>({
     queryKey: [`/api/whatsapp/ai-workbooks/${id}`],
     refetchOnMount: "always",
+  });
+  const { data: previewVersion, isFetching: previewLoading } = useQuery<{
+    id: string;
+    versionNumber: number;
+    revision: number;
+    source: string;
+    sourceFileName: string | null;
+    sheets: AiWorkbookSheet[];
+    updatedAt: string;
+  }>({
+    queryKey: [`/api/whatsapp/ai-workbooks/${id}/versions/${previewVersionId}`],
+    enabled: Boolean(previewVersionId),
   });
 
   useEffect(() => {
@@ -249,9 +264,48 @@ function WorkbookEditor({ id }: { id: string }) {
       : workbook.currentVersion!.sheets[0]?.id || "");
   }, [workbook?.currentVersion?.id, workbook?.currentVersion?.revision]);
 
+  useEffect(() => {
+    if (!previewVersion) return;
+    setPreviewSheetId(previewVersion.sheets[0]?.id || "");
+  }, [previewVersion?.id]);
+
   const activeSheet = sheets.find(sheet => sheet.id === activeSheetId) || sheets[0];
   const updateSheet = (next: AiWorkbookSheet) => {
     setSheets(current => current.map(sheet => sheet.id === next.id ? next : sheet));
+    setDirty(true);
+  };
+
+  const removeSheet = (sheetId: string) => {
+    const sheet = sheets.find(item => item.id === sheetId);
+    if (!sheet || sheets.length <= 1) {
+      toast({ title: "Keep at least one tab", description: "A workbook must contain one tab.", variant: "destructive" });
+      return;
+    }
+    if (!window.confirm(`Remove the "${sheet.name}" tab? Its rows and columns will be removed when you save.`)) return;
+    const next = sheets.filter(item => item.id !== sheetId);
+    setSheets(next);
+    if (activeSheetId === sheetId) setActiveSheetId(next[0].id);
+    setSelectedRows(new Set());
+    setDirty(true);
+  };
+
+  const removeColumn = (sheetId: string, columnKey: string) => {
+    setSheets(current => current.map(sheet => {
+      if (sheet.id !== sheetId) return sheet;
+      if (sheet.columns.length <= 1) {
+        toast({ title: "Keep at least one column", description: "A tab must contain one column.", variant: "destructive" });
+        return sheet;
+      }
+      return {
+        ...sheet,
+        columns: sheet.columns.filter(column => column.key !== columnKey),
+        rows: sheet.rows.map(row => {
+          const values = { ...row.values };
+          delete values[columnKey];
+          return { ...row, values };
+        }),
+      };
+    }));
     setDirty(true);
   };
 
@@ -285,6 +339,30 @@ function WorkbookEditor({ id }: { id: string }) {
       toast({ title: "New workbook version created" });
     },
     onError: (error: Error) => toast({ title: "Couldn't create version", description: error.message, variant: "destructive" }),
+  });
+
+  const restoreVersion = useMutation({
+    mutationFn: () => {
+      const currentVersion = workbook?.currentVersion;
+      if (!previewVersion || !currentVersion) throw new Error("Choose an older version first");
+      return apiRequest(
+        "POST",
+        `/api/whatsapp/ai-workbooks/${id}/versions/${previewVersion.id}/restore`,
+        {
+          expectedCurrentVersionId: currentVersion.id,
+          expectedRevision: currentVersion.revision,
+        },
+      );
+    },
+    onSuccess: () => {
+      setPreviewVersionId(null);
+      setHistoryOpen(false);
+      setDirty(false);
+      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/ai-workbooks/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/ai-workbooks"] });
+      toast({ title: "Version restored", description: "The older workbook is now the current version, and the previous history remains available." });
+    },
+    onError: (error: Error) => toast({ title: "Couldn't restore version", description: error.message, variant: "destructive" }),
   });
 
   const refresh = useMutation({
@@ -422,6 +500,9 @@ function WorkbookEditor({ id }: { id: string }) {
           <Button variant="outline" asChild>
             <a href={`/api/whatsapp/ai-workbooks/${id}/export.xlsx`}><Download className="h-4 w-4 mr-1" /> Export Excel</a>
           </Button>
+          <Button variant="outline" onClick={() => setHistoryOpen(true)}>
+            <Eye className="h-4 w-4 mr-1" /> Version history
+          </Button>
           <Button variant="outline" onClick={() => createVersion.mutate({ sheets, source: "manual" })} disabled={createVersion.isPending}>
             <History className="h-4 w-4 mr-1" /> Save as version
           </Button>
@@ -435,20 +516,33 @@ function WorkbookEditor({ id }: { id: string }) {
         <CardContent className="p-3 md:p-4">
           <div className="flex items-center gap-1 border-b mb-3 overflow-x-auto">
             {sheets.map(sheet => (
-              <button
+              <div
                 key={sheet.id}
-                type="button"
-                onClick={() => { setActiveSheetId(sheet.id); setSelectedRows(new Set()); }}
-                className={`px-4 py-2.5 text-sm whitespace-nowrap border-b-2 transition-colors ${
+                className={`group flex items-center border-b-2 transition-colors ${
                   activeSheet.id === sheet.id
                     ? "border-violet-600 text-violet-700 font-semibold bg-violet-50/60"
                     : "border-transparent text-gray-600 hover:bg-gray-50"
                 }`}
               >
-                <Sheet className="h-3.5 w-3.5 inline mr-1.5" />
-                {sheet.name}
-                <span className="ml-1.5 text-xs text-gray-400">{sheet.rows.length}</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => { setActiveSheetId(sheet.id); setSelectedRows(new Set()); }}
+                  className="px-4 py-2.5 text-sm whitespace-nowrap"
+                >
+                  <Sheet className="h-3.5 w-3.5 inline mr-1.5" />
+                  {sheet.name}
+                  <span className="ml-1.5 text-xs text-gray-400">{sheet.rows.length}</span>
+                </button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 mr-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                  title={`Remove ${sheet.name} tab`}
+                  onClick={() => removeSheet(sheet.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             ))}
             <Button variant="ghost" size="sm" className="ml-1" onClick={addTab}><Plus className="h-4 w-4 mr-1" /> Tab</Button>
           </div>
@@ -458,9 +552,103 @@ function WorkbookEditor({ id }: { id: string }) {
             selectedRows={selectedRows}
             onSelectedRowsChange={setSelectedRows}
             onFilteredRowsChange={setFilteredRows}
+            onRemoveColumn={columnKey => removeColumn(activeSheet.id, columnKey)}
           />
         </CardContent>
       </Card>
+
+      <Dialog open={historyOpen} onOpenChange={open => {
+        setHistoryOpen(open);
+        if (!open) setPreviewVersionId(null);
+      }}>
+        <DialogContent className="max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Version history</DialogTitle>
+            <DialogDescription>Open any prior version in read-only mode. Restoring creates a new current version and keeps all history intact.</DialogDescription>
+          </DialogHeader>
+          <div className="grid md:grid-cols-[240px,minmax(0,1fr)] gap-4 min-h-0 flex-1 overflow-hidden">
+            <div className="border rounded-lg overflow-y-auto">
+              {workbook.versions.map(version => {
+                const current = version.id === workbook.currentVersion?.id;
+                return (
+                  <button
+                    key={version.id}
+                    type="button"
+                    onClick={() => setPreviewVersionId(version.id)}
+                    className={`w-full text-left p-3 border-b last:border-b-0 hover:bg-slate-50 ${
+                      previewVersionId === version.id ? "bg-violet-50 ring-1 ring-inset ring-violet-200" : ""
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-sm">Version {version.versionNumber}</span>
+                      {current && <Badge variant="outline" className="text-[10px]">Current</Badge>}
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500 capitalize">{version.source}{version.sourceFileName ? ` · ${version.sourceFileName}` : ""}</div>
+                    <div className="mt-1 text-[11px] text-gray-400">{new Date(version.updatedAt).toLocaleString()}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="min-w-0 overflow-auto border rounded-lg p-3">
+              {!previewVersionId ? (
+                <div className="h-full min-h-48 flex items-center justify-center text-sm text-gray-500">Select a version to preview it.</div>
+              ) : previewLoading ? (
+                <div className="h-full min-h-48 flex items-center justify-center text-sm text-gray-500"><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Loading version…</div>
+              ) : previewVersion ? (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <div>
+                      <div className="font-semibold">Version {previewVersion.versionNumber}</div>
+                      <div className="text-xs text-gray-500 capitalize">Read-only preview · {previewVersion.source}</div>
+                    </div>
+                    {previewVersion.id !== workbook.currentVersion.id && (
+                      <Button
+                        onClick={() => restoreVersion.mutate()}
+                        disabled={restoreVersion.isPending || dirty}
+                        title={dirty ? "Save or discard your current edits before restoring a version" : undefined}
+                      >
+                        {restoreVersion.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RotateCcw className="h-4 w-4 mr-1" />}
+                        Restore as new version
+                      </Button>
+                    )}
+                  </div>
+                  {dirty && previewVersion.id !== workbook.currentVersion.id && (
+                    <p className="mb-3 text-xs text-amber-700">Save or discard current edits before restoring an older version.</p>
+                  )}
+                  <div className="flex items-center gap-1 border-b mb-3 overflow-x-auto">
+                    {previewVersion.sheets.map(sheet => (
+                      <button
+                        key={sheet.id}
+                        type="button"
+                        onClick={() => setPreviewSheetId(sheet.id)}
+                        className={`px-3 py-2 text-xs whitespace-nowrap border-b-2 ${
+                          previewSheetId === sheet.id ? "border-violet-600 text-violet-700 font-semibold" : "border-transparent text-gray-600"
+                        }`}
+                      >
+                        <Sheet className="h-3 w-3 inline mr-1" /> {sheet.name}
+                      </button>
+                    ))}
+                  </div>
+                  {(() => {
+                    const previewSheet = previewVersion.sheets.find(sheet => sheet.id === previewSheetId) || previewVersion.sheets[0];
+                    return previewSheet ? (
+                      <AiWorkbookGrid
+                        sheet={previewSheet}
+                        onChange={() => undefined}
+                        selectedRows={new Set()}
+                        onSelectedRowsChange={() => undefined}
+                        readOnly
+                      />
+                    ) : null;
+                  })()}
+                </>
+              ) : (
+                <div className="h-full min-h-48 flex items-center justify-center text-sm text-red-600">This version is no longer available.</div>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-violet-50/60 p-4">
         <div>

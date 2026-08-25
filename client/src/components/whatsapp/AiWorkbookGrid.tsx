@@ -13,6 +13,8 @@ interface Props {
   selectedRows: Set<string>;
   onSelectedRowsChange: (rows: Set<string>) => void;
   onFilteredRowsChange?: (rows: AiWorkbookRow[]) => void;
+  onRemoveColumn?: (columnKey: string) => void;
+  readOnly?: boolean;
 }
 
 function safeKey(label: string, columns: AiWorkbookColumn[]) {
@@ -28,6 +30,8 @@ export function AiWorkbookGrid({
   selectedRows,
   onSelectedRowsChange,
   onFilteredRowsChange,
+  onRemoveColumn,
+  readOnly = false,
 }: Props) {
   const [search, setSearch] = useState("");
   const [outcome, setOutcome] = useState("all");
@@ -119,7 +123,7 @@ export function AiWorkbookGrid({
             </SelectContent>
           </Select>
         )}
-        <div className="flex items-center gap-1 ml-auto">
+        {!readOnly && <div className="flex items-center gap-1 ml-auto">
           <Input
             value={newColumn}
             onChange={e => setNewColumn(e.target.value)}
@@ -138,7 +142,7 @@ export function AiWorkbookGrid({
               <Trash2 className="h-4 w-4 mr-1" /> Delete
             </Button>
           )}
-        </div>
+        </div>}
       </div>
 
       <div className="text-xs text-gray-500 flex items-center justify-between">
@@ -151,7 +155,7 @@ export function AiWorkbookGrid({
           <thead className="sticky top-0 z-20 bg-slate-50 shadow-sm">
             <tr>
               <th className="sticky left-0 z-30 bg-slate-50 border-r border-b w-11 px-3 py-2">
-                <Checkbox checked={allVisibleSelected} onCheckedChange={v => setAllVisible(v === true)} />
+                <Checkbox disabled={readOnly} checked={allVisibleSelected} onCheckedChange={v => setAllVisible(v === true)} />
               </th>
               <th className="border-r border-b px-2 py-2 text-xs text-gray-400 font-medium w-14">#</th>
               {sheet.columns.map(col => (
@@ -168,6 +172,23 @@ export function AiWorkbookGrid({
                         {col.source === "ai" ? "AI" : "Team"}
                       </Badge>
                     )}
+                    {!readOnly && col.editable && onRemoveColumn && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-5 w-5 ml-auto text-gray-400 hover:text-red-600"
+                        title={`Remove ${col.label} column`}
+                        aria-label={`Remove ${col.label} column`}
+                        onClick={() => {
+                          if (window.confirm(`Remove the "${col.label}" column? Its values will be removed when you save.`)) {
+                            onRemoveColumn(col.key);
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
                   </div>
                 </th>
               ))}
@@ -178,6 +199,7 @@ export function AiWorkbookGrid({
               <tr key={row.id} className={selectedRows.has(row.id) ? "bg-violet-50/70" : "hover:bg-slate-50"}>
                 <td className="sticky left-0 z-10 bg-inherit border-r border-b px-3 py-2">
                   <Checkbox
+                    disabled={readOnly}
                     checked={selectedRows.has(row.id)}
                     onCheckedChange={v => {
                       const next = new Set(selectedRows);
@@ -191,7 +213,7 @@ export function AiWorkbookGrid({
                   const value = row.values[col.key];
                   return (
                     <td key={col.key} className="border-r border-b p-0 min-w-[160px] max-w-[260px]">
-                      {col.editable ? (
+                      {!readOnly && col.editable ? (
                         col.type === "boolean" ? (
                           <div className="px-3 py-2">
                             <Checkbox

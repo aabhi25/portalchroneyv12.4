@@ -36126,6 +36126,35 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
+  app.get("/api/whatsapp/ai-workbooks/:id/versions/:versionId", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const version = await whatsappAiWorkbookService.getVersion(
+        req.user!.businessAccountId!,
+        req.params.id,
+        req.params.versionId,
+      );
+      if (!version) return res.status(404).json({ error: "Workbook version not found" });
+      res.json(version);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/whatsapp/ai-workbooks/:id/versions/:versionId/restore", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const version = await whatsappAiWorkbookService.restoreVersion(
+        req.user!.businessAccountId!,
+        req.params.id,
+        req.params.versionId,
+        req.body?.expectedCurrentVersionId,
+        Number(req.body?.expectedRevision),
+      );
+      res.status(201).json(version);
+    } catch (err: any) {
+      res.status(String(err.message).includes("another session") ? 409 : 400).json({ error: err.message });
+    }
+  });
+
   app.put("/api/whatsapp/ai-workbooks/:id/versions/:versionId", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
       const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
