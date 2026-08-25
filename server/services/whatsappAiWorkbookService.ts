@@ -18,7 +18,7 @@ import {
 import { contactGroupService, normalizePhone } from "./contactGroupService";
 import { safeDecrypt } from "./encryptionService";
 
-const MAX_SHEETS = 20;
+const MAX_SHEETS = 1;
 const MAX_COLUMNS = 100;
 const MAX_ROWS = 50_000;
 const MAX_RESULT_MAPPINGS = 20;
@@ -54,7 +54,7 @@ function normalizeResultMappings(raw: unknown, sheet: AiWorkbookSheet): AiWorkbo
     const format = String(item?.format || "text") as AiWorkbookCampaignResultMapping["format"];
     const overwrite = item?.overwrite === "always" ? "always" : "if_empty";
     if (!destinationColumnKey || !columns.has(destinationColumnKey)) {
-      throw new Error(`Result mapping ${index + 1} needs a column from this tab`);
+      throw new Error(`Result mapping ${index + 1} needs a column from this sheet`);
     }
     if (["name", "phone"].includes(destinationColumnKey)) {
       throw new Error("Name and phone columns cannot be overwritten by campaign results");
@@ -144,15 +144,15 @@ function column(
 }
 
 function validateSheets(input: unknown): AiWorkbookSheet[] {
-  if (!Array.isArray(input) || input.length === 0) throw new Error("At least one workbook tab is required");
-  if (input.length > MAX_SHEETS) throw new Error(`A workbook can have at most ${MAX_SHEETS} tabs`);
+  if (!Array.isArray(input) || input.length !== 1) throw new Error("A workbook must have exactly one sheet");
+  if (input.length > MAX_SHEETS) throw new Error(`A workbook can have exactly ${MAX_SHEETS} sheet`);
 
   let rowCount = 0;
   const sheetIds = new Set<string>();
   return input.map((raw: any, sheetIndex) => {
-    if (!raw || typeof raw !== "object") throw new Error(`Tab ${sheetIndex + 1} is invalid`);
+    if (!raw || typeof raw !== "object") throw new Error(`Sheet ${sheetIndex + 1} is invalid`);
     const id = String(raw.id || randomUUID());
-    if (sheetIds.has(id)) throw new Error("Workbook tab IDs must be unique");
+    if (sheetIds.has(id)) throw new Error("Workbook sheet IDs must be unique");
     sheetIds.add(id);
 
     const name = String(raw.name || `Sheet ${sheetIndex + 1}`).trim().slice(0, 80);
@@ -244,37 +244,32 @@ async function buildCampaignSheets(businessAccountId: string, campaignId: string
     }
   }
 
-  const recipientColumns: AiWorkbookColumn[] = [
+  const usedKeys = new Set([
+    "name", "phone", "status", "classification", "classification_label",
+    "callback_required", "callback_reason", "customer_feedback", "reply_count",
+    "first_reply_at", "classified_at", "owner", "review_status", "team_notes",
+    "follow_up_status", "next_action_date",
+  ]);
+  const attributeKeyMap = new Map<string, string>();
+  const attributeColumns = Array.from(attributeKeys).sort().map(key => {
+    const workbookKey = keyFor(key, usedKeys);
+    attributeKeyMap.set(key, workbookKey);
+    return column(workbookKey, key, "system", false);
+  });
+  const captureKeyMap = new Map<string, string>();
+  const captureColumns = captureKeys.map(field => {
+    const workbookKey = keyFor(field.key, usedKeys);
+    captureKeyMap.set(field.key, workbookKey);
+    return column(workbookKey, field.label, "ai", false, field.type);
+  });
+  const consolidatedColumns: AiWorkbookColumn[] = [
     column("name", "Name", "system", false),
     column("phone", "Phone", "system", false),
     column("status", "Delivery Status", "system", false),
-    ...Array.from(attributeKeys).sort().map(k => column(k, k, "system", false)),
-    column("team_notes", "Team Notes", "operator", true),
-    column("follow_up_status", "Follow-up Status", "operator", true),
-    column("next_action_date", "Next Action Date", "operator", true, "date"),
-  ];
-
-  const recipientRows: AiWorkbookRow[] = recipients.map(recipient => ({
-    id: recipient.id,
-    sourceRecipientId: recipient.id,
-    values: {
-      name: recipient.name || "",
-      phone: recipient.phone,
-      status: recipient.status,
-      ...(recipient.attributes || {}),
-      team_notes: "",
-      follow_up_status: "",
-      next_action_date: null,
-    },
-  }));
-
-  const outcomeColumns: AiWorkbookColumn[] = [
-    column("name", "Name", "system", false),
-    column("phone", "Phone", "system", false),
-    column("status", "Delivery Status", "system", false),
+    ...attributeColumns,
     column("classification", "Outcome Key", "ai", false),
     column("classification_label", "Reply Outcome", "ai", false),
-    ...captureKeys.map(f => column(f.key, f.label, "ai", false, f.type)),
+    ...captureColumns,
     column("callback_required", "Callback Required", "ai", false, "boolean"),
     column("callback_reason", "Callback Reason", "ai", false),
     column("customer_feedback", "Customer Feedback", "ai", false),
@@ -284,20 +279,23 @@ async function buildCampaignSheets(businessAccountId: string, campaignId: string
     column("owner", "Assigned To", "operator", true),
     column("review_status", "Review Status", "operator", true),
     column("team_notes", "Team Notes", "operator", true),
+    column("follow_up_status", "Follow-up Status", "operator", true),
     column("next_action_date", "Next Action Date", "operator", true, "date"),
   ];
 
-  const outcomeRows: AiWorkbookRow[] = recipients.map(recipient => {
+  const consolidatedRows: AiWorkbookRow[] = recipients.map(recipient => {
     const aiValues: AiWorkbookRow["values"] = {
       classification: recipient.primaryClassification || "",
       classification_label: recipient.primaryClassification
         ? labels.get(recipient.primaryClassification) || recipient.primaryClassification
         : "",
-      ...(recipient.dispositionData || {}),
       callback_required: recipient.callbackRequired,
       callback_reason: recipient.callbackReason || "",
       customer_feedback: recipient.customerFeedback || "",
     };
+    for (const [sourceKey, workbookKey] of Array.from(captureKeyMap.entries())) {
+      aiValues[workbookKey] = (recipient.dispositionData || {})[sourceKey] ?? null;
+    }
     return {
       id: recipient.id,
       sourceRecipientId: recipient.id,
@@ -305,6 +303,10 @@ async function buildCampaignSheets(businessAccountId: string, campaignId: string
         name: recipient.name || "",
         phone: recipient.phone,
         status: recipient.status,
+        ...Object.fromEntries(Array.from(attributeKeyMap.entries()).map(([sourceKey, workbookKey]) => [
+          workbookKey,
+          (recipient.attributes || {})[sourceKey] ?? null,
+        ])),
         ...aiValues,
         reply_count: recipient.replyCount,
         first_reply_at: recipient.firstReplyAt?.toISOString() || null,
@@ -312,41 +314,46 @@ async function buildCampaignSheets(businessAccountId: string, campaignId: string
         owner: "",
         review_status: "",
         team_notes: "",
+        follow_up_status: "",
         next_action_date: null,
       },
       aiValues,
     };
   });
 
-  return [
-    { id: "recipients", name: "Recipients", kind: "recipients", columns: recipientColumns, rows: recipientRows },
-    { id: "outcomes", name: "Reply Outcomes", kind: "outcomes", columns: outcomeColumns, rows: outcomeRows },
-  ];
+  return [{
+    id: "campaign-data",
+    name: "Campaign data",
+    kind: "custom",
+    columns: consolidatedColumns,
+    rows: consolidatedRows,
+  }];
 }
 
 function mergeOperatorEdits(fresh: AiWorkbookSheet[], previous: AiWorkbookSheet[]): AiWorkbookSheet[] {
-  const previousByKind = new Map(previous.map(sheet => [sheet.kind, sheet]));
-  const merged = fresh.map(sheet => {
-    const old = previousByKind.get(sheet.kind);
-    if (!old) return sheet;
-    const operatorKeys = new Set(old.columns.filter(c => c.source === "operator").map(c => c.key));
-    const oldBySource = new Map(old.rows.map(row => [row.sourceRecipientId || row.id, row]));
-    return {
-      ...sheet,
-      columns: [
-        ...sheet.columns,
-        ...old.columns.filter(c => c.source === "operator" && !sheet.columns.some(existing => existing.key === c.key)),
-      ],
-      rows: sheet.rows.map(row => {
-        const prior = oldBySource.get(row.sourceRecipientId || row.id);
-        if (!prior) return row;
-        const operatorValues: AiWorkbookRow["values"] = {};
-        for (const key of Array.from(operatorKeys)) operatorValues[key] = prior.values[key] ?? null;
-        return { ...row, values: { ...row.values, ...operatorValues } };
-      }),
-    };
-  });
-  return [...merged, ...previous.filter(sheet => sheet.kind === "custom")];
+  const current = fresh[0];
+  if (!current) return [];
+  const operatorColumns = new Map<string, AiWorkbookColumn>();
+  const oldBySource = new Map<string, AiWorkbookRow>();
+  for (const sheet of previous) {
+    for (const oldColumn of sheet.columns) {
+      if (oldColumn.source === "operator" && !operatorColumns.has(oldColumn.key)) operatorColumns.set(oldColumn.key, oldColumn);
+    }
+    for (const row of sheet.rows) oldBySource.set(row.sourceRecipientId || row.id, row);
+  }
+  const extraColumns = Array.from(operatorColumns.values())
+    .filter(oldColumn => !current.columns.some(column => column.key === oldColumn.key));
+  return [{
+    ...current,
+    columns: [...current.columns, ...extraColumns],
+    rows: current.rows.map(row => {
+      const prior = oldBySource.get(row.sourceRecipientId || row.id);
+      if (!prior) return row;
+      const operatorValues: AiWorkbookRow["values"] = {};
+      for (const key of Array.from(operatorColumns.keys())) operatorValues[key] = prior.values[key] ?? null;
+      return { ...row, values: { ...row.values, ...operatorValues } };
+    }),
+  }];
 }
 
 async function latestVersion(workbookId: string, businessAccountId: string) {
@@ -439,7 +446,7 @@ export const whatsappAiWorkbookService = {
     const workbook = await this.get(businessAccountId, workbookId);
     if (!workbook?.currentVersion) throw new Error("Workbook not found");
     const sheet = (workbook.currentVersion.sheets as AiWorkbookSheet[]).find(item => item.id === input.sheetId);
-    if (!sheet) throw new Error("Workbook tab not found");
+    if (!sheet) throw new Error("Workbook sheet not found");
 
     const fallback = heuristicResultMappings(sheet);
     const instruction = String(input.instruction || "").trim().slice(0, 2_000);
@@ -569,7 +576,7 @@ export const whatsappAiWorkbookService = {
   },
 
   async saveSheets(businessAccountId: string, workbookId: string, versionId: string, revision: number, sheets: unknown) {
-    const normalized = validateSheets(sheets);
+    let normalized = validateSheets(sheets);
     const [current] = await db.select({ sheets: whatsappAiWorkbookVersions.sheets, revision: whatsappAiWorkbookVersions.revision })
       .from(whatsappAiWorkbookVersions)
       .where(and(
@@ -580,10 +587,14 @@ export const whatsappAiWorkbookService = {
       .limit(1);
     if (!current) throw new Error("Workbook version not found");
     if (current.revision !== revision) throw new Error("This workbook changed in another session. Reload it before saving.");
+    const currentSheets = validateSheets(current.sheets);
+    if (currentSheets[0] && normalized[0].id !== currentSheets[0].id) {
+      normalized = [{ ...normalized[0], id: currentSheets[0].id }];
+    }
     const nextById = new Map(normalized.map(sheet => [sheet.id, sheet]));
-    for (const previousSheet of current.sheets as AiWorkbookSheet[]) {
+    for (const previousSheet of currentSheets) {
       const nextSheet = nextById.get(previousSheet.id);
-      if (!nextSheet || !["recipients", "outcomes"].includes(previousSheet.kind)) continue;
+      if (!nextSheet) throw new Error("The workbook must keep its current sheet");
       const nextKeys = new Set(nextSheet.columns.map(column => column.key));
       const removedProtected = previousSheet.columns
         .filter(column => column.source !== "operator" && !nextKeys.has(column.key))
@@ -633,7 +644,7 @@ export const whatsappAiWorkbookService = {
     if (!input.expectedCurrentVersionId || !Number.isInteger(input.expectedRevision)) {
       throw new Error("Current workbook version and revision are required");
     }
-    const source = ["manual", "import", "campaign"].includes(input.source || "")
+    const source = ["manual", "import", "campaign", "campaign_sync"].includes(input.source || "")
       ? input.source!
       : "manual";
     const requestedSheets = input.sheets === undefined ? undefined : validateSheets(input.sheets);
@@ -656,11 +667,14 @@ export const whatsappAiWorkbookService = {
       if (current.id !== input.expectedCurrentVersionId || current.revision !== input.expectedRevision) {
         throw new Error("This workbook changed in another session. Reload it before creating a new version.");
       }
-      const nextSheets = (requestedSheets ?? current.sheets) as AiWorkbookSheet[];
+      const currentSheets = validateSheets(current.sheets);
+      const nextSheets = requestedSheets
+        ? [{ ...(requestedSheets as AiWorkbookSheet[])[0], id: currentSheets[0]?.id || (requestedSheets as AiWorkbookSheet[])[0].id }]
+        : currentSheets;
       const nextById = new Map(nextSheets.map(sheet => [sheet.id, sheet]));
-      for (const previousSheet of current.sheets as AiWorkbookSheet[]) {
+      for (const previousSheet of currentSheets) {
         const nextSheet = nextById.get(previousSheet.id);
-        if (!nextSheet || !["recipients", "outcomes"].includes(previousSheet.kind)) continue;
+        if (!nextSheet) throw new Error("The workbook must keep its current sheet");
         const nextKeys = new Set(nextSheet.columns.map(column => column.key));
         const removedProtected = previousSheet.columns
           .filter(column => column.source !== "operator" && !nextKeys.has(column.key))
@@ -716,6 +730,7 @@ export const whatsappAiWorkbookService = {
   async duplicate(businessAccountId: string, workbookId: string, name?: string) {
     const current = await this.get(businessAccountId, workbookId);
     if (!current || !current.currentVersion) throw new Error("Workbook not found");
+    const sheets = validateSheets(current.currentVersion.sheets);
     return db.transaction(async tx => {
       const [copy] = await tx.insert(whatsappAiWorkbooks).values({
         businessAccountId,
@@ -729,7 +744,7 @@ export const whatsappAiWorkbookService = {
         sourceCampaignId: current.sourceCampaignId,
         versionNumber: 1,
         source: "duplicate",
-        sheets: current.currentVersion.sheets,
+        sheets,
       }).returning();
       return { ...copy, currentVersion: version };
     });
@@ -777,7 +792,7 @@ export const whatsappAiWorkbookService = {
     const workbook = await this.get(businessAccountId, workbookId);
     if (!workbook?.currentVersion) throw new Error("Workbook not found");
     const sheet = (workbook.currentVersion.sheets as AiWorkbookSheet[]).find(s => s.id === input.sheetId);
-    if (!sheet) throw new Error("Workbook tab not found");
+    if (!sheet) throw new Error("Workbook sheet not found");
     const phoneColumn = input.phoneColumn || "phone";
     const nameColumn = input.nameColumn || "name";
     if (!sheet.columns.some(c => c.key === phoneColumn)) throw new Error("Choose a valid phone column");
@@ -912,7 +927,7 @@ export const whatsappAiWorkbookService = {
     if (!workbook?.currentVersion) throw new Error("Workbook not found");
     const sheets = JSON.parse(JSON.stringify(workbook.currentVersion.sheets || [])) as AiWorkbookSheet[];
     const sheet = sheets.find(item => item.id === link.sheetId);
-    if (!sheet) throw new Error("The source workbook tab no longer exists");
+    if (!sheet) throw new Error("The source workbook sheet no longer exists");
     const mappings = normalizeResultMappings(link.mappings, sheet);
 
     const [campaign] = await db

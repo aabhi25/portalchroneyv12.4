@@ -16,8 +16,8 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Archive, ArrowLeft, Copy, Download, Eye, FileSpreadsheet, FolderOpen, History,
-  Link2, Loader2, Megaphone, MoreHorizontal, Pencil, Plus, RefreshCw, RotateCcw, Save, Sheet, Upload, Wand2, X,
+  Archive, ArrowLeft, Copy, Download, Eye, FileSpreadsheet, FolderOpen,
+  Link2, Loader2, Megaphone, MoreHorizontal, Pencil, Plus, RefreshCw, RotateCcw, Save, Upload, Wand2, X,
 } from "lucide-react";
 import type { AiWorkbookCampaignResultMapping, AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
 
@@ -215,7 +215,7 @@ function WorkbooksList() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create AI workbook</DialogTitle>
-            <DialogDescription>Start blank or generate tabs from an existing campaign snapshot.</DialogDescription>
+            <DialogDescription>Start blank or generate a single table from an existing campaign snapshot.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
@@ -258,14 +258,11 @@ function WorkbookEditor({ id }: { id: string }) {
   const { toast } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
   const [sheets, setSheets] = useState<AiWorkbookSheet[]>([]);
-  const [activeSheetId, setActiveSheetId] = useState("");
   const [dirty, setDirty] = useState(false);
   const [selectedRows, setSelectedRows] = useState(new Set<string>());
   const [filteredRows, setFilteredRows] = useState<AiWorkbookRow[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [previewVersionId, setPreviewVersionId] = useState<string | null>(null);
-  const [previewSheetId, setPreviewSheetId] = useState("");
-  const [sheetToRemove, setSheetToRemove] = useState<AiWorkbookSheet | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [mappingOpen, setMappingOpen] = useState(false);
@@ -297,23 +294,9 @@ function WorkbookEditor({ id }: { id: string }) {
   useEffect(() => {
     if (!workbook?.currentVersion || dirty) return;
     setSheets(workbook.currentVersion.sheets || []);
-    setActiveSheetId(current => current && workbook.currentVersion!.sheets.some(s => s.id === current)
-      ? current
-      : workbook.currentVersion!.sheets[0]?.id || "");
   }, [workbook?.currentVersion?.id, workbook?.currentVersion?.revision]);
 
-  useEffect(() => {
-    if (!previewVersion) return;
-    setPreviewSheetId(previewVersion.sheets[0]?.id || "");
-  }, [previewVersion?.id]);
-
-  useEffect(() => {
-    setResultMappings([]);
-    setMappingInstruction("");
-    setMappingFeedback(null);
-  }, [activeSheetId]);
-
-  const activeSheet = sheets.find(sheet => sheet.id === activeSheetId) || sheets[0];
+  const activeSheet = sheets[0];
   const resultDestinationColumns = (activeSheet?.columns || []).filter(column => !["name", "phone"].includes(column.key));
   const activeResultSync = resultSyncs.find(sync => sync.sheetId === activeSheet?.id && sync.campaignId) || null;
   const addResultMapping = () => {
@@ -337,24 +320,11 @@ function WorkbookEditor({ id }: { id: string }) {
     setDirty(true);
   };
 
-  const removeSheet = (sheetId: string) => {
-    const sheet = sheets.find(item => item.id === sheetId);
-    if (!sheet || sheets.length <= 1) {
-      toast({ title: "Keep at least one tab", description: "A workbook must contain one tab.", variant: "destructive" });
-      return;
-    }
-    const next = sheets.filter(item => item.id !== sheetId);
-    setSheets(next);
-    if (activeSheetId === sheetId) setActiveSheetId(next[0].id);
-    setSelectedRows(new Set());
-    setDirty(true);
-  };
-
   const removeColumn = (sheetId: string, columnKey: string) => {
     setSheets(current => current.map(sheet => {
       if (sheet.id !== sheetId) return sheet;
       if (sheet.columns.length <= 1) {
-        toast({ title: "Keep at least one column", description: "A tab must contain one column.", variant: "destructive" });
+        toast({ title: "Keep at least one column", description: "A sheet must contain one column.", variant: "destructive" });
         return sheet;
       }
       return {
@@ -456,7 +426,7 @@ function WorkbookEditor({ id }: { id: string }) {
 
   const suggestResultMappings = useMutation({
     mutationFn: () => {
-      if (!activeSheet) throw new Error("Choose a workbook tab");
+      if (!activeSheet) throw new Error("Workbook sheet is unavailable");
       return apiRequest<{
         mappings: AiWorkbookCampaignResultMapping[];
         mode: "ai" | "header_suggestions";
@@ -498,7 +468,7 @@ function WorkbookEditor({ id }: { id: string }) {
 
   const createAudience = useMutation({
     mutationFn: () => {
-      if (!activeSheet) throw new Error("Choose a workbook tab");
+      if (!activeSheet) throw new Error("Workbook sheet is unavailable");
       const sourceRows = selectedRows.size > 0
         ? activeSheet.rows.filter(row => selectedRows.has(row.id))
         : filteredRows;
@@ -525,65 +495,51 @@ function WorkbookEditor({ id }: { id: string }) {
     onError: (error: Error) => toast({ title: "Couldn't create campaign audience", description: error.message, variant: "destructive" }),
   });
 
-  const addTab = () => {
-    const id = crypto.randomUUID();
-    setSheets(current => [...current, {
-      id,
-      name: `Sheet ${current.length + 1}`,
-      kind: "custom",
-      columns: [
-        { key: "name", label: "Name", type: "text", source: "operator", editable: true },
-        { key: "phone", label: "Phone", type: "text", source: "operator", editable: true },
-      ],
-      rows: [],
-    }]);
-    setActiveSheetId(id);
-    setDirty(true);
-  };
-
   const importExcel = async (file: File) => {
     try {
       if (file.size > 15 * 1024 * 1024) throw new Error("Excel files are limited to 15 MB");
       const XLSX = await import("xlsx");
       const parsed = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
-      if (parsed.SheetNames.length > 20) throw new Error("A workbook can have at most 20 tabs");
-      const imported: AiWorkbookSheet[] = parsed.SheetNames.map((name, index) => {
-        const matrix = XLSX.utils.sheet_to_json<any[]>(parsed.Sheets[name], { header: 1, defval: "" });
-        const headers = (matrix[0] || []).map(value => String(value).trim());
-        const existing = sheets.find(sheet => sheet.name === name);
-        const visibleHeaders = headers.filter(header => header && !header.startsWith("_"));
-        const columns: AiWorkbookColumn[] = [];
-        for (const label of visibleHeaders.slice(0, 100)) {
-          const matched = existing?.columns.find(c => c.label === label);
-          columns.push(matched || {
-            key: uniqueColumnKey(label, columns),
-            label,
-            type: "text",
-            source: "operator",
-            editable: true,
-          });
-        }
-        const rowIdIndex = headers.indexOf("_row_id");
-        const sourceIdIndex = headers.indexOf("_source_recipient_id");
-        const rows: AiWorkbookRow[] = matrix.slice(1, 50_001).filter(row => row.some(value => String(value).trim() !== "")).map(row => {
-          const values: AiWorkbookRow["values"] = {};
-          for (const col of columns) {
-            const headerIndex = headers.indexOf(col.label);
-            values[col.key] = row[headerIndex] === "" ? null : row[headerIndex];
-          }
-          return {
-            id: rowIdIndex >= 0 && row[rowIdIndex] ? String(row[rowIdIndex]) : crypto.randomUUID(),
-            sourceRecipientId: sourceIdIndex >= 0 && row[sourceIdIndex] ? String(row[sourceIdIndex]) : undefined,
-            values,
-          };
+      if (parsed.SheetNames.length !== 1) throw new Error("Please import an Excel file with exactly one sheet");
+      const name = parsed.SheetNames[0];
+      const matrix = XLSX.utils.sheet_to_json<any[]>(parsed.Sheets[name], { header: 1, defval: "" });
+      const headers = (matrix[0] || []).map(value => String(value).trim());
+      const existing = sheets[0];
+      const visibleHeaders = headers.filter(header => header && !header.startsWith("_"));
+      const columns: AiWorkbookColumn[] = [];
+      for (const label of visibleHeaders.slice(0, 100)) {
+        const matched = existing?.columns.find(c => c.label === label);
+        columns.push(matched || {
+          key: uniqueColumnKey(label, columns),
+          label,
+          type: "text",
+          source: "operator",
+          editable: true,
         });
-        return { id: existing?.id || crypto.randomUUID(), name, kind: existing?.kind || (index === 0 ? "custom" : "custom"), columns, rows };
-      }).filter(sheet => sheet.columns.length > 0);
-      if (imported.length === 0) throw new Error("No tab with headers was found");
-      const importedNames = new Set(imported.map(sheet => sheet.name));
-      const merged = [...imported, ...sheets.filter(sheet => !importedNames.has(sheet.name))];
-      if (merged.length > 20) throw new Error("This import would create more than 20 tabs");
-      createVersion.mutate({ sheets: merged, source: "import", sourceFileName: file.name });
+      }
+      const rowIdIndex = headers.indexOf("_row_id");
+      const sourceIdIndex = headers.indexOf("_source_recipient_id");
+      const rows: AiWorkbookRow[] = matrix.slice(1, 50_001).filter(row => row.some(value => String(value).trim() !== "")).map(row => {
+        const values: AiWorkbookRow["values"] = {};
+        for (const col of columns) {
+          const headerIndex = headers.indexOf(col.label);
+          values[col.key] = row[headerIndex] === "" ? null : row[headerIndex];
+        }
+        return {
+          id: rowIdIndex >= 0 && row[rowIdIndex] ? String(row[rowIdIndex]) : crypto.randomUUID(),
+          sourceRecipientId: sourceIdIndex >= 0 && row[sourceIdIndex] ? String(row[sourceIdIndex]) : undefined,
+          values,
+        };
+      });
+      if (columns.length === 0) throw new Error("No sheet with headers was found");
+      const imported = {
+        id: existing?.id || crypto.randomUUID(),
+        name: name || existing?.name || "Sheet 1",
+        kind: existing?.kind || "custom" as const,
+        columns,
+        rows,
+      };
+      createVersion.mutate({ sheets: [imported], source: "import", sourceFileName: file.name });
     } catch (error: any) {
       toast({ title: "Excel import failed", description: error.message, variant: "destructive" });
     } finally {
@@ -617,12 +573,11 @@ function WorkbookEditor({ id }: { id: string }) {
             >
               <Pencil className="h-4 w-4" />
             </Button>
-            <Badge variant="outline" className="rounded-full bg-white px-2.5 font-medium text-slate-600">v{workbook.currentVersion.versionNumber}</Badge>
           </div>
           <div className="flex items-center gap-2 mt-2 text-sm text-slate-500">
             <span>{workbook.sourceCampaignId ? "Linked campaign workbook" : "Independent workbook"}</span>
             <span className="text-slate-300">•</span>
-            <span>Revision {workbook.currentVersion.revision}</span>
+            <span>Last saved {new Date(workbook.currentVersion.updatedAt).toLocaleString()}</span>
             {dirty && <><span className="text-slate-300">•</span><span className="font-medium text-amber-600">Unsaved changes</span></>}
           </div>
         </div>
@@ -649,9 +604,6 @@ function WorkbookEditor({ id }: { id: string }) {
               <DropdownMenuItem onSelect={() => setHistoryOpen(true)}>
                 <Eye className="h-4 w-4 mr-2" /> Version history
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => createVersion.mutate({ sheets, source: "manual" })} disabled={createVersion.isPending}>
-                <History className="h-4 w-4 mr-2" /> Save as version
-              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
           <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => {
@@ -666,43 +618,9 @@ function WorkbookEditor({ id }: { id: string }) {
 
       <Card className="border-slate-200/80 shadow-sm">
         <CardContent className="p-3 md:p-5">
-          <div className="flex items-center gap-1 border-b border-slate-200 mb-4 overflow-x-auto">
-            {sheets.map(sheet => (
-              <div
-                key={sheet.id}
-                className={`group flex items-center border-b-2 transition-colors ${
-                  activeSheet.id === sheet.id
-                    ? "border-violet-600 text-violet-700 font-semibold bg-violet-50/60"
-                    : "border-transparent text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => { setActiveSheetId(sheet.id); setSelectedRows(new Set()); }}
-                  className="px-4 py-2.5 text-sm whitespace-nowrap"
-                >
-                  <Sheet className="h-3.5 w-3.5 inline mr-1.5" />
-                  {sheet.name}
-                  <span className="ml-1.5 text-xs text-gray-400">{sheet.rows.length}</span>
-                </button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 mr-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 focus:opacity-100"
-                  title={`Remove ${sheet.name} tab`}
-                  onClick={() => {
-                    if (sheets.length <= 1) {
-                      toast({ title: "Keep at least one tab", description: "A workbook must contain one tab.", variant: "destructive" });
-                      return;
-                    }
-                    setSheetToRemove(sheet);
-                  }}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
-            <Button variant="ghost" size="sm" className="ml-1" onClick={addTab}><Plus className="h-4 w-4 mr-1" /> Tab</Button>
+          <div className="flex items-center justify-between gap-3 border-b border-slate-200 mb-4 px-1 pb-3">
+            <div className="text-sm font-medium text-slate-700">{activeSheet.name}</div>
+            <div className="text-xs text-slate-500">{activeSheet.rows.length.toLocaleString()} rows</div>
           </div>
           <AiWorkbookGrid
             sheet={activeSheet}
@@ -872,29 +790,6 @@ function WorkbookEditor({ id }: { id: string }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(sheetToRemove)} onOpenChange={open => !open && setSheetToRemove(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Remove tab?</DialogTitle>
-            <DialogDescription>
-              Remove “{sheetToRemove?.name}” and all of its rows and columns? The change will take effect when you save this workbook.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSheetToRemove(null)}>Cancel</Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                if (sheetToRemove) removeSheet(sheetToRemove.id);
-                setSheetToRemove(null);
-              }}
-            >
-              Remove tab
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={historyOpen} onOpenChange={open => {
         setHistoryOpen(open);
         if (!open) setPreviewVersionId(null);
@@ -953,32 +848,15 @@ function WorkbookEditor({ id }: { id: string }) {
                   {dirty && previewVersion.id !== workbook.currentVersion.id && (
                     <p className="mb-3 text-xs text-amber-700">Save or discard current edits before restoring an older version.</p>
                   )}
-                  <div className="flex items-center gap-1 border-b mb-3 overflow-x-auto">
-                    {previewVersion.sheets.map(sheet => (
-                      <button
-                        key={sheet.id}
-                        type="button"
-                        onClick={() => setPreviewSheetId(sheet.id)}
-                        className={`px-3 py-2 text-xs whitespace-nowrap border-b-2 ${
-                          previewSheetId === sheet.id ? "border-violet-600 text-violet-700 font-semibold" : "border-transparent text-gray-600"
-                        }`}
-                      >
-                        <Sheet className="h-3 w-3 inline mr-1" /> {sheet.name}
-                      </button>
-                    ))}
-                  </div>
-                  {(() => {
-                    const previewSheet = previewVersion.sheets.find(sheet => sheet.id === previewSheetId) || previewVersion.sheets[0];
-                    return previewSheet ? (
-                      <AiWorkbookGrid
-                        sheet={previewSheet}
-                        onChange={() => undefined}
-                        selectedRows={new Set()}
-                        onSelectedRowsChange={() => undefined}
-                        readOnly
-                      />
-                    ) : null;
-                  })()}
+                  {previewVersion.sheets[0] ? (
+                    <AiWorkbookGrid
+                      sheet={previewVersion.sheets[0]}
+                      onChange={() => undefined}
+                      selectedRows={new Set()}
+                      onSelectedRowsChange={() => undefined}
+                      readOnly
+                    />
+                  ) : null}
                 </>
               ) : (
                 <div className="h-full min-h-48 flex items-center justify-center text-sm text-red-600">This version is no longer available.</div>
@@ -1001,7 +879,7 @@ function WorkbookEditor({ id }: { id: string }) {
           <p className="text-xs text-violet-700 mt-1">
             {resultMappings.length
               ? `${resultMappings.length} campaign result ${resultMappings.length === 1 ? "column" : "columns"} ready to sync back.`
-              : "Optional: map campaign results back into this tab before creating the audience."}
+              : "Optional: map campaign results back into this sheet before creating the audience."}
           </p>
           </div>
         </div>

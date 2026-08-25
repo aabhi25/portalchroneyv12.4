@@ -19,3 +19,4 @@
 - [Automation deletion safety](automation-deletion-safety.md) — deactivate definitions only after locking their pending work; otherwise a delete can race a scheduled campaign into sending.
 - [TopScholar subject labels](topscholar-subject-labels.md) — the configured client embedding store has subject IDs but not clean subject names; its subject field can be a full CP label.
 - [Portable npm lockfiles](portable-npm-lockfiles.md) — registry hostnames persist in npm locks, and local-file overrides can make a clean `npm ci` reject the lock entirely.
+- [AI workbook single-sheet model](ai-workbook-single-sheet-model.md) — workbooks expose one consolidated sheet; keep history and campaign links internal, not as user-facing tabs.
