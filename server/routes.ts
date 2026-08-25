@@ -36193,6 +36193,39 @@ Return ONLY a valid JSON object in this format:
     } catch (err: any) { res.status(404).json({ error: err.message }); }
   });
 
+  app.post("/api/whatsapp/ai-workbooks/:id/result-mapping-suggestions", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const result = await whatsappAiWorkbookService.suggestResultMappings(
+        req.user!.businessAccountId!,
+        req.params.id,
+        req.body || {},
+      );
+      res.json(result);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.get("/api/whatsapp/ai-workbooks/:id/result-syncs", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      res.json(await whatsappAiWorkbookService.listResultSyncs(req.user!.businessAccountId!, req.params.id));
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post("/api/whatsapp/ai-workbooks/:id/result-syncs/:linkId/sync", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const result = await whatsappAiWorkbookService.syncCampaignResults(
+        req.user!.businessAccountId!,
+        req.params.id,
+        req.params.linkId,
+      );
+      res.status(201).json(result);
+    } catch (err: any) {
+      res.status(String(err.message).includes("another session") ? 409 : 400).json({ error: err.message });
+    }
+  });
+
   app.post("/api/whatsapp/ai-workbooks/:id/audience", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
       const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
@@ -36224,6 +36257,12 @@ Return ONLY a valid JSON object in this format:
       };
       const { marketingCampaignService, CampaignPrerequisiteError } = await import("./services/marketingCampaignService");
       const camp = await marketingCampaignService.create(req.user!.businessAccountId!, payload);
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      await whatsappAiWorkbookService.attachCampaignToAudienceGroups(
+        req.user!.businessAccountId!,
+        camp.id,
+        Array.isArray(payload.groupIds) ? payload.groupIds : [],
+      );
       res.status(201).json(camp);
     } catch (err: any) {
       // Pass the machine-readable code through so the client can link to the screen that

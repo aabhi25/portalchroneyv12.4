@@ -265,6 +265,7 @@ __export(schema_exports, {
   vistaStudioJobs: () => vistaStudioJobs,
   webhookEvents: () => webhookEvents,
   websiteAnalysis: () => websiteAnalysis,
+  whatsappAiWorkbookCampaignLinks: () => whatsappAiWorkbookCampaignLinks,
   whatsappAiWorkbookVersions: () => whatsappAiWorkbookVersions,
   whatsappAiWorkbooks: () => whatsappAiWorkbooks,
   whatsappCampaignAutomationDispatches: () => whatsappCampaignAutomationDispatches,
@@ -286,7 +287,7 @@ __export(schema_exports, {
 import { sql } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, numeric, jsonb, customType, integer, index, uniqueIndex, boolean, date, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
-var vector768, vector1536, businessAccounts, users, sessions, phoneOtpChallenges, passwordResetTokens, conversations, messages, uploadedImages, products, productJewelryEmbeddings, faqs, leads, questionBankEntries, widgetSettings, websiteAnalysis, analyzedPages, trainingDocuments, documentChunks, trainedUrls, urlContentChunks, categories, tags, productCategories, productTags, productRelationships, scheduleTemplates, slotOverrides, appointments, demoPages, publicChatLinks, supportTickets, ticketMessages, ticketAttachments, cannedResponses, ticketInsights, conversationJourneys, journeySteps, journeyResponses, journeySessions, visitorDailyStats, aiSuggestions, accountGroups, accountGroupMembers, accountGroupAdmins, accountGroupTraining, accountGroupLeadsquaredFieldMappings, accountGroupJourneys, accountGroupJourneySteps, accountGroupExtraSettings, modelPricing, aiUsageEvents, aiUsageDaily, intentScores, discountRules, discountOffers, exitIntentSettings, idleTimeoutSettings, urgencyOfferSettings, urgencyOffers, erpConfigurations, productEmbeddings, erpSyncLogs, erpProductCache, productImportJobs, openAiBatchJobs, insertBusinessAccountSchema, insertUserSchema, insertSessionSchema, insertPasswordResetTokenSchema, insertConversationSchema, insertMessageSchema, insertUploadedImageSchema, insertProductSchema, insertFaqSchema, insertLeadSchema, insertQuestionBankEntrySchema, insertWidgetSettingsSchema, insertWebsiteAnalysisSchema, insertAnalyzedPageSchema, insertTrainingDocumentSchema, insertCategorySchema, insertTagSchema, insertProductCategorySchema, insertProductTagSchema, insertProductRelationshipSchema, insertScheduleTemplateSchema, insertSlotOverrideSchema, insertAppointmentSchema, insertDemoPageSchema, insertPublicChatLinkSchema, insertSupportTicketSchema, insertTicketMessageSchema, insertTicketAttachmentSchema, insertCannedResponseSchema, insertTicketInsightSchema, insertConversationJourneySchema, insertJourneyStepSchema, insertAccountGroupSchema, insertAccountGroupMemberSchema, insertAccountGroupTrainingSchema, insertAccountGroupLeadsquaredFieldMappingSchema, insertAccountGroupJourneySchema, insertAccountGroupJourneyStepSchema, insertModelPricingSchema, insertAiUsageEventSchema, insertAiUsageDailySchema, insertIntentScoreSchema, insertDiscountRuleSchema, insertDiscountOfferSchema, insertExitIntentSettingsSchema, insertIdleTimeoutSettingsSchema, insertUrgencyOfferSettingsSchema, insertUrgencyOfferSchema, systemSettings, insertSystemSettingsSchema, vistaStudioJobs, insertVistaStudioJobSchema, restoreHistory, insertRestoreHistorySchema, backupJobs, insertBackupJobSchema, guidanceCampaigns, insertGuidanceCampaignSchema, proactiveGuidanceRules, insertProactiveGuidanceRuleSchema, leadsquaredFieldMappings, insertLeadsquaredFieldMappingSchema, salesforceFieldMappings, insertSalesforceFieldMappingSchema, insertErpConfigurationSchema, insertProductEmbeddingSchema, insertErpSyncLogSchema, insertErpProductCacheSchema, insertProductImportJobSchema, insertOpenAiBatchJobSchema, insertTrainedUrlSchema, insertUrlContentChunkSchema, whatsappSettings, insertWhatsappSettingsSchema, whatsappSessions, whatsappWhitelist, insertWhatsappWhitelistSchema, whatsappLeads, insertWhatsappLeadSchema, whatsappLeadAttachments, insertWhatsappLeadAttachmentSchema, whatsappLeadFields, insertWhatsappLeadFieldSchema, whatsappFlows, insertWhatsappFlowSchema, whatsappFlowSteps, insertWhatsappFlowStepSchema, whatsappFlowSessions, insertWhatsappFlowSessionSchema, verificationRuleSets, verificationRules, insertVerificationRuleSetSchema, insertVerificationRuleSchema, contactGroups, insertContactGroupSchema, contactGroupContacts, insertContactGroupContactSchema, whatsappTemplates, insertWhatsappTemplateSchema, marketingCampaigns, insertMarketingCampaignSchema, whatsappCampaignAutomations, whatsappCampaignAutomationRuns, whatsappCampaignAutomationDispatches, marketingCampaignRecipients, insertMarketingCampaignRecipientSchema, marketingCampaignMessages, whatsappAiWorkbooks, whatsappAiWorkbookVersions, webhookEvents, insertMarketingCampaignMessageSchema, whatsappOptOuts, insertWhatsappOptOutSchema, chatMenuConfigs, insertChatMenuConfigSchema, chatMenuItems, insertChatMenuItemSchema, chatMenuItemDetails, insertChatMenuItemDetailSchema, insertVisitorDailyStatsSchema, instagramSettings, insertInstagramSettingsSchema, instagramMessages, insertInstagramMessageSchema, instagramComments, insertInstagramCommentSchema, instagramFlows, insertInstagramFlowSchema, instagramFlowSteps, insertInstagramFlowStepSchema, instagramFlowSessions, insertInstagramFlowSessionSchema, instagramLeads, insertInstagramLeadSchema, instagramLeadFields, insertInstagramLeadFieldSchema, leadsquaredUrlExtractionCache, leadsquaredUrlRules, masterAiSettings, facebookSettings, insertFacebookSettingsSchema, facebookMessages, insertFacebookMessageSchema, facebookComments, insertFacebookCommentSchema, facebookFlows, insertFacebookFlowSchema, facebookFlowSteps, insertFacebookFlowStepSchema, facebookFlowSessions, insertFacebookFlowSessionSchema, facebookLeads, insertFacebookLeadSchema, facebookLeadFields, insertFacebookLeadFieldSchema, customCrmSettings, insertCustomCrmSettingsSchema, customCrmFieldMappings, insertCustomCrmFieldMappingSchema, crmStoreCredentials, insertCrmStoreCredentialSchema, messagingCredentials, insertMessagingCredentialSchema, customerProfiles, insertCustomerProfileSchema, customerIdentities, insertCustomerIdentitySchema, customerMemorySnapshots, insertCustomerMemorySnapshotSchema, customerMergeAudit, smartReplies, insertSmartReplySchema, conversationAnalysisCache, conversationCategorySettings, documentTypes, insertDocumentTypeSchema, documentTypePromptHistory, k12Subjects, k12Chapters, k12Topics, k12Questions, k12TopicNotes, k12TopicVideos, jobs, jobApplicants, jobApplications, insertJobSchema, insertJobApplicantSchema, insertJobApplicationSchema, demoOrders, insertDemoOrderSchema, topscholarCpMappings, topscholarPlanIds, topscholarPlanCpResolutions, topscholarContentChunks, topscholarContentSync, topscholarEmbedJobs, topscholarEmbedStaging, topscholarPlanRuns, topscholarPlanRunItems, topscholarPlanSyncLeases, insertTopscholarPlanIdSchema, insertTopscholarPlanCpResolutionSchema, insertTopscholarCpMappingSchema, insertTopscholarContentChunkSchema, insertTopscholarContentSyncSchema;
+var vector768, vector1536, businessAccounts, users, sessions, phoneOtpChallenges, passwordResetTokens, conversations, messages, uploadedImages, products, productJewelryEmbeddings, faqs, leads, questionBankEntries, widgetSettings, websiteAnalysis, analyzedPages, trainingDocuments, documentChunks, trainedUrls, urlContentChunks, categories, tags, productCategories, productTags, productRelationships, scheduleTemplates, slotOverrides, appointments, demoPages, publicChatLinks, supportTickets, ticketMessages, ticketAttachments, cannedResponses, ticketInsights, conversationJourneys, journeySteps, journeyResponses, journeySessions, visitorDailyStats, aiSuggestions, accountGroups, accountGroupMembers, accountGroupAdmins, accountGroupTraining, accountGroupLeadsquaredFieldMappings, accountGroupJourneys, accountGroupJourneySteps, accountGroupExtraSettings, modelPricing, aiUsageEvents, aiUsageDaily, intentScores, discountRules, discountOffers, exitIntentSettings, idleTimeoutSettings, urgencyOfferSettings, urgencyOffers, erpConfigurations, productEmbeddings, erpSyncLogs, erpProductCache, productImportJobs, openAiBatchJobs, insertBusinessAccountSchema, insertUserSchema, insertSessionSchema, insertPasswordResetTokenSchema, insertConversationSchema, insertMessageSchema, insertUploadedImageSchema, insertProductSchema, insertFaqSchema, insertLeadSchema, insertQuestionBankEntrySchema, insertWidgetSettingsSchema, insertWebsiteAnalysisSchema, insertAnalyzedPageSchema, insertTrainingDocumentSchema, insertCategorySchema, insertTagSchema, insertProductCategorySchema, insertProductTagSchema, insertProductRelationshipSchema, insertScheduleTemplateSchema, insertSlotOverrideSchema, insertAppointmentSchema, insertDemoPageSchema, insertPublicChatLinkSchema, insertSupportTicketSchema, insertTicketMessageSchema, insertTicketAttachmentSchema, insertCannedResponseSchema, insertTicketInsightSchema, insertConversationJourneySchema, insertJourneyStepSchema, insertAccountGroupSchema, insertAccountGroupMemberSchema, insertAccountGroupTrainingSchema, insertAccountGroupLeadsquaredFieldMappingSchema, insertAccountGroupJourneySchema, insertAccountGroupJourneyStepSchema, insertModelPricingSchema, insertAiUsageEventSchema, insertAiUsageDailySchema, insertIntentScoreSchema, insertDiscountRuleSchema, insertDiscountOfferSchema, insertExitIntentSettingsSchema, insertIdleTimeoutSettingsSchema, insertUrgencyOfferSettingsSchema, insertUrgencyOfferSchema, systemSettings, insertSystemSettingsSchema, vistaStudioJobs, insertVistaStudioJobSchema, restoreHistory, insertRestoreHistorySchema, backupJobs, insertBackupJobSchema, guidanceCampaigns, insertGuidanceCampaignSchema, proactiveGuidanceRules, insertProactiveGuidanceRuleSchema, leadsquaredFieldMappings, insertLeadsquaredFieldMappingSchema, salesforceFieldMappings, insertSalesforceFieldMappingSchema, insertErpConfigurationSchema, insertProductEmbeddingSchema, insertErpSyncLogSchema, insertErpProductCacheSchema, insertProductImportJobSchema, insertOpenAiBatchJobSchema, insertTrainedUrlSchema, insertUrlContentChunkSchema, whatsappSettings, insertWhatsappSettingsSchema, whatsappSessions, whatsappWhitelist, insertWhatsappWhitelistSchema, whatsappLeads, insertWhatsappLeadSchema, whatsappLeadAttachments, insertWhatsappLeadAttachmentSchema, whatsappLeadFields, insertWhatsappLeadFieldSchema, whatsappFlows, insertWhatsappFlowSchema, whatsappFlowSteps, insertWhatsappFlowStepSchema, whatsappFlowSessions, insertWhatsappFlowSessionSchema, verificationRuleSets, verificationRules, insertVerificationRuleSetSchema, insertVerificationRuleSchema, contactGroups, insertContactGroupSchema, contactGroupContacts, insertContactGroupContactSchema, whatsappTemplates, insertWhatsappTemplateSchema, marketingCampaigns, insertMarketingCampaignSchema, whatsappCampaignAutomations, whatsappCampaignAutomationRuns, whatsappCampaignAutomationDispatches, marketingCampaignRecipients, insertMarketingCampaignRecipientSchema, marketingCampaignMessages, whatsappAiWorkbooks, whatsappAiWorkbookVersions, whatsappAiWorkbookCampaignLinks, webhookEvents, insertMarketingCampaignMessageSchema, whatsappOptOuts, insertWhatsappOptOutSchema, chatMenuConfigs, insertChatMenuConfigSchema, chatMenuItems, insertChatMenuItemSchema, chatMenuItemDetails, insertChatMenuItemDetailSchema, insertVisitorDailyStatsSchema, instagramSettings, insertInstagramSettingsSchema, instagramMessages, insertInstagramMessageSchema, instagramComments, insertInstagramCommentSchema, instagramFlows, insertInstagramFlowSchema, instagramFlowSteps, insertInstagramFlowStepSchema, instagramFlowSessions, insertInstagramFlowSessionSchema, instagramLeads, insertInstagramLeadSchema, instagramLeadFields, insertInstagramLeadFieldSchema, leadsquaredUrlExtractionCache, leadsquaredUrlRules, masterAiSettings, facebookSettings, insertFacebookSettingsSchema, facebookMessages, insertFacebookMessageSchema, facebookComments, insertFacebookCommentSchema, facebookFlows, insertFacebookFlowSchema, facebookFlowSteps, insertFacebookFlowStepSchema, facebookFlowSessions, insertFacebookFlowSessionSchema, facebookLeads, insertFacebookLeadSchema, facebookLeadFields, insertFacebookLeadFieldSchema, customCrmSettings, insertCustomCrmSettingsSchema, customCrmFieldMappings, insertCustomCrmFieldMappingSchema, crmStoreCredentials, insertCrmStoreCredentialSchema, messagingCredentials, insertMessagingCredentialSchema, customerProfiles, insertCustomerProfileSchema, customerIdentities, insertCustomerIdentitySchema, customerMemorySnapshots, insertCustomerMemorySnapshotSchema, customerMergeAudit, smartReplies, insertSmartReplySchema, conversationAnalysisCache, conversationCategorySettings, documentTypes, insertDocumentTypeSchema, documentTypePromptHistory, k12Subjects, k12Chapters, k12Topics, k12Questions, k12TopicNotes, k12TopicVideos, jobs, jobApplicants, jobApplications, insertJobSchema, insertJobApplicantSchema, insertJobApplicationSchema, demoOrders, insertDemoOrderSchema, topscholarCpMappings, topscholarPlanIds, topscholarPlanCpResolutions, topscholarContentChunks, topscholarContentSync, topscholarEmbedJobs, topscholarEmbedStaging, topscholarPlanRuns, topscholarPlanRunItems, topscholarPlanSyncLeases, insertTopscholarPlanIdSchema, insertTopscholarPlanCpResolutionSchema, insertTopscholarCpMappingSchema, insertTopscholarContentChunkSchema, insertTopscholarContentSyncSchema;
 var init_schema = __esm({
   "shared/schema.ts"() {
     "use strict";
@@ -3472,6 +3473,29 @@ var init_schema = __esm({
       workbookVersionUniq: uniqueIndex("wa_ai_workbook_versions_workbook_version_uniq").on(table.workbookId, table.versionNumber),
       workbookCreatedIdx: index("wa_ai_workbook_versions_workbook_created_idx").on(table.workbookId, table.createdAt),
       businessIdx: index("wa_ai_workbook_versions_business_idx").on(table.businessAccountId)
+    }));
+    whatsappAiWorkbookCampaignLinks = pgTable("whatsapp_ai_workbook_campaign_links", {
+      id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+      businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+      workbookId: varchar("workbook_id").notNull().references(() => whatsappAiWorkbooks.id, { onDelete: "cascade" }),
+      workbookVersionId: varchar("workbook_version_id").notNull().references(() => whatsappAiWorkbookVersions.id, { onDelete: "restrict" }),
+      contactGroupId: varchar("contact_group_id").notNull().references(() => contactGroups.id, { onDelete: "cascade" }),
+      campaignId: varchar("campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
+      sheetId: text("sheet_id").notNull(),
+      mappings: jsonb("mappings").$type().notNull().default([]),
+      rowIdsByPhone: jsonb("row_ids_by_phone").$type().notNull().default({}),
+      status: text("status").notNull().default("audience_ready"),
+      // audience_ready | campaign_attached | synced
+      lastSyncedAt: timestamp("last_synced_at"),
+      lastSyncedVersionId: varchar("last_synced_version_id").references(() => whatsappAiWorkbookVersions.id, { onDelete: "set null" }),
+      syncedRowCount: integer("synced_row_count").notNull().default(0),
+      createdAt: timestamp("created_at").notNull().defaultNow(),
+      updatedAt: timestamp("updated_at").notNull().defaultNow()
+    }, (table) => ({
+      workbookCreatedIdx: index("wa_ai_workbook_campaign_links_workbook_created_idx").on(table.workbookId, table.createdAt),
+      groupIdx: index("wa_ai_workbook_campaign_links_group_idx").on(table.contactGroupId),
+      campaignIdx: index("wa_ai_workbook_campaign_links_campaign_idx").on(table.campaignId),
+      businessIdx: index("wa_ai_workbook_campaign_links_business_idx").on(table.businessAccountId)
     }));
     webhookEvents = pgTable("webhook_events", {
       id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -18742,8 +18766,8 @@ var init_toolExecutionService = __esm({
                 apiKey = process.env.OPENAI_API_KEY || null;
               }
               if (apiKey && productsWithMeta.length > 0) {
-                const OpenAI40 = (await import("openai")).default;
-                const openai = new OpenAI40({ apiKey });
+                const OpenAI41 = (await import("openai")).default;
+                const openai = new OpenAI41({ apiKey });
                 const response = await openai.chat.completions.create({
                   model: "gpt-4o-mini",
                   messages: [
@@ -18883,8 +18907,8 @@ ${productList}`
             console.log("[Product Translation] No API key available, skipping translation");
             return products3;
           }
-          const OpenAI40 = (await import("openai")).default;
-          const openai = new OpenAI40({ apiKey });
+          const OpenAI41 = (await import("openai")).default;
+          const openai = new OpenAI41({ apiKey });
           const productsToTranslate = products3.map((p, i) => ({
             index: i,
             name: p.name || ""
@@ -20195,12 +20219,12 @@ ${JSON.stringify(productsToTranslate)}`;
           return this.createErrorResponse("Job portal is not enabled for this account.");
         }
         try {
-          const OpenAI40 = (await import("openai")).default;
+          const OpenAI41 = (await import("openai")).default;
           const apiKey = await storage.getBusinessAccountOpenAIKey(businessAccountId);
           if (!apiKey) {
             return this.createErrorResponse("OpenAI API key not configured for this account.");
           }
-          const openai = new OpenAI40({ apiKey });
+          const openai = new OpenAI41({ apiKey });
           const extractionResponse = await openai.chat.completions.create({
             model: "gpt-4o-mini",
             messages: [
@@ -55934,10 +55958,82 @@ var init_campaignAutomationService = __esm({
 // server/services/whatsappAiWorkbookService.ts
 var whatsappAiWorkbookService_exports = {};
 __export(whatsappAiWorkbookService_exports, {
+  WORKBOOK_RESULT_FIELDS: () => WORKBOOK_RESULT_FIELDS,
   whatsappAiWorkbookService: () => whatsappAiWorkbookService
 });
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { and as and58, asc as asc13, desc as desc30, eq as eq68, inArray as inArray12, sql as sql40 } from "drizzle-orm";
+import OpenAI39 from "openai";
+function isCaptureField(source) {
+  return /^capture:[a-z][a-z0-9_]{0,79}$/i.test(source);
+}
+function normalizeResultMappings(raw, sheet) {
+  if (!Array.isArray(raw)) throw new Error("Result mappings must be a list");
+  if (raw.length > MAX_RESULT_MAPPINGS) throw new Error(`Use at most ${MAX_RESULT_MAPPINGS} result mappings`);
+  const columns = new Set(sheet.columns.map((column2) => column2.key));
+  const destinations = /* @__PURE__ */ new Set();
+  return raw.map((item, index2) => {
+    const destinationColumnKey = String(item?.destinationColumnKey || "").trim();
+    const source = String(item?.source || "").trim();
+    const format2 = String(item?.format || "text");
+    const overwrite = item?.overwrite === "always" ? "always" : "if_empty";
+    if (!destinationColumnKey || !columns.has(destinationColumnKey)) {
+      throw new Error(`Result mapping ${index2 + 1} needs a column from this tab`);
+    }
+    if (["name", "phone"].includes(destinationColumnKey)) {
+      throw new Error("Name and phone columns cannot be overwritten by campaign results");
+    }
+    if (destinations.has(destinationColumnKey)) {
+      throw new Error(`Only one campaign result can write to "${destinationColumnKey}"`);
+    }
+    destinations.add(destinationColumnKey);
+    if (!RESULT_FIELD_NAMES.has(source) && !isCaptureField(source)) {
+      throw new Error(`Result mapping ${index2 + 1} uses an unsupported campaign field`);
+    }
+    if (!RESULT_FORMATS.has(format2)) throw new Error(`Result mapping ${index2 + 1} has an unsupported format`);
+    return { destinationColumnKey, source, format: format2, overwrite };
+  });
+}
+function suggestedSourceForLabel(label) {
+  const value = label.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (/(callback reason|call reason)/.test(value)) return "callback_reason";
+  if (/(delivery|sent status|message status)/.test(value)) return "delivery_status";
+  if (/(callback|call back|follow up|required action)/.test(value)) return "callback_required";
+  if (/(feedback|customer response|reply text|response text)/.test(value)) return "customer_feedback";
+  if (/(reply count|responses count)/.test(value)) return "reply_count";
+  if (/(last contacted|first reply|reply date|contact date)/.test(value)) return "first_reply_at";
+  if (/(classification date|classified date)/.test(value)) return "classified_at";
+  if (/(outcome code|result code|status code)/.test(value)) return "outcome_key";
+  if (/(result|output|outcome|disposition|payment status|reply status|status)/.test(value)) return "outcome_label";
+  return null;
+}
+function heuristicResultMappings(sheet) {
+  const proposals = [];
+  for (const column2 of sheet.columns) {
+    if (["name", "phone"].includes(column2.key)) continue;
+    const source = suggestedSourceForLabel(column2.label);
+    if (!source || proposals.some((proposal) => proposal.destinationColumnKey === column2.key)) continue;
+    const format2 = source === "callback_required" ? "yes_no" : source === "reply_count" ? "number" : ["first_reply_at", "classified_at"].includes(source) ? "date" : "text";
+    proposals.push({ destinationColumnKey: column2.key, source, format: format2, overwrite: "if_empty" });
+  }
+  return proposals;
+}
+function formatResultValue(value, format2) {
+  if (value === null || value === void 0 || value === "") return null;
+  if (format2 === "yes_no") return value === true || value === "true" ? "Yes" : "No";
+  if (format2 === "number") return typeof value === "number" ? value : Number(value);
+  if ((format2 === "date" || format2 === "iso_date") && value instanceof Date) {
+    return format2 === "date" ? value.toISOString().slice(0, 10) : value.toISOString();
+  }
+  return cell(value);
+}
+function canReplaceResultCell(row, key, overwrite) {
+  if (overwrite === "always") return true;
+  const current = row.values[key];
+  if (current === null || current === void 0 || String(current).trim() === "") return true;
+  const previousAi = row.aiValues?.[key];
+  return previousAi !== void 0 && String(previousAi) === String(current);
+}
 function cell(value) {
   if (value === null || value === void 0) return null;
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
@@ -56128,16 +56224,31 @@ async function latestVersion(workbookId, businessAccountId) {
   )).orderBy(desc30(whatsappAiWorkbookVersions.versionNumber)).limit(1);
   return version;
 }
-var MAX_SHEETS, MAX_COLUMNS, MAX_ROWS, whatsappAiWorkbookService;
+var MAX_SHEETS, MAX_COLUMNS, MAX_ROWS, MAX_RESULT_MAPPINGS, WORKBOOK_RESULT_FIELDS, RESULT_FIELD_NAMES, RESULT_FORMATS, whatsappAiWorkbookService;
 var init_whatsappAiWorkbookService = __esm({
   "server/services/whatsappAiWorkbookService.ts"() {
     "use strict";
     init_db();
     init_schema();
     init_contactGroupService();
+    init_encryptionService();
     MAX_SHEETS = 20;
     MAX_COLUMNS = 100;
     MAX_ROWS = 5e4;
+    MAX_RESULT_MAPPINGS = 20;
+    WORKBOOK_RESULT_FIELDS = [
+      { value: "outcome_label", label: "Reply outcome", formats: ["text"] },
+      { value: "outcome_key", label: "Outcome code", formats: ["text"] },
+      { value: "delivery_status", label: "Delivery status", formats: ["text"] },
+      { value: "callback_required", label: "Callback required", formats: ["yes_no", "text"] },
+      { value: "callback_reason", label: "Callback reason", formats: ["text"] },
+      { value: "customer_feedback", label: "Customer feedback", formats: ["text"] },
+      { value: "reply_count", label: "Reply count", formats: ["number", "text"] },
+      { value: "first_reply_at", label: "First reply date", formats: ["date", "iso_date", "text"] },
+      { value: "classified_at", label: "Classified date", formats: ["date", "iso_date", "text"] }
+    ];
+    RESULT_FIELD_NAMES = new Set(WORKBOOK_RESULT_FIELDS.map((field) => field.value));
+    RESULT_FORMATS = /* @__PURE__ */ new Set(["text", "yes_no", "iso_date", "date", "number"]);
     whatsappAiWorkbookService = {
       async list(businessAccountId, includeArchived = false) {
         const workbooks = await db.select().from(whatsappAiWorkbooks).where(and58(
@@ -56188,6 +56299,79 @@ var init_whatsappAiWorkbookService = __esm({
           })),
           currentVersion: versions[0] || null
         };
+      },
+      async suggestResultMappings(businessAccountId, workbookId, input) {
+        const workbook = await this.get(businessAccountId, workbookId);
+        if (!workbook?.currentVersion) throw new Error("Workbook not found");
+        const sheet = workbook.currentVersion.sheets.find((item) => item.id === input.sheetId);
+        if (!sheet) throw new Error("Workbook tab not found");
+        const fallback = heuristicResultMappings(sheet);
+        const instruction = String(input.instruction || "").trim().slice(0, 2e3);
+        if (!instruction) {
+          return {
+            mappings: fallback,
+            mode: "header_suggestions",
+            confidence: "low",
+            warnings: ["Suggestions are based on column headers only. Review each destination before using it."]
+          };
+        }
+        const [account] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq68(businessAccounts.id, businessAccountId)).limit(1);
+        const apiKey = account?.openaiApiKey ? safeDecrypt(account.openaiApiKey) : "";
+        if (!apiKey) {
+          return {
+            mappings: fallback,
+            mode: "header_suggestions",
+            confidence: "low",
+            warnings: ["AI suggestions are unavailable for this account, so these are header-based suggestions."]
+          };
+        }
+        try {
+          const allowedFields = WORKBOOK_RESULT_FIELDS.map((field) => ({
+            value: field.value,
+            label: field.label,
+            formats: field.formats
+          }));
+          const completion = await new OpenAI39({ apiKey, timeout: 15e3 }).chat.completions.create({
+            model: "gpt-4o-mini",
+            temperature: 0,
+            response_format: { type: "json_object" },
+            messages: [
+              {
+                role: "system",
+                content: [
+                  "You map a user's requested campaign-result write-back into spreadsheet columns.",
+                  'Return JSON only: {"mappings":[{"destinationColumnKey":"...","source":"...","format":"...","overwrite":"if_empty"}],"confidence":"low|medium|high","warnings":["..."]}',
+                  "Only choose destinationColumnKey values supplied in the workbook columns.",
+                  "Only choose source values supplied in the campaign result fields; never invent values or formulas.",
+                  "Use at most one mapping per destination. Default overwrite to if_empty.",
+                  "Do not infer mappings when the user instruction is ambiguous; return fewer mappings instead."
+                ].join("\n")
+              },
+              {
+                role: "user",
+                content: JSON.stringify({
+                  instruction,
+                  workbookColumns: sheet.columns.map((column2) => ({ key: column2.key, label: column2.label, type: column2.type })),
+                  campaignResultFields: allowedFields
+                })
+              }
+            ]
+          });
+          const parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
+          const mappings = normalizeResultMappings(parsed.mappings || [], sheet);
+          const confidence2 = ["low", "medium", "high"].includes(parsed.confidence) ? parsed.confidence : "medium";
+          const warnings = Array.isArray(parsed.warnings) ? parsed.warnings.filter((warning) => typeof warning === "string").map((warning) => warning.slice(0, 300)).slice(0, 5) : [];
+          if (mappings.length === 0) warnings.push("No unambiguous mapping was found. Add a destination manually if you want to sync results.");
+          return { mappings, mode: "ai", confidence: confidence2, warnings };
+        } catch (error) {
+          console.warn("[AI Workbook] Result mapping suggestion failed; using header suggestions", error);
+          return {
+            mappings: fallback,
+            mode: "header_suggestions",
+            confidence: "low",
+            warnings: ["AI could not produce a mapping, so these are header-based suggestions."]
+          };
+        }
       },
       async create(businessAccountId, input) {
         const name = String(input.name || "").trim();
@@ -56390,6 +56574,7 @@ var init_whatsappAiWorkbookService = __esm({
         const phoneColumn = input.phoneColumn || "phone";
         const nameColumn = input.nameColumn || "name";
         if (!sheet.columns.some((c) => c.key === phoneColumn)) throw new Error("Choose a valid phone column");
+        const resultMappings = input.resultMappings === void 0 ? [] : normalizeResultMappings(input.resultMappings, sheet);
         const selected = input.rowIds?.length ? new Set(input.rowIds.map(String)) : null;
         const rows = selected ? sheet.rows.filter((row) => selected.has(row.id)) : sheet.rows;
         if (rows.length === 0) throw new Error("Select at least one workbook row");
@@ -56421,11 +56606,143 @@ var init_whatsappAiWorkbookService = __esm({
               attributes
             );
           }
-          return { group, selectedRows: rows.length, importedContacts: valid.size, skippedRows: rows.length - valid.size };
+          const rowIdsByPhone = Object.fromEntries(
+            Array.from(valid.entries()).map(([phone, row]) => [phone, row.id])
+          );
+          const [resultSync] = resultMappings.length > 0 ? await db.insert(whatsappAiWorkbookCampaignLinks).values({
+            businessAccountId,
+            workbookId,
+            workbookVersionId: workbook.currentVersion.id,
+            contactGroupId: group.id,
+            sheetId: sheet.id,
+            mappings: resultMappings,
+            rowIdsByPhone
+          }).returning() : [];
+          return {
+            group,
+            selectedRows: rows.length,
+            importedContacts: valid.size,
+            skippedRows: rows.length - valid.size,
+            resultSync: resultSync ? {
+              id: resultSync.id,
+              status: resultSync.status,
+              mappings: resultSync.mappings
+            } : null
+          };
         } catch (error) {
           await contactGroupService.remove(businessAccountId, group.id);
           throw error;
         }
+      },
+      async listResultSyncs(businessAccountId, workbookId) {
+        const links = await db.select().from(whatsappAiWorkbookCampaignLinks).where(and58(
+          eq68(whatsappAiWorkbookCampaignLinks.businessAccountId, businessAccountId),
+          eq68(whatsappAiWorkbookCampaignLinks.workbookId, workbookId)
+        )).orderBy(desc30(whatsappAiWorkbookCampaignLinks.createdAt));
+        const campaignIds = links.map((link) => link.campaignId).filter((id) => Boolean(id));
+        const campaigns = campaignIds.length ? await db.select({ id: marketingCampaigns.id, name: marketingCampaigns.name, status: marketingCampaigns.status }).from(marketingCampaigns).where(and58(
+          eq68(marketingCampaigns.businessAccountId, businessAccountId),
+          inArray12(marketingCampaigns.id, campaignIds)
+        )) : [];
+        const campaignById = new Map(campaigns.map((campaign) => [campaign.id, campaign]));
+        return links.map((link) => ({
+          ...link,
+          campaign: link.campaignId ? campaignById.get(link.campaignId) || null : null
+        }));
+      },
+      async attachCampaignToAudienceGroups(businessAccountId, campaignId, groupIds) {
+        const uniqueGroupIds = Array.from(new Set(groupIds.filter(Boolean)));
+        if (uniqueGroupIds.length === 0) return 0;
+        const links = await db.select({ id: whatsappAiWorkbookCampaignLinks.id }).from(whatsappAiWorkbookCampaignLinks).where(and58(
+          eq68(whatsappAiWorkbookCampaignLinks.businessAccountId, businessAccountId),
+          inArray12(whatsappAiWorkbookCampaignLinks.contactGroupId, uniqueGroupIds)
+        ));
+        if (links.length === 0) return 0;
+        const updated = await db.update(whatsappAiWorkbookCampaignLinks).set({ campaignId, status: "campaign_attached", updatedAt: /* @__PURE__ */ new Date() }).where(and58(
+          eq68(whatsappAiWorkbookCampaignLinks.businessAccountId, businessAccountId),
+          inArray12(whatsappAiWorkbookCampaignLinks.id, links.map((link) => link.id))
+        )).returning({ id: whatsappAiWorkbookCampaignLinks.id });
+        return updated.length;
+      },
+      async syncCampaignResults(businessAccountId, workbookId, linkId) {
+        const [link] = await db.select().from(whatsappAiWorkbookCampaignLinks).where(and58(
+          eq68(whatsappAiWorkbookCampaignLinks.id, linkId),
+          eq68(whatsappAiWorkbookCampaignLinks.workbookId, workbookId),
+          eq68(whatsappAiWorkbookCampaignLinks.businessAccountId, businessAccountId)
+        )).limit(1);
+        if (!link) throw new Error("Campaign result link not found");
+        if (!link.campaignId) throw new Error("Create the campaign before syncing its results");
+        const workbook = await this.get(businessAccountId, workbookId);
+        if (!workbook?.currentVersion) throw new Error("Workbook not found");
+        const sheets = JSON.parse(JSON.stringify(workbook.currentVersion.sheets || []));
+        const sheet = sheets.find((item) => item.id === link.sheetId);
+        if (!sheet) throw new Error("The source workbook tab no longer exists");
+        const mappings = normalizeResultMappings(link.mappings, sheet);
+        const [campaign] = await db.select({ replyClassifications: marketingCampaigns.replyClassifications }).from(marketingCampaigns).where(and58(eq68(marketingCampaigns.id, link.campaignId), eq68(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
+        if (!campaign) throw new Error("Campaign not found");
+        const outcomeLabels = new Map(
+          (campaign.replyClassifications || []).map((item) => [item.key, item.label || item.key])
+        );
+        const recipients = await db.select().from(marketingCampaignRecipients).where(and58(
+          eq68(marketingCampaignRecipients.campaignId, link.campaignId),
+          eq68(marketingCampaignRecipients.businessAccountId, businessAccountId)
+        ));
+        const rowsById = new Map(sheet.rows.map((row) => [row.id, row]));
+        const rowIdsByPhone = link.rowIdsByPhone || {};
+        let updatedRows = 0;
+        let changedCells = 0;
+        const valueFor = (recipient, source) => {
+          if (source === "outcome_label") {
+            return recipient.primaryClassification ? outcomeLabels.get(recipient.primaryClassification) || recipient.primaryClassification : null;
+          }
+          if (source === "outcome_key") return recipient.primaryClassification || null;
+          if (source === "delivery_status") return recipient.status;
+          if (source === "callback_required") return recipient.callbackRequired;
+          if (source === "callback_reason") return recipient.callbackReason || null;
+          if (source === "customer_feedback") return recipient.customerFeedback || null;
+          if (source === "reply_count") return recipient.replyCount;
+          if (source === "first_reply_at") return recipient.firstReplyAt;
+          if (source === "classified_at") return recipient.classifiedAt;
+          if (source.startsWith("capture:")) return (recipient.dispositionData || {})[source.slice("capture:".length)] || null;
+          return null;
+        };
+        for (const recipient of recipients) {
+          const rowId = rowIdsByPhone[normalizePhone5(String(recipient.phone || ""))];
+          const row = rowId ? rowsById.get(rowId) : void 0;
+          if (!row) continue;
+          let rowChanged = false;
+          for (const mapping of mappings) {
+            const nextValue = formatResultValue(valueFor(recipient, mapping.source), mapping.format);
+            if (nextValue === null || !canReplaceResultCell(row, mapping.destinationColumnKey, mapping.overwrite)) continue;
+            const currentValue = row.values[mapping.destinationColumnKey];
+            const priorAiValue = row.aiValues?.[mapping.destinationColumnKey];
+            if (String(currentValue ?? "") === String(nextValue) && String(priorAiValue ?? "") === String(nextValue)) continue;
+            row.values[mapping.destinationColumnKey] = nextValue;
+            row.aiValues = { ...row.aiValues || {}, [mapping.destinationColumnKey]: nextValue };
+            row.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+            rowChanged = true;
+            changedCells++;
+          }
+          if (rowChanged) updatedRows++;
+        }
+        if (changedCells === 0) {
+          await db.update(whatsappAiWorkbookCampaignLinks).set({ status: "campaign_attached", syncedRowCount: 0, updatedAt: /* @__PURE__ */ new Date() }).where(eq68(whatsappAiWorkbookCampaignLinks.id, link.id));
+          return { updatedRows: 0, changedCells: 0, version: null };
+        }
+        const version = await this.createVersion(businessAccountId, workbookId, {
+          sheets,
+          source: "campaign_sync",
+          expectedCurrentVersionId: workbook.currentVersion.id,
+          expectedRevision: workbook.currentVersion.revision
+        });
+        await db.update(whatsappAiWorkbookCampaignLinks).set({
+          status: "synced",
+          lastSyncedAt: /* @__PURE__ */ new Date(),
+          lastSyncedVersionId: version.id,
+          syncedRowCount: updatedRows,
+          updatedAt: /* @__PURE__ */ new Date()
+        }).where(eq68(whatsappAiWorkbookCampaignLinks.id, link.id));
+        return { updatedRows, changedCells, version };
       }
     };
   }
@@ -56714,7 +57031,7 @@ init_schema();
 import { createServer } from "http";
 import bcrypt2 from "bcrypt";
 import { eq as eq69, and as and59, isNotNull as isNotNull6, sql as sql41, inArray as inArray13, desc as desc31, asc as asc14, gte as gte12, lte as lte5, count as count4 } from "drizzle-orm";
-import OpenAI39 from "openai";
+import OpenAI40 from "openai";
 import { z as z2 } from "zod";
 
 // server/chatService.ts
@@ -57023,8 +57340,8 @@ var JourneyOrchestrator = class {
     if (!apiKey) {
       throw new Error("OpenAI API key not configured for this business account");
     }
-    const OpenAI40 = (await import("openai")).default;
-    return new OpenAI40({ apiKey });
+    const OpenAI41 = (await import("openai")).default;
+    return new OpenAI41({ apiKey });
   }
   /**
    * ENGINE-DRIVEN MODE: Process user message through strict state machine
@@ -76575,7 +76892,7 @@ async function translateWidgetText(businessAccountId, text3, targetLanguage) {
   try {
     const businessAccount = await storage.getBusinessAccount(businessAccountId);
     if (!businessAccount || !businessAccount.openaiApiKey) return text3;
-    const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
+    const openai = new OpenAI40({ apiKey: businessAccount.openaiApiKey });
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -77746,7 +78063,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       const apiKey = account?.openaiApiKey || process.env.OPENAI_API_KEY;
       if (apiKey && history.length > 0) {
         const transcript = history.slice(-20).map((m) => `${m.role === "user" ? "Student" : "AI Bot"}: ${String(m.content || "").slice(0, 500)}`).join("\n");
-        const openai = new OpenAI39({ apiKey });
+        const openai = new OpenAI40({ apiKey });
         const completion = await openai.chat.completions.create({
           model: "gpt-4o-mini",
           messages: [
@@ -77778,7 +78095,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       const history = await storage.getMessagesByConversation(conversationId, businessAccountId);
       if (history.length === 0) return fallback;
       const transcript = history.slice(-12).map((m) => `${m.role === "user" ? "Student" : "AI Tutor"}: ${String(m.content || "").slice(0, 600)}`).join("\n");
-      const openai = new OpenAI39({ apiKey });
+      const openai = new OpenAI40({ apiKey });
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -77960,7 +78277,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
           console.log("[Intro API] Generating welcome back message for returning visitor");
           const businessName = businessAccount.businessName || businessAccount.name || "us";
           const systemContext = businessAccount.description ? `You are representing: ${businessAccount.description}` : "";
-          const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
+          const openai = new OpenAI40({ apiKey: businessAccount.openaiApiKey });
           const completion = await openai.chat.completions.create({
             model: "gpt-4o-mini",
             messages: [
@@ -78069,7 +78386,7 @@ You are a friendly AI assistant. Generate a warm, welcoming message for a return
         if (!businessAccount.openaiApiKey) return text3;
         const langName = LANGUAGE_NAMES[targetLang] || targetLang;
         try {
-          const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
+          const openai = new OpenAI40({ apiKey: businessAccount.openaiApiKey });
           const completion = await openai.chat.completions.create({
             model: "gpt-4o-mini",
             messages: [
@@ -78483,7 +78800,7 @@ You are a friendly AI assistant. Generate a warm, welcoming message for a return
         return res.json({ translatedText: text3 });
       }
       try {
-        const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
+        const openai = new OpenAI40({ apiKey: businessAccount.openaiApiKey });
         const completion = await openai.chat.completions.create({
           model: "gpt-4o-mini",
           messages: [
@@ -78554,7 +78871,7 @@ You are a friendly AI assistant. Generate a warm, welcoming message for a return
         return res.json({ translatedTexts: texts });
       }
       try {
-        const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
+        const openai = new OpenAI40({ apiKey: businessAccount.openaiApiKey });
         const numberedTexts = texts.map((t, i) => `${i + 1}. ${t}`).join("\n");
         const completion = await openai.chat.completions.create({
           model: "gpt-4o-mini",
@@ -78635,7 +78952,7 @@ You are a friendly AI assistant. Generate a warm, welcoming message for a return
         return res.json({ success: true, description: null });
       }
       try {
-        const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
+        const openai = new OpenAI40({ apiKey: businessAccount.openaiApiKey });
         let systemPrompt;
         let userContent;
         if (explicitLang) {
@@ -79766,7 +80083,7 @@ ${product.description}`;
               };
               const langName = LANGUAGE_NAMES[targetLanguage];
               if (langName) {
-                const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
+                const openai = new OpenAI40({ apiKey: businessAccount.openaiApiKey });
                 const translation = await openai.chat.completions.create({
                   model: "gpt-4o-mini",
                   messages: [
@@ -79837,7 +80154,7 @@ ${product.description}`;
             };
             const langName = LANGUAGE_NAMES[targetLanguage];
             if (langName) {
-              const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
+              const openai = new OpenAI40({ apiKey: businessAccount.openaiApiKey });
               const translation = await openai.chat.completions.create({
                 model: "gpt-4o-mini",
                 messages: [
@@ -80308,7 +80625,7 @@ ${product.description}`;
       if (businessAccount.openaiApiKey && allCategories.length > 0) {
         console.log("[Visual Match] Detecting category from", allCategories.length, "available categories");
         try {
-          const openai = new OpenAI39({ apiKey: businessAccount.openaiApiKey });
+          const openai = new OpenAI40({ apiKey: businessAccount.openaiApiKey });
           const categoryNames = allCategories.map((c) => c.name);
           const categoryDetectionResponse = await openai.chat.completions.create({
             model: "gpt-4o-mini",
@@ -83509,7 +83826,7 @@ data: ${JSON.stringify({ message: error.message })}
       if (!openaiApiKey) {
         return res.status(400).json({ error: "OpenAI API key not configured" });
       }
-      const openai = new OpenAI39({ apiKey: openaiApiKey });
+      const openai = new OpenAI40({ apiKey: openaiApiKey });
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -84661,8 +84978,8 @@ ${instruction}`
         return msg.slice(0, 120);
       };
       if (provider === "openai") {
-        const OpenAI40 = (await import("openai")).default;
-        const client = new OpenAI40({ apiKey });
+        const OpenAI41 = (await import("openai")).default;
+        const client = new OpenAI41({ apiKey });
         await client.chat.completions.create({
           model,
           messages: [{ role: "user", content: "Reply with: OK" }],
@@ -88632,7 +88949,7 @@ Format your response as JSON with this structure:
       if (!openaiApiKey) {
         return res.status(400).json({ error: "OpenAI API key not configured" });
       }
-      const openai = new OpenAI39({ apiKey: openaiApiKey });
+      const openai = new OpenAI40({ apiKey: openaiApiKey });
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
         messages: [
@@ -91221,11 +91538,11 @@ ${script}`
           }
           if (!storeCredential && storeCreds.length > 0 && (nStore || nDealer)) {
             try {
-              const OpenAI40 = (await import("openai")).default;
+              const OpenAI41 = (await import("openai")).default;
               const [bizAcct] = await db.select().from(businessAccounts).where(eq69(businessAccounts.id, businessAccountId)).limit(1);
               const openaiApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
               if (openaiApiKey) {
-                const openaiClient = new OpenAI40({ apiKey: openaiApiKey, timeout: 15e3 });
+                const openaiClient = new OpenAI41({ apiKey: openaiApiKey, timeout: 15e3 });
                 const storeList = storeCreds.map((sc) => ({ id: sc.id, dealerName: sc.dealerName, storeName: sc.storeName, city: sc.city || "", storeId: sc.storeId }));
                 const prompt = `Match the lead's store info to the closest store credential.
 
@@ -91385,11 +91702,11 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             }
             if (!storeCredential && storeCreds.length > 0 && (nS || nD)) {
               try {
-                const OpenAI40 = (await import("openai")).default;
+                const OpenAI41 = (await import("openai")).default;
                 const [bizAcct] = await db.select().from(businessAccounts).where(eq69(businessAccounts.id, businessAccountId)).limit(1);
                 const openaiApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
                 if (openaiApiKey) {
-                  const openaiClient = new OpenAI40({ apiKey: openaiApiKey, timeout: 15e3 });
+                  const openaiClient = new OpenAI41({ apiKey: openaiApiKey, timeout: 15e3 });
                   const storeList = storeCreds.map((sc) => ({ id: sc.id, dealerName: sc.dealerName, storeName: sc.storeName, city: sc.city || "", storeId: sc.storeId }));
                   const prompt = `Match the lead's store info to the closest store credential.
 
@@ -92154,8 +92471,8 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       if (!apiKey) {
         return res.status(400).json({ error: "No AI API key configured" });
       }
-      const OpenAI40 = (await import("openai")).default;
-      const openai = new OpenAI40({ apiKey });
+      const OpenAI41 = (await import("openai")).default;
+      const openai = new OpenAI41({ apiKey });
       const sampleData = (sampleRows || []).slice(0, 3);
       const redactCell = (val) => {
         if (!val || val.length < 2) return val;
@@ -93036,14 +93353,14 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
     }
   });
   async function performOpenAITryOn(openaiKey, selfieBuffer, productBuffer, tryOnPrompt) {
-    const OpenAI40 = (await import("openai")).default;
+    const OpenAI41 = (await import("openai")).default;
     const { toFile: toFile2 } = await import("openai");
     const sharpModule = (await import("sharp")).default;
     const MAX_DIM = 1024;
     const resizedSelfie = await sharpModule(selfieBuffer).resize({ width: MAX_DIM, height: MAX_DIM, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
     const resizedProduct = await sharpModule(productBuffer).resize({ width: MAX_DIM, height: MAX_DIM, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
     console.log(`[Try-On][OpenAI] Selfie: ${(resizedSelfie.length / 1024).toFixed(1)} KB | Product: ${(resizedProduct.length / 1024).toFixed(1)} KB (resized to max ${MAX_DIM}px)`);
-    const client = new OpenAI40({ apiKey: openaiKey, timeout: 12e4 });
+    const client = new OpenAI41({ apiKey: openaiKey, timeout: 12e4 });
     const tryOnStartTime = Date.now();
     try {
       console.log("[Try-On][OpenAI] Trying Responses API with 2 separate images | start time:", (/* @__PURE__ */ new Date()).toISOString());
@@ -95124,7 +95441,7 @@ Strict Requirements:
       if (!openaiApiKey) {
         return res.status(400).json({ error: "OpenAI API key not configured. Please add your API key in Settings." });
       }
-      const openai = new OpenAI39({ apiKey: openaiApiKey });
+      const openai = new OpenAI40({ apiKey: openaiApiKey });
       const existingFaqs = await storage.getAllFaqs(businessAccountId);
       const existingQuestions = existingFaqs.map((f) => f.question).slice(0, 20);
       const analysisPrompt = `You are an FAQ quality analyzer for a business chatbot. Analyze this FAQ and provide improvement suggestions.
@@ -98362,7 +98679,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       if (!apiKey) {
         return res.status(400).json({ error: "OpenAI API key not configured" });
       }
-      const openai = new OpenAI39({ apiKey });
+      const openai = new OpenAI40({ apiKey });
       const sampleText = "Hello! I'm Chroney, your AI assistant. How can I help you today?";
       const mp3Response = await openai.audio.speech.create({
         model: "tts-1",
@@ -98460,7 +98777,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       if (!apiKey) {
         return res.status(400).json({ error: "OpenAI API key not configured" });
       }
-      const openai = new OpenAI39({ apiKey });
+      const openai = new OpenAI40({ apiKey });
       const [products3, faqs3, widgetSettings2, businessAccount] = await Promise.all([
         storage.getAllProducts(businessAccountId),
         storage.getAllFaqs(businessAccountId),
@@ -98866,7 +99183,7 @@ Format: Return only a JSON array of 3 strings, nothing else. Example: ["Question
       if (!settings || settings.productPageModeEnabled !== "true" || settings.showAiTrivia !== "true") {
         return res.status(403).json({ error: "Product page AI mode or trivia is not enabled" });
       }
-      const openai = new OpenAI39({ apiKey: process.env.OPENAI_API_KEY });
+      const openai = new OpenAI40({ apiKey: process.env.OPENAI_API_KEY });
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -98901,7 +99218,7 @@ Price: ${product.price || "Not available"}`
       if (!settings || settings.productPageModeEnabled !== "true" || settings.showSuggestedQuestions !== "true") {
         return res.status(403).json({ error: "Product page AI mode or suggested questions is not enabled" });
       }
-      const openai = new OpenAI39({ apiKey: process.env.OPENAI_API_KEY });
+      const openai = new OpenAI40({ apiKey: process.env.OPENAI_API_KEY });
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -98949,7 +99266,7 @@ Category: ${product.category || "General"}`
       if (!settings || settings.productPageModeEnabled !== "true" || settings.showReviewSummary !== "true") {
         return res.status(403).json({ error: "Product page AI mode or review summary is not enabled" });
       }
-      const openai = new OpenAI39({ apiKey: process.env.OPENAI_API_KEY });
+      const openai = new OpenAI40({ apiKey: process.env.OPENAI_API_KEY });
       const reviewText = reviews && reviews.length > 0 ? reviews.slice(0, 10).map((r) => `Rating: ${r.rating}/5 - ${r.text}`).join("\n") : "No reviews available yet";
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -100180,7 +100497,7 @@ Format your response as JSON with this structure:
       if (business.website) contextParts.push(`Website: ${business.website}`);
       if (widget?.customInstructions) contextParts.push(`AI Instructions: ${widget.customInstructions}`);
       const businessContext = contextParts.join("\n") || "No business context available";
-      const { default: OpenAI40 } = await import("openai");
+      const { default: OpenAI41 } = await import("openai");
       const { storage: storage2 } = await Promise.resolve().then(() => (init_storage(), storage_exports));
       const businessApiKey = await storage2.getBusinessAccountOpenAIKey(businessAccountId).catch(() => null);
       const envKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
@@ -100194,7 +100511,7 @@ Format your response as JSON with this structure:
       const provider = useMaster ? master.primaryProvider || "openai" : "openai";
       const model = useMaster ? master.primaryModel || "gpt-4o-mini" : "gpt-4o-mini";
       const GEMINI_BASE_URL2 = "https://generativelanguage.googleapis.com/v1beta/openai/";
-      const openai = provider === "gemini" ? new OpenAI40({ apiKey: effectiveKey, baseURL: GEMINI_BASE_URL2 }) : new OpenAI40({ apiKey: effectiveKey });
+      const openai = provider === "gemini" ? new OpenAI41({ apiKey: effectiveKey, baseURL: GEMINI_BASE_URL2 }) : new OpenAI41({ apiKey: effectiveKey });
       const completion = await openai.chat.completions.create({
         model,
         temperature: 0.7,
@@ -100789,11 +101106,11 @@ ${businessContext}`
                                 if (!autoStoreCredential && asNS) autoStoreCredential = asStoreCreds.find((sc) => asNorm(sc.storeName) === asNS);
                                 if (!autoStoreCredential && asStoreCreds.length > 0 && (asNS || asND)) {
                                   try {
-                                    const OpenAI40 = (await import("openai")).default;
+                                    const OpenAI41 = (await import("openai")).default;
                                     const [bizAcct] = await db.select().from(businessAccounts).where(eq69(businessAccounts.id, businessId)).limit(1);
                                     const asApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
                                     if (asApiKey) {
-                                      const asOAI = new OpenAI40({ apiKey: asApiKey, timeout: 15e3 });
+                                      const asOAI = new OpenAI41({ apiKey: asApiKey, timeout: 15e3 });
                                       const asList = asStoreCreds.map((sc) => ({ id: sc.id, dealerName: sc.dealerName, storeName: sc.storeName, city: sc.city || "", storeId: sc.storeId }));
                                       const asPrompt = `Match the lead's store info to the closest store credential.
 
@@ -101536,11 +101853,11 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                         if (!iAutoStoreCredential && iAsNS) iAutoStoreCredential = iAsStoreCreds.find((sc) => iAsNorm(sc.storeName) === iAsNS);
                         if (!iAutoStoreCredential && iAsStoreCreds.length > 0 && (iAsNS || iAsND)) {
                           try {
-                            const OpenAI40 = (await import("openai")).default;
+                            const OpenAI41 = (await import("openai")).default;
                             const [bizAcct] = await db.select().from(businessAccounts).where(eq69(businessAccounts.id, businessId)).limit(1);
                             const iAsApiKey = bizAcct?.openaiApiKey ? (await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports))).safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
                             if (iAsApiKey) {
-                              const iAsOAI = new OpenAI40({ apiKey: iAsApiKey, timeout: 15e3 });
+                              const iAsOAI = new OpenAI41({ apiKey: iAsApiKey, timeout: 15e3 });
                               const iAsList = iAsStoreCreds.map((sc) => ({ id: sc.id, dealerName: sc.dealerName, storeName: sc.storeName, city: sc.city || "", storeId: sc.storeId }));
                               const iAsPrompt = `Match the lead's store info to the closest store credential.
 
@@ -104932,6 +105249,40 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       res.status(404).json({ error: err.message });
     }
   });
+  app2.post("/api/whatsapp/ai-workbooks/:id/result-mapping-suggestions", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
+      const result = await whatsappAiWorkbookService2.suggestResultMappings(
+        req.user.businessAccountId,
+        req.params.id,
+        req.body || {}
+      );
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+  app2.get("/api/whatsapp/ai-workbooks/:id/result-syncs", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
+      res.json(await whatsappAiWorkbookService2.listResultSyncs(req.user.businessAccountId, req.params.id));
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+  app2.post("/api/whatsapp/ai-workbooks/:id/result-syncs/:linkId/sync", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
+      const result = await whatsappAiWorkbookService2.syncCampaignResults(
+        req.user.businessAccountId,
+        req.params.id,
+        req.params.linkId
+      );
+      res.status(201).json(result);
+    } catch (err) {
+      res.status(String(err.message).includes("another session") ? 409 : 400).json({ error: err.message });
+    }
+  });
   app2.post("/api/whatsapp/ai-workbooks/:id/audience", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
       const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
@@ -104964,6 +105315,12 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       };
       const { marketingCampaignService: marketingCampaignService2, CampaignPrerequisiteError: CampaignPrerequisiteError2 } = await Promise.resolve().then(() => (init_marketingCampaignService(), marketingCampaignService_exports));
       const camp = await marketingCampaignService2.create(req.user.businessAccountId, payload);
+      const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
+      await whatsappAiWorkbookService2.attachCampaignToAudienceGroups(
+        req.user.businessAccountId,
+        camp.id,
+        Array.isArray(payload.groupIds) ? payload.groupIds : []
+      );
       res.status(201).json(camp);
     } catch (err) {
       if (err?.name === "CampaignPrerequisiteError") {

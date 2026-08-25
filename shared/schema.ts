@@ -3014,6 +3014,28 @@ export interface AiWorkbookSheet {
   rows: AiWorkbookRow[];
 }
 
+/**
+ * A user-confirmed instruction for writing a campaign recipient result into a
+ * workbook column. The source vocabulary is deliberately closed; an AI helper
+ * may suggest a mapping, but only application code performs the final write.
+ */
+export interface AiWorkbookCampaignResultMapping {
+  destinationColumnKey: string;
+  source:
+    | "outcome_label"
+    | "outcome_key"
+    | "delivery_status"
+    | "callback_required"
+    | "callback_reason"
+    | "customer_feedback"
+    | "reply_count"
+    | "first_reply_at"
+    | "classified_at"
+    | `capture:${string}`;
+  format: "text" | "yes_no" | "iso_date" | "date" | "number";
+  overwrite: "if_empty" | "always";
+}
+
 // Marketing campaign — a planned send to one or more groups
 export const marketingCampaigns = pgTable("marketing_campaigns", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -3251,6 +3273,34 @@ export const whatsappAiWorkbookVersions = pgTable("whatsapp_ai_workbook_versions
   businessIdx: index("wa_ai_workbook_versions_business_idx").on(table.businessAccountId),
 }));
 
+/**
+ * Connects one workbook tab/audience to a later campaign without mutating the
+ * campaign's immutable recipient snapshot. `rowIdsByPhone` is captured when
+ * the audience is created, before contact-group de-duplication.
+ */
+export const whatsappAiWorkbookCampaignLinks = pgTable("whatsapp_ai_workbook_campaign_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  workbookId: varchar("workbook_id").notNull().references(() => whatsappAiWorkbooks.id, { onDelete: "cascade" }),
+  workbookVersionId: varchar("workbook_version_id").notNull().references(() => whatsappAiWorkbookVersions.id, { onDelete: "restrict" }),
+  contactGroupId: varchar("contact_group_id").notNull().references(() => contactGroups.id, { onDelete: "cascade" }),
+  campaignId: varchar("campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
+  sheetId: text("sheet_id").notNull(),
+  mappings: jsonb("mappings").$type<AiWorkbookCampaignResultMapping[]>().notNull().default([]),
+  rowIdsByPhone: jsonb("row_ids_by_phone").$type<Record<string, string>>().notNull().default({}),
+  status: text("status").notNull().default("audience_ready"), // audience_ready | campaign_attached | synced
+  lastSyncedAt: timestamp("last_synced_at"),
+  lastSyncedVersionId: varchar("last_synced_version_id").references(() => whatsappAiWorkbookVersions.id, { onDelete: "set null" }),
+  syncedRowCount: integer("synced_row_count").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  workbookCreatedIdx: index("wa_ai_workbook_campaign_links_workbook_created_idx").on(table.workbookId, table.createdAt),
+  groupIdx: index("wa_ai_workbook_campaign_links_group_idx").on(table.contactGroupId),
+  campaignIdx: index("wa_ai_workbook_campaign_links_campaign_idx").on(table.campaignId),
+  businessIdx: index("wa_ai_workbook_campaign_links_business_idx").on(table.businessAccountId),
+}));
+
 // Persistent webhook idempotency store — replaces in-memory dedup so it works across pods/restarts
 export const webhookEvents = pgTable("webhook_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -3301,6 +3351,7 @@ export type InsertMarketingCampaignMessage = z.infer<typeof insertMarketingCampa
 export type MarketingCampaignMessage = typeof marketingCampaignMessages.$inferSelect;
 export type WhatsappAiWorkbook = typeof whatsappAiWorkbooks.$inferSelect;
 export type WhatsappAiWorkbookVersion = typeof whatsappAiWorkbookVersions.$inferSelect;
+export type WhatsappAiWorkbookCampaignLink = typeof whatsappAiWorkbookCampaignLinks.$inferSelect;
 export type InsertWhatsappOptOut = z.infer<typeof insertWhatsappOptOutSchema>;
 export type WhatsappOptOut = typeof whatsappOptOuts.$inferSelect;
 

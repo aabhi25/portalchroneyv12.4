@@ -11,14 +11,15 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
   Archive, ArrowLeft, Copy, Download, Eye, FileSpreadsheet, FolderOpen, History,
-  Loader2, Megaphone, MoreHorizontal, Pencil, Plus, RefreshCw, RotateCcw, Save, Sheet, Upload, X,
+  Link2, Loader2, Megaphone, MoreHorizontal, Pencil, Plus, RefreshCw, RotateCcw, Save, Sheet, Upload, Wand2, X,
 } from "lucide-react";
-import type { AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
+import type { AiWorkbookCampaignResultMapping, AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
 
 interface WorkbookListItem {
   id: string;
@@ -65,6 +66,29 @@ interface Campaign {
   totalRecipients: number;
   repliedCount: number;
 }
+
+interface WorkbookResultSync {
+  id: string;
+  sheetId: string;
+  campaignId: string | null;
+  mappings: AiWorkbookCampaignResultMapping[];
+  status: string;
+  syncedRowCount: number;
+  lastSyncedAt: string | null;
+  campaign: { id: string; name: string; status: string } | null;
+}
+
+const RESULT_SOURCE_OPTIONS = [
+  { value: "outcome_label", label: "Reply outcome" },
+  { value: "outcome_key", label: "Outcome code" },
+  { value: "delivery_status", label: "Delivery status" },
+  { value: "callback_required", label: "Callback required" },
+  { value: "callback_reason", label: "Callback reason" },
+  { value: "customer_feedback", label: "Customer feedback" },
+  { value: "reply_count", label: "Reply count" },
+  { value: "first_reply_at", label: "First reply date" },
+  { value: "classified_at", label: "Classified date" },
+] as const;
 
 function uniqueColumnKey(label: string, columns: AiWorkbookColumn[]) {
   const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "column";
@@ -244,6 +268,10 @@ function WorkbookEditor({ id }: { id: string }) {
   const [sheetToRemove, setSheetToRemove] = useState<AiWorkbookSheet | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [mappingOpen, setMappingOpen] = useState(false);
+  const [mappingInstruction, setMappingInstruction] = useState("");
+  const [resultMappings, setResultMappings] = useState<AiWorkbookCampaignResultMapping[]>([]);
+  const [mappingFeedback, setMappingFeedback] = useState<{ confidence: "low" | "medium" | "high"; warnings: string[] } | null>(null);
 
   const { data: workbook, isLoading } = useQuery<WorkbookDetail>({
     queryKey: [`/api/whatsapp/ai-workbooks/${id}`],
@@ -261,6 +289,10 @@ function WorkbookEditor({ id }: { id: string }) {
     queryKey: [`/api/whatsapp/ai-workbooks/${id}/versions/${previewVersionId}`],
     enabled: Boolean(previewVersionId),
   });
+  const { data: resultSyncs = [] } = useQuery<WorkbookResultSync[]>({
+    queryKey: [`/api/whatsapp/ai-workbooks/${id}/result-syncs`],
+    enabled: Boolean(workbook),
+  });
 
   useEffect(() => {
     if (!workbook?.currentVersion || dirty) return;
@@ -275,7 +307,31 @@ function WorkbookEditor({ id }: { id: string }) {
     setPreviewSheetId(previewVersion.sheets[0]?.id || "");
   }, [previewVersion?.id]);
 
+  useEffect(() => {
+    setResultMappings([]);
+    setMappingInstruction("");
+    setMappingFeedback(null);
+  }, [activeSheetId]);
+
   const activeSheet = sheets.find(sheet => sheet.id === activeSheetId) || sheets[0];
+  const resultDestinationColumns = (activeSheet?.columns || []).filter(column => !["name", "phone"].includes(column.key));
+  const activeResultSync = resultSyncs.find(sync => sync.sheetId === activeSheet?.id && sync.campaignId) || null;
+  const addResultMapping = () => {
+    const destination = resultDestinationColumns.find(column => !resultMappings.some(mapping => mapping.destinationColumnKey === column.key));
+    if (!destination) {
+      toast({ title: "No available destination columns", description: "Add another team column before mapping more campaign results.", variant: "destructive" });
+      return;
+    }
+    setResultMappings(current => [...current, {
+      destinationColumnKey: destination.key,
+      source: "outcome_label",
+      format: "text",
+      overwrite: "if_empty",
+    }]);
+  };
+  const updateResultMapping = (index: number, patch: Partial<AiWorkbookCampaignResultMapping>) => {
+    setResultMappings(current => current.map((mapping, mappingIndex) => mappingIndex === index ? { ...mapping, ...patch } : mapping));
+  };
   const updateSheet = (next: AiWorkbookSheet) => {
     setSheets(current => current.map(sheet => sheet.id === next.id ? next : sheet));
     setDirty(true);
@@ -398,24 +454,72 @@ function WorkbookEditor({ id }: { id: string }) {
     onError: (error: Error) => toast({ title: "Refresh failed", description: error.message, variant: "destructive" }),
   });
 
+  const suggestResultMappings = useMutation({
+    mutationFn: () => {
+      if (!activeSheet) throw new Error("Choose a workbook tab");
+      return apiRequest<{
+        mappings: AiWorkbookCampaignResultMapping[];
+        mode: "ai" | "header_suggestions";
+        confidence: "low" | "medium" | "high";
+        warnings: string[];
+      }>(
+        "POST",
+        `/api/whatsapp/ai-workbooks/${id}/result-mapping-suggestions`,
+        { sheetId: activeSheet.id, instruction: mappingInstruction },
+      );
+    },
+    onSuccess: result => {
+      setResultMappings(result.mappings);
+      setMappingFeedback({ confidence: result.confidence, warnings: result.warnings });
+      toast({
+        title: result.mode === "ai" ? "AI mapping ready for review" : "Column suggestions ready for review",
+        description: "Confirm or edit the destinations before creating the campaign.",
+      });
+    },
+    onError: (error: Error) => toast({ title: "Couldn't suggest a result mapping", description: error.message, variant: "destructive" }),
+  });
+
+  const syncCampaignResults = useMutation({
+    mutationFn: (linkId: string) => apiRequest<{ updatedRows: number; changedCells: number }>(
+      "POST",
+      `/api/whatsapp/ai-workbooks/${id}/result-syncs/${linkId}/sync`,
+    ),
+    onSuccess: result => {
+      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/ai-workbooks/${id}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/ai-workbooks/${id}/result-syncs`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/ai-workbooks"] });
+      toast({
+        title: result.updatedRows ? "Campaign results synced" : "No new campaign results to sync",
+        description: result.updatedRows ? `${result.updatedRows} workbook rows were updated in a new version.` : undefined,
+      });
+    },
+    onError: (error: Error) => toast({ title: "Couldn't sync campaign results", description: error.message, variant: "destructive" }),
+  });
+
   const createAudience = useMutation({
     mutationFn: () => {
       if (!activeSheet) throw new Error("Choose a workbook tab");
       const sourceRows = selectedRows.size > 0
         ? activeSheet.rows.filter(row => selectedRows.has(row.id))
         : filteredRows;
-      return apiRequest<{ group: { id: string }; importedContacts: number; skippedRows: number }>(
+      return apiRequest<{ group: { id: string }; importedContacts: number; skippedRows: number; resultSync: { id: string } | null }>(
         "POST",
         `/api/whatsapp/ai-workbooks/${id}/audience`,
         {
           sheetId: activeSheet.id,
           rowIds: sourceRows.map(row => row.id),
           groupName: `${workbook?.name || "AI Workbook"} audience`,
+          resultMappings,
         },
       );
     },
     onSuccess: result => {
-      toast({ title: `${result.importedContacts} contacts ready`, description: result.skippedRows ? `${result.skippedRows} invalid or duplicate rows were skipped.` : undefined });
+      toast({
+        title: `${result.importedContacts} contacts ready`,
+        description: result.resultSync
+          ? "Campaign results will be ready to sync back after replies are classified."
+          : result.skippedRows ? `${result.skippedRows} invalid or duplicate rows were skipped.` : undefined,
+      });
       setLocation(`/admin/whatsapp-campaigns/new?group=${result.group.id}&workbook=${encodeURIComponent(workbook?.name || "AI Workbook")}`);
     },
     onError: (error: Error) => toast({ title: "Couldn't create campaign audience", description: error.message, variant: "destructive" }),
@@ -611,6 +715,139 @@ function WorkbookEditor({ id }: { id: string }) {
         </CardContent>
       </Card>
 
+      <Dialog open={mappingOpen} onOpenChange={setMappingOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Connect campaign results</DialogTitle>
+            <DialogDescription>
+              Describe where campaign results should go. AI only reviews the column headers and your instruction; you confirm every result before it is used.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="space-y-2">
+              <Label htmlFor="result-mapping-instruction">What should be written back?</Label>
+              <Textarea
+                id="result-mapping-instruction"
+                value={mappingInstruction}
+                onChange={event => setMappingInstruction(event.target.value)}
+                placeholder='Example: Put the reply outcome in Result, callback status in Follow-up Required, and the first reply date in Last Contacted.'
+                rows={3}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-slate-500">No customer names, phone numbers, or reply content are sent for this suggestion.</p>
+                <Button variant="outline" size="sm" onClick={() => suggestResultMappings.mutate()} disabled={suggestResultMappings.isPending}>
+                  {suggestResultMappings.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Wand2 className="h-4 w-4 mr-1" />}
+                  Suggest with AI
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 overflow-hidden">
+              <div className="flex items-center justify-between gap-3 border-b bg-slate-50 px-3 py-2">
+                <div>
+                  <div className="text-sm font-medium text-slate-800">Result mapping</div>
+                  <div className="text-xs text-slate-500">Each selected result writes to one workbook column.</div>
+                </div>
+                <Button variant="ghost" size="sm" onClick={addResultMapping}><Plus className="h-4 w-4 mr-1" /> Add column</Button>
+              </div>
+              {resultMappings.length === 0 ? (
+                <div className="p-5 text-sm text-slate-500">
+                  Add a destination manually, or describe your preferred result columns and let AI prepare a suggestion.
+                </div>
+              ) : (
+                <div className="divide-y">
+                  {resultMappings.map((mapping, index) => (
+                    <div key={`${mapping.destinationColumnKey}-${index}`} className="grid gap-2 p-3 md:grid-cols-[minmax(0,1.1fr),minmax(0,1.1fr),130px,130px,32px] md:items-center">
+                      <Select value={mapping.destinationColumnKey} onValueChange={value => updateResultMapping(index, { destinationColumnKey: value })}>
+                        <SelectTrigger><SelectValue placeholder="Workbook column" /></SelectTrigger>
+                        <SelectContent>
+                          {resultDestinationColumns.map(column => <SelectItem key={column.key} value={column.key}>{column.label}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <div className="space-y-1">
+                        <Select
+                          value={mapping.source.startsWith("capture:") ? "__capture__" : mapping.source}
+                          onValueChange={value => updateResultMapping(index, {
+                            source: (value === "__capture__" ? "capture:" : value) as AiWorkbookCampaignResultMapping["source"],
+                            format: value === "callback_required" ? "yes_no" : value === "reply_count" ? "number" : ["first_reply_at", "classified_at"].includes(value) ? "date" : "text",
+                          })}
+                        >
+                          <SelectTrigger><SelectValue placeholder="Campaign result" /></SelectTrigger>
+                          <SelectContent>
+                            {RESULT_SOURCE_OPTIONS.map(source => <SelectItem key={source.value} value={source.value}>{source.label}</SelectItem>)}
+                            <SelectItem value="__capture__">Captured field…</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {mapping.source.startsWith("capture:") && (
+                          <Input
+                            value={mapping.source.slice("capture:".length)}
+                            onChange={event => updateResultMapping(index, {
+                              source: `capture:${event.target.value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")}` as AiWorkbookCampaignResultMapping["source"],
+                            })}
+                            placeholder="e.g. promised_date"
+                            className="h-8 text-xs"
+                          />
+                        )}
+                      </div>
+                      <Select value={mapping.format} onValueChange={value => updateResultMapping(index, { format: value as AiWorkbookCampaignResultMapping["format"] })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="text">Text</SelectItem>
+                          <SelectItem value="yes_no">Yes / No</SelectItem>
+                          <SelectItem value="date">Date</SelectItem>
+                          <SelectItem value="iso_date">Date & time</SelectItem>
+                          <SelectItem value="number">Number</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Select value={mapping.overwrite} onValueChange={value => updateResultMapping(index, { overwrite: value as AiWorkbookCampaignResultMapping["overwrite"] })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="if_empty">Keep edits</SelectItem>
+                          <SelectItem value="always">Replace values</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="text-slate-400 hover:bg-red-50 hover:text-red-600"
+                        aria-label="Remove result mapping"
+                        onClick={() => setResultMappings(current => current.filter((_, mappingIndex) => mappingIndex !== index))}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {mappingFeedback && (
+              <div className={`rounded-lg border px-3 py-2 text-xs ${
+                mappingFeedback.confidence === "high"
+                  ? "border-emerald-100 bg-emerald-50 text-emerald-800"
+                  : "border-amber-100 bg-amber-50 text-amber-900"
+              }`}>
+                <div className="font-medium capitalize">{mappingFeedback.confidence} confidence suggestion</div>
+                {mappingFeedback.warnings.length > 0 && (
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                    {mappingFeedback.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMappingOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => setMappingOpen(false)}
+              disabled={resultMappings.some(mapping => mapping.source === "capture:")}
+            >
+              Use this mapping
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>
           <DialogHeader>
@@ -761,13 +998,53 @@ function WorkbookEditor({ id }: { id: string }) {
               ? `Create a protected campaign audience from ${selectedRows.size.toLocaleString()} selected rows.`
               : `Create a protected campaign audience from ${filteredRows.length.toLocaleString()} currently filtered rows.`}
           </p>
+          <p className="text-xs text-violet-700 mt-1">
+            {resultMappings.length
+              ? `${resultMappings.length} campaign result ${resultMappings.length === 1 ? "column" : "columns"} ready to sync back.`
+              : "Optional: map campaign results back into this tab before creating the audience."}
+          </p>
           </div>
         </div>
-        <Button variant="outline" className="border-violet-200 text-violet-700 hover:bg-violet-50" onClick={() => createAudience.mutate()} disabled={createAudience.isPending || (selectedRows.size === 0 && filteredRows.length === 0)}>
-          {createAudience.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
-          Create campaign
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" className="border-slate-200 text-slate-700 hover:bg-slate-50" onClick={() => setMappingOpen(true)}>
+            <Wand2 className="h-4 w-4 mr-1" /> Map results
+          </Button>
+          <Button
+            variant="outline"
+            className="border-violet-200 text-violet-700 hover:bg-violet-50"
+            onClick={() => createAudience.mutate()}
+            disabled={createAudience.isPending || (selectedRows.size === 0 && filteredRows.length === 0) || resultMappings.some(mapping => mapping.source === "capture:")}
+          >
+            {createAudience.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+            Create campaign
+          </Button>
+        </div>
       </div>
+      {activeResultSync && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-100 bg-sky-50/50 p-4">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 rounded-lg bg-white p-2 shadow-sm"><Link2 className="h-4 w-4 text-sky-700" /></div>
+            <div>
+              <div className="font-medium text-slate-900">Campaign results connected{activeResultSync.campaign ? ` · ${activeResultSync.campaign.name}` : ""}</div>
+              <p className="mt-0.5 text-xs text-slate-600">
+                {activeResultSync.lastSyncedAt
+                  ? `${activeResultSync.syncedRowCount} rows were updated ${new Date(activeResultSync.lastSyncedAt).toLocaleString()}.`
+                  : `${activeResultSync.mappings.length} mapped columns are ready to receive campaign replies and delivery results.`}
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            className="border-sky-200 bg-white text-sky-800 hover:bg-sky-100"
+            onClick={() => syncCampaignResults.mutate(activeResultSync.id)}
+            disabled={syncCampaignResults.isPending || dirty}
+            title={dirty ? "Save current workbook edits before syncing campaign results" : undefined}
+          >
+            {syncCampaignResults.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+            Sync results
+          </Button>
+        </div>
+      )}
       </div>
     </div>
   );
