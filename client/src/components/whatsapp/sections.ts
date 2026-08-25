@@ -2,7 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Sparkles, Route, Zap, MessagesSquare, Contact, BarChart3, Link2,
   UsersRound, FileCode2, Megaphone, Settings, ShieldCheck, MessageCircle,
-  FileSpreadsheet,
+  FileSpreadsheet, Table2,
 } from "lucide-react";
 
 /**
@@ -264,6 +264,17 @@ const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
     tone: "bg-emerald-50 group-hover:bg-emerald-100",
     matches: l => l.startsWith("/admin/whatsapp-campaigns"),
     blocked: r => (r.marketing && !r.marketing.canSend ? "Needs steps 1 and 2 first" : undefined),
+  },
+  {
+    key: "ai-workbooks",
+    label: "AI Workbooks",
+    description: "Review campaign recipients and AI results in one sheet",
+    href: "/admin/whatsapp-ai-workbooks",
+    icon: Table2,
+    sidebarTestId: "link-wa-ai-workbooks",
+    gradient: "bg-gradient-to-br from-purple-500 to-violet-600",
+    tone: "bg-purple-50 group-hover:bg-purple-100",
+    matches: l => l.startsWith("/admin/whatsapp-ai-workbooks"),
   },
   {
     key: "automations",
