@@ -95,6 +95,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
   
   const hasTrainingAccess = hasChroneyAccess || hasWhatsappEnabled || hasInstagramEnabled || hasFacebookEnabled;
   const hasProductsAccess = hasChroneyAccess || hasWhatsappEnabled || hasJewelryAccess;
+  const hasMoreFeaturesAccess = hasChroneyAccess || hasWhatsappEnabled;
   
   const systemMode = user?.businessAccount?.systemMode || 'full';
   const showFullFeatures = isSuperAdminImpersonating || systemMode === 'full';
@@ -341,7 +342,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
               </>
             ) : (
             <>
-            {hasChroneyAccess && (
+            {hasMoreFeaturesAccess && (
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu className="space-y-0.5">
