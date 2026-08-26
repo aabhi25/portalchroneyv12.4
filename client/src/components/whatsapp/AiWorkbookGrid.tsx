@@ -8,8 +8,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, Search, Sparkles, Trash2, UserRound, X } from "lucide-react";
+import { Link2, Plus, Search, Sparkles, Trash2, UserRound, X } from "lucide-react";
 import type { AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
+
+interface CampaignWorkbookField {
+  value: string;
+  label: string;
+  formats: readonly string[];
+}
 
 interface Props {
   sheet: AiWorkbookSheet;
@@ -19,6 +25,9 @@ interface Props {
   onFilteredRowsChange?: (rows: AiWorkbookRow[]) => void;
   onRemoveColumn?: (columnKey: string) => void;
   readOnly?: boolean;
+  /** When set, this workbook is custom-linked to a campaign: team columns can be mapped to one of these fields. */
+  mappableFields?: CampaignWorkbookField[];
+  onMapColumn?: (column: AiWorkbookColumn) => void;
 }
 
 function safeKey(label: string, columns: AiWorkbookColumn[]) {
@@ -36,6 +45,8 @@ export function AiWorkbookGrid({
   onFilteredRowsChange,
   onRemoveColumn,
   readOnly = false,
+  mappableFields,
+  onMapColumn,
 }: Props) {
   const [search, setSearch] = useState("");
   const [outcome, setOutcome] = useState("all");
@@ -180,6 +191,24 @@ export function AiWorkbookGrid({
                       <Badge variant="outline" className="text-[9px] px-1 py-0">
                         {col.source === "ai" ? "AI" : "Team"}
                       </Badge>
+                    )}
+                    {col.campaignMapping && (
+                      <Badge variant="outline" className="text-[9px] px-1 py-0 border-emerald-200 text-emerald-700 bg-emerald-50">
+                        {mappableFields?.find(f => f.value === col.campaignMapping!.source)?.label || col.campaignMapping.source}
+                      </Badge>
+                    )}
+                    {!readOnly && col.source === "operator" && mappableFields && onMapColumn && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={`h-5 w-5 text-gray-400 hover:text-violet-600 ${col.campaignMapping ? "text-emerald-500" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
+                        title={col.campaignMapping ? `Change what feeds ${col.label}` : `Map ${col.label} to a campaign field`}
+                        aria-label={col.campaignMapping ? `Change mapping for ${col.label} column` : `Map ${col.label} column to a campaign field`}
+                        onClick={() => onMapColumn(col)}
+                      >
+                        <Link2 className="h-3.5 w-3.5" />
+                      </Button>
                     )}
                     {!readOnly && col.editable && onRemoveColumn && (
                       <Button

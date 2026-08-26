@@ -90,6 +90,72 @@ const RESULT_SOURCE_OPTIONS = [
   { value: "classified_at", label: "Classified date" },
 ] as const;
 
+/** Mirrors the server's detection: a linked sheet with no extra system/AI column besides name/phone was linked in custom mode. */
+function isCustomLinkedSheet(sheet: AiWorkbookSheet | undefined) {
+  if (!sheet) return false;
+  return !sheet.columns.some(c => c.source !== "operator" && !["name", "phone"].includes(c.key));
+}
+
+interface CampaignWorkbookField {
+  value: string;
+  label: string;
+  formats: readonly string[];
+}
+
+function MapColumnForm({
+  column, fields, onSave, isPending, onCancel,
+}: {
+  column: AiWorkbookColumn;
+  fields: CampaignWorkbookField[];
+  onSave: (mapping: { source: string; format: string } | null) => void;
+  isPending: boolean;
+  onCancel: () => void;
+}) {
+  const [source, setSource] = useState(column.campaignMapping?.source || "");
+  const field = fields.find(f => f.value === source);
+  const [format, setFormat] = useState(column.campaignMapping?.format || field?.formats[0] || "text");
+  useEffect(() => {
+    const next = fields.find(f => f.value === source);
+    if (next && !next.formats.includes(format)) setFormat(next.formats[0]);
+  }, [source]);
+
+  return (
+    <div className="space-y-4 py-1">
+      <div className="space-y-1.5">
+        <Label>Campaign field</Label>
+        <Select value={source || "__none__"} onValueChange={value => setSource(value === "__none__" ? "" : value)}>
+          <SelectTrigger data-testid="select-map-column-source"><SelectValue placeholder="Leave unmapped" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">Not mapped (plain manual field)</SelectItem>
+            {fields.map(f => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+      {source && field && field.formats.length > 1 && (
+        <div className="space-y-1.5">
+          <Label>Format</Label>
+          <Select value={format} onValueChange={setFormat}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {field.formats.includes("text") && <SelectItem value="text">Text</SelectItem>}
+              {field.formats.includes("yes_no") && <SelectItem value="yes_no">Yes / No</SelectItem>}
+              {field.formats.includes("date") && <SelectItem value="date">Date</SelectItem>}
+              {field.formats.includes("iso_date") && <SelectItem value="iso_date">Date & time</SelectItem>}
+              {field.formats.includes("number") && <SelectItem value="number">Number</SelectItem>}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel}>Cancel</Button>
+        <Button onClick={() => onSave(source ? { source, format } : null)} disabled={isPending} data-testid="button-save-column-mapping">
+          {isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Link2 className="h-4 w-4 mr-1" />} {source ? "Save mapping" : "Clear mapping"}
+        </Button>
+      </DialogFooter>
+    </div>
+  );
+}
+
 function uniqueColumnKey(label: string, columns: AiWorkbookColumn[]) {
   const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "column";
   let key = base;
@@ -271,6 +337,8 @@ function WorkbookEditor({ id }: { id: string }) {
   const [mappingFeedback, setMappingFeedback] = useState<{ confidence: "low" | "medium" | "high"; warnings: string[] } | null>(null);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkCampaignId, setLinkCampaignId] = useState("");
+  const [linkMode, setLinkMode] = useState<"full" | "custom">("full");
+  const [mapColumnTarget, setMapColumnTarget] = useState<AiWorkbookColumn | null>(null);
 
   const { data: workbook, isLoading } = useQuery<WorkbookDetail>({
     queryKey: [`/api/whatsapp/ai-workbooks/${id}`],
@@ -299,6 +367,12 @@ function WorkbookEditor({ id }: { id: string }) {
   const linkedCampaign = workbook?.sourceCampaignId
     ? campaigns.find(campaign => campaign.id === workbook.sourceCampaignId) || null
     : null;
+  const isCustomLinked = Boolean(workbook?.sourceCampaignId) && isCustomLinkedSheet(sheets[0]);
+  const { data: campaignFields } = useQuery<{ fields: CampaignWorkbookField[]; captureFields: CampaignWorkbookField[] }>({
+    queryKey: [`/api/whatsapp/campaigns/${workbook?.sourceCampaignId}/workbook-fields`],
+    enabled: Boolean(workbook?.sourceCampaignId) && isCustomLinked,
+  });
+  const mappableFields = [...(campaignFields?.fields || []), ...(campaignFields?.captureFields || [])];
   const campaignIsLive = Boolean(linkedCampaign && ["running", "sending", "scheduled", "in_progress", "active"].includes(linkedCampaign.status));
   const lastCampaignSync = workbook?.versions
     ?.filter(version => version.source === "campaign" || version.source === "campaign_sync")
@@ -427,22 +501,51 @@ function WorkbookEditor({ id }: { id: string }) {
   });
 
   const linkCampaign = useMutation({
-    mutationFn: (campaignId: string | null) => apiRequest("POST", `/api/whatsapp/ai-workbooks/${id}/link`, {
-      campaignId,
+    mutationFn: (input: { campaignId: string | null; mode: "full" | "custom" }) => apiRequest("POST", `/api/whatsapp/ai-workbooks/${id}/link`, {
+      campaignId: input.campaignId,
+      mode: input.mode,
       expectedCurrentVersionId: workbook?.currentVersion?.id,
       expectedRevision: workbook?.currentVersion?.revision,
     }),
-    onSuccess: (_result, campaignId) => {
+    onSuccess: (_result, input) => {
       setLinkOpen(false);
       setLinkCampaignId("");
-      if (campaignId) setDirty(false);
+      setLinkMode("full");
+      if (input.campaignId) setDirty(false);
       queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/ai-workbooks/${id}`] });
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/ai-workbooks"] });
-      toast(campaignId
-        ? { title: "Workbook linked to campaign", description: "Campaign data was pulled in. Rows were matched by phone number and your columns were kept." }
+      toast(input.campaignId
+        ? { title: "Workbook linked to campaign", description: input.mode === "custom"
+            ? "Rows were pulled in with Name and Phone only. Add your own columns and map them to campaign fields when you're ready."
+            : "Campaign data was pulled in. Rows were matched by phone number and your columns were kept." }
         : { title: "Campaign unlinked", description: "The workbook is independent again. Its data was not changed." });
     },
     onError: (error: Error) => toast({ title: "Couldn't update campaign link", description: error.message, variant: "destructive" }),
+  });
+
+  const openMapColumn = (column: AiWorkbookColumn) => {
+    if (dirty) {
+      toast({ title: "Save your changes first", description: "Mapping a column creates a new workbook version.", variant: "destructive" });
+      return;
+    }
+    setMapColumnTarget(column);
+  };
+
+  const mapColumn = useMutation({
+    mutationFn: (input: { columnKey: string; mapping: { source: string; format: string } | null }) =>
+      apiRequest("POST", `/api/whatsapp/ai-workbooks/${id}/columns/map`, {
+        ...input,
+        expectedCurrentVersionId: workbook?.currentVersion?.id,
+        expectedRevision: workbook?.currentVersion?.revision,
+      }),
+    onSuccess: () => {
+      setMapColumnTarget(null);
+      setDirty(false);
+      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/ai-workbooks/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/ai-workbooks"] });
+      toast({ title: "Column mapping updated" });
+    },
+    onError: (error: Error) => toast({ title: "Couldn't update column mapping", description: error.message, variant: "destructive" }),
   });
 
   const refresh = useMutation({
@@ -662,7 +765,7 @@ function WorkbookEditor({ id }: { id: string }) {
                   <DropdownMenuItem onSelect={() => refresh.mutate()} disabled={refresh.isPending || dirty}>
                     <RefreshCw className={`h-4 w-4 mr-2 ${refresh.isPending ? "animate-spin" : ""}`} /> Refresh outcomes
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => linkCampaign.mutate(null)} disabled={linkCampaign.isPending || dirty}>
+                  <DropdownMenuItem onSelect={() => linkCampaign.mutate({ campaignId: null, mode: "full" })} disabled={linkCampaign.isPending || dirty}>
                     <X className="h-4 w-4 mr-2" /> Unlink campaign
                   </DropdownMenuItem>
                 </>
@@ -702,11 +805,33 @@ function WorkbookEditor({ id }: { id: string }) {
             onSelectedRowsChange={setSelectedRows}
             onFilteredRowsChange={setFilteredRows}
             onRemoveColumn={columnKey => removeColumn(activeSheet.id, columnKey)}
+            mappableFields={isCustomLinked ? mappableFields : undefined}
+            onMapColumn={isCustomLinked ? openMapColumn : undefined}
           />
         </CardContent>
       </Card>
 
-      <Dialog open={linkOpen} onOpenChange={open => { setLinkOpen(open); if (!open) setLinkCampaignId(""); }}>
+      <Dialog open={Boolean(mapColumnTarget)} onOpenChange={open => !open && setMapColumnTarget(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Map "{mapColumnTarget?.label}"</DialogTitle>
+            <DialogDescription>
+              Choose a campaign field to feed this column. It fills in now and again on every refresh. Leave it unmapped to keep this as a plain manual field.
+            </DialogDescription>
+          </DialogHeader>
+          {mapColumnTarget && (
+            <MapColumnForm
+              column={mapColumnTarget}
+              fields={mappableFields}
+              onSave={mapping => mapColumn.mutate({ columnKey: mapColumnTarget.key, mapping })}
+              isPending={mapColumn.isPending}
+              onCancel={() => setMapColumnTarget(null)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={linkOpen} onOpenChange={open => { setLinkOpen(open); if (!open) { setLinkCampaignId(""); setLinkMode("full"); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Link this workbook to a campaign</DialogTitle>
@@ -714,36 +839,61 @@ function WorkbookEditor({ id }: { id: string }) {
               Campaign replies and outcomes are pulled into this workbook. Existing rows are matched by phone number, and your own columns and notes are kept. You can refresh anytime — even while the campaign is still running.
             </DialogDescription>
           </DialogHeader>
-          <div className="py-1">
-            <Label>Campaign</Label>
-            <Select value={linkCampaignId} onValueChange={setLinkCampaignId}>
-              <SelectTrigger className="mt-1" data-testid="select-link-campaign">
-                <SelectValue placeholder="Choose a campaign…" />
-              </SelectTrigger>
-              <SelectContent>
-                {campaigns.map(campaign => (
-                  <SelectItem key={campaign.id} value={campaign.id}>
-                    <div className="flex items-center gap-2">
-                      <span className="truncate">{campaign.name}</span>
-                      <span className="text-xs text-slate-400">
-                        {campaign.totalRecipients} recipients · {campaign.status}
-                      </span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {campaigns.length === 0 && (
-              <p className="text-xs text-slate-500 mt-2">No campaigns yet — create one from All campaigns first.</p>
-            )}
+          <div className="py-1 space-y-4">
+            <div>
+              <Label>Campaign</Label>
+              <Select value={linkCampaignId} onValueChange={setLinkCampaignId}>
+                <SelectTrigger className="mt-1" data-testid="select-link-campaign">
+                  <SelectValue placeholder="Choose a campaign…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {campaigns.map(campaign => (
+                    <SelectItem key={campaign.id} value={campaign.id}>
+                      <div className="flex items-center gap-2">
+                        <span className="truncate">{campaign.name}</span>
+                        <span className="text-xs text-slate-400">
+                          {campaign.totalRecipients} recipients · {campaign.status}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {campaigns.length === 0 && (
+                <p className="text-xs text-slate-500 mt-2">No campaigns yet — create one from All campaigns first.</p>
+              )}
+            </div>
+            <div>
+              <Label>Columns</Label>
+              <div className="mt-1.5 space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setLinkMode("full")}
+                  data-testid="button-link-mode-full"
+                  className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${linkMode === "full" ? "border-violet-400 bg-violet-50/60" : "border-slate-200 hover:bg-slate-50"}`}
+                >
+                  <div className="text-sm font-medium text-slate-700">All columns as configured</div>
+                  <div className="text-xs text-slate-500">Pull in every system and AI column the campaign defines.</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLinkMode("custom")}
+                  data-testid="button-link-mode-custom"
+                  className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${linkMode === "custom" ? "border-violet-400 bg-violet-50/60" : "border-slate-200 hover:bg-slate-50"}`}
+                >
+                  <div className="text-sm font-medium text-slate-700">Custom columns</div>
+                  <div className="text-xs text-slate-500">Only Name and Phone are pulled in. Add your own columns and choose what campaign data feeds them.</div>
+                </button>
+              </div>
+            </div>
             {dirty && (
-              <p className="text-xs text-amber-600 mt-2">You have unsaved changes. Save them first — linking creates a new workbook version.</p>
+              <p className="text-xs text-amber-600">You have unsaved changes. Save them first — linking creates a new workbook version.</p>
             )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setLinkOpen(false)}>Cancel</Button>
             <Button
-              onClick={() => linkCampaign.mutate(linkCampaignId)}
+              onClick={() => linkCampaign.mutate({ campaignId: linkCampaignId, mode: linkMode })}
               disabled={!linkCampaignId || linkCampaign.isPending || dirty}
               data-testid="button-confirm-link-campaign"
             >

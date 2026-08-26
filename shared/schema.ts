@@ -2996,6 +2996,10 @@ export interface AiWorkbookColumn {
   type: "text" | "number" | "date" | "boolean";
   source: "system" | "ai" | "operator";
   editable: boolean;
+  // Only set on a custom-linked workbook's own column: tells linking/refresh
+  // which campaign-defined field should feed this column's values. Absent
+  // means the column is plain manual data, untouched by campaign sync.
+  campaignMapping?: { source: AiWorkbookCampaignResultMapping["source"]; format: AiWorkbookCampaignResultMapping["format"] } | null;
 }
 
 export interface AiWorkbookRow {

@@ -172,6 +172,9 @@ function validateSheets(input: unknown): AiWorkbookSheet[] {
         type: ["text", "number", "date", "boolean"].includes(c.type) ? c.type : "text",
         source: ["system", "ai", "operator"].includes(c.source) ? c.source : "operator",
         editable: c.editable !== false,
+        // Invalid/unknown mappings are silently dropped rather than rejected,
+        // so a stale or hand-edited mapping never blocks saving the sheet.
+        campaignMapping: normalizeColumnMapping(c.campaignMapping),
       };
     });
 
@@ -201,7 +204,13 @@ function validateSheets(input: unknown): AiWorkbookSheet[] {
   });
 }
 
-async function buildCampaignSheets(businessAccountId: string, campaignId: string): Promise<AiWorkbookSheet[]> {
+type CampaignRecipientRow = typeof marketingCampaignRecipients.$inferSelect;
+
+/**
+ * Shared campaign+recipient load used by both the full auto-generated sheet
+ * builder and the slim identity-only sheet used for custom-column linking.
+ */
+async function loadCampaignRecipientData(businessAccountId: string, campaignId: string) {
   const [campaign] = await db
     .select()
     .from(marketingCampaigns)
@@ -223,18 +232,14 @@ async function buildCampaignSheets(businessAccountId: string, campaignId: string
   }
 
   const classifications = (campaign.replyClassifications || []) as ReplyClassification[];
-  const labels = new Map(classifications.map(c => [c.key, c.label || c.key]));
-  const attributeKeys = new Set<string>();
-  for (const recipient of recipients) {
-    for (const key of Object.keys(recipient.attributes || {})) attributeKeys.add(key);
-  }
-  const captureKeys: { key: string; label: string; type: AiWorkbookColumn["type"] }[] = [];
+  const outcomeLabels = new Map(classifications.map(c => [c.key, c.label || c.key]));
+  const captureFields: { key: string; label: string; type: AiWorkbookColumn["type"] }[] = [];
   const seenCapture = new Set<string>();
   for (const classification of classifications) {
     for (const field of classification.captureFields || []) {
       if (seenCapture.has(field.fieldKey)) continue;
       seenCapture.add(field.fieldKey);
-      captureKeys.push({
+      captureFields.push({
         key: field.fieldKey,
         label: field.fieldLabel || field.fieldKey,
         type: field.fieldType === "date" || field.fieldType === "boolean"
@@ -242,6 +247,81 @@ async function buildCampaignSheets(businessAccountId: string, campaignId: string
           : "text",
       });
     }
+  }
+  return { campaign, recipients, classifications, outcomeLabels, captureFields };
+}
+
+/** Compute a single campaign-defined field's value for one recipient, shared by result-sync and column mapping. */
+function campaignFieldValue(recipient: CampaignRecipientRow, source: AiWorkbookCampaignResultMapping["source"], outcomeLabels: Map<string, string>) {
+  if (source === "outcome_label") {
+    return recipient.primaryClassification ? outcomeLabels.get(recipient.primaryClassification) || recipient.primaryClassification : null;
+  }
+  if (source === "outcome_key") return recipient.primaryClassification || null;
+  if (source === "delivery_status") return recipient.status;
+  if (source === "callback_required") return recipient.callbackRequired;
+  if (source === "callback_reason") return recipient.callbackReason || null;
+  if (source === "customer_feedback") return recipient.customerFeedback || null;
+  if (source === "reply_count") return recipient.replyCount;
+  if (source === "first_reply_at") return recipient.firstReplyAt;
+  if (source === "classified_at") return recipient.classifiedAt;
+  if (source.startsWith("capture:")) return (recipient.dispositionData || {})[source.slice("capture:".length)] || null;
+  return null;
+}
+
+function normalizeColumnMapping(raw: unknown): { source: AiWorkbookCampaignResultMapping["source"]; format: AiWorkbookCampaignResultMapping["format"] } | null {
+  if (raw === null || raw === undefined) return null;
+  const source = String((raw as any)?.source || "").trim();
+  const format = String((raw as any)?.format || "text") as AiWorkbookCampaignResultMapping["format"];
+  if (!source || (!RESULT_FIELD_NAMES.has(source as any) && !isCaptureField(source))) return null;
+  if (!RESULT_FORMATS.has(format)) return null;
+  return { source: source as AiWorkbookCampaignResultMapping["source"], format };
+}
+
+/**
+ * Re-apply each column's stored campaign-field mapping to rows that are
+ * still linked to a campaign recipient (by sourceRecipientId). Rows added
+ * by hand have no recipient behind them and are left untouched.
+ */
+function applyColumnMappings(sheet: AiWorkbookSheet, recipientsById: Map<string, CampaignRecipientRow>, outcomeLabels: Map<string, string>): AiWorkbookSheet {
+  const mappedColumns = sheet.columns.filter(c => c.campaignMapping);
+  if (mappedColumns.length === 0) return sheet;
+  return {
+    ...sheet,
+    rows: sheet.rows.map(row => {
+      const recipient = row.sourceRecipientId ? recipientsById.get(row.sourceRecipientId) : undefined;
+      if (!recipient) return row;
+      const values = { ...row.values };
+      for (const col of mappedColumns) {
+        values[col.key] = formatResultValue(campaignFieldValue(recipient, col.campaignMapping!.source, outcomeLabels), col.campaignMapping!.format);
+      }
+      return { ...row, values };
+    }),
+  };
+}
+
+/** Slim base sheet for a custom-linked workbook: only recipient identity, no auto-generated AI/system columns. */
+async function buildIdentitySheet(businessAccountId: string, campaignId: string): Promise<{ sheet: AiWorkbookSheet; recipientsById: Map<string, CampaignRecipientRow>; outcomeLabels: Map<string, string> }> {
+  const { recipients, outcomeLabels } = await loadCampaignRecipientData(businessAccountId, campaignId);
+  const recipientsById = new Map(recipients.map(r => [r.id, r]));
+  const sheet: AiWorkbookSheet = {
+    id: "campaign-data",
+    name: "Campaign data",
+    kind: "custom",
+    columns: [column("name", "Name", "system", false), column("phone", "Phone", "system", false)],
+    rows: recipients.map(recipient => ({
+      id: recipient.id,
+      sourceRecipientId: recipient.id,
+      values: { name: recipient.name || "", phone: recipient.phone },
+    })),
+  };
+  return { sheet, recipientsById, outcomeLabels };
+}
+
+async function buildCampaignSheets(businessAccountId: string, campaignId: string): Promise<AiWorkbookSheet[]> {
+  const { recipients, outcomeLabels: labels, captureFields: captureKeys } = await loadCampaignRecipientData(businessAccountId, campaignId);
+  const attributeKeys = new Set<string>();
+  for (const recipient of recipients) {
+    for (const key of Object.keys(recipient.attributes || {})) attributeKeys.add(key);
   }
 
   const usedKeys = new Set([
@@ -368,6 +448,18 @@ function mergeOperatorEdits(fresh: AiWorkbookSheet[], previous: AiWorkbookSheet[
     columns: allColumns,
     rows: [...rows, ...manualLeftovers],
   }];
+}
+
+/**
+ * Tell whether a linked workbook's sheet was built with every campaign
+ * column ("full") or with only the Name/Phone identity columns ("custom").
+ * No extra flag is stored — the sheet's own column shape is the source of
+ * truth, so it can't drift out of sync with what's actually on the sheet.
+ */
+function detectLinkMode(sheet: AiWorkbookSheet | undefined): "full" | "custom" {
+  if (!sheet) return "full";
+  const hasExtraSystemOrAiColumn = sheet.columns.some(c => c.source !== "operator" && !["name", "phone"].includes(c.key));
+  return hasExtraSystemOrAiColumn ? "full" : "custom";
 }
 
 async function latestVersion(workbookId: string, businessAccountId: string) {
@@ -729,12 +821,17 @@ export const whatsappAiWorkbookService = {
    * merges the workbook's existing data in: rows are matched by normalized
    * phone number, operator columns and their values are preserved, and rows
    * that don't match any campaign recipient are kept at the bottom.
+   *
+   * mode "full" (default) pulls in every system/AI column the campaign
+   * defines. mode "custom" pulls in only Name/Phone so rows exist; every
+   * other column is one the user creates and can map to a campaign field.
    */
   async linkToCampaign(
     businessAccountId: string,
     workbookId: string,
     campaignId: string | null,
     expected?: { expectedCurrentVersionId: string; expectedRevision: number },
+    mode: "full" | "custom" = "full",
   ) {
     const [workbook] = await db.select().from(whatsappAiWorkbooks)
       .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)))
@@ -752,7 +849,8 @@ export const whatsappAiWorkbookService = {
     if (!expected?.expectedCurrentVersionId || !Number.isInteger(expected.expectedRevision)) {
       throw new Error("Current workbook version and revision are required");
     }
-    const fresh = await buildCampaignSheets(businessAccountId, campaignId);
+    const identity = mode === "custom" ? await buildIdentitySheet(businessAccountId, campaignId) : null;
+    const fresh = identity ? identity.sheet : (await buildCampaignSheets(businessAccountId, campaignId))[0];
 
     return db.transaction(async tx => {
       const [current] = await tx.select().from(whatsappAiWorkbookVersions)
@@ -771,7 +869,7 @@ export const whatsappAiWorkbookService = {
 
       // Keep every operator column. When a key collides with a campaign
       // column, retain it under a new unique key so no values are lost.
-      const freshSheet = fresh[0];
+      const freshSheet = fresh;
       const usedKeys = new Set(freshSheet.columns.map(c => c.key));
       const keptColumns: AiWorkbookColumn[] = [];
       const keyRemap = new Map<string, string>();
@@ -815,12 +913,15 @@ export const whatsappAiWorkbookService = {
           for (const [oldKey, newKey] of carriedKeys) values[newKey] = row.values[oldKey] ?? null;
           return { ...row, sourceRecipientId: undefined, values };
         });
-      const sheets: AiWorkbookSheet[] = [{
+      let sheets: AiWorkbookSheet[] = [{
         ...freshSheet,
         id: previous[0].id,
         columns: [...freshSheet.columns, ...keptColumns],
         rows: [...rows, ...unmatched],
       }];
+      // Re-linking a workbook whose columns already carry mappings (e.g. it
+      // was previously custom-linked) should immediately repopulate them.
+      if (identity) sheets = [applyColumnMappings(sheets[0], identity.recipientsById, identity.outcomeLabels)];
 
       const [updated] = await tx.update(whatsappAiWorkbooks)
         .set({ sourceCampaignId: campaignId, updatedAt: new Date() })
@@ -845,14 +946,110 @@ export const whatsappAiWorkbookService = {
     if (!workbook) throw new Error("Workbook not found");
     if (!workbook.sourceCampaignId) throw new Error("This workbook is not linked to a campaign");
     const current = await latestVersion(workbookId, businessAccountId);
-    const fresh = await buildCampaignSheets(businessAccountId, workbook.sourceCampaignId);
-    const sheets = current ? mergeOperatorEdits(fresh, current.sheets as AiWorkbookSheet[]) : fresh;
     if (!current) throw new Error("Workbook has no version");
+    const linkedAsCustom = detectLinkMode(validateSheets(current.sheets)[0]) === "custom";
+    let sheets: AiWorkbookSheet[];
+    if (linkedAsCustom) {
+      const identity = await buildIdentitySheet(businessAccountId, workbook.sourceCampaignId);
+      const merged = mergeOperatorEdits([identity.sheet], current.sheets as AiWorkbookSheet[]);
+      sheets = [applyColumnMappings(merged[0], identity.recipientsById, identity.outcomeLabels)];
+    } else {
+      const fresh = await buildCampaignSheets(businessAccountId, workbook.sourceCampaignId);
+      sheets = mergeOperatorEdits(fresh, current.sheets as AiWorkbookSheet[]);
+    }
     return this.createVersion(businessAccountId, workbookId, {
       sheets,
       source: "campaign",
       expectedCurrentVersionId: current.id,
       expectedRevision: current.revision,
+    });
+  },
+
+  /** Fields a custom-linked workbook column can be mapped to: the fixed result fields plus this campaign's own capture fields. */
+  async listCampaignFields(businessAccountId: string, campaignId: string) {
+    const { captureFields } = await loadCampaignRecipientData(businessAccountId, campaignId);
+    return {
+      fields: WORKBOOK_RESULT_FIELDS,
+      captureFields: captureFields.map(f => ({ value: `capture:${f.key}`, label: f.label, formats: f.type === "boolean" ? ["yes_no", "text"] : f.type === "date" ? ["date", "iso_date", "text"] : ["text"] })),
+    };
+  },
+
+  /**
+   * Set (or clear) which campaign-defined field feeds one column of a
+   * custom-linked workbook. Setting a mapping immediately populates every
+   * row still tied to a campaign recipient; clearing it just stops future
+   * auto-updates without erasing the column's current values.
+   */
+  async mapColumn(
+    businessAccountId: string,
+    workbookId: string,
+    input: { columnKey: string; mapping: { source: string; format: string } | null; expectedCurrentVersionId: string; expectedRevision: number },
+  ) {
+    if (!input.expectedCurrentVersionId || !Number.isInteger(input.expectedRevision)) {
+      throw new Error("Current workbook version and revision are required");
+    }
+    // Validate the requested mapping against the *specific* field's allowed
+    // formats (not just any globally-known format) before touching the DB.
+    let mapping: { source: AiWorkbookCampaignResultMapping["source"]; format: AiWorkbookCampaignResultMapping["format"] } | null = null;
+    if (input.mapping) {
+      // sourceCampaignId is re-verified against the locked workbook row below;
+      // this pre-check only needs *a* campaign to resolve field metadata.
+      const [precheckWorkbook] = await db.select().from(whatsappAiWorkbooks)
+        .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)))
+        .limit(1);
+      if (!precheckWorkbook?.sourceCampaignId) throw new Error("This workbook is not linked to a campaign");
+      const { fields, captureFields } = await this.listCampaignFields(businessAccountId, precheckWorkbook.sourceCampaignId);
+      const field = [...fields, ...captureFields].find(f => f.value === input.mapping!.source);
+      if (!field || !(field.formats as readonly string[]).includes(input.mapping.format)) {
+        throw new Error("Unsupported campaign field or format");
+      }
+      mapping = { source: field.value as AiWorkbookCampaignResultMapping["source"], format: input.mapping.format as AiWorkbookCampaignResultMapping["format"] };
+    }
+
+    return db.transaction(async tx => {
+      const [workbook] = await tx.select().from(whatsappAiWorkbooks)
+        .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)))
+        .limit(1)
+        .for("update");
+      if (!workbook) throw new Error("Workbook not found");
+      if (!workbook.sourceCampaignId) throw new Error("This workbook is not linked to a campaign");
+      const [current] = await tx.select().from(whatsappAiWorkbookVersions)
+        .where(and(
+          eq(whatsappAiWorkbookVersions.workbookId, workbookId),
+          eq(whatsappAiWorkbookVersions.businessAccountId, businessAccountId),
+        ))
+        .orderBy(desc(whatsappAiWorkbookVersions.versionNumber))
+        .limit(1)
+        .for("update");
+      if (!current) throw new Error("Workbook has no version");
+      if (current.id !== input.expectedCurrentVersionId || current.revision !== input.expectedRevision) {
+        throw new Error("This workbook changed in another session. Reload it before changing this mapping.");
+      }
+      const sheet = validateSheets(current.sheets)[0];
+      const targetColumn = sheet.columns.find(c => c.key === input.columnKey);
+      if (!targetColumn) throw new Error("Column not found");
+      if (targetColumn.source !== "operator") throw new Error("Only your own columns can be mapped to a campaign field");
+
+      let nextSheet: AiWorkbookSheet = {
+        ...sheet,
+        columns: sheet.columns.map(c => c.key === input.columnKey ? { ...c, campaignMapping: mapping } : c),
+      };
+      if (mapping) {
+        const { recipientsById, outcomeLabels } = await buildIdentitySheet(businessAccountId, workbook.sourceCampaignId);
+        nextSheet = applyColumnMappings(nextSheet, recipientsById, outcomeLabels);
+      }
+
+      const [version] = await tx.insert(whatsappAiWorkbookVersions).values({
+        workbookId,
+        businessAccountId,
+        sourceCampaignId: workbook.sourceCampaignId,
+        versionNumber: current.versionNumber + 1,
+        source: "campaign_sync",
+        sheets: [nextSheet],
+      }).returning();
+      await tx.update(whatsappAiWorkbooks).set({ updatedAt: new Date() })
+        .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)));
+      return version;
     });
   },
 
@@ -1080,21 +1277,8 @@ export const whatsappAiWorkbookService = {
     let updatedRows = 0;
     let changedCells = 0;
 
-    const valueFor = (recipient: typeof recipients[number], source: AiWorkbookCampaignResultMapping["source"]) => {
-      if (source === "outcome_label") {
-        return recipient.primaryClassification ? outcomeLabels.get(recipient.primaryClassification) || recipient.primaryClassification : null;
-      }
-      if (source === "outcome_key") return recipient.primaryClassification || null;
-      if (source === "delivery_status") return recipient.status;
-      if (source === "callback_required") return recipient.callbackRequired;
-      if (source === "callback_reason") return recipient.callbackReason || null;
-      if (source === "customer_feedback") return recipient.customerFeedback || null;
-      if (source === "reply_count") return recipient.replyCount;
-      if (source === "first_reply_at") return recipient.firstReplyAt;
-      if (source === "classified_at") return recipient.classifiedAt;
-      if (source.startsWith("capture:")) return (recipient.dispositionData || {})[source.slice("capture:".length)] || null;
-      return null;
-    };
+    const valueFor = (recipient: typeof recipients[number], source: AiWorkbookCampaignResultMapping["source"]) =>
+      campaignFieldValue(recipient, source, outcomeLabels);
 
     for (const recipient of recipients) {
       const rowId = rowIdsByPhone[normalizePhone(String(recipient.phone || ""))];
