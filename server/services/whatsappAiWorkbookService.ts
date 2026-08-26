@@ -868,13 +868,27 @@ export const whatsappAiWorkbookService = {
       const previous = validateSheets(current.sheets);
 
       // Keep every operator column. When a key collides with a campaign
-      // column, retain it under a new unique key so no values are lost.
+      // column, retain it under a new unique key so no values are lost —
+      // unless the colliding column is still just empty scaffolding (e.g.
+      // the default Name/Phone columns every new workbook starts with):
+      // renaming and keeping those would only add pointless blank duplicates.
       const freshSheet = fresh;
       const usedKeys = new Set(freshSheet.columns.map(c => c.key));
       const keptColumns: AiWorkbookColumn[] = [];
       const keyRemap = new Map<string, string>();
       for (const oldColumn of previous[0].columns.filter(c => c.source === "operator")) {
         const newKey = keyFor(oldColumn.key, usedKeys);
+        const collided = newKey !== oldColumn.key;
+        if (collided && !oldColumn.campaignMapping) {
+          const hasData = previous[0].rows.some(row => {
+            const v = row.values[oldColumn.key];
+            return v !== undefined && v !== null && v !== "";
+          });
+          if (!hasData) {
+            usedKeys.delete(newKey); // free the reserved key; nothing is being kept under it
+            continue;
+          }
+        }
         keyRemap.set(oldColumn.key, newKey);
         keptColumns.push(newKey === oldColumn.key
           ? oldColumn
