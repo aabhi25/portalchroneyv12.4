@@ -475,17 +475,30 @@ function WorkbookEditor({ id }: { id: string }) {
   });
 
   const createVersion = useMutation({
-    mutationFn: (payload?: { sheets?: AiWorkbookSheet[]; source?: string; sourceFileName?: string }) =>
-      apiRequest("POST", `/api/whatsapp/ai-workbooks/${id}/versions`, {
-        ...(payload || { sheets, source: "manual" }),
+    mutationFn: (payload?: {
+      sheets?: AiWorkbookSheet[];
+      source?: string;
+      sourceFileName?: string;
+      importNotice?: { importedSheet: string; skippedSheets: string[] };
+    }) => {
+      const { importNotice: _importNotice, ...versionPayload } = payload || { sheets, source: "manual" };
+      return apiRequest("POST", `/api/whatsapp/ai-workbooks/${id}/versions`, {
+        ...versionPayload,
         expectedCurrentVersionId: workbook!.currentVersion!.id,
         expectedRevision: workbook!.currentVersion!.revision,
-      }),
-    onSuccess: () => {
+      });
+    },
+    onSuccess: (_version, payload) => {
       setDirty(false);
       queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/ai-workbooks/${id}`] });
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/ai-workbooks"] });
-      toast({ title: "New workbook version created" });
+      const importNotice = payload?.importNotice;
+      toast(importNotice
+        ? {
+            title: "Excel imported from the first sheet",
+            description: `Imported "${importNotice.importedSheet}". Skipped ${importNotice.skippedSheets.length} additional sheet${importNotice.skippedSheets.length === 1 ? "" : "s"}: ${importNotice.skippedSheets.join(", ")}.`,
+          }
+        : { title: "New workbook version created" });
     },
     onError: (error: Error) => toast({ title: "Couldn't create version", description: error.message, variant: "destructive" }),
   });
@@ -666,8 +679,9 @@ function WorkbookEditor({ id }: { id: string }) {
       if (file.size > 15 * 1024 * 1024) throw new Error("Excel files are limited to 15 MB");
       const XLSX = await import("xlsx");
       const parsed = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
-      if (parsed.SheetNames.length !== 1) throw new Error("Please import an Excel file with exactly one sheet");
+      if (parsed.SheetNames.length === 0) throw new Error("That Excel file has no sheets");
       const name = parsed.SheetNames[0];
+      const skippedSheets = parsed.SheetNames.slice(1);
       const matrix = XLSX.utils.sheet_to_json<any[]>(parsed.Sheets[name], { header: 1, defval: "" });
       const headers = (matrix[0] || []).map(value => String(value).trim());
       const existing = sheets[0];
@@ -705,7 +719,12 @@ function WorkbookEditor({ id }: { id: string }) {
         columns,
         rows,
       };
-      createVersion.mutate({ sheets: [imported], source: "import", sourceFileName: file.name });
+      createVersion.mutate({
+        sheets: [imported],
+        source: "import",
+        sourceFileName: file.name,
+        importNotice: skippedSheets.length ? { importedSheet: name, skippedSheets } : undefined,
+      });
     } catch (error: any) {
       toast({ title: "Excel import failed", description: error.message, variant: "destructive" });
     } finally {
