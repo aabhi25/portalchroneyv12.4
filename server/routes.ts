@@ -36332,12 +36332,14 @@ Return ONLY a valid JSON object in this format:
       };
       const { marketingCampaignService, CampaignPrerequisiteError } = await import("./services/marketingCampaignService");
       const camp = await marketingCampaignService.create(req.user!.businessAccountId!, payload);
-      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
-      await whatsappAiWorkbookService.attachCampaignToAudienceGroups(
-        req.user!.businessAccountId!,
-        camp.id,
-        Array.isArray(payload.groupIds) ? payload.groupIds : [],
-      );
+      if (camp.campaignType !== "automation") {
+        const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+        await whatsappAiWorkbookService.attachCampaignToAudienceGroups(
+          req.user!.businessAccountId!,
+          camp.id,
+          Array.isArray(payload.groupIds) ? payload.groupIds : [],
+        );
+      }
       res.status(201).json(camp);
     } catch (err: any) {
       // Pass the machine-readable code through so the client can link to the screen that
@@ -36380,6 +36382,14 @@ Return ONLY a valid JSON object in this format:
       const c = await marketingCampaignService.update(req.user!.businessAccountId!, req.params.id, payload, { onlyIfStatusIn: EDITABLE });
       if (!c) {
         return res.status(409).json({ error: "This campaign started sending and can no longer be edited." });
+      }
+      if (body.groupIds !== undefined && c.campaignType !== "automation") {
+        const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+        await whatsappAiWorkbookService.attachCampaignToAudienceGroups(
+          req.user!.businessAccountId!,
+          c.id,
+          Array.isArray(body.groupIds) ? body.groupIds : [],
+        );
       }
       res.json(c);
     } catch (err: any) {

@@ -42,6 +42,7 @@ const PAGE_SIZE = 100;
 
 interface Campaign {
   id: string; name: string; status: string;
+  campaignType?: "one_time" | "automation";
   templateId: string; templateParams: string[] | null; groupIds: string[] | null;
   totalRecipients: number; sentCount: number; failedCount: number; repliedCount: number; optedOutCount: number;
   scheduledAt: string | null; startedAt: string | null; completedAt: string | null;
@@ -286,6 +287,7 @@ export default function WhatsAppCampaignDetail() {
           <h1 className="text-2xl font-bold flex items-center gap-2">
             {campaign.name}
             <Badge variant={CAMPAIGN_STATUS_VARIANT[campaign.status] || "outline"}>{campaign.status}</Badge>
+            <Badge variant="outline">{campaign.campaignType === "automation" ? "Automation campaign" : "One-time"}</Badge>
           </h1>
           <div className="text-xs text-gray-500 mt-1">
             {campaign.scheduledAt && <>Scheduled: {new Date(campaign.scheduledAt).toLocaleString()} · </>}
@@ -310,7 +312,11 @@ export default function WhatsAppCampaignDetail() {
               <Pencil className="h-4 w-4 mr-1" /> Edit
             </Button>
           )}
-          {(campaign.status === "draft" || campaign.status === "scheduled") && (
+          {campaign.campaignType === "automation" && campaign.status === "draft" ? (
+            <Button onClick={() => setLocation(`/admin/whatsapp-campaign-automations/new?campaign=${campaign.id}`)}>
+              Set up automation
+            </Button>
+          ) : (campaign.status === "draft" || campaign.status === "scheduled") && (
             <Button onClick={() => sendMutation.mutate()} disabled={sendMutation.isPending}>
               <Send className="h-4 w-4 mr-1" /> Send Now
             </Button>
@@ -374,7 +380,9 @@ export default function WhatsAppCampaignDetail() {
                   : NOT_SET}
             </ConfigRow>
             <ConfigRow label="Contact groups">
-              {targetGroups.length === 0 ? NOT_SET : (
+              {campaign.campaignType === "automation"
+                ? <span className="text-violet-700 font-normal">Selected in Automations</span>
+                : targetGroups.length === 0 ? NOT_SET : (
                 <span className="flex flex-wrap gap-1 justify-end">
                   {targetGroups.map(g => (
                     <Badge key={g.id} variant="outline" className="font-normal" data-testid={`config-group-${g.id}`}>
@@ -397,7 +405,9 @@ export default function WhatsAppCampaignDetail() {
               </ConfigRow>
             )}
             <ConfigRow label="Schedule">
-              {campaign.scheduledAt
+              {campaign.campaignType === "automation"
+                ? <span className="text-violet-700 font-normal">Recurring timing is set in Automations</span>
+                : campaign.scheduledAt
                 ? new Date(campaign.scheduledAt).toLocaleString()
                 : <span className="text-gray-500 font-normal">Send manually</span>}
             </ConfigRow>

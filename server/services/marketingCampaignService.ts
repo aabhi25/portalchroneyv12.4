@@ -180,6 +180,7 @@ const SEND_DELAY_MS = 250;
 
 interface CreatePayload {
   name: string;
+  campaignType?: "one_time" | "automation";
   templateId: string;
   templateParams?: string[];
   groupIds: string[];
@@ -402,14 +403,20 @@ export const marketingCampaignService = {
   },
 
   async create(businessAccountId: string, payload: CreatePayload): Promise<MarketingCampaign> {
+    if (payload.campaignType !== undefined && payload.campaignType !== "one_time" && payload.campaignType !== "automation") {
+      throw new Error("campaignType must be one_time or automation");
+    }
+    const campaignType = payload.campaignType === "automation" ? "automation" : "one_time";
     // One shared definition of "usable template" and "usable audience", also applied at send
     // time and by the readiness summary. An approved-but-since-withdrawn template or a group
     // that has been emptied must not slip through just because it passed once.
-    const missing = await checkCampaignPrerequisites(businessAccountId, {
-      templateId: payload.templateId,
-      groupIds: payload.groupIds,
-    });
-    if (missing) throw new CampaignPrerequisiteError(missing);
+    if (campaignType === "one_time") {
+      const missing = await checkCampaignPrerequisites(businessAccountId, {
+        templateId: payload.templateId,
+        groupIds: payload.groupIds,
+      });
+      if (missing) throw new CampaignPrerequisiteError(missing);
+    }
 
     const [tpl] = await db
       .select()
@@ -417,6 +424,7 @@ export const marketingCampaignService = {
       .where(and(eq(whatsappTemplates.id, payload.templateId), eq(whatsappTemplates.businessAccountId, businessAccountId)))
       .limit(1);
     if (!tpl) throw new Error("Template not found for this business");
+    if (tpl.status !== "approved") throw new Error("Choose an approved WhatsApp template");
 
     const paramError = validateTemplateParams(tpl, payload.templateParams);
     if (paramError) throw new Error(paramError);
@@ -426,11 +434,12 @@ export const marketingCampaignService = {
       .values({
         businessAccountId,
         name: payload.name.trim(),
+        campaignType,
         templateId: payload.templateId,
         templateParams: normalizeParams(tpl, payload.templateParams),
-        groupIds: payload.groupIds,
-        status: payload.scheduledAt ? "scheduled" : "draft",
-        scheduledAt: payload.scheduledAt || null,
+        groupIds: campaignType === "automation" ? [] : payload.groupIds,
+        status: campaignType === "one_time" && payload.scheduledAt ? "scheduled" : "draft",
+        scheduledAt: campaignType === "one_time" ? payload.scheduledAt || null : null,
         aiEnabled: toFlag(payload.aiEnabled, "true"),
         aiAgentName: payload.aiAgentName || "Sales Agent",
         aiSystemPrompt: payload.aiSystemPrompt || "",
@@ -459,11 +468,21 @@ export const marketingCampaignService = {
     if (executionRun) {
       throw new Error("Automation execution campaigns are immutable. Change the source blueprint for future runs instead.");
     }
+    const current = await this.get(businessAccountId, id);
+    if (!current) return undefined;
+    if (payload.campaignType !== undefined && payload.campaignType !== "one_time" && payload.campaignType !== "automation") {
+      throw new Error("campaignType must be one_time or automation");
+    }
+    const campaignType = payload.campaignType === "automation"
+      ? "automation"
+      : payload.campaignType === "one_time" ? "one_time" : current.campaignType === "automation" ? "automation" : "one_time";
+    const isAutomationToOneTime = current.campaignType === "automation" && campaignType === "one_time";
+    if (campaignType === "automation") {
+      payload = { ...payload, campaignType, groupIds: [], scheduledAt: null, status: "draft" };
+    }
     // Editing the template or the audience must be held to the same bar as creating one,
     // otherwise a valid campaign can be edited into an unsendable state and only fail later.
-    if (payload.templateId !== undefined || payload.groupIds !== undefined) {
-      const current = await this.get(businessAccountId, id);
-      if (!current) return undefined;
+    if (campaignType === "one_time" && (payload.templateId !== undefined || payload.groupIds !== undefined || payload.campaignType !== undefined)) {
       const missing = await checkCampaignPrerequisites(businessAccountId, {
         templateId: payload.templateId ?? current.templateId,
         groupIds: payload.groupIds ?? ((current.groupIds as string[]) || []),
@@ -474,8 +493,6 @@ export const marketingCampaignService = {
     // Hold a saved campaign to the same rule as a new one: no blank parameters. Switching the
     // template counts too, since the new one may expect a different number of values.
     if (payload.templateParams !== undefined || payload.templateId !== undefined) {
-      const current = await this.get(businessAccountId, id);
-      if (!current) return undefined;
       const templateId = payload.templateId ?? current.templateId;
       const [tpl] = await db
         .select()
@@ -491,7 +508,7 @@ export const marketingCampaignService = {
 
     const set: any = { updatedAt: new Date() };
     const fields: (keyof CreatePayload)[] = [
-      "name", "templateId", "templateParams", "groupIds",
+      "name", "campaignType", "templateId", "templateParams", "groupIds",
       "aiAgentName", "aiSystemPrompt", "aiKnowledgeDocIds",
       "aiDailyTokenBudget", "aiMaxRepliesPerRecipient",
     ];
@@ -507,15 +524,37 @@ export const marketingCampaignService = {
       set.replyClassifications = normalizeClassifications(payload.replyClassifications);
     }
     if (payload.status !== undefined) set.status = payload.status;
-    const [row] = await db
-      .update(marketingCampaigns)
-      .set(set)
-      .where(and(
-        eq(marketingCampaigns.id, id),
-        eq(marketingCampaigns.businessAccountId, businessAccountId),
-        ...(opts?.onlyIfStatusIn ? [inArray(marketingCampaigns.status, opts.onlyIfStatusIn)] : []),
-      ))
-      .returning();
+    const where = and(
+      eq(marketingCampaigns.id, id),
+      eq(marketingCampaigns.businessAccountId, businessAccountId),
+      ...(opts?.onlyIfStatusIn ? [inArray(marketingCampaigns.status, opts.onlyIfStatusIn)] : []),
+    );
+    if (isAutomationToOneTime) {
+      return db.transaction(async tx => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${"wa-blueprint:" + id}))`);
+        const [lockedCampaign] = await tx.select({ id: marketingCampaigns.id })
+          .from(marketingCampaigns)
+          .where(and(
+            eq(marketingCampaigns.id, id),
+            eq(marketingCampaigns.businessAccountId, businessAccountId),
+          ))
+          .for("update")
+          .limit(1);
+        if (!lockedCampaign) return undefined;
+        const [blueprintUse] = await tx.select({ id: whatsappCampaignAutomations.id })
+          .from(whatsappCampaignAutomations)
+          .where(and(
+            eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+            eq(whatsappCampaignAutomations.sourceCampaignId, id),
+            isNull(whatsappCampaignAutomations.deletedAt),
+          ))
+          .limit(1);
+        if (blueprintUse) throw new Error("Delete the linked automation before changing this into a one-time campaign");
+        const [row] = await tx.update(marketingCampaigns).set(set).where(where).returning();
+        return row;
+      });
+    }
+    const [row] = await db.update(marketingCampaigns).set(set).where(where).returning();
     return row;
   },
 
@@ -763,6 +802,9 @@ export const marketingCampaignService = {
 
     const campaign = await this.get(businessAccountId, campaignId);
     if (!campaign) return { started: false, reason: "Campaign not found" };
+    if (campaign.campaignType === "automation") {
+      return { started: false, reason: "Automation campaign drafts can only run through Automations" };
+    }
     const [executionRun] = await db.select({
       id: whatsappCampaignAutomationRuns.id,
       status: whatsappCampaignAutomationRuns.status,
@@ -1148,6 +1190,10 @@ export const marketingCampaignService = {
   },
 
   async cancel(businessAccountId: string, campaignId: string): Promise<boolean> {
+    const campaign = await this.get(businessAccountId, campaignId);
+    if (campaign?.campaignType === "automation") {
+      throw new Error("Automation campaign drafts are managed from Automations");
+    }
     const [executionRun] = await db.select({ id: whatsappCampaignAutomationRuns.id })
       .from(whatsappCampaignAutomationRuns)
       .where(and(

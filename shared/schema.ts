@@ -3045,6 +3045,7 @@ export const marketingCampaigns = pgTable("marketing_campaigns", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
+  campaignType: text("campaign_type").notNull().default("one_time"), // one_time | automation
   templateId: varchar("template_id").notNull().references(() => whatsappTemplates.id, { onDelete: "restrict" }),
   templateParams: jsonb("template_params").$type<string[]>().default([]), // Static param values OR placeholders like "{{name}}" mapping to contact attributes
   groupIds: jsonb("group_ids").$type<string[]>().notNull().default([]), // Target contact groups
@@ -3103,6 +3104,7 @@ export const whatsappCampaignAutomations = pgTable("whatsapp_campaign_automation
   sourceCampaignId: varchar("source_campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
   sourceWorkbookId: varchar("source_workbook_id").references(() => whatsappAiWorkbooks.id, { onDelete: "set null" }),
   sourceWorkbookSheetId: text("source_workbook_sheet_id"),
+  sourceGroupIds: jsonb("source_group_ids").$type<string[]>().default([]),
   templateId: varchar("template_id").notNull().references(() => whatsappTemplates.id, { onDelete: "restrict" }),
   templateParams: jsonb("template_params").$type<string[]>().default([]),
   phoneColumn: text("phone_column").notNull(),
@@ -3156,6 +3158,8 @@ export const whatsappCampaignAutomationRuns = pgTable("whatsapp_campaign_automat
   sourceWorkbookVersionNumber: integer("source_workbook_version_number"),
   sourceWorkbookRevision: integer("source_workbook_revision"),
   sourceWorkbookSheetName: text("source_workbook_sheet_name"),
+  sourceGroupIds: jsonb("source_group_ids").$type<string[]>().default([]),
+  sourceGroupNames: jsonb("source_group_names").$type<string[]>().default([]),
   // Immutable run evidence. Workbooks can edit a version in place and generated
   // contact groups can later be removed, so provenance IDs alone are insufficient.
   sourceSnapshot: jsonb("source_snapshot").$type<{

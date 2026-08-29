@@ -95,10 +95,14 @@ export default function WhatsAppNewCampaign() {
             }
           : {}),
       }),
-    onSuccess: () => {
+    onSuccess: (created: { id: string; campaignType?: "one_time" | "automation" }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/campaigns"] });
       toast({ title: source ? "Copy created" : "Campaign created" });
-      setLocation(listPath);
+      setLocation(
+        created.campaignType === "automation"
+          ? `/admin/whatsapp-campaign-automations/new?campaign=${created.id}`
+          : listPath,
+      );
     },
     onError: (e: any) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
   });
@@ -154,8 +158,10 @@ export default function WhatsAppNewCampaign() {
       submitting={createMutation.isPending}
       pendingLabel="Creating..."
       readyPrefix="Ready to create"
-      submitLabel={hasSchedule =>
-        hasSchedule
+      submitLabel={(hasSchedule, campaignType) =>
+        campaignType === "automation"
+          ? <><Send className="h-4 w-4" /> Save &amp; Set Up Automation</>
+          : hasSchedule
           ? <><Clock className="h-4 w-4" /> Schedule Campaign</>
           : source
             ? <><Copy className="h-4 w-4" /> Create Copy</>

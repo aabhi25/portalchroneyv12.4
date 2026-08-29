@@ -12,6 +12,7 @@ import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, Table2,
 interface Campaign {
   id: string;
   name: string;
+  campaignType?: "one_time" | "automation";
   templateId: string;
   groupIds: string[];
   status: string;
@@ -139,10 +140,11 @@ export default function WhatsAppCampaigns() {
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-semibold">{c.name}</span>
                       <Badge variant={STATUS_VARIANT[c.status] || "outline"}>{c.status}</Badge>
+                      <Badge variant="outline">{c.campaignType === "automation" ? "Automation campaign" : "One-time"}</Badge>
                       {c.aiEnabled === "true" && <Badge variant="outline">AI Reply</Badge>}
                     </div>
                     <div className="text-xs text-gray-500 flex flex-wrap gap-x-3 gap-y-1">
-                      <span>Recipients: {c.totalRecipients}</span>
+                      <span>{c.campaignType === "automation" ? "Audience: choose in Automations" : `Recipients: ${c.totalRecipients}`}</span>
                       <span className="text-emerald-600">Sent: {c.sentCount}</span>
                       <span className="text-blue-600">Replied: {c.repliedCount}</span>
                       {c.failedCount > 0 && <span className="text-red-600">Failed: {c.failedCount}</span>}
@@ -161,7 +163,11 @@ export default function WhatsAppCampaigns() {
                     >
                       <Table2 className="h-4 w-4 mr-1" /> Workbook
                     </Button>
-                    {(c.status === "draft" || c.status === "scheduled") && (
+                    {c.campaignType === "automation" && c.status === "draft" ? (
+                      <Button size="sm" variant="default" onClick={() => setLocation(`/admin/whatsapp-campaign-automations/new?campaign=${c.id}`)} data-testid={`button-setup-automation-${c.id}`}>
+                        Set up automation
+                      </Button>
+                    ) : (c.status === "draft" || c.status === "scheduled") && (
                       <Button size="sm" variant="default" onClick={() => sendMutation.mutate(c.id)} disabled={sendMutation.isPending} data-testid={`button-send-${c.id}`}>
                         <Send className="h-4 w-4 mr-1" /> Send Now
                       </Button>

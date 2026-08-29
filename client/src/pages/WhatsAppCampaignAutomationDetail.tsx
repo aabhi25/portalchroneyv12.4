@@ -29,6 +29,8 @@ type Preview = {
     versionNumber?: number;
     revision?: number;
     sheetName?: string;
+    audienceType?: "ai_workbook" | "contact_groups";
+    groupNames?: string[];
   };
 };
 type Run = {
@@ -65,17 +67,19 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
     refetchInterval: 20_000,
   });
   const isBlueprintSource = automation?.sourceType === "campaign_blueprint";
-  const isWorkbookSource = automation?.sourceType === "ai_workbook" || isBlueprintSource;
+  const isWorkbookSource = automation?.sourceType === "ai_workbook" || Boolean(automation?.sourceWorkbookId);
+  const isManagedSource = automation?.sourceType !== "upload";
+  const isGroupSource = isBlueprintSource && !isWorkbookSource;
 
   const previewMutation = useMutation({
     mutationFn: () => apiRequest(
       "POST",
       `/api/whatsapp/campaign-automations/${id}/upload-preview`,
-       isWorkbookSource ? { sourceType: automation?.sourceType } : payload,
+       isManagedSource ? { sourceType: automation?.sourceType } : payload,
     ),
     onSuccess: (result: Preview) => setPreview(result),
     onError: (error: any) => toast({
-      title: isWorkbookSource ? "Could not validate workbook" : "Could not validate file",
+      title: isManagedSource ? "Could not validate audience" : "Could not validate file",
       description: error.message,
       variant: "destructive",
     }),
@@ -84,7 +88,7 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
     mutationFn: () => apiRequest(
       "POST",
       `/api/whatsapp/campaign-automations/${id}/runs`,
-      isWorkbookSource
+      isManagedSource
         ? {
              sourceType: automation?.sourceType,
             expectedWorkbookVersionId: preview?.source.versionId,
@@ -95,7 +99,7 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
     ),
     onSuccess: (result: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/campaign-automations", id, "runs"] });
-      if (!isWorkbookSource) {
+      if (!isManagedSource) {
         setPayload(null);
         setFileName("");
       }
@@ -195,27 +199,29 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            {isWorkbookSource
+            {isManagedSource
               ? <BookOpen className="h-4 w-4 text-emerald-600" />
               : <Upload className="h-4 w-4 text-emerald-600" />}
-            {isBlueprintSource ? "Run campaign blueprint" : isWorkbookSource ? "Run from AI Workbook" : "Daily spreadsheet upload"}
+            {isBlueprintSource ? "Run automation campaign" : isWorkbookSource ? "Run from AI Workbook" : "Daily spreadsheet upload"}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-gray-600">
             {isBlueprintSource
-              ? "Validate the AI Workbook already linked to the campaign. The automation does not maintain a second audience link, and the run records both campaign and workbook provenance."
+              ? isGroupSource
+                ? "Validate the fixed contact groups selected by this automation. Each run snapshots the contacts it uses."
+                : "Validate the AI Workbook selected by this automation. Each run pins the exact saved version it uses."
               : isWorkbookSource
               ? "Validate the linked workbook’s latest saved version. The resulting run records the exact workbook version it used."
               : "Upload the refreshed client file. We validate the configured fields and calculate today’s eligible recipients before creating any campaign."}
           </p>
-          {isWorkbookSource ? (
+          {isManagedSource ? (
             <div className="flex flex-wrap items-center gap-3">
               <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending || !automation.enabled}>
                 <CheckCircle2 className="h-4 w-4 mr-1" />
-                {previewMutation.isPending ? "Validating..." : "Validate latest workbook"}
+                {previewMutation.isPending ? "Validating..." : isGroupSource ? "Validate contact groups" : "Validate latest workbook"}
               </Button>
-              {!automation.sourceWorkbookId && !isBlueprintSource && <span className="text-sm text-red-700">The linked workbook is no longer available. Edit this automation to choose another source.</span>}
+              {isWorkbookSource && !automation.sourceWorkbookId && <span className="text-sm text-red-700">The linked workbook is no longer available. Edit this automation to choose another source.</span>}
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
@@ -233,7 +239,10 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
                 <p className="text-sm text-gray-600">Target date: <span className="font-medium">{preview.targetDate}</span></p>
                 {preview.source.type !== "upload" && (
                   <p className="text-xs text-gray-500">
-                    {preview.source.campaignName ? `${preview.source.campaignName} · ` : ""}{preview.source.workbookName} · version {preview.source.versionNumber}.{preview.source.revision} · {preview.source.sheetName}
+                    {preview.source.campaignName ? `${preview.source.campaignName} · ` : ""}
+                    {preview.source.audienceType === "contact_groups"
+                      ? preview.source.groupNames?.join(", ")
+                      : `${preview.source.workbookName} · version ${preview.source.versionNumber}.${preview.source.revision} · ${preview.source.sheetName}`}
                   </p>
                 )}
               </div>

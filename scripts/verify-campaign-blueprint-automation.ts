@@ -45,6 +45,7 @@ async function main() {
   const [blueprint] = await db.insert(marketingCampaigns).values({
     businessAccountId,
     name: "AUTOMATION BLUEPRINT VERIFY (temp)",
+    campaignType: "automation",
     templateId: template.id,
     templateParams,
     groupIds: [sourceGroup.id],
@@ -260,7 +261,7 @@ async function main() {
       .set({ enabled: false, updatedAt: new Date() })
       .where(eq(whatsappCampaignAutomations.id, automation.id));
     const directSend = await marketingCampaignService.startSend(businessAccountId, blueprint.id);
-    if (directSend.started || !/automation blueprint/i.test(directSend.reason || "")) {
+    if (directSend.started || !/automation blueprint|only run through Automations/i.test(directSend.reason || "")) {
       throw new Error("A blueprint attached to a paused automation could still be sent directly");
     }
     const refreshedBlueprint = await marketingCampaignService.get(businessAccountId, blueprint.id);

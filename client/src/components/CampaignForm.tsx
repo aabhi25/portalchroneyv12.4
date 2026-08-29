@@ -48,6 +48,7 @@ interface Contact {
 
 export interface CampaignFormValues {
   name: string;
+  campaignType: "one_time" | "automation";
   templateId: string;
   groupIds: string[];
   templateParams: string[];
@@ -65,6 +66,7 @@ export interface CampaignFormValues {
 
 export const EMPTY_CAMPAIGN_FORM: CampaignFormValues = {
   name: "",
+  campaignType: "one_time",
   templateId: "",
   groupIds: [],
   templateParams: [],
@@ -84,6 +86,7 @@ export const EMPTY_CAMPAIGN_FORM: CampaignFormValues = {
  */
 export interface StoredCampaignConfig {
   name: string;
+  campaignType?: "one_time" | "automation" | null;
   templateId: string;
   templateParams: string[] | null;
   groupIds: string[] | null;
@@ -110,6 +113,7 @@ export function toDateTimeLocal(iso: string | null): string {
 export function campaignToFormValues(campaign: StoredCampaignConfig): CampaignFormValues {
   return {
     name: campaign.name ?? "",
+    campaignType: campaign.campaignType === "automation" ? "automation" : "one_time",
     templateId: campaign.templateId ?? "",
     groupIds: Array.isArray(campaign.groupIds) ? campaign.groupIds : [],
     templateParams: Array.isArray(campaign.templateParams) ? campaign.templateParams : [],
@@ -210,7 +214,7 @@ export interface CampaignFormProps {
   pendingLabel: string;
   /** Leading text in the footer when the form is valid, e.g. "Ready to create". */
   readyPrefix: string;
-  submitLabel: (hasSchedule: boolean) => React.ReactNode;
+  submitLabel: (hasSchedule: boolean, campaignType: CampaignFormValues["campaignType"]) => React.ReactNode;
   onSubmit: (values: CampaignFormValues) => void;
   onCancel: () => void;
 }
@@ -226,6 +230,7 @@ export default function CampaignForm({
   onCancel,
 }: CampaignFormProps) {
   const [name, setName] = useState(initialValues.name);
+  const [campaignType, setCampaignType] = useState<CampaignFormValues["campaignType"]>(initialValues.campaignType);
   const [templateId, setTemplateId] = useState(initialValues.templateId);
   const [selectedGroups, setSelectedGroups] = useState<string[]>(initialValues.groupIds);
   const [params, setParams] = useState<string[]>(initialValues.templateParams);
@@ -278,6 +283,7 @@ export default function CampaignForm({
   const approvedTemplates = templates.filter(t => t.status === "approved");
   const nonEmptyGroups = groups.filter(g => g.contactCount > 0);
   const selectedTemplateApproved = !selectedTemplate || selectedTemplate.status === "approved";
+  const isAutomation = campaignType === "automation";
 
   const totalContacts = groups
     .filter(g => selectedGroups.includes(g.id))
@@ -295,7 +301,7 @@ export default function CampaignForm({
           href: "/admin/whatsapp-templates",
           cta: "Go to Templates",
         }
-      : nonEmptyGroups.length === 0
+      : !isAutomation && nonEmptyGroups.length === 0
         ? {
             title: "You need an audience with contacts in it",
             body:
@@ -320,9 +326,9 @@ export default function CampaignForm({
     .filter(i => !(params[i] ?? "").trim());
   const paramsComplete = blankParams.length === 0;
 
-  const basicsComplete = Boolean(name.trim()) && Boolean(templateId) && selectedGroups.length > 0;
+  const basicsComplete = Boolean(name.trim()) && Boolean(templateId) && (isAutomation || selectedGroups.length > 0);
   // totalContacts > 0 is the client-side twin of the server's empty-audience refusal.
-  const audienceUsable = totalContacts > 0;
+  const audienceUsable = isAutomation || totalContacts > 0;
   const canSubmit =
     basicsComplete && templateResolved && paramsComplete && audienceUsable && selectedTemplateApproved;
 
@@ -332,10 +338,11 @@ export default function CampaignForm({
     for (let i = 0; i < requiredParams; i++) padded.push((params[i] ?? "").trim());
     onSubmit({
       name,
+      campaignType,
       templateId,
-      groupIds: selectedGroups,
+      groupIds: isAutomation ? [] : selectedGroups,
       templateParams: padded,
-      scheduledAt: scheduleAt,
+      scheduledAt: isAutomation ? "" : scheduleAt,
       aiEnabled,
       aiAgentName,
       aiSystemPrompt,
@@ -391,6 +398,37 @@ export default function CampaignForm({
 
             {/* Campaign basics */}
             <SectionCard icon={<Megaphone className="h-4 w-4 text-emerald-600" />} title="Campaign basics">
+              <div>
+                <label className="text-sm font-medium text-gray-700">Campaign type <span className="text-red-500">*</span></label>
+                <p className="text-xs text-gray-500 mt-0.5 mb-2">Choose whether this campaign is sent once or reused by a recurring automation.</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {([
+                    ["one_time", "One-time campaign", "Choose the audience and optional send time here."],
+                    ["automation", "Automation campaign", "Save the message and AI behavior; choose audience and recurring timing later."],
+                  ] as const).map(([value, label, description]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => {
+                        setCampaignType(value);
+                        if (value === "automation") {
+                          setSelectedGroups([]);
+                          setScheduleAt("");
+                        }
+                      }}
+                      className={`rounded-lg border px-3 py-3 text-left transition-colors ${
+                        campaignType === value
+                          ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500"
+                          : "border-gray-200 hover:border-emerald-300 hover:bg-gray-50"
+                      }`}
+                      data-testid={`button-campaign-type-${value}`}
+                    >
+                      <span className="block text-sm font-medium text-gray-800">{label}</span>
+                      <span className="block text-xs text-gray-500 mt-1">{description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div>
                 <label className="text-sm font-medium text-gray-700">Campaign name <span className="text-red-500">*</span></label>
                 <Input
@@ -482,8 +520,8 @@ export default function CampaignForm({
               </SectionCard>
             )}
 
-            {/* Audience */}
-            <SectionCard icon={<Users className="h-4 w-4 text-purple-600" />} title="Audience">
+            {/* Audience — automation campaigns choose this later in Automations. */}
+            {!isAutomation && <SectionCard icon={<Users className="h-4 w-4 text-purple-600" />} title="Audience">
               <div>
                 <label className="text-sm font-medium text-gray-700">Contact groups <span className="text-red-500">*</span></label>
                 <p className="text-xs text-gray-500 mt-0.5 mb-2">Select one or more groups to receive this campaign.</p>
@@ -527,10 +565,10 @@ export default function CampaignForm({
                   </p>
                 )}
               </div>
-            </SectionCard>
+            </SectionCard>}
 
-            {/* Schedule */}
-            <SectionCard icon={<Calendar className="h-4 w-4 text-amber-600" />} title="Schedule">
+            {/* Schedule — recurring automation timing is configured separately. */}
+            {!isAutomation && <SectionCard icon={<Calendar className="h-4 w-4 text-amber-600" />} title="Schedule">
               <div>
                 <label className="text-sm font-medium text-gray-700">Send at (optional)</label>
                 <Input
@@ -545,7 +583,7 @@ export default function CampaignForm({
                   Leave blank to send immediately when you click "Send Now" on the campaigns list.
                 </p>
               </div>
-            </SectionCard>
+            </SectionCard>}
 
             {/* AI replies */}
             <SectionCard icon={<Bot className="h-4 w-4 text-indigo-600" />} title="AI replies">
@@ -655,15 +693,15 @@ export default function CampaignForm({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Groups</span>
-                  <span className="font-medium">{selectedGroups.length > 0 ? `${selectedGroups.length} selected` : <span className="text-gray-400">—</span>}</span>
+                   <span className="font-medium">{isAutomation ? <span className="text-violet-700">Choose in Automations</span> : selectedGroups.length > 0 ? `${selectedGroups.length} selected` : <span className="text-gray-400">—</span>}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Recipients</span>
-                  <span className="font-medium text-emerald-700">{totalContacts > 0 ? `~${totalContacts}` : <span className="text-gray-400">—</span>}</span>
+                   <span className="font-medium text-emerald-700">{isAutomation ? <span className="text-violet-700">Later</span> : totalContacts > 0 ? `~${totalContacts}` : <span className="text-gray-400">—</span>}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Schedule</span>
-                  <span className="font-medium">{scheduleAt ? new Date(scheduleAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : <span className="text-gray-400">Send manually</span>}</span>
+                   <span className="font-medium">{isAutomation ? <span className="text-violet-700">Recurring setup later</span> : scheduleAt ? new Date(scheduleAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : <span className="text-gray-400">Send manually</span>}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">AI replies</span>
@@ -682,8 +720,8 @@ export default function CampaignForm({
           {!canSubmit && (
             templateId && !templateResolved
               ? <span>Loading template details&hellip;</span>
-              : !basicsComplete
-                ? <span>Fill in name, template, and at least one group to continue.</span>
+                 : !basicsComplete
+                 ? <span>Fill in name, template, and at least one group to continue.</span>
                 : !selectedTemplateApproved
                   ? <span className="text-amber-700">This template is not approved, so WhatsApp will not deliver it. Pick an approved one.</span>
                 : !audienceUsable
@@ -695,7 +733,11 @@ export default function CampaignForm({
                     {blankParams.map(i => i + 1).join(", ")} &mdash; WhatsApp won't deliver a message with a blank value.
                   </span>
           )}
-          {canSubmit && <span className="text-emerald-700 font-medium">{readyPrefix} &mdash; {totalContacts} recipients in {selectedGroups.length} group{selectedGroups.length !== 1 ? "s" : ""}.</span>}
+          {canSubmit && <span className="text-emerald-700 font-medium">
+            {isAutomation
+              ? `${readyPrefix} — message and AI behavior ready for automation setup.`
+              : `${readyPrefix} — ${totalContacts} recipients in ${selectedGroups.length} group${selectedGroups.length !== 1 ? "s" : ""}.`}
+          </span>}
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={onCancel}>
@@ -707,7 +749,7 @@ export default function CampaignForm({
             data-testid="button-submit-campaign"
             className="gap-1.5"
           >
-            {submitting ? pendingLabel : submitLabel(Boolean(scheduleAt))}
+            {submitting ? pendingLabel : submitLabel(Boolean(scheduleAt), campaignType)}
           </Button>
         </div>
       </div>

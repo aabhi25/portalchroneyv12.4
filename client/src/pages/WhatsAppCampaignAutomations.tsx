@@ -14,6 +14,8 @@ export interface CampaignAutomation {
   name: string;
   sourceType?: "upload" | "ai_workbook" | "campaign_blueprint";
   sourceCampaignId?: string | null;
+  sourceWorkbookId?: string | null;
+  sourceGroupIds?: string[];
   sendMode: "review" | "automatic";
   sendTime: string;
   timezone: string;
@@ -49,7 +51,7 @@ export default function WhatsAppCampaignAutomations() {
       <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
-            <CalendarClock className="h-6 w-6 text-emerald-600" /> Spreadsheet Automations
+            <CalendarClock className="h-6 w-6 text-emerald-600" /> Campaign Automations
           </h1>
           <p className="text-sm text-gray-600 mt-1">
             Run recurring deliveries from a fully configured draft WhatsApp campaign.
@@ -68,7 +70,7 @@ export default function WhatsAppCampaignAutomations() {
             <FileSpreadsheet className="h-10 w-10 text-emerald-600 mx-auto mb-3" />
               <h2 className="font-semibold text-gray-900">No campaign automations yet</h2>
             <p className="text-sm text-gray-500 mt-1 max-w-md mx-auto">
-                Create a WhatsApp campaign draft with its AI behavior and linked workbook, then use it as an automation blueprint.
+                Create an automation campaign with its message and AI behavior, then choose its Workbook or fixed audience here.
             </p>
             <Button className="mt-4" onClick={() => setLocation("/admin/whatsapp-campaign-automations/new")}>
               Create automation
@@ -99,7 +101,11 @@ export default function WhatsAppCampaignAutomations() {
                     </Badge>
                     <Badge variant="outline">
                       {automation.sourceType === "campaign_blueprint"
-                        ? `Blueprint: ${campaignNames.get(automation.sourceCampaignId || "") || "Unavailable"}`
+                        ? `${campaignNames.get(automation.sourceCampaignId || "") || "Unavailable"} · ${
+                            automation.sourceGroupIds?.length
+                              ? `${automation.sourceGroupIds.length} fixed group${automation.sourceGroupIds.length === 1 ? "" : "s"}`
+                              : "AI Workbook"
+                          }`
                         : automation.sourceType === "ai_workbook" ? "Legacy AI Workbook" : "Legacy spreadsheet upload"}
                     </Badge>
                   </div>
