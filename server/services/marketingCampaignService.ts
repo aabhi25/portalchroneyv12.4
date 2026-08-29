@@ -14,6 +14,7 @@ import {
   type WhatsappTemplate,
   type ReplyClassification,
 } from "@shared/schema";
+import { parseSpreadsheetDate } from "@shared/spreadsheetDate";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { contactGroupService, normalizePhone, applyCountryCode } from "./contactGroupService";
 import { contactGroups } from "@shared/schema";
@@ -267,20 +268,21 @@ async function validateCampaignWorkbookSource(businessAccountId: string, input: 
           ? String(contact.name || "").trim()
           : String(attributes[key] ?? "").trim();
       const phone = normalizePhone(value(sourceKey(input.recipientPhoneColumn)));
-      const date = value(sourceKey(input.recipientDateColumn));
-      const parsedDate = date.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
-      const validDate = !!parsedDate && (() => {
-        const y = Number(parsedDate[1]), m = Number(parsedDate[2]), d = Number(parsedDate[3]);
-        const check = new Date(Date.UTC(y, m - 1, d));
-        return check.getUTCFullYear() === y && check.getUTCMonth() === m - 1 && check.getUTCDate() === d;
-      })();
-      if (
-        phone.length < 8
-        || !value(sourceKey(input.recipientRecordKeyColumn))
-        || !validDate
-        || refs.some(ref => !value(ref))
-      ) {
-        throw new Error(`Contact-group recipient ${index + 1} is missing a required campaign field`);
+      const dateColumn = sourceKey(input.recipientDateColumn);
+      const recordKeyColumn = sourceKey(input.recipientRecordKeyColumn);
+      const date = value(dateColumn);
+      if (phone.length < 8) {
+        throw new Error(`Contact-group recipient ${index + 1} has an invalid or missing phone in "${sourceKey(input.recipientPhoneColumn)}"`);
+      }
+      if (!value(recordKeyColumn)) {
+        throw new Error(`Contact-group recipient ${index + 1} is missing record key "${recordKeyColumn}"`);
+      }
+      if (!parseSpreadsheetDate(date)) {
+        throw new Error(`Contact-group recipient ${index + 1} has an invalid date in "${dateColumn}"; use YYYY-MM-DD`);
+      }
+      const missingTemplateField = refs.find(ref => !value(ref));
+      if (missingTemplateField) {
+        throw new Error(`Contact-group recipient ${index + 1} is missing template field "${missingTemplateField}"`);
       }
     }
     input.recipientAiAllowedFields = [];
@@ -330,18 +332,24 @@ async function validateCampaignWorkbookSource(businessAccountId: string, input: 
     const values = sheet.rows[i].values || {};
     const value = (key: string) => String(values[key] ?? "").trim();
     const phone = normalizePhone(value(sourceKey(input.recipientPhoneColumn)));
-    const date = value(sourceKey(input.recipientDateColumn));
-    const parsedDate = date.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
-    const validDate = !!parsedDate && (() => {
-      const y = Number(parsedDate[1]), m = Number(parsedDate[2]), d = Number(parsedDate[3]);
-      const check = new Date(Date.UTC(y, m - 1, d));
-      return check.getUTCFullYear() === y && check.getUTCMonth() === m - 1 && check.getUTCDate() === d;
-    })();
+    const phoneColumn = sourceKey(input.recipientPhoneColumn);
+    const recordKeyColumn = sourceKey(input.recipientRecordKeyColumn);
+    const dateColumn = sourceKey(input.recipientDateColumn);
+    const date = value(dateColumn);
     const missingTemplateField = refs.find(ref =>
       (ref === "name" ? !value(sourceKey(input.recipientNameColumn)) : ref !== "phone" && !value(ref))
     );
-    if (phone.length < 8 || !value(sourceKey(input.recipientRecordKeyColumn)) || !validDate || missingTemplateField) {
-      throw new Error(`Workbook row ${i + 2} is missing a required campaign mapping`);
+    if (phone.length < 8) {
+      throw new Error(`Workbook row ${i + 2} has an invalid or missing phone in "${phoneColumn}"`);
+    }
+    if (!value(recordKeyColumn)) {
+      throw new Error(`Workbook row ${i + 2} is missing record key "${recordKeyColumn}"`);
+    }
+    if (!parseSpreadsheetDate(date)) {
+      throw new Error(`Workbook row ${i + 2} has an invalid date in "${dateColumn}"; use YYYY-MM-DD`);
+    }
+    if (missingTemplateField) {
+      throw new Error(`Workbook row ${i + 2} is missing template field "${missingTemplateField}"`);
     }
   }
   input.recipientAiAllowedFields = allowed;

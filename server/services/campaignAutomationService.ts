@@ -23,6 +23,7 @@ import {
   type ImportColumn,
   type SourceRecord,
 } from "@shared/contactImport";
+import { parseSpreadsheetDate } from "@shared/spreadsheetDate";
 
 type AutomationInput = {
   name: string;
@@ -398,27 +399,7 @@ function validateColumns(config: AutomationInput, columns: ImportColumn[]) {
 }
 
 function parseDateOnly(raw: string): string | null {
-  const text = raw.trim();
-  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
-  if (iso) {
-    const year = Number(iso[1]), month = Number(iso[2]), day = Number(iso[3]);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      const check = new Date(Date.UTC(year, month - 1, day));
-      if (check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) {
-        return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-      }
-    }
-  }
-
-  const dmy = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s.*)?$/);
-  if (dmy) {
-    const day = Number(dmy[1]), month = Number(dmy[2]), year = Number(dmy[3]);
-    const check = new Date(Date.UTC(year, month - 1, day));
-    if (check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) {
-      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    }
-  }
-  return null;
+  return parseSpreadsheetDate(raw);
 }
 
 function addDays(isoDate: string, days: number): string {

@@ -46856,6 +46856,45 @@ var init_webhookIdempotencyService = __esm({
   }
 });
 
+// shared/spreadsheetDate.ts
+function isoDate(year, month, day) {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  const check = new Date(Date.UTC(year, month - 1, day));
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+function excelSerialDate(serial) {
+  if (!Number.isFinite(serial) || serial <= 0 || serial >= 2958466) return null;
+  const wholeDays = Math.floor(serial);
+  if (wholeDays === 60) return null;
+  const adjustedDays = wholeDays > 60 ? wholeDays - 1 : wholeDays;
+  const date2 = new Date(Date.UTC(1899, 11, 31) + adjustedDays * DAY_MS);
+  return isoDate(date2.getUTCFullYear(), date2.getUTCMonth() + 1, date2.getUTCDate());
+}
+function parseSpreadsheetDate(value) {
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const calendarDate = new Date(Math.round(value.getTime() / 1e3) * 1e3);
+    return isoDate(calendarDate.getFullYear(), calendarDate.getMonth() + 1, calendarDate.getDate());
+  }
+  if (typeof value === "number") return excelSerialDate(value);
+  const text3 = String(value ?? "").trim();
+  if (!text3) return null;
+  const iso = text3.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
+  if (iso) return isoDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+  const dayFirst = text3.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s.*)?$/);
+  if (dayFirst) return isoDate(Number(dayFirst[3]), Number(dayFirst[2]), Number(dayFirst[1]));
+  if (/^\d+(?:\.\d+)?$/.test(text3)) return excelSerialDate(Number(text3));
+  return null;
+}
+var DAY_MS;
+var init_spreadsheetDate = __esm({
+  "shared/spreadsheetDate.ts"() {
+    "use strict";
+    DAY_MS = 24 * 60 * 60 * 1e3;
+  }
+});
+
 // server/services/contactGroupService.ts
 var contactGroupService_exports = {};
 __export(contactGroupService_exports, {
@@ -47628,15 +47667,21 @@ async function validateCampaignWorkbookSource(businessAccountId, input) {
       const attributes = contact.attributes || {};
       const value = (key) => key === "phone" ? String(contact.phone || "").trim() : key === "name" ? String(contact.name || "").trim() : String(attributes[key] ?? "").trim();
       const phone = normalizePhone5(value(sourceKey(input.recipientPhoneColumn)));
-      const date2 = value(sourceKey(input.recipientDateColumn));
-      const parsedDate = date2.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
-      const validDate = !!parsedDate && (() => {
-        const y = Number(parsedDate[1]), m = Number(parsedDate[2]), d = Number(parsedDate[3]);
-        const check = new Date(Date.UTC(y, m - 1, d));
-        return check.getUTCFullYear() === y && check.getUTCMonth() === m - 1 && check.getUTCDate() === d;
-      })();
-      if (phone.length < 8 || !value(sourceKey(input.recipientRecordKeyColumn)) || !validDate || refs2.some((ref) => !value(ref))) {
-        throw new Error(`Contact-group recipient ${index2 + 1} is missing a required campaign field`);
+      const dateColumn = sourceKey(input.recipientDateColumn);
+      const recordKeyColumn = sourceKey(input.recipientRecordKeyColumn);
+      const date2 = value(dateColumn);
+      if (phone.length < 8) {
+        throw new Error(`Contact-group recipient ${index2 + 1} has an invalid or missing phone in "${sourceKey(input.recipientPhoneColumn)}"`);
+      }
+      if (!value(recordKeyColumn)) {
+        throw new Error(`Contact-group recipient ${index2 + 1} is missing record key "${recordKeyColumn}"`);
+      }
+      if (!parseSpreadsheetDate(date2)) {
+        throw new Error(`Contact-group recipient ${index2 + 1} has an invalid date in "${dateColumn}"; use YYYY-MM-DD`);
+      }
+      const missingTemplateField = refs2.find((ref) => !value(ref));
+      if (missingTemplateField) {
+        throw new Error(`Contact-group recipient ${index2 + 1} is missing template field "${missingTemplateField}"`);
       }
     }
     input.recipientAiAllowedFields = [];
@@ -47688,18 +47733,24 @@ async function validateCampaignWorkbookSource(businessAccountId, input) {
     const values = sheet.rows[i].values || {};
     const value = (key) => String(values[key] ?? "").trim();
     const phone = normalizePhone5(value(sourceKey(input.recipientPhoneColumn)));
-    const date2 = value(sourceKey(input.recipientDateColumn));
-    const parsedDate = date2.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
-    const validDate = !!parsedDate && (() => {
-      const y = Number(parsedDate[1]), m = Number(parsedDate[2]), d = Number(parsedDate[3]);
-      const check = new Date(Date.UTC(y, m - 1, d));
-      return check.getUTCFullYear() === y && check.getUTCMonth() === m - 1 && check.getUTCDate() === d;
-    })();
+    const phoneColumn = sourceKey(input.recipientPhoneColumn);
+    const recordKeyColumn = sourceKey(input.recipientRecordKeyColumn);
+    const dateColumn = sourceKey(input.recipientDateColumn);
+    const date2 = value(dateColumn);
     const missingTemplateField = refs.find(
       (ref) => ref === "name" ? !value(sourceKey(input.recipientNameColumn)) : ref !== "phone" && !value(ref)
     );
-    if (phone.length < 8 || !value(sourceKey(input.recipientRecordKeyColumn)) || !validDate || missingTemplateField) {
-      throw new Error(`Workbook row ${i + 2} is missing a required campaign mapping`);
+    if (phone.length < 8) {
+      throw new Error(`Workbook row ${i + 2} has an invalid or missing phone in "${phoneColumn}"`);
+    }
+    if (!value(recordKeyColumn)) {
+      throw new Error(`Workbook row ${i + 2} is missing record key "${recordKeyColumn}"`);
+    }
+    if (!parseSpreadsheetDate(date2)) {
+      throw new Error(`Workbook row ${i + 2} has an invalid date in "${dateColumn}"; use YYYY-MM-DD`);
+    }
+    if (missingTemplateField) {
+      throw new Error(`Workbook row ${i + 2} is missing template field "${missingTemplateField}"`);
     }
   }
   input.recipientAiAllowedFields = allowed;
@@ -47859,6 +47910,7 @@ var init_marketingCampaignService = __esm({
     "use strict";
     init_db();
     init_schema();
+    init_spreadsheetDate();
     init_contactGroupService();
     init_schema();
     init_whatsappSessionService();
@@ -55969,29 +56021,10 @@ function validateColumns(config, columns) {
   }
 }
 function parseDateOnly(raw) {
-  const text3 = raw.trim();
-  const iso = text3.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
-  if (iso) {
-    const year = Number(iso[1]), month = Number(iso[2]), day = Number(iso[3]);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      const check = new Date(Date.UTC(year, month - 1, day));
-      if (check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) {
-        return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-      }
-    }
-  }
-  const dmy = text3.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s.*)?$/);
-  if (dmy) {
-    const day = Number(dmy[1]), month = Number(dmy[2]), year = Number(dmy[3]);
-    const check = new Date(Date.UTC(year, month - 1, day));
-    if (check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) {
-      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    }
-  }
-  return null;
+  return parseSpreadsheetDate(raw);
 }
-function addDays2(isoDate, days) {
-  const date2 = /* @__PURE__ */ new Date(`${isoDate}T00:00:00.000Z`);
+function addDays2(isoDate2, days) {
+  const date2 = /* @__PURE__ */ new Date(`${isoDate2}T00:00:00.000Z`);
   date2.setUTCDate(date2.getUTCDate() + days);
   return date2.toISOString().slice(0, 10);
 }
@@ -56005,8 +56038,8 @@ function dateInTimezone(timezone, date2 = /* @__PURE__ */ new Date()) {
   const get = (name) => parts.find((part) => part.type === name)?.value || "";
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
-function zonedDateTimeToUtc(isoDate, time, timezone) {
-  const [year, month, day] = isoDate.split("-").map(Number);
+function zonedDateTimeToUtc(isoDate2, time, timezone) {
+  const [year, month, day] = isoDate2.split("-").map(Number);
   const [hour, minute] = time.split(":").map(Number);
   const desiredUtcMillis = Date.UTC(year, month - 1, day, hour, minute);
   let guess = new Date(desiredUtcMillis);
@@ -56168,6 +56201,7 @@ var init_campaignAutomationService = __esm({
     init_db();
     init_schema();
     init_contactImport();
+    init_spreadsheetDate();
     MAX_OFFSET_DAYS = 366;
     ALLOWED_SEND_MODES = /* @__PURE__ */ new Set(["review", "automatic"]);
     ALLOWED_SOURCE_TYPES = /* @__PURE__ */ new Set(["upload", "ai_workbook", "campaign_blueprint"]);
@@ -64486,9 +64520,9 @@ ${websiteContent.uniqueSellingPoints.map((u) => `- ${u}`).join("\n")}
       day: "2-digit"
     }).formatToParts(now);
     const getPart = (type) => istParts.find((p) => p.type === type)?.value || "";
-    const isoDate = `${getPart("year")}-${getPart("month")}-${getPart("day")}`;
+    const isoDate2 = `${getPart("year")}-${getPart("month")}-${getPart("day")}`;
     const dateContext = `CURRENT DATE/TIME (IST - Indian Standard Time):
-Today is ${istDateFormatter.format(now)} (${isoDate}) at ${istTimeFormatter.format(now)} IST.
+Today is ${istDateFormatter.format(now)} (${isoDate2}) at ${istTimeFormatter.format(now)} IST.
 IMPORTANT: Users booking appointments for future dates is completely normal and expected. Do NOT question, clarify, or confirm that a date is "in the future" - simply proceed with the booking flow by asking for their name and phone number.
 
 `;
@@ -107824,7 +107858,7 @@ init_aiUsageLogger();
 var IST_OFFSET_MS = 5.5 * 60 * 60 * 1e3;
 var TARGET_HOUR_IST = 4;
 var TARGET_MINUTE_IST = 0;
-var DAY_MS = 24 * 60 * 60 * 1e3;
+var DAY_MS2 = 24 * 60 * 60 * 1e3;
 var BackupScheduler = class {
   timeoutId = null;
   intervalId = null;
@@ -107842,7 +107876,7 @@ var BackupScheduler = class {
     ));
     let targetUTC = todayTargetIST.getTime() - IST_OFFSET_MS;
     if (targetUTC < now) {
-      targetUTC += DAY_MS;
+      targetUTC += DAY_MS2;
     }
     return targetUTC - now;
   }
@@ -107889,7 +107923,7 @@ var BackupScheduler = class {
       this.runBackup();
       this.intervalId = setInterval(() => {
         this.runBackup();
-      }, DAY_MS);
+      }, DAY_MS2);
     }, delayMs);
   }
   stop() {

@@ -25,6 +25,17 @@ SheetJS does not expose number formats unless asked. Without `cellNF` a
 date-formatted cell reads back as its raw serial (`46000`), and the date branch
 of a cell reader silently never runs. Pass `cellDates` and `cellNF` together.
 
+SheetJS date-only values can also land one millisecond before local midnight
+because of floating-point conversion. Preserve local calendar components, not
+UTC components, and round sub-second precision before extracting the date.
+
+**Why:** UTC extraction shifts dates in positive-offset timezones, while the
+one-millisecond artifact can still shift a local-midnight date to the previous
+day.
+
+**How to apply:** whenever a spreadsheet date is normalized to `YYYY-MM-DD`;
+test the XLSX round-trip under the user's actual timezone, not only UTC.
+
 Excel also emits three different CSV encodings depending on which "Save as" the
 user picked: UTF-8 with BOM, UTF-16LE with BOM ("Unicode Text"), and the Windows
 system codepage. Decoding everything as UTF-8 turns the latter two into

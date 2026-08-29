@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { AiWorkbookGrid } from "@/components/whatsapp/AiWorkbookGrid";
+import { parseSpreadsheetDate } from "@shared/spreadsheetDate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -678,7 +679,7 @@ function WorkbookEditor({ id }: { id: string }) {
     try {
       if (file.size > 15 * 1024 * 1024) throw new Error("Excel files are limited to 15 MB");
       const XLSX = await import("xlsx");
-      const parsed = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
+      const parsed = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true, cellNF: true });
       if (parsed.SheetNames.length === 0) throw new Error("That Excel file has no sheets");
       const name = parsed.SheetNames[0];
       const skippedSheets = parsed.SheetNames.slice(1);
@@ -703,7 +704,12 @@ function WorkbookEditor({ id }: { id: string }) {
         const values: AiWorkbookRow["values"] = {};
         for (const col of columns) {
           const headerIndex = headers.indexOf(col.label);
-          values[col.key] = row[headerIndex] === "" ? null : row[headerIndex];
+          const rawValue = row[headerIndex];
+          values[col.key] = rawValue === ""
+            ? null
+            : rawValue instanceof Date
+              ? parseSpreadsheetDate(rawValue)
+              : rawValue;
         }
         return {
           id: rowIdIndex >= 0 && row[rowIdIndex] ? String(row[rowIdIndex]) : crypto.randomUUID(),
