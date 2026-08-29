@@ -3302,6 +3302,10 @@ var init_schema = __esm({
       id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
       businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
       name: text("name").notNull(),
+      sourceType: text("source_type").notNull().default("upload"),
+      // upload | ai_workbook
+      sourceWorkbookId: varchar("source_workbook_id").references(() => whatsappAiWorkbooks.id, { onDelete: "set null" }),
+      sourceWorkbookSheetId: text("source_workbook_sheet_id"),
       templateId: varchar("template_id").notNull().references(() => whatsappTemplates.id, { onDelete: "restrict" }),
       templateParams: jsonb("template_params").$type().default([]),
       phoneColumn: text("phone_column").notNull(),
@@ -3336,6 +3340,17 @@ var init_schema = __esm({
       campaignId: varchar("campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
       contactGroupId: varchar("contact_group_id").references(() => contactGroups.id, { onDelete: "set null" }),
       sourceFileName: text("source_file_name").notNull(),
+      sourceType: text("source_type").notNull().default("upload"),
+      // upload | ai_workbook
+      // Run provenance is an immutable audit snapshot, not a live relationship.
+      // These identifiers deliberately remain after a workbook is permanently deleted.
+      sourceWorkbookId: varchar("source_workbook_id"),
+      sourceWorkbookVersionId: varchar("source_workbook_version_id"),
+      sourceWorkbookSheetId: text("source_workbook_sheet_id"),
+      sourceWorkbookName: text("source_workbook_name"),
+      sourceWorkbookVersionNumber: integer("source_workbook_version_number"),
+      sourceWorkbookRevision: integer("source_workbook_revision"),
+      sourceWorkbookSheetName: text("source_workbook_sheet_name"),
       status: text("status").notNull().default("awaiting_review"),
       // awaiting_review | scheduled | failed | cancelled
       scheduledAt: timestamp("scheduled_at"),
@@ -55394,6 +55409,10 @@ function cleanConfig(input) {
   const name = String(input?.name || "").trim();
   if (!name) throw new Error("Automation name is required");
   if (!input?.templateId) throw new Error("Choose an approved WhatsApp template");
+  const sourceType = input.sourceType || "upload";
+  if (!ALLOWED_SOURCE_TYPES.has(sourceType)) throw new Error("Invalid automation source");
+  const sourceWorkbookId = sourceType === "ai_workbook" ? String(input.sourceWorkbookId || "").trim() : null;
+  if (sourceType === "ai_workbook" && !sourceWorkbookId) throw new Error("Choose an AI Workbook");
   const mapped = ["phoneColumn", "recordKeyColumn", "dateColumn"];
   for (const field of mapped) {
     if (!canonical(input[field])) throw new Error(`${field.replace("Column", " column")} is required`);
@@ -55421,6 +55440,9 @@ function cleanConfig(input) {
   return {
     ...input,
     name,
+    sourceType,
+    sourceWorkbookId,
+    sourceWorkbookSheetId: sourceType === "ai_workbook" ? String(input.sourceWorkbookSheetId || "").trim() || null : null,
     templateParams: params,
     phoneColumn: canonical(input.phoneColumn),
     nameColumn: canonical(input.nameColumn),
@@ -55435,6 +55457,48 @@ function cleanConfig(input) {
     timezone,
     enabled: input.enabled !== false
   };
+}
+async function resolveWorkbookSource(businessAccountId, config) {
+  if (!config.sourceWorkbookId) throw new Error("This automation is not linked to an AI Workbook");
+  const [workbook] = await db.select().from(whatsappAiWorkbooks).where(and57(
+    eq67(whatsappAiWorkbooks.id, config.sourceWorkbookId),
+    eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId)
+  )).limit(1);
+  if (!workbook) throw new Error("The linked AI Workbook is no longer available");
+  const [version] = await db.select().from(whatsappAiWorkbookVersions).where(and57(
+    eq67(whatsappAiWorkbookVersions.workbookId, workbook.id),
+    eq67(whatsappAiWorkbookVersions.businessAccountId, businessAccountId)
+  )).orderBy(desc29(whatsappAiWorkbookVersions.versionNumber)).limit(1);
+  if (!version) throw new Error("The linked AI Workbook has no saved version");
+  const sheets = Array.isArray(version.sheets) ? version.sheets : [];
+  const sheet = config.sourceWorkbookSheetId ? sheets.find((candidate) => candidate.id === config.sourceWorkbookSheetId) : sheets[0];
+  if (!sheet) throw new Error("The linked AI Workbook sheet is no longer available");
+  if (!sheet.columns.length) throw new Error("The linked AI Workbook has no columns");
+  return {
+    payload: {
+      columns: sheet.columns.map((column2) => ({ key: column2.key, label: column2.label })),
+      rows: sheet.rows.map((row, index2) => ({
+        r: index2 + 2,
+        v: sheet.columns.map((column2) => {
+          const value = row.values[column2.key];
+          return value === null || value === void 0 ? "" : String(value);
+        })
+      }))
+    },
+    workbookId: workbook.id,
+    workbookName: workbook.name,
+    versionId: version.id,
+    versionNumber: version.versionNumber,
+    revision: version.revision,
+    sheetId: sheet.id,
+    sheetName: sheet.name
+  };
+}
+async function validateWorkbookConfig(businessAccountId, config) {
+  if (config.sourceType !== "ai_workbook") return null;
+  const source = await resolveWorkbookSource(businessAccountId, config);
+  validateColumns(config, source.payload.columns);
+  return source;
 }
 function validateColumns(config, columns) {
   const available = new Set(columns.map((column2) => column2.key));
@@ -55638,7 +55702,7 @@ async function evaluateUpload(automation, payload) {
     invalid: invalid.slice(0, 50)
   };
 }
-var MAX_OFFSET_DAYS, ALLOWED_SEND_MODES, campaignAutomationService;
+var MAX_OFFSET_DAYS, ALLOWED_SEND_MODES, ALLOWED_SOURCE_TYPES, campaignAutomationService;
 var init_campaignAutomationService = __esm({
   "server/services/campaignAutomationService.ts"() {
     "use strict";
@@ -55647,6 +55711,7 @@ var init_campaignAutomationService = __esm({
     init_contactImport();
     MAX_OFFSET_DAYS = 366;
     ALLOWED_SEND_MODES = /* @__PURE__ */ new Set(["review", "automatic"]);
+    ALLOWED_SOURCE_TYPES = /* @__PURE__ */ new Set(["upload", "ai_workbook"]);
     campaignAutomationService = {
       async list(businessAccountId) {
         return db.select().from(whatsappCampaignAutomations).where(and57(
@@ -55663,13 +55728,18 @@ var init_campaignAutomationService = __esm({
         return row;
       },
       async create(businessAccountId, input) {
-        const config = cleanConfig(input);
+        let config = cleanConfig(input);
         const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, config.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         assertTemplateMapping(template, config.templateParams || []);
+        const workbookSource = await validateWorkbookConfig(businessAccountId, config);
+        if (workbookSource) config = { ...config, sourceWorkbookSheetId: workbookSource.sheetId };
         const [row] = await db.insert(whatsappCampaignAutomations).values({
           businessAccountId,
           name: config.name,
+          sourceType: config.sourceType,
+          sourceWorkbookId: config.sourceWorkbookId,
+          sourceWorkbookSheetId: config.sourceWorkbookSheetId,
           templateId: config.templateId,
           templateParams: config.templateParams,
           phoneColumn: config.phoneColumn,
@@ -55690,10 +55760,12 @@ var init_campaignAutomationService = __esm({
       async update(businessAccountId, id, input) {
         const existing = await this.get(businessAccountId, id);
         if (!existing) return void 0;
-        const config = cleanConfig({ ...existing, ...input });
+        let config = cleanConfig({ ...existing, ...input });
         const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, config.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         assertTemplateMapping(template, config.templateParams || []);
+        const workbookSource = await validateWorkbookConfig(businessAccountId, config);
+        if (workbookSource) config = { ...config, sourceWorkbookSheetId: workbookSource.sheetId };
         const [row] = await db.update(whatsappCampaignAutomations).set({
           ...config,
           updatedAt: /* @__PURE__ */ new Date()
@@ -55759,11 +55831,22 @@ var init_campaignAutomationService = __esm({
       async preview(businessAccountId, id, payload) {
         const automation = await this.get(businessAccountId, id);
         if (!automation) throw new Error("Automation not found");
-        const evaluated = await evaluateUpload(automation, payload);
+        const workbookSource = automation.sourceType === "ai_workbook" ? await resolveWorkbookSource(businessAccountId, automation) : null;
+        const evaluated = await evaluateUpload(automation, workbookSource?.payload || payload);
         return {
           targetDate: evaluated.targetDate,
           summary: evaluated.summary,
           invalid: evaluated.invalid,
+          source: workbookSource ? {
+            type: "ai_workbook",
+            workbookId: workbookSource.workbookId,
+            workbookName: workbookSource.workbookName,
+            versionId: workbookSource.versionId,
+            versionNumber: workbookSource.versionNumber,
+            revision: workbookSource.revision,
+            sheetId: workbookSource.sheetId,
+            sheetName: workbookSource.sheetName
+          } : { type: "upload" },
           previewRecipients: evaluated.candidates.slice(0, 25).map((candidate) => ({
             rowNumber: candidate.rowNumber,
             recordKey: candidate.recordKey,
@@ -55780,14 +55863,38 @@ var init_campaignAutomationService = __esm({
         const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, automation.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("The selected template is no longer approved");
         assertTemplateMapping(template, automation.templateParams || []);
-        const evaluated = await evaluateUpload(automation, payload);
+        const workbookSource = automation.sourceType === "ai_workbook" ? await resolveWorkbookSource(businessAccountId, automation) : null;
+        if (workbookSource && (!payload?.expectedWorkbookVersionId || !Number.isInteger(payload?.expectedWorkbookRevision))) {
+          throw new Error("Validate the latest AI Workbook version before creating a run.");
+        }
+        if (workbookSource && (payload.expectedWorkbookVersionId !== workbookSource.versionId || payload.expectedWorkbookRevision !== workbookSource.revision)) {
+          throw new Error("The AI Workbook changed after validation. Validate the latest version again.");
+        }
+        const evaluated = await evaluateUpload(automation, workbookSource?.payload || payload);
         if (evaluated.candidates.length === 0) {
           throw new Error("No eligible recipients were found. Check the date rule, status filter, and duplicate history.");
         }
         const scheduledAt = nextScheduledAt(automation);
         const automatic = automation.sendMode === "automatic";
-        const safeFileName = String(sourceFileName || "spreadsheet").slice(0, 200);
+        const safeFileName = workbookSource ? `${workbookSource.workbookName} \xB7 version ${workbookSource.versionNumber}.${workbookSource.revision}`.slice(0, 200) : String(sourceFileName || "spreadsheet").slice(0, 200);
         const result = await db.transaction(async (tx) => {
+          if (workbookSource) {
+            const [lockedWorkbook] = await tx.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks).where(and57(
+              eq67(whatsappAiWorkbooks.id, workbookSource.workbookId),
+              eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId)
+            )).for("update").limit(1);
+            if (!lockedWorkbook) throw new Error("The linked AI Workbook was deleted before the run could be created");
+            const [currentVersion] = await tx.select({
+              id: whatsappAiWorkbookVersions.id,
+              revision: whatsappAiWorkbookVersions.revision
+            }).from(whatsappAiWorkbookVersions).where(and57(
+              eq67(whatsappAiWorkbookVersions.workbookId, workbookSource.workbookId),
+              eq67(whatsappAiWorkbookVersions.businessAccountId, businessAccountId)
+            )).orderBy(desc29(whatsappAiWorkbookVersions.versionNumber)).limit(1);
+            if (currentVersion?.id !== workbookSource.versionId || currentVersion.revision !== workbookSource.revision) {
+              throw new Error("The AI Workbook changed after validation. Validate the latest version again.");
+            }
+          }
           const [activeAutomation] = await tx.select().from(whatsappCampaignAutomations).where(and57(
             eq67(whatsappCampaignAutomations.id, id),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
@@ -55795,10 +55902,13 @@ var init_campaignAutomationService = __esm({
             isNull11(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be created");
+          if (activeAutomation.updatedAt.getTime() !== automation.updatedAt.getTime() || activeAutomation.sourceType !== automation.sourceType || activeAutomation.sourceWorkbookId !== automation.sourceWorkbookId || activeAutomation.sourceWorkbookSheetId !== automation.sourceWorkbookSheetId) {
+            throw new Error("This automation changed while the run was being prepared. Validate the source again.");
+          }
           const [group] = await tx.insert(contactGroups).values({
             businessAccountId,
             name: `${automation.name} \u2014 ${dateInTimezone(automation.timezone)} (${safeFileName})`.slice(0, 250),
-            description: `Generated from spreadsheet automation "${automation.name}"`,
+            description: workbookSource ? `Generated from AI Workbook "${workbookSource.workbookName}" by automation "${automation.name}"` : `Generated from spreadsheet automation "${automation.name}"`,
             defaultCountryCode: automation.defaultCountryCode,
             contactCount: evaluated.candidates.length
           }).returning();
@@ -55828,6 +55938,14 @@ var init_campaignAutomationService = __esm({
             campaignId: campaign.id,
             contactGroupId: group.id,
             sourceFileName: safeFileName,
+            sourceType: workbookSource ? "ai_workbook" : "upload",
+            sourceWorkbookId: workbookSource?.workbookId || null,
+            sourceWorkbookVersionId: workbookSource?.versionId || null,
+            sourceWorkbookSheetId: workbookSource?.sheetId || null,
+            sourceWorkbookName: workbookSource?.workbookName || null,
+            sourceWorkbookVersionNumber: workbookSource?.versionNumber || null,
+            sourceWorkbookRevision: workbookSource?.revision || null,
+            sourceWorkbookSheetName: workbookSource?.sheetName || null,
             status: automatic ? "scheduled" : "awaiting_review",
             scheduledAt: automatic ? scheduledAt : null,
             ...evaluated.summary
@@ -56074,7 +56192,10 @@ function validateSheets(input) {
         label: String(c.label || key).trim().slice(0, 120),
         type: ["text", "number", "date", "boolean"].includes(c.type) ? c.type : "text",
         source: ["system", "ai", "operator"].includes(c.source) ? c.source : "operator",
-        editable: c.editable !== false
+        editable: c.editable !== false,
+        // Invalid/unknown mappings are silently dropped rather than rejected,
+        // so a stale or hand-edited mapping never blocks saving the sheet.
+        campaignMapping: normalizeColumnMapping(c.campaignMapping)
       };
     });
     if (!Array.isArray(raw.rows)) throw new Error(`${name} has invalid rows`);
@@ -56098,7 +56219,7 @@ function validateSheets(input) {
     return { id, name, kind, columns, rows };
   });
 }
-async function buildCampaignSheets(businessAccountId, campaignId) {
+async function loadCampaignRecipientData(businessAccountId, campaignId) {
   const [campaign] = await db.select().from(marketingCampaigns).where(and58(eq68(marketingCampaigns.id, campaignId), eq68(marketingCampaigns.businessAccountId, businessAccountId))).limit(1);
   if (!campaign) throw new Error("Campaign not found");
   const recipients = await db.select().from(marketingCampaignRecipients).where(and58(
@@ -56109,23 +56230,82 @@ async function buildCampaignSheets(businessAccountId, campaignId) {
     throw new Error(`This campaign has more than ${MAX_ROWS.toLocaleString()} recipients. Filter or split it before creating a workbook.`);
   }
   const classifications = campaign.replyClassifications || [];
-  const labels = new Map(classifications.map((c) => [c.key, c.label || c.key]));
-  const attributeKeys = /* @__PURE__ */ new Set();
-  for (const recipient of recipients) {
-    for (const key of Object.keys(recipient.attributes || {})) attributeKeys.add(key);
-  }
-  const captureKeys = [];
+  const outcomeLabels = new Map(classifications.map((c) => [c.key, c.label || c.key]));
+  const captureFields = [];
   const seenCapture = /* @__PURE__ */ new Set();
   for (const classification of classifications) {
     for (const field of classification.captureFields || []) {
       if (seenCapture.has(field.fieldKey)) continue;
       seenCapture.add(field.fieldKey);
-      captureKeys.push({
+      captureFields.push({
         key: field.fieldKey,
         label: field.fieldLabel || field.fieldKey,
         type: field.fieldType === "date" || field.fieldType === "boolean" ? field.fieldType : "text"
       });
     }
+  }
+  return { campaign, recipients, classifications, outcomeLabels, captureFields };
+}
+function campaignFieldValue(recipient, source, outcomeLabels) {
+  if (source === "outcome_label") {
+    return recipient.primaryClassification ? outcomeLabels.get(recipient.primaryClassification) || recipient.primaryClassification : null;
+  }
+  if (source === "outcome_key") return recipient.primaryClassification || null;
+  if (source === "delivery_status") return recipient.status;
+  if (source === "callback_required") return recipient.callbackRequired;
+  if (source === "callback_reason") return recipient.callbackReason || null;
+  if (source === "customer_feedback") return recipient.customerFeedback || null;
+  if (source === "reply_count") return recipient.replyCount;
+  if (source === "first_reply_at") return recipient.firstReplyAt;
+  if (source === "classified_at") return recipient.classifiedAt;
+  if (source.startsWith("capture:")) return (recipient.dispositionData || {})[source.slice("capture:".length)] || null;
+  return null;
+}
+function normalizeColumnMapping(raw) {
+  if (raw === null || raw === void 0) return null;
+  const source = String(raw?.source || "").trim();
+  const format2 = String(raw?.format || "text");
+  if (!source || !RESULT_FIELD_NAMES.has(source) && !isCaptureField(source)) return null;
+  if (!RESULT_FORMATS.has(format2)) return null;
+  return { source, format: format2 };
+}
+function applyColumnMappings(sheet, recipientsById, outcomeLabels) {
+  const mappedColumns = sheet.columns.filter((c) => c.campaignMapping);
+  if (mappedColumns.length === 0) return sheet;
+  return {
+    ...sheet,
+    rows: sheet.rows.map((row) => {
+      const recipient = row.sourceRecipientId ? recipientsById.get(row.sourceRecipientId) : void 0;
+      if (!recipient) return row;
+      const values = { ...row.values };
+      for (const col of mappedColumns) {
+        values[col.key] = formatResultValue(campaignFieldValue(recipient, col.campaignMapping.source, outcomeLabels), col.campaignMapping.format);
+      }
+      return { ...row, values };
+    })
+  };
+}
+async function buildIdentitySheet(businessAccountId, campaignId) {
+  const { recipients, outcomeLabels } = await loadCampaignRecipientData(businessAccountId, campaignId);
+  const recipientsById = new Map(recipients.map((r) => [r.id, r]));
+  const sheet = {
+    id: "campaign-data",
+    name: "Campaign data",
+    kind: "custom",
+    columns: [column("name", "Name", "system", false), column("phone", "Phone", "system", false)],
+    rows: recipients.map((recipient) => ({
+      id: recipient.id,
+      sourceRecipientId: recipient.id,
+      values: { name: recipient.name || "", phone: recipient.phone }
+    }))
+  };
+  return { sheet, recipientsById, outcomeLabels };
+}
+async function buildCampaignSheets(businessAccountId, campaignId) {
+  const { recipients, outcomeLabels: labels, captureFields: captureKeys } = await loadCampaignRecipientData(businessAccountId, campaignId);
+  const attributeKeys = /* @__PURE__ */ new Set();
+  for (const recipient of recipients) {
+    for (const key of Object.keys(recipient.attributes || {})) attributeKeys.add(key);
   }
   const usedKeys = /* @__PURE__ */ new Set([
     "name",
@@ -56253,6 +56433,11 @@ function mergeOperatorEdits(fresh, previous) {
     rows: [...rows, ...manualLeftovers]
   }];
 }
+function detectLinkMode(sheet) {
+  if (!sheet) return "full";
+  const hasExtraSystemOrAiColumn = sheet.columns.some((c) => c.source !== "operator" && !["name", "phone"].includes(c.key));
+  return hasExtraSystemOrAiColumn ? "full" : "custom";
+}
 async function latestVersion(workbookId, businessAccountId) {
   const [version] = await db.select().from(whatsappAiWorkbookVersions).where(and58(
     eq68(whatsappAiWorkbookVersions.workbookId, workbookId),
@@ -56286,10 +56471,9 @@ var init_whatsappAiWorkbookService = __esm({
     RESULT_FIELD_NAMES = new Set(WORKBOOK_RESULT_FIELDS.map((field) => field.value));
     RESULT_FORMATS = /* @__PURE__ */ new Set(["text", "yes_no", "iso_date", "date", "number"]);
     whatsappAiWorkbookService = {
-      async list(businessAccountId, includeArchived = false) {
+      async list(businessAccountId) {
         const workbooks = await db.select().from(whatsappAiWorkbooks).where(and58(
-          eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId),
-          ...includeArchived ? [] : [eq68(whatsappAiWorkbooks.status, "active")]
+          eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId)
         )).orderBy(desc30(whatsappAiWorkbooks.updatedAt));
         if (workbooks.length === 0) return [];
         const versions = await db.select().from(whatsappAiWorkbookVersions).where(and58(
@@ -56445,45 +56629,70 @@ var init_whatsappAiWorkbookService = __esm({
           set.name = name;
         }
         if (input.description !== void 0) set.description = String(input.description);
-        if (input.status !== void 0) {
-          if (!["active", "archived"].includes(input.status)) throw new Error("Invalid workbook status");
-          set.status = input.status;
-        }
         const [row] = await db.update(whatsappAiWorkbooks).set(set).where(and58(eq68(whatsappAiWorkbooks.id, id), eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId))).returning();
         return row;
       },
+      async deleteWorkbook(businessAccountId, id) {
+        return db.transaction(async (tx) => {
+          const [workbook] = await tx.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks).where(and58(
+            eq68(whatsappAiWorkbooks.id, id),
+            eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId)
+          )).limit(1).for("update");
+          if (!workbook) return null;
+          await tx.delete(whatsappAiWorkbookCampaignLinks).where(and58(
+            eq68(whatsappAiWorkbookCampaignLinks.workbookId, id),
+            eq68(whatsappAiWorkbookCampaignLinks.businessAccountId, businessAccountId)
+          ));
+          await tx.delete(whatsappAiWorkbookVersions).where(and58(
+            eq68(whatsappAiWorkbookVersions.workbookId, id),
+            eq68(whatsappAiWorkbookVersions.businessAccountId, businessAccountId)
+          ));
+          const [deleted] = await tx.delete(whatsappAiWorkbooks).where(and58(
+            eq68(whatsappAiWorkbooks.id, id),
+            eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId)
+          )).returning({ id: whatsappAiWorkbooks.id });
+          return deleted ?? null;
+        });
+      },
       async saveSheets(businessAccountId, workbookId, versionId, revision, sheets) {
         let normalized = validateSheets(sheets);
-        const [current] = await db.select({ sheets: whatsappAiWorkbookVersions.sheets, revision: whatsappAiWorkbookVersions.revision }).from(whatsappAiWorkbookVersions).where(and58(
-          eq68(whatsappAiWorkbookVersions.id, versionId),
-          eq68(whatsappAiWorkbookVersions.workbookId, workbookId),
-          eq68(whatsappAiWorkbookVersions.businessAccountId, businessAccountId)
-        )).limit(1);
-        if (!current) throw new Error("Workbook version not found");
-        if (current.revision !== revision) throw new Error("This workbook changed in another session. Reload it before saving.");
-        const currentSheets = validateSheets(current.sheets);
-        if (currentSheets[0] && normalized[0].id !== currentSheets[0].id) {
-          normalized = [{ ...normalized[0], id: currentSheets[0].id }];
-        }
-        const nextById = new Map(normalized.map((sheet) => [sheet.id, sheet]));
-        for (const previousSheet of currentSheets) {
-          const nextSheet = nextById.get(previousSheet.id);
-          if (!nextSheet) throw new Error("The workbook must keep its current sheet");
-          const nextKeys = new Set(nextSheet.columns.map((column2) => column2.key));
-          const removedProtected = previousSheet.columns.filter((column2) => column2.source !== "operator" && !nextKeys.has(column2.key)).map((column2) => column2.label);
-          if (removedProtected.length > 0) {
-            throw new Error(`These campaign columns cannot be removed: ${removedProtected.join(", ")}`);
+        return db.transaction(async (tx) => {
+          const [workbook] = await tx.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks).where(and58(
+            eq68(whatsappAiWorkbooks.id, workbookId),
+            eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId)
+          )).for("update").limit(1);
+          if (!workbook) throw new Error("Workbook not found");
+          const [current] = await tx.select({ sheets: whatsappAiWorkbookVersions.sheets, revision: whatsappAiWorkbookVersions.revision }).from(whatsappAiWorkbookVersions).where(and58(
+            eq68(whatsappAiWorkbookVersions.id, versionId),
+            eq68(whatsappAiWorkbookVersions.workbookId, workbookId),
+            eq68(whatsappAiWorkbookVersions.businessAccountId, businessAccountId)
+          )).limit(1);
+          if (!current) throw new Error("Workbook version not found");
+          if (current.revision !== revision) throw new Error("This workbook changed in another session. Reload it before saving.");
+          const currentSheets = validateSheets(current.sheets);
+          if (currentSheets[0] && normalized[0].id !== currentSheets[0].id) {
+            normalized = [{ ...normalized[0], id: currentSheets[0].id }];
           }
-        }
-        const [updated] = await db.update(whatsappAiWorkbookVersions).set({ sheets: normalized, revision: sql40`${whatsappAiWorkbookVersions.revision} + 1`, updatedAt: /* @__PURE__ */ new Date() }).where(and58(
-          eq68(whatsappAiWorkbookVersions.id, versionId),
-          eq68(whatsappAiWorkbookVersions.workbookId, workbookId),
-          eq68(whatsappAiWorkbookVersions.businessAccountId, businessAccountId),
-          eq68(whatsappAiWorkbookVersions.revision, revision)
-        )).returning();
-        if (!updated) throw new Error("This workbook changed in another session. Reload it before saving.");
-        await db.update(whatsappAiWorkbooks).set({ updatedAt: /* @__PURE__ */ new Date() }).where(and58(eq68(whatsappAiWorkbooks.id, workbookId), eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId)));
-        return updated;
+          const nextById = new Map(normalized.map((sheet) => [sheet.id, sheet]));
+          for (const previousSheet of currentSheets) {
+            const nextSheet = nextById.get(previousSheet.id);
+            if (!nextSheet) throw new Error("The workbook must keep its current sheet");
+            const nextKeys = new Set(nextSheet.columns.map((column2) => column2.key));
+            const removedProtected = previousSheet.columns.filter((column2) => column2.source !== "operator" && !nextKeys.has(column2.key)).map((column2) => column2.label);
+            if (removedProtected.length > 0) {
+              throw new Error(`These campaign columns cannot be removed: ${removedProtected.join(", ")}`);
+            }
+          }
+          const [updated] = await tx.update(whatsappAiWorkbookVersions).set({ sheets: normalized, revision: sql40`${whatsappAiWorkbookVersions.revision} + 1`, updatedAt: /* @__PURE__ */ new Date() }).where(and58(
+            eq68(whatsappAiWorkbookVersions.id, versionId),
+            eq68(whatsappAiWorkbookVersions.workbookId, workbookId),
+            eq68(whatsappAiWorkbookVersions.businessAccountId, businessAccountId),
+            eq68(whatsappAiWorkbookVersions.revision, revision)
+          )).returning();
+          if (!updated) throw new Error("This workbook changed in another session. Reload it before saving.");
+          await tx.update(whatsappAiWorkbooks).set({ updatedAt: /* @__PURE__ */ new Date() }).where(and58(eq68(whatsappAiWorkbooks.id, workbookId), eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId)));
+          return updated;
+        });
       },
       async getVersion(businessAccountId, workbookId, versionId) {
         const [version] = await db.select().from(whatsappAiWorkbookVersions).where(and58(
@@ -56500,7 +56709,7 @@ var init_whatsappAiWorkbookService = __esm({
         const source = ["manual", "import", "campaign", "campaign_sync"].includes(input.source || "") ? input.source : "manual";
         const requestedSheets = input.sheets === void 0 ? void 0 : validateSheets(input.sheets);
         return db.transaction(async (tx) => {
-          const [workbook] = await tx.select().from(whatsappAiWorkbooks).where(and58(eq68(whatsappAiWorkbooks.id, workbookId), eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId))).limit(1);
+          const [workbook] = await tx.select().from(whatsappAiWorkbooks).where(and58(eq68(whatsappAiWorkbooks.id, workbookId), eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId))).limit(1).for("update");
           if (!workbook) throw new Error("Workbook not found");
           const [current] = await tx.select().from(whatsappAiWorkbookVersions).where(and58(
             eq68(whatsappAiWorkbookVersions.workbookId, workbookId),
@@ -56551,8 +56760,12 @@ var init_whatsappAiWorkbookService = __esm({
        * merges the workbook's existing data in: rows are matched by normalized
        * phone number, operator columns and their values are preserved, and rows
        * that don't match any campaign recipient are kept at the bottom.
+       *
+       * mode "full" (default) pulls in every system/AI column the campaign
+       * defines. mode "custom" pulls in only Name/Phone so rows exist; every
+       * other column is one the user creates and can map to a campaign field.
        */
-      async linkToCampaign(businessAccountId, workbookId, campaignId, expected) {
+      async linkToCampaign(businessAccountId, workbookId, campaignId, expected, mode = "full") {
         const [workbook] = await db.select().from(whatsappAiWorkbooks).where(and58(eq68(whatsappAiWorkbooks.id, workbookId), eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId))).limit(1);
         if (!workbook) throw new Error("Workbook not found");
         if (!campaignId) {
@@ -56562,8 +56775,14 @@ var init_whatsappAiWorkbookService = __esm({
         if (!expected?.expectedCurrentVersionId || !Number.isInteger(expected.expectedRevision)) {
           throw new Error("Current workbook version and revision are required");
         }
-        const fresh = await buildCampaignSheets(businessAccountId, campaignId);
+        const identity = mode === "custom" ? await buildIdentitySheet(businessAccountId, campaignId) : null;
+        const fresh = identity ? identity.sheet : (await buildCampaignSheets(businessAccountId, campaignId))[0];
         return db.transaction(async (tx) => {
+          const [lockedWorkbook] = await tx.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks).where(and58(
+            eq68(whatsappAiWorkbooks.id, workbookId),
+            eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId)
+          )).for("update").limit(1);
+          if (!lockedWorkbook) throw new Error("Workbook not found");
           const [current] = await tx.select().from(whatsappAiWorkbookVersions).where(and58(
             eq68(whatsappAiWorkbookVersions.workbookId, workbookId),
             eq68(whatsappAiWorkbookVersions.businessAccountId, businessAccountId)
@@ -56573,12 +56792,23 @@ var init_whatsappAiWorkbookService = __esm({
             throw new Error("This workbook changed in another session. Reload it before linking.");
           }
           const previous = validateSheets(current.sheets);
-          const freshSheet = fresh[0];
+          const freshSheet = fresh;
           const usedKeys = new Set(freshSheet.columns.map((c) => c.key));
           const keptColumns = [];
           const keyRemap = /* @__PURE__ */ new Map();
           for (const oldColumn of previous[0].columns.filter((c) => c.source === "operator")) {
             const newKey = keyFor(oldColumn.key, usedKeys);
+            const collided = newKey !== oldColumn.key;
+            if (collided && !oldColumn.campaignMapping) {
+              const hasData = previous[0].rows.some((row) => {
+                const v = row.values[oldColumn.key];
+                return v !== void 0 && v !== null && v !== "";
+              });
+              if (!hasData) {
+                usedKeys.delete(newKey);
+                continue;
+              }
+            }
             keyRemap.set(oldColumn.key, newKey);
             keptColumns.push(newKey === oldColumn.key ? oldColumn : { ...oldColumn, key: newKey, label: `${oldColumn.label} (workbook)` });
           }
@@ -56612,12 +56842,13 @@ var init_whatsappAiWorkbookService = __esm({
             for (const [oldKey, newKey] of carriedKeys) values[newKey] = row.values[oldKey] ?? null;
             return { ...row, sourceRecipientId: void 0, values };
           });
-          const sheets = [{
+          let sheets = [{
             ...freshSheet,
             id: previous[0].id,
             columns: [...freshSheet.columns, ...keptColumns],
             rows: [...rows, ...unmatched]
           }];
+          if (identity) sheets = [applyColumnMappings(sheets[0], identity.recipientsById, identity.outcomeLabels)];
           const [updated] = await tx.update(whatsappAiWorkbooks).set({ sourceCampaignId: campaignId, updatedAt: /* @__PURE__ */ new Date() }).where(and58(eq68(whatsappAiWorkbooks.id, workbookId), eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId))).returning();
           const [version] = await tx.insert(whatsappAiWorkbookVersions).values({
             workbookId,
@@ -56635,14 +56866,87 @@ var init_whatsappAiWorkbookService = __esm({
         if (!workbook) throw new Error("Workbook not found");
         if (!workbook.sourceCampaignId) throw new Error("This workbook is not linked to a campaign");
         const current = await latestVersion(workbookId, businessAccountId);
-        const fresh = await buildCampaignSheets(businessAccountId, workbook.sourceCampaignId);
-        const sheets = current ? mergeOperatorEdits(fresh, current.sheets) : fresh;
         if (!current) throw new Error("Workbook has no version");
+        const linkedAsCustom = detectLinkMode(validateSheets(current.sheets)[0]) === "custom";
+        let sheets;
+        if (linkedAsCustom) {
+          const identity = await buildIdentitySheet(businessAccountId, workbook.sourceCampaignId);
+          const merged = mergeOperatorEdits([identity.sheet], current.sheets);
+          sheets = [applyColumnMappings(merged[0], identity.recipientsById, identity.outcomeLabels)];
+        } else {
+          const fresh = await buildCampaignSheets(businessAccountId, workbook.sourceCampaignId);
+          sheets = mergeOperatorEdits(fresh, current.sheets);
+        }
         return this.createVersion(businessAccountId, workbookId, {
           sheets,
           source: "campaign",
           expectedCurrentVersionId: current.id,
           expectedRevision: current.revision
+        });
+      },
+      /** Fields a custom-linked workbook column can be mapped to: the fixed result fields plus this campaign's own capture fields. */
+      async listCampaignFields(businessAccountId, campaignId) {
+        const { captureFields } = await loadCampaignRecipientData(businessAccountId, campaignId);
+        return {
+          fields: WORKBOOK_RESULT_FIELDS,
+          captureFields: captureFields.map((f) => ({ value: `capture:${f.key}`, label: f.label, formats: f.type === "boolean" ? ["yes_no", "text"] : f.type === "date" ? ["date", "iso_date", "text"] : ["text"] }))
+        };
+      },
+      /**
+       * Set (or clear) which campaign-defined field feeds one column of a
+       * custom-linked workbook. Setting a mapping immediately populates every
+       * row still tied to a campaign recipient; clearing it just stops future
+       * auto-updates without erasing the column's current values.
+       */
+      async mapColumn(businessAccountId, workbookId, input) {
+        if (!input.expectedCurrentVersionId || !Number.isInteger(input.expectedRevision)) {
+          throw new Error("Current workbook version and revision are required");
+        }
+        let mapping = null;
+        if (input.mapping) {
+          const [precheckWorkbook] = await db.select().from(whatsappAiWorkbooks).where(and58(eq68(whatsappAiWorkbooks.id, workbookId), eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId))).limit(1);
+          if (!precheckWorkbook?.sourceCampaignId) throw new Error("This workbook is not linked to a campaign");
+          const { fields, captureFields } = await this.listCampaignFields(businessAccountId, precheckWorkbook.sourceCampaignId);
+          const field = [...fields, ...captureFields].find((f) => f.value === input.mapping.source);
+          if (!field || !field.formats.includes(input.mapping.format)) {
+            throw new Error("Unsupported campaign field or format");
+          }
+          mapping = { source: field.value, format: input.mapping.format };
+        }
+        return db.transaction(async (tx) => {
+          const [workbook] = await tx.select().from(whatsappAiWorkbooks).where(and58(eq68(whatsappAiWorkbooks.id, workbookId), eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId))).limit(1).for("update");
+          if (!workbook) throw new Error("Workbook not found");
+          if (!workbook.sourceCampaignId) throw new Error("This workbook is not linked to a campaign");
+          const [current] = await tx.select().from(whatsappAiWorkbookVersions).where(and58(
+            eq68(whatsappAiWorkbookVersions.workbookId, workbookId),
+            eq68(whatsappAiWorkbookVersions.businessAccountId, businessAccountId)
+          )).orderBy(desc30(whatsappAiWorkbookVersions.versionNumber)).limit(1).for("update");
+          if (!current) throw new Error("Workbook has no version");
+          if (current.id !== input.expectedCurrentVersionId || current.revision !== input.expectedRevision) {
+            throw new Error("This workbook changed in another session. Reload it before changing this mapping.");
+          }
+          const sheet = validateSheets(current.sheets)[0];
+          const targetColumn = sheet.columns.find((c) => c.key === input.columnKey);
+          if (!targetColumn) throw new Error("Column not found");
+          if (targetColumn.source !== "operator") throw new Error("Only your own columns can be mapped to a campaign field");
+          let nextSheet = {
+            ...sheet,
+            columns: sheet.columns.map((c) => c.key === input.columnKey ? { ...c, campaignMapping: mapping } : c)
+          };
+          if (mapping) {
+            const { recipientsById, outcomeLabels } = await buildIdentitySheet(businessAccountId, workbook.sourceCampaignId);
+            nextSheet = applyColumnMappings(nextSheet, recipientsById, outcomeLabels);
+          }
+          const [version] = await tx.insert(whatsappAiWorkbookVersions).values({
+            workbookId,
+            businessAccountId,
+            sourceCampaignId: workbook.sourceCampaignId,
+            versionNumber: current.versionNumber + 1,
+            source: "campaign_sync",
+            sheets: [nextSheet]
+          }).returning();
+          await tx.update(whatsappAiWorkbooks).set({ updatedAt: /* @__PURE__ */ new Date() }).where(and58(eq68(whatsappAiWorkbooks.id, workbookId), eq68(whatsappAiWorkbooks.businessAccountId, businessAccountId)));
+          return version;
         });
       },
       async duplicate(businessAccountId, workbookId, name) {
@@ -56818,21 +57122,7 @@ var init_whatsappAiWorkbookService = __esm({
         const rowIdsByPhone = link.rowIdsByPhone || {};
         let updatedRows = 0;
         let changedCells = 0;
-        const valueFor = (recipient, source) => {
-          if (source === "outcome_label") {
-            return recipient.primaryClassification ? outcomeLabels.get(recipient.primaryClassification) || recipient.primaryClassification : null;
-          }
-          if (source === "outcome_key") return recipient.primaryClassification || null;
-          if (source === "delivery_status") return recipient.status;
-          if (source === "callback_required") return recipient.callbackRequired;
-          if (source === "callback_reason") return recipient.callbackReason || null;
-          if (source === "customer_feedback") return recipient.customerFeedback || null;
-          if (source === "reply_count") return recipient.replyCount;
-          if (source === "first_reply_at") return recipient.firstReplyAt;
-          if (source === "classified_at") return recipient.classifiedAt;
-          if (source.startsWith("capture:")) return (recipient.dispositionData || {})[source.slice("capture:".length)] || null;
-          return null;
-        };
+        const valueFor = (recipient, source) => campaignFieldValue(recipient, source, outcomeLabels);
         for (const recipient of recipients) {
           const rowId = rowIdsByPhone[normalizePhone5(String(recipient.phone || ""))];
           const row = rowId ? rowsById.get(rowId) : void 0;
@@ -105763,8 +106053,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
     try {
       const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
       const rows = await whatsappAiWorkbookService2.list(
-        req.user.businessAccountId,
-        req.query.includeArchived === "true"
+        req.user.businessAccountId
       );
       res.json(rows);
     } catch (err) {
@@ -105796,6 +106085,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
   });
   app2.patch("/api/whatsapp/ai-workbooks/:id", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
+      if (req.body?.status !== void 0) {
+        return res.status(400).json({ error: "Workbook archiving is no longer supported. Delete the workbook instead." });
+      }
       const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
       const workbook = await whatsappAiWorkbookService2.updateWorkbook(
         req.user.businessAccountId,
@@ -105806,6 +106098,20 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       res.json(workbook);
     } catch (err) {
       res.status(400).json({ error: err.message });
+    }
+  });
+  app2.delete("/api/whatsapp/ai-workbooks/:id", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
+      const deleted = await whatsappAiWorkbookService2.deleteWorkbook(
+        req.user.businessAccountId,
+        req.params.id
+      );
+      if (!deleted) return res.status(404).json({ error: "Workbook not found" });
+      res.json({ success: true, id: deleted.id });
+    } catch (err) {
+      console.error("[AI Workbooks] Failed to delete workbook:", err);
+      res.status(500).json({ error: "Couldn't delete the workbook. Please try again." });
     }
   });
   app2.post("/api/whatsapp/ai-workbooks/:id/duplicate", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
@@ -105890,11 +106196,39 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
     try {
       const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
       const campaignId = req.body?.campaignId ? String(req.body.campaignId) : null;
+      const rawMode = req.body?.mode;
+      if (rawMode !== void 0 && rawMode !== "full" && rawMode !== "custom") {
+        return res.status(400).json({ error: "mode must be 'full' or 'custom'" });
+      }
+      const mode = rawMode === "custom" ? "custom" : "full";
       const result = await whatsappAiWorkbookService2.linkToCampaign(req.user.businessAccountId, req.params.id, campaignId, campaignId ? {
         expectedCurrentVersionId: String(req.body?.expectedCurrentVersionId || ""),
         expectedRevision: Number(req.body?.expectedRevision)
-      } : void 0);
+      } : void 0, mode);
       res.status(200).json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+  app2.post("/api/whatsapp/ai-workbooks/:id/columns/map", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
+      const version = await whatsappAiWorkbookService2.mapColumn(req.user.businessAccountId, req.params.id, {
+        columnKey: String(req.body?.columnKey || ""),
+        mapping: req.body?.mapping ? { source: String(req.body.mapping.source || ""), format: String(req.body.mapping.format || "text") } : null,
+        expectedCurrentVersionId: String(req.body?.expectedCurrentVersionId || ""),
+        expectedRevision: Number(req.body?.expectedRevision)
+      });
+      res.status(201).json(version);
+    } catch (err) {
+      res.status(String(err.message).includes("another session") ? 409 : 400).json({ error: err.message });
+    }
+  });
+  app2.get("/api/whatsapp/campaigns/:id/workbook-fields", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
+      const fields = await whatsappAiWorkbookService2.listCampaignFields(req.user.businessAccountId, req.params.id);
+      res.json(fields);
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

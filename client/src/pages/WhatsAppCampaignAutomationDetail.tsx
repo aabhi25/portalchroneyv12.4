@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { ArrowLeft, CheckCircle2, FileSpreadsheet, Pencil, Play, Trash2, Upload, XCircle } from "lucide-react";
+import { ArrowLeft, BookOpen, CheckCircle2, FileSpreadsheet, Pencil, Play, Trash2, Upload, XCircle } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { parseSpreadsheetFile, pickDefaultSheet } from "@/lib/spreadsheetImport";
 import { buildSheetData } from "@shared/contactImport";
@@ -18,10 +18,20 @@ type Preview = {
   summary: { totalRows: number; eligibleRows: number; excludedRows: number; invalidRows: number; duplicateRows: number };
   invalid: { rowNumber: number; reason: string }[];
   previewRecipients: { rowNumber: number; recordKey: string; phone: string; name: string; params: string[] }[];
+  source: {
+    type: "upload" | "ai_workbook";
+    workbookId?: string;
+    workbookName?: string;
+    versionId?: string;
+    versionNumber?: number;
+    revision?: number;
+    sheetName?: string;
+  };
 };
 type Run = {
   id: string; sourceFileName: string; status: string; scheduledAt: string | null; totalRows: number; eligibleRows: number;
   excludedRows: number; invalidRows: number; duplicateRows: number; createdAt: string;
+  sourceType?: "upload" | "ai_workbook"; sourceWorkbookVersionId?: string | null;
   campaignId: string | null; campaign?: { status: string; id: string } | null;
 };
 
@@ -46,17 +56,40 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
     queryFn: () => apiRequest("GET", `/api/whatsapp/campaign-automations/${id}/runs`),
     refetchInterval: 20_000,
   });
+  const isWorkbookSource = automation?.sourceType === "ai_workbook";
 
   const previewMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/whatsapp/campaign-automations/${id}/upload-preview`, payload),
+    mutationFn: () => apiRequest(
+      "POST",
+      `/api/whatsapp/campaign-automations/${id}/upload-preview`,
+      isWorkbookSource ? { sourceType: "ai_workbook" } : payload,
+    ),
     onSuccess: (result: Preview) => setPreview(result),
-    onError: (error: any) => toast({ title: "Could not validate file", description: error.message, variant: "destructive" }),
+    onError: (error: any) => toast({
+      title: isWorkbookSource ? "Could not validate workbook" : "Could not validate file",
+      description: error.message,
+      variant: "destructive",
+    }),
   });
   const createRunMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/whatsapp/campaign-automations/${id}/runs`, { ...payload, sourceFileName: fileName }),
+    mutationFn: () => apiRequest(
+      "POST",
+      `/api/whatsapp/campaign-automations/${id}/runs`,
+      isWorkbookSource
+        ? {
+            sourceType: "ai_workbook",
+            expectedWorkbookVersionId: preview?.source.versionId,
+            expectedWorkbookRevision: preview?.source.revision,
+          }
+        : { ...payload, sourceFileName: fileName },
+    ),
     onSuccess: (result: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/campaign-automations", id, "runs"] });
-      setPayload(null); setPreview(null); setFileName("");
+      if (!isWorkbookSource) {
+        setPayload(null);
+        setFileName("");
+      }
+      setPreview(null);
       if (fileInput.current) fileInput.current.value = "";
       toast({ title: result.run.status === "scheduled" ? "Campaign scheduled" : "Run created for review" });
     },
@@ -145,21 +178,47 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
       </div>
 
       <Card>
-        <CardHeader><CardTitle className="text-base flex items-center gap-2"><Upload className="h-4 w-4 text-emerald-600" /> Daily spreadsheet upload</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            {isWorkbookSource
+              ? <BookOpen className="h-4 w-4 text-emerald-600" />
+              : <Upload className="h-4 w-4 text-emerald-600" />}
+            {isWorkbookSource ? "Run from AI Workbook" : "Daily spreadsheet upload"}
+          </CardTitle>
+        </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-gray-600">Upload the refreshed client file. We validate the configured fields and calculate today’s eligible recipients before creating any campaign.</p>
-          <div className="flex flex-wrap items-center gap-3">
-            <input ref={fileInput} type="file" accept=".xlsx,.xls,.xlsm,.csv,.tsv,.txt" className="hidden" onChange={event => handleFile(event.target.files?.[0])} />
-            <Button variant="outline" onClick={() => fileInput.current?.click()}><FileSpreadsheet className="h-4 w-4 mr-1" /> Choose spreadsheet</Button>
-            {fileName && <span className="text-sm text-gray-600">{fileName}</span>}
-            {payload && <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending}><CheckCircle2 className="h-4 w-4 mr-1" /> {previewMutation.isPending ? "Validating..." : "Validate upload"}</Button>}
-          </div>
+          <p className="text-sm text-gray-600">
+            {isWorkbookSource
+              ? "Validate the linked workbook’s latest saved version. The resulting run records the exact workbook version it used."
+              : "Upload the refreshed client file. We validate the configured fields and calculate today’s eligible recipients before creating any campaign."}
+          </p>
+          {isWorkbookSource ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending || !automation.enabled}>
+                <CheckCircle2 className="h-4 w-4 mr-1" />
+                {previewMutation.isPending ? "Validating..." : "Validate latest workbook"}
+              </Button>
+              {!automation.sourceWorkbookId && <span className="text-sm text-red-700">The linked workbook is no longer available. Edit this automation to choose another source.</span>}
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <input ref={fileInput} type="file" accept=".xlsx,.xls,.xlsm,.csv,.tsv,.txt" className="hidden" onChange={event => handleFile(event.target.files?.[0])} />
+              <Button variant="outline" onClick={() => fileInput.current?.click()}><FileSpreadsheet className="h-4 w-4 mr-1" /> Choose spreadsheet</Button>
+              {fileName && <span className="text-sm text-gray-600">{fileName}</span>}
+              {payload && <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending}><CheckCircle2 className="h-4 w-4 mr-1" /> {previewMutation.isPending ? "Validating..." : "Validate upload"}</Button>}
+            </div>
+          )}
 
           {preview && (
             <div className="space-y-4 border rounded-lg p-4 bg-gray-50">
               <div>
                 <h3 className="font-medium">Validation result</h3>
                 <p className="text-sm text-gray-600">Target date: <span className="font-medium">{preview.targetDate}</span></p>
+                {preview.source.type === "ai_workbook" && (
+                  <p className="text-xs text-gray-500">
+                    {preview.source.workbookName} · version {preview.source.versionNumber}.{preview.source.revision} · {preview.source.sheetName}
+                  </p>
+                )}
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
                 <div><span className="block text-gray-500">Rows</span><strong>{preview.summary.totalRows}</strong></div>
@@ -172,7 +231,7 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
                 <Button onClick={() => createRunMutation.mutate()} disabled={createRunMutation.isPending} data-testid="button-create-automation-run">
                   <Play className="h-4 w-4 mr-1" /> {createRunMutation.isPending ? "Creating..." : automation.sendMode === "automatic" ? "Create and schedule campaign" : "Create run for review"}
                 </Button>
-              ) : <Alert variant="destructive"><AlertTitle>No recipients ready</AlertTitle><AlertDescription>Correct the date rule, upload data, or duplicate history before creating a run.</AlertDescription></Alert>}
+              ) : <Alert variant="destructive"><AlertTitle>No recipients ready</AlertTitle><AlertDescription>Correct the date rule, source data, or duplicate history before creating a run.</AlertDescription></Alert>}
               {preview.previewRecipients.length > 0 && (
                 <div className="rounded-md border bg-white overflow-hidden">
                   <div className="px-3 py-2 text-sm font-medium border-b">Recipient preview (first {preview.previewRecipients.length})</div>
@@ -198,13 +257,13 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
       <Card>
         <CardHeader><CardTitle className="text-base">Run history</CardTitle></CardHeader>
         <CardContent>
-          {!runs.length ? <p className="text-sm text-gray-500 py-4">No uploaded runs yet.</p> : (
+          {!runs.length ? <p className="text-sm text-gray-500 py-4">No runs yet.</p> : (
             <div className="space-y-3">
               {runs.map(run => (
                 <div key={run.id} className="border rounded-lg p-3 flex flex-wrap gap-3 items-center">
                   <div className="flex-1 min-w-[220px]">
                     <div className="flex items-center gap-2"><span className="font-medium text-sm">{run.sourceFileName}</span><Badge variant={statusVariant[run.status] || "outline"}>{run.status.replace("_", " ")}</Badge>{run.campaign && <Badge variant={statusVariant[run.campaign.status] || "outline"}>Campaign: {run.campaign.status}</Badge>}</div>
-                    <div className="text-xs text-gray-500 mt-1">{run.eligibleRows} eligible · {run.excludedRows} excluded · {run.duplicateRows} already sent · {run.invalidRows} invalid · uploaded {new Date(run.createdAt).toLocaleString()}</div>
+                    <div className="text-xs text-gray-500 mt-1">{run.eligibleRows} eligible · {run.excludedRows} excluded · {run.duplicateRows} already sent · {run.invalidRows} invalid · created {new Date(run.createdAt).toLocaleString()}</div>
                     {run.scheduledAt && <div className="text-xs text-gray-500">Scheduled: {new Date(run.scheduledAt).toLocaleString()}</div>}
                   </div>
                   <div className="flex gap-2">

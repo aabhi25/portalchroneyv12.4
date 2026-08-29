@@ -21,3 +21,4 @@
 - [Portable npm lockfiles](portable-npm-lockfiles.md) — registry hostnames persist in npm locks, and local-file overrides can make a clean `npm ci` reject the lock entirely.
 - [AI workbook single-sheet model](ai-workbook-single-sheet-model.md) — workbooks expose one consolidated sheet; keep history and campaign links internal, not as user-facing tabs.
 - [Development campaign fixtures](development-campaign-fixtures.md) — simulated campaigns must be tenant-locked, historical, and use non-dispatchable templates so fixtures can never reach a provider.
+- [Workbook automation source locking](workbook-automation-source-locking.md) — bind runs to version ID + revision, and serialize source changes on the workbook row.

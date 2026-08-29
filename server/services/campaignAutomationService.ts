@@ -1,12 +1,15 @@
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../db";
 import {
+  type AiWorkbookSheet,
   contactGroupContacts,
   contactGroups,
   marketingCampaigns,
   whatsappCampaignAutomationDispatches,
   whatsappCampaignAutomationRuns,
   whatsappCampaignAutomations,
+  whatsappAiWorkbookVersions,
+  whatsappAiWorkbooks,
   whatsappTemplates,
   type WhatsappCampaignAutomation,
   type WhatsappTemplate,
@@ -22,6 +25,9 @@ import {
 
 type AutomationInput = {
   name: string;
+  sourceType?: "upload" | "ai_workbook";
+  sourceWorkbookId?: string | null;
+  sourceWorkbookSheetId?: string | null;
   templateId: string;
   templateParams?: string[];
   phoneColumn: string;
@@ -53,6 +59,7 @@ type AutomationCandidate = {
 
 const MAX_OFFSET_DAYS = 366;
 const ALLOWED_SEND_MODES = new Set(["review", "automatic"]);
+const ALLOWED_SOURCE_TYPES = new Set(["upload", "ai_workbook"]);
 
 function canonical(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -69,6 +76,10 @@ function cleanConfig(input: any): AutomationInput {
   const name = String(input?.name || "").trim();
   if (!name) throw new Error("Automation name is required");
   if (!input?.templateId) throw new Error("Choose an approved WhatsApp template");
+  const sourceType = input.sourceType || "upload";
+  if (!ALLOWED_SOURCE_TYPES.has(sourceType)) throw new Error("Invalid automation source");
+  const sourceWorkbookId = sourceType === "ai_workbook" ? String(input.sourceWorkbookId || "").trim() : null;
+  if (sourceType === "ai_workbook" && !sourceWorkbookId) throw new Error("Choose an AI Workbook");
 
   const mapped = ["phoneColumn", "recordKeyColumn", "dateColumn"];
   for (const field of mapped) {
@@ -108,6 +119,11 @@ function cleanConfig(input: any): AutomationInput {
   return {
     ...input,
     name,
+    sourceType,
+    sourceWorkbookId,
+    sourceWorkbookSheetId: sourceType === "ai_workbook"
+      ? String(input.sourceWorkbookSheetId || "").trim() || null
+      : null,
     templateParams: params,
     phoneColumn: canonical(input.phoneColumn),
     nameColumn: canonical(input.nameColumn),
@@ -122,6 +138,74 @@ function cleanConfig(input: any): AutomationInput {
     timezone,
     enabled: input.enabled !== false,
   } as AutomationInput;
+}
+
+type ResolvedWorkbookSource = {
+  payload: SpreadsheetPayload;
+  workbookId: string;
+  workbookName: string;
+  versionId: string;
+  versionNumber: number;
+  revision: number;
+  sheetId: string;
+  sheetName: string;
+};
+
+async function resolveWorkbookSource(
+  businessAccountId: string,
+  config: Pick<AutomationInput, "sourceWorkbookId" | "sourceWorkbookSheetId">,
+): Promise<ResolvedWorkbookSource> {
+  if (!config.sourceWorkbookId) throw new Error("This automation is not linked to an AI Workbook");
+  const [workbook] = await db.select().from(whatsappAiWorkbooks)
+    .where(and(
+      eq(whatsappAiWorkbooks.id, config.sourceWorkbookId),
+      eq(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+    ))
+    .limit(1);
+  if (!workbook) throw new Error("The linked AI Workbook is no longer available");
+
+  const [version] = await db.select().from(whatsappAiWorkbookVersions)
+    .where(and(
+      eq(whatsappAiWorkbookVersions.workbookId, workbook.id),
+      eq(whatsappAiWorkbookVersions.businessAccountId, businessAccountId),
+    ))
+    .orderBy(desc(whatsappAiWorkbookVersions.versionNumber))
+    .limit(1);
+  if (!version) throw new Error("The linked AI Workbook has no saved version");
+
+  const sheets = Array.isArray(version.sheets) ? version.sheets as AiWorkbookSheet[] : [];
+  const sheet = config.sourceWorkbookSheetId
+    ? sheets.find(candidate => candidate.id === config.sourceWorkbookSheetId)
+    : sheets[0];
+  if (!sheet) throw new Error("The linked AI Workbook sheet is no longer available");
+  if (!sheet.columns.length) throw new Error("The linked AI Workbook has no columns");
+
+  return {
+    payload: {
+      columns: sheet.columns.map(column => ({ key: column.key, label: column.label })),
+      rows: sheet.rows.map((row, index) => ({
+        r: index + 2,
+        v: sheet.columns.map(column => {
+          const value = row.values[column.key];
+          return value === null || value === undefined ? "" : String(value);
+        }),
+      })),
+    },
+    workbookId: workbook.id,
+    workbookName: workbook.name,
+    versionId: version.id,
+    versionNumber: version.versionNumber,
+    revision: version.revision,
+    sheetId: sheet.id,
+    sheetName: sheet.name,
+  };
+}
+
+async function validateWorkbookConfig(businessAccountId: string, config: AutomationInput) {
+  if (config.sourceType !== "ai_workbook") return null;
+  const source = await resolveWorkbookSource(businessAccountId, config);
+  validateColumns(config, source.payload.columns);
+  return source;
 }
 
 function validateColumns(config: AutomationInput, columns: ImportColumn[]) {
@@ -393,16 +477,21 @@ export const campaignAutomationService = {
   },
 
   async create(businessAccountId: string, input: AutomationInput) {
-    const config = cleanConfig(input);
+    let config = cleanConfig(input);
     const [template] = await db.select().from(whatsappTemplates)
       .where(and(eq(whatsappTemplates.id, config.templateId), eq(whatsappTemplates.businessAccountId, businessAccountId)))
       .limit(1);
     if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
     assertTemplateMapping(template, config.templateParams || []);
+    const workbookSource = await validateWorkbookConfig(businessAccountId, config);
+    if (workbookSource) config = { ...config, sourceWorkbookSheetId: workbookSource.sheetId };
 
     const [row] = await db.insert(whatsappCampaignAutomations).values({
       businessAccountId,
       name: config.name,
+      sourceType: config.sourceType,
+      sourceWorkbookId: config.sourceWorkbookId,
+      sourceWorkbookSheetId: config.sourceWorkbookSheetId,
       templateId: config.templateId,
       templateParams: config.templateParams,
       phoneColumn: config.phoneColumn,
@@ -424,12 +513,14 @@ export const campaignAutomationService = {
   async update(businessAccountId: string, id: string, input: AutomationInput) {
     const existing = await this.get(businessAccountId, id);
     if (!existing) return undefined;
-    const config = cleanConfig({ ...existing, ...input });
+    let config = cleanConfig({ ...existing, ...input });
     const [template] = await db.select().from(whatsappTemplates)
       .where(and(eq(whatsappTemplates.id, config.templateId), eq(whatsappTemplates.businessAccountId, businessAccountId)))
       .limit(1);
     if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
     assertTemplateMapping(template, config.templateParams || []);
+    const workbookSource = await validateWorkbookConfig(businessAccountId, config);
+    if (workbookSource) config = { ...config, sourceWorkbookSheetId: workbookSource.sheetId };
     const [row] = await db.update(whatsappCampaignAutomations).set({
       ...config,
       updatedAt: new Date(),
@@ -512,11 +603,24 @@ export const campaignAutomationService = {
   async preview(businessAccountId: string, id: string, payload: any) {
     const automation = await this.get(businessAccountId, id);
     if (!automation) throw new Error("Automation not found");
-    const evaluated = await evaluateUpload(automation, payload);
+    const workbookSource = automation.sourceType === "ai_workbook"
+      ? await resolveWorkbookSource(businessAccountId, automation)
+      : null;
+    const evaluated = await evaluateUpload(automation, workbookSource?.payload || payload);
     return {
       targetDate: evaluated.targetDate,
       summary: evaluated.summary,
       invalid: evaluated.invalid,
+      source: workbookSource ? {
+        type: "ai_workbook",
+        workbookId: workbookSource.workbookId,
+        workbookName: workbookSource.workbookName,
+        versionId: workbookSource.versionId,
+        versionNumber: workbookSource.versionNumber,
+        revision: workbookSource.revision,
+        sheetId: workbookSource.sheetId,
+        sheetName: workbookSource.sheetName,
+      } : { type: "upload" },
       previewRecipients: evaluated.candidates.slice(0, 25).map(candidate => ({
         rowNumber: candidate.rowNumber,
         recordKey: candidate.recordKey,
@@ -537,15 +641,61 @@ export const campaignAutomationService = {
     if (!template || template.status !== "approved") throw new Error("The selected template is no longer approved");
     assertTemplateMapping(template, automation.templateParams || []);
 
-    const evaluated = await evaluateUpload(automation, payload);
+    const workbookSource = automation.sourceType === "ai_workbook"
+      ? await resolveWorkbookSource(businessAccountId, automation)
+      : null;
+    if (
+      workbookSource
+      && (!payload?.expectedWorkbookVersionId || !Number.isInteger(payload?.expectedWorkbookRevision))
+    ) {
+      throw new Error("Validate the latest AI Workbook version before creating a run.");
+    }
+    if (
+      workbookSource
+      && (
+        payload.expectedWorkbookVersionId !== workbookSource.versionId
+        || payload.expectedWorkbookRevision !== workbookSource.revision
+      )
+    ) {
+      throw new Error("The AI Workbook changed after validation. Validate the latest version again.");
+    }
+    const evaluated = await evaluateUpload(automation, workbookSource?.payload || payload);
     if (evaluated.candidates.length === 0) {
       throw new Error("No eligible recipients were found. Check the date rule, status filter, and duplicate history.");
     }
 
     const scheduledAt = nextScheduledAt(automation);
     const automatic = automation.sendMode === "automatic";
-    const safeFileName = String(sourceFileName || "spreadsheet").slice(0, 200);
+    const safeFileName = workbookSource
+      ? `${workbookSource.workbookName} · version ${workbookSource.versionNumber}.${workbookSource.revision}`.slice(0, 200)
+      : String(sourceFileName || "spreadsheet").slice(0, 200);
     const result = await db.transaction(async tx => {
+      if (workbookSource) {
+        const [lockedWorkbook] = await tx.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks)
+          .where(and(
+            eq(whatsappAiWorkbooks.id, workbookSource.workbookId),
+            eq(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+          ))
+          .for("update")
+          .limit(1);
+        if (!lockedWorkbook) throw new Error("The linked AI Workbook was deleted before the run could be created");
+        const [currentVersion] = await tx.select({
+          id: whatsappAiWorkbookVersions.id,
+          revision: whatsappAiWorkbookVersions.revision,
+        }).from(whatsappAiWorkbookVersions)
+          .where(and(
+            eq(whatsappAiWorkbookVersions.workbookId, workbookSource.workbookId),
+            eq(whatsappAiWorkbookVersions.businessAccountId, businessAccountId),
+          ))
+          .orderBy(desc(whatsappAiWorkbookVersions.versionNumber))
+          .limit(1);
+        if (
+          currentVersion?.id !== workbookSource.versionId
+          || currentVersion.revision !== workbookSource.revision
+        ) {
+          throw new Error("The AI Workbook changed after validation. Validate the latest version again.");
+        }
+      }
       const [activeAutomation] = await tx.select().from(whatsappCampaignAutomations)
         .where(and(
           eq(whatsappCampaignAutomations.id, id),
@@ -556,11 +706,21 @@ export const campaignAutomationService = {
         .for("update")
         .limit(1);
       if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be created");
+      if (
+        activeAutomation.updatedAt.getTime() !== automation.updatedAt.getTime()
+        || activeAutomation.sourceType !== automation.sourceType
+        || activeAutomation.sourceWorkbookId !== automation.sourceWorkbookId
+        || activeAutomation.sourceWorkbookSheetId !== automation.sourceWorkbookSheetId
+      ) {
+        throw new Error("This automation changed while the run was being prepared. Validate the source again.");
+      }
 
       const [group] = await tx.insert(contactGroups).values({
         businessAccountId,
         name: `${automation.name} — ${dateInTimezone(automation.timezone)} (${safeFileName})`.slice(0, 250),
-        description: `Generated from spreadsheet automation "${automation.name}"`,
+        description: workbookSource
+          ? `Generated from AI Workbook "${workbookSource.workbookName}" by automation "${automation.name}"`
+          : `Generated from spreadsheet automation "${automation.name}"`,
         defaultCountryCode: automation.defaultCountryCode,
         contactCount: evaluated.candidates.length,
       }).returning();
@@ -593,6 +753,14 @@ export const campaignAutomationService = {
         campaignId: campaign.id,
         contactGroupId: group.id,
         sourceFileName: safeFileName,
+        sourceType: workbookSource ? "ai_workbook" : "upload",
+        sourceWorkbookId: workbookSource?.workbookId || null,
+        sourceWorkbookVersionId: workbookSource?.versionId || null,
+        sourceWorkbookSheetId: workbookSource?.sheetId || null,
+        sourceWorkbookName: workbookSource?.workbookName || null,
+        sourceWorkbookVersionNumber: workbookSource?.versionNumber || null,
+        sourceWorkbookRevision: workbookSource?.revision || null,
+        sourceWorkbookSheetName: workbookSource?.sheetName || null,
         status: automatic ? "scheduled" : "awaiting_review",
         scheduledAt: automatic ? scheduledAt : null,
         ...evaluated.summary,

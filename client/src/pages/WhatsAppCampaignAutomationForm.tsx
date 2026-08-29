@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { AlertTriangle, ArrowLeft, CalendarClock, FileSpreadsheet, Loader2, Save, SlidersHorizontal, Sparkles } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpen, CalendarClock, FileSpreadsheet, Loader2, Save, SlidersHorizontal, Sparkles } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractAutomationSampleHeaders, type HeaderSource } from "@/lib/automationSampleHeaders";
 import { Button } from "@/components/ui/button";
@@ -25,9 +25,22 @@ type MappingSuggestions = {
   warnings: string[];
 };
 type MappingResponse = { available: boolean; suggestions: MappingSuggestions };
+type WorkbookSummary = { id: string; name: string; status: string; latestVersion?: { versionNumber: number } | null };
+type WorkbookDetail = {
+  id: string;
+  name: string;
+  currentVersion: {
+    id: string;
+    versionNumber: number;
+    sheets: { id: string; name: string; columns: { key: string; label: string }[] }[];
+  } | null;
+};
 
 const EMPTY = {
   name: "",
+  sourceType: "ai_workbook" as "upload" | "ai_workbook",
+  sourceWorkbookId: "",
+  sourceWorkbookSheetId: "",
   templateId: "",
   templateParams: [] as string[],
   phoneColumn: "phone",
@@ -73,6 +86,14 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
   const [suggestions, setSuggestions] = useState<MappingResponse | null>(null);
   const [touchedMappingFields, setTouchedMappingFields] = useState<Set<string>>(() => new Set());
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ["/api/whatsapp/templates"] });
+  const { data: workbooks = [] } = useQuery<WorkbookSummary[]>({
+    queryKey: ["/api/whatsapp/ai-workbooks"],
+  });
+  const { data: selectedWorkbook, isLoading: isLoadingWorkbook } = useQuery<WorkbookDetail>({
+    queryKey: ["/api/whatsapp/ai-workbooks", form.sourceWorkbookId],
+    queryFn: () => apiRequest("GET", `/api/whatsapp/ai-workbooks/${form.sourceWorkbookId}`),
+    enabled: form.sourceType === "ai_workbook" && Boolean(form.sourceWorkbookId),
+  });
   const { data: existing, isLoading } = useQuery<CampaignAutomation & Record<string, any>>({
     queryKey: ["/api/whatsapp/campaign-automations", id],
     queryFn: () => apiRequest("GET", `/api/whatsapp/campaign-automations/${id}`),
@@ -83,6 +104,9 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
     if (!existing) return;
     setForm({
       name: existing.name,
+      sourceType: existing.sourceType === "ai_workbook" ? "ai_workbook" : "upload",
+      sourceWorkbookId: existing.sourceWorkbookId || "",
+      sourceWorkbookSheetId: existing.sourceWorkbookSheetId || "",
       templateId: existing.templateId,
       templateParams: Array.isArray(existing.templateParams) ? existing.templateParams : [],
       phoneColumn: existing.phoneColumn,
@@ -111,7 +135,15 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
     setTouchedMappingFields(current => new Set(current).add(touchedKey));
     update(key, value);
   };
-  const selectedSource = headerSources.find(source => source.id === selectedSourceId) || headerSources[0];
+  const selectedUploadSource = headerSources.find(source => source.id === selectedSourceId) || headerSources[0];
+  const selectedWorkbookSheet = selectedWorkbook?.currentVersion?.sheets.find(
+    sheet => sheet.id === form.sourceWorkbookSheetId,
+  ) || selectedWorkbook?.currentVersion?.sheets[0];
+  const selectedSource: HeaderSource | undefined = form.sourceType === "ai_workbook"
+    ? selectedWorkbookSheet
+      ? { id: selectedWorkbookSheet.id, label: selectedWorkbookSheet.name, columns: selectedWorkbookSheet.columns }
+      : undefined
+    : selectedUploadSource;
   const sampleColumnKeys = new Set(selectedSource?.columns.map(column => column.key) || []);
 
   const applySuggestion = (
@@ -157,7 +189,13 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
 
   const requestSuggestions = async () => {
     if (!selectedSource) {
-      toast({ title: "Upload a sample first", description: "Choose an Excel, CSV, or table-based PDF sample so we can read its headers.", variant: "destructive" });
+      toast({
+        title: form.sourceType === "ai_workbook" ? "Choose a workbook first" : "Upload a sample first",
+        description: form.sourceType === "ai_workbook"
+          ? "Choose an AI Workbook so we can read its saved columns."
+          : "Choose an Excel, CSV, or table-based PDF sample so we can read its headers.",
+        variant: "destructive",
+      });
       return;
     }
     setIsSuggestingMappings(true);
@@ -239,6 +277,10 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
     mutationFn: () => {
       const payload = {
         ...form,
+        sourceWorkbookId: form.sourceType === "ai_workbook" ? form.sourceWorkbookId : null,
+        sourceWorkbookSheetId: form.sourceType === "ai_workbook"
+          ? selectedWorkbookSheet?.id || form.sourceWorkbookSheetId || null
+          : null,
         eligibleStatuses: form.eligibleStatusesText.split(",").map(value => value.trim()).filter(Boolean),
       };
       return id
@@ -261,8 +303,8 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
         <ArrowLeft className="h-4 w-4 mr-1" /> Back to automations
       </Button>
       <div>
-        <h1 className="text-2xl font-bold">{id ? "Edit spreadsheet automation" : "New spreadsheet automation"}</h1>
-        <p className="text-sm text-gray-600 mt-1">Map your client’s spreadsheet once, then upload a refreshed file whenever it is ready.</p>
+        <h1 className="text-2xl font-bold">{id ? "Edit WhatsApp automation" : "New WhatsApp automation"}</h1>
+        <p className="text-sm text-gray-600 mt-1">Use a live AI Workbook for recurring runs, or keep the existing spreadsheet-upload workflow.</p>
       </div>
 
       <Section title="Campaign and template" icon={<FileSpreadsheet className="h-4 w-4 text-emerald-600" />}>
@@ -301,34 +343,88 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
         )}
       </Section>
 
-      <Section title="Sample file and AI mapping" icon={<Sparkles className="h-4 w-4 text-violet-600" />}>
+      <Section title="Automation source and AI mapping" icon={<Sparkles className="h-4 w-4 text-violet-600" />}>
         <div className="space-y-2">
-          <Label htmlFor="automation-sample-file">Representative file</Label>
-          <Input
-            id="automation-sample-file"
-            type="file"
-            accept=".xlsx,.xls,.xlsm,.csv,.tsv,.txt,.pdf,application/pdf"
-            disabled={isExtractingHeaders}
-            onChange={event => {
-              void extractHeaders(event.target.files?.[0]);
-              event.currentTarget.value = "";
+          <Label>Data source</Label>
+          <Select
+            value={form.sourceType}
+            onValueChange={(sourceType: "upload" | "ai_workbook") => {
+              update("sourceType", sourceType);
+              setSuggestions(null);
             }}
-          />
+          >
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ai_workbook">AI Workbook (recommended)</SelectItem>
+              <SelectItem value="upload">Upload a spreadsheet for each run</SelectItem>
+            </SelectContent>
+          </Select>
           <p className="text-xs text-gray-500">
-            Upload Excel, CSV, or a table-based PDF (5 MB max). It is read locally in your browser to find headers, then discarded. Its rows are never sent to AI or saved.
+            {form.sourceType === "ai_workbook"
+              ? "Each run reads the workbook’s latest saved version. Existing runs keep the version they used."
+              : "Keep uploading a refreshed spreadsheet when you want to create a run."}
           </p>
         </div>
 
-        {isExtractingHeaders && <p className="flex items-center gap-2 text-sm text-gray-600"><Loader2 className="h-4 w-4 animate-spin" /> Reading headers…</p>}
+        {form.sourceType === "ai_workbook" ? (
+          <div className="space-y-2">
+            <Label>AI Workbook</Label>
+            <Select
+              value={form.sourceWorkbookId}
+              onValueChange={sourceWorkbookId => {
+                setForm(current => ({ ...current, sourceWorkbookId, sourceWorkbookSheetId: "" }));
+                setSuggestions(null);
+              }}
+            >
+              <SelectTrigger><SelectValue placeholder="Choose an AI Workbook" /></SelectTrigger>
+              <SelectContent>
+                {workbooks.map(workbook => (
+                  <SelectItem key={workbook.id} value={workbook.id}>
+                    {workbook.name}{workbook.latestVersion ? ` · version ${workbook.latestVersion.versionNumber}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {!workbooks.length && (
+              <p className="text-xs text-amber-700">Create an AI Workbook before using the recommended automation source.</p>
+            )}
+            {isLoadingWorkbook && <p className="flex items-center gap-2 text-sm text-gray-600"><Loader2 className="h-4 w-4 animate-spin" /> Loading workbook columns…</p>}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <Label htmlFor="automation-sample-file">Representative file</Label>
+            <Input
+              id="automation-sample-file"
+              type="file"
+              accept=".xlsx,.xls,.xlsm,.csv,.tsv,.txt,.pdf,application/pdf"
+              disabled={isExtractingHeaders}
+              onChange={event => {
+                void extractHeaders(event.target.files?.[0]);
+                event.currentTarget.value = "";
+              }}
+            />
+            <p className="text-xs text-gray-500">
+              Upload Excel, CSV, or a table-based PDF (5 MB max). It is read locally in your browser to find headers, then discarded. Its rows are never sent to AI or saved.
+            </p>
+            {isExtractingHeaders && <p className="flex items-center gap-2 text-sm text-gray-600"><Loader2 className="h-4 w-4 animate-spin" /> Reading headers…</p>}
+          </div>
+        )}
 
         {selectedSource && (
           <div className="space-y-3 rounded-md border bg-gray-50 p-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-sm font-medium">{sampleFileName}</p>
-                <p className="text-xs text-gray-500">Choose the sheet or PDF page whose header row should be used for this automation.</p>
+                <p className="text-sm font-medium flex items-center gap-1.5">
+                  {form.sourceType === "ai_workbook" && <BookOpen className="h-4 w-4 text-emerald-700" />}
+                  {form.sourceType === "ai_workbook" ? selectedWorkbook?.name : sampleFileName}
+                </p>
+                <p className="text-xs text-gray-500">
+                  {form.sourceType === "ai_workbook"
+                    ? `${selectedSource.label} · ${selectedWorkbook?.currentVersion?.versionNumber ? `version ${selectedWorkbook.currentVersion.versionNumber}` : "latest saved version"}`
+                    : "Choose the sheet or PDF page whose header row should be used for this automation."}
+                </p>
               </div>
-              {headerSources.length > 1 && (
+              {form.sourceType === "upload" && headerSources.length > 1 && (
                 <Select value={selectedSource.id} onValueChange={value => { setSelectedSourceId(value); setSuggestions(null); }}>
                   <SelectTrigger className="w-full sm:w-56"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -384,7 +480,9 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
       </Section>
 
       <Section title="Spreadsheet matching rule" icon={<SlidersHorizontal className="h-4 w-4 text-emerald-600" />}>
-        <p className="text-sm text-gray-600">Enter normalized spreadsheet headers. For example, “EMI Due Date” becomes <code>emi due date</code>; use the exact lower-case header text shown above when a sample is selected.</p>
+        <p className="text-sm text-gray-600">
+          Map the fields used for eligibility and message delivery. Use the exact column keys shown above.
+        </p>
         <div className="grid sm:grid-cols-2 gap-4">
           <div className="space-y-2"><Label>Phone column</Label><Input list="automation-sample-columns" value={form.phoneColumn} onChange={event => updateMapping("phoneColumn", event.target.value)} /></div>
           <div className="space-y-2"><Label>Name column (optional)</Label><Input list="automation-sample-columns" value={form.nameColumn} onChange={event => updateMapping("nameColumn", event.target.value)} /></div>
@@ -409,7 +507,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
           <div className="space-y-2"><Label>Send time</Label><Input type="time" value={form.sendTime} onChange={event => update("sendTime", event.target.value)} /></div>
           <div className="space-y-2"><Label>Timezone</Label><Input value={form.timezone} onChange={event => update("timezone", event.target.value)} placeholder="Asia/Kolkata" /></div>
           <div className="space-y-2"><Label>Default country calling code</Label><Input value={form.defaultCountryCode} onChange={event => update("defaultCountryCode", event.target.value)} placeholder="91" /></div>
-          <div className="space-y-2"><Label>After a valid upload</Label>
+          <div className="space-y-2"><Label>{form.sourceType === "ai_workbook" ? "After a valid workbook run" : "After a valid upload"}</Label>
             <Select value={form.sendMode} onValueChange={(sendMode: "review" | "automatic") => update("sendMode", sendMode)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -421,13 +519,23 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
         </div>
         <div className="flex items-center gap-3 border-t pt-4">
           <Switch checked={form.enabled} onCheckedChange={enabled => update("enabled", enabled)} id="automation-enabled" />
-          <div><Label htmlFor="automation-enabled">Automation is active</Label><p className="text-xs text-gray-500">Paused automations keep their history but reject new uploads.</p></div>
+          <div><Label htmlFor="automation-enabled">Automation is active</Label><p className="text-xs text-gray-500">Paused automations keep their history but reject new runs.</p></div>
         </div>
       </Section>
 
       <div className="flex justify-end gap-2 pb-6">
         <Button variant="outline" onClick={() => setLocation("/admin/whatsapp-campaign-automations")}>Cancel</Button>
-        <Button disabled={saveMutation.isPending || !form.name || !form.templateId || sampleMappingIssues.length > 0} onClick={() => saveMutation.mutate()} data-testid="button-save-campaign-automation">
+        <Button
+          disabled={
+            saveMutation.isPending
+            || !form.name
+            || !form.templateId
+            || sampleMappingIssues.length > 0
+            || (form.sourceType === "ai_workbook" && (!form.sourceWorkbookId || !selectedSource))
+          }
+          onClick={() => saveMutation.mutate()}
+          data-testid="button-save-campaign-automation"
+        >
           <Save className="h-4 w-4 mr-1" /> {saveMutation.isPending ? "Saving..." : id ? "Save changes" : "Create automation"}
         </Button>
       </div>

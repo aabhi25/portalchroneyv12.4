@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 export interface CampaignAutomation {
   id: string;
   name: string;
+  sourceType?: "upload" | "ai_workbook";
   sendMode: "review" | "automatic";
   sendTime: string;
   timezone: string;
@@ -46,7 +47,7 @@ export default function WhatsAppCampaignAutomations() {
             <CalendarClock className="h-6 w-6 text-emerald-600" /> Spreadsheet Automations
           </h1>
           <p className="text-sm text-gray-600 mt-1">
-            Turn a daily Excel or CSV upload into a scheduled WhatsApp campaign.
+            Run recurring campaigns from a live AI Workbook, or upload a spreadsheet when needed.
           </p>
         </div>
         <Button onClick={() => setLocation("/admin/whatsapp-campaign-automations/new")} data-testid="button-new-campaign-automation">
@@ -90,6 +91,9 @@ export default function WhatsAppCampaignAutomations() {
                     </Badge>
                     <Badge variant="outline">
                       {automation.sendMode === "automatic" ? "Automatic" : "Review before send"}
+                    </Badge>
+                    <Badge variant="outline">
+                      {automation.sourceType === "ai_workbook" ? "AI Workbook" : "Spreadsheet upload"}
                     </Badge>
                   </div>
                   <div className="text-xs text-gray-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">
