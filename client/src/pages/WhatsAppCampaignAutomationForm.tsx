@@ -39,6 +39,18 @@ type CampaignBlueprint = {
   aiUseDocs: string;
   aiUseProducts: string;
   replyClassifications?: unknown[] | null;
+  recipientSourceType?: "ai_workbook" | "contact_groups" | null;
+  recipientWorkbookId?: string | null;
+  recipientWorkbookSheetId?: string | null;
+  groupIds?: string[] | null;
+  recipientPhoneColumn?: string | null;
+  recipientNameColumn?: string | null;
+  recipientRecordKeyColumn?: string | null;
+  recipientDateColumn?: string | null;
+  recipientDateOffsetDays?: number | null;
+  recipientStatusColumn?: string | null;
+  recipientEligibleStatuses?: string[] | null;
+  recipientAiAllowedFields?: string[] | null;
 };
 type ContactGroup = { id: string; name: string; contactCount: number };
 type GroupContact = { phone: string; name?: string | null; attributes?: Record<string, unknown> | null };
@@ -190,6 +202,17 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
       sourceCampaignId: campaign.id,
       templateId: campaign.templateId,
       templateParams: Array.isArray(campaign.templateParams) ? campaign.templateParams : [],
+      sourceWorkbookId: campaign.recipientWorkbookId || "",
+      sourceWorkbookSheetId: campaign.recipientWorkbookSheetId || "",
+      sourceAudienceType: campaign.recipientSourceType === "contact_groups" || (Array.isArray(campaign.groupIds) && campaign.groupIds.length) ? "contact_groups" : "ai_workbook",
+      sourceGroupIds: Array.isArray(campaign.groupIds) ? campaign.groupIds : [],
+      phoneColumn: campaign.recipientPhoneColumn || current.phoneColumn,
+      nameColumn: campaign.recipientNameColumn || "",
+      recordKeyColumn: campaign.recipientRecordKeyColumn || current.recordKeyColumn,
+      dateColumn: campaign.recipientDateColumn || current.dateColumn,
+      dateOffsetDays: campaign.recipientDateOffsetDays || 0,
+      statusColumn: campaign.recipientStatusColumn || "",
+      eligibleStatusesText: Array.isArray(campaign.recipientEligibleStatuses) ? campaign.recipientEligibleStatuses.join(", ") : "",
     }));
   }, [campaigns, existing, form.sourceCampaignId, id, search]);
 
@@ -201,6 +224,11 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
     && (campaign.campaignType === "automation" || campaign.id === existing?.sourceCampaignId),
   );
   const selectedBlueprint = campaigns.find(campaign => campaign.id === form.sourceCampaignId);
+  // New automation blueprints fully define recipients. Older blueprints intentionally retain
+  // the editor below so existing upload/direct-workbook setups remain editable.
+  const isCampaignOwnedBlueprint = isBlueprintSource
+    && ["ai_workbook", "contact_groups"].includes(selectedBlueprint?.recipientSourceType || "");
+  const blueprintAudienceType = selectedBlueprint?.recipientSourceType === "contact_groups" ? "contact_groups" : "ai_workbook";
   const selectedTemplateId = isBlueprintSource ? selectedBlueprint?.templateId || "" : form.templateId;
   const selectedTemplateParams = isBlueprintSource
     ? Array.isArray(selectedBlueprint?.templateParams) ? selectedBlueprint.templateParams : []
@@ -367,22 +395,34 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
 
   const saveMutation = useMutation({
     mutationFn: () => {
+      const inherited = isCampaignOwnedBlueprint ? selectedBlueprint : undefined;
+      const inheritedAudienceType = inherited?.recipientSourceType === "contact_groups" ? "contact_groups" : "ai_workbook";
+      const effectiveWorkbookId = inherited ? inherited.recipientWorkbookId || "" : form.sourceWorkbookId;
+      const effectiveGroupIds = inherited && inheritedAudienceType === "contact_groups"
+        ? Array.isArray(inherited.groupIds) ? inherited.groupIds : []
+        : form.sourceGroupIds;
       const payload = {
         ...form,
         sourceCampaignId: isBlueprintSource ? form.sourceCampaignId : null,
         sourceWorkbookId: form.sourceType === "ai_workbook"
-          || (isBlueprintSource && form.sourceAudienceType === "ai_workbook")
-          ? form.sourceWorkbookId || null
+          || (isBlueprintSource && (inheritedAudienceType === "ai_workbook"))
+          ? effectiveWorkbookId || null
           : null,
-        sourceGroupIds: isBlueprintSource && form.sourceAudienceType === "contact_groups"
-          ? form.sourceGroupIds
+        sourceGroupIds: isBlueprintSource && inheritedAudienceType === "contact_groups"
+          ? effectiveGroupIds
           : [],
         sourceWorkbookSheetId: form.sourceType !== "upload"
-          ? selectedWorkbookSheet?.id || form.sourceWorkbookSheetId || null
+          ? inherited?.recipientWorkbookSheetId || selectedWorkbookSheet?.id || form.sourceWorkbookSheetId || null
           : null,
         templateId: selectedTemplateId,
         templateParams: selectedTemplateParams,
-        eligibleStatuses: form.eligibleStatusesText.split(",").map(value => value.trim()).filter(Boolean),
+        phoneColumn: inherited?.recipientPhoneColumn || form.phoneColumn,
+        nameColumn: inherited?.recipientNameColumn || form.nameColumn,
+        recordKeyColumn: inherited?.recipientRecordKeyColumn || form.recordKeyColumn,
+        dateColumn: inherited?.recipientDateColumn || form.dateColumn,
+        dateOffsetDays: inherited?.recipientDateOffsetDays ?? form.dateOffsetDays,
+        statusColumn: inherited?.recipientStatusColumn || form.statusColumn,
+        eligibleStatuses: Array.isArray(inherited?.recipientEligibleStatuses) ? inherited.recipientEligibleStatuses : form.eligibleStatusesText.split(",").map(value => value.trim()).filter(Boolean),
       };
       return id
         ? apiRequest("PATCH", `/api/whatsapp/campaign-automations/${id}`, payload)
@@ -426,10 +466,19 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
                   setForm(current => ({
                     ...current,
                     sourceCampaignId,
-                    sourceWorkbookId: "",
-                    sourceWorkbookSheetId: "",
                     templateId: campaign?.templateId || "",
                     templateParams: Array.isArray(campaign?.templateParams) ? campaign.templateParams : [],
+                    sourceAudienceType: campaign?.recipientSourceType === "contact_groups" || (Array.isArray(campaign?.groupIds) && campaign.groupIds.length) ? "contact_groups" : "ai_workbook",
+                    sourceWorkbookId: campaign?.recipientWorkbookId || "",
+                    sourceWorkbookSheetId: campaign?.recipientWorkbookSheetId || "",
+                    sourceGroupIds: Array.isArray(campaign?.groupIds) ? campaign.groupIds : [],
+                    phoneColumn: campaign?.recipientPhoneColumn || "",
+                    nameColumn: campaign?.recipientNameColumn || "",
+                    recordKeyColumn: campaign?.recipientRecordKeyColumn || "",
+                    dateColumn: campaign?.recipientDateColumn || "",
+                    dateOffsetDays: campaign?.recipientDateOffsetDays || 0,
+                    statusColumn: campaign?.recipientStatusColumn || "",
+                    eligibleStatusesText: Array.isArray(campaign?.recipientEligibleStatuses) ? campaign.recipientEligibleStatuses.join(", ") : "",
                   }));
                   setSuggestions(null);
                 }}
@@ -497,7 +546,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
         )}
       </Section>
 
-      <Section title={isBlueprintSource ? "Automation audience and field mapping" : "Automation source and AI mapping"} icon={<Sparkles className="h-4 w-4 text-violet-600" />}>
+      {!isCampaignOwnedBlueprint && <Section title={isBlueprintSource ? "Automation audience and field mapping" : "Automation source and AI mapping"} icon={<Sparkles className="h-4 w-4 text-violet-600" />}>
         {isBlueprintSource ? (
           <div className="space-y-4">
             {!selectedBlueprint ? (
@@ -727,9 +776,23 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
             ))}
           </div>
         )}
-      </Section>
+      </Section>}
 
-      <Section title="Spreadsheet matching rule" icon={<SlidersHorizontal className="h-4 w-4 text-emerald-600" />}>
+      {isCampaignOwnedBlueprint && <Section title="Campaign-owned recipient rules" icon={<BookOpen className="h-4 w-4 text-violet-600" />}>
+        <div className="rounded-md border bg-gray-50 p-3 space-y-1 text-sm">
+          <p className="font-medium">{blueprintAudienceType === "ai_workbook" ? "AI Workbook" : "Fixed contact groups"} · inherited from {selectedBlueprint?.name}</p>
+          {blueprintAudienceType === "ai_workbook" ? (
+            <p className="text-xs text-gray-600">
+              Workbook: {workbooks.find(workbook => workbook.id === selectedBlueprint?.recipientWorkbookId)?.name || "Unavailable"} ·
+              phone: {selectedBlueprint?.recipientPhoneColumn || "—"} · record key: {selectedBlueprint?.recipientRecordKeyColumn || "—"} ·
+              date: {selectedBlueprint?.recipientDateColumn || "—"} ({selectedBlueprint?.recipientDateOffsetDays || 0} days)
+            </p>
+          ) : <p className="text-xs text-gray-600">{selectedBlueprint?.groupIds?.length || 0} fixed contact group(s)</p>}
+          <p className="text-xs text-gray-500">Recipient source, field mappings, eligibility, and AI field access are controlled by this campaign blueprint. This automation only controls delivery.</p>
+        </div>
+      </Section>}
+
+      {!isCampaignOwnedBlueprint && <Section title="Spreadsheet matching rule" icon={<SlidersHorizontal className="h-4 w-4 text-emerald-600" />}>
         <p className="text-sm text-gray-600">
           Map the fields used for eligibility and message delivery. Use the exact column keys shown above.
         </p>
@@ -750,7 +813,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
           <Input value={form.eligibleStatusesText} onChange={event => update("eligibleStatusesText", event.target.value)} placeholder="pending, overdue" />
           <p className="text-xs text-gray-500">Leave blank to include every record that matches the date rule.</p>
         </div>
-      </Section>
+      </Section>}
 
       <Section title="Delivery control" icon={<CalendarClock className="h-4 w-4 text-emerald-600" />}>
         <div className="grid sm:grid-cols-2 gap-4">

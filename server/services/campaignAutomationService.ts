@@ -170,6 +170,39 @@ type BlueprintContext = {
   campaign: MarketingCampaign;
 };
 
+/**
+ * New blueprints own their audience definition.  Never trust a copied
+ * automation mapping for these: the blueprint is the live source of truth.
+ * NULL recipientSourceType denotes a legacy blueprint and deliberately keeps
+ * its previous workbook/group behavior.
+ */
+function applyCampaignOwnedSource<T extends AutomationInput | WhatsappCampaignAutomation>(
+  config: T,
+  campaign: MarketingCampaign,
+): T & AutomationInput {
+  if (!["ai_workbook", "contact_groups"].includes(campaign.recipientSourceType || "")) {
+    return config as T & AutomationInput;
+  }
+  const usesWorkbook = campaign.recipientSourceType === "ai_workbook";
+  return {
+    ...config,
+    sourceType: "campaign_blueprint",
+    sourceCampaignId: campaign.id,
+    sourceWorkbookId: usesWorkbook ? campaign.recipientWorkbookId : null,
+    sourceWorkbookSheetId: usesWorkbook ? campaign.recipientWorkbookSheetId : null,
+    sourceGroupIds: usesWorkbook ? [] : (campaign.groupIds || []),
+    phoneColumn: campaign.recipientPhoneColumn || "",
+    nameColumn: campaign.recipientNameColumn || "",
+    recordKeyColumn: campaign.recipientRecordKeyColumn || "",
+    dateColumn: campaign.recipientDateColumn || "",
+    dateOffsetDays: campaign.recipientDateOffsetDays || 0,
+    statusColumn: campaign.recipientStatusColumn || "",
+    eligibleStatuses: (campaign.recipientEligibleStatuses || []) as string[],
+    templateId: campaign.templateId,
+    templateParams: (campaign.templateParams || []) as string[],
+  } as T & AutomationInput;
+}
+
 type ResolvedGroupSource = {
   payload: SpreadsheetPayload;
   groupIds: string[];
@@ -307,7 +340,10 @@ async function prepareAutomationInput(
     : null;
   let sourceWorkbookId = input.sourceWorkbookId;
   let sourceWorkbookSheetId = input.sourceWorkbookSheetId;
-  if (blueprint && !sourceWorkbookId && !(input.sourceGroupIds || []).length) {
+  const owned = blueprint ? applyCampaignOwnedSource(input, blueprint.campaign) : input;
+  sourceWorkbookId = owned.sourceWorkbookId;
+  sourceWorkbookSheetId = owned.sourceWorkbookSheetId;
+  if (blueprint && !blueprint.campaign.recipientSourceType && !sourceWorkbookId && !(input.sourceGroupIds || []).length) {
     const linkedWorkbooks = await db.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks)
       .where(and(
         eq(whatsappAiWorkbooks.businessAccountId, businessAccountId),
@@ -327,7 +363,7 @@ async function prepareAutomationInput(
   }
   const prepared = blueprint
     ? {
-        ...input,
+        ...owned,
         sourceType: "campaign_blueprint" as const,
         sourceCampaignId: blueprint.campaign.id,
         sourceWorkbookId,
@@ -335,7 +371,7 @@ async function prepareAutomationInput(
         templateId: blueprint.campaign.templateId,
         templateParams: blueprint.campaign.templateParams || [],
       }
-    : input;
+    : owned;
   return { config: cleanConfig(prepared), blueprint };
 }
 
@@ -828,15 +864,16 @@ export const campaignAutomationService = {
     const blueprint = automation.sourceType === "campaign_blueprint"
       ? await resolveBlueprintContext(businessAccountId, automation.sourceCampaignId)
       : null;
-    const workbookSource = automation.sourceWorkbookId
-      ? await resolveWorkbookSource(businessAccountId, automation)
+    const sourceConfig = blueprint ? applyCampaignOwnedSource(automation, blueprint.campaign) : automation;
+    const workbookSource = sourceConfig.sourceWorkbookId
+      ? await resolveWorkbookSource(businessAccountId, sourceConfig)
       : null;
     const groupSource = blueprint && !workbookSource
-      ? await resolveGroupSource(businessAccountId, automation.sourceGroupIds)
+      ? await resolveGroupSource(businessAccountId, sourceConfig.sourceGroupIds)
       : null;
     const effectiveAutomation = blueprint
       ? {
-          ...automation,
+          ...sourceConfig,
           templateId: blueprint.campaign.templateId,
           templateParams: blueprint.campaign.templateParams || [],
           sourceWorkbookId: workbookSource?.workbookId || null,
@@ -887,15 +924,16 @@ export const campaignAutomationService = {
     const blueprint = automation.sourceType === "campaign_blueprint"
       ? await resolveBlueprintContext(businessAccountId, automation.sourceCampaignId)
       : null;
-    const workbookSource = automation.sourceWorkbookId
-      ? await resolveWorkbookSource(businessAccountId, automation)
+    const sourceConfig = blueprint ? applyCampaignOwnedSource(automation, blueprint.campaign) : automation;
+    const workbookSource = sourceConfig.sourceWorkbookId
+      ? await resolveWorkbookSource(businessAccountId, sourceConfig)
       : null;
     const groupSource = blueprint && !workbookSource
-      ? await resolveGroupSource(businessAccountId, automation.sourceGroupIds)
+      ? await resolveGroupSource(businessAccountId, sourceConfig.sourceGroupIds)
       : null;
     const effectiveAutomation = blueprint
       ? {
-          ...automation,
+          ...sourceConfig,
           templateId: blueprint.campaign.templateId,
           templateParams: blueprint.campaign.templateParams || [],
           sourceWorkbookId: workbookSource?.workbookId || null,
@@ -1052,6 +1090,10 @@ export const campaignAutomationService = {
         replyClassifications: lockedBlueprint?.replyClassifications || [],
         aiDailyTokenBudget: lockedBlueprint?.aiDailyTokenBudget || 50000,
         aiMaxRepliesPerRecipient: lockedBlueprint?.aiMaxRepliesPerRecipient || 20,
+        // Keep the generated execution immutable, but preserve the blueprint's
+        // prompt allowlist so Campaign AI never receives extra workbook fields.
+        recipientSourceType: lockedBlueprint?.recipientSourceType,
+        recipientAiAllowedFields: lockedBlueprint?.recipientAiAllowedFields || [],
       }).returning();
 
       const [run] = await tx.insert(whatsappCampaignAutomationRuns).values({

@@ -7,6 +7,8 @@ import {
   whatsappCampaignAutomationRuns,
   whatsappTemplates,
   whatsappOptOuts,
+  whatsappAiWorkbooks,
+  whatsappAiWorkbookVersions,
   type MarketingCampaign,
   type MarketingCampaignRecipient,
   type WhatsappTemplate,
@@ -195,6 +197,154 @@ interface CreatePayload {
   aiDailyTokenBudget?: number;
   aiMaxRepliesPerRecipient?: number;
   replyClassifications?: ReplyClassification[];
+  recipientSourceType?: "ai_workbook" | "contact_groups" | null;
+  recipientWorkbookId?: string | null;
+  recipientWorkbookSheetId?: string | null;
+  recipientPhoneColumn?: string | null;
+  recipientNameColumn?: string | null;
+  recipientRecordKeyColumn?: string | null;
+  recipientDateColumn?: string | null;
+  recipientDateOffsetDays?: number;
+  recipientStatusColumn?: string | null;
+  recipientEligibleStatuses?: string[];
+  recipientAiAllowedFields?: string[];
+}
+
+const campaignSourceFields = [
+  "recipientSourceType", "recipientWorkbookId", "recipientWorkbookSheetId",
+  "recipientPhoneColumn", "recipientNameColumn", "recipientRecordKeyColumn",
+  "recipientDateColumn", "recipientDateOffsetDays", "recipientStatusColumn", "recipientEligibleStatuses",
+  "recipientAiAllowedFields",
+] as const;
+
+const sourceKey = (value: unknown) => String(value || "").trim().toLowerCase();
+const sourceRefs = (value: string) => Array.from(value.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g))
+  .map(match => sourceKey(match[1])).filter(Boolean);
+
+/** Validate the live, campaign-owned workbook before saving its definition. */
+async function validateCampaignWorkbookSource(businessAccountId: string, input: Partial<CreatePayload>) {
+  const supplied = campaignSourceFields.some(field => (input as any)[field] !== undefined);
+  if (!supplied) return;
+  if (input.recipientSourceType === "contact_groups") {
+    const groupIds = Array.from(new Set((input.groupIds || []).filter(Boolean)));
+    if (!groupIds.length) throw new Error("Choose at least one contact group for this campaign");
+    const groups = await Promise.all(groupIds.map(id => contactGroupService.get(businessAccountId, id)));
+    if (groups.some(group => !group || group.contactCount <= 0)) {
+      throw new Error("Selected contact groups must exist and contain contacts");
+    }
+    const contacts = await contactGroupService.getContactsForGroups(businessAccountId, groupIds);
+    if (!contacts.length) throw new Error("Selected contact groups contain no contacts");
+    const columns = new Set([
+      "phone",
+      "name",
+      ...contacts.flatMap(contact => Object.keys((contact.attributes || {}) as Record<string, string>).map(sourceKey)),
+    ]);
+    const required = [
+      input.recipientPhoneColumn, input.recipientRecordKeyColumn, input.recipientDateColumn,
+    ].map(sourceKey);
+    if (required.some(value => !value)) {
+      throw new Error("Campaign contact-group phone, record key, and date mappings are required");
+    }
+    for (const column of [...required, sourceKey(input.recipientNameColumn), sourceKey(input.recipientStatusColumn)]) {
+      if (column && !columns.has(column)) throw new Error(`The selected contact groups do not have the "${column}" field`);
+    }
+    if (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366) {
+      throw new Error("Campaign date offset must be a whole number between -366 and 366");
+    }
+    if ((input.recipientEligibleStatuses || []).length && !sourceKey(input.recipientStatusColumn)) {
+      throw new Error("A status mapping is required when eligible statuses are configured");
+    }
+    const refs = (input.templateParams || []).flatMap(sourceRefs);
+    if (refs.some(ref => !columns.has(ref))) {
+      throw new Error("A template parameter references a field not present in the selected contact groups");
+    }
+    for (let index = 0; index < contacts.length; index++) {
+      const contact = contacts[index];
+      const attributes = (contact.attributes || {}) as Record<string, string>;
+      const value = (key: string) => key === "phone"
+        ? String(contact.phone || "").trim()
+        : key === "name"
+          ? String(contact.name || "").trim()
+          : String(attributes[key] ?? "").trim();
+      const phone = normalizePhone(value(sourceKey(input.recipientPhoneColumn)));
+      const date = value(sourceKey(input.recipientDateColumn));
+      const parsedDate = date.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
+      const validDate = !!parsedDate && (() => {
+        const y = Number(parsedDate[1]), m = Number(parsedDate[2]), d = Number(parsedDate[3]);
+        const check = new Date(Date.UTC(y, m - 1, d));
+        return check.getUTCFullYear() === y && check.getUTCMonth() === m - 1 && check.getUTCDate() === d;
+      })();
+      if (
+        phone.length < 8
+        || !value(sourceKey(input.recipientRecordKeyColumn))
+        || !validDate
+        || refs.some(ref => !value(ref))
+      ) {
+        throw new Error(`Contact-group recipient ${index + 1} is missing a required campaign field`);
+      }
+    }
+    input.recipientAiAllowedFields = [];
+    return;
+  }
+  if (input.recipientSourceType !== "ai_workbook") {
+    throw new Error("Choose a valid campaign recipient source");
+  }
+  const workbookId = String(input.recipientWorkbookId || "").trim();
+  const sheetId = String(input.recipientWorkbookSheetId || "").trim();
+  if (!workbookId || !sheetId) throw new Error("Choose exactly one AI Workbook sheet for this campaign");
+  const [workbook] = await db.select().from(whatsappAiWorkbooks).where(and(
+    eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+    eq(whatsappAiWorkbooks.status, "active"),
+  )).limit(1);
+  if (!workbook) throw new Error("The selected AI Workbook is not active or does not belong to this business");
+  const [version] = await db.select().from(whatsappAiWorkbookVersions).where(and(
+    eq(whatsappAiWorkbookVersions.workbookId, workbookId),
+    eq(whatsappAiWorkbookVersions.businessAccountId, businessAccountId),
+  )).orderBy(desc(whatsappAiWorkbookVersions.versionNumber)).limit(1);
+  if (!version) throw new Error("The selected AI Workbook has no saved version");
+  const sheets = Array.isArray(version.sheets) ? version.sheets : [];
+  const sheet = sheets.find(s => s.id === sheetId);
+  if (!sheet || !sheet.columns.length) throw new Error("The selected AI Workbook sheet is unavailable");
+  const columns = new Set(sheet.columns.map(c => sourceKey(c.key)));
+  const required = [
+    input.recipientPhoneColumn, input.recipientRecordKeyColumn, input.recipientDateColumn,
+  ].map(sourceKey);
+  if (required.some(v => !v)) throw new Error("Campaign workbook phone, record key, and date mappings are required");
+  if (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366) {
+    throw new Error("Campaign workbook date offset must be a whole number between -366 and 366");
+  }
+  for (const column of [...required, sourceKey(input.recipientNameColumn), sourceKey(input.recipientStatusColumn)]) {
+    if (column && !columns.has(column)) throw new Error(`The selected AI Workbook no longer has the "${column}" column`);
+  }
+  const allowed = Array.from(new Set((input.recipientAiAllowedFields || []).map(sourceKey).filter(Boolean)));
+  if (allowed.some(column => !columns.has(column))) throw new Error("Campaign AI allowlist contains a column not present in the selected sheet");
+  if ((input.recipientEligibleStatuses || []).length && !sourceKey(input.recipientStatusColumn)) {
+    throw new Error("A status mapping is required when eligible statuses are configured");
+  }
+  const refs = (input.templateParams || []).flatMap(sourceRefs);
+  if (refs.some(ref => ref !== "name" && ref !== "phone" && !columns.has(ref))) {
+    throw new Error("A template parameter references a column not present in the selected sheet");
+  }
+  // Validate every row now, not just rows that happen to be eligible today.
+  for (let i = 0; i < sheet.rows.length; i++) {
+    const values = sheet.rows[i].values || {};
+    const value = (key: string) => String(values[key] ?? "").trim();
+    const phone = normalizePhone(value(sourceKey(input.recipientPhoneColumn)));
+    const date = value(sourceKey(input.recipientDateColumn));
+    const parsedDate = date.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
+    const validDate = !!parsedDate && (() => {
+      const y = Number(parsedDate[1]), m = Number(parsedDate[2]), d = Number(parsedDate[3]);
+      const check = new Date(Date.UTC(y, m - 1, d));
+      return check.getUTCFullYear() === y && check.getUTCMonth() === m - 1 && check.getUTCDate() === d;
+    })();
+    const missingTemplateField = refs.find(ref =>
+      (ref === "name" ? !value(sourceKey(input.recipientNameColumn)) : ref !== "phone" && !value(ref))
+    );
+    if (phone.length < 8 || !value(sourceKey(input.recipientRecordKeyColumn)) || !validDate || missingTemplateField) {
+      throw new Error(`Workbook row ${i + 2} is missing a required campaign mapping`);
+    }
+  }
+  input.recipientAiAllowedFields = allowed;
 }
 
 /** Sentinel filter value for "replied, but the classifier matched no category". */
@@ -428,6 +578,7 @@ export const marketingCampaignService = {
 
     const paramError = validateTemplateParams(tpl, payload.templateParams);
     if (paramError) throw new Error(paramError);
+    await validateCampaignWorkbookSource(businessAccountId, payload);
 
     const [row] = await db
       .insert(marketingCampaigns)
@@ -437,7 +588,9 @@ export const marketingCampaignService = {
         campaignType,
         templateId: payload.templateId,
         templateParams: normalizeParams(tpl, payload.templateParams),
-        groupIds: campaignType === "automation" ? [] : payload.groupIds,
+        groupIds: campaignType === "automation" && payload.recipientSourceType !== "contact_groups"
+          ? []
+          : payload.groupIds,
         status: campaignType === "one_time" && payload.scheduledAt ? "scheduled" : "draft",
         scheduledAt: campaignType === "one_time" ? payload.scheduledAt || null : null,
         aiEnabled: toFlag(payload.aiEnabled, "true"),
@@ -450,6 +603,17 @@ export const marketingCampaignService = {
         aiDailyTokenBudget: payload.aiDailyTokenBudget ?? 50000,
         aiMaxRepliesPerRecipient: payload.aiMaxRepliesPerRecipient ?? 20,
         replyClassifications: normalizeClassifications(payload.replyClassifications),
+        recipientSourceType: payload.recipientSourceType || null,
+        recipientWorkbookId: payload.recipientWorkbookId || null,
+        recipientWorkbookSheetId: payload.recipientWorkbookSheetId || null,
+        recipientPhoneColumn: payload.recipientPhoneColumn || null,
+        recipientNameColumn: payload.recipientNameColumn || "",
+        recipientRecordKeyColumn: payload.recipientRecordKeyColumn || null,
+        recipientDateColumn: payload.recipientDateColumn || null,
+        recipientDateOffsetDays: payload.recipientDateOffsetDays ?? 0,
+        recipientStatusColumn: payload.recipientStatusColumn || "",
+        recipientEligibleStatuses: payload.recipientEligibleStatuses || [],
+        recipientAiAllowedFields: payload.recipientAiAllowedFields || [],
       })
       .returning();
     return row;
@@ -505,12 +669,22 @@ export const marketingCampaignService = {
       if (paramError) throw new Error(paramError);
       payload = { ...payload, templateParams: normalizeParams(tpl, values) };
     }
+    if (
+      campaignSourceFields.some(field => (payload as any)[field] !== undefined)
+      || (current.recipientSourceType === "ai_workbook"
+        && (payload.templateParams !== undefined || payload.templateId !== undefined))
+    ) {
+      const sourcePayload = { ...current, ...payload } as Partial<CreatePayload>;
+      await validateCampaignWorkbookSource(businessAccountId, sourcePayload);
+      payload = { ...payload, recipientAiAllowedFields: sourcePayload.recipientAiAllowedFields };
+    }
 
     const set: any = { updatedAt: new Date() };
     const fields: (keyof CreatePayload)[] = [
       "name", "campaignType", "templateId", "templateParams", "groupIds",
       "aiAgentName", "aiSystemPrompt", "aiKnowledgeDocIds",
       "aiDailyTokenBudget", "aiMaxRepliesPerRecipient",
+      ...campaignSourceFields,
     ];
     for (const f of fields) {
       if ((payload as any)[f] !== undefined) (set as any)[f] = (payload as any)[f];

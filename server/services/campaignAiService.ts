@@ -113,9 +113,19 @@ export interface ClassificationResult {
  * verbatim is what lets one prompt serve every vertical: the agent answers
  * from the row it was given, and is told explicitly not to go beyond it.
  */
-function buildRecipientContext(attributes: Record<string, string> | null | undefined): string {
+function buildRecipientContext(
+  attributes: Record<string, string> | null | undefined,
+  allowedFields: string[] | null | undefined,
+): string {
   if (!attributes) return "";
-  const entries = Object.entries(attributes).filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== "");
+  // An empty allowlist is intentionally deny-all for campaign-owned workbook
+  // records. Legacy campaigns have no source type and retain their historic
+  // attribute behavior.
+  const allow = allowedFields ? new Set(allowedFields.map(v => String(v).trim().toLowerCase())) : null;
+  const entries = Object.entries(attributes).filter(([k, v]) =>
+    (allow === null || allow.has(k.trim().toLowerCase()))
+    && v !== null && v !== undefined && String(v).trim() !== "",
+  );
   if (entries.length === 0) return "";
   return [
     "RECIPIENT DETAILS (this specific customer's data — answer only from these values):",
@@ -127,6 +137,20 @@ function buildRecipientContext(attributes: Record<string, string> | null | undef
     "- Never reveal details belonging to any other customer.",
     "- Do not promise any outcome, exception or concession that is not explicitly stated above or in the knowledge base.",
   ].join("\n");
+}
+
+function loanRecordIdentity(attributes: Record<string, string> | null | undefined): string {
+  return Object.entries(attributes || {})
+    .filter(([key, value]) => /loan|account|record/i.test(key) && String(value || "").trim().length >= 3)
+    .map(([key, value]) => `${key.trim().toLowerCase()}:${String(value).trim().toLowerCase()}`)
+    .sort()
+    .join("|");
+}
+
+function loanRecordValues(attributes: Record<string, string> | null | undefined): string[] {
+  return Object.entries(attributes || {})
+    .filter(([key, value]) => /loan|account|record/i.test(key) && String(value || "").trim().length >= 3)
+    .map(([, value]) => String(value).trim());
 }
 
 /**
@@ -141,9 +165,10 @@ async function classifyInboundReply(opts: {
   classifications: ReplyClassification[];
   inboundText: string;
   recipientAttributes: Record<string, string> | null | undefined;
+  recipientAiAllowedFields?: string[] | null;
   onTokens: (n: number) => Promise<void>;
 }): Promise<ClassificationResult | null> {
-  const { apiKey, classifications, inboundText, recipientAttributes, onTokens } = opts;
+  const { apiKey, classifications, inboundText, recipientAttributes, recipientAiAllowedFields, onTokens } = opts;
   if (!classifications || classifications.length === 0) return null;
 
   const categoryLines = classifications
@@ -155,7 +180,7 @@ async function classifyInboundReply(opts: {
     })
     .join("\n");
 
-  const contextBlock = buildRecipientContext(recipientAttributes);
+  const contextBlock = buildRecipientContext(recipientAttributes, recipientAiAllowedFields);
 
   const system = [
     "You classify a customer's WhatsApp reply into exactly one business outcome category.",
@@ -298,6 +323,9 @@ export const campaignAiService = {
         classifications,
         inboundText: text,
         recipientAttributes: recipient.attributes,
+        recipientAiAllowedFields: campaign.recipientSourceType === "ai_workbook"
+          ? (campaign.recipientAiAllowedFields || []) as string[]
+          : null,
         onTokens: (n) => marketingCampaignService.addAiTokensUsed(campaignId, n),
       });
       if (!result) return;
@@ -376,6 +404,33 @@ export const campaignAiService = {
 
       const ordered = history.slice().reverse();
 
+      // A phone number alone is not an account selector. If it is attached to
+      // multiple live loan/account records, do not let an AI reply disclose one
+      // arbitrarily; a rendered outbound template containing this record's
+      // identifier is the only automatic disambiguation we accept.
+      const samePhone = await db.select({ id: marketingCampaignRecipients.id, attributes: marketingCampaignRecipients.attributes })
+        .from(marketingCampaignRecipients)
+        .where(and(
+          eq(marketingCampaignRecipients.businessAccountId, campaign.businessAccountId),
+          eq(marketingCampaignRecipients.phone, recipient.phone),
+          inArray(marketingCampaignRecipients.status, ["queued", "sent", "delivered", "read", "replied"]),
+        ))
+        .limit(10);
+      const recordValues = loanRecordValues(recipient.attributes);
+      const distinctRecordIdentities = new Set(
+        samePhone.map(row => loanRecordIdentity(row.attributes)).filter(Boolean),
+      );
+      const ambiguousLoan = recordValues.length > 0 && distinctRecordIdentities.size > 1;
+      const outboundIdentifiesRecord = ordered
+        .filter(message => message.direction === "outbound_template")
+        .some(message => recordValues.some(value => message.body.includes(value)));
+      if (ambiguousLoan && !outboundIdentifiesRecord) {
+        return {
+          text: "For your privacy, I need to confirm which account you mean. Please share the account reference from our message or ask our team to help.",
+          blockedReason: "Multiple active account records share this phone without an outbound record reference",
+        };
+      }
+
       // Default persona is deliberately vertical-neutral. A campaign that is
       // chasing payments, confirming appointments or handling RSVPs all land
       // here when the operator hasn't written a custom prompt, so this must not
@@ -384,7 +439,12 @@ export const campaignAiService = {
         (campaign.aiSystemPrompt || "").trim() ||
         `You are ${campaign.aiAgentName || "an assistant"} for ${biz.name}, replying to someone who has responded to a WhatsApp message we sent them. Be warm, concise and helpful. Answer using only the recipient details and knowledge below, and finish with a clear next step. Never invent amounts, dates, prices, policies or product details.`;
 
-      const recipientContext = buildRecipientContext(recipient.attributes);
+      const recipientContext = buildRecipientContext(
+        recipient.attributes,
+        campaign.recipientSourceType === "ai_workbook"
+          ? (campaign.recipientAiAllowedFields || []) as string[]
+          : null,
+      );
 
       const systemPrompt = [
         persona,

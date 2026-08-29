@@ -3242,11 +3242,31 @@ var init_schema = __esm({
       id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
       businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
       name: text("name").notNull(),
+      campaignType: text("campaign_type").notNull().default("one_time"),
+      // one_time | automation
       templateId: varchar("template_id").notNull().references(() => whatsappTemplates.id, { onDelete: "restrict" }),
       templateParams: jsonb("template_params").$type().default([]),
       // Static param values OR placeholders like "{{name}}" mapping to contact attributes
       groupIds: jsonb("group_ids").$type().notNull().default([]),
       // Target contact groups
+      // Optional live audience definition for recurring campaign blueprints.  These
+      // are deliberately separate from groupIds: executions snapshot recipients
+      // into a generated group, while a blueprint always re-reads this workbook.
+      recipientSourceType: text("recipient_source_type"),
+      // ai_workbook | contact_groups
+      // The database migration owns this FK. Keeping the Drizzle field unlinked
+      // avoids a circular inferred type with whatsappAiWorkbooks.sourceCampaignId.
+      recipientWorkbookId: varchar("recipient_workbook_id"),
+      recipientWorkbookSheetId: text("recipient_workbook_sheet_id"),
+      recipientPhoneColumn: text("recipient_phone_column"),
+      recipientNameColumn: text("recipient_name_column").default(""),
+      recipientRecordKeyColumn: text("recipient_record_key_column"),
+      recipientDateColumn: text("recipient_date_column"),
+      recipientDateOffsetDays: integer("recipient_date_offset_days").notNull().default(0),
+      recipientStatusColumn: text("recipient_status_column").default(""),
+      recipientEligibleStatuses: jsonb("recipient_eligible_statuses").$type().default([]),
+      // Only these imported fields may be placed in Campaign AI prompts.
+      recipientAiAllowedFields: jsonb("recipient_ai_allowed_fields").$type().default([]),
       status: text("status").notNull().default("draft"),
       // 'draft' | 'scheduled' | 'sending' | 'completed' | 'cancelled' | 'failed'
       scheduledAt: timestamp("scheduled_at"),
@@ -3307,6 +3327,7 @@ var init_schema = __esm({
       sourceCampaignId: varchar("source_campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
       sourceWorkbookId: varchar("source_workbook_id").references(() => whatsappAiWorkbooks.id, { onDelete: "set null" }),
       sourceWorkbookSheetId: text("source_workbook_sheet_id"),
+      sourceGroupIds: jsonb("source_group_ids").$type().default([]),
       templateId: varchar("template_id").notNull().references(() => whatsappTemplates.id, { onDelete: "restrict" }),
       templateParams: jsonb("template_params").$type().default([]),
       phoneColumn: text("phone_column").notNull(),
@@ -3358,6 +3379,8 @@ var init_schema = __esm({
       sourceWorkbookVersionNumber: integer("source_workbook_version_number"),
       sourceWorkbookRevision: integer("source_workbook_revision"),
       sourceWorkbookSheetName: text("source_workbook_sheet_name"),
+      sourceGroupIds: jsonb("source_group_ids").$type().default([]),
+      sourceGroupNames: jsonb("source_group_names").$type().default([]),
       // Immutable run evidence. Workbooks can edit a version in place and generated
       // contact groups can later be removed, so provenance IDs alone are insufficient.
       sourceSnapshot: jsonb("source_snapshot").$type(),
@@ -47228,9 +47251,12 @@ ${body.substring(0, 4e3)}`;
   }
   return blocks.join("\n\n=========\n\n");
 }
-function buildRecipientContext(attributes) {
+function buildRecipientContext(attributes, allowedFields) {
   if (!attributes) return "";
-  const entries = Object.entries(attributes).filter(([, v]) => v !== null && v !== void 0 && String(v).trim() !== "");
+  const allow = allowedFields ? new Set(allowedFields.map((v) => String(v).trim().toLowerCase())) : null;
+  const entries = Object.entries(attributes).filter(
+    ([k, v]) => (allow === null || allow.has(k.trim().toLowerCase())) && v !== null && v !== void 0 && String(v).trim() !== ""
+  );
   if (entries.length === 0) return "";
   return [
     "RECIPIENT DETAILS (this specific customer's data \u2014 answer only from these values):",
@@ -47243,8 +47269,14 @@ function buildRecipientContext(attributes) {
     "- Do not promise any outcome, exception or concession that is not explicitly stated above or in the knowledge base."
   ].join("\n");
 }
+function loanRecordIdentity(attributes) {
+  return Object.entries(attributes || {}).filter(([key, value]) => /loan|account|record/i.test(key) && String(value || "").trim().length >= 3).map(([key, value]) => `${key.trim().toLowerCase()}:${String(value).trim().toLowerCase()}`).sort().join("|");
+}
+function loanRecordValues(attributes) {
+  return Object.entries(attributes || {}).filter(([key, value]) => /loan|account|record/i.test(key) && String(value || "").trim().length >= 3).map(([, value]) => String(value).trim());
+}
 async function classifyInboundReply(opts) {
-  const { apiKey, classifications, inboundText, recipientAttributes, onTokens } = opts;
+  const { apiKey, classifications, inboundText, recipientAttributes, recipientAiAllowedFields, onTokens } = opts;
   if (!classifications || classifications.length === 0) return null;
   const categoryLines = classifications.map((c) => {
     const fields = (c.captureFields || []).map((f) => `      - ${f.fieldKey} (${f.fieldType}): ${f.fieldLabel}`).join("\n");
@@ -47252,7 +47284,7 @@ async function classifyInboundReply(opts) {
     Extract when this category applies:
 ${fields}` : ""}`;
   }).join("\n");
-  const contextBlock = buildRecipientContext(recipientAttributes);
+  const contextBlock = buildRecipientContext(recipientAttributes, recipientAiAllowedFields);
   const system = [
     "You classify a customer's WhatsApp reply into exactly one business outcome category.",
     "",
@@ -47368,6 +47400,7 @@ var init_campaignAiService = __esm({
             classifications,
             inboundText: text3,
             recipientAttributes: recipient.attributes,
+            recipientAiAllowedFields: campaign.recipientSourceType === "ai_workbook" ? campaign.recipientAiAllowedFields || [] : null,
             onTokens: (n) => marketingCampaignService.addAiTokensUsed(campaignId, n)
           });
           if (!result) return;
@@ -47406,8 +47439,28 @@ var init_campaignAiService = __esm({
           });
           const history = await db.select().from(marketingCampaignMessages).where(eq54(marketingCampaignMessages.recipientId, recipientId)).orderBy(desc19(marketingCampaignMessages.createdAt)).limit(20);
           const ordered = history.slice().reverse();
+          const samePhone = await db.select({ id: marketingCampaignRecipients.id, attributes: marketingCampaignRecipients.attributes }).from(marketingCampaignRecipients).where(and44(
+            eq54(marketingCampaignRecipients.businessAccountId, campaign.businessAccountId),
+            eq54(marketingCampaignRecipients.phone, recipient.phone),
+            inArray9(marketingCampaignRecipients.status, ["queued", "sent", "delivered", "read", "replied"])
+          )).limit(10);
+          const recordValues = loanRecordValues(recipient.attributes);
+          const distinctRecordIdentities = new Set(
+            samePhone.map((row) => loanRecordIdentity(row.attributes)).filter(Boolean)
+          );
+          const ambiguousLoan = recordValues.length > 0 && distinctRecordIdentities.size > 1;
+          const outboundIdentifiesRecord = ordered.filter((message) => message.direction === "outbound_template").some((message) => recordValues.some((value) => message.body.includes(value)));
+          if (ambiguousLoan && !outboundIdentifiesRecord) {
+            return {
+              text: "For your privacy, I need to confirm which account you mean. Please share the account reference from our message or ask our team to help.",
+              blockedReason: "Multiple active account records share this phone without an outbound record reference"
+            };
+          }
           const persona = (campaign.aiSystemPrompt || "").trim() || `You are ${campaign.aiAgentName || "an assistant"} for ${biz.name}, replying to someone who has responded to a WhatsApp message we sent them. Be warm, concise and helpful. Answer using only the recipient details and knowledge below, and finish with a clear next step. Never invent amounts, dates, prices, policies or product details.`;
-          const recipientContext = buildRecipientContext(recipient.attributes);
+          const recipientContext = buildRecipientContext(
+            recipient.attributes,
+            campaign.recipientSourceType === "ai_workbook" ? campaign.recipientAiAllowedFields || [] : null
+          );
           const systemPrompt = [
             persona,
             "",
@@ -47531,6 +47584,125 @@ function mapMsg91StatusToKind(status) {
   if (s.includes("deliv")) return "delivered";
   if (s.includes("sent") || s.includes("submit") || s.includes("accept") || s === "enroute") return "sent";
   return null;
+}
+async function validateCampaignWorkbookSource(businessAccountId, input) {
+  const supplied = campaignSourceFields.some((field) => input[field] !== void 0);
+  if (!supplied) return;
+  if (input.recipientSourceType === "contact_groups") {
+    const groupIds = Array.from(new Set((input.groupIds || []).filter(Boolean)));
+    if (!groupIds.length) throw new Error("Choose at least one contact group for this campaign");
+    const groups = await Promise.all(groupIds.map((id) => contactGroupService.get(businessAccountId, id)));
+    if (groups.some((group) => !group || group.contactCount <= 0)) {
+      throw new Error("Selected contact groups must exist and contain contacts");
+    }
+    const contacts = await contactGroupService.getContactsForGroups(businessAccountId, groupIds);
+    if (!contacts.length) throw new Error("Selected contact groups contain no contacts");
+    const columns2 = /* @__PURE__ */ new Set([
+      "phone",
+      "name",
+      ...contacts.flatMap((contact) => Object.keys(contact.attributes || {}).map(sourceKey))
+    ]);
+    const required2 = [
+      input.recipientPhoneColumn,
+      input.recipientRecordKeyColumn,
+      input.recipientDateColumn
+    ].map(sourceKey);
+    if (required2.some((value) => !value)) {
+      throw new Error("Campaign contact-group phone, record key, and date mappings are required");
+    }
+    for (const column2 of [...required2, sourceKey(input.recipientNameColumn), sourceKey(input.recipientStatusColumn)]) {
+      if (column2 && !columns2.has(column2)) throw new Error(`The selected contact groups do not have the "${column2}" field`);
+    }
+    if (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366) {
+      throw new Error("Campaign date offset must be a whole number between -366 and 366");
+    }
+    if ((input.recipientEligibleStatuses || []).length && !sourceKey(input.recipientStatusColumn)) {
+      throw new Error("A status mapping is required when eligible statuses are configured");
+    }
+    const refs2 = (input.templateParams || []).flatMap(sourceRefs);
+    if (refs2.some((ref) => !columns2.has(ref))) {
+      throw new Error("A template parameter references a field not present in the selected contact groups");
+    }
+    for (let index2 = 0; index2 < contacts.length; index2++) {
+      const contact = contacts[index2];
+      const attributes = contact.attributes || {};
+      const value = (key) => key === "phone" ? String(contact.phone || "").trim() : key === "name" ? String(contact.name || "").trim() : String(attributes[key] ?? "").trim();
+      const phone = normalizePhone5(value(sourceKey(input.recipientPhoneColumn)));
+      const date2 = value(sourceKey(input.recipientDateColumn));
+      const parsedDate = date2.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
+      const validDate = !!parsedDate && (() => {
+        const y = Number(parsedDate[1]), m = Number(parsedDate[2]), d = Number(parsedDate[3]);
+        const check = new Date(Date.UTC(y, m - 1, d));
+        return check.getUTCFullYear() === y && check.getUTCMonth() === m - 1 && check.getUTCDate() === d;
+      })();
+      if (phone.length < 8 || !value(sourceKey(input.recipientRecordKeyColumn)) || !validDate || refs2.some((ref) => !value(ref))) {
+        throw new Error(`Contact-group recipient ${index2 + 1} is missing a required campaign field`);
+      }
+    }
+    input.recipientAiAllowedFields = [];
+    return;
+  }
+  if (input.recipientSourceType !== "ai_workbook") {
+    throw new Error("Choose a valid campaign recipient source");
+  }
+  const workbookId = String(input.recipientWorkbookId || "").trim();
+  const sheetId = String(input.recipientWorkbookSheetId || "").trim();
+  if (!workbookId || !sheetId) throw new Error("Choose exactly one AI Workbook sheet for this campaign");
+  const [workbook] = await db.select().from(whatsappAiWorkbooks).where(and45(
+    eq55(whatsappAiWorkbooks.id, workbookId),
+    eq55(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+    eq55(whatsappAiWorkbooks.status, "active")
+  )).limit(1);
+  if (!workbook) throw new Error("The selected AI Workbook is not active or does not belong to this business");
+  const [version] = await db.select().from(whatsappAiWorkbookVersions).where(and45(
+    eq55(whatsappAiWorkbookVersions.workbookId, workbookId),
+    eq55(whatsappAiWorkbookVersions.businessAccountId, businessAccountId)
+  )).orderBy(desc20(whatsappAiWorkbookVersions.versionNumber)).limit(1);
+  if (!version) throw new Error("The selected AI Workbook has no saved version");
+  const sheets = Array.isArray(version.sheets) ? version.sheets : [];
+  const sheet = sheets.find((s) => s.id === sheetId);
+  if (!sheet || !sheet.columns.length) throw new Error("The selected AI Workbook sheet is unavailable");
+  const columns = new Set(sheet.columns.map((c) => sourceKey(c.key)));
+  const required = [
+    input.recipientPhoneColumn,
+    input.recipientRecordKeyColumn,
+    input.recipientDateColumn
+  ].map(sourceKey);
+  if (required.some((v) => !v)) throw new Error("Campaign workbook phone, record key, and date mappings are required");
+  if (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366) {
+    throw new Error("Campaign workbook date offset must be a whole number between -366 and 366");
+  }
+  for (const column2 of [...required, sourceKey(input.recipientNameColumn), sourceKey(input.recipientStatusColumn)]) {
+    if (column2 && !columns.has(column2)) throw new Error(`The selected AI Workbook no longer has the "${column2}" column`);
+  }
+  const allowed = Array.from(new Set((input.recipientAiAllowedFields || []).map(sourceKey).filter(Boolean)));
+  if (allowed.some((column2) => !columns.has(column2))) throw new Error("Campaign AI allowlist contains a column not present in the selected sheet");
+  if ((input.recipientEligibleStatuses || []).length && !sourceKey(input.recipientStatusColumn)) {
+    throw new Error("A status mapping is required when eligible statuses are configured");
+  }
+  const refs = (input.templateParams || []).flatMap(sourceRefs);
+  if (refs.some((ref) => ref !== "name" && ref !== "phone" && !columns.has(ref))) {
+    throw new Error("A template parameter references a column not present in the selected sheet");
+  }
+  for (let i = 0; i < sheet.rows.length; i++) {
+    const values = sheet.rows[i].values || {};
+    const value = (key) => String(values[key] ?? "").trim();
+    const phone = normalizePhone5(value(sourceKey(input.recipientPhoneColumn)));
+    const date2 = value(sourceKey(input.recipientDateColumn));
+    const parsedDate = date2.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
+    const validDate = !!parsedDate && (() => {
+      const y = Number(parsedDate[1]), m = Number(parsedDate[2]), d = Number(parsedDate[3]);
+      const check = new Date(Date.UTC(y, m - 1, d));
+      return check.getUTCFullYear() === y && check.getUTCMonth() === m - 1 && check.getUTCDate() === d;
+    })();
+    const missingTemplateField = refs.find(
+      (ref) => ref === "name" ? !value(sourceKey(input.recipientNameColumn)) : ref !== "phone" && !value(ref)
+    );
+    if (phone.length < 8 || !value(sourceKey(input.recipientRecordKeyColumn)) || !validDate || missingTemplateField) {
+      throw new Error(`Workbook row ${i + 2} is missing a required campaign mapping`);
+    }
+  }
+  input.recipientAiAllowedFields = allowed;
 }
 function classificationCondition(classification) {
   if (!classification) return void 0;
@@ -47681,7 +47853,7 @@ function startCampaignScheduler() {
   }, reconcileInterval);
   console.log("[CampaignScheduler] Pull-API reconciler started (3 min interval)");
 }
-var CampaignPrerequisiteError, inFlight2, HEARTBEAT_INTERVAL_MS, STALE_CAMPAIGN_HEARTBEAT_MS, STALE_RECIPIENT_CLAIM_MS, SEND_BATCH_SIZE, SEND_DELAY_MS, UNCLASSIFIED_FILTER, MAX_CLASSIFICATIONS, MAX_CAPTURE_FIELDS, VALID_FIELD_TYPES, marketingCampaignService, schedulerStarted;
+var CampaignPrerequisiteError, inFlight2, HEARTBEAT_INTERVAL_MS, STALE_CAMPAIGN_HEARTBEAT_MS, STALE_RECIPIENT_CLAIM_MS, SEND_BATCH_SIZE, SEND_DELAY_MS, campaignSourceFields, sourceKey, sourceRefs, UNCLASSIFIED_FILTER, MAX_CLASSIFICATIONS, MAX_CAPTURE_FIELDS, VALID_FIELD_TYPES, marketingCampaignService, schedulerStarted;
 var init_marketingCampaignService = __esm({
   "server/services/marketingCampaignService.ts"() {
     "use strict";
@@ -47706,6 +47878,21 @@ var init_marketingCampaignService = __esm({
     STALE_RECIPIENT_CLAIM_MS = 5 * 60 * 1e3;
     SEND_BATCH_SIZE = 20;
     SEND_DELAY_MS = 250;
+    campaignSourceFields = [
+      "recipientSourceType",
+      "recipientWorkbookId",
+      "recipientWorkbookSheetId",
+      "recipientPhoneColumn",
+      "recipientNameColumn",
+      "recipientRecordKeyColumn",
+      "recipientDateColumn",
+      "recipientDateOffsetDays",
+      "recipientStatusColumn",
+      "recipientEligibleStatuses",
+      "recipientAiAllowedFields"
+    ];
+    sourceKey = (value) => String(value || "").trim().toLowerCase();
+    sourceRefs = (value) => Array.from(value.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)).map((match) => sourceKey(match[1])).filter(Boolean);
     UNCLASSIFIED_FILTER = "__unclassified__";
     MAX_CLASSIFICATIONS = 25;
     MAX_CAPTURE_FIELDS = 8;
@@ -47719,23 +47906,32 @@ var init_marketingCampaignService = __esm({
         return row;
       },
       async create(businessAccountId, payload) {
-        const missing = await checkCampaignPrerequisites(businessAccountId, {
-          templateId: payload.templateId,
-          groupIds: payload.groupIds
-        });
-        if (missing) throw new CampaignPrerequisiteError(missing);
+        if (payload.campaignType !== void 0 && payload.campaignType !== "one_time" && payload.campaignType !== "automation") {
+          throw new Error("campaignType must be one_time or automation");
+        }
+        const campaignType = payload.campaignType === "automation" ? "automation" : "one_time";
+        if (campaignType === "one_time") {
+          const missing = await checkCampaignPrerequisites(businessAccountId, {
+            templateId: payload.templateId,
+            groupIds: payload.groupIds
+          });
+          if (missing) throw new CampaignPrerequisiteError(missing);
+        }
         const [tpl] = await db.select().from(whatsappTemplates).where(and45(eq55(whatsappTemplates.id, payload.templateId), eq55(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!tpl) throw new Error("Template not found for this business");
+        if (tpl.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         const paramError = validateTemplateParams(tpl, payload.templateParams);
         if (paramError) throw new Error(paramError);
+        await validateCampaignWorkbookSource(businessAccountId, payload);
         const [row] = await db.insert(marketingCampaigns).values({
           businessAccountId,
           name: payload.name.trim(),
+          campaignType,
           templateId: payload.templateId,
           templateParams: normalizeParams(tpl, payload.templateParams),
-          groupIds: payload.groupIds,
-          status: payload.scheduledAt ? "scheduled" : "draft",
-          scheduledAt: payload.scheduledAt || null,
+          groupIds: campaignType === "automation" && payload.recipientSourceType !== "contact_groups" ? [] : payload.groupIds,
+          status: campaignType === "one_time" && payload.scheduledAt ? "scheduled" : "draft",
+          scheduledAt: campaignType === "one_time" ? payload.scheduledAt || null : null,
           aiEnabled: toFlag(payload.aiEnabled, "true"),
           aiAgentName: payload.aiAgentName || "Sales Agent",
           aiSystemPrompt: payload.aiSystemPrompt || "",
@@ -47745,7 +47941,18 @@ var init_marketingCampaignService = __esm({
           aiKnowledgeDocIds: payload.aiKnowledgeDocIds || [],
           aiDailyTokenBudget: payload.aiDailyTokenBudget ?? 5e4,
           aiMaxRepliesPerRecipient: payload.aiMaxRepliesPerRecipient ?? 20,
-          replyClassifications: normalizeClassifications(payload.replyClassifications)
+          replyClassifications: normalizeClassifications(payload.replyClassifications),
+          recipientSourceType: payload.recipientSourceType || null,
+          recipientWorkbookId: payload.recipientWorkbookId || null,
+          recipientWorkbookSheetId: payload.recipientWorkbookSheetId || null,
+          recipientPhoneColumn: payload.recipientPhoneColumn || null,
+          recipientNameColumn: payload.recipientNameColumn || "",
+          recipientRecordKeyColumn: payload.recipientRecordKeyColumn || null,
+          recipientDateColumn: payload.recipientDateColumn || null,
+          recipientDateOffsetDays: payload.recipientDateOffsetDays ?? 0,
+          recipientStatusColumn: payload.recipientStatusColumn || "",
+          recipientEligibleStatuses: payload.recipientEligibleStatuses || [],
+          recipientAiAllowedFields: payload.recipientAiAllowedFields || []
         }).returning();
         return row;
       },
@@ -47759,9 +47966,17 @@ var init_marketingCampaignService = __esm({
         if (executionRun) {
           throw new Error("Automation execution campaigns are immutable. Change the source blueprint for future runs instead.");
         }
-        if (payload.templateId !== void 0 || payload.groupIds !== void 0) {
-          const current = await this.get(businessAccountId, id);
-          if (!current) return void 0;
+        const current = await this.get(businessAccountId, id);
+        if (!current) return void 0;
+        if (payload.campaignType !== void 0 && payload.campaignType !== "one_time" && payload.campaignType !== "automation") {
+          throw new Error("campaignType must be one_time or automation");
+        }
+        const campaignType = payload.campaignType === "automation" ? "automation" : payload.campaignType === "one_time" ? "one_time" : current.campaignType === "automation" ? "automation" : "one_time";
+        const isAutomationToOneTime = current.campaignType === "automation" && campaignType === "one_time";
+        if (campaignType === "automation") {
+          payload = { ...payload, campaignType, groupIds: [], scheduledAt: null, status: "draft" };
+        }
+        if (campaignType === "one_time" && (payload.templateId !== void 0 || payload.groupIds !== void 0 || payload.campaignType !== void 0)) {
           const missing = await checkCampaignPrerequisites(businessAccountId, {
             templateId: payload.templateId ?? current.templateId,
             groupIds: payload.groupIds ?? (current.groupIds || [])
@@ -47769,8 +47984,6 @@ var init_marketingCampaignService = __esm({
           if (missing) throw new CampaignPrerequisiteError(missing);
         }
         if (payload.templateParams !== void 0 || payload.templateId !== void 0) {
-          const current = await this.get(businessAccountId, id);
-          if (!current) return void 0;
           const templateId = payload.templateId ?? current.templateId;
           const [tpl] = await db.select().from(whatsappTemplates).where(and45(eq55(whatsappTemplates.id, templateId), eq55(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
           if (!tpl) throw new Error("Template not found for this business");
@@ -47779,9 +47992,15 @@ var init_marketingCampaignService = __esm({
           if (paramError) throw new Error(paramError);
           payload = { ...payload, templateParams: normalizeParams(tpl, values) };
         }
+        if (campaignSourceFields.some((field) => payload[field] !== void 0) || current.recipientSourceType === "ai_workbook" && (payload.templateParams !== void 0 || payload.templateId !== void 0)) {
+          const sourcePayload = { ...current, ...payload };
+          await validateCampaignWorkbookSource(businessAccountId, sourcePayload);
+          payload = { ...payload, recipientAiAllowedFields: sourcePayload.recipientAiAllowedFields };
+        }
         const set = { updatedAt: /* @__PURE__ */ new Date() };
         const fields = [
           "name",
+          "campaignType",
           "templateId",
           "templateParams",
           "groupIds",
@@ -47789,7 +48008,8 @@ var init_marketingCampaignService = __esm({
           "aiSystemPrompt",
           "aiKnowledgeDocIds",
           "aiDailyTokenBudget",
-          "aiMaxRepliesPerRecipient"
+          "aiMaxRepliesPerRecipient",
+          ...campaignSourceFields
         ];
         for (const f of fields) {
           if (payload[f] !== void 0) set[f] = payload[f];
@@ -47803,11 +48023,30 @@ var init_marketingCampaignService = __esm({
           set.replyClassifications = normalizeClassifications(payload.replyClassifications);
         }
         if (payload.status !== void 0) set.status = payload.status;
-        const [row] = await db.update(marketingCampaigns).set(set).where(and45(
+        const where = and45(
           eq55(marketingCampaigns.id, id),
           eq55(marketingCampaigns.businessAccountId, businessAccountId),
           ...opts?.onlyIfStatusIn ? [inArray10(marketingCampaigns.status, opts.onlyIfStatusIn)] : []
-        )).returning();
+        );
+        if (isAutomationToOneTime) {
+          return db.transaction(async (tx) => {
+            await tx.execute(sql30`SELECT pg_advisory_xact_lock(hashtext(${"wa-blueprint:" + id}))`);
+            const [lockedCampaign] = await tx.select({ id: marketingCampaigns.id }).from(marketingCampaigns).where(and45(
+              eq55(marketingCampaigns.id, id),
+              eq55(marketingCampaigns.businessAccountId, businessAccountId)
+            )).for("update").limit(1);
+            if (!lockedCampaign) return void 0;
+            const [blueprintUse] = await tx.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
+              eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+              eq55(whatsappCampaignAutomations.sourceCampaignId, id),
+              isNull11(whatsappCampaignAutomations.deletedAt)
+            )).limit(1);
+            if (blueprintUse) throw new Error("Delete the linked automation before changing this into a one-time campaign");
+            const [row2] = await tx.update(marketingCampaigns).set(set).where(where).returning();
+            return row2;
+          });
+        }
+        const [row] = await db.update(marketingCampaigns).set(set).where(where).returning();
         return row;
       },
       async remove(businessAccountId, id) {
@@ -47987,6 +48226,9 @@ var init_marketingCampaignService = __esm({
         if (inFlight2.has(key)) return { started: false, reason: "Campaign send is already in progress on this node" };
         const campaign = await this.get(businessAccountId, campaignId);
         if (!campaign) return { started: false, reason: "Campaign not found" };
+        if (campaign.campaignType === "automation") {
+          return { started: false, reason: "Automation campaign drafts can only run through Automations" };
+        }
         const [executionRun] = await db.select({
           id: whatsappCampaignAutomationRuns.id,
           status: whatsappCampaignAutomationRuns.status
@@ -48248,6 +48490,10 @@ var init_marketingCampaignService = __esm({
         }
       },
       async cancel(businessAccountId, campaignId) {
+        const campaign = await this.get(businessAccountId, campaignId);
+        if (campaign?.campaignType === "automation") {
+          throw new Error("Automation campaign drafts are managed from Automations");
+        }
         const [executionRun] = await db.select({ id: whatsappCampaignAutomationRuns.id }).from(whatsappCampaignAutomationRuns).where(and45(
           eq55(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
           eq55(whatsappCampaignAutomationRuns.campaignId, campaignId)
@@ -55500,9 +55746,11 @@ function cleanConfig(input) {
   if (!ALLOWED_SOURCE_TYPES.has(sourceType)) throw new Error("Invalid automation source");
   const sourceCampaignId = sourceType === "campaign_blueprint" ? String(input.sourceCampaignId || "").trim() : null;
   if (sourceType === "campaign_blueprint" && !sourceCampaignId) throw new Error("Choose a draft campaign blueprint");
-  const sourceWorkbookId = sourceType !== "upload" ? String(input.sourceWorkbookId || "").trim() : null;
-  if (sourceType !== "upload" && !sourceWorkbookId) {
-    throw new Error(sourceType === "campaign_blueprint" ? "The selected campaign must be linked to one AI Workbook" : "Choose an AI Workbook");
+  const sourceGroupIds = sourceType === "campaign_blueprint" && Array.isArray(input.sourceGroupIds) ? Array.from(new Set(input.sourceGroupIds.map((value) => String(value || "").trim()).filter(Boolean))) : [];
+  const sourceWorkbookId = sourceType !== "upload" && sourceGroupIds.length === 0 ? String(input.sourceWorkbookId || "").trim() : null;
+  if (sourceType === "ai_workbook" && !sourceWorkbookId) throw new Error("Choose an AI Workbook");
+  if (sourceType === "campaign_blueprint" && !sourceWorkbookId && sourceGroupIds.length === 0) {
+    throw new Error("Choose an AI Workbook or at least one contact group");
   }
   const mapped = ["phoneColumn", "recordKeyColumn", "dateColumn"];
   for (const field of mapped) {
@@ -55534,7 +55782,8 @@ function cleanConfig(input) {
     sourceType,
     sourceCampaignId,
     sourceWorkbookId,
-    sourceWorkbookSheetId: sourceType !== "upload" ? String(input.sourceWorkbookSheetId || "").trim() || null : null,
+    sourceWorkbookSheetId: sourceWorkbookId ? String(input.sourceWorkbookSheetId || "").trim() || null : null,
+    sourceGroupIds,
     templateParams: params,
     phoneColumn: canonical(input.phoneColumn),
     nameColumn: canonical(input.nameColumn),
@@ -55550,11 +55799,35 @@ function cleanConfig(input) {
     enabled: input.enabled !== false
   };
 }
+function applyCampaignOwnedSource(config, campaign) {
+  if (!["ai_workbook", "contact_groups"].includes(campaign.recipientSourceType || "")) {
+    return config;
+  }
+  const usesWorkbook = campaign.recipientSourceType === "ai_workbook";
+  return {
+    ...config,
+    sourceType: "campaign_blueprint",
+    sourceCampaignId: campaign.id,
+    sourceWorkbookId: usesWorkbook ? campaign.recipientWorkbookId : null,
+    sourceWorkbookSheetId: usesWorkbook ? campaign.recipientWorkbookSheetId : null,
+    sourceGroupIds: usesWorkbook ? [] : campaign.groupIds || [],
+    phoneColumn: campaign.recipientPhoneColumn || "",
+    nameColumn: campaign.recipientNameColumn || "",
+    recordKeyColumn: campaign.recipientRecordKeyColumn || "",
+    dateColumn: campaign.recipientDateColumn || "",
+    dateOffsetDays: campaign.recipientDateOffsetDays || 0,
+    statusColumn: campaign.recipientStatusColumn || "",
+    eligibleStatuses: campaign.recipientEligibleStatuses || [],
+    templateId: campaign.templateId,
+    templateParams: campaign.templateParams || []
+  };
+}
 async function resolveWorkbookSource(businessAccountId, config) {
   if (!config.sourceWorkbookId) throw new Error("This automation is not linked to an AI Workbook");
   const [workbook] = await db.select().from(whatsappAiWorkbooks).where(and57(
     eq67(whatsappAiWorkbooks.id, config.sourceWorkbookId),
-    eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId)
+    eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+    eq67(whatsappAiWorkbooks.status, "active")
   )).limit(1);
   if (!workbook) throw new Error("The linked AI Workbook is no longer available");
   const [version] = await db.select().from(whatsappAiWorkbookVersions).where(and57(
@@ -55596,41 +55869,92 @@ async function resolveBlueprintContext(businessAccountId, sourceCampaignId) {
   if (campaign.status !== "draft" || campaign.startedAt) {
     throw new Error("Only an unsent draft campaign can be used as an automation blueprint");
   }
-  const linkedWorkbooks = await db.select({
-    id: whatsappAiWorkbooks.id
-  }).from(whatsappAiWorkbooks).where(and57(
-    eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId),
-    eq67(whatsappAiWorkbooks.sourceCampaignId, campaign.id),
-    eq67(whatsappAiWorkbooks.status, "active")
-  )).orderBy(desc29(whatsappAiWorkbooks.updatedAt)).limit(2);
-  if (linkedWorkbooks.length === 0) {
-    throw new Error("Link one AI Workbook to this campaign before using it in an automation");
-  }
-  if (linkedWorkbooks.length > 1) {
-    throw new Error("This campaign is linked to multiple AI Workbooks. Keep one linked workbook before using it in an automation");
-  }
-  const workbookSource = await resolveWorkbookSource(businessAccountId, {
-    sourceWorkbookId: linkedWorkbooks[0].id,
-    sourceWorkbookSheetId: null
-  });
-  return { campaign, workbookSource };
+  return { campaign };
+}
+async function resolveGroupSource(businessAccountId, sourceGroupIds) {
+  const groupIds = Array.from(new Set((sourceGroupIds || []).filter(Boolean)));
+  if (!groupIds.length) throw new Error("Choose at least one contact group");
+  const groups = await db.select().from(contactGroups).where(and57(
+    eq67(contactGroups.businessAccountId, businessAccountId),
+    inArray11(contactGroups.id, groupIds)
+  ));
+  if (groups.length !== groupIds.length) throw new Error("One or more selected contact groups are no longer available");
+  if (groups.some((group) => group.contactCount <= 0)) throw new Error("Selected contact groups must contain contacts");
+  const contacts = await db.select({
+    groupId: contactGroupContacts.groupId,
+    phone: contactGroupContacts.phone,
+    name: contactGroupContacts.name,
+    attributes: contactGroupContacts.attributes
+  }).from(contactGroupContacts).where(and57(
+    eq67(contactGroupContacts.businessAccountId, businessAccountId),
+    inArray11(contactGroupContacts.groupId, groupIds)
+  ));
+  if (!contacts.length) throw new Error("The selected contact groups contain no contacts");
+  const attributeKeys = Array.from(new Set(
+    contacts.flatMap((contact) => Object.keys(contact.attributes || {}))
+  )).sort();
+  const columns = [
+    { key: "phone", label: "Phone" },
+    { key: "name", label: "Name" },
+    ...attributeKeys.map((key) => ({ key, label: key }))
+  ];
+  return {
+    groupIds,
+    groupNames: groupIds.map((id) => groups.find((group) => group.id === id)?.name || id),
+    payload: {
+      columns,
+      rows: contacts.map((contact, index2) => ({
+        r: index2 + 2,
+        v: columns.map((column2) => {
+          if (column2.key === "phone") return contact.phone || "";
+          if (column2.key === "name") return contact.name || "";
+          return String(contact.attributes?.[column2.key] || "");
+        })
+      }))
+    }
+  };
 }
 async function prepareAutomationInput(businessAccountId, input) {
   const sourceType = input.sourceType || "upload";
   const blueprint = sourceType === "campaign_blueprint" ? await resolveBlueprintContext(businessAccountId, input.sourceCampaignId) : null;
+  let sourceWorkbookId = input.sourceWorkbookId;
+  let sourceWorkbookSheetId = input.sourceWorkbookSheetId;
+  const owned = blueprint ? applyCampaignOwnedSource(input, blueprint.campaign) : input;
+  sourceWorkbookId = owned.sourceWorkbookId;
+  sourceWorkbookSheetId = owned.sourceWorkbookSheetId;
+  if (blueprint && !blueprint.campaign.recipientSourceType && !sourceWorkbookId && !(input.sourceGroupIds || []).length) {
+    const linkedWorkbooks = await db.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks).where(and57(
+      eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+      eq67(whatsappAiWorkbooks.sourceCampaignId, blueprint.campaign.id),
+      eq67(whatsappAiWorkbooks.status, "active")
+    )).orderBy(desc29(whatsappAiWorkbooks.updatedAt)).limit(2);
+    if (linkedWorkbooks.length === 1) {
+      const legacySource = await resolveWorkbookSource(businessAccountId, {
+        sourceWorkbookId: linkedWorkbooks[0].id,
+        sourceWorkbookSheetId: null
+      });
+      sourceWorkbookId = legacySource.workbookId;
+      sourceWorkbookSheetId = legacySource.sheetId;
+    }
+  }
   const prepared = blueprint ? {
-    ...input,
+    ...owned,
     sourceType: "campaign_blueprint",
     sourceCampaignId: blueprint.campaign.id,
-    sourceWorkbookId: blueprint.workbookSource.workbookId,
-    sourceWorkbookSheetId: blueprint.workbookSource.sheetId,
+    sourceWorkbookId,
+    sourceWorkbookSheetId,
     templateId: blueprint.campaign.templateId,
     templateParams: blueprint.campaign.templateParams || []
-  } : input;
+  } : owned;
   return { config: cleanConfig(prepared), blueprint };
 }
 async function validateWorkbookConfig(businessAccountId, config) {
   if (config.sourceType === "upload") return null;
+  if (!config.sourceWorkbookId && config.sourceType === "campaign_blueprint") {
+    const source2 = await resolveGroupSource(businessAccountId, config.sourceGroupIds);
+    validateColumns(config, source2.payload.columns);
+    return null;
+  }
   const source = await resolveWorkbookSource(businessAccountId, config);
   validateColumns(config, source.payload.columns);
   return source;
@@ -55864,6 +56188,12 @@ var init_campaignAutomationService = __esm({
       },
       async create(businessAccountId, input) {
         let { config } = await prepareAutomationInput(businessAccountId, input);
+        if (config.sourceType === "campaign_blueprint") {
+          const blueprint = await resolveBlueprintContext(businessAccountId, config.sourceCampaignId);
+          if (blueprint.campaign.campaignType !== "automation") {
+            throw new Error("Choose an automation campaign. One-time campaigns cannot be used for new recurring automations");
+          }
+        }
         const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, config.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         assertTemplateMapping(template, config.templateParams || []);
@@ -55879,12 +56209,17 @@ var init_campaignAutomationService = __esm({
             if (!lockedCampaign || lockedCampaign.status !== "draft" || lockedCampaign.startedAt) {
               throw new Error("Only an unsent draft campaign can be used as an automation blueprint");
             }
-            const [linkedWorkbook] = await tx.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks).where(and57(
+            if (lockedCampaign.campaignType !== "automation") {
+              throw new Error("Choose an automation campaign. One-time campaigns cannot be used for new recurring automations");
+            }
+          }
+          if (config.sourceWorkbookId) {
+            const [selectedWorkbook] = await tx.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks).where(and57(
               eq67(whatsappAiWorkbooks.id, config.sourceWorkbookId),
               eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId),
-              eq67(whatsappAiWorkbooks.sourceCampaignId, lockedCampaign.id)
+              eq67(whatsappAiWorkbooks.status, "active")
             )).for("update").limit(1);
-            if (!linkedWorkbook) throw new Error("The campaign's linked AI Workbook changed before the automation was saved");
+            if (!selectedWorkbook) throw new Error("The selected AI Workbook changed before the automation was saved");
           }
           const [row] = await tx.insert(whatsappCampaignAutomations).values({
             businessAccountId,
@@ -55893,6 +56228,7 @@ var init_campaignAutomationService = __esm({
             sourceCampaignId: config.sourceCampaignId,
             sourceWorkbookId: config.sourceWorkbookId,
             sourceWorkbookSheetId: config.sourceWorkbookSheetId,
+            sourceGroupIds: config.sourceGroupIds || [],
             templateId: config.templateId,
             templateParams: config.templateParams,
             phoneColumn: config.phoneColumn,
@@ -55915,6 +56251,13 @@ var init_campaignAutomationService = __esm({
         const existing = await this.get(businessAccountId, id);
         if (!existing) return void 0;
         let { config } = await prepareAutomationInput(businessAccountId, { ...existing, ...input });
+        const requiresAutomationCampaignType = config.sourceType === "campaign_blueprint" && (existing.sourceType !== "campaign_blueprint" || config.sourceCampaignId !== existing.sourceCampaignId);
+        if (requiresAutomationCampaignType) {
+          const blueprint = await resolveBlueprintContext(businessAccountId, config.sourceCampaignId);
+          if (blueprint.campaign.campaignType !== "automation") {
+            throw new Error("Choose an automation campaign. One-time campaigns cannot be used for new recurring automations");
+          }
+        }
         const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, config.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         assertTemplateMapping(template, config.templateParams || []);
@@ -55930,6 +56273,17 @@ var init_campaignAutomationService = __esm({
             if (!lockedCampaign || lockedCampaign.status !== "draft" || lockedCampaign.startedAt) {
               throw new Error("Only an unsent draft campaign can be used as an automation blueprint");
             }
+            if (requiresAutomationCampaignType && lockedCampaign.campaignType !== "automation") {
+              throw new Error("Choose an automation campaign. One-time campaigns cannot be used for new recurring automations");
+            }
+          }
+          if (config.sourceWorkbookId) {
+            const [selectedWorkbook] = await tx.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks).where(and57(
+              eq67(whatsappAiWorkbooks.id, config.sourceWorkbookId),
+              eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+              eq67(whatsappAiWorkbooks.status, "active")
+            )).for("update").limit(1);
+            if (!selectedWorkbook) throw new Error("The selected AI Workbook changed before the automation was saved");
           }
           const [row] = await tx.update(whatsappCampaignAutomations).set({
             ...config,
@@ -55998,21 +56352,24 @@ var init_campaignAutomationService = __esm({
         const automation = await this.get(businessAccountId, id);
         if (!automation) throw new Error("Automation not found");
         const blueprint = automation.sourceType === "campaign_blueprint" ? await resolveBlueprintContext(businessAccountId, automation.sourceCampaignId) : null;
-        const workbookSource = blueprint?.workbookSource || (automation.sourceType === "ai_workbook" ? await resolveWorkbookSource(businessAccountId, automation) : null);
+        const sourceConfig = blueprint ? applyCampaignOwnedSource(automation, blueprint.campaign) : automation;
+        const workbookSource = sourceConfig.sourceWorkbookId ? await resolveWorkbookSource(businessAccountId, sourceConfig) : null;
+        const groupSource = blueprint && !workbookSource ? await resolveGroupSource(businessAccountId, sourceConfig.sourceGroupIds) : null;
         const effectiveAutomation = blueprint ? {
-          ...automation,
+          ...sourceConfig,
           templateId: blueprint.campaign.templateId,
           templateParams: blueprint.campaign.templateParams || [],
-          sourceWorkbookId: workbookSource.workbookId,
-          sourceWorkbookSheetId: workbookSource.sheetId
+          sourceWorkbookId: workbookSource?.workbookId || null,
+          sourceWorkbookSheetId: workbookSource?.sheetId || null
         } : automation;
-        const evaluated = await evaluateUpload(effectiveAutomation, workbookSource?.payload || payload);
+        const evaluated = await evaluateUpload(effectiveAutomation, workbookSource?.payload || groupSource?.payload || payload);
         return {
           targetDate: evaluated.targetDate,
           summary: evaluated.summary,
           invalid: evaluated.invalid,
           source: workbookSource ? {
             type: blueprint ? "campaign_blueprint" : "ai_workbook",
+            audienceType: "ai_workbook",
             campaignId: blueprint?.campaign.id,
             campaignName: blueprint?.campaign.name,
             campaignUpdatedAt: blueprint?.campaign.updatedAt,
@@ -56023,6 +56380,14 @@ var init_campaignAutomationService = __esm({
             revision: workbookSource.revision,
             sheetId: workbookSource.sheetId,
             sheetName: workbookSource.sheetName
+          } : groupSource ? {
+            type: "campaign_blueprint",
+            audienceType: "contact_groups",
+            campaignId: blueprint?.campaign.id,
+            campaignName: blueprint?.campaign.name,
+            campaignUpdatedAt: blueprint?.campaign.updatedAt,
+            groupIds: groupSource.groupIds,
+            groupNames: groupSource.groupNames
           } : { type: "upload" },
           previewRecipients: evaluated.candidates.slice(0, 25).map((candidate) => ({
             rowNumber: candidate.rowNumber,
@@ -56038,13 +56403,15 @@ var init_campaignAutomationService = __esm({
         if (!automation) throw new Error("Automation not found");
         if (!automation.enabled) throw new Error("This automation is paused");
         const blueprint = automation.sourceType === "campaign_blueprint" ? await resolveBlueprintContext(businessAccountId, automation.sourceCampaignId) : null;
-        const workbookSource = blueprint?.workbookSource || (automation.sourceType === "ai_workbook" ? await resolveWorkbookSource(businessAccountId, automation) : null);
+        const sourceConfig = blueprint ? applyCampaignOwnedSource(automation, blueprint.campaign) : automation;
+        const workbookSource = sourceConfig.sourceWorkbookId ? await resolveWorkbookSource(businessAccountId, sourceConfig) : null;
+        const groupSource = blueprint && !workbookSource ? await resolveGroupSource(businessAccountId, sourceConfig.sourceGroupIds) : null;
         const effectiveAutomation = blueprint ? {
-          ...automation,
+          ...sourceConfig,
           templateId: blueprint.campaign.templateId,
           templateParams: blueprint.campaign.templateParams || [],
-          sourceWorkbookId: workbookSource.workbookId,
-          sourceWorkbookSheetId: workbookSource.sheetId
+          sourceWorkbookId: workbookSource?.workbookId || null,
+          sourceWorkbookSheetId: workbookSource?.sheetId || null
         } : automation;
         const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, effectiveAutomation.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("The selected template is no longer approved");
@@ -56058,18 +56425,19 @@ var init_campaignAutomationService = __esm({
         if (blueprint && (!payload?.expectedCampaignUpdatedAt || new Date(payload.expectedCampaignUpdatedAt).getTime() !== blueprint.campaign.updatedAt.getTime())) {
           throw new Error("The campaign blueprint changed after validation. Validate it again.");
         }
-        const evaluated = await evaluateUpload(effectiveAutomation, workbookSource?.payload || payload);
+        const evaluated = await evaluateUpload(effectiveAutomation, workbookSource?.payload || groupSource?.payload || payload);
         if (evaluated.candidates.length === 0) {
           throw new Error("No eligible recipients were found. Check the date rule, status filter, and duplicate history.");
         }
         const scheduledAt = nextScheduledAt(automation);
         const automatic = automation.sendMode === "automatic";
-        const safeFileName = workbookSource ? `${workbookSource.workbookName} \xB7 version ${workbookSource.versionNumber}.${workbookSource.revision}`.slice(0, 200) : String(sourceFileName || "spreadsheet").slice(0, 200);
+        const safeFileName = workbookSource ? `${workbookSource.workbookName} \xB7 version ${workbookSource.versionNumber}.${workbookSource.revision}`.slice(0, 200) : groupSource ? groupSource.groupNames.join(", ").slice(0, 200) : String(sourceFileName || "spreadsheet").slice(0, 200);
         const result = await db.transaction(async (tx) => {
           if (workbookSource) {
             const [lockedWorkbook] = await tx.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks).where(and57(
               eq67(whatsappAiWorkbooks.id, workbookSource.workbookId),
-              eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId)
+              eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+              eq67(whatsappAiWorkbooks.status, "active")
             )).for("update").limit(1);
             if (!lockedWorkbook) throw new Error("The linked AI Workbook was deleted before the run could be created");
             const [currentVersion] = await tx.select({
@@ -56090,7 +56458,7 @@ var init_campaignAutomationService = __esm({
             isNull12(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be created");
-          if (activeAutomation.updatedAt.getTime() !== automation.updatedAt.getTime() || activeAutomation.sourceType !== automation.sourceType || activeAutomation.sourceCampaignId !== automation.sourceCampaignId || activeAutomation.sourceWorkbookId !== automation.sourceWorkbookId || activeAutomation.sourceWorkbookSheetId !== automation.sourceWorkbookSheetId) {
+          if (activeAutomation.updatedAt.getTime() !== automation.updatedAt.getTime() || activeAutomation.sourceType !== automation.sourceType || activeAutomation.sourceCampaignId !== automation.sourceCampaignId || activeAutomation.sourceWorkbookId !== automation.sourceWorkbookId || activeAutomation.sourceWorkbookSheetId !== automation.sourceWorkbookSheetId || JSON.stringify(activeAutomation.sourceGroupIds || []) !== JSON.stringify(automation.sourceGroupIds || [])) {
             throw new Error("This automation changed while the run was being prepared. Validate the source again.");
           }
           let lockedBlueprint = null;
@@ -56109,7 +56477,7 @@ var init_campaignAutomationService = __esm({
           const [group] = await tx.insert(contactGroups).values({
             businessAccountId,
             name: `${automation.name} \u2014 ${dateInTimezone(automation.timezone)} (${safeFileName})`.slice(0, 250),
-            description: blueprint ? `Generated from campaign blueprint "${blueprint.campaign.name}" and AI Workbook "${workbookSource.workbookName}"` : workbookSource ? `Generated from AI Workbook "${workbookSource.workbookName}" by automation "${automation.name}"` : `Generated from spreadsheet automation "${automation.name}"`,
+            description: blueprint ? workbookSource ? `Generated from campaign blueprint "${blueprint.campaign.name}" and AI Workbook "${workbookSource.workbookName}"` : `Generated from campaign blueprint "${blueprint.campaign.name}" and contact groups "${groupSource.groupNames.join(", ")}"` : workbookSource ? `Generated from AI Workbook "${workbookSource.workbookName}" by automation "${automation.name}"` : `Generated from spreadsheet automation "${automation.name}"`,
             defaultCountryCode: automation.defaultCountryCode,
             contactCount: evaluated.candidates.length
           }).returning();
@@ -56140,7 +56508,11 @@ var init_campaignAutomationService = __esm({
             aiKnowledgeDocIds: lockedBlueprint?.aiKnowledgeDocIds || [],
             replyClassifications: lockedBlueprint?.replyClassifications || [],
             aiDailyTokenBudget: lockedBlueprint?.aiDailyTokenBudget || 5e4,
-            aiMaxRepliesPerRecipient: lockedBlueprint?.aiMaxRepliesPerRecipient || 20
+            aiMaxRepliesPerRecipient: lockedBlueprint?.aiMaxRepliesPerRecipient || 20,
+            // Keep the generated execution immutable, but preserve the blueprint's
+            // prompt allowlist so Campaign AI never receives extra workbook fields.
+            recipientSourceType: lockedBlueprint?.recipientSourceType,
+            recipientAiAllowedFields: lockedBlueprint?.recipientAiAllowedFields || []
           }).returning();
           const [run] = await tx.insert(whatsappCampaignAutomationRuns).values({
             automationId: automation.id,
@@ -56159,6 +56531,8 @@ var init_campaignAutomationService = __esm({
             sourceWorkbookVersionNumber: workbookSource?.versionNumber || null,
             sourceWorkbookRevision: workbookSource?.revision || null,
             sourceWorkbookSheetName: workbookSource?.sheetName || null,
+            sourceGroupIds: groupSource?.groupIds || [],
+            sourceGroupNames: groupSource?.groupNames || [],
             sourceSnapshot: {
               columns: evaluated.sheet.columns,
               recipients: evaluated.candidates.map((candidate) => ({
@@ -56621,8 +56995,8 @@ async function buildCampaignSheets(businessAccountId, campaignId) {
       callback_reason: recipient.callbackReason || "",
       customer_feedback: recipient.customerFeedback || ""
     };
-    for (const [sourceKey, workbookKey] of Array.from(captureKeyMap.entries())) {
-      aiValues[workbookKey] = (recipient.dispositionData || {})[sourceKey] ?? null;
+    for (const [sourceKey2, workbookKey] of Array.from(captureKeyMap.entries())) {
+      aiValues[workbookKey] = (recipient.dispositionData || {})[sourceKey2] ?? null;
     }
     return {
       id: recipient.id,
@@ -56631,9 +57005,9 @@ async function buildCampaignSheets(businessAccountId, campaignId) {
         name: recipient.name || "",
         phone: recipient.phone,
         status: recipient.status,
-        ...Object.fromEntries(Array.from(attributeKeyMap.entries()).map(([sourceKey, workbookKey]) => [
+        ...Object.fromEntries(Array.from(attributeKeyMap.entries()).map(([sourceKey2, workbookKey]) => [
           workbookKey,
-          (recipient.attributes || {})[sourceKey] ?? null
+          (recipient.attributes || {})[sourceKey2] ?? null
         ])),
         ...aiValues,
         reply_count: recipient.replyCount,
@@ -106587,12 +106961,14 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       };
       const { marketingCampaignService: marketingCampaignService2, CampaignPrerequisiteError: CampaignPrerequisiteError2 } = await Promise.resolve().then(() => (init_marketingCampaignService(), marketingCampaignService_exports));
       const camp = await marketingCampaignService2.create(req.user.businessAccountId, payload);
-      const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
-      await whatsappAiWorkbookService2.attachCampaignToAudienceGroups(
-        req.user.businessAccountId,
-        camp.id,
-        Array.isArray(payload.groupIds) ? payload.groupIds : []
-      );
+      if (camp.campaignType !== "automation") {
+        const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
+        await whatsappAiWorkbookService2.attachCampaignToAudienceGroups(
+          req.user.businessAccountId,
+          camp.id,
+          Array.isArray(payload.groupIds) ? payload.groupIds : []
+        );
+      }
       res.status(201).json(camp);
     } catch (err) {
       if (err?.name === "CampaignPrerequisiteError") {
@@ -106628,6 +107004,14 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const c = await marketingCampaignService2.update(req.user.businessAccountId, req.params.id, payload, { onlyIfStatusIn: EDITABLE });
       if (!c) {
         return res.status(409).json({ error: "This campaign started sending and can no longer be edited." });
+      }
+      if (body.groupIds !== void 0 && c.campaignType !== "automation") {
+        const { whatsappAiWorkbookService: whatsappAiWorkbookService2 } = await Promise.resolve().then(() => (init_whatsappAiWorkbookService(), whatsappAiWorkbookService_exports));
+        await whatsappAiWorkbookService2.attachCampaignToAudienceGroups(
+          req.user.businessAccountId,
+          c.id,
+          Array.isArray(body.groupIds) ? body.groupIds : []
+        );
       }
       res.json(c);
     } catch (err) {

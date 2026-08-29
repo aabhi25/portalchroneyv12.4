@@ -45,6 +45,17 @@ interface Contact {
   phone: string;
   attributes?: Record<string, string>;
 }
+interface WorkbookSummary {
+  id: string; name: string; status: string;
+  latestVersion?: { versionNumber: number } | null;
+}
+interface WorkbookDetail {
+  id: string; name: string;
+  currentVersion: {
+    id: string; versionNumber: number;
+    sheets: { id: string; name: string; columns: { key: string; label: string }[]; rows?: { values: Record<string, string | number | boolean | null> }[] }[];
+  } | null;
+}
 
 export interface CampaignFormValues {
   name: string;
@@ -62,6 +73,19 @@ export interface CampaignFormValues {
   aiUseProducts: boolean;
   /** Outcome categories the AI sorts inbound replies into. Empty = broadcast only. */
   replyClassifications: ReplyClassification[];
+  /** Automation blueprints own their audience and eligibility rules. */
+  recipientSourceType?: "ai_workbook" | "contact_groups";
+  recipientWorkbookId?: string;
+  recipientWorkbookSheetId?: string;
+  recipientPhoneColumn?: string;
+  recipientNameColumn?: string;
+  recipientRecordKeyColumn?: string;
+  recipientDateColumn?: string;
+  recipientDateOffsetDays?: number;
+  recipientStatusColumn?: string;
+  recipientEligibleStatuses?: string[];
+  /** Workbook fields the campaign AI may receive. */
+  recipientAiAllowedFields?: string[];
 }
 
 export const EMPTY_CAMPAIGN_FORM: CampaignFormValues = {
@@ -78,6 +102,17 @@ export const EMPTY_CAMPAIGN_FORM: CampaignFormValues = {
   aiUseDocs: true,
   aiUseProducts: true,
   replyClassifications: [],
+  recipientSourceType: "ai_workbook",
+  recipientWorkbookId: "",
+  recipientWorkbookSheetId: "",
+  recipientPhoneColumn: "",
+  recipientNameColumn: "",
+  recipientRecordKeyColumn: "",
+  recipientDateColumn: "",
+  recipientDateOffsetDays: 0,
+  recipientStatusColumn: "",
+  recipientEligibleStatuses: [],
+  recipientAiAllowedFields: [],
 };
 
 /**
@@ -98,6 +133,17 @@ export interface StoredCampaignConfig {
   aiUseDocs: string;
   aiUseProducts: string;
   replyClassifications?: ReplyClassification[] | null;
+  recipientSourceType?: "ai_workbook" | "contact_groups" | null;
+  recipientWorkbookId?: string | null;
+  recipientWorkbookSheetId?: string | null;
+  recipientPhoneColumn?: string | null;
+  recipientNameColumn?: string | null;
+  recipientRecordKeyColumn?: string | null;
+  recipientDateColumn?: string | null;
+  recipientDateOffsetDays?: number | null;
+  recipientStatusColumn?: string | null;
+  recipientEligibleStatuses?: string[] | null;
+  recipientAiAllowedFields?: string[] | null;
 }
 
 /** Convert a stored ISO timestamp into the local-time string a datetime-local input expects. */
@@ -125,6 +171,17 @@ export function campaignToFormValues(campaign: StoredCampaignConfig): CampaignFo
     aiUseDocs: campaign.aiUseDocs !== "false",
     aiUseProducts: campaign.aiUseProducts !== "false",
     replyClassifications: Array.isArray(campaign.replyClassifications) ? campaign.replyClassifications : [],
+    recipientSourceType: campaign.recipientSourceType === "contact_groups" ? "contact_groups" : "ai_workbook",
+    recipientWorkbookId: campaign.recipientWorkbookId || "",
+    recipientWorkbookSheetId: campaign.recipientWorkbookSheetId || "",
+    recipientPhoneColumn: campaign.recipientPhoneColumn || "",
+    recipientNameColumn: campaign.recipientNameColumn || "",
+    recipientRecordKeyColumn: campaign.recipientRecordKeyColumn || "",
+    recipientDateColumn: campaign.recipientDateColumn || "",
+    recipientDateOffsetDays: campaign.recipientDateOffsetDays || 0,
+    recipientStatusColumn: campaign.recipientStatusColumn || "",
+    recipientEligibleStatuses: Array.isArray(campaign.recipientEligibleStatuses) ? campaign.recipientEligibleStatuses : [],
+    recipientAiAllowedFields: Array.isArray(campaign.recipientAiAllowedFields) ? campaign.recipientAiAllowedFields : [],
   };
 }
 
@@ -231,6 +288,7 @@ export default function CampaignForm({
 }: CampaignFormProps) {
   const [name, setName] = useState(initialValues.name);
   const [campaignType, setCampaignType] = useState<CampaignFormValues["campaignType"]>(initialValues.campaignType);
+  const isAutomation = campaignType === "automation";
   const [templateId, setTemplateId] = useState(initialValues.templateId);
   const [selectedGroups, setSelectedGroups] = useState<string[]>(initialValues.groupIds);
   const [params, setParams] = useState<string[]>(initialValues.templateParams);
@@ -244,10 +302,32 @@ export default function CampaignForm({
   const [aiUseFaqs, setAiUseFaqs] = useState(initialValues.aiUseFaqs);
   const [aiUseDocs, setAiUseDocs] = useState(initialValues.aiUseDocs);
   const [aiUseProducts, setAiUseProducts] = useState(initialValues.aiUseProducts);
+  const [recipientSourceType, setRecipientSourceType] = useState<"ai_workbook" | "contact_groups">(initialValues.recipientSourceType || "ai_workbook");
+  const [sourceWorkbookId, setSourceWorkbookId] = useState(initialValues.recipientWorkbookId || "");
+  const [sourceWorkbookSheetId, setSourceWorkbookSheetId] = useState(initialValues.recipientWorkbookSheetId || "");
+  const [phoneColumn, setPhoneColumn] = useState(initialValues.recipientPhoneColumn || "");
+  const [nameColumn, setNameColumn] = useState(initialValues.recipientNameColumn || "");
+  const [recordKeyColumn, setRecordKeyColumn] = useState(initialValues.recipientRecordKeyColumn || "");
+  const [dateColumn, setDateColumn] = useState(initialValues.recipientDateColumn || "");
+  const [dateOffsetDays, setDateOffsetDays] = useState(initialValues.recipientDateOffsetDays || 0);
+  const [statusColumn, setStatusColumn] = useState(initialValues.recipientStatusColumn || "");
+  const [eligibleStatusesText, setEligibleStatusesText] = useState((initialValues.recipientEligibleStatuses || []).join(", "));
+  const [aiFieldAllowlist, setAiFieldAllowlist] = useState<string[]>(initialValues.recipientAiAllowedFields || []);
   const [, setLocation] = useLocation();
 
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ["/api/whatsapp/templates"] });
   const { data: groups = [] } = useQuery<Group[]>({ queryKey: ["/api/whatsapp/contact-groups"] });
+  const { data: workbooks = [] } = useQuery<WorkbookSummary[]>({ queryKey: ["/api/whatsapp/ai-workbooks"] });
+  const { data: selectedWorkbook } = useQuery<WorkbookDetail>({
+    queryKey: ["/api/whatsapp/ai-workbooks", sourceWorkbookId],
+    queryFn: () => apiRequest("GET", `/api/whatsapp/ai-workbooks/${sourceWorkbookId}`),
+    enabled: isAutomation && recipientSourceType === "ai_workbook" && Boolean(sourceWorkbookId),
+  });
+  const selectedWorkbookSheet = selectedWorkbook?.currentVersion?.sheets[0];
+  const sourceColumns = isAutomation && recipientSourceType === "ai_workbook"
+    ? selectedWorkbookSheet?.columns || []
+    : [];
+  const sourceSample = selectedWorkbookSheet?.rows?.[0]?.values;
 
   // Fetch a sample of contacts from each selected group to discover attribute keys
   const contactSampleQueries = useQueries({
@@ -272,6 +352,24 @@ export default function CampaignForm({
     }
     return Array.from(keys).sort();
   }, [contactSampleQueries]);
+  const contactGroupColumns = useMemo(
+    () => [
+      { key: "phone", label: "Phone" },
+      { key: "name", label: "Name" },
+      ...extraAttributeKeys.map(key => ({ key, label: key })),
+    ],
+    [extraAttributeKeys],
+  );
+  const mappingColumns = recipientSourceType === "ai_workbook" ? sourceColumns : contactGroupColumns;
+  const personalizationKeys = isAutomation
+    ? mappingColumns.map(column => column.key)
+    : extraAttributeKeys;
+  const resolvedParam = (value: string) => value.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, key) => {
+    const normalized = String(key).trim().toLowerCase();
+    if (normalized === "name") return String(sourceSample?.[nameColumn] ?? "Name");
+    if (normalized === "phone") return String(sourceSample?.[phoneColumn] ?? "Phone");
+    return String(sourceSample?.[key] ?? sourceSample?.[normalized] ?? `{{${key}}}`);
+  });
 
   const selectedTemplate = templates.find(t => t.id === templateId);
   const requiredParams = selectedTemplate?.paramCount || 0;
@@ -283,7 +381,6 @@ export default function CampaignForm({
   const approvedTemplates = templates.filter(t => t.status === "approved");
   const nonEmptyGroups = groups.filter(g => g.contactCount > 0);
   const selectedTemplateApproved = !selectedTemplate || selectedTemplate.status === "approved";
-  const isAutomation = campaignType === "automation";
 
   const totalContacts = groups
     .filter(g => selectedGroups.includes(g.id))
@@ -326,7 +423,11 @@ export default function CampaignForm({
     .filter(i => !(params[i] ?? "").trim());
   const paramsComplete = blankParams.length === 0;
 
-  const basicsComplete = Boolean(name.trim()) && Boolean(templateId) && (isAutomation || selectedGroups.length > 0);
+  const automationSourceComplete = recipientSourceType === "ai_workbook"
+    ? Boolean(sourceWorkbookId && phoneColumn && recordKeyColumn && dateColumn)
+      && (!eligibleStatusesText.trim() || Boolean(statusColumn.trim()))
+    : selectedGroups.length > 0;
+  const basicsComplete = Boolean(name.trim()) && Boolean(templateId) && (isAutomation ? automationSourceComplete : selectedGroups.length > 0);
   // totalContacts > 0 is the client-side twin of the server's empty-audience refusal.
   const audienceUsable = isAutomation || totalContacts > 0;
   const canSubmit =
@@ -340,7 +441,7 @@ export default function CampaignForm({
       name,
       campaignType,
       templateId,
-      groupIds: isAutomation ? [] : selectedGroups,
+      groupIds: isAutomation && recipientSourceType === "ai_workbook" ? [] : selectedGroups,
       templateParams: padded,
       scheduledAt: isAutomation ? "" : scheduleAt,
       aiEnabled,
@@ -350,6 +451,19 @@ export default function CampaignForm({
       aiUseDocs,
       aiUseProducts,
       replyClassifications,
+      ...(isAutomation ? {
+        recipientSourceType,
+        recipientWorkbookId: recipientSourceType === "ai_workbook" ? sourceWorkbookId : "",
+        recipientWorkbookSheetId: recipientSourceType === "ai_workbook" ? selectedWorkbookSheet?.id || sourceWorkbookSheetId : "",
+        recipientPhoneColumn: phoneColumn,
+        recipientNameColumn: nameColumn,
+        recipientRecordKeyColumn: recordKeyColumn,
+        recipientDateColumn: dateColumn,
+        recipientDateOffsetDays: dateOffsetDays,
+        recipientStatusColumn: statusColumn,
+        recipientEligibleStatuses: eligibleStatusesText.split(",").map(value => value.trim()).filter(Boolean),
+        recipientAiAllowedFields: recipientSourceType === "ai_workbook" ? aiFieldAllowlist : [],
+      } : {}),
     });
   };
 
@@ -441,6 +555,98 @@ export default function CampaignForm({
               </div>
             </SectionCard>
 
+            {/* A recurring blueprint owns the recipient definition. Keeping it ahead of the
+                template makes the available personalization fields unambiguous. */}
+            {isAutomation && <SectionCard icon={<Users className="h-4 w-4 text-purple-600" />} title="Recipient source">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">Audience source <span className="text-red-500">*</span></label>
+                <Select value={recipientSourceType} onValueChange={(value: "ai_workbook" | "contact_groups") => {
+                  setRecipientSourceType(value);
+                  if (value === "ai_workbook") setSelectedGroups([]);
+                  else {
+                    setSourceWorkbookId("");
+                    setPhoneColumn(current => current || "phone");
+                    setNameColumn(current => current || "name");
+                    setRecordKeyColumn(current => current || "phone");
+                  }
+                }}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ai_workbook">AI Workbook</SelectItem>
+                    <SelectItem value="contact_groups">Fixed contact groups (compatibility)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-gray-500">This source and its rules are saved with the campaign blueprint.</p>
+              </div>
+              {recipientSourceType === "ai_workbook" ? <>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Active AI Workbook <span className="text-red-500">*</span></label>
+                  <Select value={sourceWorkbookId} onValueChange={value => {
+                    setSourceWorkbookId(value); setSourceWorkbookSheetId(""); setAiFieldAllowlist([]);
+                  }}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Choose an active AI Workbook" /></SelectTrigger>
+                    <SelectContent>{workbooks.filter(w => w.status === "active").map(w => <SelectItem key={w.id} value={w.id}>{w.name}{w.latestVersion ? ` · v${w.latestVersion.versionNumber}` : ""}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                {selectedWorkbookSheet && <div className="rounded-md border bg-gray-50 p-3 text-xs space-y-2">
+                  <p className="font-medium text-gray-700">Sheet: {selectedWorkbookSheet.name} · {sourceColumns.length} columns</p>
+                  <p className="text-gray-600 break-words">Columns: {sourceColumns.map(c => c.label).join(", ")}</p>
+                  {sourceSample && <p className="text-gray-600 break-words">Sample row: {sourceColumns.slice(0, 5).map(c => `${c.label}: ${String(sourceSample[c.key] ?? "—")}`).join(" · ")}</p>}
+                </div>}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {([
+                    ["Phone column", phoneColumn, setPhoneColumn, true],
+                    ["Name column", nameColumn, setNameColumn, false],
+                    ["Record key column", recordKeyColumn, setRecordKeyColumn, true],
+                    ["Date column", dateColumn, setDateColumn, true],
+                    ["Status column", statusColumn, setStatusColumn, false],
+                  ] as const).map(([label, value, setter, required]) => <div key={label}>
+                    <label className="text-xs font-medium text-gray-600">{label}{required && <span className="text-red-500"> *</span>}</label>
+                    <Input className="mt-1" list="workbook-columns" value={value} onChange={e => setter(e.target.value)} placeholder="Choose a Workbook column" />
+                  </div>)}
+                  <div><label className="text-xs font-medium text-gray-600">Date offset (days)</label><Input className="mt-1" type="number" min={-366} max={366} value={dateOffsetDays} onChange={e => setDateOffsetDays(Number(e.target.value) || 0)} /></div>
+                </div>
+                <datalist id="workbook-columns">{sourceColumns.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}</datalist>
+                <div>
+                  <label className="text-xs font-medium text-gray-600">Eligible statuses <span className="font-normal">(comma-separated, optional)</span></label>
+                  <Input className="mt-1" value={eligibleStatusesText} onChange={e => setEligibleStatusesText(e.target.value)} placeholder="pending, overdue" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600">Campaign-AI field allowlist</label>
+                  <p className="text-xs text-gray-500 mt-0.5">Only checked Workbook fields are provided to the campaign AI.</p>
+                  <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2">{sourceColumns.map(c => <label key={c.key} className="flex items-center gap-1.5 text-xs cursor-pointer">
+                    <Checkbox checked={aiFieldAllowlist.includes(c.key)} onCheckedChange={checked => setAiFieldAllowlist(current => checked ? [...current, c.key] : current.filter(key => key !== c.key))} />
+                    {c.label}
+                  </label>)}</div>
+                </div>
+              </> : <>
+                <div className="border rounded-lg divide-y">
+                  {groups.map(g => <label key={g.id} className="flex items-center gap-3 px-4 py-3 text-sm">
+                    <Checkbox checked={selectedGroups.includes(g.id)} disabled={g.contactCount === 0} onCheckedChange={checked => setSelectedGroups(current => checked ? [...current, g.id] : current.filter(id => id !== g.id))} />
+                    <span className="flex-1">{g.name}</span><Badge variant="outline">{g.contactCount} contacts</Badge>
+                  </label>)}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {([
+                    ["Phone field", phoneColumn, setPhoneColumn, true],
+                    ["Name field", nameColumn, setNameColumn, false],
+                    ["Record key field", recordKeyColumn, setRecordKeyColumn, true],
+                    ["Date field", dateColumn, setDateColumn, true],
+                    ["Status field", statusColumn, setStatusColumn, false],
+                  ] as const).map(([label, value, setter, required]) => <div key={label}>
+                    <label className="text-xs font-medium text-gray-600">{label}{required && <span className="text-red-500"> *</span>}</label>
+                    <Input className="mt-1" list="contact-group-fields" value={value} onChange={event => setter(event.target.value)} placeholder="Choose a contact field" />
+                  </div>)}
+                  <div><label className="text-xs font-medium text-gray-600">Date offset (days)</label><Input className="mt-1" type="number" min={-366} max={366} value={dateOffsetDays} onChange={event => setDateOffsetDays(Number(event.target.value) || 0)} /></div>
+                </div>
+                <datalist id="contact-group-fields">{contactGroupColumns.map(column => <option key={column.key} value={column.key}>{column.label}</option>)}</datalist>
+                <div>
+                  <label className="text-xs font-medium text-gray-600">Eligible statuses <span className="font-normal">(comma-separated, optional)</span></label>
+                  <Input className="mt-1" value={eligibleStatusesText} onChange={event => setEligibleStatusesText(event.target.value)} placeholder="pending, overdue" />
+                </div>
+              </>}
+            </SectionCard>}
+
             {/* Template */}
             <SectionCard icon={<FileCode2 className="h-4 w-4 text-blue-600" />} title="Template">
               <div>
@@ -480,7 +686,7 @@ export default function CampaignForm({
                 <p className="text-xs text-gray-500">
                   Type a fixed value like <code className="bg-gray-100 px-1 rounded">"50%"</code>, or click a field chip below to personalise per contact (e.g. each person's name).
                 </p>
-                {selectedGroups.length === 0 && (
+                {!isAutomation && selectedGroups.length === 0 && (
                   <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
                     Select a contact group above to see available contact fields.
                   </p>
@@ -508,15 +714,24 @@ export default function CampaignForm({
                       </p>
                     )}
                     <FieldChips
-                      extraKeys={extraAttributeKeys}
+                      extraKeys={personalizationKeys}
                       onInsert={placeholder => {
                         const next = [...params];
                         next[i] = placeholder;
                         setParams(next);
                       }}
                     />
+                    {isAutomation && sourceSample && params[i] && (
+                      <p className="text-xs text-emerald-700 mt-1">Sample value: {resolvedParam(params[i])}</p>
+                    )}
                   </div>
                 ))}
+                {isAutomation && selectedTemplate && sourceSample && (
+                  <div className="rounded-md border bg-gray-50 p-3 text-xs text-gray-600">
+                    <span className="font-medium text-gray-700">Sample preview: </span>
+                    {interpolatePreview(selectedTemplate.bodyText, params.map(resolvedParam))}
+                  </div>
+                )}
               </SectionCard>
             )}
 

@@ -3049,6 +3049,23 @@ export const marketingCampaigns = pgTable("marketing_campaigns", {
   templateId: varchar("template_id").notNull().references(() => whatsappTemplates.id, { onDelete: "restrict" }),
   templateParams: jsonb("template_params").$type<string[]>().default([]), // Static param values OR placeholders like "{{name}}" mapping to contact attributes
   groupIds: jsonb("group_ids").$type<string[]>().notNull().default([]), // Target contact groups
+  // Optional live audience definition for recurring campaign blueprints.  These
+  // are deliberately separate from groupIds: executions snapshot recipients
+  // into a generated group, while a blueprint always re-reads this workbook.
+  recipientSourceType: text("recipient_source_type"), // ai_workbook | contact_groups
+  // The database migration owns this FK. Keeping the Drizzle field unlinked
+  // avoids a circular inferred type with whatsappAiWorkbooks.sourceCampaignId.
+  recipientWorkbookId: varchar("recipient_workbook_id"),
+  recipientWorkbookSheetId: text("recipient_workbook_sheet_id"),
+  recipientPhoneColumn: text("recipient_phone_column"),
+  recipientNameColumn: text("recipient_name_column").default(""),
+  recipientRecordKeyColumn: text("recipient_record_key_column"),
+  recipientDateColumn: text("recipient_date_column"),
+  recipientDateOffsetDays: integer("recipient_date_offset_days").notNull().default(0),
+  recipientStatusColumn: text("recipient_status_column").default(""),
+  recipientEligibleStatuses: jsonb("recipient_eligible_statuses").$type<string[]>().default([]),
+  // Only these imported fields may be placed in Campaign AI prompts.
+  recipientAiAllowedFields: jsonb("recipient_ai_allowed_fields").$type<string[]>().default([]),
   status: text("status").notNull().default("draft"), // 'draft' | 'scheduled' | 'sending' | 'completed' | 'cancelled' | 'failed'
   scheduledAt: timestamp("scheduled_at"), // When to send (null = send now once started)
   startedAt: timestamp("started_at"),
