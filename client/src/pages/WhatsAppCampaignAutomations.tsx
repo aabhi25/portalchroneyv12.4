@@ -12,7 +12,8 @@ import { useToast } from "@/hooks/use-toast";
 export interface CampaignAutomation {
   id: string;
   name: string;
-  sourceType?: "upload" | "ai_workbook";
+  sourceType?: "upload" | "ai_workbook" | "campaign_blueprint";
+  sourceCampaignId?: string | null;
   sendMode: "review" | "automatic";
   sendTime: string;
   timezone: string;
@@ -29,6 +30,10 @@ export default function WhatsAppCampaignAutomations() {
   const { data: automations = [], isLoading } = useQuery<CampaignAutomation[]>({
     queryKey: ["/api/whatsapp/campaign-automations"],
   });
+  const { data: campaigns = [] } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ["/api/whatsapp/campaigns"],
+  });
+  const campaignNames = new Map(campaigns.map(campaign => [campaign.id, campaign.name]));
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/whatsapp/campaign-automations/${id}`),
     onSuccess: () => {
@@ -47,7 +52,7 @@ export default function WhatsAppCampaignAutomations() {
             <CalendarClock className="h-6 w-6 text-emerald-600" /> Spreadsheet Automations
           </h1>
           <p className="text-sm text-gray-600 mt-1">
-            Run recurring campaigns from a live AI Workbook, or upload a spreadsheet when needed.
+            Run recurring deliveries from a fully configured draft WhatsApp campaign.
           </p>
         </div>
         <Button onClick={() => setLocation("/admin/whatsapp-campaign-automations/new")} data-testid="button-new-campaign-automation">
@@ -61,9 +66,9 @@ export default function WhatsAppCampaignAutomations() {
         <Card>
           <CardContent className="py-12 text-center">
             <FileSpreadsheet className="h-10 w-10 text-emerald-600 mx-auto mb-3" />
-            <h2 className="font-semibold text-gray-900">No spreadsheet automations yet</h2>
+              <h2 className="font-semibold text-gray-900">No campaign automations yet</h2>
             <p className="text-sm text-gray-500 mt-1 max-w-md mx-auto">
-              Configure a date rule, approved template, and send time for daily loan, EMI, or other spreadsheet-based messages.
+                Create a WhatsApp campaign draft with its AI behavior and linked workbook, then use it as an automation blueprint.
             </p>
             <Button className="mt-4" onClick={() => setLocation("/admin/whatsapp-campaign-automations/new")}>
               Create automation
@@ -93,7 +98,9 @@ export default function WhatsAppCampaignAutomations() {
                       {automation.sendMode === "automatic" ? "Automatic" : "Review before send"}
                     </Badge>
                     <Badge variant="outline">
-                      {automation.sourceType === "ai_workbook" ? "AI Workbook" : "Spreadsheet upload"}
+                      {automation.sourceType === "campaign_blueprint"
+                        ? `Blueprint: ${campaignNames.get(automation.sourceCampaignId || "") || "Unavailable"}`
+                        : automation.sourceType === "ai_workbook" ? "Legacy AI Workbook" : "Legacy spreadsheet upload"}
                     </Badge>
                   </div>
                   <div className="text-xs text-gray-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">

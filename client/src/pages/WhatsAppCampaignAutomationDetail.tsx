@@ -19,7 +19,10 @@ type Preview = {
   invalid: { rowNumber: number; reason: string }[];
   previewRecipients: { rowNumber: number; recordKey: string; phone: string; name: string; params: string[] }[];
   source: {
-    type: "upload" | "ai_workbook";
+    type: "upload" | "ai_workbook" | "campaign_blueprint";
+    campaignId?: string;
+    campaignName?: string;
+    campaignUpdatedAt?: string;
     workbookId?: string;
     workbookName?: string;
     versionId?: string;
@@ -31,7 +34,8 @@ type Preview = {
 type Run = {
   id: string; sourceFileName: string; status: string; scheduledAt: string | null; totalRows: number; eligibleRows: number;
   excludedRows: number; invalidRows: number; duplicateRows: number; createdAt: string;
-  sourceType?: "upload" | "ai_workbook"; sourceWorkbookVersionId?: string | null;
+  sourceType?: "upload" | "ai_workbook" | "campaign_blueprint"; sourceWorkbookVersionId?: string | null;
+  sourceCampaignId?: string | null; sourceCampaignName?: string | null;
   campaignId: string | null; campaign?: { status: string; id: string } | null;
 };
 
@@ -51,18 +55,23 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
     queryKey: ["/api/whatsapp/campaign-automations", id],
     queryFn: () => apiRequest("GET", `/api/whatsapp/campaign-automations/${id}`),
   });
+  const { data: sourceCampaign } = useQuery<{ id: string; name: string }>({
+    queryKey: [`/api/whatsapp/campaigns/${automation?.sourceCampaignId}`],
+    enabled: Boolean(automation?.sourceCampaignId),
+  });
   const { data: runs = [] } = useQuery<Run[]>({
     queryKey: ["/api/whatsapp/campaign-automations", id, "runs"],
     queryFn: () => apiRequest("GET", `/api/whatsapp/campaign-automations/${id}/runs`),
     refetchInterval: 20_000,
   });
-  const isWorkbookSource = automation?.sourceType === "ai_workbook";
+  const isBlueprintSource = automation?.sourceType === "campaign_blueprint";
+  const isWorkbookSource = automation?.sourceType === "ai_workbook" || isBlueprintSource;
 
   const previewMutation = useMutation({
     mutationFn: () => apiRequest(
       "POST",
       `/api/whatsapp/campaign-automations/${id}/upload-preview`,
-      isWorkbookSource ? { sourceType: "ai_workbook" } : payload,
+       isWorkbookSource ? { sourceType: automation?.sourceType } : payload,
     ),
     onSuccess: (result: Preview) => setPreview(result),
     onError: (error: any) => toast({
@@ -77,9 +86,10 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
       `/api/whatsapp/campaign-automations/${id}/runs`,
       isWorkbookSource
         ? {
-            sourceType: "ai_workbook",
+             sourceType: automation?.sourceType,
             expectedWorkbookVersionId: preview?.source.versionId,
             expectedWorkbookRevision: preview?.source.revision,
+            expectedCampaignUpdatedAt: preview?.source.campaignUpdatedAt,
           }
         : { ...payload, sourceFileName: fileName },
     ),
@@ -145,6 +155,11 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
           <p className="text-sm text-gray-600 mt-1">
             {automation.dateOffsetDays > 0 ? `${automation.dateOffsetDays} days after` : automation.dateOffsetDays < 0 ? `${Math.abs(automation.dateOffsetDays)} days before` : "On"} <span className="font-medium">{automation.dateColumn}</span> · send at {automation.sendTime} {automation.timezone}
           </p>
+          {isBlueprintSource && (
+            <p className="text-xs text-violet-700 mt-1">
+              Campaign blueprint: <span className="font-medium">{sourceCampaign?.name || preview?.source.campaignName || automation.sourceCampaignId}</span>. Its template, AI replies, knowledge sources, and outcomes are inherited by every run.
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setLocation(`/admin/whatsapp-campaign-automations/${id}/edit`)}><Pencil className="h-4 w-4 mr-1" /> Edit</Button>
@@ -183,12 +198,14 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
             {isWorkbookSource
               ? <BookOpen className="h-4 w-4 text-emerald-600" />
               : <Upload className="h-4 w-4 text-emerald-600" />}
-            {isWorkbookSource ? "Run from AI Workbook" : "Daily spreadsheet upload"}
+            {isBlueprintSource ? "Run campaign blueprint" : isWorkbookSource ? "Run from AI Workbook" : "Daily spreadsheet upload"}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-gray-600">
-            {isWorkbookSource
+            {isBlueprintSource
+              ? "Validate the AI Workbook already linked to the campaign. The automation does not maintain a second audience link, and the run records both campaign and workbook provenance."
+              : isWorkbookSource
               ? "Validate the linked workbook’s latest saved version. The resulting run records the exact workbook version it used."
               : "Upload the refreshed client file. We validate the configured fields and calculate today’s eligible recipients before creating any campaign."}
           </p>
@@ -198,7 +215,7 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
                 <CheckCircle2 className="h-4 w-4 mr-1" />
                 {previewMutation.isPending ? "Validating..." : "Validate latest workbook"}
               </Button>
-              {!automation.sourceWorkbookId && <span className="text-sm text-red-700">The linked workbook is no longer available. Edit this automation to choose another source.</span>}
+              {!automation.sourceWorkbookId && !isBlueprintSource && <span className="text-sm text-red-700">The linked workbook is no longer available. Edit this automation to choose another source.</span>}
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
@@ -214,9 +231,9 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
               <div>
                 <h3 className="font-medium">Validation result</h3>
                 <p className="text-sm text-gray-600">Target date: <span className="font-medium">{preview.targetDate}</span></p>
-                {preview.source.type === "ai_workbook" && (
+                {preview.source.type !== "upload" && (
                   <p className="text-xs text-gray-500">
-                    {preview.source.workbookName} · version {preview.source.versionNumber}.{preview.source.revision} · {preview.source.sheetName}
+                    {preview.source.campaignName ? `${preview.source.campaignName} · ` : ""}{preview.source.workbookName} · version {preview.source.versionNumber}.{preview.source.revision} · {preview.source.sheetName}
                   </p>
                 )}
               </div>
@@ -262,7 +279,7 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
               {runs.map(run => (
                 <div key={run.id} className="border rounded-lg p-3 flex flex-wrap gap-3 items-center">
                   <div className="flex-1 min-w-[220px]">
-                    <div className="flex items-center gap-2"><span className="font-medium text-sm">{run.sourceFileName}</span><Badge variant={statusVariant[run.status] || "outline"}>{run.status.replace("_", " ")}</Badge>{run.campaign && <Badge variant={statusVariant[run.campaign.status] || "outline"}>Campaign: {run.campaign.status}</Badge>}</div>
+                    <div className="flex items-center gap-2"><span className="font-medium text-sm">{run.sourceFileName}</span><Badge variant={statusVariant[run.status] || "outline"}>{run.status.replace("_", " ")}</Badge>{run.sourceCampaignName && <Badge variant="outline">Blueprint: {run.sourceCampaignName}</Badge>}{run.campaign && <Badge variant={statusVariant[run.campaign.status] || "outline"}>Campaign: {run.campaign.status}</Badge>}</div>
                     <div className="text-xs text-gray-500 mt-1">{run.eligibleRows} eligible · {run.excludedRows} excluded · {run.duplicateRows} already sent · {run.invalidRows} invalid · created {new Date(run.createdAt).toLocaleString()}</div>
                     {run.scheduledAt && <div className="text-xs text-gray-500">Scheduled: {new Date(run.scheduledAt).toLocaleString()}</div>}
                   </div>

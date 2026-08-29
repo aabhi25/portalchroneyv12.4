@@ -3092,13 +3092,15 @@ export const insertMarketingCampaignSchema = createInsertSchema(marketingCampaig
   optedOutCount: true,
 });
 
-// Spreadsheet campaign automations — reusable daily upload definitions that
-// create ordinary marketing campaigns after a file is validated.
+// Campaign automations create ordinary marketing campaign executions from a
+// reusable draft campaign blueprint. Legacy upload/workbook definitions remain
+// supported for backward compatibility.
 export const whatsappCampaignAutomations = pgTable("whatsapp_campaign_automations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  sourceType: text("source_type").notNull().default("upload"), // upload | ai_workbook
+  sourceType: text("source_type").notNull().default("upload"), // upload | ai_workbook | campaign_blueprint
+  sourceCampaignId: varchar("source_campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
   sourceWorkbookId: varchar("source_workbook_id").references(() => whatsappAiWorkbooks.id, { onDelete: "set null" }),
   sourceWorkbookSheetId: text("source_workbook_sheet_id"),
   templateId: varchar("template_id").notNull().references(() => whatsappTemplates.id, { onDelete: "restrict" }),
@@ -3124,6 +3126,7 @@ export const whatsappCampaignAutomations = pgTable("whatsapp_campaign_automation
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
   businessIdx: index("wa_automation_business_idx").on(table.businessAccountId),
+  businessCampaignIdx: index("wa_automation_business_campaign_idx").on(table.businessAccountId, table.sourceCampaignId),
   businessEnabledIdx: index("wa_automation_business_enabled_idx").on(table.businessAccountId, table.enabled),
   businessDeletedIdx: index("wa_automation_business_deleted_idx").on(table.businessAccountId, table.deletedAt),
 }));
@@ -3138,7 +3141,12 @@ export const whatsappCampaignAutomationRuns = pgTable("whatsapp_campaign_automat
   campaignId: varchar("campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
   contactGroupId: varchar("contact_group_id").references(() => contactGroups.id, { onDelete: "set null" }),
   sourceFileName: text("source_file_name").notNull(),
-  sourceType: text("source_type").notNull().default("upload"), // upload | ai_workbook
+  sourceType: text("source_type").notNull().default("upload"), // upload | ai_workbook | campaign_blueprint
+  // Blueprint provenance is an immutable audit snapshot. The original campaign
+  // may later be renamed or deleted without rewriting historical runs.
+  sourceCampaignId: varchar("source_campaign_id"),
+  sourceCampaignName: text("source_campaign_name"),
+  sourceCampaignUpdatedAt: timestamp("source_campaign_updated_at"),
   // Run provenance is an immutable audit snapshot, not a live relationship.
   // These identifiers deliberately remain after a workbook is permanently deleted.
   sourceWorkbookId: varchar("source_workbook_id"),
@@ -3148,6 +3156,19 @@ export const whatsappCampaignAutomationRuns = pgTable("whatsapp_campaign_automat
   sourceWorkbookVersionNumber: integer("source_workbook_version_number"),
   sourceWorkbookRevision: integer("source_workbook_revision"),
   sourceWorkbookSheetName: text("source_workbook_sheet_name"),
+  // Immutable run evidence. Workbooks can edit a version in place and generated
+  // contact groups can later be removed, so provenance IDs alone are insufficient.
+  sourceSnapshot: jsonb("source_snapshot").$type<{
+    columns: { key: string; label: string }[];
+    recipients: {
+      rowNumber: number;
+      recordKey: string;
+      phone: string;
+      name: string;
+      attributes: Record<string, string>;
+    }[];
+  }>(),
+  blueprintSnapshot: jsonb("blueprint_snapshot").$type<Record<string, unknown>>(),
   status: text("status").notNull().default("awaiting_review"), // awaiting_review | scheduled | failed | cancelled
   scheduledAt: timestamp("scheduled_at"),
   totalRows: integer("total_rows").notNull().default(0),

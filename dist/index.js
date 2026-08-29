@@ -3303,7 +3303,8 @@ var init_schema = __esm({
       businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
       name: text("name").notNull(),
       sourceType: text("source_type").notNull().default("upload"),
-      // upload | ai_workbook
+      // upload | ai_workbook | campaign_blueprint
+      sourceCampaignId: varchar("source_campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
       sourceWorkbookId: varchar("source_workbook_id").references(() => whatsappAiWorkbooks.id, { onDelete: "set null" }),
       sourceWorkbookSheetId: text("source_workbook_sheet_id"),
       templateId: varchar("template_id").notNull().references(() => whatsappTemplates.id, { onDelete: "restrict" }),
@@ -3330,6 +3331,7 @@ var init_schema = __esm({
       updatedAt: timestamp("updated_at").notNull().defaultNow()
     }, (table) => ({
       businessIdx: index("wa_automation_business_idx").on(table.businessAccountId),
+      businessCampaignIdx: index("wa_automation_business_campaign_idx").on(table.businessAccountId, table.sourceCampaignId),
       businessEnabledIdx: index("wa_automation_business_enabled_idx").on(table.businessAccountId, table.enabled),
       businessDeletedIdx: index("wa_automation_business_deleted_idx").on(table.businessAccountId, table.deletedAt)
     }));
@@ -3341,7 +3343,12 @@ var init_schema = __esm({
       contactGroupId: varchar("contact_group_id").references(() => contactGroups.id, { onDelete: "set null" }),
       sourceFileName: text("source_file_name").notNull(),
       sourceType: text("source_type").notNull().default("upload"),
-      // upload | ai_workbook
+      // upload | ai_workbook | campaign_blueprint
+      // Blueprint provenance is an immutable audit snapshot. The original campaign
+      // may later be renamed or deleted without rewriting historical runs.
+      sourceCampaignId: varchar("source_campaign_id"),
+      sourceCampaignName: text("source_campaign_name"),
+      sourceCampaignUpdatedAt: timestamp("source_campaign_updated_at"),
       // Run provenance is an immutable audit snapshot, not a live relationship.
       // These identifiers deliberately remain after a workbook is permanently deleted.
       sourceWorkbookId: varchar("source_workbook_id"),
@@ -3351,6 +3358,10 @@ var init_schema = __esm({
       sourceWorkbookVersionNumber: integer("source_workbook_version_number"),
       sourceWorkbookRevision: integer("source_workbook_revision"),
       sourceWorkbookSheetName: text("source_workbook_sheet_name"),
+      // Immutable run evidence. Workbooks can edit a version in place and generated
+      // contact groups can later be removed, so provenance IDs alone are insufficient.
+      sourceSnapshot: jsonb("source_snapshot").$type(),
+      blueprintSnapshot: jsonb("blueprint_snapshot").$type(),
       status: text("status").notNull().default("awaiting_review"),
       // awaiting_review | scheduled | failed | cancelled
       scheduledAt: timestamp("scheduled_at"),
@@ -47457,7 +47468,7 @@ __export(marketingCampaignService_exports, {
   startCampaignScheduler: () => startCampaignScheduler,
   validateTemplateParams: () => validateTemplateParams
 });
-import { and as and45, desc as desc20, eq as eq55, inArray as inArray10, sql as sql30 } from "drizzle-orm";
+import { and as and45, desc as desc20, eq as eq55, inArray as inArray10, isNull as isNull11, sql as sql30 } from "drizzle-orm";
 async function parkUnsendableCampaign(campaignId, businessAccountId, currentStatus, reason) {
   if (currentStatus !== "scheduled" && currentStatus !== "sending") return;
   const [dispatched] = await db.select({ n: sql30`count(*)::int` }).from(marketingCampaignRecipients).where(
@@ -47741,6 +47752,13 @@ var init_marketingCampaignService = __esm({
       // `onlyIfStatusIn` makes the status check part of the UPDATE itself, so a send that starts
       // between a caller's read and its write cannot have its configuration changed underneath it.
       async update(businessAccountId, id, payload, opts) {
+        const [executionRun] = await db.select({ id: whatsappCampaignAutomationRuns.id }).from(whatsappCampaignAutomationRuns).where(and45(
+          eq55(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+          eq55(whatsappCampaignAutomationRuns.campaignId, id)
+        )).limit(1);
+        if (executionRun) {
+          throw new Error("Automation execution campaigns are immutable. Change the source blueprint for future runs instead.");
+        }
         if (payload.templateId !== void 0 || payload.groupIds !== void 0) {
           const current = await this.get(businessAccountId, id);
           if (!current) return void 0;
@@ -47793,6 +47811,17 @@ var init_marketingCampaignService = __esm({
         return row;
       },
       async remove(businessAccountId, id) {
+        const [executionRun] = await db.select({ id: whatsappCampaignAutomationRuns.id }).from(whatsappCampaignAutomationRuns).where(and45(
+          eq55(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+          eq55(whatsappCampaignAutomationRuns.campaignId, id)
+        )).limit(1);
+        if (executionRun) throw new Error("Automation execution campaigns cannot be deleted because they are part of run history");
+        const [blueprintUse] = await db.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
+          eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          eq55(whatsappCampaignAutomations.sourceCampaignId, id),
+          isNull11(whatsappCampaignAutomations.deletedAt)
+        )).limit(1);
+        if (blueprintUse) throw new Error("This campaign is used as an automation blueprint. Delete the automation before deleting the campaign");
         const result = await db.delete(marketingCampaigns).where(and45(eq55(marketingCampaigns.id, id), eq55(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
         return result.length > 0;
       },
@@ -47958,6 +47987,35 @@ var init_marketingCampaignService = __esm({
         if (inFlight2.has(key)) return { started: false, reason: "Campaign send is already in progress on this node" };
         const campaign = await this.get(businessAccountId, campaignId);
         if (!campaign) return { started: false, reason: "Campaign not found" };
+        const [executionRun] = await db.select({
+          id: whatsappCampaignAutomationRuns.id,
+          status: whatsappCampaignAutomationRuns.status
+        }).from(whatsappCampaignAutomationRuns).where(and45(
+          eq55(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+          eq55(whatsappCampaignAutomationRuns.campaignId, campaignId)
+        )).limit(1);
+        if (executionRun) {
+          if (!opts?.automationExecution) {
+            return { started: false, reason: "Automation execution campaigns can only be started by their scheduled automation run" };
+          }
+          if (executionRun.status !== "scheduled") {
+            return { started: false, reason: `This automation run is ${executionRun.status} and cannot be sent` };
+          }
+          if (campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now()) {
+            return { started: false, reason: "This automation execution is not due yet" };
+          }
+        }
+        const [blueprintUse] = await db.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
+          eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          eq55(whatsappCampaignAutomations.sourceCampaignId, campaignId),
+          isNull11(whatsappCampaignAutomations.deletedAt)
+        )).limit(1);
+        if (blueprintUse) {
+          return {
+            started: false,
+            reason: "This draft is used as an automation blueprint and cannot be sent directly. Run it from Automations instead."
+          };
+        }
         if (campaign.status === "completed") return { started: false, reason: "Already completed" };
         if (campaign.status === "cancelled") return { started: false, reason: "Campaign cancelled" };
         if (campaign.status === "sending" && !opts?.forceResume) {
@@ -47991,19 +48049,37 @@ var init_marketingCampaignService = __esm({
           if (released > 0) console.log(`[Campaign] ${campaignId} recovery: released ${released} stale claims`);
         }
         const startableStatuses = opts?.forceResume ? ["draft", "scheduled", "failed", "sending"] : ["draft", "scheduled", "failed"];
-        const [claimedCampaign] = await db.update(marketingCampaigns).set({
-          status: "sending",
-          startedAt: campaign.startedAt || /* @__PURE__ */ new Date(),
-          heartbeatAt: /* @__PURE__ */ new Date(),
-          updatedAt: /* @__PURE__ */ new Date()
-        }).where(and45(
-          eq55(marketingCampaigns.id, campaignId),
-          eq55(marketingCampaigns.businessAccountId, businessAccountId),
-          inArray10(marketingCampaigns.status, startableStatuses)
-        )).returning({ id: marketingCampaigns.id });
+        const claimedCampaign = await db.transaction(async (tx) => {
+          await tx.execute(sql30`SELECT pg_advisory_xact_lock(hashtext(${"wa-blueprint:" + campaignId}))`);
+          const [stillBlueprint] = await tx.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
+            eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+            eq55(whatsappCampaignAutomations.sourceCampaignId, campaignId),
+            isNull11(whatsappCampaignAutomations.deletedAt)
+          )).limit(1);
+          if (stillBlueprint) return null;
+          const [claimed] = await tx.update(marketingCampaigns).set({
+            status: "sending",
+            startedAt: campaign.startedAt || /* @__PURE__ */ new Date(),
+            heartbeatAt: /* @__PURE__ */ new Date(),
+            updatedAt: /* @__PURE__ */ new Date()
+          }).where(and45(
+            eq55(marketingCampaigns.id, campaignId),
+            eq55(marketingCampaigns.businessAccountId, businessAccountId),
+            inArray10(marketingCampaigns.status, startableStatuses)
+          )).returning({ id: marketingCampaigns.id });
+          return claimed || null;
+        });
         if (!claimedCampaign) {
           const latest = await this.get(businessAccountId, campaignId);
-          return { started: false, reason: latest?.status === "cancelled" ? "Campaign cancelled" : "Campaign state changed before sending could begin" };
+          const [protectedBlueprint] = await db.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
+            eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+            eq55(whatsappCampaignAutomations.sourceCampaignId, campaignId),
+            isNull11(whatsappCampaignAutomations.deletedAt)
+          )).limit(1);
+          return {
+            started: false,
+            reason: protectedBlueprint ? "This draft is used as an automation blueprint and cannot be sent directly. Run it from Automations instead." : latest?.status === "cancelled" ? "Campaign cancelled" : "Campaign state changed before sending could begin"
+          };
         }
         inFlight2.add(key);
         setImmediate(() => {
@@ -48172,6 +48248,17 @@ var init_marketingCampaignService = __esm({
         }
       },
       async cancel(businessAccountId, campaignId) {
+        const [executionRun] = await db.select({ id: whatsappCampaignAutomationRuns.id }).from(whatsappCampaignAutomationRuns).where(and45(
+          eq55(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+          eq55(whatsappCampaignAutomationRuns.campaignId, campaignId)
+        )).limit(1);
+        if (executionRun) throw new Error("Cancel this campaign from its automation run");
+        const [blueprintUse] = await db.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
+          eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          eq55(whatsappCampaignAutomations.sourceCampaignId, campaignId),
+          isNull11(whatsappCampaignAutomations.deletedAt)
+        )).limit(1);
+        if (blueprintUse) throw new Error("This campaign is an automation blueprint and cannot be cancelled directly");
         const result = await db.update(marketingCampaigns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(and45(eq55(marketingCampaigns.id, campaignId), eq55(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
         return result.length > 0;
       },
@@ -48758,7 +48845,7 @@ var init_marketingCampaignService = __esm({
         for (const c of due) {
           console.log(`[CampaignScheduler] Auto-launching campaign ${c.id} (scheduled at ${c.scheduledAt})`);
           try {
-            await this.startSend(c.businessAccountId, c.id);
+            await this.startSend(c.businessAccountId, c.id, { automationExecution: true });
           } catch (err) {
             console.error(`[CampaignScheduler] Failed to launch ${c.id}:`, err);
           }
@@ -48773,7 +48860,7 @@ var init_marketingCampaignService = __esm({
           if (inFlight2.has(key)) continue;
           console.log(`[CampaignScheduler] Recovering stuck sending campaign ${c.id} (heartbeatAt=${c.heartbeatAt})`);
           try {
-            await this.startSend(c.businessAccountId, c.id, { forceResume: true });
+            await this.startSend(c.businessAccountId, c.id, { forceResume: true, automationExecution: true });
           } catch (err) {
             console.error(`[CampaignScheduler] Failed to recover ${c.id}:`, err);
           }
@@ -55398,7 +55485,7 @@ var campaignAutomationService_exports = {};
 __export(campaignAutomationService_exports, {
   campaignAutomationService: () => campaignAutomationService
 });
-import { and as and57, desc as desc29, eq as eq67, inArray as inArray11, isNull as isNull11 } from "drizzle-orm";
+import { and as and57, desc as desc29, eq as eq67, inArray as inArray11, isNull as isNull12, sql as sql40 } from "drizzle-orm";
 function canonical(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -55411,8 +55498,12 @@ function cleanConfig(input) {
   if (!input?.templateId) throw new Error("Choose an approved WhatsApp template");
   const sourceType = input.sourceType || "upload";
   if (!ALLOWED_SOURCE_TYPES.has(sourceType)) throw new Error("Invalid automation source");
-  const sourceWorkbookId = sourceType === "ai_workbook" ? String(input.sourceWorkbookId || "").trim() : null;
-  if (sourceType === "ai_workbook" && !sourceWorkbookId) throw new Error("Choose an AI Workbook");
+  const sourceCampaignId = sourceType === "campaign_blueprint" ? String(input.sourceCampaignId || "").trim() : null;
+  if (sourceType === "campaign_blueprint" && !sourceCampaignId) throw new Error("Choose a draft campaign blueprint");
+  const sourceWorkbookId = sourceType !== "upload" ? String(input.sourceWorkbookId || "").trim() : null;
+  if (sourceType !== "upload" && !sourceWorkbookId) {
+    throw new Error(sourceType === "campaign_blueprint" ? "The selected campaign must be linked to one AI Workbook" : "Choose an AI Workbook");
+  }
   const mapped = ["phoneColumn", "recordKeyColumn", "dateColumn"];
   for (const field of mapped) {
     if (!canonical(input[field])) throw new Error(`${field.replace("Column", " column")} is required`);
@@ -55441,8 +55532,9 @@ function cleanConfig(input) {
     ...input,
     name,
     sourceType,
+    sourceCampaignId,
     sourceWorkbookId,
-    sourceWorkbookSheetId: sourceType === "ai_workbook" ? String(input.sourceWorkbookSheetId || "").trim() || null : null,
+    sourceWorkbookSheetId: sourceType !== "upload" ? String(input.sourceWorkbookSheetId || "").trim() || null : null,
     templateParams: params,
     phoneColumn: canonical(input.phoneColumn),
     nameColumn: canonical(input.nameColumn),
@@ -55494,8 +55586,51 @@ async function resolveWorkbookSource(businessAccountId, config) {
     sheetName: sheet.name
   };
 }
+async function resolveBlueprintContext(businessAccountId, sourceCampaignId) {
+  if (!sourceCampaignId) throw new Error("Choose a draft campaign blueprint");
+  const [campaign] = await db.select().from(marketingCampaigns).where(and57(
+    eq67(marketingCampaigns.id, sourceCampaignId),
+    eq67(marketingCampaigns.businessAccountId, businessAccountId)
+  )).limit(1);
+  if (!campaign) throw new Error("The selected campaign blueprint is no longer available");
+  if (campaign.status !== "draft" || campaign.startedAt) {
+    throw new Error("Only an unsent draft campaign can be used as an automation blueprint");
+  }
+  const linkedWorkbooks = await db.select({
+    id: whatsappAiWorkbooks.id
+  }).from(whatsappAiWorkbooks).where(and57(
+    eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+    eq67(whatsappAiWorkbooks.sourceCampaignId, campaign.id),
+    eq67(whatsappAiWorkbooks.status, "active")
+  )).orderBy(desc29(whatsappAiWorkbooks.updatedAt)).limit(2);
+  if (linkedWorkbooks.length === 0) {
+    throw new Error("Link one AI Workbook to this campaign before using it in an automation");
+  }
+  if (linkedWorkbooks.length > 1) {
+    throw new Error("This campaign is linked to multiple AI Workbooks. Keep one linked workbook before using it in an automation");
+  }
+  const workbookSource = await resolveWorkbookSource(businessAccountId, {
+    sourceWorkbookId: linkedWorkbooks[0].id,
+    sourceWorkbookSheetId: null
+  });
+  return { campaign, workbookSource };
+}
+async function prepareAutomationInput(businessAccountId, input) {
+  const sourceType = input.sourceType || "upload";
+  const blueprint = sourceType === "campaign_blueprint" ? await resolveBlueprintContext(businessAccountId, input.sourceCampaignId) : null;
+  const prepared = blueprint ? {
+    ...input,
+    sourceType: "campaign_blueprint",
+    sourceCampaignId: blueprint.campaign.id,
+    sourceWorkbookId: blueprint.workbookSource.workbookId,
+    sourceWorkbookSheetId: blueprint.workbookSource.sheetId,
+    templateId: blueprint.campaign.templateId,
+    templateParams: blueprint.campaign.templateParams || []
+  } : input;
+  return { config: cleanConfig(prepared), blueprint };
+}
 async function validateWorkbookConfig(businessAccountId, config) {
-  if (config.sourceType !== "ai_workbook") return null;
+  if (config.sourceType === "upload") return null;
   const source = await resolveWorkbookSource(businessAccountId, config);
   validateColumns(config, source.payload.columns);
   return source;
@@ -55711,73 +55846,104 @@ var init_campaignAutomationService = __esm({
     init_contactImport();
     MAX_OFFSET_DAYS = 366;
     ALLOWED_SEND_MODES = /* @__PURE__ */ new Set(["review", "automatic"]);
-    ALLOWED_SOURCE_TYPES = /* @__PURE__ */ new Set(["upload", "ai_workbook"]);
+    ALLOWED_SOURCE_TYPES = /* @__PURE__ */ new Set(["upload", "ai_workbook", "campaign_blueprint"]);
     campaignAutomationService = {
       async list(businessAccountId) {
         return db.select().from(whatsappCampaignAutomations).where(and57(
           eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-          isNull11(whatsappCampaignAutomations.deletedAt)
+          isNull12(whatsappCampaignAutomations.deletedAt)
         )).orderBy(desc29(whatsappCampaignAutomations.updatedAt));
       },
       async get(businessAccountId, id) {
         const [row] = await db.select().from(whatsappCampaignAutomations).where(and57(
           eq67(whatsappCampaignAutomations.id, id),
           eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-          isNull11(whatsappCampaignAutomations.deletedAt)
+          isNull12(whatsappCampaignAutomations.deletedAt)
         )).limit(1);
         return row;
       },
       async create(businessAccountId, input) {
-        let config = cleanConfig(input);
+        let { config } = await prepareAutomationInput(businessAccountId, input);
         const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, config.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         assertTemplateMapping(template, config.templateParams || []);
         const workbookSource = await validateWorkbookConfig(businessAccountId, config);
         if (workbookSource) config = { ...config, sourceWorkbookSheetId: workbookSource.sheetId };
-        const [row] = await db.insert(whatsappCampaignAutomations).values({
-          businessAccountId,
-          name: config.name,
-          sourceType: config.sourceType,
-          sourceWorkbookId: config.sourceWorkbookId,
-          sourceWorkbookSheetId: config.sourceWorkbookSheetId,
-          templateId: config.templateId,
-          templateParams: config.templateParams,
-          phoneColumn: config.phoneColumn,
-          nameColumn: config.nameColumn || "",
-          recordKeyColumn: config.recordKeyColumn,
-          dateColumn: config.dateColumn,
-          dateOffsetDays: config.dateOffsetDays,
-          statusColumn: config.statusColumn || "",
-          eligibleStatuses: config.eligibleStatuses || [],
-          defaultCountryCode: config.defaultCountryCode,
-          sendMode: config.sendMode,
-          sendTime: config.sendTime,
-          timezone: config.timezone,
-          enabled: config.enabled
-        }).returning();
-        return row;
+        return db.transaction(async (tx) => {
+          if (config.sourceCampaignId) {
+            await tx.execute(sql40`SELECT pg_advisory_xact_lock(hashtext(${"wa-blueprint:" + config.sourceCampaignId}))`);
+            const [lockedCampaign] = await tx.select().from(marketingCampaigns).where(and57(
+              eq67(marketingCampaigns.id, config.sourceCampaignId),
+              eq67(marketingCampaigns.businessAccountId, businessAccountId)
+            )).for("update").limit(1);
+            if (!lockedCampaign || lockedCampaign.status !== "draft" || lockedCampaign.startedAt) {
+              throw new Error("Only an unsent draft campaign can be used as an automation blueprint");
+            }
+            const [linkedWorkbook] = await tx.select({ id: whatsappAiWorkbooks.id }).from(whatsappAiWorkbooks).where(and57(
+              eq67(whatsappAiWorkbooks.id, config.sourceWorkbookId),
+              eq67(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+              eq67(whatsappAiWorkbooks.sourceCampaignId, lockedCampaign.id)
+            )).for("update").limit(1);
+            if (!linkedWorkbook) throw new Error("The campaign's linked AI Workbook changed before the automation was saved");
+          }
+          const [row] = await tx.insert(whatsappCampaignAutomations).values({
+            businessAccountId,
+            name: config.name,
+            sourceType: config.sourceType,
+            sourceCampaignId: config.sourceCampaignId,
+            sourceWorkbookId: config.sourceWorkbookId,
+            sourceWorkbookSheetId: config.sourceWorkbookSheetId,
+            templateId: config.templateId,
+            templateParams: config.templateParams,
+            phoneColumn: config.phoneColumn,
+            nameColumn: config.nameColumn || "",
+            recordKeyColumn: config.recordKeyColumn,
+            dateColumn: config.dateColumn,
+            dateOffsetDays: config.dateOffsetDays,
+            statusColumn: config.statusColumn || "",
+            eligibleStatuses: config.eligibleStatuses || [],
+            defaultCountryCode: config.defaultCountryCode,
+            sendMode: config.sendMode,
+            sendTime: config.sendTime,
+            timezone: config.timezone,
+            enabled: config.enabled
+          }).returning();
+          return row;
+        });
       },
       async update(businessAccountId, id, input) {
         const existing = await this.get(businessAccountId, id);
         if (!existing) return void 0;
-        let config = cleanConfig({ ...existing, ...input });
+        let { config } = await prepareAutomationInput(businessAccountId, { ...existing, ...input });
         const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, config.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         assertTemplateMapping(template, config.templateParams || []);
         const workbookSource = await validateWorkbookConfig(businessAccountId, config);
         if (workbookSource) config = { ...config, sourceWorkbookSheetId: workbookSource.sheetId };
-        const [row] = await db.update(whatsappCampaignAutomations).set({
-          ...config,
-          updatedAt: /* @__PURE__ */ new Date()
-        }).where(and57(eq67(whatsappCampaignAutomations.id, id), eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId))).returning();
-        return row;
+        return db.transaction(async (tx) => {
+          if (config.sourceCampaignId) {
+            await tx.execute(sql40`SELECT pg_advisory_xact_lock(hashtext(${"wa-blueprint:" + config.sourceCampaignId}))`);
+            const [lockedCampaign] = await tx.select().from(marketingCampaigns).where(and57(
+              eq67(marketingCampaigns.id, config.sourceCampaignId),
+              eq67(marketingCampaigns.businessAccountId, businessAccountId)
+            )).for("update").limit(1);
+            if (!lockedCampaign || lockedCampaign.status !== "draft" || lockedCampaign.startedAt) {
+              throw new Error("Only an unsent draft campaign can be used as an automation blueprint");
+            }
+          }
+          const [row] = await tx.update(whatsappCampaignAutomations).set({
+            ...config,
+            updatedAt: /* @__PURE__ */ new Date()
+          }).where(and57(eq67(whatsappCampaignAutomations.id, id), eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId))).returning();
+          return row;
+        });
       },
       async delete(businessAccountId, id) {
         return db.transaction(async (tx) => {
           const [automation] = await tx.select().from(whatsappCampaignAutomations).where(and57(
             eq67(whatsappCampaignAutomations.id, id),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-            isNull11(whatsappCampaignAutomations.deletedAt)
+            isNull12(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!automation) return void 0;
           const activeRuns = await tx.select().from(whatsappCampaignAutomationRuns).where(and57(
@@ -55823,7 +55989,7 @@ var init_campaignAutomationService = __esm({
           }).where(and57(
             eq67(whatsappCampaignAutomations.id, id),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-            isNull11(whatsappCampaignAutomations.deletedAt)
+            isNull12(whatsappCampaignAutomations.deletedAt)
           )).returning();
           return deleted;
         });
@@ -55831,14 +55997,25 @@ var init_campaignAutomationService = __esm({
       async preview(businessAccountId, id, payload) {
         const automation = await this.get(businessAccountId, id);
         if (!automation) throw new Error("Automation not found");
-        const workbookSource = automation.sourceType === "ai_workbook" ? await resolveWorkbookSource(businessAccountId, automation) : null;
-        const evaluated = await evaluateUpload(automation, workbookSource?.payload || payload);
+        const blueprint = automation.sourceType === "campaign_blueprint" ? await resolveBlueprintContext(businessAccountId, automation.sourceCampaignId) : null;
+        const workbookSource = blueprint?.workbookSource || (automation.sourceType === "ai_workbook" ? await resolveWorkbookSource(businessAccountId, automation) : null);
+        const effectiveAutomation = blueprint ? {
+          ...automation,
+          templateId: blueprint.campaign.templateId,
+          templateParams: blueprint.campaign.templateParams || [],
+          sourceWorkbookId: workbookSource.workbookId,
+          sourceWorkbookSheetId: workbookSource.sheetId
+        } : automation;
+        const evaluated = await evaluateUpload(effectiveAutomation, workbookSource?.payload || payload);
         return {
           targetDate: evaluated.targetDate,
           summary: evaluated.summary,
           invalid: evaluated.invalid,
           source: workbookSource ? {
-            type: "ai_workbook",
+            type: blueprint ? "campaign_blueprint" : "ai_workbook",
+            campaignId: blueprint?.campaign.id,
+            campaignName: blueprint?.campaign.name,
+            campaignUpdatedAt: blueprint?.campaign.updatedAt,
             workbookId: workbookSource.workbookId,
             workbookName: workbookSource.workbookName,
             versionId: workbookSource.versionId,
@@ -55852,7 +56029,7 @@ var init_campaignAutomationService = __esm({
             recordKey: candidate.recordKey,
             phone: candidate.phone,
             name: candidate.name,
-            params: (automation.templateParams || []).map((value) => resolvePreviewParam(value, candidate))
+            params: (effectiveAutomation.templateParams || []).map((value) => resolvePreviewParam(value, candidate))
           }))
         };
       },
@@ -55860,17 +56037,28 @@ var init_campaignAutomationService = __esm({
         const automation = await this.get(businessAccountId, id);
         if (!automation) throw new Error("Automation not found");
         if (!automation.enabled) throw new Error("This automation is paused");
-        const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, automation.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
+        const blueprint = automation.sourceType === "campaign_blueprint" ? await resolveBlueprintContext(businessAccountId, automation.sourceCampaignId) : null;
+        const workbookSource = blueprint?.workbookSource || (automation.sourceType === "ai_workbook" ? await resolveWorkbookSource(businessAccountId, automation) : null);
+        const effectiveAutomation = blueprint ? {
+          ...automation,
+          templateId: blueprint.campaign.templateId,
+          templateParams: blueprint.campaign.templateParams || [],
+          sourceWorkbookId: workbookSource.workbookId,
+          sourceWorkbookSheetId: workbookSource.sheetId
+        } : automation;
+        const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, effectiveAutomation.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
         if (!template || template.status !== "approved") throw new Error("The selected template is no longer approved");
-        assertTemplateMapping(template, automation.templateParams || []);
-        const workbookSource = automation.sourceType === "ai_workbook" ? await resolveWorkbookSource(businessAccountId, automation) : null;
+        assertTemplateMapping(template, effectiveAutomation.templateParams || []);
         if (workbookSource && (!payload?.expectedWorkbookVersionId || !Number.isInteger(payload?.expectedWorkbookRevision))) {
           throw new Error("Validate the latest AI Workbook version before creating a run.");
         }
         if (workbookSource && (payload.expectedWorkbookVersionId !== workbookSource.versionId || payload.expectedWorkbookRevision !== workbookSource.revision)) {
           throw new Error("The AI Workbook changed after validation. Validate the latest version again.");
         }
-        const evaluated = await evaluateUpload(automation, workbookSource?.payload || payload);
+        if (blueprint && (!payload?.expectedCampaignUpdatedAt || new Date(payload.expectedCampaignUpdatedAt).getTime() !== blueprint.campaign.updatedAt.getTime())) {
+          throw new Error("The campaign blueprint changed after validation. Validate it again.");
+        }
+        const evaluated = await evaluateUpload(effectiveAutomation, workbookSource?.payload || payload);
         if (evaluated.candidates.length === 0) {
           throw new Error("No eligible recipients were found. Check the date rule, status filter, and duplicate history.");
         }
@@ -55899,16 +56087,29 @@ var init_campaignAutomationService = __esm({
             eq67(whatsappCampaignAutomations.id, id),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
             eq67(whatsappCampaignAutomations.enabled, true),
-            isNull11(whatsappCampaignAutomations.deletedAt)
+            isNull12(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be created");
-          if (activeAutomation.updatedAt.getTime() !== automation.updatedAt.getTime() || activeAutomation.sourceType !== automation.sourceType || activeAutomation.sourceWorkbookId !== automation.sourceWorkbookId || activeAutomation.sourceWorkbookSheetId !== automation.sourceWorkbookSheetId) {
+          if (activeAutomation.updatedAt.getTime() !== automation.updatedAt.getTime() || activeAutomation.sourceType !== automation.sourceType || activeAutomation.sourceCampaignId !== automation.sourceCampaignId || activeAutomation.sourceWorkbookId !== automation.sourceWorkbookId || activeAutomation.sourceWorkbookSheetId !== automation.sourceWorkbookSheetId) {
             throw new Error("This automation changed while the run was being prepared. Validate the source again.");
+          }
+          let lockedBlueprint = null;
+          if (blueprint) {
+            [lockedBlueprint] = await tx.select().from(marketingCampaigns).where(and57(
+              eq67(marketingCampaigns.id, blueprint.campaign.id),
+              eq67(marketingCampaigns.businessAccountId, businessAccountId)
+            )).for("update").limit(1);
+            if (!lockedBlueprint || lockedBlueprint.status !== "draft" || lockedBlueprint.startedAt) {
+              throw new Error("The campaign blueprint is no longer an unsent draft");
+            }
+            if (lockedBlueprint.updatedAt.getTime() !== blueprint.campaign.updatedAt.getTime()) {
+              throw new Error("The campaign blueprint changed after validation. Validate it again.");
+            }
           }
           const [group] = await tx.insert(contactGroups).values({
             businessAccountId,
             name: `${automation.name} \u2014 ${dateInTimezone(automation.timezone)} (${safeFileName})`.slice(0, 250),
-            description: workbookSource ? `Generated from AI Workbook "${workbookSource.workbookName}" by automation "${automation.name}"` : `Generated from spreadsheet automation "${automation.name}"`,
+            description: blueprint ? `Generated from campaign blueprint "${blueprint.campaign.name}" and AI Workbook "${workbookSource.workbookName}"` : workbookSource ? `Generated from AI Workbook "${workbookSource.workbookName}" by automation "${automation.name}"` : `Generated from spreadsheet automation "${automation.name}"`,
             defaultCountryCode: automation.defaultCountryCode,
             contactCount: evaluated.candidates.length
           }).returning();
@@ -55925,12 +56126,21 @@ var init_campaignAutomationService = __esm({
           const [campaign] = await tx.insert(marketingCampaigns).values({
             businessAccountId,
             name: `${automation.name} \u2014 ${dateInTimezone(automation.timezone)}`.slice(0, 250),
-            templateId: automation.templateId,
-            templateParams: automation.templateParams,
+            templateId: lockedBlueprint?.templateId || effectiveAutomation.templateId,
+            templateParams: lockedBlueprint?.templateParams || effectiveAutomation.templateParams,
             groupIds: [group.id],
             status: automatic ? "scheduled" : "draft",
             scheduledAt: automatic ? scheduledAt : null,
-            aiEnabled: "false"
+            aiEnabled: lockedBlueprint?.aiEnabled || "false",
+            aiAgentName: lockedBlueprint?.aiAgentName,
+            aiSystemPrompt: lockedBlueprint?.aiSystemPrompt,
+            aiUseFaqs: lockedBlueprint?.aiUseFaqs || "true",
+            aiUseDocs: lockedBlueprint?.aiUseDocs || "true",
+            aiUseProducts: lockedBlueprint?.aiUseProducts || "true",
+            aiKnowledgeDocIds: lockedBlueprint?.aiKnowledgeDocIds || [],
+            replyClassifications: lockedBlueprint?.replyClassifications || [],
+            aiDailyTokenBudget: lockedBlueprint?.aiDailyTokenBudget || 5e4,
+            aiMaxRepliesPerRecipient: lockedBlueprint?.aiMaxRepliesPerRecipient || 20
           }).returning();
           const [run] = await tx.insert(whatsappCampaignAutomationRuns).values({
             automationId: automation.id,
@@ -55938,7 +56148,10 @@ var init_campaignAutomationService = __esm({
             campaignId: campaign.id,
             contactGroupId: group.id,
             sourceFileName: safeFileName,
-            sourceType: workbookSource ? "ai_workbook" : "upload",
+            sourceType: blueprint ? "campaign_blueprint" : workbookSource ? "ai_workbook" : "upload",
+            sourceCampaignId: blueprint?.campaign.id || null,
+            sourceCampaignName: blueprint?.campaign.name || null,
+            sourceCampaignUpdatedAt: blueprint?.campaign.updatedAt || null,
             sourceWorkbookId: workbookSource?.workbookId || null,
             sourceWorkbookVersionId: workbookSource?.versionId || null,
             sourceWorkbookSheetId: workbookSource?.sheetId || null,
@@ -55946,6 +56159,33 @@ var init_campaignAutomationService = __esm({
             sourceWorkbookVersionNumber: workbookSource?.versionNumber || null,
             sourceWorkbookRevision: workbookSource?.revision || null,
             sourceWorkbookSheetName: workbookSource?.sheetName || null,
+            sourceSnapshot: {
+              columns: evaluated.sheet.columns,
+              recipients: evaluated.candidates.map((candidate) => ({
+                rowNumber: candidate.rowNumber,
+                recordKey: candidate.recordKey,
+                phone: candidate.phone,
+                name: candidate.name,
+                attributes: candidate.attributes
+              }))
+            },
+            blueprintSnapshot: lockedBlueprint ? {
+              campaignId: lockedBlueprint.id,
+              campaignName: lockedBlueprint.name,
+              updatedAt: lockedBlueprint.updatedAt.toISOString(),
+              templateId: lockedBlueprint.templateId,
+              templateParams: lockedBlueprint.templateParams || [],
+              aiEnabled: lockedBlueprint.aiEnabled,
+              aiAgentName: lockedBlueprint.aiAgentName,
+              aiSystemPrompt: lockedBlueprint.aiSystemPrompt,
+              aiUseFaqs: lockedBlueprint.aiUseFaqs,
+              aiUseDocs: lockedBlueprint.aiUseDocs,
+              aiUseProducts: lockedBlueprint.aiUseProducts,
+              aiKnowledgeDocIds: lockedBlueprint.aiKnowledgeDocIds || [],
+              replyClassifications: lockedBlueprint.replyClassifications || [],
+              aiDailyTokenBudget: lockedBlueprint.aiDailyTokenBudget,
+              aiMaxRepliesPerRecipient: lockedBlueprint.aiMaxRepliesPerRecipient
+            } : null,
             status: automatic ? "scheduled" : "awaiting_review",
             scheduledAt: automatic ? scheduledAt : null,
             ...evaluated.summary
@@ -55998,7 +56238,7 @@ var init_campaignAutomationService = __esm({
             eq67(whatsappCampaignAutomations.id, automationId),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
             eq67(whatsappCampaignAutomations.enabled, true),
-            isNull11(whatsappCampaignAutomations.deletedAt)
+            isNull12(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be scheduled");
           const scheduledAt = nextScheduledAt(activeAutomation);
@@ -56046,28 +56286,44 @@ var init_campaignAutomationService = __esm({
       async cancelRun(businessAccountId, automationId, runId) {
         const automation = await this.get(businessAccountId, automationId);
         if (!automation) return false;
-        const [run] = await db.select().from(whatsappCampaignAutomationRuns).where(and57(
-          eq67(whatsappCampaignAutomationRuns.id, runId),
-          eq67(whatsappCampaignAutomationRuns.automationId, automationId),
-          eq67(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId)
-        )).limit(1);
-        if (!run) return false;
-        if (!["awaiting_review", "scheduled"].includes(run.status)) throw new Error("This run can no longer be cancelled");
-        const campaign = run.campaignId ? await db.select().from(marketingCampaigns).where(and57(eq67(marketingCampaigns.id, run.campaignId), eq67(marketingCampaigns.businessAccountId, businessAccountId))).then((rows) => rows[0]) : null;
-        if (campaign && !["draft", "scheduled"].includes(campaign.status)) {
-          throw new Error(`This run's campaign is already ${campaign.status} and can no longer be cancelled`);
-        }
-        await db.transaction(async (tx) => {
+        return db.transaction(async (tx) => {
+          const [run] = await tx.select().from(whatsappCampaignAutomationRuns).where(and57(
+            eq67(whatsappCampaignAutomationRuns.id, runId),
+            eq67(whatsappCampaignAutomationRuns.automationId, automationId),
+            eq67(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId)
+          )).for("update").limit(1);
+          if (!run) return false;
+          if (!["awaiting_review", "scheduled"].includes(run.status)) {
+            throw new Error("This run can no longer be cancelled");
+          }
           if (run.campaignId) {
-            await tx.update(marketingCampaigns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(and57(eq67(marketingCampaigns.id, run.campaignId), eq67(marketingCampaigns.businessAccountId, businessAccountId)));
+            const [campaign] = await tx.select({ status: marketingCampaigns.status }).from(marketingCampaigns).where(and57(
+              eq67(marketingCampaigns.id, run.campaignId),
+              eq67(marketingCampaigns.businessAccountId, businessAccountId)
+            )).for("update").limit(1);
+            if (campaign && !["draft", "scheduled"].includes(campaign.status)) {
+              throw new Error(`This run's campaign is already ${campaign.status} and can no longer be cancelled`);
+            }
+            if (campaign) {
+              const [cancelledCampaign] = await tx.update(marketingCampaigns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(and57(
+                eq67(marketingCampaigns.id, run.campaignId),
+                eq67(marketingCampaigns.businessAccountId, businessAccountId),
+                inArray11(marketingCampaigns.status, ["draft", "scheduled"])
+              )).returning({ id: marketingCampaigns.id });
+              if (!cancelledCampaign) throw new Error("This campaign started sending and can no longer be cancelled");
+            }
           }
           await tx.delete(whatsappCampaignAutomationDispatches).where(and57(
             eq67(whatsappCampaignAutomationDispatches.runId, run.id),
             eq67(whatsappCampaignAutomationDispatches.businessAccountId, businessAccountId)
           ));
-          await tx.update(whatsappCampaignAutomationRuns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(eq67(whatsappCampaignAutomationRuns.id, run.id));
+          const [cancelledRun] = await tx.update(whatsappCampaignAutomationRuns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(and57(
+            eq67(whatsappCampaignAutomationRuns.id, run.id),
+            inArray11(whatsappCampaignAutomationRuns.status, ["awaiting_review", "scheduled"])
+          )).returning({ id: whatsappCampaignAutomationRuns.id });
+          if (!cancelledRun) throw new Error("This run changed and can no longer be cancelled");
+          return true;
         });
-        return true;
       }
     };
   }
@@ -56080,7 +56336,7 @@ __export(whatsappAiWorkbookService_exports, {
   whatsappAiWorkbookService: () => whatsappAiWorkbookService
 });
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { and as and58, asc as asc13, desc as desc30, eq as eq68, inArray as inArray12, sql as sql40 } from "drizzle-orm";
+import { and as and58, asc as asc13, desc as desc30, eq as eq68, inArray as inArray12, sql as sql41 } from "drizzle-orm";
 import OpenAI39 from "openai";
 function isCaptureField(source) {
   return /^capture:[a-z][a-z0-9_]{0,79}$/i.test(source);
@@ -56683,7 +56939,7 @@ var init_whatsappAiWorkbookService = __esm({
               throw new Error(`These campaign columns cannot be removed: ${removedProtected.join(", ")}`);
             }
           }
-          const [updated] = await tx.update(whatsappAiWorkbookVersions).set({ sheets: normalized, revision: sql40`${whatsappAiWorkbookVersions.revision} + 1`, updatedAt: /* @__PURE__ */ new Date() }).where(and58(
+          const [updated] = await tx.update(whatsappAiWorkbookVersions).set({ sheets: normalized, revision: sql41`${whatsappAiWorkbookVersions.revision} + 1`, updatedAt: /* @__PURE__ */ new Date() }).where(and58(
             eq68(whatsappAiWorkbookVersions.id, versionId),
             eq68(whatsappAiWorkbookVersions.workbookId, workbookId),
             eq68(whatsappAiWorkbookVersions.businessAccountId, businessAccountId),
@@ -57370,7 +57626,7 @@ var whatsappCampaignSimulator_exports = {};
 __export(whatsappCampaignSimulator_exports, {
   simulateWhatsAppCampaign: () => simulateWhatsAppCampaign
 });
-import { and as and59, eq as eq69, sql as sql41 } from "drizzle-orm";
+import { and as and59, eq as eq69, sql as sql42 } from "drizzle-orm";
 import { randomUUID as randomUUID3 } from "node:crypto";
 function buildCaseSequence() {
   return CASE_PLAN.flatMap(({ key, count: count5 }) => Array.from({ length: count5 }, () => key));
@@ -57402,7 +57658,7 @@ async function simulateWhatsAppCampaign(businessAccountId) {
   if (missingClassification) throw new Error(`Simulation classification is not configured: ${missingClassification}`);
   const templateBody = "Hi {{1}}, this is a development-only payment reminder. Please reply with your payment update.";
   return db.transaction(async (tx) => {
-    await tx.execute(sql41`SELECT pg_advisory_xact_lock(hashtext(${`whatsapp-campaign-simulation:${businessAccountId}`}))`);
+    await tx.execute(sql42`SELECT pg_advisory_xact_lock(hashtext(${`whatsapp-campaign-simulation:${businessAccountId}`}))`);
     const [existing] = await tx.select({ id: marketingCampaigns.id, totalRecipients: marketingCampaigns.totalRecipients, repliedCount: marketingCampaigns.repliedCount }).from(marketingCampaigns).where(and59(
       eq69(marketingCampaigns.businessAccountId, businessAccountId),
       eq69(marketingCampaigns.name, SIMULATION_CAMPAIGN_NAME)
@@ -57701,7 +57957,7 @@ __export(embedJobPoller_exports, {
   processPendingEmbedJobs: () => processPendingEmbedJobs,
   startEmbedJobPoller: () => startEmbedJobPoller
 });
-import { and as and63, eq as eq74, inArray as inArray14, ne as ne7, sql as sql47 } from "drizzle-orm";
+import { and as and63, eq as eq74, inArray as inArray14, ne as ne7, sql as sql48 } from "drizzle-orm";
 async function syncJobStatus(jobId, businessAccountId, cpId, processed) {
   await db.update(topscholarContentSync).set({ processedCount: processed, updatedAt: /* @__PURE__ */ new Date() }).where(
     and63(
@@ -57730,7 +57986,7 @@ async function completeJob(job) {
   }
   const cfg = getTopscholarConfig(account);
   await withCpLock(job.businessAccountId, job.cpId, async () => {
-    const [{ staged: stagedCount } = { staged: 0 }] = await db.select({ staged: sql47`count(*)::int` }).from(topscholarEmbedStaging).where(eq74(topscholarEmbedStaging.jobId, job.id));
+    const [{ staged: stagedCount } = { staged: 0 }] = await db.select({ staged: sql48`count(*)::int` }).from(topscholarEmbedStaging).where(eq74(topscholarEmbedStaging.jobId, job.id));
     if (!stagedCount) {
       await db.update(topscholarEmbedJobs).set({ status: "completed", error: null, updatedAt: /* @__PURE__ */ new Date() }).where(and63(eq74(topscholarEmbedJobs.id, job.id), ne7(topscholarEmbedJobs.status, "cancelled")));
       console.log(`[TopScholar EmbedPoller] Job ${job.id} already landed (no staging); marked completed.`);
@@ -57977,7 +58233,7 @@ init_auth();
 init_schema();
 import { createServer } from "http";
 import bcrypt2 from "bcrypt";
-import { eq as eq70, and as and60, isNotNull as isNotNull6, sql as sql42, inArray as inArray13, desc as desc31, asc as asc14, gte as gte12, lte as lte5, count as count4 } from "drizzle-orm";
+import { eq as eq70, and as and60, isNotNull as isNotNull6, sql as sql43, inArray as inArray13, desc as desc31, asc as asc14, gte as gte12, lte as lte5, count as count4 } from "drizzle-orm";
 import OpenAI40 from "openai";
 import { z as z2 } from "zod";
 
@@ -68978,7 +69234,7 @@ var DatabaseBackupService = class {
     }
     return "Restore failed. Please try again or contact support.";
   }
-  async runPsqlCommand(databaseUrl, sql48, label) {
+  async runPsqlCommand(databaseUrl, sql49, label) {
     return new Promise((resolve, reject) => {
       const errorChunks = [];
       const psql = spawn("psql", [databaseUrl, "-v", "ON_ERROR_STOP=1"], {
@@ -69011,13 +69267,13 @@ var DatabaseBackupService = class {
         clearTimeout(timeoutId);
         reject(new Error(`${label} process error: ${error.message}`));
       });
-      psql.stdin.write(sql48);
+      psql.stdin.write(sql49);
       psql.stdin.end();
     });
   }
-  async runPsqlQuery(databaseUrl, sql48, label) {
+  async runPsqlQuery(databaseUrl, sql49, label) {
     return new Promise((resolve, reject) => {
-      const psql = spawn("psql", [databaseUrl, "-t", "-A", "-F", "	", "-c", sql48], {
+      const psql = spawn("psql", [databaseUrl, "-t", "-A", "-F", "	", "-c", sql49], {
         stdio: ["ignore", "pipe", "pipe"]
       });
       let stdout = "";
@@ -69046,14 +69302,14 @@ var DatabaseBackupService = class {
    */
   async assertCanModifyTables(databaseUrl, tables) {
     if (tables.length === 0) return;
-    const sql48 = `
+    const sql49 = `
       SELECT t.tablename,
              has_table_privilege(current_user, format('public.%I', t.tablename)::regclass, 'TRUNCATE') AS can_truncate,
              (t.tableowner = current_user) AS is_owner
       FROM pg_tables t
       WHERE t.schemaname = 'public'
     `;
-    const out = await this.runPsqlQuery(databaseUrl, sql48, "RESTORE_PREFLIGHT");
+    const out = await this.runPsqlQuery(databaseUrl, sql49, "RESTORE_PREFLIGHT");
     const lacking = [];
     for (const line of out.trim().split("\n")) {
       if (!line.trim()) continue;
@@ -69074,7 +69330,7 @@ var DatabaseBackupService = class {
    */
   async snapshotForeignKeys(databaseUrl, tableName) {
     const filter = tableName ? `AND conrelid = format('public.%I', '${tableName.replace(/'/g, "''")}')::regclass` : "";
-    const sql48 = `
+    const sql49 = `
       SELECT conname,
              (SELECT relname FROM pg_class WHERE oid = conrelid) AS table_name,
              pg_get_constraintdef(oid) AS definition
@@ -69084,7 +69340,7 @@ var DatabaseBackupService = class {
         ${filter}
       ORDER BY conname
     `;
-    const out = await this.runPsqlQuery(databaseUrl, sql48, "RESTORE_SNAPSHOT_FKS");
+    const out = await this.runPsqlQuery(databaseUrl, sql49, "RESTORE_SNAPSHOT_FKS");
     const fks = [];
     for (const line of out.trim().split("\n")) {
       if (!line.trim()) continue;
@@ -69100,8 +69356,8 @@ var DatabaseBackupService = class {
   }
   async dropForeignKeys(databaseUrl, fks) {
     if (fks.length === 0) return;
-    const sql48 = fks.map((fk) => `ALTER TABLE "${fk.tableName}" DROP CONSTRAINT IF EXISTS "${fk.conname}";`).join("\n");
-    await this.runPsqlCommand(databaseUrl, sql48, "RESTORE_DROP_FKS");
+    const sql49 = fks.map((fk) => `ALTER TABLE "${fk.tableName}" DROP CONSTRAINT IF EXISTS "${fk.conname}";`).join("\n");
+    await this.runPsqlCommand(databaseUrl, sql49, "RESTORE_DROP_FKS");
   }
   /**
    * Recreate FKs as NOT VALID first (instant, restores write-time enforcement),
@@ -69123,21 +69379,21 @@ var DatabaseBackupService = class {
     } catch (e) {
       this.log("RESTORE_RECREATE_FKS", `Batch add failed (${e.message}); falling back to per-FK add`);
       for (const fk of fks) {
-        const sql48 = this.buildAddFkSql(fk);
+        const sql49 = this.buildAddFkSql(fk);
         try {
-          await this.runPsqlCommand(databaseUrl, sql48, "RESTORE_RECREATE_FK");
+          await this.runPsqlCommand(databaseUrl, sql49, "RESTORE_RECREATE_FK");
           added.push(fk);
         } catch (innerErr) {
-          failures.push({ conname: fk.conname, tableName: fk.tableName, error: innerErr.message, sql: sql48 });
+          failures.push({ conname: fk.conname, tableName: fk.tableName, error: innerErr.message, sql: sql49 });
         }
       }
     }
     for (const fk of added) {
-      const sql48 = `ALTER TABLE "${fk.tableName}" VALIDATE CONSTRAINT "${fk.conname}";`;
+      const sql49 = `ALTER TABLE "${fk.tableName}" VALIDATE CONSTRAINT "${fk.conname}";`;
       try {
-        await this.runPsqlCommand(databaseUrl, sql48, "RESTORE_VALIDATE_FK");
+        await this.runPsqlCommand(databaseUrl, sql49, "RESTORE_VALIDATE_FK");
       } catch (e) {
-        failures.push({ conname: fk.conname, tableName: fk.tableName, error: e.message, sql: sql48 });
+        failures.push({ conname: fk.conname, tableName: fk.tableName, error: e.message, sql: sql49 });
       }
     }
     return { failures };
@@ -77901,12 +78157,12 @@ async function registerRoutes(app2) {
     console.error("[Migration] Failed to migrate legacy education_k12 accounts:", err);
   }
   try {
-    await db.execute(sql42`ALTER TABLE business_accounts ADD COLUMN IF NOT EXISTS job_import_config jsonb`);
+    await db.execute(sql43`ALTER TABLE business_accounts ADD COLUMN IF NOT EXISTS job_import_config jsonb`);
   } catch (err) {
     console.error("[Migration] Failed to add job_import_config column:", err);
   }
   try {
-    const updated = await db.execute(sql42`
+    const updated = await db.execute(sql43`
       UPDATE widget_settings 
       SET avatar_type = 'none' 
       WHERE avatar_type IN ('preset-animated-1', 'preset-animated-2', 'preset-animated-3')
@@ -78898,7 +79154,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         const escalateIntent = /\b(escalate|real person|live (agent|person|support)|talk to (a |the )?(human|teacher|someone|support|agent|person|team)|speak (to|with) (a |the )?(human|teacher|someone|support|agent|person|team)|connect (me )?(to|with) (a |the )?(human|teacher|support|agent|team)|support team|raise (a )?(ticket|complaint)|not (a |an )?(bot|ai))\b/i.test(String(message || ""));
         if (escalateIntent) {
           try {
-            await db.execute(sql42`
+            await db.execute(sql43`
               UPDATE conversations SET doubt_retry_status = 'attempted'
                WHERE business_account_id = ${businessAccountId}
                  AND topscholar_doubt_id = ${topscholarDoubtId}
@@ -78936,7 +79192,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
     if (!isTopscholarAccount2(businessAccountId)) {
       return { ok: false, status: 403, error: "Doubt actions are not available for this account" };
     }
-    const lookup = await db.execute(sql42`
+    const lookup = await db.execute(sql43`
       SELECT c.topscholar_doubt_id AS doubt_id,
              c.doubt_retry_status AS retry_status,
              c.topscholar_plan_id AS plan_id,
@@ -79068,7 +79324,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       if (!ctx.ok) return res.status(ctx.status).json({ error: ctx.error, lockState: ctx.lockState });
       const { closeDoubt: closeDoubt2 } = await Promise.resolve().then(() => (init_doubtSyncService(), doubtSyncService_exports));
       const { DOUBT_RESOLVED_FIRST_PASS: DOUBT_RESOLVED_FIRST_PASS2, DOUBT_RESOLVED_AFTER_RETRY: DOUBT_RESOLVED_AFTER_RETRY2, DOUBT_RETRY_ATTEMPTED: DOUBT_RETRY_ATTEMPTED2, doubtLockStateFor: doubtLockStateFor2 } = await Promise.resolve().then(() => (init_doubtStatus(), doubtStatus_exports));
-      const claim = await db.execute(sql42`
+      const claim = await db.execute(sql43`
         UPDATE conversations
            SET doubt_retry_status = CASE WHEN doubt_retry_status = ${DOUBT_RETRY_ATTEMPTED2}
                                          THEN ${DOUBT_RESOLVED_AFTER_RETRY2}
@@ -79105,7 +79361,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       const ctx = await resolveDoubtActionContext(businessAccountId, conversationId, token);
       if (!ctx.ok) return res.status(ctx.status).json({ error: ctx.error, lockState: ctx.lockState });
       if (ctx.retryStatus === null) {
-        const claimed = await db.execute(sql42`
+        const claimed = await db.execute(sql43`
           UPDATE conversations SET doubt_retry_status = 'attempted'
            WHERE id = ${conversationId} AND business_account_id = ${businessAccountId}
              AND doubt_retry_status IS NULL
@@ -79144,7 +79400,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         }
       }
       const { DOUBT_ESCALATED: DOUBT_ESCALATED2, DOUBT_RETRY_ATTEMPTED: DOUBT_RETRY_ATTEMPTED2, doubtLockStateFor: doubtLockStateFor2 } = await Promise.resolve().then(() => (init_doubtStatus(), doubtStatus_exports));
-      const escalationClaim = await db.execute(sql42`
+      const escalationClaim = await db.execute(sql43`
         UPDATE conversations SET doubt_retry_status = ${DOUBT_ESCALATED2}
          WHERE id = ${conversationId} AND business_account_id = ${businessAccountId}
            AND doubt_retry_status = ${DOUBT_RETRY_ATTEMPTED2}
@@ -79994,7 +80250,7 @@ ${product.description}`;
         existingLead = recentLeads.find((l) => l.phone && l.phone.replace(/\D/g, "").slice(-10) === normalizedPhone) || null;
       }
       if (!existingLead && normalizedEmail) {
-        const [found] = await db.select().from(leads).where(and60(...conditions, sql42`LOWER(TRIM(${leads.email})) = ${normalizedEmail}`)).limit(1);
+        const [found] = await db.select().from(leads).where(and60(...conditions, sql43`LOWER(TRIM(${leads.email})) = ${normalizedEmail}`)).limit(1);
         existingLead = found || null;
       }
       let promotedLead = null;
@@ -80385,10 +80641,10 @@ ${product.description}`;
       if (lockKey >= 1n << 63n) lockKey -= 1n << 64n;
       let conversationId = "";
       await db.transaction(async (tx) => {
-        await tx.execute(sql42`SELECT pg_advisory_xact_lock(${lockKey.toString()}::bigint)`);
+        await tx.execute(sql43`SELECT pg_advisory_xact_lock(${lockKey.toString()}::bigint)`);
         let voiceIsInternalTest = false;
         if (sessionToken) {
-          const existing = await tx.execute(sql42`
+          const existing = await tx.execute(sql43`
             SELECT c.id
               FROM conversations c
              WHERE c.business_account_id = ${businessAccountId}
@@ -80406,7 +80662,7 @@ ${product.description}`;
           }
         }
         if (!conversationId) {
-          const inserted = await tx.execute(sql42`
+          const inserted = await tx.execute(sql43`
             INSERT INTO conversations (business_account_id, title, visitor_city, visitor_token, is_internal_test, awaiting_verification)
             VALUES (${businessAccountId}, ${"Pending verification"}, ${null}, ${sessionToken || null}, ${"false"}, true)
             RETURNING id
@@ -80643,9 +80899,9 @@ ${product.description}`;
       if (lockKey >= 1n << 63n) lockKey -= 1n << 64n;
       let conversationId = "";
       await db.transaction(async (tx) => {
-        await tx.execute(sql42`SELECT pg_advisory_xact_lock(${lockKey.toString()}::bigint)`);
+        await tx.execute(sql43`SELECT pg_advisory_xact_lock(${lockKey.toString()}::bigint)`);
         if (sessionToken) {
-          const existing = await tx.execute(sql42`
+          const existing = await tx.execute(sql43`
             SELECT c.id
               FROM conversations c
              WHERE c.business_account_id = ${businessAccountId}
@@ -80662,7 +80918,7 @@ ${product.description}`;
           }
         }
         if (!conversationId) {
-          const inserted = await tx.execute(sql42`
+          const inserted = await tx.execute(sql43`
             INSERT INTO conversations (business_account_id, title, visitor_city, visitor_token, is_internal_test, awaiting_verification)
             VALUES (${businessAccountId}, ${"Pending verification"}, ${null}, ${sessionToken || null}, ${"false"}, true)
             RETURNING id
@@ -81685,13 +81941,13 @@ If you cannot determine the category or the image doesn't match any category, re
               price: products.price,
               imageUrl: products.imageUrl,
               imageHash: products.imageHash,
-              distance: sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`
+              distance: sql43`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`
             }).from(products).where(
               and60(
                 eq70(products.businessAccountId, businessAccountId),
-                sql42`${products.fullImageEmbedding} IS NOT NULL`
+                sql43`${products.fullImageEmbedding} IS NOT NULL`
               )
-            ).orderBy(sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`).limit(1);
+            ).orderBy(sql43`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`).limit(1);
             if (exactMatchResults.length > 0) {
               const topMatch = exactMatchResults[0];
               const similarity = Math.max(0, 1 - topMatch.distance);
@@ -81938,7 +82194,7 @@ If you cannot determine the category or the image doesn't match any category, re
             descriptionEmbedding: productJewelryEmbeddings.descriptionEmbedding,
             jewelryType: productJewelryEmbeddings.jewelryType,
             attributes: productJewelryEmbeddings.attributes
-          }).from(productJewelryEmbeddings).where(sql42`${productJewelryEmbeddings.productId} = ANY(${productIds})`);
+          }).from(productJewelryEmbeddings).where(sql43`${productJewelryEmbeddings.productId} = ANY(${productIds})`);
           for (const row of descEmbeddingRows) {
             if (row.descriptionEmbedding && row.description) {
               productDescriptionEmbeddings.set(row.productId, {
@@ -82240,13 +82496,13 @@ If you cannot determine the category or the image doesn't match any category, re
           price: products.price,
           imageUrl: products.imageUrl,
           imageHash: products.imageHash,
-          distance: sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`
+          distance: sql43`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`
         }).from(products).where(
           and60(
             eq70(products.businessAccountId, businessAccountId),
-            sql42`${products.fullImageEmbedding} IS NOT NULL`
+            sql43`${products.fullImageEmbedding} IS NOT NULL`
           )
-        ).orderBy(sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`).limit(1);
+        ).orderBy(sql43`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`).limit(1);
         if (exactMatchResults.length > 0) {
           const topMatch = exactMatchResults[0];
           const similarity = Math.max(0, 1 - topMatch.distance);
@@ -82550,13 +82806,13 @@ data: ${JSON.stringify({ message: error.message })}
           price: products.price,
           imageUrl: products.imageUrl,
           imageHash: products.imageHash,
-          distance: sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`
+          distance: sql43`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`
         }).from(products).where(
           and60(
             eq70(products.businessAccountId, businessAccountId),
-            sql42`${products.fullImageEmbedding} IS NOT NULL`
+            sql43`${products.fullImageEmbedding} IS NOT NULL`
           )
-        ).orderBy(sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`).limit(1);
+        ).orderBy(sql43`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`).limit(1);
         if (exactMatchResults.length > 0) {
           const topMatch = exactMatchResults[0];
           const similarity = Math.max(0, 1 - topMatch.distance);
@@ -82942,7 +83198,7 @@ data: ${JSON.stringify({ message: error.message })}
             }).from(products).where(
               and60(
                 eq70(products.businessAccountId, businessAccountId),
-                sql42`${products.imageHash} IS NOT NULL`
+                sql43`${products.imageHash} IS NOT NULL`
               )
             ).limit(100);
             for (const candidate of pHashCandidates) {
@@ -82979,13 +83235,13 @@ data: ${JSON.stringify({ message: error.message })}
             price: products.price,
             imageUrl: products.imageUrl,
             imageHash: products.imageHash,
-            distance: sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(fullImageEmbeddingResult.embedding)}::vector`
+            distance: sql43`${products.fullImageEmbedding} <=> ${JSON.stringify(fullImageEmbeddingResult.embedding)}::vector`
           }).from(products).where(
             and60(
               eq70(products.businessAccountId, businessAccountId),
-              sql42`${products.fullImageEmbedding} IS NOT NULL`
+              sql43`${products.fullImageEmbedding} IS NOT NULL`
             )
-          ).orderBy(sql42`${products.fullImageEmbedding} <=> ${JSON.stringify(fullImageEmbeddingResult.embedding)}::vector`).limit(3);
+          ).orderBy(sql43`${products.fullImageEmbedding} <=> ${JSON.stringify(fullImageEmbeddingResult.embedding)}::vector`).limit(3);
           if (exactMatchResults.length > 0) {
             for (const topMatch of exactMatchResults) {
               const similarity = Math.max(0, 1 - topMatch.distance);
@@ -83238,14 +83494,14 @@ data: ${JSON.stringify({ message: error.message })}
       }
       let jewelryTypeFilterConditions;
       if (compatibleTypes.length > 0 && detectedType) {
-        jewelryTypeFilterConditions = sql42`(LOWER(REPLACE(${productJewelryEmbeddings.jewelryType}, ' ', '-')) IN (${sql42.join(compatibleTypes.map((t) => sql42`${t}`), sql42`, `)}) OR LOWER(${productJewelryEmbeddings.jewelryType}) = 'others')`;
+        jewelryTypeFilterConditions = sql43`(LOWER(REPLACE(${productJewelryEmbeddings.jewelryType}, ' ', '-')) IN (${sql43.join(compatibleTypes.map((t) => sql43`${t}`), sql43`, `)}) OR LOWER(${productJewelryEmbeddings.jewelryType}) = 'others')`;
       } else {
         console.log("[Adjusted Boundary Search] No type detected, using broad search");
-        jewelryTypeFilterConditions = sql42`1=1`;
+        jewelryTypeFilterConditions = sql43`1=1`;
       }
       const baseConditions = and60(
         eq70(productJewelryEmbeddings.businessAccountId, businessAccountId),
-        sql42`${productJewelryEmbeddings.embedding} IS NOT NULL`,
+        sql43`${productJewelryEmbeddings.embedding} IS NOT NULL`,
         jewelryTypeFilterConditions
       );
       if (useVisionWarehouse && (!visionWarehouseCandidateIds || visionWarehouseCandidateIds.length === 0)) {
@@ -83266,8 +83522,8 @@ data: ${JSON.stringify({ message: error.message })}
         price: products.price,
         imageUrl: products.imageUrl,
         detectedJewelryType: productJewelryEmbeddings.jewelryType,
-        distance: sql42`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`
-      }).from(productJewelryEmbeddings).innerJoin(products, eq70(productJewelryEmbeddings.productId, products.id)).where(queryConditions).orderBy(sql42`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`).limit(30);
+        distance: sql43`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`
+      }).from(productJewelryEmbeddings).innerJoin(products, eq70(productJewelryEmbeddings.productId, products.id)).where(queryConditions).orderBy(sql43`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`).limit(30);
       if (visionWarehouseCandidateIds) {
         console.log(`[Adjusted Boundary Search] Vision Warehouse pre-filtered to ${visionWarehouseCandidateIds.length} candidates, found ${candidateProducts.length} with embeddings matching type filter`);
       } else {
@@ -85468,8 +85724,8 @@ ${instruction}`
         return res.status(403).json({ error: "Demo Orders module is not enabled for this account" });
       }
       const { demoOrders: demoOrders2, products: products3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { isNull: isNull15 } = await import("drizzle-orm");
-      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and60(eq70(demoOrders2.businessAccountId, businessAccountId), isNull15(demoOrders2.productImageUrl)));
+      const { isNull: isNull16 } = await import("drizzle-orm");
+      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and60(eq70(demoOrders2.businessAccountId, businessAccountId), isNull16(demoOrders2.productImageUrl)));
       const allProducts = await db.select({ name: products3.name, imageUrl: products3.imageUrl }).from(products3).where(eq70(products3.businessAccountId, businessAccountId));
       const imageByName = new Map(
         allProducts.filter((p) => p.imageUrl).map((p) => [p.name.toLowerCase(), p.imageUrl])
@@ -86560,13 +86816,13 @@ ${instruction}`
       if (!account) {
         return res.status(404).json({ error: "Business account not found" });
       }
-      const totalProducts = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+      const totalProducts = await db.select({ count: sql43`count(*)::int` }).from(products).where(
         and60(
           eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl)
         )
       );
-      const syncedProducts = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+      const syncedProducts = await db.select({ count: sql43`count(*)::int` }).from(products).where(
         and60(
           eq70(products.businessAccountId, id),
           isNotNull6(products.productSearchProductId)
@@ -86593,34 +86849,34 @@ ${instruction}`
       if (!businessAccount) {
         return res.status(404).json({ error: "Business account not found" });
       }
-      const productsWithImages = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+      const productsWithImages = await db.select({ count: sql43`count(*)::int` }).from(products).where(
         and60(
           eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl)
         )
       );
-      const productsWithEmbeddings = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+      const productsWithEmbeddings = await db.select({ count: sql43`count(*)::int` }).from(products).where(
         and60(
           eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl),
           isNotNull6(products.imageEmbedding)
         )
       );
-      const productsWithFullEmbeddings = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+      const productsWithFullEmbeddings = await db.select({ count: sql43`count(*)::int` }).from(products).where(
         and60(
           eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl),
           isNotNull6(products.fullImageEmbedding)
         )
       );
-      const productsWithAttributes = await db.select({ count: sql42`count(*)::int` }).from(productJewelryEmbeddings).where(
+      const productsWithAttributes = await db.select({ count: sql43`count(*)::int` }).from(productJewelryEmbeddings).where(
         and60(
           eq70(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.attributes),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl)
         )
       );
-      const jewelryEmbeddingsCount = await db.select({ count: sql42`count(*)::int` }).from(productJewelryEmbeddings).where(
+      const jewelryEmbeddingsCount = await db.select({ count: sql43`count(*)::int` }).from(productJewelryEmbeddings).where(
         and60(
           eq70(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl)
@@ -86691,7 +86947,7 @@ ${instruction}`
         and60(
           eq70(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl),
-          sql42`${productJewelryEmbeddings.attributes} IS NULL`
+          sql43`${productJewelryEmbeddings.attributes} IS NULL`
         )
       ).limit(50);
       if (productsNeedingAttributes.length === 0) {
@@ -86731,11 +86987,11 @@ ${instruction}`
           console.error(`[SuperAdmin] Error processing ${item.productId}:`, itemError.message);
         }
       }
-      const remainingCount = await db.select({ count: sql42`count(*)::int` }).from(productJewelryEmbeddings).where(
+      const remainingCount = await db.select({ count: sql43`count(*)::int` }).from(productJewelryEmbeddings).where(
         and60(
           eq70(productJewelryEmbeddings.businessAccountId, id),
           isNotNull6(productJewelryEmbeddings.croppedImageUrl),
-          sql42`${productJewelryEmbeddings.attributes} IS NULL`
+          sql43`${productJewelryEmbeddings.attributes} IS NULL`
         )
       );
       const remaining = remainingCount[0]?.count || 0;
@@ -86759,13 +87015,13 @@ ${instruction}`
       if (!businessAccount) {
         return res.status(404).json({ error: "Business account not found" });
       }
-      const productsWithImages = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+      const productsWithImages = await db.select({ count: sql43`count(*)::int` }).from(products).where(
         and60(
           eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl)
         )
       );
-      const productsWithCroppedImages = await db.select({ count: sql42`count(*)::int` }).from(products).where(
+      const productsWithCroppedImages = await db.select({ count: sql43`count(*)::int` }).from(products).where(
         and60(
           eq70(products.businessAccountId, id),
           isNotNull6(products.imageUrl),
@@ -86774,7 +87030,7 @@ ${instruction}`
       );
       const productsWithMultipleEmbeddings = await db.select({
         productId: productJewelryEmbeddings.productId,
-        count: sql42`count(*)::int`
+        count: sql43`count(*)::int`
       }).from(productJewelryEmbeddings).where(eq70(productJewelryEmbeddings.businessAccountId, id)).groupBy(productJewelryEmbeddings.productId);
       const multiItemProducts = productsWithMultipleEmbeddings.filter((p) => p.count > 1);
       const productsWithMultiItemEmbeddingsCount = multiItemProducts.length;
@@ -86827,7 +87083,7 @@ ${instruction}`
         }).where(eq70(products.businessAccountId, id));
         console.log(`[SuperAdmin] Cleared all embeddings for business: ${businessAccount.name}`);
       }
-      const totalProducts = await db.select({ count: sql42`count(*)` }).from(products).where(and60(
+      const totalProducts = await db.select({ count: sql43`count(*)` }).from(products).where(and60(
         eq70(products.businessAccountId, id),
         isNotNull6(products.imageUrl)
       ));
@@ -89079,9 +89335,9 @@ ${instruction}`
         db.select({
           category: conversations.category,
           count: count4()
-        }).from(conversations).where(and60(...convDateConds, sql42`${conversations.category} IS NOT NULL`)).groupBy(conversations.category).orderBy(desc31(count4())).limit(8)
+        }).from(conversations).where(and60(...convDateConds, sql43`${conversations.category} IS NOT NULL`)).groupBy(conversations.category).orderBy(desc31(count4())).limit(8)
       ]);
-      const outcomeRawResult = await db.execute(sql42`
+      const outcomeRawResult = await db.execute(sql43`
         SELECT
           c.id,
           COUNT(m.id)::int AS msg_count,
@@ -89091,9 +89347,9 @@ ${instruction}`
           (SELECT m2.content FROM messages m2 WHERE m2.conversation_id = c.id AND m2.role = 'user' ORDER BY m2.created_at DESC LIMIT 1) AS last_user_content
         FROM conversations c
         LEFT JOIN messages m ON m.conversation_id = c.id
-        WHERE c.business_account_id IN (${sql42.join(accountIds.map((id) => sql42`${id}`), sql42`, `)})
-          ${dateFrom ? sql42`AND c.created_at >= ${dateFrom}` : sql42``}
-          ${dateTo ? sql42`AND c.created_at <= ${dateTo}` : sql42``}
+        WHERE c.business_account_id IN (${sql43.join(accountIds.map((id) => sql43`${id}`), sql43`, `)})
+          ${dateFrom ? sql43`AND c.created_at >= ${dateFrom}` : sql43``}
+          ${dateTo ? sql43`AND c.created_at <= ${dateTo}` : sql43``}
         GROUP BY c.id
       `);
       const outcomeRows = outcomeRawResult.rows;
@@ -89129,7 +89385,7 @@ ${instruction}`
       const outcomesTotal = completed + abandoned + singleMessage + active;
       const [allCatCountResult] = await db.select({
         total: count4()
-      }).from(conversations).where(and60(...convDateConds, sql42`${conversations.category} IS NOT NULL`));
+      }).from(conversations).where(and60(...convDateConds, sql43`${conversations.category} IS NOT NULL`));
       const allCategorizedTotal = allCatCountResult?.total || 0;
       const topCategoriesList = categoryRows.map((r) => ({
         category: r.category,
@@ -89205,7 +89461,7 @@ ${instruction}`
       if (toDate) convoConditions.push(lte5(conversations.createdAt, new Date(toDate)));
       const [viAllConvRows, viFormLeadRows] = await Promise.all([
         db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and60(...convoConditions)),
-        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and60(eq70(leads.businessAccountId, accountId), sql42`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql42`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`))
+        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and60(eq70(leads.businessAccountId, accountId), sql43`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql43`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`))
       ]);
       const viFormPhoneMap = /* @__PURE__ */ new Map();
       for (const l of viFormLeadRows) {
@@ -90495,7 +90751,7 @@ ${script}`
                 const [found] = await db.select().from(leads).where(and60(
                   eq70(leads.businessAccountId, businessAccountId),
                   gte12(leads.createdAt, twentyFourHoursAgo),
-                  sql42`LOWER(TRIM(${leads.email})) = ${normalizedEmail}`
+                  sql43`LOWER(TRIM(${leads.email})) = ${normalizedEmail}`
                 )).limit(1);
                 existingLead = found || null;
               }
@@ -90916,7 +91172,7 @@ ${script}`
       const user = req.user;
       const businessAccountId = user.businessAccountId;
       const { aiSuggestions: aiSuggestions2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { eq: eq75, and: and64, count: count5, sql: sql48 } = await import("drizzle-orm");
+      const { eq: eq75, and: and64, count: count5, sql: sql49 } = await import("drizzle-orm");
       const stats = await db.select({
         total: count5(),
         status: aiSuggestions2.status
@@ -92049,7 +92305,7 @@ ${script}`
         await db.update(customCrmFieldMappings).set({ crmField: item.crmFieldKey }).where(eq70(customCrmFieldMappings.id, item.id));
         updated++;
       }
-      const maxSortResult = await db.select({ maxOrder: sql42`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId));
+      const maxSortResult = await db.select({ maxOrder: sql43`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId));
       let nextSortOrder = (maxSortResult[0]?.maxOrder || 0) + 1;
       for (const item of toCreate) {
         const isDefaultField = defaultFieldKeys.includes(item.fieldKey);
@@ -92603,7 +92859,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       }
       const unsyncedLeads = await db.select().from(whatsappLeads).where(and60(
         eq70(whatsappLeads.businessAccountId, businessAccountId),
-        sql42`(${whatsappLeads.customCrmSyncStatus} IS NULL OR ${whatsappLeads.customCrmSyncStatus} = 'failed')`
+        sql43`(${whatsappLeads.customCrmSyncStatus} IS NULL OR ${whatsappLeads.customCrmSyncStatus} = 'failed')`
       )).orderBy(desc31(whatsappLeads.createdAt));
       if (unsyncedLeads.length === 0) {
         return res.json({ success: true, message: "No unsynced leads found", synced: 0, failed: 0, total: 0 });
@@ -95104,8 +95360,8 @@ Strict Requirements:
         detectedJewelryType: products.detectedJewelryType,
         croppedJewelryUrl: products.croppedJewelryUrl,
         // Use SQL expressions to check if embeddings exist without fetching them
-        hasImageEmbedding: sql42`CASE WHEN ${products.imageEmbedding} IS NOT NULL THEN true ELSE false END`,
-        hasFullImageEmbedding: sql42`CASE WHEN ${products.fullImageEmbedding} IS NOT NULL THEN true ELSE false END`
+        hasImageEmbedding: sql43`CASE WHEN ${products.imageEmbedding} IS NOT NULL THEN true ELSE false END`,
+        hasFullImageEmbedding: sql43`CASE WHEN ${products.fullImageEmbedding} IS NOT NULL THEN true ELSE false END`
       }).from(products).where(eq70(products.businessAccountId, businessAccountId)).orderBy(desc31(products.updatedAt)).limit(100);
       const productIds = allProducts.map((p) => p.id);
       const allEmbeddings = productIds.length > 0 ? await db.select({
@@ -95122,8 +95378,8 @@ Strict Requirements:
         createdAt: productJewelryEmbeddings.createdAt,
         updatedAt: productJewelryEmbeddings.updatedAt,
         // Check embedding existence without fetching the vectors
-        hasEmbedding: sql42`CASE WHEN ${productJewelryEmbeddings.embedding} IS NOT NULL THEN true ELSE false END`,
-        hasDescriptionEmbedding: sql42`CASE WHEN ${productJewelryEmbeddings.descriptionEmbedding} IS NOT NULL THEN true ELSE false END`
+        hasEmbedding: sql43`CASE WHEN ${productJewelryEmbeddings.embedding} IS NOT NULL THEN true ELSE false END`,
+        hasDescriptionEmbedding: sql43`CASE WHEN ${productJewelryEmbeddings.descriptionEmbedding} IS NOT NULL THEN true ELSE false END`
       }).from(productJewelryEmbeddings).where(and60(
         eq70(productJewelryEmbeddings.businessAccountId, businessAccountId),
         inArray13(productJewelryEmbeddings.productId, productIds)
@@ -95237,7 +95493,7 @@ Strict Requirements:
       if (!businessAccountId) {
         return res.status(400).json({ error: "Business account not found" });
       }
-      const result = await db.execute(sql42`
+      const result = await db.execute(sql43`
         SELECT 
           COUNT(*) as total,
           COUNT(text_embedding) as embedded,
@@ -100266,7 +100522,7 @@ ${reviewText}`
       if (toDate) leadConditions.push(lte5(leads.createdAt, new Date(toDate)));
       const [dashAllConvRows, dashFormLeadRows, [leadResult]] = await Promise.all([
         db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and60(...convoConditions)),
-        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and60(eq70(leads.businessAccountId, businessAccountId), sql42`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql42`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`)),
+        db.select({ conversationId: leads.conversationId, phone: leads.phone }).from(leads).where(and60(eq70(leads.businessAccountId, businessAccountId), sql43`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql43`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`)),
         db.select({ total: count4() }).from(leads).where(and60(...leadConditions))
       ]);
       const dashFormPhoneMap = /* @__PURE__ */ new Map();
@@ -100803,7 +101059,7 @@ ${reviewText}`
         return res.json([]);
       }
       const [visitorRows, leadRows, convoRows] = await Promise.all([
-        db.execute(sql42`
+        db.execute(sql43`
           SELECT business_account_id,
             SUM(CASE WHEN date >= ${mtdStartIST} THEN opened_chat_count ELSE 0 END)::int AS mtd,
             SUM(CASE WHEN date = ${todayIST} THEN opened_chat_count ELSE 0 END)::int AS today
@@ -100811,7 +101067,7 @@ ${reviewText}`
           WHERE date >= ${mtdStartIST}
           GROUP BY business_account_id
         `),
-        db.execute(sql42`
+        db.execute(sql43`
           SELECT business_account_id,
             COUNT(CASE WHEN created_at >= ${mtdStartIST}::date THEN 1 END)::int AS mtd,
             COUNT(CASE WHEN created_at >= ${todayIST}::date AND created_at < (${todayIST}::date + interval '1 day') THEN 1 END)::int AS today
@@ -100819,7 +101075,7 @@ ${reviewText}`
           WHERE created_at >= ${mtdStartIST}::date
           GROUP BY business_account_id
         `),
-        db.execute(sql42`
+        db.execute(sql43`
           SELECT business_account_id,
             COUNT(CASE WHEN created_at >= ${mtdStartIST}::date THEN 1 END)::int AS mtd,
             COUNT(CASE WHEN created_at >= ${todayIST}::date AND created_at < (${todayIST}::date + interval '1 day') THEN 1 END)::int AS today
@@ -101210,7 +101466,7 @@ ${reviewText}`
       const sevenDaysAgo = /* @__PURE__ */ new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
       const now = /* @__PURE__ */ new Date();
-      const convCount = await db.select({ count: sql42`count(*)::int` }).from(conversations).where(and60(
+      const convCount = await db.select({ count: sql43`count(*)::int` }).from(conversations).where(and60(
         eq70(conversations.businessAccountId, businessAccountId),
         gte12(conversations.createdAt, sevenDaysAgo),
         lte5(conversations.createdAt, now)
@@ -101642,7 +101898,7 @@ ${businessContext}`
           );
           if (staleAttachments.length > 0) {
             const staleIds = staleAttachments.map((a) => a.id);
-            await db.delete(whatsappLeadAttachments).where(sql42`${whatsappLeadAttachments.id} IN (${sql42.join(staleIds.map((id) => sql42`${id}`), sql42`, `)})`);
+            await db.delete(whatsappLeadAttachments).where(sql43`${whatsappLeadAttachments.id} IN (${sql43.join(staleIds.map((id) => sql43`${id}`), sql43`, `)})`);
             console.log(`[MSG91 Webhook] Retag cleanup: removed ${staleIds.length} superseded ${docType} attachment(s) for lead ${leadId}`);
           }
         }
@@ -101660,7 +101916,7 @@ ${businessContext}`
         }
         if (invalidAtts.length > 0) {
           const invalidIds = invalidAtts.map((a) => a.id);
-          await db.delete(whatsappLeadAttachments).where(sql42`${whatsappLeadAttachments.id} IN (${sql42.join(invalidIds.map((id) => sql42`${id}`), sql42`, `)})`);
+          await db.delete(whatsappLeadAttachments).where(sql43`${whatsappLeadAttachments.id} IN (${sql43.join(invalidIds.map((id) => sql43`${id}`), sql43`, `)})`);
           console.log(`[MSG91 Webhook] Retag: deleted ${invalidAtts.length} invalid ${invalidType} attachment(s) and R2 files for lead ${leadId}`);
         }
       }
@@ -102182,7 +102438,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                   for (const sourceUrl of allUrls) {
                     const tagged = await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(and60(
                       eq70(whatsappLeadAttachments.leadId, existingLead.id),
-                      sql42`(${whatsappLeadAttachments.mediaUrl} = ${sourceUrl} OR ${whatsappLeadAttachments.filePath} = ${sourceUrl})`
+                      sql43`(${whatsappLeadAttachments.mediaUrl} = ${sourceUrl} OR ${whatsappLeadAttachments.filePath} = ${sourceUrl})`
                     )).returning({ id: whatsappLeadAttachments.id });
                     if (tagged.length > 0) {
                       newlyTaggedIds.push(...tagged.map((t) => t.id));
@@ -102193,7 +102449,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                     const alreadyTaggedRows = await db.select({ id: whatsappLeadAttachments.id }).from(whatsappLeadAttachments).where(and60(
                       eq70(whatsappLeadAttachments.leadId, existingLead.id),
                       eq70(whatsappLeadAttachments.documentCategory, docType),
-                      sql42`(${whatsappLeadAttachments.mediaUrl} IN (${sql42.join(allUrls.map((u) => sql42`${u}`), sql42`, `)}) OR ${whatsappLeadAttachments.filePath} IN (${sql42.join(allUrls.map((u) => sql42`${u}`), sql42`, `)}))`
+                      sql43`(${whatsappLeadAttachments.mediaUrl} IN (${sql43.join(allUrls.map((u) => sql43`${u}`), sql43`, `)}) OR ${whatsappLeadAttachments.filePath} IN (${sql43.join(allUrls.map((u) => sql43`${u}`), sql43`, `)}))`
                     ));
                     for (const att of alreadyTaggedRows) {
                       if (!newlyTaggedIds.includes(att.id)) {
@@ -102205,7 +102461,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                     const deleted = await db.delete(whatsappLeadAttachments).where(and60(
                       eq70(whatsappLeadAttachments.leadId, existingLead.id),
                       eq70(whatsappLeadAttachments.documentCategory, docType),
-                      sql42`${whatsappLeadAttachments.id} NOT IN (${sql42.join(newlyTaggedIds.map((id) => sql42`${id}`), sql42`, `)})`
+                      sql43`${whatsappLeadAttachments.id} NOT IN (${sql43.join(newlyTaggedIds.map((id) => sql43`${id}`), sql43`, `)})`
                     )).returning({ id: whatsappLeadAttachments.id });
                     if (deleted.length > 0) {
                       console.log(`[MSG91 Webhook] Removed ${deleted.length} stale ${docType} attachment(s) for lead ${existingLead.id}`);
@@ -102216,7 +102472,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                     if (isPdf) {
                       const tagged = await db.update(whatsappLeadAttachments).set({ caption: docCapitalized, documentCategory: docType }).where(and60(
                         eq70(whatsappLeadAttachments.leadId, existingLead.id),
-                        sql42`${whatsappLeadAttachments.fileName} ILIKE '%.pdf'`
+                        sql43`${whatsappLeadAttachments.fileName} ILIKE '%.pdf'`
                       )).returning({ id: whatsappLeadAttachments.id });
                       if (tagged.length > 0) {
                         console.log(`[MSG91 Webhook] Tagged ${tagged.length} PDF attachment(s) as: ${docCapitalized} (category: ${docType})`);
@@ -102460,7 +102716,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                   const alreadyTaggedRows2 = await db.select({ id: whatsappLeadAttachments2.id }).from(whatsappLeadAttachments2).where(and64(
                                     eq75(whatsappLeadAttachments2.leadId, attachToLeadId),
                                     eq75(whatsappLeadAttachments2.documentCategory, matchedDocType),
-                                    sql42`(${whatsappLeadAttachments2.mediaUrl} IN (${sql42.join(docAllUrls.map((u) => sql42`${u}`), sql42`, `)}) OR ${whatsappLeadAttachments2.filePath} IN (${sql42.join(docAllUrls.map((u) => sql42`${u}`), sql42`, `)}))`
+                                    sql43`(${whatsappLeadAttachments2.mediaUrl} IN (${sql43.join(docAllUrls.map((u) => sql43`${u}`), sql43`, `)}) OR ${whatsappLeadAttachments2.filePath} IN (${sql43.join(docAllUrls.map((u) => sql43`${u}`), sql43`, `)}))`
                                   ));
                                   for (const att of alreadyTaggedRows2) {
                                     if (!taggedIds.includes(att.id)) taggedIds.push(att.id);
@@ -102469,7 +102725,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                 const deletedDups = await db.delete(whatsappLeadAttachments2).where(and64(
                                   eq75(whatsappLeadAttachments2.leadId, attachToLeadId),
                                   eq75(whatsappLeadAttachments2.documentCategory, matchedDocType),
-                                  sql42`${whatsappLeadAttachments2.id} NOT IN (${sql42.join(taggedIds.map((id) => sql42`${id}`), sql42`, `)})`
+                                  sql43`${whatsappLeadAttachments2.id} NOT IN (${sql43.join(taggedIds.map((id) => sql43`${id}`), sql43`, `)})`
                                 )).returning({ id: whatsappLeadAttachments2.id });
                                 if (deletedDups.length > 0) {
                                   console.log(`[MSG91 Webhook] Removed ${deletedDups.length} stale ${matchedDocType} attachment(s) for lead ${attachToLeadId}`);
@@ -102480,7 +102736,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                           const eagerDocState = sessionData._documentState;
                           if (eagerDocState) {
                             const { whatsappLeadAttachments: wlaEager } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-                            const { eq: eqE, and: andE, sql: sqlE, isNull: isNull15 } = await import("drizzle-orm");
+                            const { eq: eqE, and: andE, sql: sqlE, isNull: isNull16 } = await import("drizzle-orm");
                             for (const [eagerDocType, eagerState] of Object.entries(eagerDocState)) {
                               const eagerPages = eagerState?.pages || [];
                               for (const page of eagerPages) {
@@ -102493,7 +102749,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                 const eagerTagged = await db.update(wlaEager).set({ documentCategory: eagerDocType }).where(andE(
                                   eqE(wlaEager.leadId, attachToLeadId),
                                   sqlE`${wlaEager.mediaUrl} = ${pageUrl}`,
-                                  isNull15(wlaEager.documentCategory)
+                                  isNull16(wlaEager.documentCategory)
                                 )).returning({ id: wlaEager.id });
                                 if (eagerTagged.length > 0) {
                                   console.log(`[MSG91 Webhook] Eager tag: ${eagerTagged.length} attachment(s) tagged as ${eagerDocType}`);
@@ -103116,7 +103372,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       if (body.whitelistEnabled !== void 0) {
         if (body.whitelistEnabled) {
           const { whatsappWhitelist: whatsappWhitelist2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-          const [{ n: allowedCount }] = await db.select({ n: sql42`count(*)::int` }).from(whatsappWhitelist2).where(eq70(whatsappWhitelist2.businessAccountId, businessAccountId));
+          const [{ n: allowedCount }] = await db.select({ n: sql43`count(*)::int` }).from(whatsappWhitelist2).where(eq70(whatsappWhitelist2.businessAccountId, businessAccountId));
           if (allowedCount === 0 && body.confirmBlockAllInbound !== true) {
             return res.status(409).json({
               error: "Turning on Allowed Numbers while the list is empty will block every incoming WhatsApp message \u2014 no leads will be captured and the AI will not reply to anyone. Add at least one number first, or confirm you intend to block all incoming messages.",
@@ -103389,9 +103645,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       } else if (period === "90d") {
         startDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1e3);
       }
-      const dateFilter = startDate ? endDate ? sql42`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql42`AND created_at >= ${startDate}` : sql42``;
-      const dateFilterReceived = startDate ? endDate ? sql42`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql42`AND received_at >= ${startDate}` : sql42``;
-      const sessionsRows = await db.execute(sql42`
+      const dateFilter = startDate ? endDate ? sql43`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql43`AND created_at >= ${startDate}` : sql43``;
+      const dateFilterReceived = startDate ? endDate ? sql43`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql43`AND received_at >= ${startDate}` : sql43``;
+      const sessionsRows = await db.execute(sql43`
         SELECT 
           COUNT(*) as total,
           COUNT(*) FILTER (WHERE status = 'completed') as completed,
@@ -103401,7 +103657,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilter}
       `);
       const sessionsResult = sessionsRows.rows?.[0] || sessionsRows[0] || {};
-      const leadsRows = await db.execute(sql42`
+      const leadsRows = await db.execute(sql43`
         SELECT 
           COUNT(*) FILTER (WHERE status != 'message_only' AND direction = 'incoming') as qualified_leads,
           COUNT(*) FILTER (WHERE direction = 'incoming') as total_incoming,
@@ -103411,19 +103667,19 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilterReceived}
       `);
       const leadsResult = leadsRows.rows?.[0] || leadsRows[0] || {};
-      const docsRows = await db.execute(sql42`
+      const docsRows = await db.execute(sql43`
         SELECT COUNT(*) as total_docs
         FROM whatsapp_lead_attachments a
         JOIN whatsapp_leads l ON a.lead_id = l.id
         WHERE l.business_account_id = ${businessAccountId}
-        ${startDate ? sql42`AND a.created_at >= ${startDate}` : sql42``}
-        ${endDate ? sql42`AND a.created_at < ${endDate}` : sql42``}
+        ${startDate ? sql43`AND a.created_at >= ${startDate}` : sql43``}
+        ${endDate ? sql43`AND a.created_at < ${endDate}` : sql43``}
       `);
       const docsResult = docsRows.rows?.[0] || docsRows[0] || {};
       const chartDays = period === "today" ? 1 : period === "yesterday" ? 1 : period === "7d" ? 7 : period === "90d" ? 90 : 30;
       const chartStart = period === "today" ? startDate : period === "yesterday" ? startDate : new Date(now.getTime() - chartDays * 24 * 60 * 60 * 1e3);
       const chartEnd = endDate;
-      const dailySessionsRows = await db.execute(sql42`
+      const dailySessionsRows = await db.execute(sql43`
         SELECT 
           DATE(created_at) as date,
           COUNT(*) as sessions,
@@ -103431,32 +103687,32 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         FROM whatsapp_flow_sessions
         WHERE business_account_id = ${businessAccountId}
           AND created_at >= ${chartStart}
-          ${chartEnd ? sql42`AND created_at < ${chartEnd}` : sql42``}
+          ${chartEnd ? sql43`AND created_at < ${chartEnd}` : sql43``}
         GROUP BY DATE(created_at)
         ORDER BY date
       `);
       const dailySessions = dailySessionsRows.rows || dailySessionsRows;
-      const dailyLeadsRows = await db.execute(sql42`
+      const dailyLeadsRows = await db.execute(sql43`
         SELECT 
           DATE(received_at) as date,
           COUNT(*) FILTER (WHERE status != 'message_only' AND direction = 'incoming') as leads
         FROM whatsapp_leads
         WHERE business_account_id = ${businessAccountId}
           AND received_at >= ${chartStart}
-          ${chartEnd ? sql42`AND received_at < ${chartEnd}` : sql42``}
+          ${chartEnd ? sql43`AND received_at < ${chartEnd}` : sql43``}
         GROUP BY DATE(received_at)
         ORDER BY date
       `);
       const dailyLeads = dailyLeadsRows.rows || dailyLeadsRows;
-      const docTypesRows = await db.execute(sql42`
+      const docTypesRows = await db.execute(sql43`
         SELECT 
           COALESCE(a.document_category, 'other') as doc_type,
           COUNT(*) as count
         FROM whatsapp_lead_attachments a
         JOIN whatsapp_leads l ON a.lead_id = l.id
         WHERE l.business_account_id = ${businessAccountId}
-        ${startDate ? sql42`AND a.created_at >= ${startDate}` : sql42``}
-        ${endDate ? sql42`AND a.created_at < ${endDate}` : sql42``}
+        ${startDate ? sql43`AND a.created_at >= ${startDate}` : sql43``}
+        ${endDate ? sql43`AND a.created_at < ${endDate}` : sql43``}
         GROUP BY COALESCE(a.document_category, 'other')
         ORDER BY count DESC
       `);
@@ -103508,7 +103764,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       if (!businessAccountId) {
         return res.status(400).json({ error: "No active business account" });
       }
-      const rows = await db.execute(sql42`
+      const rows = await db.execute(sql43`
         (
           SELECT 
             'lead' as type,
@@ -103778,7 +104034,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         const sourceField = isDefaultField ? normalizedKey === "customer_name" ? "lead.customerName" : normalizedKey === "customer_phone" ? "lead.customerPhone" : "lead.customerEmail" : `extracted.${normalizedKey}`;
         const existing = await db.select({ id: customCrmFieldMappings.id }).from(customCrmFieldMappings).where(and60(eq70(customCrmFieldMappings.businessAccountId, businessAccountId), eq70(customCrmFieldMappings.sourceField, sourceField))).limit(1);
         if (existing.length === 0) {
-          const maxSort = await db.select({ maxOrder: sql42`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId));
+          const maxSort = await db.select({ maxOrder: sql43`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId));
           await db.insert(customCrmFieldMappings).values({ businessAccountId, crmField: defaultCrmFieldKey, sourceType: "dynamic", sourceField, displayName: fieldLabel || field.fieldLabel, isEnabled: "true", sortOrder: (maxSort[0]?.maxOrder || 0) + 1, isAutoManaged: true });
         }
       }
@@ -103812,7 +104068,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         const sourceField = isDefaultField ? normalizedKey === "customer_name" ? "lead.customerName" : normalizedKey === "customer_phone" ? "lead.customerPhone" : "lead.customerEmail" : `extracted.${normalizedKey}`;
         const existing = await db.select({ id: customCrmFieldMappings.id }).from(customCrmFieldMappings).where(and60(eq70(customCrmFieldMappings.businessAccountId, businessAccountId), eq70(customCrmFieldMappings.sourceField, sourceField))).limit(1);
         if (existing.length === 0) {
-          const maxSort = await db.select({ maxOrder: sql42`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId));
+          const maxSort = await db.select({ maxOrder: sql43`COALESCE(MAX(sort_order), 0)` }).from(customCrmFieldMappings).where(eq70(customCrmFieldMappings.businessAccountId, businessAccountId));
           await db.insert(customCrmFieldMappings).values({ businessAccountId, crmField: defaultCrmFieldKey, sourceType: "dynamic", sourceField, displayName: field.fieldLabel, isEnabled: "true", sortOrder: (maxSort[0]?.maxOrder || 0) + 1, isAutoManaged: true });
         }
       }
@@ -104395,9 +104651,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       } else if (period === "90d") {
         startDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1e3);
       }
-      const dateFilter = startDate ? endDate ? sql42`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql42`AND created_at >= ${startDate}` : sql42``;
-      const dateFilterReceived = startDate ? endDate ? sql42`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql42`AND received_at >= ${startDate}` : sql42``;
-      const sessionsRows = await db.execute(sql42`
+      const dateFilter = startDate ? endDate ? sql43`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql43`AND created_at >= ${startDate}` : sql43``;
+      const dateFilterReceived = startDate ? endDate ? sql43`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql43`AND received_at >= ${startDate}` : sql43``;
+      const sessionsRows = await db.execute(sql43`
         SELECT 
           COUNT(*) as total,
           COUNT(*) FILTER (WHERE status = 'completed') as completed,
@@ -104407,7 +104663,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilter}
       `);
       const sessionsResult = sessionsRows.rows?.[0] || sessionsRows[0] || {};
-      const leadsRows = await db.execute(sql42`
+      const leadsRows = await db.execute(sql43`
         SELECT 
           COUNT(*) as total_leads,
           COUNT(DISTINCT sender_id) as unique_senders
@@ -104415,7 +104671,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilterReceived}
       `);
       const leadsResult = leadsRows.rows?.[0] || leadsRows[0] || {};
-      const messagesRows = await db.execute(sql42`
+      const messagesRows = await db.execute(sql43`
         SELECT 
           COUNT(*) FILTER (WHERE direction = 'incoming') as total_incoming,
           COUNT(*) FILTER (WHERE direction = 'outgoing') as total_outgoing
@@ -104423,17 +104679,17 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilter}
       `);
       const messagesResult = messagesRows.rows?.[0] || messagesRows[0] || {};
-      const chartStartFilter = period === "all" ? sql42`` : (() => {
+      const chartStartFilter = period === "all" ? sql43`` : (() => {
         const chartDays = period === "today" ? 1 : period === "yesterday" ? 1 : period === "7d" ? 7 : period === "90d" ? 90 : 30;
         const chartStart = period === "today" || period === "yesterday" ? startDate : new Date(now.getTime() - chartDays * 24 * 60 * 60 * 1e3);
-        return sql42`AND created_at >= ${chartStart}`;
+        return sql43`AND created_at >= ${chartStart}`;
       })();
-      const chartStartFilterReceived = period === "all" ? sql42`` : (() => {
+      const chartStartFilterReceived = period === "all" ? sql43`` : (() => {
         const chartDays = period === "today" ? 1 : period === "yesterday" ? 1 : period === "7d" ? 7 : period === "90d" ? 90 : 30;
         const chartStart = period === "today" || period === "yesterday" ? startDate : new Date(now.getTime() - chartDays * 24 * 60 * 60 * 1e3);
-        return sql42`AND received_at >= ${chartStart}`;
+        return sql43`AND received_at >= ${chartStart}`;
       })();
-      const dailySessionsRows = await db.execute(sql42`
+      const dailySessionsRows = await db.execute(sql43`
         SELECT 
           DATE(created_at) as date,
           COUNT(*) as sessions,
@@ -104441,19 +104697,19 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         FROM instagram_flow_sessions
         WHERE business_account_id = ${businessAccountId}
           ${chartStartFilter}
-          ${endDate ? sql42`AND created_at < ${endDate}` : sql42``}
+          ${endDate ? sql43`AND created_at < ${endDate}` : sql43``}
         GROUP BY DATE(created_at)
         ORDER BY date
       `);
       const dailySessions = dailySessionsRows.rows || dailySessionsRows;
-      const dailyLeadsRows = await db.execute(sql42`
+      const dailyLeadsRows = await db.execute(sql43`
         SELECT 
           DATE(received_at) as date,
           COUNT(*) as leads
         FROM instagram_leads
         WHERE business_account_id = ${businessAccountId}
           ${chartStartFilterReceived}
-          ${endDate ? sql42`AND received_at < ${endDate}` : sql42``}
+          ${endDate ? sql43`AND received_at < ${endDate}` : sql43``}
         GROUP BY DATE(received_at)
         ORDER BY date
       `);
@@ -105202,9 +105458,9 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       } else if (period === "90d") {
         startDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1e3);
       }
-      const dateFilter = startDate ? endDate ? sql42`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql42`AND created_at >= ${startDate}` : sql42``;
-      const dateFilterReceived = startDate ? endDate ? sql42`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql42`AND received_at >= ${startDate}` : sql42``;
-      const sessionsRows = await db.execute(sql42`
+      const dateFilter = startDate ? endDate ? sql43`AND created_at >= ${startDate} AND created_at < ${endDate}` : sql43`AND created_at >= ${startDate}` : sql43``;
+      const dateFilterReceived = startDate ? endDate ? sql43`AND received_at >= ${startDate} AND received_at < ${endDate}` : sql43`AND received_at >= ${startDate}` : sql43``;
+      const sessionsRows = await db.execute(sql43`
         SELECT 
           COUNT(*) as total,
           COUNT(*) FILTER (WHERE status = 'completed') as completed,
@@ -105214,7 +105470,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilter}
       `);
       const sessionsResult = sessionsRows.rows?.[0] || sessionsRows[0] || {};
-      const leadsRows = await db.execute(sql42`
+      const leadsRows = await db.execute(sql43`
         SELECT 
           COUNT(*) as total_leads,
           COUNT(DISTINCT sender_id) as unique_senders
@@ -105222,7 +105478,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilterReceived}
       `);
       const leadsResult = leadsRows.rows?.[0] || leadsRows[0] || {};
-      const messagesRows = await db.execute(sql42`
+      const messagesRows = await db.execute(sql43`
         SELECT 
           COUNT(*) FILTER (WHERE direction = 'incoming') as total_incoming,
           COUNT(*) FILTER (WHERE direction = 'outgoing') as total_outgoing
@@ -105230,17 +105486,17 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         WHERE business_account_id = ${businessAccountId} ${dateFilter}
       `);
       const messagesResult = messagesRows.rows?.[0] || messagesRows[0] || {};
-      const chartStartFilter = period === "all" ? sql42`` : (() => {
+      const chartStartFilter = period === "all" ? sql43`` : (() => {
         const chartDays = period === "today" ? 1 : period === "yesterday" ? 1 : period === "7d" ? 7 : period === "90d" ? 90 : 30;
         const chartStart = period === "today" || period === "yesterday" ? startDate : new Date(now.getTime() - chartDays * 24 * 60 * 60 * 1e3);
-        return sql42`AND created_at >= ${chartStart}`;
+        return sql43`AND created_at >= ${chartStart}`;
       })();
-      const chartStartFilterReceived = period === "all" ? sql42`` : (() => {
+      const chartStartFilterReceived = period === "all" ? sql43`` : (() => {
         const chartDays = period === "today" ? 1 : period === "yesterday" ? 1 : period === "7d" ? 7 : period === "90d" ? 90 : 30;
         const chartStart = period === "today" || period === "yesterday" ? startDate : new Date(now.getTime() - chartDays * 24 * 60 * 60 * 1e3);
-        return sql42`AND received_at >= ${chartStart}`;
+        return sql43`AND received_at >= ${chartStart}`;
       })();
-      const dailySessionsRows = await db.execute(sql42`
+      const dailySessionsRows = await db.execute(sql43`
         SELECT 
           DATE(created_at) as date,
           COUNT(*) as sessions,
@@ -105248,19 +105504,19 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
         FROM facebook_flow_sessions
         WHERE business_account_id = ${businessAccountId}
           ${chartStartFilter}
-          ${endDate ? sql42`AND created_at < ${endDate}` : sql42``}
+          ${endDate ? sql43`AND created_at < ${endDate}` : sql43``}
         GROUP BY DATE(created_at)
         ORDER BY date
       `);
       const dailySessions = dailySessionsRows.rows || dailySessionsRows;
-      const dailyLeadsRows = await db.execute(sql42`
+      const dailyLeadsRows = await db.execute(sql43`
         SELECT 
           DATE(received_at) as date,
           COUNT(*) as leads
         FROM facebook_leads
         WHERE business_account_id = ${businessAccountId}
           ${chartStartFilterReceived}
-          ${endDate ? sql42`AND received_at < ${endDate}` : sql42``}
+          ${endDate ? sql43`AND received_at < ${endDate}` : sql43``}
         GROUP BY DATE(received_at)
         ORDER BY date
       `);
@@ -106042,7 +106298,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const { whatsappOptOuts: whatsappOptOuts2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
       await db.delete(whatsappOptOuts2).where(and60(
         eq70(whatsappOptOuts2.businessAccountId, businessAccountId),
-        sql42`(${whatsappOptOuts2.phone} = ${phone} OR ${whatsappOptOuts2.phone} = ${last10} OR RIGHT(${whatsappOptOuts2.phone}, 10) = ${last10})`
+        sql43`(${whatsappOptOuts2.phone} = ${phone} OR ${whatsappOptOuts2.phone} = ${last10} OR RIGHT(${whatsappOptOuts2.phone}, 10) = ${last10})`
       ));
       res.json({ success: true });
     } catch (err) {
@@ -106655,7 +106911,7 @@ init_auth();
 init_jewelryImageGeneratorService();
 init_db();
 init_schema();
-import { and as and61, eq as eq71, isNull as isNull13, sql as sql43 } from "drizzle-orm";
+import { and as and61, eq as eq71, isNull as isNull14, sql as sql44 } from "drizzle-orm";
 async function initializeDatabase() {
   try {
     try {
@@ -106696,71 +106952,71 @@ async function initializeDatabase() {
         await db.update(whatsappLeadFields).set({ defaultCrmFieldKey: crmKey }).where(and61(
           eq71(whatsappLeadFields.fieldKey, fieldKey),
           eq71(whatsappLeadFields.isDefault, true),
-          isNull13(whatsappLeadFields.defaultCrmFieldKey)
+          isNull14(whatsappLeadFields.defaultCrmFieldKey)
         ));
       }
     } catch (err) {
       console.error("[INIT] Error backfilling default CRM field keys:", err);
     }
     try {
-      await db.execute(sql43`ALTER TABLE crm_store_credentials ADD COLUMN IF NOT EXISTS city TEXT`);
+      await db.execute(sql44`ALTER TABLE crm_store_credentials ADD COLUMN IF NOT EXISTS city TEXT`);
     } catch (err) {
       console.error("[INIT] Error adding city column to crm_store_credentials:", err);
     }
     try {
-      await db.execute(sql43`ALTER TABLE custom_crm_settings ADD COLUMN IF NOT EXISTS callback_url TEXT`);
+      await db.execute(sql44`ALTER TABLE custom_crm_settings ADD COLUMN IF NOT EXISTS callback_url TEXT`);
     } catch (err) {
       console.error("[INIT] Error adding callback_url column to custom_crm_settings:", err);
     }
     try {
-      await db.execute(sql43`ALTER TABLE custom_crm_settings ADD COLUMN IF NOT EXISTS relay_url TEXT`);
+      await db.execute(sql44`ALTER TABLE custom_crm_settings ADD COLUMN IF NOT EXISTS relay_url TEXT`);
     } catch (err) {
       console.error("[INIT] Error adding relay_url column to custom_crm_settings:", err);
     }
     try {
       await db.execute(
-        sql43`UPDATE whatsapp_templates SET status = 'approved' WHERE status IS DISTINCT FROM 'approved'`
+        sql44`UPDATE whatsapp_templates SET status = 'approved' WHERE status IS DISTINCT FROM 'approved'`
       );
     } catch (err) {
       console.error("[INIT] Error backfilling whatsapp_templates status:", err);
     }
     try {
-      await db.execute(sql43`ALTER TABLE contact_groups ADD COLUMN IF NOT EXISTS default_country_code TEXT`);
+      await db.execute(sql44`ALTER TABLE contact_groups ADD COLUMN IF NOT EXISTS default_country_code TEXT`);
     } catch (err) {
       console.error("[INIT] Error adding default_country_code column to contact_groups:", err);
     }
     try {
-      await db.execute(sql43`ALTER TABLE marketing_campaign_recipients ADD COLUMN IF NOT EXISTS provider_response JSONB`);
+      await db.execute(sql44`ALTER TABLE marketing_campaign_recipients ADD COLUMN IF NOT EXISTS provider_response JSONB`);
     } catch (err) {
       console.error("[INIT] Error adding provider_response column to marketing_campaign_recipients:", err);
     }
     try {
-      await db.execute(sql43`ALTER TABLE marketing_campaign_recipients ADD COLUMN IF NOT EXISTS send_phone TEXT`);
-      await db.execute(sql43`CREATE INDEX IF NOT EXISTS mkt_recipients_biz_send_phone_idx ON marketing_campaign_recipients (business_account_id, send_phone)`);
+      await db.execute(sql44`ALTER TABLE marketing_campaign_recipients ADD COLUMN IF NOT EXISTS send_phone TEXT`);
+      await db.execute(sql44`CREATE INDEX IF NOT EXISTS mkt_recipients_biz_send_phone_idx ON marketing_campaign_recipients (business_account_id, send_phone)`);
     } catch (err) {
       console.error("[INIT] Error adding send_phone column/index to marketing_campaign_recipients:", err);
     }
     try {
-      await db.execute(sql43`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS conversion_fired BOOLEAN NOT NULL DEFAULT false`);
+      await db.execute(sql44`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS conversion_fired BOOLEAN NOT NULL DEFAULT false`);
     } catch (err) {
       console.error("[INIT] Error adding conversion_fired column to conversations:", err);
     }
     try {
-      await db.execute(sql43`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summarized_at TIMESTAMP`);
-      await db.execute(sql43`CREATE INDEX IF NOT EXISTS conversations_summarized_sweep_idx ON conversations (updated_at, summarized_at)`);
+      await db.execute(sql44`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summarized_at TIMESTAMP`);
+      await db.execute(sql44`CREATE INDEX IF NOT EXISTS conversations_summarized_sweep_idx ON conversations (updated_at, summarized_at)`);
     } catch (err) {
       console.error("[INIT] Error adding summarized_at column/index to conversations:", err);
     }
     try {
-      await db.execute(sql43`ALTER TABLE topscholar_cp_mappings ADD COLUMN IF NOT EXISTS subject TEXT`);
-      await db.execute(sql43`ALTER TABLE topscholar_cp_mappings ADD COLUMN IF NOT EXISTS subject_id TEXT`);
-      await db.execute(sql43`ALTER TABLE topscholar_plan_cp_resolutions ADD COLUMN IF NOT EXISTS subject TEXT`);
-      await db.execute(sql43`ALTER TABLE topscholar_plan_cp_resolutions ADD COLUMN IF NOT EXISTS subject_id TEXT`);
+      await db.execute(sql44`ALTER TABLE topscholar_cp_mappings ADD COLUMN IF NOT EXISTS subject TEXT`);
+      await db.execute(sql44`ALTER TABLE topscholar_cp_mappings ADD COLUMN IF NOT EXISTS subject_id TEXT`);
+      await db.execute(sql44`ALTER TABLE topscholar_plan_cp_resolutions ADD COLUMN IF NOT EXISTS subject TEXT`);
+      await db.execute(sql44`ALTER TABLE topscholar_plan_cp_resolutions ADD COLUMN IF NOT EXISTS subject_id TEXT`);
     } catch (err) {
       console.error("[INIT] Error adding subject columns to topscholar mapping/resolution tables:", err);
     }
     try {
-      await db.execute(sql43`
+      await db.execute(sql44`
         CREATE TABLE IF NOT EXISTS topscholar_plan_runs (
           id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
           business_account_id VARCHAR NOT NULL REFERENCES business_accounts(id) ON DELETE CASCADE,
@@ -106779,7 +107035,7 @@ async function initializeDatabase() {
           updated_at TIMESTAMP NOT NULL DEFAULT NOW()
         )
       `);
-      await db.execute(sql43`
+      await db.execute(sql44`
         CREATE TABLE IF NOT EXISTS topscholar_plan_run_items (
           id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
           run_id VARCHAR NOT NULL REFERENCES topscholar_plan_runs(id) ON DELETE CASCADE,
@@ -106796,7 +107052,7 @@ async function initializeDatabase() {
           CONSTRAINT topscholar_plan_run_items_run_cp_key UNIQUE (run_id, cp_id)
         )
       `);
-      await db.execute(sql43`
+      await db.execute(sql44`
         CREATE TABLE IF NOT EXISTS topscholar_plan_sync_leases (
           business_account_id VARCHAR PRIMARY KEY REFERENCES business_accounts(id) ON DELETE CASCADE,
           owner TEXT NOT NULL,
@@ -106804,31 +107060,31 @@ async function initializeDatabase() {
           updated_at TIMESTAMP NOT NULL DEFAULT NOW()
         )
       `);
-      await db.execute(sql43`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS lease_owner TEXT`);
-      await db.execute(sql43`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMP`);
-      await db.execute(sql43`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS requested_cp_id TEXT`);
-      await db.execute(sql43`CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_plan_updated_idx ON topscholar_plan_runs (business_account_id, plan_id, updated_at)`);
-      await db.execute(sql43`CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_status_idx ON topscholar_plan_runs (business_account_id, status)`);
-      await db.execute(sql43`CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_run_status_idx ON topscholar_plan_run_items (run_id, status)`);
-      await db.execute(sql43`CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_account_cp_idx ON topscholar_plan_run_items (business_account_id, cp_id)`);
-      await db.execute(sql43`CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_plan_unique ON topscholar_plan_runs (business_account_id, plan_id) WHERE requested_cp_id IS NULL AND status IN ('queued', 'resolving', 'running')`);
-      await db.execute(sql43`CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_cp_unique ON topscholar_plan_runs (business_account_id, plan_id, requested_cp_id) WHERE requested_cp_id IS NOT NULL AND status IN ('queued', 'resolving', 'running')`);
+      await db.execute(sql44`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS lease_owner TEXT`);
+      await db.execute(sql44`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMP`);
+      await db.execute(sql44`ALTER TABLE topscholar_plan_runs ADD COLUMN IF NOT EXISTS requested_cp_id TEXT`);
+      await db.execute(sql44`CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_plan_updated_idx ON topscholar_plan_runs (business_account_id, plan_id, updated_at)`);
+      await db.execute(sql44`CREATE INDEX IF NOT EXISTS topscholar_plan_runs_account_status_idx ON topscholar_plan_runs (business_account_id, status)`);
+      await db.execute(sql44`CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_run_status_idx ON topscholar_plan_run_items (run_id, status)`);
+      await db.execute(sql44`CREATE INDEX IF NOT EXISTS topscholar_plan_run_items_account_cp_idx ON topscholar_plan_run_items (business_account_id, cp_id)`);
+      await db.execute(sql44`CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_plan_unique ON topscholar_plan_runs (business_account_id, plan_id) WHERE requested_cp_id IS NULL AND status IN ('queued', 'resolving', 'running')`);
+      await db.execute(sql44`CREATE UNIQUE INDEX IF NOT EXISTS topscholar_plan_runs_active_cp_unique ON topscholar_plan_runs (business_account_id, plan_id, requested_cp_id) WHERE requested_cp_id IS NOT NULL AND status IN ('queued', 'resolving', 'running')`);
     } catch (err) {
       console.error("[INIT] Error creating TopScholar Plan sync queue tables:", err);
     }
     try {
-      await db.execute(sql43`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
-      await db.execute(sql43`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_output_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
-      await db.execute(sql43`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
-      await db.execute(sql43`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql44`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql44`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_output_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql44`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
+      await db.execute(sql44`ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS tokens_input_cached_audio NUMERIC(10, 0) NOT NULL DEFAULT '0'`);
     } catch (err) {
       console.error("[INIT] Error adding token breakdown columns to ai_usage_events:", err);
     }
     try {
-      await db.execute(sql43`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS cached_input_cost_per_1k NUMERIC(10, 6)`);
-      await db.execute(sql43`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_input_cost_per_1k NUMERIC(10, 6)`);
-      await db.execute(sql43`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_cached_input_cost_per_1k NUMERIC(10, 6)`);
-      await db.execute(sql43`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_output_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql44`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS cached_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql44`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql44`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_cached_input_cost_per_1k NUMERIC(10, 6)`);
+      await db.execute(sql44`ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS audio_output_cost_per_1k NUMERIC(10, 6)`);
     } catch (err) {
       console.error("[INIT] Error adding audio/cached rate columns to model_pricing:", err);
     }
@@ -106849,13 +107105,13 @@ init_db();
 // server/scripts/migrateK12NotesVideos.ts
 init_db();
 init_schema();
-import { eq as eq72, sql as sql44 } from "drizzle-orm";
+import { eq as eq72, sql as sql45 } from "drizzle-orm";
 function stripHtmlTags(html) {
   return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 async function migrateK12NotesAndVideos() {
   console.log("[K12 Migration] Starting migration of legacy notes and videos...");
-  const tableCheck = await db.execute(sql44`
+  const tableCheck = await db.execute(sql45`
     SELECT EXISTS (
       SELECT FROM information_schema.tables WHERE table_name = 'k12_topic_notes'
     ) AS notes_exists,
@@ -106927,7 +107183,7 @@ init_shopifySyncScheduler();
 init_storage();
 init_db();
 init_schema();
-import { and as and62, eq as eq73, lte as lte6, lt as lt3, sql as sql45, or as or7, isNull as isNull14 } from "drizzle-orm";
+import { and as and62, eq as eq73, lte as lte6, lt as lt3, sql as sql46, or as or7, isNull as isNull15 } from "drizzle-orm";
 var MAX_RETRY_COUNT = 3;
 var RETRY_DELAYS_MS = [
   1 * 60 * 1e3,
@@ -106970,9 +107226,9 @@ var LeadsquaredRetryWorker = class {
       const retryableLeads = await db.select().from(leads).where(
         and62(
           eq73(leads.leadsquaredSyncStatus, "failed"),
-          lt3(sql45`COALESCE(${leads.leadsquaredRetryCount}::int, 0)`, MAX_RETRY_COUNT),
+          lt3(sql46`COALESCE(${leads.leadsquaredRetryCount}::int, 0)`, MAX_RETRY_COUNT),
           or7(
-            isNull14(leads.leadsquaredNextRetryAt),
+            isNull15(leads.leadsquaredNextRetryAt),
             lte6(leads.leadsquaredNextRetryAt, now)
           )
         )
@@ -107103,7 +107359,7 @@ var leadsquaredRetryWorker = new LeadsquaredRetryWorker();
 // server/services/crmSyncRecoveryWorker.ts
 init_db();
 init_whatsappFlowService();
-import { sql as sql46 } from "drizzle-orm";
+import { sql as sql47 } from "drizzle-orm";
 var CHECK_INTERVAL_MS2 = 5 * 60 * 1e3;
 var INITIAL_DELAY_MS = 9e4;
 var LOOKBACK_DAYS = 3;
@@ -107135,7 +107391,7 @@ var CrmSyncRecoveryWorker = class {
     if (this.isProcessing) return;
     this.isProcessing = true;
     try {
-      const rows = await db.execute(sql46`
+      const rows = await db.execute(sql47`
         SELECT DISTINCT ON (wfs.id)
           wfs.id            AS session_id,
           wfs.collected_data

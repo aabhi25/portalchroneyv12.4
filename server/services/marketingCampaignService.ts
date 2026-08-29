@@ -3,6 +3,8 @@ import {
   marketingCampaigns,
   marketingCampaignRecipients,
   marketingCampaignMessages,
+  whatsappCampaignAutomations,
+  whatsappCampaignAutomationRuns,
   whatsappTemplates,
   whatsappOptOuts,
   type MarketingCampaign,
@@ -10,7 +12,7 @@ import {
   type WhatsappTemplate,
   type ReplyClassification,
 } from "@shared/schema";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { contactGroupService, normalizePhone, applyCountryCode } from "./contactGroupService";
 import { contactGroups } from "@shared/schema";
 import { sendTemplateMessage } from "./whatsappSessionService";
@@ -447,6 +449,16 @@ export const marketingCampaignService = {
   // `onlyIfStatusIn` makes the status check part of the UPDATE itself, so a send that starts
   // between a caller's read and its write cannot have its configuration changed underneath it.
   async update(businessAccountId: string, id: string, payload: Partial<CreatePayload> & { status?: string }, opts?: { onlyIfStatusIn?: string[] }): Promise<MarketingCampaign | undefined> {
+    const [executionRun] = await db.select({ id: whatsappCampaignAutomationRuns.id })
+      .from(whatsappCampaignAutomationRuns)
+      .where(and(
+        eq(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+        eq(whatsappCampaignAutomationRuns.campaignId, id),
+      ))
+      .limit(1);
+    if (executionRun) {
+      throw new Error("Automation execution campaigns are immutable. Change the source blueprint for future runs instead.");
+    }
     // Editing the template or the audience must be held to the same bar as creating one,
     // otherwise a valid campaign can be edited into an unsendable state and only fail later.
     if (payload.templateId !== undefined || payload.groupIds !== undefined) {
@@ -508,6 +520,23 @@ export const marketingCampaignService = {
   },
 
   async remove(businessAccountId: string, id: string): Promise<boolean> {
+    const [executionRun] = await db.select({ id: whatsappCampaignAutomationRuns.id })
+      .from(whatsappCampaignAutomationRuns)
+      .where(and(
+        eq(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+        eq(whatsappCampaignAutomationRuns.campaignId, id),
+      ))
+      .limit(1);
+    if (executionRun) throw new Error("Automation execution campaigns cannot be deleted because they are part of run history");
+    const [blueprintUse] = await db.select({ id: whatsappCampaignAutomations.id })
+      .from(whatsappCampaignAutomations)
+      .where(and(
+        eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+        eq(whatsappCampaignAutomations.sourceCampaignId, id),
+        isNull(whatsappCampaignAutomations.deletedAt),
+      ))
+      .limit(1);
+    if (blueprintUse) throw new Error("This campaign is used as an automation blueprint. Delete the automation before deleting the campaign");
     const result = await db
       .delete(marketingCampaigns)
       .where(and(eq(marketingCampaigns.id, id), eq(marketingCampaigns.businessAccountId, businessAccountId)))
@@ -724,12 +753,51 @@ export const marketingCampaignService = {
     return rows.length;
   },
 
-  async startSend(businessAccountId: string, campaignId: string, opts?: { forceResume?: boolean }): Promise<{ started: boolean; reason?: string }> {
+  async startSend(
+    businessAccountId: string,
+    campaignId: string,
+    opts?: { forceResume?: boolean; automationExecution?: boolean },
+  ): Promise<{ started: boolean; reason?: string }> {
     const key = `${businessAccountId}:${campaignId}`;
     if (inFlight.has(key)) return { started: false, reason: "Campaign send is already in progress on this node" };
 
     const campaign = await this.get(businessAccountId, campaignId);
     if (!campaign) return { started: false, reason: "Campaign not found" };
+    const [executionRun] = await db.select({
+      id: whatsappCampaignAutomationRuns.id,
+      status: whatsappCampaignAutomationRuns.status,
+    })
+      .from(whatsappCampaignAutomationRuns)
+      .where(and(
+        eq(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+        eq(whatsappCampaignAutomationRuns.campaignId, campaignId),
+      ))
+      .limit(1);
+    if (executionRun) {
+      if (!opts?.automationExecution) {
+        return { started: false, reason: "Automation execution campaigns can only be started by their scheduled automation run" };
+      }
+      if (executionRun.status !== "scheduled") {
+        return { started: false, reason: `This automation run is ${executionRun.status} and cannot be sent` };
+      }
+      if (campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now()) {
+        return { started: false, reason: "This automation execution is not due yet" };
+      }
+    }
+    const [blueprintUse] = await db.select({ id: whatsappCampaignAutomations.id })
+      .from(whatsappCampaignAutomations)
+      .where(and(
+        eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+        eq(whatsappCampaignAutomations.sourceCampaignId, campaignId),
+        isNull(whatsappCampaignAutomations.deletedAt),
+      ))
+      .limit(1);
+    if (blueprintUse) {
+      return {
+        started: false,
+        reason: "This draft is used as an automation blueprint and cannot be sent directly. Run it from Automations instead.",
+      };
+    }
     if (campaign.status === "completed") return { started: false, reason: "Already completed" };
     if (campaign.status === "cancelled") return { started: false, reason: "Campaign cancelled" };
     if (campaign.status === "sending" && !opts?.forceResume) {
@@ -788,23 +856,49 @@ export const marketingCampaignService = {
     const startableStatuses = opts?.forceResume
       ? ["draft", "scheduled", "failed", "sending"]
       : ["draft", "scheduled", "failed"];
-    const [claimedCampaign] = await db
-      .update(marketingCampaigns)
-      .set({
-        status: "sending",
-        startedAt: campaign.startedAt || new Date(),
-        heartbeatAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(and(
-        eq(marketingCampaigns.id, campaignId),
-        eq(marketingCampaigns.businessAccountId, businessAccountId),
-        inArray(marketingCampaigns.status, startableStatuses),
-      ))
-      .returning({ id: marketingCampaigns.id });
+    const claimedCampaign = await db.transaction(async tx => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${"wa-blueprint:" + campaignId}))`);
+      const [stillBlueprint] = await tx.select({ id: whatsappCampaignAutomations.id })
+        .from(whatsappCampaignAutomations)
+        .where(and(
+          eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          eq(whatsappCampaignAutomations.sourceCampaignId, campaignId),
+          isNull(whatsappCampaignAutomations.deletedAt),
+        ))
+        .limit(1);
+      if (stillBlueprint) return null;
+      const [claimed] = await tx
+        .update(marketingCampaigns)
+        .set({
+          status: "sending",
+          startedAt: campaign.startedAt || new Date(),
+          heartbeatAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(marketingCampaigns.id, campaignId),
+          eq(marketingCampaigns.businessAccountId, businessAccountId),
+          inArray(marketingCampaigns.status, startableStatuses),
+        ))
+        .returning({ id: marketingCampaigns.id });
+      return claimed || null;
+    });
     if (!claimedCampaign) {
       const latest = await this.get(businessAccountId, campaignId);
-      return { started: false, reason: latest?.status === "cancelled" ? "Campaign cancelled" : "Campaign state changed before sending could begin" };
+      const [protectedBlueprint] = await db.select({ id: whatsappCampaignAutomations.id })
+        .from(whatsappCampaignAutomations)
+        .where(and(
+          eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+          eq(whatsappCampaignAutomations.sourceCampaignId, campaignId),
+          isNull(whatsappCampaignAutomations.deletedAt),
+        ))
+        .limit(1);
+      return {
+        started: false,
+        reason: protectedBlueprint
+          ? "This draft is used as an automation blueprint and cannot be sent directly. Run it from Automations instead."
+          : latest?.status === "cancelled" ? "Campaign cancelled" : "Campaign state changed before sending could begin",
+      };
     }
 
     inFlight.add(key);
@@ -1054,6 +1148,23 @@ export const marketingCampaignService = {
   },
 
   async cancel(businessAccountId: string, campaignId: string): Promise<boolean> {
+    const [executionRun] = await db.select({ id: whatsappCampaignAutomationRuns.id })
+      .from(whatsappCampaignAutomationRuns)
+      .where(and(
+        eq(whatsappCampaignAutomationRuns.businessAccountId, businessAccountId),
+        eq(whatsappCampaignAutomationRuns.campaignId, campaignId),
+      ))
+      .limit(1);
+    if (executionRun) throw new Error("Cancel this campaign from its automation run");
+    const [blueprintUse] = await db.select({ id: whatsappCampaignAutomations.id })
+      .from(whatsappCampaignAutomations)
+      .where(and(
+        eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+        eq(whatsappCampaignAutomations.sourceCampaignId, campaignId),
+        isNull(whatsappCampaignAutomations.deletedAt),
+      ))
+      .limit(1);
+    if (blueprintUse) throw new Error("This campaign is an automation blueprint and cannot be cancelled directly");
     const result = await db
       .update(marketingCampaigns)
       .set({ status: "cancelled", updatedAt: new Date() })
@@ -1836,7 +1947,7 @@ export const marketingCampaignService = {
     for (const c of due) {
       console.log(`[CampaignScheduler] Auto-launching campaign ${c.id} (scheduled at ${c.scheduledAt})`);
       try {
-        await this.startSend(c.businessAccountId, c.id);
+        await this.startSend(c.businessAccountId, c.id, { automationExecution: true });
       } catch (err) {
         console.error(`[CampaignScheduler] Failed to launch ${c.id}:`, err);
       }
@@ -1857,7 +1968,7 @@ export const marketingCampaignService = {
       if (inFlight.has(key)) continue;
       console.log(`[CampaignScheduler] Recovering stuck sending campaign ${c.id} (heartbeatAt=${c.heartbeatAt})`);
       try {
-        await this.startSend(c.businessAccountId, c.id, { forceResume: true });
+        await this.startSend(c.businessAccountId, c.id, { forceResume: true, automationExecution: true });
       } catch (err) {
         console.error(`[CampaignScheduler] Failed to recover ${c.id}:`, err);
       }

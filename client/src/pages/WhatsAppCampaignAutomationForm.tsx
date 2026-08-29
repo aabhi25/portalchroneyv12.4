@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { AlertTriangle, ArrowLeft, BookOpen, CalendarClock, FileSpreadsheet, Loader2, Save, SlidersHorizontal, Sparkles } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpen, Bot, CalendarClock, FileSpreadsheet, Loader2, Save, SlidersHorizontal, Sparkles } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractAutomationSampleHeaders, type HeaderSource } from "@/lib/automationSampleHeaders";
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,27 @@ type MappingSuggestions = {
   warnings: string[];
 };
 type MappingResponse = { available: boolean; suggestions: MappingSuggestions };
-type WorkbookSummary = { id: string; name: string; status: string; latestVersion?: { versionNumber: number } | null };
+type CampaignBlueprint = {
+  id: string;
+  name: string;
+  status: string;
+  startedAt?: string | null;
+  templateId: string;
+  templateParams?: string[] | null;
+  aiEnabled: string;
+  aiAgentName?: string | null;
+  aiUseFaqs: string;
+  aiUseDocs: string;
+  aiUseProducts: string;
+  replyClassifications?: unknown[] | null;
+};
+type WorkbookSummary = {
+  id: string;
+  name: string;
+  status: string;
+  sourceCampaignId?: string | null;
+  latestVersion?: { versionNumber: number } | null;
+};
 type WorkbookDetail = {
   id: string;
   name: string;
@@ -38,7 +58,8 @@ type WorkbookDetail = {
 
 const EMPTY = {
   name: "",
-  sourceType: "ai_workbook" as "upload" | "ai_workbook",
+  sourceType: "campaign_blueprint" as "upload" | "ai_workbook" | "campaign_blueprint",
+  sourceCampaignId: "",
   sourceWorkbookId: "",
   sourceWorkbookSheetId: "",
   templateId: "",
@@ -86,13 +107,25 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
   const [suggestions, setSuggestions] = useState<MappingResponse | null>(null);
   const [touchedMappingFields, setTouchedMappingFields] = useState<Set<string>>(() => new Set());
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ["/api/whatsapp/templates"] });
+  const { data: campaigns = [] } = useQuery<CampaignBlueprint[]>({ queryKey: ["/api/whatsapp/campaigns"] });
   const { data: workbooks = [] } = useQuery<WorkbookSummary[]>({
     queryKey: ["/api/whatsapp/ai-workbooks"],
   });
   const { data: selectedWorkbook, isLoading: isLoadingWorkbook } = useQuery<WorkbookDetail>({
-    queryKey: ["/api/whatsapp/ai-workbooks", form.sourceWorkbookId],
-    queryFn: () => apiRequest("GET", `/api/whatsapp/ai-workbooks/${form.sourceWorkbookId}`),
-    enabled: form.sourceType === "ai_workbook" && Boolean(form.sourceWorkbookId),
+    queryKey: ["/api/whatsapp/ai-workbooks", form.sourceType === "campaign_blueprint"
+      ? workbooks.find(workbook => workbook.sourceCampaignId === form.sourceCampaignId)?.id
+      : form.sourceWorkbookId],
+    queryFn: () => {
+      const workbookId = form.sourceType === "campaign_blueprint"
+        ? workbooks.find(workbook => workbook.sourceCampaignId === form.sourceCampaignId)?.id
+        : form.sourceWorkbookId;
+      return apiRequest("GET", `/api/whatsapp/ai-workbooks/${workbookId}`);
+    },
+    enabled: form.sourceType !== "upload" && Boolean(
+      form.sourceType === "campaign_blueprint"
+        ? workbooks.find(workbook => workbook.sourceCampaignId === form.sourceCampaignId)?.id
+        : form.sourceWorkbookId,
+    ),
   });
   const { data: existing, isLoading } = useQuery<CampaignAutomation & Record<string, any>>({
     queryKey: ["/api/whatsapp/campaign-automations", id],
@@ -104,7 +137,10 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
     if (!existing) return;
     setForm({
       name: existing.name,
-      sourceType: existing.sourceType === "ai_workbook" ? "ai_workbook" : "upload",
+      sourceType: existing.sourceType === "campaign_blueprint"
+        ? "campaign_blueprint"
+        : existing.sourceType === "ai_workbook" ? "ai_workbook" : "upload",
+      sourceCampaignId: existing.sourceCampaignId || "",
       sourceWorkbookId: existing.sourceWorkbookId || "",
       sourceWorkbookSheetId: existing.sourceWorkbookSheetId || "",
       templateId: existing.templateId,
@@ -128,7 +164,20 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
     ]));
   }, [existing]);
 
-  const selectedTemplate = templates.find(template => template.id === form.templateId);
+  const isBlueprintSource = form.sourceType === "campaign_blueprint";
+  const isLegacyAutomation = Boolean(existing && existing.sourceType !== "campaign_blueprint");
+  const eligibleBlueprints = campaigns.filter(campaign => campaign.status === "draft" && !campaign.startedAt);
+  const selectedBlueprint = campaigns.find(campaign => campaign.id === form.sourceCampaignId);
+  const linkedBlueprintWorkbooks = workbooks.filter(workbook =>
+    workbook.status === "active" && workbook.sourceCampaignId === form.sourceCampaignId,
+  );
+  const blueprintWorkbook = linkedBlueprintWorkbooks.length === 1 ? linkedBlueprintWorkbooks[0] : null;
+  const effectiveWorkbookId = isBlueprintSource ? blueprintWorkbook?.id || "" : form.sourceWorkbookId;
+  const selectedTemplateId = isBlueprintSource ? selectedBlueprint?.templateId || "" : form.templateId;
+  const selectedTemplateParams = isBlueprintSource
+    ? Array.isArray(selectedBlueprint?.templateParams) ? selectedBlueprint.templateParams : []
+    : form.templateParams;
+  const selectedTemplate = templates.find(template => template.id === selectedTemplateId);
   const approvedTemplates = templates.filter(template => template.status === "approved");
   const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm(current => ({ ...current, [key]: value }));
   const updateMapping = <K extends keyof typeof form>(key: K, value: (typeof form)[K], touchedKey = String(key)) => {
@@ -139,7 +188,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
   const selectedWorkbookSheet = selectedWorkbook?.currentVersion?.sheets.find(
     sheet => sheet.id === form.sourceWorkbookSheetId,
   ) || selectedWorkbook?.currentVersion?.sheets[0];
-  const selectedSource: HeaderSource | undefined = form.sourceType === "ai_workbook"
+  const selectedSource: HeaderSource | undefined = form.sourceType !== "upload"
     ? selectedWorkbookSheet
       ? { id: selectedWorkbookSheet.id, label: selectedWorkbookSheet.name, columns: selectedWorkbookSheet.columns }
       : undefined
@@ -190,8 +239,10 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
   const requestSuggestions = async () => {
     if (!selectedSource) {
       toast({
-        title: form.sourceType === "ai_workbook" ? "Choose a workbook first" : "Upload a sample first",
-        description: form.sourceType === "ai_workbook"
+        title: form.sourceType !== "upload" ? "Workbook audience unavailable" : "Upload a sample first",
+        description: isBlueprintSource
+          ? "The selected campaign must have exactly one linked AI Workbook."
+          : form.sourceType === "ai_workbook"
           ? "Choose an AI Workbook so we can read its saved columns."
           : "Choose an Excel, CSV, or table-based PDF sample so we can read its headers.",
         variant: "destructive",
@@ -202,7 +253,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
     try {
       const result = await apiRequest<MappingResponse>("POST", "/api/whatsapp/campaign-automations/suggest-mappings", {
         columns: selectedSource.columns,
-        templateId: form.templateId || undefined,
+        templateId: selectedTemplateId || undefined,
       });
       setSuggestions(result);
       if (result.available) {
@@ -238,7 +289,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
     }
   };
 
-  const templateColumnReferences = form.templateParams.flatMap((value, index) =>
+  const templateColumnReferences = selectedTemplateParams.flatMap((value, index) =>
     Array.from(String(value || "").matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g))
       .map(match => ({ label: `Template field ${index + 1}`, column: match[1].trim().toLowerCase() }))
       // These are recipient properties, not spreadsheet attributes.
@@ -265,11 +316,11 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
       { label: "Record key", suggestion: suggestions.suggestions.recordKeyColumn, onUse: () => applySuggestion("recordKeyColumn", suggestions.suggestions.recordKeyColumn) },
       { label: "Date column", suggestion: suggestions.suggestions.dateColumn, onUse: () => applySuggestion("dateColumn", suggestions.suggestions.dateColumn) },
       { label: "Status column", suggestion: suggestions.suggestions.statusColumn, onUse: () => applySuggestion("statusColumn", suggestions.suggestions.statusColumn) },
-      ...suggestions.suggestions.templateParams.map((suggestion, index) => ({
+      ...(!isBlueprintSource ? suggestions.suggestions.templateParams.map((suggestion, index) => ({
         label: `Template field ${index + 1}`,
         suggestion,
         onUse: () => applySuggestion("templateParams", suggestion, index),
-      })),
+      })) : []),
     ]
     : [];
 
@@ -277,10 +328,15 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
     mutationFn: () => {
       const payload = {
         ...form,
-        sourceWorkbookId: form.sourceType === "ai_workbook" ? form.sourceWorkbookId : null,
-        sourceWorkbookSheetId: form.sourceType === "ai_workbook"
+        sourceCampaignId: isBlueprintSource ? form.sourceCampaignId : null,
+        sourceWorkbookId: isBlueprintSource
+          ? blueprintWorkbook?.id || null
+          : form.sourceType === "ai_workbook" ? form.sourceWorkbookId : null,
+        sourceWorkbookSheetId: form.sourceType !== "upload"
           ? selectedWorkbookSheet?.id || form.sourceWorkbookSheetId || null
           : null,
+        templateId: selectedTemplateId,
+        templateParams: selectedTemplateParams,
         eligibleStatuses: form.eligibleStatusesText.split(",").map(value => value.trim()).filter(Boolean),
       };
       return id
@@ -304,26 +360,79 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
       </Button>
       <div>
         <h1 className="text-2xl font-bold">{id ? "Edit WhatsApp automation" : "New WhatsApp automation"}</h1>
-        <p className="text-sm text-gray-600 mt-1">Use a live AI Workbook for recurring runs, or keep the existing spreadsheet-upload workflow.</p>
+        <p className="text-sm text-gray-600 mt-1">
+          Select a draft campaign blueprint, then add the recurring eligibility and delivery rules.
+        </p>
       </div>
 
-      <Section title="Campaign and template" icon={<FileSpreadsheet className="h-4 w-4 text-emerald-600" />}>
+      <Section title={isLegacyAutomation ? "Campaign and template" : "Campaign blueprint"} icon={<FileSpreadsheet className="h-4 w-4 text-emerald-600" />}>
         <div className="space-y-2">
           <Label htmlFor="automation-name">Automation name</Label>
           <Input id="automation-name" value={form.name} onChange={event => update("name", event.target.value)} placeholder="EMI reminder — 3 days before due date" />
         </div>
-        <div className="space-y-2">
-          <Label>Approved WhatsApp template</Label>
-          <Select value={form.templateId} onValueChange={templateId => update("templateId", templateId)}>
-            <SelectTrigger><SelectValue placeholder="Choose an approved template" /></SelectTrigger>
-            <SelectContent>
-              {approvedTemplates.map(template => <SelectItem key={template.id} value={template.id}>{template.name} · {template.paramCount} fields</SelectItem>)}
-            </SelectContent>
-          </Select>
-          {!approvedTemplates.length && <p className="text-xs text-amber-700">Sync an approved MSG91 template before creating an automation.</p>}
-          {selectedTemplate && <p className="text-xs text-gray-500">{selectedTemplate.bodyText}</p>}
-        </div>
-        {selectedTemplate && selectedTemplate.paramCount > 0 && (
+        {isBlueprintSource ? (
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Draft WhatsApp campaign</Label>
+              <Select
+                value={form.sourceCampaignId}
+                onValueChange={sourceCampaignId => {
+                  const campaign = campaigns.find(candidate => candidate.id === sourceCampaignId);
+                  setForm(current => ({
+                    ...current,
+                    sourceCampaignId,
+                    sourceWorkbookId: "",
+                    sourceWorkbookSheetId: "",
+                    templateId: campaign?.templateId || "",
+                    templateParams: Array.isArray(campaign?.templateParams) ? campaign.templateParams : [],
+                  }));
+                  setSuggestions(null);
+                }}
+              >
+                <SelectTrigger><SelectValue placeholder="Choose an unsent draft campaign" /></SelectTrigger>
+                <SelectContent>
+                  {eligibleBlueprints.map(campaign => (
+                    <SelectItem key={campaign.id} value={campaign.id}>{campaign.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {!eligibleBlueprints.length && (
+                <p className="text-xs text-amber-700">
+                  Create and save a WhatsApp campaign as a draft before creating its automation.
+                </p>
+              )}
+            </div>
+            {selectedBlueprint && (
+              <div className="rounded-md border bg-gray-50 p-3 space-y-2 text-sm">
+                <div className="flex items-center gap-2 font-medium">
+                  <Bot className="h-4 w-4 text-violet-600" />
+                  Campaign behavior inherited from {selectedBlueprint.name}
+                </div>
+                <p className="text-xs text-gray-600">
+                  Template: {selectedTemplate?.name || "Unavailable"} · AI replies: {selectedBlueprint.aiEnabled === "false" ? "Off" : `On (${selectedBlueprint.aiAgentName || "Sales Agent"})`} · Reply outcomes: {selectedBlueprint.replyClassifications?.length || 0}
+                </p>
+                <p className="text-xs text-gray-500">
+                  Template fields, persona, knowledge sources, AI limits, and reply outcomes are controlled by the campaign blueprint and copied into every run.
+                </p>
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="space-y-2">
+              <Label>Approved WhatsApp template</Label>
+              <Select value={form.templateId} onValueChange={templateId => update("templateId", templateId)}>
+                <SelectTrigger><SelectValue placeholder="Choose an approved template" /></SelectTrigger>
+                <SelectContent>
+                  {approvedTemplates.map(template => <SelectItem key={template.id} value={template.id}>{template.name} · {template.paramCount} fields</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {!approvedTemplates.length && <p className="text-xs text-amber-700">Sync an approved MSG91 template before creating an automation.</p>}
+              {selectedTemplate && <p className="text-xs text-gray-500">{selectedTemplate.bodyText}</p>}
+            </div>
+          </>
+        )}
+        {!isBlueprintSource && selectedTemplate && selectedTemplate.paramCount > 0 && (
           <div className="rounded-md border bg-gray-50 p-3 space-y-2">
             <p className="text-sm font-medium">Template field mappings</p>
             <p className="text-xs text-gray-500">Use spreadsheet fields like <code>{"{{customer name}}"}</code> or static text. Field names must match the sheet headers after lowercasing.</p>
@@ -343,7 +452,35 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
         )}
       </Section>
 
-      <Section title="Automation source and AI mapping" icon={<Sparkles className="h-4 w-4 text-violet-600" />}>
+      <Section title={isBlueprintSource ? "Campaign audience and field mapping" : "Automation source and AI mapping"} icon={<Sparkles className="h-4 w-4 text-violet-600" />}>
+        {isBlueprintSource ? (
+          <div className="space-y-3">
+            {!selectedBlueprint ? (
+              <p className="text-sm text-gray-500">Choose a campaign blueprint to see its configured audience.</p>
+            ) : linkedBlueprintWorkbooks.length === 0 ? (
+              <p className="flex gap-2 text-sm text-amber-800">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                Link one AI Workbook to this campaign before creating the automation.
+              </p>
+            ) : linkedBlueprintWorkbooks.length > 1 ? (
+              <p className="flex gap-2 text-sm text-amber-800">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                This campaign is linked to multiple AI Workbooks. Keep exactly one linked workbook so the automation has one authoritative audience.
+              </p>
+            ) : (
+              <div className="rounded-md border bg-emerald-50/50 p-3">
+                <p className="flex items-center gap-2 text-sm font-medium text-emerald-900">
+                  <BookOpen className="h-4 w-4" /> {blueprintWorkbook?.name}
+                </p>
+                <p className="mt-1 text-xs text-emerald-800">
+                  This workbook is inherited from the campaign. It is not linked again in the automation, and each run pins the exact saved version it uses.
+                </p>
+              </div>
+            )}
+            {isLoadingWorkbook && <p className="flex items-center gap-2 text-sm text-gray-600"><Loader2 className="h-4 w-4 animate-spin" /> Loading campaign audience columns…</p>}
+          </div>
+        ) : (
+          <>
         <div className="space-y-2">
           <Label>Data source</Label>
           <Select
@@ -409,17 +546,19 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
             {isExtractingHeaders && <p className="flex items-center gap-2 text-sm text-gray-600"><Loader2 className="h-4 w-4 animate-spin" /> Reading headers…</p>}
           </div>
         )}
+          </>
+        )}
 
         {selectedSource && (
           <div className="space-y-3 rounded-md border bg-gray-50 p-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm font-medium flex items-center gap-1.5">
-                  {form.sourceType === "ai_workbook" && <BookOpen className="h-4 w-4 text-emerald-700" />}
-                  {form.sourceType === "ai_workbook" ? selectedWorkbook?.name : sampleFileName}
+                  {form.sourceType !== "upload" && <BookOpen className="h-4 w-4 text-emerald-700" />}
+                  {form.sourceType !== "upload" ? selectedWorkbook?.name : sampleFileName}
                 </p>
                 <p className="text-xs text-gray-500">
-                  {form.sourceType === "ai_workbook"
+                  {form.sourceType !== "upload"
                     ? `${selectedSource.label} · ${selectedWorkbook?.currentVersion?.versionNumber ? `version ${selectedWorkbook.currentVersion.versionNumber}` : "latest saved version"}`
                     : "Choose the sheet or PDF page whose header row should be used for this automation."}
                 </p>
@@ -507,7 +646,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
           <div className="space-y-2"><Label>Send time</Label><Input type="time" value={form.sendTime} onChange={event => update("sendTime", event.target.value)} /></div>
           <div className="space-y-2"><Label>Timezone</Label><Input value={form.timezone} onChange={event => update("timezone", event.target.value)} placeholder="Asia/Kolkata" /></div>
           <div className="space-y-2"><Label>Default country calling code</Label><Input value={form.defaultCountryCode} onChange={event => update("defaultCountryCode", event.target.value)} placeholder="91" /></div>
-          <div className="space-y-2"><Label>{form.sourceType === "ai_workbook" ? "After a valid workbook run" : "After a valid upload"}</Label>
+          <div className="space-y-2"><Label>{form.sourceType !== "upload" ? "After a valid workbook run" : "After a valid upload"}</Label>
             <Select value={form.sendMode} onValueChange={(sendMode: "review" | "automatic") => update("sendMode", sendMode)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -529,8 +668,9 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
           disabled={
             saveMutation.isPending
             || !form.name
-            || !form.templateId
+            || !selectedTemplateId
             || sampleMappingIssues.length > 0
+            || (isBlueprintSource && (!form.sourceCampaignId || linkedBlueprintWorkbooks.length !== 1 || !selectedSource))
             || (form.sourceType === "ai_workbook" && (!form.sourceWorkbookId || !selectedSource))
           }
           onClick={() => saveMutation.mutate()}
