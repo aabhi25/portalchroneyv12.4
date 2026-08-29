@@ -36054,7 +36054,6 @@ Return ONLY a valid JSON object in this format:
       const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
       const rows = await whatsappAiWorkbookService.list(
         req.user!.businessAccountId!,
-        req.query.includeArchived === "true",
       );
       res.json(rows);
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -36083,6 +36082,9 @@ Return ONLY a valid JSON object in this format:
 
   app.patch("/api/whatsapp/ai-workbooks/:id", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
+      if (req.body?.status !== undefined) {
+        return res.status(400).json({ error: "Workbook archiving is no longer supported. Delete the workbook instead." });
+      }
       const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
       const workbook = await whatsappAiWorkbookService.updateWorkbook(
         req.user!.businessAccountId!,
@@ -36092,6 +36094,21 @@ Return ONLY a valid JSON object in this format:
       if (!workbook) return res.status(404).json({ error: "Workbook not found" });
       res.json(workbook);
     } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.delete("/api/whatsapp/ai-workbooks/:id", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
+    try {
+      const { whatsappAiWorkbookService } = await import("./services/whatsappAiWorkbookService");
+      const deleted = await whatsappAiWorkbookService.deleteWorkbook(
+        req.user!.businessAccountId!,
+        req.params.id,
+      );
+      if (!deleted) return res.status(404).json({ error: "Workbook not found" });
+      res.json({ success: true, id: deleted.id });
+    } catch (err: any) {
+      console.error("[AI Workbooks] Failed to delete workbook:", err);
+      res.status(500).json({ error: "Couldn't delete the workbook. Please try again." });
+    }
   });
 
   app.post("/api/whatsapp/ai-workbooks/:id/duplicate", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {

@@ -7,6 +7,7 @@ import { AiWorkbookGrid } from "@/components/whatsapp/AiWorkbookGrid";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,8 +17,9 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Archive, ArrowLeft, Copy, Download, Eye, FileSpreadsheet, FolderOpen,
+  ArrowLeft, Copy, Download, Eye, FileSpreadsheet, FolderOpen,
   Link2, Loader2, Megaphone, MoreHorizontal, Pencil, Plus, RefreshCw, RotateCcw, Save, Upload, Wand2, X,
+  Trash2,
 } from "lucide-react";
 import type { AiWorkbookCampaignResultMapping, AiWorkbookColumn, AiWorkbookRow, AiWorkbookSheet } from "@shared/schema";
 
@@ -169,6 +171,7 @@ function WorkbooksList() {
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [campaignId, setCampaignId] = useState("blank");
+  const [deleteTarget, setDeleteTarget] = useState<WorkbookListItem | null>(null);
 
   const { data: workbooks = [], isLoading } = useQuery<WorkbookListItem[]>({
     queryKey: ["/api/whatsapp/ai-workbooks"],
@@ -195,12 +198,14 @@ function WorkbooksList() {
       setLocation(`/admin/whatsapp-ai-workbooks/${copy.id}`);
     },
   });
-  const archive = useMutation({
-    mutationFn: (id: string) => apiRequest("PATCH", `/api/whatsapp/ai-workbooks/${id}`, { status: "archived" }),
+  const deleteWorkbook = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/whatsapp/ai-workbooks/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/ai-workbooks"] });
-      toast({ title: "Workbook archived" });
+      setDeleteTarget(null);
+      toast({ title: "Workbook deleted" });
     },
+    onError: (error: Error) => toast({ title: "Couldn't delete workbook", description: error.message, variant: "destructive" }),
   });
 
   const openCreate = () => {
@@ -267,8 +272,8 @@ function WorkbooksList() {
                   <Button size="icon" variant="outline" asChild title="Export Excel">
                     <a href={`/api/whatsapp/ai-workbooks/${workbook.id}/export.xlsx`}><Download className="h-4 w-4" /></a>
                   </Button>
-                  <Button size="icon" variant="ghost" onClick={() => archive.mutate(workbook.id)} title="Archive workbook">
-                    <Archive className="h-4 w-4 text-gray-500" />
+                  <Button size="icon" variant="ghost" onClick={() => setDeleteTarget(workbook)} title="Delete workbook" data-testid={`button-delete-workbook-${workbook.id}`}>
+                    <Trash2 className="h-4 w-4 text-red-600" />
                   </Button>
                 </div>
               </CardContent>
@@ -276,6 +281,32 @@ function WorkbooksList() {
           ))}
         </div>
       )}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={open => { if (!open && !deleteWorkbook.isPending) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete workbook?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete <span className="font-semibold">"{deleteTarget?.name}"</span>, including its workbook data, version history, and linked workbook records. The connected campaign and its recipients will not be affected. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteWorkbook.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+              onClick={event => {
+                event.preventDefault();
+                if (deleteTarget && !deleteWorkbook.isPending) deleteWorkbook.mutate(deleteTarget.id);
+              }}
+              disabled={deleteWorkbook.isPending}
+              data-testid="button-confirm-delete-workbook"
+            >
+              {deleteWorkbook.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Trash2 className="h-4 w-4 mr-1" />}
+              Delete permanently
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>

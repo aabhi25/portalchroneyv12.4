@@ -476,13 +476,12 @@ async function latestVersion(workbookId: string, businessAccountId: string) {
 }
 
 export const whatsappAiWorkbookService = {
-  async list(businessAccountId: string, includeArchived = false) {
+  async list(businessAccountId: string) {
     const workbooks = await db
       .select()
       .from(whatsappAiWorkbooks)
       .where(and(
         eq(whatsappAiWorkbooks.businessAccountId, businessAccountId),
-        ...(includeArchived ? [] : [eq(whatsappAiWorkbooks.status, "active")]),
       ))
       .orderBy(desc(whatsappAiWorkbooks.updatedAt));
     if (workbooks.length === 0) return [];
@@ -662,7 +661,7 @@ export const whatsappAiWorkbookService = {
     });
   },
 
-  async updateWorkbook(businessAccountId: string, id: string, input: { name?: string; description?: string; status?: string }) {
+  async updateWorkbook(businessAccountId: string, id: string, input: { name?: string; description?: string }) {
     const set: Record<string, unknown> = { updatedAt: new Date() };
     if (input.name !== undefined) {
       const name = String(input.name).trim();
@@ -670,15 +669,44 @@ export const whatsappAiWorkbookService = {
       set.name = name;
     }
     if (input.description !== undefined) set.description = String(input.description);
-    if (input.status !== undefined) {
-      if (!["active", "archived"].includes(input.status)) throw new Error("Invalid workbook status");
-      set.status = input.status;
-    }
     const [row] = await db.update(whatsappAiWorkbooks)
       .set(set)
       .where(and(eq(whatsappAiWorkbooks.id, id), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)))
       .returning();
     return row;
+  },
+
+  async deleteWorkbook(businessAccountId: string, id: string) {
+    return db.transaction(async tx => {
+      const [workbook] = await tx
+        .select({ id: whatsappAiWorkbooks.id })
+        .from(whatsappAiWorkbooks)
+        .where(and(
+          eq(whatsappAiWorkbooks.id, id),
+          eq(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+        ))
+        .limit(1)
+        .for("update");
+      if (!workbook) return null;
+
+      // Delete links explicitly before versions because links retain a
+      // restrict reference to the version they were created from.
+      await tx.delete(whatsappAiWorkbookCampaignLinks).where(and(
+        eq(whatsappAiWorkbookCampaignLinks.workbookId, id),
+        eq(whatsappAiWorkbookCampaignLinks.businessAccountId, businessAccountId),
+      ));
+      await tx.delete(whatsappAiWorkbookVersions).where(and(
+        eq(whatsappAiWorkbookVersions.workbookId, id),
+        eq(whatsappAiWorkbookVersions.businessAccountId, businessAccountId),
+      ));
+      const [deleted] = await tx.delete(whatsappAiWorkbooks)
+        .where(and(
+          eq(whatsappAiWorkbooks.id, id),
+          eq(whatsappAiWorkbooks.businessAccountId, businessAccountId),
+        ))
+        .returning({ id: whatsappAiWorkbooks.id });
+      return deleted ?? null;
+    });
   },
 
   async saveSheets(businessAccountId: string, workbookId: string, versionId: string, revision: number, sheets: unknown) {
