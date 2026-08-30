@@ -3230,9 +3230,28 @@ var init_schema = __esm({
       namespace: text("namespace"),
       // WABA template namespace (required by MSG91 send payload)
       rejectionReason: text("rejection_reason"),
+      sourceType: text("source_type").notNull().default("manual"),
+      // 'manual' | 'msg91'
+      sourceWhatsappNumber: text("source_whatsapp_number"),
+      // Normalized business number used for MSG91 sync
+      deletedAt: timestamp("deleted_at"),
+      // Soft delete preserves campaign/automation history
       createdAt: timestamp("created_at").notNull().defaultNow(),
       updatedAt: timestamp("updated_at").notNull().defaultNow()
-    });
+    }, (table) => ({
+      businessActiveIdx: index("whatsapp_templates_business_active_idx").on(table.businessAccountId, table.deletedAt),
+      businessSourceNumberIdx: index("whatsapp_templates_business_source_number_idx").on(
+        table.businessAccountId,
+        table.sourceType,
+        table.sourceWhatsappNumber
+      ),
+      msg91ScopedIdentityUnique: uniqueIndex("whatsapp_templates_msg91_scoped_identity_unique").on(
+        table.businessAccountId,
+        table.sourceWhatsappNumber,
+        table.name,
+        table.language
+      ).where(sql`${table.sourceType} = 'msg91' AND ${table.sourceWhatsappNumber} IS NOT NULL`)
+    }));
     insertWhatsappTemplateSchema = createInsertSchema(whatsappTemplates).omit({
       id: true,
       createdAt: true,
@@ -47168,15 +47187,16 @@ var init_contactGroupService = __esm({
 });
 
 // server/services/whatsapp/campaignPrerequisites.ts
-import { and as and43, eq as eq53, inArray as inArray8, sql as sql29 } from "drizzle-orm";
+import { and as and43, eq as eq53, inArray as inArray8, isNull as isNull11, sql as sql29 } from "drizzle-orm";
 function isTemplateUsable(tpl) {
-  return !!tpl && tpl.status === USABLE_TEMPLATE_STATUS;
+  return !!tpl && tpl.status === USABLE_TEMPLATE_STATUS && !tpl.deletedAt;
 }
 async function countUsableTemplates(businessAccountId) {
   const [row] = await db.select({ n: sql29`count(*)::int` }).from(whatsappTemplates).where(
     and43(
       eq53(whatsappTemplates.businessAccountId, businessAccountId),
-      eq53(whatsappTemplates.status, USABLE_TEMPLATE_STATUS)
+      eq53(whatsappTemplates.status, USABLE_TEMPLATE_STATUS),
+      isNull11(whatsappTemplates.deletedAt)
     )
   );
   return row?.n ?? 0;
@@ -47206,6 +47226,12 @@ async function checkCampaignPrerequisites(businessAccountId, opts) {
   const [tpl] = await db.select().from(whatsappTemplates).where(and43(eq53(whatsappTemplates.id, templateId), eq53(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
   if (!tpl) {
     return { code: "template_not_found", message: "That message template no longer exists." };
+  }
+  if (tpl.deletedAt) {
+    return {
+      code: "template_not_found",
+      message: `The template "${tpl.name}" was removed. Choose another approved message template.`
+    };
   }
   if (!isTemplateUsable(tpl)) {
     return {
@@ -47560,7 +47586,7 @@ __export(marketingCampaignService_exports, {
   startCampaignScheduler: () => startCampaignScheduler,
   validateTemplateParams: () => validateTemplateParams
 });
-import { and as and45, desc as desc20, eq as eq55, inArray as inArray10, isNull as isNull11, sql as sql30 } from "drizzle-orm";
+import { and as and45, desc as desc20, eq as eq55, inArray as inArray10, isNull as isNull12, sql as sql30 } from "drizzle-orm";
 async function parkUnsendableCampaign(campaignId, businessAccountId, currentStatus, reason) {
   if (currentStatus !== "scheduled" && currentStatus !== "sending") return;
   const [dispatched] = await db.select({ n: sql30`count(*)::int` }).from(marketingCampaignRecipients).where(
@@ -47641,21 +47667,22 @@ async function validateCampaignWorkbookSource(businessAccountId, input) {
       "name",
       ...contacts.flatMap((contact) => Object.keys(contact.attributes || {}).map(sourceKey))
     ]);
-    const required2 = [
-      input.recipientPhoneColumn,
-      input.recipientRecordKeyColumn,
-      input.recipientDateColumn
-    ].map(sourceKey);
-    if (required2.some((value) => !value)) {
-      throw new Error("Campaign contact-group phone, record key, and date mappings are required");
+    const phoneColumn2 = sourceKey(input.recipientPhoneColumn);
+    const recordKeyColumn2 = sourceKey(input.recipientRecordKeyColumn);
+    const dateColumn2 = sourceKey(input.recipientDateColumn);
+    const statusColumn2 = sourceKey(input.recipientStatusColumn);
+    const hasAutomationRules2 = Boolean(recordKeyColumn2 || dateColumn2 || statusColumn2 || (input.recipientEligibleStatuses || []).length);
+    if (!phoneColumn2) throw new Error("Choose the contact-group mobile number field");
+    if (hasAutomationRules2 && (!recordKeyColumn2 || !dateColumn2)) {
+      throw new Error("Record key and date mappings must both be configured in Automations");
     }
-    for (const column2 of [...required2, sourceKey(input.recipientNameColumn), sourceKey(input.recipientStatusColumn)]) {
+    for (const column2 of [phoneColumn2, sourceKey(input.recipientNameColumn), recordKeyColumn2, dateColumn2, statusColumn2]) {
       if (column2 && !columns2.has(column2)) throw new Error(`The selected contact groups do not have the "${column2}" field`);
     }
-    if (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366) {
+    if (hasAutomationRules2 && (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366)) {
       throw new Error("Campaign date offset must be a whole number between -366 and 366");
     }
-    if ((input.recipientEligibleStatuses || []).length && !sourceKey(input.recipientStatusColumn)) {
+    if ((input.recipientEligibleStatuses || []).length && !statusColumn2) {
       throw new Error("A status mapping is required when eligible statuses are configured");
     }
     const refs2 = (input.templateParams || []).flatMap(sourceRefs);
@@ -47666,20 +47693,17 @@ async function validateCampaignWorkbookSource(businessAccountId, input) {
       const contact = contacts[index2];
       const attributes = contact.attributes || {};
       const value = (key) => key === "phone" ? String(contact.phone || "").trim() : key === "name" ? String(contact.name || "").trim() : String(attributes[key] ?? "").trim();
-      const phone = normalizePhone5(value(sourceKey(input.recipientPhoneColumn)));
-      const dateColumn = sourceKey(input.recipientDateColumn);
-      const recordKeyColumn = sourceKey(input.recipientRecordKeyColumn);
-      const date2 = value(dateColumn);
+      const phone = normalizePhone5(value(phoneColumn2));
       if (phone.length < 8) {
-        throw new Error(`Contact-group recipient ${index2 + 1} has an invalid or missing phone in "${sourceKey(input.recipientPhoneColumn)}"`);
+        throw new Error(`Contact-group recipient ${index2 + 1} has an invalid or missing phone in "${phoneColumn2}"`);
       }
-      if (!value(recordKeyColumn)) {
-        throw new Error(`Contact-group recipient ${index2 + 1} is missing record key "${recordKeyColumn}"`);
+      if (hasAutomationRules2 && !value(recordKeyColumn2)) {
+        throw new Error(`Contact-group recipient ${index2 + 1} is missing record key "${recordKeyColumn2}"`);
       }
-      if (!parseSpreadsheetDate(date2)) {
-        throw new Error(`Contact-group recipient ${index2 + 1} has an invalid date in "${dateColumn}"; use YYYY-MM-DD`);
+      if (hasAutomationRules2 && !parseSpreadsheetDate(value(dateColumn2))) {
+        throw new Error(`Contact-group recipient ${index2 + 1} has an invalid date in "${dateColumn2}"; use YYYY-MM-DD`);
       }
-      const missingTemplateField = refs2.find((ref) => !value(ref));
+      const missingTemplateField = refs2.find((ref) => ref !== "name" && ref !== "phone" && !value(ref));
       if (missingTemplateField) {
         throw new Error(`Contact-group recipient ${index2 + 1} is missing template field "${missingTemplateField}"`);
       }
@@ -47708,21 +47732,24 @@ async function validateCampaignWorkbookSource(businessAccountId, input) {
   const sheet = sheets.find((s) => s.id === sheetId);
   if (!sheet || !sheet.columns.length) throw new Error("The selected AI Workbook sheet is unavailable");
   const columns = new Set(sheet.columns.map((c) => sourceKey(c.key)));
-  const required = [
-    input.recipientPhoneColumn,
-    input.recipientRecordKeyColumn,
-    input.recipientDateColumn
-  ].map(sourceKey);
-  if (required.some((v) => !v)) throw new Error("Campaign workbook phone, record key, and date mappings are required");
-  if (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366) {
+  const phoneColumn = sourceKey(input.recipientPhoneColumn);
+  const recordKeyColumn = sourceKey(input.recipientRecordKeyColumn);
+  const dateColumn = sourceKey(input.recipientDateColumn);
+  const statusColumn = sourceKey(input.recipientStatusColumn);
+  const hasAutomationRules = Boolean(recordKeyColumn || dateColumn || statusColumn || (input.recipientEligibleStatuses || []).length);
+  if (!phoneColumn) throw new Error("Choose the Workbook mobile number column");
+  if (hasAutomationRules && (!recordKeyColumn || !dateColumn)) {
+    throw new Error("Record key and date mappings must both be configured in Automations");
+  }
+  if (hasAutomationRules && (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366)) {
     throw new Error("Campaign workbook date offset must be a whole number between -366 and 366");
   }
-  for (const column2 of [...required, sourceKey(input.recipientNameColumn), sourceKey(input.recipientStatusColumn)]) {
+  for (const column2 of [phoneColumn, sourceKey(input.recipientNameColumn), recordKeyColumn, dateColumn, statusColumn]) {
     if (column2 && !columns.has(column2)) throw new Error(`The selected AI Workbook no longer has the "${column2}" column`);
   }
   const allowed = Array.from(new Set((input.recipientAiAllowedFields || []).map(sourceKey).filter(Boolean)));
   if (allowed.some((column2) => !columns.has(column2))) throw new Error("Campaign AI allowlist contains a column not present in the selected sheet");
-  if ((input.recipientEligibleStatuses || []).length && !sourceKey(input.recipientStatusColumn)) {
+  if ((input.recipientEligibleStatuses || []).length && !statusColumn) {
     throw new Error("A status mapping is required when eligible statuses are configured");
   }
   const refs = (input.templateParams || []).flatMap(sourceRefs);
@@ -47732,21 +47759,17 @@ async function validateCampaignWorkbookSource(businessAccountId, input) {
   for (let i = 0; i < sheet.rows.length; i++) {
     const values = sheet.rows[i].values || {};
     const value = (key) => String(values[key] ?? "").trim();
-    const phone = normalizePhone5(value(sourceKey(input.recipientPhoneColumn)));
-    const phoneColumn = sourceKey(input.recipientPhoneColumn);
-    const recordKeyColumn = sourceKey(input.recipientRecordKeyColumn);
-    const dateColumn = sourceKey(input.recipientDateColumn);
-    const date2 = value(dateColumn);
+    const phone = normalizePhone5(value(phoneColumn));
     const missingTemplateField = refs.find(
-      (ref) => ref === "name" ? !value(sourceKey(input.recipientNameColumn)) : ref !== "phone" && !value(ref)
+      (ref) => ref !== "name" && ref !== "phone" && !value(ref)
     );
     if (phone.length < 8) {
       throw new Error(`Workbook row ${i + 2} has an invalid or missing phone in "${phoneColumn}"`);
     }
-    if (!value(recordKeyColumn)) {
+    if (hasAutomationRules && !value(recordKeyColumn)) {
       throw new Error(`Workbook row ${i + 2} is missing record key "${recordKeyColumn}"`);
     }
-    if (!parseSpreadsheetDate(date2)) {
+    if (hasAutomationRules && !parseSpreadsheetDate(value(dateColumn))) {
       throw new Error(`Workbook row ${i + 2} has an invalid date in "${dateColumn}"; use YYYY-MM-DD`);
     }
     if (missingTemplateField) {
@@ -47970,7 +47993,7 @@ var init_marketingCampaignService = __esm({
           if (missing) throw new CampaignPrerequisiteError(missing);
         }
         const [tpl] = await db.select().from(whatsappTemplates).where(and45(eq55(whatsappTemplates.id, payload.templateId), eq55(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
-        if (!tpl) throw new Error("Template not found for this business");
+        if (!tpl || tpl.deletedAt) throw new Error("Template not found for this business");
         if (tpl.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         const paramError = validateTemplateParams(tpl, payload.templateParams);
         if (paramError) throw new Error(paramError);
@@ -48038,7 +48061,7 @@ var init_marketingCampaignService = __esm({
         if (payload.templateParams !== void 0 || payload.templateId !== void 0) {
           const templateId = payload.templateId ?? current.templateId;
           const [tpl] = await db.select().from(whatsappTemplates).where(and45(eq55(whatsappTemplates.id, templateId), eq55(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
-          if (!tpl) throw new Error("Template not found for this business");
+          if (!tpl || tpl.deletedAt) throw new Error("Template not found for this business");
           const values = payload.templateParams ?? current.templateParams;
           const paramError = validateTemplateParams(tpl, values);
           if (paramError) throw new Error(paramError);
@@ -48091,7 +48114,7 @@ var init_marketingCampaignService = __esm({
             const [blueprintUse] = await tx.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
               eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
               eq55(whatsappCampaignAutomations.sourceCampaignId, id),
-              isNull11(whatsappCampaignAutomations.deletedAt)
+              isNull12(whatsappCampaignAutomations.deletedAt)
             )).limit(1);
             if (blueprintUse) throw new Error("Delete the linked automation before changing this into a one-time campaign");
             const [row2] = await tx.update(marketingCampaigns).set(set).where(where).returning();
@@ -48110,7 +48133,7 @@ var init_marketingCampaignService = __esm({
         const [blueprintUse] = await db.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
           eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
           eq55(whatsappCampaignAutomations.sourceCampaignId, id),
-          isNull11(whatsappCampaignAutomations.deletedAt)
+          isNull12(whatsappCampaignAutomations.deletedAt)
         )).limit(1);
         if (blueprintUse) throw new Error("This campaign is used as an automation blueprint. Delete the automation before deleting the campaign");
         const result = await db.delete(marketingCampaigns).where(and45(eq55(marketingCampaigns.id, id), eq55(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
@@ -48302,7 +48325,7 @@ var init_marketingCampaignService = __esm({
         const [blueprintUse] = await db.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
           eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
           eq55(whatsappCampaignAutomations.sourceCampaignId, campaignId),
-          isNull11(whatsappCampaignAutomations.deletedAt)
+          isNull12(whatsappCampaignAutomations.deletedAt)
         )).limit(1);
         if (blueprintUse) {
           return {
@@ -48348,7 +48371,7 @@ var init_marketingCampaignService = __esm({
           const [stillBlueprint] = await tx.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
             eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
             eq55(whatsappCampaignAutomations.sourceCampaignId, campaignId),
-            isNull11(whatsappCampaignAutomations.deletedAt)
+            isNull12(whatsappCampaignAutomations.deletedAt)
           )).limit(1);
           if (stillBlueprint) return null;
           const [claimed] = await tx.update(marketingCampaigns).set({
@@ -48368,7 +48391,7 @@ var init_marketingCampaignService = __esm({
           const [protectedBlueprint] = await db.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
             eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
             eq55(whatsappCampaignAutomations.sourceCampaignId, campaignId),
-            isNull11(whatsappCampaignAutomations.deletedAt)
+            isNull12(whatsappCampaignAutomations.deletedAt)
           )).limit(1);
           return {
             started: false,
@@ -48554,7 +48577,7 @@ var init_marketingCampaignService = __esm({
         const [blueprintUse] = await db.select({ id: whatsappCampaignAutomations.id }).from(whatsappCampaignAutomations).where(and45(
           eq55(whatsappCampaignAutomations.businessAccountId, businessAccountId),
           eq55(whatsappCampaignAutomations.sourceCampaignId, campaignId),
-          isNull11(whatsappCampaignAutomations.deletedAt)
+          isNull12(whatsappCampaignAutomations.deletedAt)
         )).limit(1);
         if (blueprintUse) throw new Error("This campaign is an automation blueprint and cannot be cancelled directly");
         const result = await db.update(marketingCampaigns).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(and45(eq55(marketingCampaigns.id, campaignId), eq55(marketingCampaigns.businessAccountId, businessAccountId))).returning({ id: marketingCampaigns.id });
@@ -55396,9 +55419,10 @@ ${repromptResponse.text}`;
 var whatsappTemplateService_exports = {};
 __export(whatsappTemplateService_exports, {
   countTemplateParams: () => countParams,
+  normalizeWhatsappNumber: () => normalizeWhatsappNumber,
   whatsappTemplateService: () => whatsappTemplateService
 });
-import { and as and55, desc as desc28, eq as eq65 } from "drizzle-orm";
+import { and as and55, desc as desc28, eq as eq65, isNull as isNull13 } from "drizzle-orm";
 function countParams(body) {
   const matches = body.match(/\{\{\s*\d+\s*\}\}/g);
   if (!matches) return 0;
@@ -55406,6 +55430,25 @@ function countParams(body) {
     matches.map((m) => parseInt(m.replace(/\D/g, ""), 10)).filter((n) => Number.isFinite(n))
   );
   return indices.size;
+}
+function normalizeWhatsappNumber(value) {
+  return typeof value === "string" ? value.replace(/\D/g, "") : "";
+}
+function remoteWhatsappNumbers(remote, variant) {
+  const values = [
+    remote?.integrated_number,
+    remote?.integratedNumber,
+    remote?.whatsapp_number,
+    remote?.whatsappNumber,
+    variant?.integrated_number,
+    variant?.integratedNumber,
+    variant?.whatsapp_number,
+    variant?.whatsappNumber
+  ];
+  return Array.from(new Set(values.map(normalizeWhatsappNumber).filter(Boolean)));
+}
+function templateIdentity(name, language) {
+  return `${name.trim().toLowerCase()}\0${language.trim().toLowerCase()}`;
 }
 var whatsappTemplateService;
 var init_whatsappTemplateService = __esm({
@@ -55415,10 +55458,17 @@ var init_whatsappTemplateService = __esm({
     init_schema();
     whatsappTemplateService = {
       async list(businessAccountId) {
-        return db.select().from(whatsappTemplates).where(eq65(whatsappTemplates.businessAccountId, businessAccountId)).orderBy(desc28(whatsappTemplates.updatedAt));
+        return db.select().from(whatsappTemplates).where(and55(
+          eq65(whatsappTemplates.businessAccountId, businessAccountId),
+          isNull13(whatsappTemplates.deletedAt)
+        )).orderBy(desc28(whatsappTemplates.updatedAt));
       },
       async get(businessAccountId, id) {
-        const [row] = await db.select().from(whatsappTemplates).where(and55(eq65(whatsappTemplates.id, id), eq65(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
+        const [row] = await db.select().from(whatsappTemplates).where(and55(
+          eq65(whatsappTemplates.id, id),
+          eq65(whatsappTemplates.businessAccountId, businessAccountId),
+          isNull13(whatsappTemplates.deletedAt)
+        )).limit(1);
         return row;
       },
       async create(businessAccountId, payload) {
@@ -55441,7 +55491,10 @@ var init_whatsappTemplateService = __esm({
           // always mark it as approved (and therefore campaign-ready) on save.
           status: "approved",
           msg91TemplateId,
-          namespace: payload.namespace || null
+          namespace: payload.namespace || null,
+          sourceType: "manual",
+          sourceWhatsappNumber: null,
+          deletedAt: null
         }).returning();
         return row;
       },
@@ -55468,11 +55521,19 @@ var init_whatsappTemplateService = __esm({
         if (payload.bodyText !== void 0) {
           updates.paramCount = countParams(payload.bodyText || "");
         }
-        const [row] = await db.update(whatsappTemplates).set(updates).where(and55(eq65(whatsappTemplates.id, id), eq65(whatsappTemplates.businessAccountId, businessAccountId))).returning();
+        const [row] = await db.update(whatsappTemplates).set(updates).where(and55(
+          eq65(whatsappTemplates.id, id),
+          eq65(whatsappTemplates.businessAccountId, businessAccountId),
+          isNull13(whatsappTemplates.deletedAt)
+        )).returning();
         return row;
       },
       async remove(businessAccountId, id) {
-        const result = await db.delete(whatsappTemplates).where(and55(eq65(whatsappTemplates.id, id), eq65(whatsappTemplates.businessAccountId, businessAccountId))).returning({ id: whatsappTemplates.id });
+        const result = await db.update(whatsappTemplates).set({ deletedAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(and55(
+          eq65(whatsappTemplates.id, id),
+          eq65(whatsappTemplates.businessAccountId, businessAccountId),
+          isNull13(whatsappTemplates.deletedAt)
+        )).returning({ id: whatsappTemplates.id });
         return result.length > 0;
       },
       /**
@@ -55500,21 +55561,25 @@ var init_whatsappTemplateService = __esm({
        * The `:number` path variable is the integrated WhatsApp number (digits only).
        */
       async syncFromMsg91(businessAccountId, authKey, integratedNumber) {
-        let synced = 0;
+        let added = 0;
+        let updated = 0;
+        let skipped = 0;
+        let removed = 0;
         try {
-          const num = (integratedNumber || "").replace(/\D/g, "");
+          const num = normalizeWhatsappNumber(integratedNumber);
           if (!num) {
             throw new Error("WhatsApp number not configured \u2014 cannot reach MSG91 template API.");
           }
           const PAGE_SIZE = 200;
           const MAX_PAGES = 25;
           const allRemote = [];
+          let snapshotComplete = false;
           for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
             const url = `https://control.msg91.com/api/v5/whatsapp/get-template-client/${encodeURIComponent(num)}?page_size=${PAGE_SIZE}&page_num=${pageNum}&pagination=true&template_status=approved`;
             console.log(`[WhatsappTemplateService] Fetching page ${pageNum}: ${url}`);
             const resp = await fetch(url, {
               method: "GET",
-              headers: { authkey: authKey, accept: "application/json" }
+              headers: { authkey: authKey, accept: "application/json", "content-type": "text/plain" }
             });
             const json = await resp.json().catch(() => ({}));
             console.log(`[WhatsappTemplateService] Page ${pageNum}: status=${resp.status}, keys=${JSON.stringify(Object.keys(json || {}))}`);
@@ -55522,17 +55587,44 @@ var init_whatsappTemplateService = __esm({
               const msg = json?.message || json?.error || `HTTP ${resp.status}`;
               throw new Error(`MSG91 API error: ${msg}`);
             }
-            const page = Array.isArray(json?.data) && json.data || Array.isArray(json?.templates) && json.templates || Array.isArray(json?.data?.templates) && json.data.templates || Array.isArray(json?.result) && json.result || Array.isArray(json) && json || [];
+            const page = [json?.data, json?.templates, json?.data?.templates, json?.result, json].find(Array.isArray);
+            if (!page) {
+              throw new Error("MSG91 returned an unsupported template response. No local templates were changed.");
+            }
             allRemote.push(...page);
-            if (page.length < PAGE_SIZE) break;
+            if (page.length < PAGE_SIZE) {
+              snapshotComplete = true;
+              break;
+            }
+            if (pageNum === MAX_PAGES) {
+              throw new Error(
+                `MSG91 returned at least ${PAGE_SIZE * MAX_PAGES} templates without a final page. No local templates were changed.`
+              );
+            }
           }
+          if (!snapshotComplete) throw new Error("MSG91 template snapshot was incomplete. No local templates were changed.");
           console.log(`[WhatsappTemplateService] Total templates fetched from MSG91: ${allRemote.length}`);
+          const remoteIdentities = /* @__PURE__ */ new Set();
           for (const remote of allRemote) {
-            const name = remote.name || remote.template_name;
+            const name = String(remote.name || remote.template_name || "").trim();
             if (!name) continue;
             const variants = Array.isArray(remote.languages) ? remote.languages : [remote];
             for (const variant of variants) {
               const language = (variant.language || remote.language || "en").toString().toLowerCase();
+              const identity = templateIdentity(name, language);
+              if (remoteIdentities.has(identity)) {
+                skipped++;
+                continue;
+              }
+              const associatedNumbers = remoteWhatsappNumbers(remote, variant);
+              if (associatedNumbers.length > 0 && !associatedNumbers.includes(num)) {
+                skipped++;
+                console.warn(
+                  `[WhatsappTemplateService] Skipping template ${name}/${language}: response number does not match configured WhatsApp number`
+                );
+                continue;
+              }
+              remoteIdentities.add(identity);
               const findComp = (type) => variant.code?.find?.((c) => c.type?.toUpperCase() === type.toUpperCase()) || variant.components?.find?.((c) => c.type?.toUpperCase() === type.toUpperCase()) || remote.components?.find?.((c) => c.type?.toUpperCase() === type.toUpperCase());
               const bodyComp = findComp("BODY");
               const headerComp = findComp("HEADER");
@@ -55554,29 +55646,59 @@ var init_whatsappTemplateService = __esm({
                 paramCount: countParams(bodyText),
                 status: (variant.status || remote.status || "approved").toString().toLowerCase(),
                 msg91TemplateId: (variant.msg91_template_id ?? variant.id ?? remote.id ?? remote.template_id ?? null)?.toString() ?? null,
-                namespace: remote.namespace || variant.namespace || null
+                namespace: remote.namespace || variant.namespace || null,
+                sourceType: "msg91",
+                sourceWhatsappNumber: num
               };
-              const existing = await db.select().from(whatsappTemplates).where(
+              const scopedExisting = await db.select().from(whatsappTemplates).where(
                 and55(
                   eq65(whatsappTemplates.businessAccountId, businessAccountId),
+                  eq65(whatsappTemplates.sourceType, "msg91"),
+                  eq65(whatsappTemplates.sourceWhatsappNumber, num),
                   eq65(whatsappTemplates.name, name),
                   eq65(whatsappTemplates.language, language)
                 )
               ).limit(1);
+              let existing = scopedExisting;
+              if (existing.length === 0 && payload.msg91TemplateId) {
+                existing = await db.select().from(whatsappTemplates).where(and55(
+                  eq65(whatsappTemplates.businessAccountId, businessAccountId),
+                  eq65(whatsappTemplates.sourceType, "manual"),
+                  eq65(whatsappTemplates.msg91TemplateId, payload.msg91TemplateId),
+                  eq65(whatsappTemplates.name, name),
+                  eq65(whatsappTemplates.language, language)
+                )).limit(1);
+              }
               if (existing.length > 0) {
+                if (existing[0].deletedAt) {
+                  skipped++;
+                  continue;
+                }
                 await db.update(whatsappTemplates).set({ ...payload, updatedAt: /* @__PURE__ */ new Date() }).where(eq65(whatsappTemplates.id, existing[0].id));
+                updated++;
               } else {
                 await db.insert(whatsappTemplates).values(payload);
+                added++;
               }
-              synced++;
             }
+          }
+          const activeSynced = await db.select().from(whatsappTemplates).where(and55(
+            eq65(whatsappTemplates.businessAccountId, businessAccountId),
+            eq65(whatsappTemplates.sourceType, "msg91"),
+            eq65(whatsappTemplates.sourceWhatsappNumber, num),
+            isNull13(whatsappTemplates.deletedAt)
+          ));
+          const staleIds = activeSynced.filter((template) => !remoteIdentities.has(templateIdentity(template.name, template.language))).map((template) => template.id);
+          for (const id of staleIds) {
+            await db.update(whatsappTemplates).set({ deletedAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).where(eq65(whatsappTemplates.id, id));
+            removed++;
           }
         } catch (err) {
           console.error("[WhatsappTemplateService] syncFromMsg91 error:", err);
           throw err;
         }
         const templates = await this.list(businessAccountId);
-        return { synced, templates };
+        return { synced: added + updated, added, updated, skipped, removed, templates };
       },
       /** @deprecated kept only to preserve old type — unused. */
       async _legacySyncFromMsg91(businessAccountId, authKey, integratedNumber) {
@@ -55783,7 +55905,7 @@ var campaignAutomationService_exports = {};
 __export(campaignAutomationService_exports, {
   campaignAutomationService: () => campaignAutomationService
 });
-import { and as and57, desc as desc29, eq as eq67, inArray as inArray11, isNull as isNull12, sql as sql40 } from "drizzle-orm";
+import { and as and57, desc as desc29, eq as eq67, inArray as inArray11, isNull as isNull14, sql as sql40 } from "drizzle-orm";
 function canonical(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -55864,12 +55986,6 @@ function applyCampaignOwnedSource(config, campaign) {
     sourceWorkbookSheetId: usesWorkbook ? campaign.recipientWorkbookSheetId : null,
     sourceGroupIds: usesWorkbook ? [] : campaign.groupIds || [],
     phoneColumn: campaign.recipientPhoneColumn || "",
-    nameColumn: campaign.recipientNameColumn || "",
-    recordKeyColumn: campaign.recipientRecordKeyColumn || "",
-    dateColumn: campaign.recipientDateColumn || "",
-    dateOffsetDays: campaign.recipientDateOffsetDays || 0,
-    statusColumn: campaign.recipientStatusColumn || "",
-    eligibleStatuses: campaign.recipientEligibleStatuses || [],
     templateId: campaign.templateId,
     templateParams: campaign.templateParams || []
   };
@@ -56018,6 +56134,14 @@ function validateColumns(config, columns) {
   }
   for (const field of [config.nameColumn, config.statusColumn]) {
     if (field && !available.has(field)) throw new Error(`The uploaded file no longer has the "${field}" column`);
+  }
+  for (const reference of (config.templateParams || []).flatMap(fieldReferences)) {
+    if (reference === "phone") continue;
+    if (reference === "name") {
+      if (!config.nameColumn) throw new Error('Choose a name column because the campaign template uses "{{name}}"');
+      continue;
+    }
+    if (!available.has(reference)) throw new Error(`The uploaded file no longer has the "${reference}" column`);
   }
 }
 function parseDateOnly(raw) {
@@ -56209,14 +56333,14 @@ var init_campaignAutomationService = __esm({
       async list(businessAccountId) {
         return db.select().from(whatsappCampaignAutomations).where(and57(
           eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-          isNull12(whatsappCampaignAutomations.deletedAt)
+          isNull14(whatsappCampaignAutomations.deletedAt)
         )).orderBy(desc29(whatsappCampaignAutomations.updatedAt));
       },
       async get(businessAccountId, id) {
         const [row] = await db.select().from(whatsappCampaignAutomations).where(and57(
           eq67(whatsappCampaignAutomations.id, id),
           eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-          isNull12(whatsappCampaignAutomations.deletedAt)
+          isNull14(whatsappCampaignAutomations.deletedAt)
         )).limit(1);
         return row;
       },
@@ -56229,7 +56353,7 @@ var init_campaignAutomationService = __esm({
           }
         }
         const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, config.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
-        if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
+        if (!template || template.deletedAt || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         assertTemplateMapping(template, config.templateParams || []);
         const workbookSource = await validateWorkbookConfig(businessAccountId, config);
         if (workbookSource) config = { ...config, sourceWorkbookSheetId: workbookSource.sheetId };
@@ -56293,7 +56417,7 @@ var init_campaignAutomationService = __esm({
           }
         }
         const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, config.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
-        if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
+        if (!template || template.deletedAt || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
         assertTemplateMapping(template, config.templateParams || []);
         const workbookSource = await validateWorkbookConfig(businessAccountId, config);
         if (workbookSource) config = { ...config, sourceWorkbookSheetId: workbookSource.sheetId };
@@ -56331,7 +56455,7 @@ var init_campaignAutomationService = __esm({
           const [automation] = await tx.select().from(whatsappCampaignAutomations).where(and57(
             eq67(whatsappCampaignAutomations.id, id),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-            isNull12(whatsappCampaignAutomations.deletedAt)
+            isNull14(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!automation) return void 0;
           const activeRuns = await tx.select().from(whatsappCampaignAutomationRuns).where(and57(
@@ -56377,7 +56501,7 @@ var init_campaignAutomationService = __esm({
           }).where(and57(
             eq67(whatsappCampaignAutomations.id, id),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
-            isNull12(whatsappCampaignAutomations.deletedAt)
+            isNull14(whatsappCampaignAutomations.deletedAt)
           )).returning();
           return deleted;
         });
@@ -56448,7 +56572,9 @@ var init_campaignAutomationService = __esm({
           sourceWorkbookSheetId: workbookSource?.sheetId || null
         } : automation;
         const [template] = await db.select().from(whatsappTemplates).where(and57(eq67(whatsappTemplates.id, effectiveAutomation.templateId), eq67(whatsappTemplates.businessAccountId, businessAccountId))).limit(1);
-        if (!template || template.status !== "approved") throw new Error("The selected template is no longer approved");
+        if (!template || template.deletedAt || template.status !== "approved") {
+          throw new Error("The selected template is no longer available");
+        }
         assertTemplateMapping(template, effectiveAutomation.templateParams || []);
         if (workbookSource && (!payload?.expectedWorkbookVersionId || !Number.isInteger(payload?.expectedWorkbookRevision))) {
           throw new Error("Validate the latest AI Workbook version before creating a run.");
@@ -56489,7 +56615,7 @@ var init_campaignAutomationService = __esm({
             eq67(whatsappCampaignAutomations.id, id),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
             eq67(whatsappCampaignAutomations.enabled, true),
-            isNull12(whatsappCampaignAutomations.deletedAt)
+            isNull14(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be created");
           if (activeAutomation.updatedAt.getTime() !== automation.updatedAt.getTime() || activeAutomation.sourceType !== automation.sourceType || activeAutomation.sourceCampaignId !== automation.sourceCampaignId || activeAutomation.sourceWorkbookId !== automation.sourceWorkbookId || activeAutomation.sourceWorkbookSheetId !== automation.sourceWorkbookSheetId || JSON.stringify(activeAutomation.sourceGroupIds || []) !== JSON.stringify(automation.sourceGroupIds || [])) {
@@ -56646,7 +56772,7 @@ var init_campaignAutomationService = __esm({
             eq67(whatsappCampaignAutomations.id, automationId),
             eq67(whatsappCampaignAutomations.businessAccountId, businessAccountId),
             eq67(whatsappCampaignAutomations.enabled, true),
-            isNull12(whatsappCampaignAutomations.deletedAt)
+            isNull14(whatsappCampaignAutomations.deletedAt)
           )).for("update").limit(1);
           if (!activeAutomation) throw new Error("This automation was deleted or paused before the run could be scheduled");
           const scheduledAt = nextScheduledAt(activeAutomation);
@@ -85602,8 +85728,8 @@ ${instruction}`
         return res.status(403).json({ error: "Demo Orders module is not enabled for this account" });
       }
       const { demoOrders: demoOrders2, products: products3 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-      const { isNull: isNull16 } = await import("drizzle-orm");
-      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and59(eq69(demoOrders2.businessAccountId, businessAccountId), isNull16(demoOrders2.productImageUrl)));
+      const { isNull: isNull18 } = await import("drizzle-orm");
+      const allOrders = await db.select({ id: demoOrders2.id, productName: demoOrders2.productName }).from(demoOrders2).where(and59(eq69(demoOrders2.businessAccountId, businessAccountId), isNull18(demoOrders2.productImageUrl)));
       const allProducts = await db.select({ name: products3.name, imageUrl: products3.imageUrl }).from(products3).where(eq69(products3.businessAccountId, businessAccountId));
       const imageByName = new Map(
         allProducts.filter((p) => p.imageUrl).map((p) => [p.name.toLowerCase(), p.imageUrl])
@@ -102614,7 +102740,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                           const eagerDocState = sessionData._documentState;
                           if (eagerDocState) {
                             const { whatsappLeadAttachments: wlaEager } = await Promise.resolve().then(() => (init_schema(), schema_exports));
-                            const { eq: eqE, and: andE, sql: sqlE, isNull: isNull16 } = await import("drizzle-orm");
+                            const { eq: eqE, and: andE, sql: sqlE, isNull: isNull18 } = await import("drizzle-orm");
                             for (const [eagerDocType, eagerState] of Object.entries(eagerDocState)) {
                               const eagerPages = eagerState?.pages || [];
                               for (const page of eagerPages) {
@@ -102627,7 +102753,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
                                 const eagerTagged = await db.update(wlaEager).set({ documentCategory: eagerDocType }).where(andE(
                                   eqE(wlaEager.leadId, attachToLeadId),
                                   sqlE`${wlaEager.mediaUrl} = ${pageUrl}`,
-                                  isNull16(wlaEager.documentCategory)
+                                  isNull18(wlaEager.documentCategory)
                                 )).returning({ id: wlaEager.id });
                                 if (eagerTagged.length > 0) {
                                   console.log(`[MSG91 Webhook] Eager tag: ${eagerTagged.length} attachment(s) tagged as ${eagerDocType}`);
@@ -105869,8 +105995,8 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const { whatsappService: whatsappService2 } = await Promise.resolve().then(() => (init_whatsappService(), whatsappService_exports));
       const settings = await whatsappService2.getSettings(businessAccountId);
       if (!settings?.msg91AuthKey) return res.status(400).json({ error: "MSG91 auth key not configured" });
-      const number = settings.whatsappNumber || settings.msg91IntegratedNumberId || void 0;
-      if (!number) return res.status(400).json({ error: "WhatsApp number not configured \u2014 save your number in WhatsApp \u2192 Connection settings first." });
+      const number = settings.whatsappNumber || void 0;
+      if (!number) return res.status(400).json({ error: "WhatsApp business number not configured \u2014 save it in WhatsApp \u2192 Connection settings first." });
       const { whatsappTemplateService: whatsappTemplateService2 } = await Promise.resolve().then(() => (init_whatsappTemplateService(), whatsappTemplateService_exports));
       const result = await whatsappTemplateService2.syncFromMsg91(businessAccountId, settings.msg91AuthKey, number);
       res.json(result);
@@ -106787,7 +106913,7 @@ init_auth();
 init_jewelryImageGeneratorService();
 init_db();
 init_schema();
-import { and as and60, eq as eq70, isNull as isNull14, sql as sql43 } from "drizzle-orm";
+import { and as and60, eq as eq70, isNull as isNull16, sql as sql43 } from "drizzle-orm";
 async function initializeDatabase() {
   try {
     try {
@@ -106828,7 +106954,7 @@ async function initializeDatabase() {
         await db.update(whatsappLeadFields).set({ defaultCrmFieldKey: crmKey }).where(and60(
           eq70(whatsappLeadFields.fieldKey, fieldKey),
           eq70(whatsappLeadFields.isDefault, true),
-          isNull14(whatsappLeadFields.defaultCrmFieldKey)
+          isNull16(whatsappLeadFields.defaultCrmFieldKey)
         ));
       }
     } catch (err) {
@@ -107059,7 +107185,7 @@ init_shopifySyncScheduler();
 init_storage();
 init_db();
 init_schema();
-import { and as and61, eq as eq72, lte as lte6, lt as lt3, sql as sql45, or as or7, isNull as isNull15 } from "drizzle-orm";
+import { and as and61, eq as eq72, lte as lte6, lt as lt3, sql as sql45, or as or7, isNull as isNull17 } from "drizzle-orm";
 var MAX_RETRY_COUNT = 3;
 var RETRY_DELAYS_MS = [
   1 * 60 * 1e3,
@@ -107104,7 +107230,7 @@ var LeadsquaredRetryWorker = class {
           eq72(leads.leadsquaredSyncStatus, "failed"),
           lt3(sql45`COALESCE(${leads.leadsquaredRetryCount}::int, 0)`, MAX_RETRY_COUNT),
           or7(
-            isNull15(leads.leadsquaredNextRetryAt),
+            isNull17(leads.leadsquaredNextRetryAt),
             lte6(leads.leadsquaredNextRetryAt, now)
           )
         )

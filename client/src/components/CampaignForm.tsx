@@ -307,12 +307,6 @@ export default function CampaignForm({
   const [sourceWorkbookId, setSourceWorkbookId] = useState(initialValues.recipientWorkbookId || "");
   const [sourceWorkbookSheetId, setSourceWorkbookSheetId] = useState(initialValues.recipientWorkbookSheetId || "");
   const [phoneColumn, setPhoneColumn] = useState(initialValues.recipientPhoneColumn || "");
-  const [nameColumn, setNameColumn] = useState(initialValues.recipientNameColumn || "");
-  const [recordKeyColumn, setRecordKeyColumn] = useState(initialValues.recipientRecordKeyColumn || "");
-  const [dateColumn, setDateColumn] = useState(initialValues.recipientDateColumn || "");
-  const [dateOffsetDays, setDateOffsetDays] = useState(initialValues.recipientDateOffsetDays || 0);
-  const [statusColumn, setStatusColumn] = useState(initialValues.recipientStatusColumn || "");
-  const [eligibleStatusesText, setEligibleStatusesText] = useState((initialValues.recipientEligibleStatuses || []).join(", "));
   const [aiFieldAllowlist, setAiFieldAllowlist] = useState<string[]>(initialValues.recipientAiAllowedFields || []);
   const [, setLocation] = useLocation();
 
@@ -367,7 +361,7 @@ export default function CampaignForm({
     : extraAttributeKeys;
   const resolvedParam = (value: string) => value.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, key) => {
     const normalized = String(key).trim().toLowerCase();
-    if (normalized === "name") return String(sourceSample?.[nameColumn] ?? "Name");
+    if (normalized === "name") return String(sourceSample?.name ?? "Name");
     if (normalized === "phone") return String(sourceSample?.[phoneColumn] ?? "Phone");
     return String(sourceSample?.[key] ?? sourceSample?.[normalized] ?? `{{${key}}}`);
   });
@@ -425,8 +419,7 @@ export default function CampaignForm({
   const paramsComplete = blankParams.length === 0;
 
   const automationSourceComplete = recipientSourceType === "ai_workbook"
-    ? Boolean(sourceWorkbookId && phoneColumn && recordKeyColumn && dateColumn)
-      && (!eligibleStatusesText.trim() || Boolean(statusColumn.trim()))
+    ? Boolean(sourceWorkbookId && phoneColumn)
     : selectedGroups.length > 0;
   const basicsComplete = Boolean(name.trim()) && Boolean(templateId) && (isAutomation ? automationSourceComplete : selectedGroups.length > 0);
   // totalContacts > 0 is the client-side twin of the server's empty-audience refusal.
@@ -457,12 +450,6 @@ export default function CampaignForm({
         recipientWorkbookId: recipientSourceType === "ai_workbook" ? sourceWorkbookId : "",
         recipientWorkbookSheetId: recipientSourceType === "ai_workbook" ? selectedWorkbookSheet?.id || sourceWorkbookSheetId : "",
         recipientPhoneColumn: phoneColumn,
-        recipientNameColumn: nameColumn,
-        recipientRecordKeyColumn: recordKeyColumn,
-        recipientDateColumn: dateColumn,
-        recipientDateOffsetDays: dateOffsetDays,
-        recipientStatusColumn: statusColumn,
-        recipientEligibleStatuses: eligibleStatusesText.split(",").map(value => value.trim()).filter(Boolean),
         recipientAiAllowedFields: recipientSourceType === "ai_workbook" ? aiFieldAllowlist : [],
       } : {}),
     });
@@ -556,8 +543,8 @@ export default function CampaignForm({
               </div>
             </SectionCard>
 
-            {/* A recurring blueprint owns the recipient definition. Keeping it ahead of the
-                template makes the available personalization fields unambiguous. */}
+            {/* A recurring blueprint owns its recipient source and mobile mapping. Scheduling,
+                eligibility, and duplicate rules are configured on the next automation screen. */}
             {isAutomation && <SectionCard icon={<Users className="h-4 w-4 text-purple-600" />} title="Recipient source">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-gray-700">Audience source <span className="text-red-500">*</span></label>
@@ -567,8 +554,6 @@ export default function CampaignForm({
                   else {
                     setSourceWorkbookId("");
                     setPhoneColumn(current => current || "phone");
-                    setNameColumn(current => current || "name");
-                    setRecordKeyColumn(current => current || "phone");
                   }
                 }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -594,24 +579,12 @@ export default function CampaignForm({
                   <p className="text-gray-600 break-words">Columns: {sourceColumns.map(c => c.label).join(", ")}</p>
                   {sourceSample && <p className="text-gray-600 break-words">Sample row: {sourceColumns.slice(0, 5).map(c => `${c.label}: ${String(sourceSample[c.key] ?? "—")}`).join(" · ")}</p>}
                 </div>}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {([
-                    ["Phone column", phoneColumn, setPhoneColumn, true],
-                    ["Name column", nameColumn, setNameColumn, false],
-                    ["Record key column", recordKeyColumn, setRecordKeyColumn, true],
-                    ["Date column", dateColumn, setDateColumn, true],
-                    ["Status column", statusColumn, setStatusColumn, false],
-                  ] as const).map(([label, value, setter, required]) => <div key={label}>
-                    <label className="text-xs font-medium text-gray-600">{label}{required && <span className="text-red-500"> *</span>}</label>
-                    <Input className="mt-1" list="workbook-columns" value={value} onChange={e => setter(e.target.value)} placeholder="Choose a Workbook column" />
-                  </div>)}
-                  <div><label className="text-xs font-medium text-gray-600">Date offset (days)</label><Input className="mt-1" type="number" min={-366} max={366} value={dateOffsetDays} onChange={e => setDateOffsetDays(Number(e.target.value) || 0)} /></div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600">Mobile number column<span className="text-red-500"> *</span></label>
+                  <Input className="mt-1" list="workbook-columns" value={phoneColumn} onChange={e => setPhoneColumn(e.target.value)} placeholder="Choose a Workbook column" />
+                  <p className="text-xs text-gray-500 mt-1">This is the column used to deliver WhatsApp messages. Date, status, and duplicate rules are configured next in Automations.</p>
                 </div>
                 <datalist id="workbook-columns">{sourceColumns.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}</datalist>
-                <div>
-                  <label className="text-xs font-medium text-gray-600">Eligible statuses <span className="font-normal">(comma-separated, optional)</span></label>
-                  <Input className="mt-1" value={eligibleStatusesText} onChange={e => setEligibleStatusesText(e.target.value)} placeholder="pending, overdue" />
-                </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600">Campaign-AI field allowlist</label>
                   <p className="text-xs text-gray-500 mt-0.5">Only checked Workbook fields are provided to the campaign AI.</p>
@@ -627,24 +600,7 @@ export default function CampaignForm({
                     <span className="flex-1">{g.name}</span><Badge variant="outline">{g.contactCount} contacts</Badge>
                   </label>)}
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {([
-                    ["Phone field", phoneColumn, setPhoneColumn, true],
-                    ["Name field", nameColumn, setNameColumn, false],
-                    ["Record key field", recordKeyColumn, setRecordKeyColumn, true],
-                    ["Date field", dateColumn, setDateColumn, true],
-                    ["Status field", statusColumn, setStatusColumn, false],
-                  ] as const).map(([label, value, setter, required]) => <div key={label}>
-                    <label className="text-xs font-medium text-gray-600">{label}{required && <span className="text-red-500"> *</span>}</label>
-                    <Input className="mt-1" list="contact-group-fields" value={value} onChange={event => setter(event.target.value)} placeholder="Choose a contact field" />
-                  </div>)}
-                  <div><label className="text-xs font-medium text-gray-600">Date offset (days)</label><Input className="mt-1" type="number" min={-366} max={366} value={dateOffsetDays} onChange={event => setDateOffsetDays(Number(event.target.value) || 0)} /></div>
-                </div>
-                <datalist id="contact-group-fields">{contactGroupColumns.map(column => <option key={column.key} value={column.key}>{column.label}</option>)}</datalist>
-                <div>
-                  <label className="text-xs font-medium text-gray-600">Eligible statuses <span className="font-normal">(comma-separated, optional)</span></label>
-                  <Input className="mt-1" value={eligibleStatusesText} onChange={event => setEligibleStatusesText(event.target.value)} placeholder="pending, overdue" />
-                </div>
+                <p className="text-xs text-gray-500">Date, status, and duplicate rules are configured next in Automations.</p>
               </>}
             </SectionCard>}
 
@@ -929,12 +885,12 @@ export default function CampaignForm({
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-500">Groups</span>
-                   <span className="font-medium">{isAutomation ? <span className="text-violet-700">Choose in Automations</span> : selectedGroups.length > 0 ? `${selectedGroups.length} selected` : <span className="text-gray-400">—</span>}</span>
+                  <span className="text-gray-500">{isAutomation ? "Audience" : "Groups"}</span>
+                   <span className="font-medium">{isAutomation ? <span className="text-violet-700">{recipientSourceType === "ai_workbook" ? selectedWorkbook?.name || "Choose a Workbook" : selectedGroups.length > 0 ? `${selectedGroups.length} fixed group${selectedGroups.length === 1 ? "" : "s"}` : "Choose groups"}</span> : selectedGroups.length > 0 ? `${selectedGroups.length} selected` : <span className="text-gray-400">—</span>}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Recipients</span>
-                   <span className="font-medium text-emerald-700">{isAutomation ? <span className="text-violet-700">Later</span> : totalContacts > 0 ? `~${totalContacts}` : <span className="text-gray-400">—</span>}</span>
+                   <span className="font-medium text-emerald-700">{isAutomation ? <span className="text-violet-700">{recipientSourceType === "ai_workbook" ? "From Workbook" : totalContacts > 0 ? `~${totalContacts}` : "—"}</span> : totalContacts > 0 ? `~${totalContacts}` : <span className="text-gray-400">—</span>}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Schedule</span>
@@ -958,7 +914,7 @@ export default function CampaignForm({
             templateId && !templateResolved
               ? <span>Loading template details&hellip;</span>
                  : !basicsComplete
-                 ? <span>Fill in name, template, and at least one group to continue.</span>
+                 ? <span>{isAutomation ? "Fill in the campaign name, template, recipient source, and mobile number column to continue." : "Fill in name, template, and at least one group to continue."}</span>
                 : !selectedTemplateApproved
                   ? <span className="text-amber-700">This template is not approved, so WhatsApp will not deliver it. Pick an approved one.</span>
                 : !audienceUsable

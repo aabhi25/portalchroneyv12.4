@@ -240,19 +240,22 @@ async function validateCampaignWorkbookSource(businessAccountId: string, input: 
       "name",
       ...contacts.flatMap(contact => Object.keys((contact.attributes || {}) as Record<string, string>).map(sourceKey)),
     ]);
-    const required = [
-      input.recipientPhoneColumn, input.recipientRecordKeyColumn, input.recipientDateColumn,
-    ].map(sourceKey);
-    if (required.some(value => !value)) {
-      throw new Error("Campaign contact-group phone, record key, and date mappings are required");
+    const phoneColumn = sourceKey(input.recipientPhoneColumn);
+    const recordKeyColumn = sourceKey(input.recipientRecordKeyColumn);
+    const dateColumn = sourceKey(input.recipientDateColumn);
+    const statusColumn = sourceKey(input.recipientStatusColumn);
+    const hasAutomationRules = Boolean(recordKeyColumn || dateColumn || statusColumn || (input.recipientEligibleStatuses || []).length);
+    if (!phoneColumn) throw new Error("Choose the contact-group mobile number field");
+    if (hasAutomationRules && (!recordKeyColumn || !dateColumn)) {
+      throw new Error("Record key and date mappings must both be configured in Automations");
     }
-    for (const column of [...required, sourceKey(input.recipientNameColumn), sourceKey(input.recipientStatusColumn)]) {
+    for (const column of [phoneColumn, sourceKey(input.recipientNameColumn), recordKeyColumn, dateColumn, statusColumn]) {
       if (column && !columns.has(column)) throw new Error(`The selected contact groups do not have the "${column}" field`);
     }
-    if (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366) {
+    if (hasAutomationRules && (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366)) {
       throw new Error("Campaign date offset must be a whole number between -366 and 366");
     }
-    if ((input.recipientEligibleStatuses || []).length && !sourceKey(input.recipientStatusColumn)) {
+    if ((input.recipientEligibleStatuses || []).length && !statusColumn) {
       throw new Error("A status mapping is required when eligible statuses are configured");
     }
     const refs = (input.templateParams || []).flatMap(sourceRefs);
@@ -267,20 +270,17 @@ async function validateCampaignWorkbookSource(businessAccountId: string, input: 
         : key === "name"
           ? String(contact.name || "").trim()
           : String(attributes[key] ?? "").trim();
-      const phone = normalizePhone(value(sourceKey(input.recipientPhoneColumn)));
-      const dateColumn = sourceKey(input.recipientDateColumn);
-      const recordKeyColumn = sourceKey(input.recipientRecordKeyColumn);
-      const date = value(dateColumn);
+      const phone = normalizePhone(value(phoneColumn));
       if (phone.length < 8) {
-        throw new Error(`Contact-group recipient ${index + 1} has an invalid or missing phone in "${sourceKey(input.recipientPhoneColumn)}"`);
+        throw new Error(`Contact-group recipient ${index + 1} has an invalid or missing phone in "${phoneColumn}"`);
       }
-      if (!value(recordKeyColumn)) {
+      if (hasAutomationRules && !value(recordKeyColumn)) {
         throw new Error(`Contact-group recipient ${index + 1} is missing record key "${recordKeyColumn}"`);
       }
-      if (!parseSpreadsheetDate(date)) {
+      if (hasAutomationRules && !parseSpreadsheetDate(value(dateColumn))) {
         throw new Error(`Contact-group recipient ${index + 1} has an invalid date in "${dateColumn}"; use YYYY-MM-DD`);
       }
-      const missingTemplateField = refs.find(ref => !value(ref));
+      const missingTemplateField = refs.find(ref => ref !== "name" && ref !== "phone" && !value(ref));
       if (missingTemplateField) {
         throw new Error(`Contact-group recipient ${index + 1} is missing template field "${missingTemplateField}"`);
       }
@@ -308,19 +308,24 @@ async function validateCampaignWorkbookSource(businessAccountId: string, input: 
   const sheet = sheets.find(s => s.id === sheetId);
   if (!sheet || !sheet.columns.length) throw new Error("The selected AI Workbook sheet is unavailable");
   const columns = new Set(sheet.columns.map(c => sourceKey(c.key)));
-  const required = [
-    input.recipientPhoneColumn, input.recipientRecordKeyColumn, input.recipientDateColumn,
-  ].map(sourceKey);
-  if (required.some(v => !v)) throw new Error("Campaign workbook phone, record key, and date mappings are required");
-  if (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366) {
+  const phoneColumn = sourceKey(input.recipientPhoneColumn);
+  const recordKeyColumn = sourceKey(input.recipientRecordKeyColumn);
+  const dateColumn = sourceKey(input.recipientDateColumn);
+  const statusColumn = sourceKey(input.recipientStatusColumn);
+  const hasAutomationRules = Boolean(recordKeyColumn || dateColumn || statusColumn || (input.recipientEligibleStatuses || []).length);
+  if (!phoneColumn) throw new Error("Choose the Workbook mobile number column");
+  if (hasAutomationRules && (!recordKeyColumn || !dateColumn)) {
+    throw new Error("Record key and date mappings must both be configured in Automations");
+  }
+  if (hasAutomationRules && (!Number.isInteger(input.recipientDateOffsetDays ?? 0) || Math.abs(input.recipientDateOffsetDays ?? 0) > 366)) {
     throw new Error("Campaign workbook date offset must be a whole number between -366 and 366");
   }
-  for (const column of [...required, sourceKey(input.recipientNameColumn), sourceKey(input.recipientStatusColumn)]) {
+  for (const column of [phoneColumn, sourceKey(input.recipientNameColumn), recordKeyColumn, dateColumn, statusColumn]) {
     if (column && !columns.has(column)) throw new Error(`The selected AI Workbook no longer has the "${column}" column`);
   }
   const allowed = Array.from(new Set((input.recipientAiAllowedFields || []).map(sourceKey).filter(Boolean)));
   if (allowed.some(column => !columns.has(column))) throw new Error("Campaign AI allowlist contains a column not present in the selected sheet");
-  if ((input.recipientEligibleStatuses || []).length && !sourceKey(input.recipientStatusColumn)) {
+  if ((input.recipientEligibleStatuses || []).length && !statusColumn) {
     throw new Error("A status mapping is required when eligible statuses are configured");
   }
   const refs = (input.templateParams || []).flatMap(sourceRefs);
@@ -331,21 +336,17 @@ async function validateCampaignWorkbookSource(businessAccountId: string, input: 
   for (let i = 0; i < sheet.rows.length; i++) {
     const values = sheet.rows[i].values || {};
     const value = (key: string) => String(values[key] ?? "").trim();
-    const phone = normalizePhone(value(sourceKey(input.recipientPhoneColumn)));
-    const phoneColumn = sourceKey(input.recipientPhoneColumn);
-    const recordKeyColumn = sourceKey(input.recipientRecordKeyColumn);
-    const dateColumn = sourceKey(input.recipientDateColumn);
-    const date = value(dateColumn);
+    const phone = normalizePhone(value(phoneColumn));
     const missingTemplateField = refs.find(ref =>
-      (ref === "name" ? !value(sourceKey(input.recipientNameColumn)) : ref !== "phone" && !value(ref))
+      ref !== "name" && ref !== "phone" && !value(ref)
     );
     if (phone.length < 8) {
       throw new Error(`Workbook row ${i + 2} has an invalid or missing phone in "${phoneColumn}"`);
     }
-    if (!value(recordKeyColumn)) {
+    if (hasAutomationRules && !value(recordKeyColumn)) {
       throw new Error(`Workbook row ${i + 2} is missing record key "${recordKeyColumn}"`);
     }
-    if (!parseSpreadsheetDate(date)) {
+    if (hasAutomationRules && !parseSpreadsheetDate(value(dateColumn))) {
       throw new Error(`Workbook row ${i + 2} has an invalid date in "${dateColumn}"; use YYYY-MM-DD`);
     }
     if (missingTemplateField) {

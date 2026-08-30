@@ -82,12 +82,12 @@ const EMPTY = {
   templateId: "",
   templateParams: [] as string[],
   phoneColumn: "phone",
-  nameColumn: "customer name",
-  recordKeyColumn: "loan id",
-  dateColumn: "emi due date",
+  nameColumn: "",
+  recordKeyColumn: "",
+  dateColumn: "",
   dateOffsetDays: 0,
-  statusColumn: "payment status",
-  eligibleStatusesText: "pending, overdue",
+  statusColumn: "",
+  eligibleStatusesText: "",
   defaultCountryCode: "91",
   sendMode: "review" as "review" | "automatic",
   sendTime: "10:00",
@@ -364,19 +364,29 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
       // These are recipient properties, not spreadsheet attributes.
       .filter(reference => reference.column !== "name" && reference.column !== "phone"),
   );
+  const templateUsesName = selectedTemplateParams.some(value =>
+    /\{\{\s*name\s*\}\}/i.test(String(value || "")),
+  );
   const sampleMappingIssues = selectedSource
     ? [
+      ...(!form.phoneColumn.trim() ? ["Mobile number column is required"] : []),
+      ...(!form.recordKeyColumn.trim() ? ["Unique record key is required"] : []),
+      ...(!form.dateColumn.trim() ? ["Date column is required"] : []),
+      ...(templateUsesName && !form.nameColumn.trim() ? ['Name column is required because the template uses "{{name}}"'] : []),
+      ...(form.eligibleStatusesText.trim() && !form.statusColumn.trim() ? ["Status column is required when allowed statuses are configured"] : []),
+      ...[
       { label: "Phone", columns: [form.phoneColumn] },
       { label: "Name", columns: form.nameColumn.trim() ? [form.nameColumn] : [] },
       { label: "Record key", columns: form.recordKeyColumn.split(",").map(value => value.trim()).filter(Boolean) },
       { label: "Date", columns: [form.dateColumn] },
       { label: "Status", columns: form.statusColumn.trim() ? [form.statusColumn] : [] },
       ...templateColumnReferences.map(reference => ({ label: reference.label, columns: [reference.column] })),
-    ].flatMap(({ label, columns }) =>
+      ].flatMap(({ label, columns }) =>
       columns.some(column => !sampleColumnKeys.has(String(column).trim().toLowerCase()))
         ? [`${label} must match a detected sample header`]
         : [],
-    )
+      ),
+    ]
     : [];
   const suggestionRows: { label: string; suggestion: MappingSuggestion; onUse: () => void }[] = suggestions
     ? [
@@ -417,12 +427,12 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
         templateId: selectedTemplateId,
         templateParams: selectedTemplateParams,
         phoneColumn: inherited?.recipientPhoneColumn || form.phoneColumn,
-        nameColumn: inherited?.recipientNameColumn || form.nameColumn,
-        recordKeyColumn: inherited?.recipientRecordKeyColumn || form.recordKeyColumn,
-        dateColumn: inherited?.recipientDateColumn || form.dateColumn,
-        dateOffsetDays: inherited?.recipientDateOffsetDays ?? form.dateOffsetDays,
-        statusColumn: inherited?.recipientStatusColumn || form.statusColumn,
-        eligibleStatuses: Array.isArray(inherited?.recipientEligibleStatuses) ? inherited.recipientEligibleStatuses : form.eligibleStatusesText.split(",").map(value => value.trim()).filter(Boolean),
+        nameColumn: form.nameColumn,
+        recordKeyColumn: form.recordKeyColumn,
+        dateColumn: form.dateColumn,
+        dateOffsetDays: form.dateOffsetDays,
+        statusColumn: form.statusColumn,
+        eligibleStatuses: form.eligibleStatusesText.split(",").map(value => value.trim()).filter(Boolean),
       };
       return id
         ? apiRequest("PATCH", `/api/whatsapp/campaign-automations/${id}`, payload)
@@ -778,26 +788,44 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
         )}
       </Section>}
 
-      {isCampaignOwnedBlueprint && <Section title="Campaign-owned recipient rules" icon={<BookOpen className="h-4 w-4 text-violet-600" />}>
+      {isCampaignOwnedBlueprint && <Section title="Campaign audience" icon={<BookOpen className="h-4 w-4 text-violet-600" />}>
         <div className="rounded-md border bg-gray-50 p-3 space-y-1 text-sm">
           <p className="font-medium">{blueprintAudienceType === "ai_workbook" ? "AI Workbook" : "Fixed contact groups"} · inherited from {selectedBlueprint?.name}</p>
           {blueprintAudienceType === "ai_workbook" ? (
             <p className="text-xs text-gray-600">
               Workbook: {workbooks.find(workbook => workbook.id === selectedBlueprint?.recipientWorkbookId)?.name || "Unavailable"} ·
-              phone: {selectedBlueprint?.recipientPhoneColumn || "—"} · record key: {selectedBlueprint?.recipientRecordKeyColumn || "—"} ·
-              date: {selectedBlueprint?.recipientDateColumn || "—"} ({selectedBlueprint?.recipientDateOffsetDays || 0} days)
+              mobile number: {selectedBlueprint?.recipientPhoneColumn || "—"}
             </p>
           ) : <p className="text-xs text-gray-600">{selectedBlueprint?.groupIds?.length || 0} fixed contact group(s)</p>}
-          <p className="text-xs text-gray-500">Recipient source, field mappings, eligibility, and AI field access are controlled by this campaign blueprint. This automation only controls delivery.</p>
+          <p className="text-xs text-gray-500">The campaign controls its recipient source, mobile-number mapping, message, and AI field access. Configure eligibility and duplicate rules below.</p>
         </div>
+        {selectedSource && (
+          <div className="space-y-3 rounded-md border bg-gray-50 p-3">
+            <div className="flex flex-wrap gap-1.5">
+              {selectedSource.columns.map(column => (
+                <span key={column.key} className="rounded-full border bg-white px-2 py-0.5 text-xs text-gray-700" title={column.label}>
+                  {column.key}
+                </span>
+              ))}
+            </div>
+            <Button type="button" variant="secondary" onClick={() => void requestSuggestions()} disabled={isSuggestingMappings}>
+              {isSuggestingMappings ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1" />}
+              {isSuggestingMappings ? "Suggesting…" : "Suggest automation mappings with AI"}
+            </Button>
+          </div>
+        )}
       </Section>}
 
-      {!isCampaignOwnedBlueprint && <Section title="Spreadsheet matching rule" icon={<SlidersHorizontal className="h-4 w-4 text-emerald-600" />}>
+      {(!isBlueprintSource || selectedBlueprint) && <Section title="Spreadsheet matching rule" icon={<SlidersHorizontal className="h-4 w-4 text-emerald-600" />}>
         <p className="text-sm text-gray-600">
-          Map the fields used for eligibility and message delivery. Use the exact column keys shown above.
+          Configure the fields used for recurring eligibility and duplicate prevention. Use the exact column keys shown above.
         </p>
         <div className="grid sm:grid-cols-2 gap-4">
-          <div className="space-y-2"><Label>Phone column</Label><Input list="automation-sample-columns" value={form.phoneColumn} onChange={event => updateMapping("phoneColumn", event.target.value)} /></div>
+          <div className="space-y-2">
+            <Label>Mobile number column</Label>
+            <Input list="automation-sample-columns" value={form.phoneColumn} disabled={isCampaignOwnedBlueprint} onChange={event => updateMapping("phoneColumn", event.target.value)} />
+            {isCampaignOwnedBlueprint && <p className="text-xs text-gray-500">Inherited from the campaign setup.</p>}
+          </div>
           <div className="space-y-2"><Label>Name column (optional)</Label><Input list="automation-sample-columns" value={form.nameColumn} onChange={event => updateMapping("nameColumn", event.target.value)} /></div>
           <div className="space-y-2"><Label>Unique record key column(s)</Label><Input list="automation-sample-columns" value={form.recordKeyColumn} onChange={event => updateMapping("recordKeyColumn", event.target.value)} /><p className="text-xs text-gray-500">Use one column, or comma-separated values such as loan id, installment id.</p></div>
           <div className="space-y-2"><Label>Date column</Label><Input list="automation-sample-columns" value={form.dateColumn} onChange={event => updateMapping("dateColumn", event.target.value)} /></div>
@@ -843,6 +871,10 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
             saveMutation.isPending
             || !form.name
             || !selectedTemplateId
+             || !form.phoneColumn.trim()
+             || !form.recordKeyColumn.trim()
+             || !form.dateColumn.trim()
+             || (form.eligibleStatusesText.trim().length > 0 && !form.statusColumn.trim())
             || sampleMappingIssues.length > 0
             || (isBlueprintSource && (
               !form.sourceCampaignId

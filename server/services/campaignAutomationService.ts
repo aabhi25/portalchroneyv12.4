@@ -172,8 +172,8 @@ type BlueprintContext = {
 };
 
 /**
- * New blueprints own their audience definition.  Never trust a copied
- * automation mapping for these: the blueprint is the live source of truth.
+ * New blueprints own the audience source and delivery identity. Scheduling,
+ * eligibility, and deduplication mappings belong to the automation itself.
  * NULL recipientSourceType denotes a legacy blueprint and deliberately keeps
  * its previous workbook/group behavior.
  */
@@ -193,12 +193,6 @@ function applyCampaignOwnedSource<T extends AutomationInput | WhatsappCampaignAu
     sourceWorkbookSheetId: usesWorkbook ? campaign.recipientWorkbookSheetId : null,
     sourceGroupIds: usesWorkbook ? [] : (campaign.groupIds || []),
     phoneColumn: campaign.recipientPhoneColumn || "",
-    nameColumn: campaign.recipientNameColumn || "",
-    recordKeyColumn: campaign.recipientRecordKeyColumn || "",
-    dateColumn: campaign.recipientDateColumn || "",
-    dateOffsetDays: campaign.recipientDateOffsetDays || 0,
-    statusColumn: campaign.recipientStatusColumn || "",
-    eligibleStatuses: (campaign.recipientEligibleStatuses || []) as string[],
     templateId: campaign.templateId,
     templateParams: (campaign.templateParams || []) as string[],
   } as T & AutomationInput;
@@ -395,6 +389,14 @@ function validateColumns(config: AutomationInput, columns: ImportColumn[]) {
   }
   for (const field of [config.nameColumn, config.statusColumn]) {
     if (field && !available.has(field)) throw new Error(`The uploaded file no longer has the "${field}" column`);
+  }
+  for (const reference of (config.templateParams || []).flatMap(fieldReferences)) {
+    if (reference === "phone") continue;
+    if (reference === "name") {
+      if (!config.nameColumn) throw new Error('Choose a name column because the campaign template uses "{{name}}"');
+      continue;
+    }
+    if (!available.has(reference)) throw new Error(`The uploaded file no longer has the "${reference}" column`);
   }
 }
 
