@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip as MetricTooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import {
   Select,
@@ -50,6 +51,7 @@ import {
   CalendarDays,
   UserPlus,
   Activity,
+  Info,
 } from "lucide-react";
 import {
   BarChart,
@@ -219,12 +221,14 @@ function KpiCard({
   label,
   value,
   sub,
+  description,
   tone = "indigo",
 }: {
   icon: any;
   label: string;
   value: string | number;
   sub?: string;
+  description: string;
   tone?: "indigo" | "emerald" | "rose" | "amber";
 }) {
   const tones: Record<string, string> = {
@@ -242,7 +246,23 @@ function KpiCard({
           </div>
           <div className="min-w-0">
             <div className="text-2xl font-bold leading-tight" data-testid={`kpi-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}>{value}</div>
-            <div className="text-xs text-muted-foreground truncate">{label}</div>
+             <div className="flex items-center gap-1 text-xs text-muted-foreground">
+               <span className="truncate">{label}</span>
+               <MetricTooltip>
+                 <TooltipTrigger asChild>
+                   <button
+                     type="button"
+                     aria-label={`About ${label}`}
+                     className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                   >
+                     <Info className="h-3.5 w-3.5" aria-hidden="true" />
+                   </button>
+                 </TooltipTrigger>
+                 <TooltipContent side="top" className="max-w-xs leading-relaxed">
+                   {description}
+                 </TooltipContent>
+               </MetricTooltip>
+             </div>
             {sub && <div className="text-[11px] text-muted-foreground/80 truncate" title={sub}>{sub}</div>}
           </div>
         </div>
@@ -485,14 +505,30 @@ export default function TopScholarAnalytics() {
 
       {/* Volume KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard icon={Users} label="Students" value={ov?.totalStudents ?? "—"} />
-        <KpiCard icon={MessageSquare} label="Chat Sessions" value={ov?.totalConversations ?? "—"} />
-        <KpiCard icon={HelpCircle} label="Doubts Asked" value={ov?.totalQuestions ?? "—"} />
+        <KpiCard
+          icon={Users}
+          label="Students"
+          value={ov?.totalStudents ?? "—"}
+          description="Unique students with at least one qualifying chat session in the selected date range and curriculum filters."
+        />
+        <KpiCard
+          icon={MessageSquare}
+          label="Chat Sessions"
+          value={ov?.totalConversations ?? "—"}
+          description="The number of qualifying chat conversations. One session can contain multiple doubts from the same student."
+        />
+        <KpiCard
+          icon={HelpCircle}
+          label="Doubts Asked"
+          value={ov?.totalQuestions ?? "—"}
+          description="The number of student questions or messages in qualifying chat sessions. Repeated questions are counted separately."
+        />
         <KpiCard
           icon={TrendingUp}
           label="Avg Doubts / Student"
           value={ov?.avgQuestionsPerStudent ?? "—"}
           sub={ov ? `${ov.avgDoubtsPerSession} per chat session` : undefined}
+          description="Doubts Asked divided by Students for the current date range and curriculum filters."
         />
       </div>
 
@@ -504,6 +540,7 @@ export default function TopScholarAnalytics() {
           label="Resolution Rate"
           value={ov ? `${ov.resolution.resolutionRate}%` : "—"}
           sub={ov ? `${ov.resolution.resolved} of ${ov.totalConversations} chat sessions` : undefined}
+          description="The percentage of chat sessions counted as resolved through the retry flow: no unresolved report, or confirmation after the bot's retry. This is session-level, not per-doubt."
         />
         <KpiCard
           icon={AlertTriangle}
@@ -511,6 +548,7 @@ export default function TopScholarAnalytics() {
           label="Escalation Rate"
           value={ov ? `${ov.resolution.escalationRate}%` : "—"}
           sub={ov ? `${ov.resolution.escalated} escalated to support` : undefined}
+          description="The percentage of chat sessions that remained unresolved after the retry flow and were escalated to support."
         />
         <KpiCard
           icon={Timer}
@@ -518,12 +556,14 @@ export default function TopScholarAnalytics() {
           label="Median Active Time"
           value={ov ? formatDuration(ov.duration.medianActiveSeconds) : "—"}
           sub={ov ? `per chat session · avg ${formatDuration(ov.duration.avgActiveSeconds)}` : undefined}
+          description="The middle active-time value across sessions, measured from the first student message to the last. It is not the session's 24-hour resumable lifetime."
         />
         <KpiCard
           icon={Activity}
           label="Awaiting Outcome"
           value={ov?.resolution.pending ?? "—"}
           sub="retry sent, student hasn't replied"
+          description="Chat sessions where a retry was sent but the student has not yet provided an outcome."
         />
       </div>
 
