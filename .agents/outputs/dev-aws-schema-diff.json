@@ -1,0 +1,1433 @@
+{
+  "counts": {
+    "devTables": 153,
+    "devColumns": 2199,
+    "prodTables": 150,
+    "prodColumns": 2132,
+    "missingTables": 3,
+    "extraProdTables": 0,
+    "missingColumns": 70,
+    "extraProductionColumns": 3,
+    "definitionMismatches": 0,
+    "defaultMismatches": 5
+  },
+  "missingTables": [
+    "public.whatsapp_ai_workbook_campaign_links",
+    "public.whatsapp_ai_workbook_versions",
+    "public.whatsapp_ai_workbooks"
+  ],
+  "extraProdTables": [],
+  "missingByTable": {
+    "public.marketing_campaigns": [
+      {
+        "name": "campaign_type",
+        "type": "text",
+        "nullable": false,
+        "default": "'one_time'::text"
+      },
+      {
+        "name": "recipient_source_type",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "recipient_workbook_id",
+        "type": "character varying",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "recipient_workbook_sheet_id",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "recipient_phone_column",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "recipient_name_column",
+        "type": "text",
+        "nullable": true,
+        "default": "''::text"
+      },
+      {
+        "name": "recipient_record_key_column",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "recipient_date_column",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "recipient_date_offset_days",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "recipient_status_column",
+        "type": "text",
+        "nullable": true,
+        "default": "''::text"
+      },
+      {
+        "name": "recipient_eligible_statuses",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "recipient_ai_allowed_fields",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      }
+    ],
+    "public.whatsapp_ai_workbook_campaign_links": [
+      {
+        "name": "id",
+        "type": "character varying",
+        "nullable": false,
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "business_account_id",
+        "type": "character varying",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "workbook_id",
+        "type": "character varying",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "workbook_version_id",
+        "type": "character varying",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "contact_group_id",
+        "type": "character varying",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "campaign_id",
+        "type": "character varying",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "sheet_id",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "mappings",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "row_ids_by_phone",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'{}'::jsonb"
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": false,
+        "default": "'audience_ready'::text"
+      },
+      {
+        "name": "last_synced_at",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "last_synced_version_id",
+        "type": "character varying",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "synced_row_count",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "public.whatsapp_ai_workbook_versions": [
+      {
+        "name": "id",
+        "type": "character varying",
+        "nullable": false,
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "workbook_id",
+        "type": "character varying",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "business_account_id",
+        "type": "character varying",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "source_campaign_id",
+        "type": "character varying",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "version_number",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "revision",
+        "type": "integer",
+        "nullable": false,
+        "default": "1"
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": false,
+        "default": "'manual'::text"
+      },
+      {
+        "name": "source_file_name",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "sheets",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "public.whatsapp_ai_workbooks": [
+      {
+        "name": "id",
+        "type": "character varying",
+        "nullable": false,
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "business_account_id",
+        "type": "character varying",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": true,
+        "default": "''::text"
+      },
+      {
+        "name": "source_campaign_id",
+        "type": "character varying",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": false,
+        "default": "'active'::text"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "public.whatsapp_campaign_automation_runs": [
+      {
+        "name": "source_type",
+        "type": "text",
+        "nullable": false,
+        "default": "'upload'::text"
+      },
+      {
+        "name": "source_campaign_id",
+        "type": "character varying",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_campaign_name",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_campaign_updated_at",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_workbook_id",
+        "type": "character varying",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_workbook_version_id",
+        "type": "character varying",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_workbook_sheet_id",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_workbook_name",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_workbook_version_number",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_workbook_revision",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_workbook_sheet_name",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_group_ids",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "source_group_names",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "source_snapshot",
+        "type": "jsonb",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "blueprint_snapshot",
+        "type": "jsonb",
+        "nullable": true,
+        "default": null
+      }
+    ],
+    "public.whatsapp_campaign_automations": [
+      {
+        "name": "source_type",
+        "type": "text",
+        "nullable": false,
+        "default": "'upload'::text"
+      },
+      {
+        "name": "source_campaign_id",
+        "type": "character varying",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_workbook_id",
+        "type": "character varying",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_workbook_sheet_id",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "source_group_ids",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      }
+    ],
+    "public.whatsapp_flows": [
+      {
+        "name": "adaptive_mode",
+        "type": "text",
+        "nullable": false,
+        "default": "'false'::text"
+      }
+    ],
+    "public.whatsapp_templates": [
+      {
+        "name": "source_type",
+        "type": "text",
+        "nullable": false,
+        "default": "'manual'::text"
+      },
+      {
+        "name": "source_whatsapp_number",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "deleted_at",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  "extraByTable": {
+    "public.whatsapp_leads": [
+      {
+        "name": "loan_amount",
+        "type": "numeric(15,2)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "loan_type",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "address",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  "definitionMismatches": [],
+  "defaultMismatches": [
+    {
+      "table": "public.ai_usage_events",
+      "column": "tokens_input_audio",
+      "devDefault": "'0'::numeric",
+      "prodDefault": "0"
+    },
+    {
+      "table": "public.ai_usage_events",
+      "column": "tokens_output_audio",
+      "devDefault": "'0'::numeric",
+      "prodDefault": "0"
+    },
+    {
+      "table": "public.ai_usage_events",
+      "column": "tokens_input_cached",
+      "devDefault": "'0'::numeric",
+      "prodDefault": "0"
+    },
+    {
+      "table": "public.ai_usage_events",
+      "column": "tokens_input_cached_audio",
+      "devDefault": "'0'::numeric",
+      "prodDefault": "0"
+    },
+    {
+      "table": "public.whatsapp_settings",
+      "column": "extraction_fields",
+      "devDefault": "'[\"name\", \"phone\", \"email\"]'::jsonb",
+      "prodDefault": "'[\"name\", \"phone\", \"email\", \"loan_amount\", \"loan_type\", \"address\"]'::jsonb"
+    }
+  ],
+  "tally": [
+    {
+      "table": "public.account_group_admins",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.account_group_extra_settings",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.account_group_journey_steps",
+      "developmentColumns": 21,
+      "productionColumns": 21,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.account_group_journeys",
+      "developmentColumns": 16,
+      "productionColumns": 16,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.account_group_leadsquared_field_mappings",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.account_group_members",
+      "developmentColumns": 5,
+      "productionColumns": 5,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.account_group_training",
+      "developmentColumns": 17,
+      "productionColumns": 17,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.account_groups",
+      "developmentColumns": 6,
+      "productionColumns": 6,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.ai_suggestions",
+      "developmentColumns": 21,
+      "productionColumns": 21,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.ai_usage_daily",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.ai_usage_events",
+      "developmentColumns": 13,
+      "productionColumns": 13,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.analyzed_pages",
+      "developmentColumns": 6,
+      "productionColumns": 6,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.appointments",
+      "developmentColumns": 16,
+      "productionColumns": 16,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.backup_jobs",
+      "developmentColumns": 14,
+      "productionColumns": 14,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.business_accounts",
+      "developmentColumns": 93,
+      "productionColumns": 93,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.canned_responses",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.categories",
+      "developmentColumns": 7,
+      "productionColumns": 7,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.chat_menu_configs",
+      "developmentColumns": 19,
+      "productionColumns": 19,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.chat_menu_item_details",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.chat_menu_items",
+      "developmentColumns": 15,
+      "productionColumns": 15,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.contact_group_contacts",
+      "developmentColumns": 7,
+      "productionColumns": 7,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.contact_groups",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.conversation_analysis_cache",
+      "developmentColumns": 6,
+      "productionColumns": 6,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.conversation_category_settings",
+      "developmentColumns": 6,
+      "productionColumns": 6,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.conversation_journeys",
+      "developmentColumns": 16,
+      "productionColumns": 16,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.conversations",
+      "developmentColumns": 28,
+      "productionColumns": 28,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.crm_store_credentials",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.custom_crm_field_mappings",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.custom_crm_settings",
+      "developmentColumns": 16,
+      "productionColumns": 16,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.customer_identities",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.customer_memory_snapshots",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.customer_merge_audit",
+      "developmentColumns": 7,
+      "productionColumns": 7,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.customer_profiles",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.demo_orders",
+      "developmentColumns": 19,
+      "productionColumns": 19,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.demo_pages",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.discount_offers",
+      "developmentColumns": 13,
+      "productionColumns": 13,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.discount_rules",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.document_chunks",
+      "developmentColumns": 7,
+      "productionColumns": 7,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.document_type_prompt_history",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.document_types",
+      "developmentColumns": 15,
+      "productionColumns": 15,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.erp_configurations",
+      "developmentColumns": 29,
+      "productionColumns": 29,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.erp_product_cache",
+      "developmentColumns": 21,
+      "productionColumns": 21,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.erp_sync_logs",
+      "developmentColumns": 21,
+      "productionColumns": 21,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.exit_intent_settings",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.facebook_comments",
+      "developmentColumns": 13,
+      "productionColumns": 13,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.facebook_flow_sessions",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.facebook_flow_steps",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.facebook_flows",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.facebook_lead_fields",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.facebook_leads",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.facebook_messages",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.facebook_settings",
+      "developmentColumns": 21,
+      "productionColumns": 21,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.faqs",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.guidance_campaigns",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.idle_timeout_settings",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.instagram_comments",
+      "developmentColumns": 13,
+      "productionColumns": 13,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.instagram_flow_sessions",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.instagram_flow_steps",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.instagram_flows",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.instagram_lead_fields",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.instagram_leads",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.instagram_messages",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.instagram_settings",
+      "developmentColumns": 21,
+      "productionColumns": 21,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.intent_scores",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.job_applicants",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.job_applications",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.jobs",
+      "developmentColumns": 19,
+      "productionColumns": 19,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.journey_responses",
+      "developmentColumns": 7,
+      "productionColumns": 7,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.journey_sessions",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.journey_steps",
+      "developmentColumns": 22,
+      "productionColumns": 22,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.k12_chapters",
+      "developmentColumns": 7,
+      "productionColumns": 7,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.k12_questions",
+      "developmentColumns": 13,
+      "productionColumns": 13,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.k12_subjects",
+      "developmentColumns": 9,
+      "productionColumns": 9,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.k12_topic_notes",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.k12_topic_videos",
+      "developmentColumns": 9,
+      "productionColumns": 9,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.k12_topics",
+      "developmentColumns": 15,
+      "productionColumns": 15,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.leads",
+      "developmentColumns": 28,
+      "productionColumns": 28,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.leadsquared_field_mappings",
+      "developmentColumns": 13,
+      "productionColumns": 13,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.leadsquared_url_extraction_cache",
+      "developmentColumns": 6,
+      "productionColumns": 6,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.leadsquared_url_rules",
+      "developmentColumns": 7,
+      "productionColumns": 7,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.marketing_campaign_messages",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.marketing_campaign_recipients",
+      "developmentColumns": 26,
+      "productionColumns": 26,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.marketing_campaigns",
+      "developmentColumns": 42,
+      "productionColumns": 30,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.master_ai_settings",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.messages",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.messaging_credentials",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.model_pricing",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.openai_batch_jobs",
+      "developmentColumns": 21,
+      "productionColumns": 21,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.password_reset_tokens",
+      "developmentColumns": 6,
+      "productionColumns": 6,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.phone_otp_challenges",
+      "developmentColumns": 19,
+      "productionColumns": 19,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.proactive_guidance_rules",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.product_categories",
+      "developmentColumns": 4,
+      "productionColumns": 4,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.product_embeddings",
+      "developmentColumns": 17,
+      "productionColumns": 17,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.product_import_jobs",
+      "developmentColumns": 16,
+      "productionColumns": 16,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.product_jewelry_embeddings",
+      "developmentColumns": 15,
+      "productionColumns": 15,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.product_relationships",
+      "developmentColumns": 9,
+      "productionColumns": 9,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.product_tags",
+      "developmentColumns": 4,
+      "productionColumns": 4,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.products",
+      "developmentColumns": 24,
+      "productionColumns": 24,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.public_chat_links",
+      "developmentColumns": 9,
+      "productionColumns": 9,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.question_bank_entries",
+      "developmentColumns": 13,
+      "productionColumns": 13,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.restore_history",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.salesforce_field_mappings",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.schedule_templates",
+      "developmentColumns": 9,
+      "productionColumns": 9,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.sessions",
+      "developmentColumns": 6,
+      "productionColumns": 6,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.slot_overrides",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.smart_replies",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.support_tickets",
+      "developmentColumns": 29,
+      "productionColumns": 29,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.system_settings",
+      "developmentColumns": 7,
+      "productionColumns": 7,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.tags",
+      "developmentColumns": 6,
+      "productionColumns": 6,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.ticket_attachments",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.ticket_insights",
+      "developmentColumns": 15,
+      "productionColumns": 15,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.ticket_messages",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.topscholar_content_chunks",
+      "developmentColumns": 20,
+      "productionColumns": 20,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.topscholar_content_sync",
+      "developmentColumns": 19,
+      "productionColumns": 19,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.topscholar_cp_mappings",
+      "developmentColumns": 13,
+      "productionColumns": 13,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.topscholar_embed_jobs",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.topscholar_embed_staging",
+      "developmentColumns": 17,
+      "productionColumns": 17,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.topscholar_plan_cp_resolutions",
+      "developmentColumns": 18,
+      "productionColumns": 18,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.topscholar_plan_ids",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.topscholar_plan_run_items",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.topscholar_plan_runs",
+      "developmentColumns": 17,
+      "productionColumns": 17,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.topscholar_plan_sync_leases",
+      "developmentColumns": 4,
+      "productionColumns": 4,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.trained_urls",
+      "developmentColumns": 18,
+      "productionColumns": 18,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.training_documents",
+      "developmentColumns": 18,
+      "productionColumns": 18,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.uploaded_images",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.urgency_offer_settings",
+      "developmentColumns": 25,
+      "productionColumns": 25,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.urgency_offers",
+      "developmentColumns": 19,
+      "productionColumns": 19,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.url_content_chunks",
+      "developmentColumns": 7,
+      "productionColumns": 7,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.users",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.verification_rule_sets",
+      "developmentColumns": 8,
+      "productionColumns": 8,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.verification_rules",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.visitor_daily_stats",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.vista_studio_jobs",
+      "developmentColumns": 11,
+      "productionColumns": 11,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.webhook_events",
+      "developmentColumns": 6,
+      "productionColumns": 6,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.website_analysis",
+      "developmentColumns": 9,
+      "productionColumns": 9,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_ai_workbook_campaign_links",
+      "developmentColumns": 15,
+      "productionColumns": 0,
+      "status": "MISSING_TABLE_IN_PRODUCTION"
+    },
+    {
+      "table": "public.whatsapp_ai_workbook_versions",
+      "developmentColumns": 11,
+      "productionColumns": 0,
+      "status": "MISSING_TABLE_IN_PRODUCTION"
+    },
+    {
+      "table": "public.whatsapp_ai_workbooks",
+      "developmentColumns": 8,
+      "productionColumns": 0,
+      "status": "MISSING_TABLE_IN_PRODUCTION"
+    },
+    {
+      "table": "public.whatsapp_campaign_automation_dispatches",
+      "developmentColumns": 6,
+      "productionColumns": 6,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_campaign_automation_runs",
+      "developmentColumns": 32,
+      "productionColumns": 17,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_campaign_automations",
+      "developmentColumns": 25,
+      "productionColumns": 20,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_flow_sessions",
+      "developmentColumns": 10,
+      "productionColumns": 10,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_flow_steps",
+      "developmentColumns": 12,
+      "productionColumns": 12,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_flows",
+      "developmentColumns": 14,
+      "productionColumns": 13,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_lead_attachments",
+      "developmentColumns": 13,
+      "productionColumns": 13,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_lead_fields",
+      "developmentColumns": 13,
+      "productionColumns": 13,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_leads",
+      "developmentColumns": 30,
+      "productionColumns": 33,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_opt_outs",
+      "developmentColumns": 6,
+      "productionColumns": 6,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_sessions",
+      "developmentColumns": 7,
+      "productionColumns": 7,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_settings",
+      "developmentColumns": 37,
+      "productionColumns": 37,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_templates",
+      "developmentColumns": 21,
+      "productionColumns": 18,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.whatsapp_whitelist",
+      "developmentColumns": 5,
+      "productionColumns": 5,
+      "status": "PRESENT"
+    },
+    {
+      "table": "public.widget_settings",
+      "developmentColumns": 134,
+      "productionColumns": 134,
+      "status": "PRESENT"
+    }
+  ]
+}

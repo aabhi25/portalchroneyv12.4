@@ -1,0 +1,44 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "5Lqjoki-F4eJESq8KohqF"
+uri = "file://.agents/outputs/dev-vs-aws-production-schema-report.md"
+type = "text"
+title = "Development vs AWS schema report"
+description = "Complete schema comparison, migration checklist, missing tables and columns, and all-table tally."
+logical_id = "a450a06c-a4a2-4559-9892-828e585fc6a8"
+content_hash = "sha256:6eccd099f6cf1c7812ea67fc782699ebe676455c2780c924380a2445bcc595b4"
+size = 15909
+mtime_ms = 1788119157183
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:f8c33894-e8c9-4c45-a49b-a00f28c864fd/a450a06c-a4a2-4559-9892-828e585fc6a8/7c915d47-6493-4b86-a687-640117cc6c25"
+storage_version_token = "1788119159841444"
+content_type = "text/markdown"
+
+[[outputs]]
+id = "6Jx9fotpjdG0jtPZRhhrw"
+uri = "file://.agents/outputs/dev-vs-aws-schema-differences.csv"
+type = "table"
+title = "AWS schema differences CSV"
+description = "Machine-readable list of missing, production-only, and default-difference columns."
+logical_id = "46452253-9330-48dc-a248-27c03271417d"
+content_hash = "sha256:8215f1f857e1e1cb148b312978ad2fdfc295444eba0dff4377afe1693b158da3"
+size = 12875
+mtime_ms = 1788119157391
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:f8c33894-e8c9-4c45-a49b-a00f28c864fd/46452253-9330-48dc-a248-27c03271417d/7437a425-6f84-4c05-b48a-ca6c4ddcfcf8"
+storage_version_token = "1788119161235386"
+content_type = "text/csv"
+
+[[outputs]]
+id = "0lLNBxDyp1fMyf03TJ9if"
+uri = "file://.agents/outputs/dev-vs-aws-table-tally.csv"
+type = "table"
+title = "Table and column tally CSV"
+description = "All 153 tables with development and production column counts."
+logical_id = "9f9396a4-c500-487f-b521-f312e732fe50"
+content_hash = "sha256:a76ed0eef59072de97ab1d77dd2b32cbcbcccdb517d8daf7c088b0ffa3587107"
+size = 7435
+mtime_ms = 1788119157647
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:f8c33894-e8c9-4c45-a49b-a00f28c864fd/9f9396a4-c500-487f-b521-f312e732fe50/86581e2e-9a7b-458d-a923-95a1e148b08d"
+storage_version_token = "1788119162608096"
+content_type = "text/csv"
