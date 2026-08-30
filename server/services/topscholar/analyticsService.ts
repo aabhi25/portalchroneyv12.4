@@ -804,44 +804,41 @@ export interface StudentRosterRow {
   grade: string | null;
 }
 
-export async function getStudentRoster(
+export interface StudentRosterPage {
+  items: StudentRosterRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+function studentRosterConditions(
   businessAccountId: string,
   filters: AnalyticsFilters,
-  opts: { search?: string | null; limit?: number } = {},
-): Promise<StudentRosterRow[]> {
-  const cpIds = await resolveScopeCpIds(businessAccountId, filters.scope);
-  if (cpIds && cpIds.length === 0) return [];
+  search?: string | null,
+): Promise<{ cpIds: string[] | null; conds: SQL[] }> {
+  return resolveScopeCpIds(businessAccountId, filters.scope).then((cpIds) => {
+    const conds = baseConversationConditions(businessAccountId, cpIds, filters);
+    const normalizedSearch = (search || '').trim();
+    if (normalizedSearch) {
+      conds.push(sql`(${conversations.studentName} ilike ${'%' + normalizedSearch + '%'} or ${conversations.studentId} ilike ${'%' + normalizedSearch + '%'})`);
+    }
+    return { cpIds, conds };
+  });
+}
 
-  const conds = baseConversationConditions(businessAccountId, cpIds, filters);
-  const search = (opts.search || '').trim();
-  if (search) {
-    conds.push(sql`(${conversations.studentName} ilike ${'%' + search + '%'} or ${conversations.studentId} ilike ${'%' + search + '%'})`);
-  }
-  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 500);
-
-  // Group by student. Question count via a correlated count of user messages.
-  const rows = await db
-    .select({
-      studentKey: sql<string>`coalesce(${conversations.studentId}, ${conversations.id})`,
-      studentId: sql<string | null>`max(${conversations.studentId})`,
-      studentName: sql<string | null>`max(${conversations.studentName})`,
-      conversationCount: sql<number>`count(distinct ${conversations.id})::int`,
-      questionCount: sql<number>`coalesce(sum((select count(*) from ${messages} m where m.conversation_id = ${conversations.id} and m.role = 'user')), 0)::int`,
-      lastActive: sql<Date | null>`max(${conversations.updatedAt})`,
-      cpId: sql<string | null>`max(${conversations.topscholarCpId})`,
-    })
-    .from(conversations)
-    .where(and(...conds))
-    .groupBy(sql`coalesce(${conversations.studentId}, ${conversations.id})`)
-    .orderBy(desc(sql`max(${conversations.updatedAt})`))
-    .limit(limit);
-
-  const mappings = await db
-    .select()
-    .from(topscholarCpMappings)
-    .where(eq(topscholarCpMappings.businessAccountId, businessAccountId));
+function mapStudentRosterRows(
+  rows: Array<{
+    studentId: string | null;
+    studentName: string | null;
+    conversationCount: number;
+    questionCount: number;
+    lastActive: Date | null;
+    cpId: string | null;
+  }>,
+  mappings: Array<typeof topscholarCpMappings.$inferSelect>,
+): StudentRosterRow[] {
   const byCp = new Map(mappings.map((m) => [m.cpId, m]));
-
   return rows.map((r) => {
     const m = r.cpId ? byCp.get(r.cpId) : undefined;
     return {
@@ -854,6 +851,94 @@ export async function getStudentRoster(
       grade: m?.grade ?? null,
     };
   });
+}
+
+export async function getStudentRoster(
+  businessAccountId: string,
+  filters: AnalyticsFilters,
+  opts: { search?: string | null; limit?: number } = {},
+): Promise<StudentRosterRow[]> {
+  const { cpIds, conds } = await studentRosterConditions(businessAccountId, filters, opts.search);
+  if (cpIds && cpIds.length === 0) return [];
+
+  // `limit: 0` is reserved for complete exports. Regular callers retain the
+  // existing bounded default.
+  const limit = opts.limit === 0
+    ? undefined
+    : Math.min(Math.max(opts.limit ?? 200, 1), 500);
+
+  // Group by student. Question count via a correlated count of user messages.
+  const query = db
+    .select({
+      studentKey: sql<string>`coalesce(${conversations.studentId}, ${conversations.id})`,
+      studentId: sql<string | null>`max(${conversations.studentId})`,
+      studentName: sql<string | null>`max(${conversations.studentName})`,
+      conversationCount: sql<number>`count(distinct ${conversations.id})::int`,
+      questionCount: sql<number>`coalesce(sum((select count(*) from ${messages} m where m.conversation_id = ${conversations.id} and m.role = 'user')), 0)::int`,
+      lastActive: sql<Date | null>`max(${conversations.updatedAt})`,
+      cpId: sql<string | null>`max(${conversations.topscholarCpId})`,
+    })
+    .from(conversations)
+    .where(and(...conds))
+    .groupBy(sql`coalesce(${conversations.studentId}, ${conversations.id})`)
+    .orderBy(desc(sql`max(${conversations.updatedAt})`), desc(sql`coalesce(${conversations.studentId}, ${conversations.id})`));
+  const rows = limit === undefined ? await query : await query.limit(limit);
+
+  const mappings = await db
+    .select()
+    .from(topscholarCpMappings)
+    .where(eq(topscholarCpMappings.businessAccountId, businessAccountId));
+  return mapStudentRosterRows(rows, mappings);
+}
+
+export async function getStudentRosterPaginated(
+  businessAccountId: string,
+  filters: AnalyticsFilters,
+  opts: { search?: string | null; page?: number; pageSize?: number } = {},
+): Promise<StudentRosterPage> {
+  const pageSize = Math.min(Math.max(Math.floor(opts.pageSize ?? 10), 1), 50);
+  const page = Math.max(Math.floor(opts.page ?? 1), 1);
+  const { cpIds, conds } = await studentRosterConditions(businessAccountId, filters, opts.search);
+  if (cpIds && cpIds.length === 0) {
+    return { items: [], total: 0, page, pageSize, totalPages: 0 };
+  }
+
+  const studentKey = sql`coalesce(${conversations.studentId}, ${conversations.id})`;
+  const [countRows, rows] = await Promise.all([
+    db
+      .select({ total: sql<number>`count(distinct ${studentKey})::int` })
+      .from(conversations)
+      .where(and(...conds)),
+    db
+      .select({
+        studentKey: sql<string>`coalesce(${conversations.studentId}, ${conversations.id})`,
+        studentId: sql<string | null>`max(${conversations.studentId})`,
+        studentName: sql<string | null>`max(${conversations.studentName})`,
+        conversationCount: sql<number>`count(distinct ${conversations.id})::int`,
+        questionCount: sql<number>`coalesce(sum((select count(*) from ${messages} m where m.conversation_id = ${conversations.id} and m.role = 'user')), 0)::int`,
+        lastActive: sql<Date | null>`max(${conversations.updatedAt})`,
+        cpId: sql<string | null>`max(${conversations.topscholarCpId})`,
+      })
+      .from(conversations)
+      .where(and(...conds))
+      .groupBy(studentKey)
+      .orderBy(desc(sql`max(${conversations.updatedAt})`), desc(studentKey))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize),
+  ]);
+
+  const mappings = await db
+    .select()
+    .from(topscholarCpMappings)
+    .where(eq(topscholarCpMappings.businessAccountId, businessAccountId));
+  const total = countRows[0]?.total ?? 0;
+  return {
+    items: mapStudentRosterRows(rows, mappings),
+    total,
+    page,
+    pageSize,
+    totalPages: total > 0 ? Math.ceil(total / pageSize) : 0,
+  };
 }
 
 /**

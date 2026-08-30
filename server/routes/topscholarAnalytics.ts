@@ -18,6 +18,7 @@ import {
   getAdoption,
   getDoubtsExport,
   getStudentRoster,
+  getStudentRosterPaginated,
   getStudentRosterPage,
   getStudentReport,
   getStudentConversations,
@@ -157,8 +158,9 @@ router.get("/api/topscholar/analytics/adoption", ...adminGuards, async (req: Req
 router.get("/api/topscholar/analytics/students", ...adminGuards, async (req: Request, res: Response) => {
   const businessAccountId = getBusinessAccountId(req)!;
   const search = typeof req.query.q === "string" ? req.query.q : null;
-  const limit = parseLimit(req.query.limit, 200, 500);
-  res.json(await getStudentRoster(businessAccountId, parseFilters(req), { search, limit }));
+  const page = parseLimit(req.query.page, 1, 1000000);
+  const pageSize = parseLimit(req.query.pageSize, 10, 50);
+  res.json(await getStudentRosterPaginated(businessAccountId, parseFilters(req), { search, page, pageSize }));
 });
 
 // ---- CSV exports -----------------------------------------------------------
@@ -168,7 +170,7 @@ router.get("/api/topscholar/analytics/students", ...adminGuards, async (req: Req
 router.get("/api/topscholar/analytics/students/export", ...adminGuards, async (req: Request, res: Response) => {
   const businessAccountId = getBusinessAccountId(req)!;
   const search = typeof req.query.q === "string" ? req.query.q : null;
-  const rows = await getStudentRoster(businessAccountId, parseFilters(req), { search, limit: 5000 });
+  const rows = await getStudentRoster(businessAccountId, parseFilters(req), { search, limit: 0 });
   sendCsv(
     res,
     exportFilename("students"),

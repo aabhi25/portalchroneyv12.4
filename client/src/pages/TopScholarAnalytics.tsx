@@ -41,6 +41,7 @@ import {
   Meh,
   Frown,
   RotateCcw,
+  ChevronLeft,
   ChevronRight,
   CheckCircle2,
   AlertTriangle,
@@ -141,6 +142,13 @@ interface StudentRow {
   lastActive: string | null;
   curriculumLabel: string;
   grade: string | null;
+}
+interface StudentRosterResponse {
+  items: StudentRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 }
 interface StudentReport {
   studentId: string;
@@ -254,6 +262,7 @@ export default function TopScholarAnalytics() {
   const [subject, setSubject] = useState("");
   const [bucket, setBucket] = useState<"day" | "week" | "month">("day");
   const [search, setSearch] = useState("");
+  const [studentPage, setStudentPage] = useState(1);
   const [openStudentId, setOpenStudentId] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
 
@@ -327,27 +336,30 @@ export default function TopScholarAnalytics() {
     queryKey: [`/api/topscholar/analytics/trends${buildQs({ ...scopeParams, bucket })}`],
     enabled: isTopscholar,
   });
-  const studentsQ = useQuery<StudentRow[]>({
-    queryKey: [`/api/topscholar/analytics/students${buildQs({ ...scopeParams, q: search || undefined })}`],
+  const studentsQ = useQuery<StudentRosterResponse>({
+    queryKey: [`/api/topscholar/analytics/students${buildQs({ ...scopeParams, q: search || undefined, page: String(studentPage), pageSize: "10" })}`],
     enabled: isTopscholar,
+    keepPreviousData: true,
   });
   const reportQ = useQuery<StudentReport>({
     queryKey: [`/api/topscholar/analytics/students/${openStudentId}${buildQs({ from, to })}`],
     enabled: isTopscholar && !!openStudentId,
   });
 
-  const handleBoard = (v: string) => { setBoard(v === ALL ? "" : v); setMedium(""); setGrade(""); setSubject(""); };
-  const handleMedium = (v: string) => { setMedium(v === ALL ? "" : v); setGrade(""); setSubject(""); };
-  const handleGrade = (v: string) => { setGrade(v === ALL ? "" : v); setSubject(""); };
-  const handleSubject = (v: string) => { setSubject(v === ALL ? "" : v); };
+  const handleBoard = (v: string) => { setBoard(v === ALL ? "" : v); setMedium(""); setGrade(""); setSubject(""); setStudentPage(1); };
+  const handleMedium = (v: string) => { setMedium(v === ALL ? "" : v); setGrade(""); setSubject(""); setStudentPage(1); };
+  const handleGrade = (v: string) => { setGrade(v === ALL ? "" : v); setSubject(""); setStudentPage(1); };
+  const handleSubject = (v: string) => { setSubject(v === ALL ? "" : v); setStudentPage(1); };
   const handleRange = (v: string) => {
     setRangeKey(v);
+    setStudentPage(1);
     if (v === CUSTOM) setDatePickerOpen(true);
     else setCustomRange(undefined);
   };
   const resetFilters = () => {
     setBoard(""); setMedium(""); setGrade(""); setSubject("");
     setRangeKey("30"); setCustomRange(undefined);
+    setStudentPage(1);
   };
 
   /**
@@ -793,7 +805,7 @@ export default function TopScholarAnalytics() {
             <CardDescription>Click a student to view their detailed report.</CardDescription>
           </div>
           <div className="flex items-center gap-2">
-            <Input placeholder="Search students…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-48 h-8" data-testid="input-student-search" />
+            <Input placeholder="Search students…" value={search} onChange={(e) => { setSearch(e.target.value); setStudentPage(1); }} className="w-48 h-8" data-testid="input-student-search" />
             <Button
               variant="outline"
               size="sm"
@@ -810,7 +822,7 @@ export default function TopScholarAnalytics() {
         <CardContent className="p-0">
           {studentsQ.isLoading ? (
             <EmptyState loading />
-          ) : (studentsQ.data ?? []).length === 0 ? (
+          ) : (studentsQ.data?.items ?? []).length === 0 ? (
             <div className="p-6 text-sm text-muted-foreground text-center">No students match the current filters.</div>
           ) : (
             <div className="overflow-x-auto">
@@ -826,7 +838,7 @@ export default function TopScholarAnalytics() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {(studentsQ.data ?? []).map((s, i) => {
+                  {(studentsQ.data?.items ?? []).map((s, i) => {
                     const clickable = !!s.studentId;
                     return (
                       <TableRow
@@ -846,6 +858,40 @@ export default function TopScholarAnalytics() {
                   })}
                 </TableBody>
               </Table>
+            </div>
+          )}
+          {studentsQ.data && studentsQ.data.totalPages > 1 && (
+            <div className="flex items-center justify-between border-t px-4 py-3 text-sm text-muted-foreground">
+              <span>
+                Showing {(studentPage - 1) * studentsQ.data.pageSize + 1}–{Math.min(studentPage * studentsQ.data.pageSize, studentsQ.data.total)} of {studentsQ.data.total}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  onClick={() => setStudentPage((page) => Math.max(1, page - 1))}
+                  disabled={studentPage <= 1 || studentsQ.isFetching}
+                  aria-label="Previous student page"
+                  data-testid="button-students-previous"
+                >
+                  <ChevronLeft className="mr-1 h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="whitespace-nowrap">Page {studentPage} of {studentsQ.data.totalPages}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  onClick={() => setStudentPage((page) => Math.min(studentsQ.data?.totalPages ?? page, page + 1))}
+                  disabled={studentPage >= studentsQ.data.totalPages || studentsQ.isFetching}
+                  aria-label="Next student page"
+                  data-testid="button-students-next"
+                >
+                  Next
+                  <ChevronRight className="ml-1 h-4 w-4" />
+                </Button>
+              </div>
             </div>
           )}
         </CardContent>
