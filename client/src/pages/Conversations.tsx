@@ -10,7 +10,10 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
+import { convertLatexDelimiters } from '@/lib/convertLatexDelimiters';
 import 'highlight.js/styles/github-dark.css';
 import { useLocation } from "wouter";
 import WebsiteNavTabs from "@/components/WebsiteNavTabs";
@@ -760,8 +763,8 @@ export default function Conversations() {
                           <CardContent className="p-4">
                             <div className="prose prose-sm max-w-none">
                               <ReactMarkdown
-                                remarkPlugins={[remarkGfm]}
-                                rehypePlugins={[rehypeHighlight]}
+                                remarkPlugins={[remarkGfm, remarkMath]}
+                                rehypePlugins={[rehypeHighlight, rehypeKatex]}
                                 components={{
                                   p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
                                   ul: ({ children }) => <ul className="mb-2 pl-4 list-disc">{children}</ul>,
@@ -777,7 +780,7 @@ export default function Conversations() {
                                   }
                                 }}
                               >
-                                {message.content}
+                                {convertLatexDelimiters(message.content)}
                               </ReactMarkdown>
                             </div>
                           </CardContent>

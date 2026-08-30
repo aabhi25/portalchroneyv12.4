@@ -26088,7 +26088,27 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       
       // Get messages - getMessagesByConversation now verifies access internally
       const messages = await storage.getMessagesByConversation(conversationId, businessAccountId);
-      res.json(messages);
+      const displayMessages = messages.map((message) => {
+        if (message.role !== "assistant" || !message.metadata) {
+          return message;
+        }
+
+        try {
+          const metadata = JSON.parse(message.metadata);
+          if (
+            metadata &&
+            typeof metadata.formattedContent === "string" &&
+            metadata.formattedContent.trim().length > 0
+          ) {
+            return { ...message, content: metadata.formattedContent };
+          }
+        } catch {
+          // Keep the original message when legacy metadata is malformed.
+        }
+
+        return message;
+      });
+      res.json(displayMessages);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
