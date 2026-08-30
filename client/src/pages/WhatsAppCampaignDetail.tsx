@@ -5,11 +5,13 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Send, X, RotateCcw, Pencil, MessageSquare, Copy, Users, ChevronLeft, ChevronRight } from "lucide-react";
 import { interpolatePreview, type Template, type Group } from "@/components/CampaignForm";
 import {
   type Recipient,
+  type CampaignMessage,
   RECIPIENT_STATUS_VARIANT,
   RecipientAvatar,
 } from "@/components/whatsapp/CampaignConversationsPanel";
@@ -70,11 +72,6 @@ function ConfigRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-/** Pick the most informative timestamp for a recipient row. */
-function bestTimestamp(r: Recipient): string | null {
-  return r.firstReplyAt ?? r.readAt ?? r.deliveredAt ?? r.sentAt ?? null;
-}
-
 const NOT_SET = <span className="text-gray-400 font-normal">—</span>;
 
 export default function WhatsAppCampaignDetail() {
@@ -87,6 +84,7 @@ export default function WhatsAppCampaignDetail() {
   // Outcome filter, driven by clicking a row in the outcomes card. Orthogonal to
   // the status tabs — both narrow the same list and both feed the same counts.
   const [classificationFilter, setClassificationFilter] = useState<string | null>(null);
+  const [selectedRecipient, setSelectedRecipient] = useState<Recipient | null>(null);
 
   const changeFilter = (key: StatusKey) => {
     setStatusFilter(key);
@@ -143,6 +141,13 @@ export default function WhatsAppCampaignDetail() {
     refetchInterval: (query) => (query.state.error ? false : 5000),
     refetchOnMount: "always",
     placeholderData: (prev) => prev,  // keep old rows visible while new page loads
+  });
+
+  const { data: selectedRecipientMessages = [], isLoading: messagesLoading } = useQuery<CampaignMessage[]>({
+    queryKey: [`/api/whatsapp/campaigns/${id}/recipients/${selectedRecipient?.id}/messages`],
+    enabled: Boolean(selectedRecipient),
+    refetchInterval: selectedRecipient ? 5000 : false,
+    refetchOnMount: "always",
   });
 
   const { data: templates = [] } = useQuery<Template[]>({
@@ -232,6 +237,11 @@ export default function WhatsAppCampaignDetail() {
     campaignClassifications.flatMap(c => (c.captureFields || []).map(f => [f.fieldKey, f.fieldLabel || f.fieldKey]))
   );
   const isLive = campaign?.status === "sending" || campaign?.status === "completed";
+  const activeClassificationLabel = classificationFilter
+    ? classificationFilter === "__unclassified__"
+      ? "Unclassified"
+      : classificationLabels[classificationFilter] || classificationFilter
+    : null;
 
   const canEditConfig = campaign?.status === "draft" || campaign?.status === "scheduled";
   const template = templates.find(t => t.id === campaign?.templateId);
@@ -530,63 +540,155 @@ export default function WhatsAppCampaignDetail() {
             <div className="py-10 text-center text-sm text-gray-400">
               {(counts?.total ?? 0) === 0
                 ? "No recipients yet — they're snapshotted when the send starts."
-                : `No recipients with status "${statusFilter}".`}
+                : activeClassificationLabel
+                  ? `No recipients in "${activeClassificationLabel}" with status "${statusFilter}".`
+                  : `No recipients with status "${statusFilter}".`}
             </div>
           ) : (
-            <div className="divide-y max-h-[520px] overflow-y-auto">
-              {displayedRecipients.map(r => {
-                const canResend = r.status === "failed" || r.status === "expired";
-                const ts = bestTimestamp(r);
-                return (
-                  <div
-                    key={r.id}
-                    className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors"
-                    data-testid={`recipient-row-${r.id}`}
-                  >
-                    <RecipientAvatar r={r} />
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm truncate">{r.name || r.phone}</div>
-                      {r.name && <div className="text-xs text-gray-400">{r.phone}</div>}
-                      {r.errorMessage && (
-                        <div className="text-xs text-red-500 mt-0.5 line-clamp-1" title={r.errorMessage}>
-                          {r.errorMessage}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      {ts && (
-                        <span className="text-xs text-gray-400 hidden sm:block">
-                          {new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                        </span>
-                      )}
-                      {r.replyCount > 0 && (
-                        <span className="bg-emerald-600 text-white text-[10px] font-semibold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
-                          {r.replyCount}
-                        </span>
-                      )}
-                      <Badge
-                        variant={RECIPIENT_STATUS_VARIANT[r.status] || "outline"}
-                        className="text-xs"
-                        data-testid={`status-${r.id}`}
+            <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
+              <table className="w-full min-w-[980px] text-sm" data-testid="recipient-replies-table">
+                <thead className="sticky top-0 z-10 bg-gray-50 border-b">
+                  <tr className="text-left text-xs font-medium text-gray-500">
+                    <th className="px-4 py-3 w-[190px]">Recipient</th>
+                    <th className="px-4 py-3 w-[145px]">Mobile</th>
+                    <th className="px-4 py-3 w-[150px]">Outcome</th>
+                    <th className="px-4 py-3 min-w-[260px]">What they said</th>
+                    <th className="px-4 py-3 min-w-[180px]">Captured details</th>
+                    <th className="px-4 py-3 w-[150px]">Reply time</th>
+                    <th className="px-4 py-3 w-[130px]">Status</th>
+                    <th className="px-4 py-3 w-[135px] text-right">Conversation</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {displayedRecipients.map(r => {
+                    const canResend = r.status === "failed" || r.status === "expired";
+                    const ts = r.firstReplyAt;
+                    const outcome = r.primaryClassification
+                      ? classificationLabels[r.primaryClassification] || r.primaryClassification
+                      : r.firstReplyAt
+                        ? "Unclassified"
+                        : null;
+                    const capturedDetails = Object.entries(r.dispositionData || {});
+
+                    return (
+                      <tr
+                        key={r.id}
+                        className="align-top hover:bg-gray-50 transition-colors"
+                        data-testid={`recipient-row-${r.id}`}
                       >
-                        {r.status}
-                      </Badge>
-                      {canResend && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-xs text-gray-500 hover:text-gray-800"
-                          onClick={() => resendOneMutation.mutate(r.id)}
-                          disabled={resendOneMutation.isPending}
-                          data-testid={`button-resend-${r.id}`}
-                        >
-                          <RotateCcw className="h-3 w-3 mr-1" /> Resend
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <RecipientAvatar r={r} />
+                            <span className="font-medium text-gray-900 truncate" title={r.name || "No name"}>
+                              {r.name || "Unnamed recipient"}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-xs text-gray-700 whitespace-nowrap">
+                          {r.phone || "—"}
+                        </td>
+                        <td className="px-4 py-3">
+                          {outcome ? (
+                            <Badge
+                              variant="outline"
+                              className="bg-violet-50 text-violet-700 border-violet-200 whitespace-nowrap"
+                              data-testid={`badge-outcome-${r.id}`}
+                            >
+                              {outcome}
+                            </Badge>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 max-w-[340px]">
+                          {r.customerFeedback ? (
+                            <p className="text-gray-700 line-clamp-3" title={r.customerFeedback}>
+                              {r.customerFeedback}
+                            </p>
+                          ) : r.firstReplyAt ? (
+                            <span className="text-gray-400 italic">Reply text not captured</span>
+                          ) : (
+                            <span className="text-gray-400">No reply yet</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {capturedDetails.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {capturedDetails.map(([key, value]) => (
+                                <Badge
+                                  key={key}
+                                  variant="outline"
+                                  className="bg-gray-50 text-gray-600 border-gray-200 font-normal whitespace-normal text-left"
+                                  title={`${captureFieldLabels[key] || key}: ${value}`}
+                                >
+                                  {captureFieldLabels[key] || key.replace(/_/g, " ")}: {value}
+                                </Badge>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                          {ts
+                            ? new Date(ts).toLocaleString([], {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
+                            : "—"}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge
+                            variant={RECIPIENT_STATUS_VARIANT[r.status] || "outline"}
+                            className="text-xs whitespace-nowrap"
+                            data-testid={`status-${r.id}`}
+                          >
+                            {r.status}
+                          </Badge>
+                          {r.replyCount > 0 && (
+                            <div className="text-[11px] text-gray-400 mt-1">
+                              {r.replyCount} {r.replyCount === 1 ? "reply" : "replies"}
+                            </div>
+                          )}
+                          {r.errorMessage && (
+                            <div className="text-[11px] text-red-500 mt-1 line-clamp-2" title={r.errorMessage}>
+                              {r.errorMessage}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex flex-col items-end gap-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => setSelectedRecipient(r)}
+                              data-testid={`button-view-conversation-${r.id}`}
+                            >
+                              <MessageSquare className="h-3 w-3 mr-1" /> View
+                            </Button>
+                            {canResend && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 px-2 text-xs text-gray-500 hover:text-gray-800"
+                                onClick={() => resendOneMutation.mutate(r.id)}
+                                disabled={resendOneMutation.isPending}
+                                data-testid={`button-resend-${r.id}`}
+                              >
+                                <RotateCcw className="h-3 w-3 mr-1" /> Resend
+                              </Button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
 
@@ -622,6 +724,128 @@ export default function WhatsAppCampaignDetail() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={Boolean(selectedRecipient)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedRecipient(null);
+        }}
+      >
+        <DialogContent className="max-w-2xl">
+          {selectedRecipient && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 pr-6">
+                  <RecipientAvatar r={selectedRecipient} />
+                  <span className="truncate">{selectedRecipient.name || "Unnamed recipient"}</span>
+                </DialogTitle>
+                <DialogDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="font-mono text-xs">{selectedRecipient.phone}</span>
+                  {selectedRecipient.primaryClassification && (
+                    <Badge variant="outline" className="bg-violet-50 text-violet-700 border-violet-200">
+                      {classificationLabels[selectedRecipient.primaryClassification] || selectedRecipient.primaryClassification}
+                    </Badge>
+                  )}
+                  {selectedRecipient.callbackRequired && (
+                    <span className="text-amber-700">Callback requested</span>
+                  )}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <div className="rounded-md border bg-gray-50 p-2">
+                  <div className="text-gray-500">Status</div>
+                  <Badge
+                    variant={RECIPIENT_STATUS_VARIANT[selectedRecipient.status] || "outline"}
+                    className="mt-1 text-[11px]"
+                  >
+                    {selectedRecipient.status}
+                  </Badge>
+                </div>
+                <div className="rounded-md border bg-gray-50 p-2">
+                  <div className="text-gray-500">Replies</div>
+                  <div className="font-semibold mt-1">{selectedRecipient.replyCount}</div>
+                </div>
+                <div className="rounded-md border bg-gray-50 p-2">
+                  <div className="text-gray-500">First reply</div>
+                  <div className="font-medium mt-1">
+                    {selectedRecipient.firstReplyAt
+                      ? new Date(selectedRecipient.firstReplyAt).toLocaleString([], {
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : "—"}
+                  </div>
+                </div>
+                <div className="rounded-md border bg-gray-50 p-2">
+                  <div className="text-gray-500">Captured details</div>
+                  <div className="font-semibold mt-1">{Object.keys(selectedRecipient.dispositionData || {}).length}</div>
+                </div>
+              </div>
+
+              {selectedRecipient.customerFeedback && (
+                <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 p-3">
+                  <div className="text-xs font-medium text-emerald-800 mb-1">Customer reply</div>
+                  <p className="text-sm text-gray-800 whitespace-pre-wrap">{selectedRecipient.customerFeedback}</p>
+                </div>
+              )}
+
+              {Object.keys(selectedRecipient.dispositionData || {}).length > 0 && (
+                <div>
+                  <div className="text-xs font-medium text-gray-500 mb-1.5">Captured outcome details</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(selectedRecipient.dispositionData || {}).map(([key, value]) => (
+                      <Badge key={key} variant="outline" className="font-normal">
+                        {captureFieldLabels[key] || key.replace(/_/g, " ")}: {value}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <div className="text-xs font-medium text-gray-500 mb-1.5">Full conversation</div>
+                <div className="rounded-lg border bg-gray-50 p-3 max-h-[320px] overflow-y-auto space-y-2">
+                  {messagesLoading ? (
+                    <div className="py-6 text-center text-sm text-gray-400">Loading conversation…</div>
+                  ) : selectedRecipientMessages.length === 0 ? (
+                    <div className="py-6 text-center text-sm text-gray-400">
+                      No conversation messages are available yet.
+                    </div>
+                  ) : (
+                    selectedRecipientMessages.map(message => {
+                      const inbound = message.direction === "inbound";
+                      return (
+                        <div key={message.id} className={`flex ${inbound ? "justify-start" : "justify-end"}`}>
+                          <div
+                            className={`max-w-[85%] rounded-lg px-3 py-2 ${
+                              inbound ? "bg-white border text-gray-800" : "bg-emerald-100 text-gray-800"
+                            }`}
+                          >
+                            <div className="text-[10px] font-medium text-gray-500 mb-0.5">
+                              {inbound ? "Recipient" : campaign.aiAgentName || "Campaign"}
+                              {" · "}
+                              {new Date(message.createdAt).toLocaleString([], {
+                                month: "short",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </div>
+                            <p className="text-sm whitespace-pre-wrap break-words">{message.body}</p>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
