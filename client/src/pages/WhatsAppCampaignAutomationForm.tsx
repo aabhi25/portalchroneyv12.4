@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
-import { AlertTriangle, ArrowLeft, BookOpen, Bot, CalendarClock, FileSpreadsheet, Loader2, Save, SlidersHorizontal, Sparkles } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpen, Bot, CalendarClock, CheckCircle2, FileSpreadsheet, KeyRound, Loader2, MapPin, Save, SlidersHorizontal, Sparkles, UserRound, XCircle } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractAutomationSampleHeaders, type HeaderSource } from "@/lib/automationSampleHeaders";
+import { parseSpreadsheetDate } from "@shared/spreadsheetDate";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -67,7 +68,12 @@ type WorkbookDetail = {
   currentVersion: {
     id: string;
     versionNumber: number;
-    sheets: { id: string; name: string; columns: { key: string; label: string }[] }[];
+    sheets: {
+      id: string;
+      name: string;
+      columns: { key: string; label: string }[];
+      rows?: { values: Record<string, string | number | boolean | null> }[];
+    }[];
   } | null;
 };
 
@@ -110,6 +116,27 @@ function confidenceClass(confidence: MappingSuggestion["confidence"]) {
   if (confidence === "high") return "bg-emerald-100 text-emerald-800";
   if (confidence === "medium") return "bg-amber-100 text-amber-800";
   return "bg-gray-100 text-gray-700";
+}
+
+function dateInTimezone(timezone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value || "";
+    return `${value("year")}-${value("month")}-${value("day")}`;
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+function addIsoDays(value: string, days: number): string {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) {
@@ -262,7 +289,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
       ? { id: selectedWorkbookSheet.id, label: selectedWorkbookSheet.name, columns: selectedWorkbookSheet.columns }
       : groupSource
     : selectedUploadSource;
-  const sampleColumnKeys = new Set(selectedSource?.columns.map(column => column.key) || []);
+  const sampleColumnKeys = new Set(selectedSource?.columns.map(column => column.key.trim().toLowerCase()) || []);
 
   const applySuggestion = (
     field: "phoneColumn" | "nameColumn" | "recordKeyColumn" | "dateColumn" | "statusColumn" | "templateParams",
@@ -367,13 +394,71 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
   const templateUsesName = selectedTemplateParams.some(value =>
     /\{\{\s*name\s*\}\}/i.test(String(value || "")),
   );
+  const workbookSampleValues = selectedWorkbookSheet?.rows?.find(row =>
+    Object.values(row.values || {}).some(value => String(value ?? "").trim()),
+  )?.values;
+  const groupSampleContact = selectedGroupContacts.find(contact =>
+    Boolean(contact.phone || contact.name || Object.keys(contact.attributes || {}).length),
+  );
+  const sampleRow = workbookSampleValues
+    ? Object.fromEntries(Object.entries(workbookSampleValues).map(([key, value]) => [key.toLowerCase(), String(value ?? "").trim()]))
+    : groupSampleContact
+      ? {
+          phone: String(groupSampleContact.phone || "").trim(),
+          name: String(groupSampleContact.name || "").trim(),
+          ...Object.fromEntries(Object.entries(groupSampleContact.attributes || {}).map(([key, value]) => [key.toLowerCase(), String(value ?? "").trim()])),
+        }
+      : null;
+  const sampleValue = (column: string) => sampleRow?.[column.trim().toLowerCase()] || "";
+  const todayForAutomation = dateInTimezone(form.timezone);
+  const dateBeingChecked = addIsoDays(todayForAutomation, -(Number.isFinite(form.dateOffsetDays) ? form.dateOffsetDays : 0));
+  const allowedStatuses = form.eligibleStatusesText.split(",").map(value => value.trim().toLowerCase()).filter(Boolean);
+  const recordKeyColumns = form.recordKeyColumn.split(",").map(value => value.trim()).filter(Boolean);
+  const samplePhone = sampleValue(form.phoneColumn).replace(/\D/g, "");
+  const sampleRecordValues = recordKeyColumns.map(sampleValue);
+  const sampleDate = sampleValue(form.dateColumn);
+  const normalizedSampleDate = parseSpreadsheetDate(sampleDate);
+  const sampleStatus = sampleValue(form.statusColumn);
+  const sampleChecks = sampleRow
+    ? [
+        {
+          label: "Delivery number",
+          passed: samplePhone.length >= 8,
+          detail: sampleValue(form.phoneColumn) || `No value in ${form.phoneColumn || "the selected column"}`,
+        },
+        {
+          label: "Business record key",
+          passed: recordKeyColumns.length > 0 && sampleRecordValues.every(Boolean),
+          detail: sampleRecordValues.filter(Boolean).join(" · ") || "No complete record key",
+        },
+        {
+          label: "Date rule",
+          passed: Boolean(normalizedSampleDate) && normalizedSampleDate === dateBeingChecked,
+          detail: sampleDate
+            ? normalizedSampleDate
+              ? `${sampleDate}${sampleDate === normalizedSampleDate ? "" : ` → ${normalizedSampleDate}`} ${normalizedSampleDate === dateBeingChecked ? "matches" : `does not match ${dateBeingChecked}`}`
+              : `${sampleDate} is not a recognized spreadsheet date`
+            : `No value in ${form.dateColumn || "the selected column"}`,
+        },
+        {
+          label: "Status rule",
+          passed: allowedStatuses.length === 0 || allowedStatuses.includes(sampleStatus.toLowerCase()),
+          detail: allowedStatuses.length === 0
+            ? "All statuses are allowed"
+            : sampleStatus
+              ? `${sampleStatus} ${allowedStatuses.includes(sampleStatus.toLowerCase()) ? "is allowed" : "is not allowed"}`
+              : `No value in ${form.statusColumn || "the selected column"}`,
+        },
+      ]
+    : [];
+  const sampleMatchesFilters = sampleChecks.length > 0 && sampleChecks.every(check => check.passed);
   const sampleMappingIssues = selectedSource
     ? [
-      ...(!form.phoneColumn.trim() ? ["Mobile number column is required"] : []),
-      ...(!form.recordKeyColumn.trim() ? ["Unique record key is required"] : []),
-      ...(!form.dateColumn.trim() ? ["Date column is required"] : []),
+      ...(!form.phoneColumn.trim() ? ["Choose the column containing the WhatsApp delivery number"] : []),
+      ...(!form.recordKeyColumn.trim() ? ["Choose a business record key so the same invoice, loan, order, or appointment is not processed twice"] : []),
+      ...(!form.dateColumn.trim() ? ["Choose the date column that decides when each row becomes eligible"] : []),
       ...(templateUsesName && !form.nameColumn.trim() ? ['Name column is required because the template uses "{{name}}"'] : []),
-      ...(form.eligibleStatusesText.trim() && !form.statusColumn.trim() ? ["Status column is required when allowed statuses are configured"] : []),
+      ...(form.eligibleStatusesText.trim() && !form.statusColumn.trim() ? ["Choose a status column before limiting the automation to specific status values"] : []),
       ...[
       { label: "Phone", columns: [form.phoneColumn] },
       { label: "Name", columns: form.nameColumn.trim() ? [form.nameColumn] : [] },
@@ -382,8 +467,8 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
       { label: "Status", columns: form.statusColumn.trim() ? [form.statusColumn] : [] },
       ...templateColumnReferences.map(reference => ({ label: reference.label, columns: [reference.column] })),
       ].flatMap(({ label, columns }) =>
-      columns.some(column => !sampleColumnKeys.has(String(column).trim().toLowerCase()))
-        ? [`${label} must match a detected sample header`]
+      columns.some(column => String(column).trim() && !sampleColumnKeys.has(String(column).trim().toLowerCase()))
+        ? [`${label} points to a column that is not available in this source`]
         : [],
       ),
     ]
@@ -816,30 +901,161 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
         )}
       </Section>}
 
-      {(!isBlueprintSource || selectedBlueprint) && <Section title="Spreadsheet matching rule" icon={<SlidersHorizontal className="h-4 w-4 text-emerald-600" />}>
-        <p className="text-sm text-gray-600">
-          Configure the fields used for recurring eligibility and duplicate prevention. Use the exact column keys shown above.
-        </p>
-        <div className="grid sm:grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label>Mobile number column</Label>
-            <Input list="automation-sample-columns" value={form.phoneColumn} disabled={isCampaignOwnedBlueprint} onChange={event => updateMapping("phoneColumn", event.target.value)} />
-            {isCampaignOwnedBlueprint && <p className="text-xs text-gray-500">Inherited from the campaign setup.</p>}
-          </div>
-          <div className="space-y-2"><Label>Name column (optional)</Label><Input list="automation-sample-columns" value={form.nameColumn} onChange={event => updateMapping("nameColumn", event.target.value)} /></div>
-          <div className="space-y-2"><Label>Unique record key column(s)</Label><Input list="automation-sample-columns" value={form.recordKeyColumn} onChange={event => updateMapping("recordKeyColumn", event.target.value)} /><p className="text-xs text-gray-500">Use one column, or comma-separated values such as loan id, installment id.</p></div>
-          <div className="space-y-2"><Label>Date column</Label><Input list="automation-sample-columns" value={form.dateColumn} onChange={event => updateMapping("dateColumn", event.target.value)} /></div>
-          <div className="space-y-2"><Label>Days relative to date</Label><Input type="number" min={-366} max={366} value={form.dateOffsetDays} onChange={event => update("dateOffsetDays", Number(event.target.value))} /><p className="text-xs text-gray-500">-3 sends three days before; 0 sends on the date; +1 sends one day after.</p></div>
-          <div className="space-y-2"><Label>Status column (optional)</Label><Input list="automation-sample-columns" value={form.statusColumn} onChange={event => updateMapping("statusColumn", event.target.value)} /></div>
+      {(!isBlueprintSource || selectedBlueprint) && <Section title="Who gets included in each run" icon={<SlidersHorizontal className="h-4 w-4 text-emerald-600" />}>
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+          <p className="font-medium text-emerald-950">How this automation decides</p>
+          <p className="mt-1 text-sm text-emerald-900">
+            On each run, Chroney checks every row in this order:
+          </p>
+          <ol className="mt-3 grid gap-2 text-sm text-emerald-950 sm:grid-cols-2">
+            <li className="flex gap-2"><span className="font-semibold">1.</span><span>The row has a mobile number and business record key.</span></li>
+            <li className="flex gap-2"><span className="font-semibold">2.</span><span>Its mapped date matches today after applying the offset.</span></li>
+            <li className="flex gap-2"><span className="font-semibold">3.</span><span>Its status is allowed, if you add a status filter.</span></li>
+            <li className="flex gap-2"><span className="font-semibold">4.</span><span>That record key has not already been scheduled by this automation.</span></li>
+          </ol>
         </div>
+
+        <div className="rounded-lg border p-4 space-y-4">
+          <div className="flex gap-3">
+            <MapPin className="mt-0.5 h-5 w-5 shrink-0 text-violet-600" />
+            <div>
+              <h3 className="font-medium">Where to send and how to personalize</h3>
+              <p className="text-xs text-gray-500">These fields identify the WhatsApp destination and the customer name used by the message template.</p>
+            </div>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Mobile number column</Label>
+              <Input list="automation-sample-columns" value={form.phoneColumn} disabled={isCampaignOwnedBlueprint} onChange={event => updateMapping("phoneColumn", event.target.value)} />
+              <p className="text-xs text-gray-500">{isCampaignOwnedBlueprint ? "Inherited from campaign setup. This is the WhatsApp delivery destination." : "The column containing each recipient's WhatsApp number."}</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Name column {templateUsesName ? <span className="text-red-600">(required by template)</span> : "(optional)"}</Label>
+              <Input list="automation-sample-columns" value={form.nameColumn} onChange={event => updateMapping("nameColumn", event.target.value)} />
+              <p className="text-xs text-gray-500">{templateUsesName ? 'Required because the campaign message uses "{{name}}".' : "Used only for message personalization; it does not decide eligibility."}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-4">
+          <div className="flex gap-3">
+            <CalendarClock className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+            <div>
+              <h3 className="font-medium">When should a row qualify?</h3>
+              <p className="text-xs text-gray-500">A row qualifies when its date plus the offset equals today in the automation timezone.</p>
+            </div>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Date column</Label>
+              <Input list="automation-sample-columns" value={form.dateColumn} onChange={event => updateMapping("dateColumn", event.target.value)} placeholder="e.g. due_date" />
+              <p className="text-xs text-gray-500">YYYY-MM-DD is recommended. Day-first dates and Excel date cells are normalized before matching.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Send relative to that date</Label>
+              <Input type="number" min={-366} max={366} value={form.dateOffsetDays} onChange={event => update("dateOffsetDays", Number(event.target.value))} />
+              <div className="grid grid-cols-3 gap-1 text-center text-[11px]">
+                <span className={`rounded border px-1.5 py-1 ${form.dateOffsetDays < 0 ? "border-blue-300 bg-blue-50 text-blue-800" : "text-gray-500"}`}>−3 = before</span>
+                <span className={`rounded border px-1.5 py-1 ${form.dateOffsetDays === 0 ? "border-blue-300 bg-blue-50 text-blue-800" : "text-gray-500"}`}>0 = on date</span>
+                <span className={`rounded border px-1.5 py-1 ${form.dateOffsetDays > 0 ? "border-blue-300 bg-blue-50 text-blue-800" : "text-gray-500"}`}>+1 = after</span>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-950">
+            <span className="font-medium">For today, {todayForAutomation}:</span>{" "}
+            this run checks for <span className="font-mono font-semibold">{dateBeingChecked}</span> in{" "}
+            <span className="font-mono font-semibold">{form.dateColumn || "your date column"}</span>.
+            {form.dateOffsetDays < 0 && ` That is ${Math.abs(form.dateOffsetDays)} day${Math.abs(form.dateOffsetDays) === 1 ? "" : "s"} before the row's date.`}
+            {form.dateOffsetDays > 0 && ` That is ${form.dateOffsetDays} day${form.dateOffsetDays === 1 ? "" : "s"} after the row's date.`}
+          </div>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-4">
+          <div className="flex gap-3">
+            <UserRound className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+            <div>
+              <h3 className="font-medium">Should status limit the matching rows?</h3>
+              <p className="text-xs text-gray-500">Use this only when records should send in selected states, such as pending or overdue.</p>
+            </div>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Status column (optional)</Label>
+              <Input list="automation-sample-columns" value={form.statusColumn} onChange={event => updateMapping("statusColumn", event.target.value)} placeholder="e.g. payment_status" />
+              <p className="text-xs text-gray-500">The column containing the current state of each record.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Statuses that are allowed to send</Label>
+              <Input value={form.eligibleStatusesText} onChange={event => update("eligibleStatusesText", event.target.value)} placeholder="pending, overdue" />
+              <p className="text-xs text-gray-500">Comma-separated; leading/trailing spaces and letter case are ignored, but values must otherwise match exactly. Leave blank to allow every status.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-4">
+          <div className="flex gap-3">
+            <KeyRound className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
+            <div>
+              <h3 className="font-medium">How should repeat sends be prevented?</h3>
+              <p className="text-xs text-gray-500">Choose the stable ID of the business record—not the customer’s phone number when one customer can have multiple records.</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Business record key column(s)</Label>
+            <Input list="automation-sample-columns" value={form.recordKeyColumn} onChange={event => updateMapping("recordKeyColumn", event.target.value)} placeholder="e.g. loan_id or invoice_id, installment_id" />
+            <p className="text-xs text-gray-500">
+              Examples: invoice ID, loan ID, order ID, or appointment ID. Use comma-separated columns for a combined key, such as <span className="font-mono">loan_id, installment_id</span>. Once a run is scheduled for a key, future runs skip it.
+            </p>
+          </div>
+        </div>
+
         {selectedSource && <datalist id="automation-sample-columns">{selectedSource.columns.map(column => <option key={column.key} value={column.key}>{column.label}</option>)}</datalist>}
+
         {sampleMappingIssues.length > 0 && (
-          <p className="flex gap-2 text-xs text-amber-800"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{sampleMappingIssues.join(". ")}.</p>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="flex gap-2 text-sm font-medium text-amber-950"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />Complete these settings</p>
+            <ul className="mt-2 space-y-1 pl-6 text-xs text-amber-900">
+              {sampleMappingIssues.map(issue => <li key={issue} className="list-disc">{issue}.</li>)}
+            </ul>
+          </div>
         )}
-        <div className="space-y-2">
-          <Label>Allowed status values (optional, comma separated)</Label>
-          <Input value={form.eligibleStatusesText} onChange={event => update("eligibleStatusesText", event.target.value)} placeholder="pending, overdue" />
-          <p className="text-xs text-gray-500">Leave blank to include every record that matches the date rule.</p>
+
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="font-medium text-slate-950">{sampleRow ? "First source row: filter preview" : "Current rule in plain language"}</h3>
+              <p className="mt-1 text-xs text-slate-600">
+                {sampleRow
+                  ? "This previews filter matching only. Previously scheduled record keys are still skipped at run time."
+                  : "Choose valid column mappings to preview the first available source row here."}
+              </p>
+            </div>
+            {sampleRow && (
+              <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${sampleMappingIssues.length > 0 ? "bg-amber-100 text-amber-800" : sampleMatchesFilters ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"}`}>
+                {sampleMappingIssues.length > 0 ? "Finish setup" : sampleMatchesFilters ? "Matches filters" : "Excluded"}
+              </span>
+            )}
+          </div>
+          {sampleRow ? (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {sampleChecks.map(check => (
+                <div key={check.label} className="flex gap-2 rounded-md border bg-white p-2.5">
+                  {check.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />}
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-slate-900">{check.label}</p>
+                    <p className="break-words text-xs text-slate-600">{check.detail}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-md border bg-white p-3 text-sm text-slate-700">
+              Include a row when <span className="font-mono">{form.dateColumn || "date column"}</span> is{" "}
+              <span className="font-mono font-medium">{dateBeingChecked}</span>
+              {allowedStatuses.length > 0 ? <> and <span className="font-mono">{form.statusColumn || "status column"}</span> is one of <span className="font-medium">{allowedStatuses.join(", ")}</span></> : ", regardless of status"}.
+              Then skip it if its business record key was already scheduled.
+            </p>
+          )}
         </div>
       </Section>}
 
