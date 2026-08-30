@@ -541,7 +541,7 @@ export default function TopScholarAnalytics() {
           label="Total Voice Minutes"
           value={ov ? ov.voice.totalMinutes.toLocaleString(undefined, { maximumFractionDigits: 1 }) : "—"}
           sub={ov ? `${ov.voice.sessions} voice ${ov.voice.sessions === 1 ? "session" : "sessions"}` : undefined}
-          description="Total time voice mode remained connected during the selected date range and curriculum filters. Idle connected time is included."
+          description="Total time voice mode remained connected during the selected date range and curriculum filters."
         />
       </div>
 
