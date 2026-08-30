@@ -15,15 +15,15 @@
  *    nobody.
  */
 import { db } from "../../db";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { whatsappTemplates, contactGroups, contactGroupContacts } from "../../../shared/schema";
 import type { WhatsappTemplate } from "../../../shared/schema";
 
 /** The only template status MSG91 will accept for a send. */
 export const USABLE_TEMPLATE_STATUS = "approved";
 
-export function isTemplateUsable(tpl: Pick<WhatsappTemplate, "status"> | null | undefined): boolean {
-  return !!tpl && tpl.status === USABLE_TEMPLATE_STATUS;
+export function isTemplateUsable(tpl: Pick<WhatsappTemplate, "status" | "deletedAt"> | null | undefined): boolean {
+  return !!tpl && tpl.status === USABLE_TEMPLATE_STATUS && !tpl.deletedAt;
 }
 
 /** Number of approved, sendable templates this business owns. */
@@ -35,6 +35,7 @@ export async function countUsableTemplates(businessAccountId: string): Promise<n
       and(
         eq(whatsappTemplates.businessAccountId, businessAccountId),
         eq(whatsappTemplates.status, USABLE_TEMPLATE_STATUS),
+        isNull(whatsappTemplates.deletedAt),
       ),
     );
   return row?.n ?? 0;
@@ -103,6 +104,12 @@ export async function checkCampaignPrerequisites(
 
   if (!tpl) {
     return { code: "template_not_found", message: "That message template no longer exists." };
+  }
+  if (tpl.deletedAt) {
+    return {
+      code: "template_not_found",
+      message: `The template "${tpl.name}" was removed. Choose another approved message template.`,
+    };
   }
   if (!isTemplateUsable(tpl)) {
     return {

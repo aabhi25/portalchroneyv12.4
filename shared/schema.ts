@@ -2959,9 +2959,27 @@ export const whatsappTemplates = pgTable("whatsapp_templates", {
   msg91TemplateId: text("msg91_template_id"), // External MSG91 template id once submitted
   namespace: text("namespace"), // WABA template namespace (required by MSG91 send payload)
   rejectionReason: text("rejection_reason"),
+  sourceType: text("source_type").notNull().default("manual"), // 'manual' | 'msg91'
+  sourceWhatsappNumber: text("source_whatsapp_number"), // Normalized business number used for MSG91 sync
+  deletedAt: timestamp("deleted_at"), // Soft delete preserves campaign/automation history
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  businessActiveIdx: index("whatsapp_templates_business_active_idx").on(table.businessAccountId, table.deletedAt),
+  businessSourceNumberIdx: index("whatsapp_templates_business_source_number_idx").on(
+    table.businessAccountId,
+    table.sourceType,
+    table.sourceWhatsappNumber,
+  ),
+  msg91ScopedIdentityUnique: uniqueIndex("whatsapp_templates_msg91_scoped_identity_unique")
+    .on(
+      table.businessAccountId,
+      table.sourceWhatsappNumber,
+      table.name,
+      table.language,
+    )
+    .where(sql`${table.sourceType} = 'msg91' AND ${table.sourceWhatsappNumber} IS NOT NULL`),
+}));
 
 export const insertWhatsappTemplateSchema = createInsertSchema(whatsappTemplates).omit({
   id: true,

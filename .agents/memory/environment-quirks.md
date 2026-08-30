@@ -6,11 +6,16 @@ description: Replit/workspace specifics for this repl that are easy to get wrong
 # Schema changes
 
 Schema lives in `shared/schema.ts` and is applied with `npm run db:push`
-(drizzle-kit push), not migration files. `-- --force` is needed when drizzle
-prompts interactively, since the agent shell is non-interactive.
+(drizzle-kit push), not migration files. Never force a push that reports
+unrelated destructive statements; apply only the required additive development
+DDL and leave production to Replit Publish's managed schema diff.
 
-**How to apply:** after a push, verify the columns landed by querying
-`information_schema.columns` rather than trusting the "Changes applied" line.
+**Why:** this project's Drizzle schema can drift from existing tables, so a
+small additive change may also propose deleting populated unrelated columns.
+
+**How to apply:** inspect every proposed statement. If unrelated destructive
+changes appear, decline the push and apply only static additive DDL to
+development. Verify columns and indexes through catalog queries.
 
 # pgvector
 
@@ -42,16 +47,10 @@ Never edit `.replit` directly — it goes through the verify-and-replace flow.
 
 # A schema push is NOT a deployment
 
-`db:push` updates the development database only. Production starts from the
-built bundle and never runs it, so a column that exists in dev can be missing in
-production and every insert touching it fails there.
+Development schema changes do not modify production directly.
 
-**Why:** the dev and production databases drift independently, and a pushed
-change looks completely finished locally.
+**Why:** Replit Publish manages the development-to-production schema diff and
+rename confirmation; new startup-time DDL bypasses that safety model.
 
-**How to apply:** any new column also needs an expand-only
-`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in the startup init path, which runs
-on every boot in both environments. Follow the existing convention there:
-nullable or defaulted, wrapped in its own try/catch so one failure cannot abort
-boot. Verify by dropping the columns and restarting — if they come back and the
-app works, the production upgrade path is proven.
+**How to apply:** keep the Drizzle schema authoritative, validate development,
+and use Publish for production schema application. Do not add new boot-time DDL.

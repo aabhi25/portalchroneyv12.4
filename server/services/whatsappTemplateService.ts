@@ -1,6 +1,6 @@
 import { db } from "../db";
 import { whatsappTemplates, type WhatsappTemplate, type InsertWhatsappTemplate } from "@shared/schema";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 
 function countParams(body: string): number {
   const matches = body.match(/\{\{\s*\d+\s*\}\}/g);
@@ -11,12 +11,46 @@ function countParams(body: string): number {
   return indices.size;
 }
 
+export function normalizeWhatsappNumber(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\D/g, "") : "";
+}
+
+function remoteWhatsappNumbers(remote: any, variant: any): string[] {
+  const values = [
+    remote?.integrated_number,
+    remote?.integratedNumber,
+    remote?.whatsapp_number,
+    remote?.whatsappNumber,
+    variant?.integrated_number,
+    variant?.integratedNumber,
+    variant?.whatsapp_number,
+    variant?.whatsappNumber,
+  ];
+  return Array.from(new Set(values.map(normalizeWhatsappNumber).filter(Boolean)));
+}
+
+function templateIdentity(name: string, language: string): string {
+  return `${name.trim().toLowerCase()}\u0000${language.trim().toLowerCase()}`;
+}
+
+export interface WhatsappTemplateSyncResult {
+  synced: number;
+  added: number;
+  updated: number;
+  skipped: number;
+  removed: number;
+  templates: WhatsappTemplate[];
+}
+
 export const whatsappTemplateService = {
   async list(businessAccountId: string): Promise<WhatsappTemplate[]> {
     return db
       .select()
       .from(whatsappTemplates)
-      .where(eq(whatsappTemplates.businessAccountId, businessAccountId))
+      .where(and(
+        eq(whatsappTemplates.businessAccountId, businessAccountId),
+        isNull(whatsappTemplates.deletedAt),
+      ))
       .orderBy(desc(whatsappTemplates.updatedAt));
   },
 
@@ -24,7 +58,11 @@ export const whatsappTemplateService = {
     const [row] = await db
       .select()
       .from(whatsappTemplates)
-      .where(and(eq(whatsappTemplates.id, id), eq(whatsappTemplates.businessAccountId, businessAccountId)))
+      .where(and(
+        eq(whatsappTemplates.id, id),
+        eq(whatsappTemplates.businessAccountId, businessAccountId),
+        isNull(whatsappTemplates.deletedAt),
+      ))
       .limit(1);
     return row;
   },
@@ -52,6 +90,9 @@ export const whatsappTemplateService = {
         status: "approved",
         msg91TemplateId,
         namespace: payload.namespace || null,
+        sourceType: "manual",
+        sourceWhatsappNumber: null,
+        deletedAt: null,
       })
       .returning();
     return row;
@@ -72,15 +113,24 @@ export const whatsappTemplateService = {
     const [row] = await db
       .update(whatsappTemplates)
       .set(updates)
-      .where(and(eq(whatsappTemplates.id, id), eq(whatsappTemplates.businessAccountId, businessAccountId)))
+      .where(and(
+        eq(whatsappTemplates.id, id),
+        eq(whatsappTemplates.businessAccountId, businessAccountId),
+        isNull(whatsappTemplates.deletedAt),
+      ))
       .returning();
     return row;
   },
 
   async remove(businessAccountId: string, id: string): Promise<boolean> {
     const result = await db
-      .delete(whatsappTemplates)
-      .where(and(eq(whatsappTemplates.id, id), eq(whatsappTemplates.businessAccountId, businessAccountId)))
+      .update(whatsappTemplates)
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
+      .where(and(
+        eq(whatsappTemplates.id, id),
+        eq(whatsappTemplates.businessAccountId, businessAccountId),
+        isNull(whatsappTemplates.deletedAt),
+      ))
       .returning({ id: whatsappTemplates.id });
     return result.length > 0;
   },
@@ -115,10 +165,17 @@ export const whatsappTemplateService = {
    *
    * The `:number` path variable is the integrated WhatsApp number (digits only).
    */
-  async syncFromMsg91(businessAccountId: string, authKey: string, integratedNumber?: string): Promise<{ synced: number; templates: WhatsappTemplate[] }> {
-    let synced = 0;
+  async syncFromMsg91(
+    businessAccountId: string,
+    authKey: string,
+    integratedNumber?: string,
+  ): Promise<WhatsappTemplateSyncResult> {
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
+    let removed = 0;
     try {
-      const num = (integratedNumber || "").replace(/\D/g, "");
+      const num = normalizeWhatsappNumber(integratedNumber);
       if (!num) {
         // Throw so the route returns a clear 500 (route already guards for missing
         // number before calling here, so this is a last-resort safety net).
@@ -136,6 +193,7 @@ export const whatsappTemplateService = {
       const PAGE_SIZE = 200;
       const MAX_PAGES = 25;
       const allRemote: any[] = [];
+      let snapshotComplete = false;
 
       for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
         const url =
@@ -145,7 +203,7 @@ export const whatsappTemplateService = {
 
         const resp = await fetch(url, {
           method: "GET",
-          headers: { authkey: authKey, accept: "application/json" },
+          headers: { authkey: authKey, accept: "application/json", "content-type": "text/plain" },
         });
 
         const json: any = await resp.json().catch(() => ({}));
@@ -157,21 +215,30 @@ export const whatsappTemplateService = {
         }
 
         // Normalise the response envelope — MSG91 returns arrays under various keys
-        const page: any[] =
-          (Array.isArray(json?.data) && json.data) ||
-          (Array.isArray(json?.templates) && json.templates) ||
-          (Array.isArray(json?.data?.templates) && json.data.templates) ||
-          (Array.isArray(json?.result) && json.result) ||
-          (Array.isArray(json) && json) ||
-          [];
+        const page =
+          [json?.data, json?.templates, json?.data?.templates, json?.result, json]
+            .find(Array.isArray) as any[] | undefined;
+        if (!page) {
+          throw new Error("MSG91 returned an unsupported template response. No local templates were changed.");
+        }
 
         allRemote.push(...page);
 
         // A page shorter than PAGE_SIZE means we have reached the last page.
-        if (page.length < PAGE_SIZE) break;
+        if (page.length < PAGE_SIZE) {
+          snapshotComplete = true;
+          break;
+        }
+        if (pageNum === MAX_PAGES) {
+          throw new Error(
+            `MSG91 returned at least ${PAGE_SIZE * MAX_PAGES} templates without a final page. No local templates were changed.`,
+          );
+        }
       }
+      if (!snapshotComplete) throw new Error("MSG91 template snapshot was incomplete. No local templates were changed.");
 
       console.log(`[WhatsappTemplateService] Total templates fetched from MSG91: ${allRemote.length}`);
+      const remoteIdentities = new Set<string>();
 
       // MSG91 response shape (discovered from live API):
       //   { name, category, namespace, languages: [ { language, status, code: [ {type, text}, ... ] } ] }
@@ -179,7 +246,7 @@ export const whatsappTemplateService = {
       // entry per language variant. Components (BODY, HEADER, FOOTER, BUTTONS)
       // live inside variant.code[], NOT variant.components[].
       for (const remote of allRemote) {
-        const name = remote.name || remote.template_name;
+        const name = String(remote.name || remote.template_name || "").trim();
         if (!name) continue;
 
         // Collect language variants. Fall back to treating the remote object itself
@@ -190,6 +257,21 @@ export const whatsappTemplateService = {
           // Language is part of the identity: "promo_offer" in "en" and "hi" are
           // distinct Meta-approved templates and must not overwrite each other.
           const language = (variant.language || remote.language || "en").toString().toLowerCase();
+          const identity = templateIdentity(name, language);
+          if (remoteIdentities.has(identity)) {
+            skipped++;
+            continue;
+          }
+
+          const associatedNumbers = remoteWhatsappNumbers(remote, variant);
+          if (associatedNumbers.length > 0 && !associatedNumbers.includes(num)) {
+            skipped++;
+            console.warn(
+              `[WhatsappTemplateService] Skipping template ${name}/${language}: response number does not match configured WhatsApp number`,
+            );
+            continue;
+          }
+          remoteIdentities.add(identity);
 
           // Helper: find a component from either variant.code (MSG91) or
           // variant.components (Meta Graph API fallback), case-insensitively.
@@ -229,38 +311,87 @@ export const whatsappTemplateService = {
               (variant.msg91_template_id ?? variant.id ?? remote.id ?? remote.template_id ?? null)
                 ?.toString() ?? null,
             namespace: remote.namespace || variant.namespace || null,
+            sourceType: "msg91",
+            sourceWhatsappNumber: num,
           };
 
-          // Upsert by (businessAccountId, name, language)
-          const existing = await db
+          // Provider identities are scoped to the configured WhatsApp number.
+          // A number change must create a separate record so old campaigns keep
+          // their original template snapshot and tombstones do not cross scopes.
+          const scopedExisting = await db
             .select()
             .from(whatsappTemplates)
             .where(
               and(
                 eq(whatsappTemplates.businessAccountId, businessAccountId),
+                eq(whatsappTemplates.sourceType, "msg91"),
+                eq(whatsappTemplates.sourceWhatsappNumber, num),
                 eq(whatsappTemplates.name, name),
                 eq(whatsappTemplates.language, language),
               ),
             )
             .limit(1);
+          let existing = scopedExisting;
+
+          // Conservatively adopt a legacy/manual mirror only when its external
+          // MSG91 ID proves it is the same provider template. Name collisions
+          // alone never convert or overwrite a manual record.
+          if (existing.length === 0 && payload.msg91TemplateId) {
+            existing = await db
+              .select()
+              .from(whatsappTemplates)
+              .where(and(
+                eq(whatsappTemplates.businessAccountId, businessAccountId),
+                eq(whatsappTemplates.sourceType, "manual"),
+                eq(whatsappTemplates.msg91TemplateId, payload.msg91TemplateId),
+                eq(whatsappTemplates.name, name),
+                eq(whatsappTemplates.language, language),
+              ))
+              .limit(1);
+          }
 
           if (existing.length > 0) {
+            if (existing[0].deletedAt) {
+              skipped++;
+              continue;
+            }
             await db
               .update(whatsappTemplates)
               .set({ ...payload, updatedAt: new Date() })
               .where(eq(whatsappTemplates.id, existing[0].id));
+            updated++;
           } else {
             await db.insert(whatsappTemplates).values(payload);
+            added++;
           }
-          synced++;
         }
+      }
+
+      const activeSynced = await db
+        .select()
+        .from(whatsappTemplates)
+        .where(and(
+          eq(whatsappTemplates.businessAccountId, businessAccountId),
+          eq(whatsappTemplates.sourceType, "msg91"),
+          eq(whatsappTemplates.sourceWhatsappNumber, num),
+          isNull(whatsappTemplates.deletedAt),
+        ));
+      const staleIds = activeSynced
+        .filter(template => !remoteIdentities.has(templateIdentity(template.name, template.language)))
+        .map(template => template.id);
+      for (const id of staleIds) {
+        await db
+          .update(whatsappTemplates)
+          .set({ deletedAt: new Date(), updatedAt: new Date() })
+          .where(eq(whatsappTemplates.id, id));
+        removed++;
       }
     } catch (err) {
       console.error("[WhatsappTemplateService] syncFromMsg91 error:", err);
       throw err; // let the route return a proper error to the client
     }
     const templates = await this.list(businessAccountId);
-    return { synced, templates };
+    return { synced: added + updated, added, updated, skipped, removed, templates };
   },
 
   /** @deprecated kept only to preserve old type — unused. */

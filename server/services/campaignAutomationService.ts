@@ -647,7 +647,7 @@ export const campaignAutomationService = {
     const [template] = await db.select().from(whatsappTemplates)
       .where(and(eq(whatsappTemplates.id, config.templateId), eq(whatsappTemplates.businessAccountId, businessAccountId)))
       .limit(1);
-    if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
+    if (!template || template.deletedAt || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
     assertTemplateMapping(template, config.templateParams || []);
     const workbookSource = await validateWorkbookConfig(businessAccountId, config);
     if (workbookSource) config = { ...config, sourceWorkbookSheetId: workbookSource.sheetId };
@@ -727,7 +727,7 @@ export const campaignAutomationService = {
     const [template] = await db.select().from(whatsappTemplates)
       .where(and(eq(whatsappTemplates.id, config.templateId), eq(whatsappTemplates.businessAccountId, businessAccountId)))
       .limit(1);
-    if (!template || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
+    if (!template || template.deletedAt || template.status !== "approved") throw new Error("Choose an approved WhatsApp template");
     assertTemplateMapping(template, config.templateParams || []);
     const workbookSource = await validateWorkbookConfig(businessAccountId, config);
     if (workbookSource) config = { ...config, sourceWorkbookSheetId: workbookSource.sheetId };
@@ -924,7 +924,9 @@ export const campaignAutomationService = {
     const [template] = await db.select().from(whatsappTemplates)
       .where(and(eq(whatsappTemplates.id, effectiveAutomation.templateId), eq(whatsappTemplates.businessAccountId, businessAccountId)))
       .limit(1);
-    if (!template || template.status !== "approved") throw new Error("The selected template is no longer approved");
+    if (!template || template.deletedAt || template.status !== "approved") {
+      throw new Error("The selected template is no longer available");
+    }
     assertTemplateMapping(template, effectiveAutomation.templateParams || []);
     if (
       workbookSource

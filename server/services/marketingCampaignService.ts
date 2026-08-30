@@ -581,7 +581,7 @@ export const marketingCampaignService = {
       .from(whatsappTemplates)
       .where(and(eq(whatsappTemplates.id, payload.templateId), eq(whatsappTemplates.businessAccountId, businessAccountId)))
       .limit(1);
-    if (!tpl) throw new Error("Template not found for this business");
+    if (!tpl || tpl.deletedAt) throw new Error("Template not found for this business");
     if (tpl.status !== "approved") throw new Error("Choose an approved WhatsApp template");
 
     const paramError = validateTemplateParams(tpl, payload.templateParams);
@@ -671,7 +671,7 @@ export const marketingCampaignService = {
         .from(whatsappTemplates)
         .where(and(eq(whatsappTemplates.id, templateId), eq(whatsappTemplates.businessAccountId, businessAccountId)))
         .limit(1);
-      if (!tpl) throw new Error("Template not found for this business");
+      if (!tpl || tpl.deletedAt) throw new Error("Template not found for this business");
       const values = payload.templateParams ?? (current.templateParams as string[]);
       const paramError = validateTemplateParams(tpl, values);
       if (paramError) throw new Error(paramError);

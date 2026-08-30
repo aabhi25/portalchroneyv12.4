@@ -41,6 +41,14 @@ interface Form {
   namespace: string;
 }
 
+interface SyncResult {
+  synced: number;
+  added: number;
+  updated: number;
+  skipped: number;
+  removed: number;
+}
+
 const DEFAULT_NAMESPACE = "e5656ce8_113b_4313_960e_b53051ef4247";
 
 const emptyForm: Form = {
@@ -69,16 +77,17 @@ export default function WhatsAppTemplates() {
   });
 
   const syncMutation = useMutation({
-    mutationFn: async () => apiRequest("POST", "/api/whatsapp/templates/sync"),
-    onSuccess: (data: any) => {
+    mutationFn: async () => apiRequest<SyncResult>("POST", "/api/whatsapp/templates/sync"),
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/templates"] });
       toast({
-        title: data?.synced > 0
-          ? `Synced ${data.synced} template${data.synced !== 1 ? "s" : ""} from MSG91`
-          : "No new templates found",
-        description: data?.synced === 0
-          ? "All your approved templates are already up to date, or none exist yet on MSG91."
-          : undefined,
+        title: "MSG91 sync complete",
+        description: [
+          `${data.added} added`,
+          `${data.updated} updated`,
+          `${data.removed} removed`,
+          `${data.skipped} skipped`,
+        ].join(" · "),
       });
     },
     onError: (e: any) => toast({ title: "Sync failed", description: e.message, variant: "destructive" }),
@@ -98,8 +107,14 @@ export default function WhatsAppTemplates() {
     mutationFn: async (id: string) => apiRequest("DELETE", `/api/whatsapp/templates/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/templates"] });
+      setDeleteTarget(null);
       toast({ title: "Template deleted" });
     },
+    onError: (e: Error) => toast({
+      title: "Couldn't delete template",
+      description: e.message,
+      variant: "destructive",
+    }),
   });
 
   const startNew = () => {
@@ -402,16 +417,20 @@ export default function WhatsAppTemplates() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete template?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will remove <strong>{deleteTarget?.name}</strong> from Chroney. It will not be deleted from MSG91 — you can re-sync it any time.
+              This will remove <strong>{deleteTarget?.name}</strong> from Chroney and prevent it from returning during future syncs. Existing campaign history will be preserved. It will not be deleted from MSG91.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-red-600 hover:bg-red-700"
-              onClick={() => { if (deleteTarget) { deleteMutation.mutate(deleteTarget.id); setDeleteTarget(null); } }}
+              onClick={(event) => {
+                event.preventDefault();
+                if (deleteTarget && !deleteMutation.isPending) deleteMutation.mutate(deleteTarget.id);
+              }}
+              disabled={deleteMutation.isPending}
             >
-              Delete
+              {deleteMutation.isPending ? "Deleting…" : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
