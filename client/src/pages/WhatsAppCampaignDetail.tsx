@@ -5,6 +5,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Send, X, RotateCcw, Pencil, MessageSquare, Copy, Users, ChevronLeft, ChevronRight } from "lucide-react";
@@ -81,8 +82,8 @@ export default function WhatsAppCampaignDetail() {
 
   const [statusFilter, setStatusFilter] = useState<StatusKey>("all");
   const [page, setPage] = useState(0);
-  // Outcome filter, driven by clicking a row in the outcomes card. Orthogonal to
-  // the status tabs — both narrow the same list and both feed the same counts.
+  // Outcome filter, driven by the table dropdown or by clicking a row in the
+  // outcomes summary. It narrows the same list as the status dropdown.
   const [classificationFilter, setClassificationFilter] = useState<string | null>(null);
   const [selectedRecipient, setSelectedRecipient] = useState<Recipient | null>(null);
 
@@ -106,7 +107,7 @@ export default function WhatsAppCampaignDetail() {
   // Counts-only query — no status filter, no pagination.
   // countRecipients on the server always returns totals for every status
   // regardless of what list filter is applied, so this query is the
-  // authoritative source for the stat tiles and filter-tab badges.
+  // authoritative source for the stat tiles and table filter options.
   // The outcome filter is included here as well as in the list query. Both must
   // narrow by the same thing: filterTotal below is read from these counts and
   // drives pagination over the list, so a mismatch would strand the user on
@@ -242,6 +243,8 @@ export default function WhatsAppCampaignDetail() {
       ? "Unclassified"
       : classificationLabels[classificationFilter] || classificationFilter
     : null;
+  const activeStatusLabel = STATUS_FILTERS.find((filter) => filter.key === statusFilter)?.label || "All";
+  const hasActiveTableFilter = Boolean(classificationFilter) || statusFilter !== "all";
 
   const canEditConfig = campaign?.status === "draft" || campaign?.status === "scheduled";
   const template = templates.find(t => t.id === campaign?.templateId);
@@ -471,7 +474,7 @@ export default function WhatsAppCampaignDetail() {
               Recipients
               {counts && (
                 <span className="text-sm font-normal text-gray-500">
-                  ({counts.total} total)
+                  ({filterTotal}{hasActiveTableFilter ? " matching" : " total"})
                 </span>
               )}
             </CardTitle>
@@ -499,37 +502,56 @@ export default function WhatsAppCampaignDetail() {
             )}
           </div>
 
-          {/* Status filter pills */}
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {STATUS_FILTERS.map(f => {
-              // Resolve count for badge display
-              const count: number =
-                f.key === "all"
-                  ? (counts?.total ?? 0)
-                  : (counts?.[f.key as keyof typeof counts] as number | undefined) ?? 0;
-              const isActive = statusFilter === f.key;
-              // Hide zero-count statuses (except "all") to keep the pill row lean
-              if (f.key !== "all" && count === 0) return null;
-              return (
-                <button
-                  key={f.key}
-                  onClick={() => changeFilter(f.key)}
-                  data-testid={`filter-${f.key}`}
-                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
-                    isActive
-                      ? "bg-emerald-600 text-white border-emerald-600"
-                      : "bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:bg-gray-50"
-                  }`}
-                >
-                  {f.label}
-                  {count > 0 && (
-                    <span className={`text-[10px] font-semibold ${isActive ? "text-white/80" : "text-gray-400"}`}>
-                      {count}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+          {/* Filters stay with the table they control. The outcomes card above
+              remains a summary, while these dropdowns are the authoritative
+              controls for the rows below. */}
+          <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
+            <span className="text-xs font-medium text-gray-500 shrink-0">Filter rows by</span>
+            <Select
+              value={classificationFilter || "all"}
+              onValueChange={(value) => changeClassification(value === "all" ? null : value)}
+            >
+              <SelectTrigger className="h-9 w-full sm:w-56 text-sm" data-testid="select-recipient-outcome">
+                <SelectValue placeholder="All outcomes" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All outcomes</SelectItem>
+                {campaignClassifications.map((classification) => (
+                  <SelectItem key={classification.key} value={classification.key}>
+                    {classification.label || classification.key}
+                  </SelectItem>
+                ))}
+                <SelectItem value="__unclassified__">Unclassified</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select value={statusFilter} onValueChange={(value) => changeFilter(value as StatusKey)}>
+              <SelectTrigger className="h-9 w-full sm:w-48 text-sm" data-testid="select-recipient-status">
+                <SelectValue placeholder="All statuses" />
+              </SelectTrigger>
+              <SelectContent>
+                {STATUS_FILTERS.map((filter) => (
+                  <SelectItem key={filter.key} value={filter.key}>
+                    {filter.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {hasActiveTableFilter && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 px-2 text-xs text-gray-500"
+                onClick={() => {
+                  changeClassification(null);
+                  changeFilter("all");
+                }}
+                data-testid="button-clear-recipient-filters"
+              >
+                Clear filters
+              </Button>
+            )}
           </div>
         </CardHeader>
 
@@ -541,8 +563,10 @@ export default function WhatsAppCampaignDetail() {
               {(counts?.total ?? 0) === 0
                 ? "No recipients yet — they're snapshotted when the send starts."
                 : activeClassificationLabel
-                  ? `No recipients in "${activeClassificationLabel}" with status "${statusFilter}".`
-                  : `No recipients with status "${statusFilter}".`}
+                  ? `No recipients in "${activeClassificationLabel}"${statusFilter !== "all" ? ` with status "${activeStatusLabel}"` : ""}.`
+                  : statusFilter !== "all"
+                    ? `No recipients with status "${activeStatusLabel}".`
+                    : "No recipients match the selected filters."}
             </div>
           ) : (
             <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
@@ -697,7 +721,7 @@ export default function WhatsAppCampaignDetail() {
             <div className="px-4 py-2.5 border-t bg-gray-50 text-xs text-gray-500 flex justify-between items-center">
               <span>
                 Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filterTotal)} of {filterTotal}{" "}
-                {statusFilter === "all" ? "recipients" : `${statusFilter} recipients`}
+                {hasActiveTableFilter ? "matching recipients" : "recipients"}
               </span>
               {totalPages > 1 && (
                 <div className="flex items-center gap-1">
