@@ -210,9 +210,8 @@ function WorkbooksList() {
   });
 
   const openCreate = () => {
-    const selected = campaigns[0];
-    setCampaignId(selected?.id || "blank");
-    setName(selected ? `${selected.name} Workbook` : "New AI Workbook");
+    setCampaignId("blank");
+    setName("New AI Workbook");
     setCreateOpen(true);
   };
 
