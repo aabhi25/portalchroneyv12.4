@@ -1,6 +1,6 @@
 import { and, eq, sql, desc, asc, isNotNull, inArray, gte, lte, type SQL } from 'drizzle-orm';
 import { db } from '../../db';
-import { conversations, messages, topscholarCpMappings } from '@shared/schema';
+import { conversations, messages, topscholarCpMappings, topscholarVoiceSessions } from '@shared/schema';
 import { resolveCpIdsForScope, hasScope, type StudentScope } from './scopeResolver';
 
 /**
@@ -201,6 +201,11 @@ const EMPTY_OVERVIEW = {
     avgActiveSeconds: 0,
     medianActiveSeconds: 0,
   },
+  voice: {
+    sessions: 0,
+    totalSeconds: 0,
+    totalMinutes: 0,
+  },
 };
 
 export type AnalyticsOverview = typeof EMPTY_OVERVIEW;
@@ -285,9 +290,43 @@ export async function getOverview(
     })
     .from(spans);
 
+  // Voice usage is measured from browser WebSocket connect to disconnect,
+  // including idle time. Clip each interval to the selected reporting window so
+  // a session crossing midnight contributes only the overlapping seconds.
+  const voiceConds: SQL[] = [
+    eq(topscholarVoiceSessions.businessAccountId, businessAccountId),
+    eq(topscholarVoiceSessions.isInternalTest, false),
+  ];
+  if (cpIds && cpIds.length > 0) {
+    const cpSql = sql.join(cpIds.map((cpId) => sql`${cpId}`), sql`, `);
+    voiceConds.push(sql`jsonb_exists_any(${topscholarVoiceSessions.cpIds}, array[${cpSql}]::text[])`);
+  }
+  if (filters.from) {
+    voiceConds.push(sql`coalesce(${topscholarVoiceSessions.disconnectedAt}, now()) >= ${filters.from}`);
+  }
+  if (filters.to) {
+    voiceConds.push(lte(topscholarVoiceSessions.connectedAt, filters.to));
+  }
+
+  const intervalStart = filters.from
+    ? sql`greatest(${topscholarVoiceSessions.connectedAt}, ${filters.from})`
+    : sql`${topscholarVoiceSessions.connectedAt}`;
+  const intervalEnd = filters.to
+    ? sql`least(coalesce(${topscholarVoiceSessions.disconnectedAt}, now()), ${filters.to})`
+    : sql`coalesce(${topscholarVoiceSessions.disconnectedAt}, now())`;
+
+  const [voiceAgg] = await db
+    .select({
+      sessions: sql<number>`count(*)::int`,
+      totalSeconds: sql<number>`coalesce(sum(greatest(0, extract(epoch from (${intervalEnd} - ${intervalStart})))), 0)::float`,
+    })
+    .from(topscholarVoiceSessions)
+    .where(and(...voiceConds));
+
   const totalStudents = convAgg?.totalStudents ?? 0;
   const totalQuestions = qAgg?.totalQuestions ?? 0;
   const totalConversations = convAgg?.totalConversations ?? 0;
+  const totalVoiceSeconds = Math.max(0, Math.round(voiceAgg?.totalSeconds ?? 0));
 
   const resolvedFirstPass = convAgg?.resolvedFirstPass ?? 0;
   const resolvedAfterRetry = convAgg?.resolvedAfterRetry ?? 0;
@@ -324,6 +363,11 @@ export async function getOverview(
       measuredSessions: activeAgg?.sessions ?? 0,
       avgActiveSeconds: Math.round(activeAgg?.avgActiveSeconds ?? 0),
       medianActiveSeconds: Math.round(activeAgg?.medianActiveSeconds ?? 0),
+    },
+    voice: {
+      sessions: voiceAgg?.sessions ?? 0,
+      totalSeconds: totalVoiceSeconds,
+      totalMinutes: Math.round((totalVoiceSeconds / 60) * 10) / 10,
     },
     sentiment: {
       positive: convAgg?.positive ?? 0,

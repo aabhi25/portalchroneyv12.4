@@ -13,6 +13,11 @@ import { resolveCpIdsForScope } from './services/topscholar/scopeResolver';
 import { selectRelevantImages, type CurriculumMediaCandidate } from './services/topscholar/mediaMetadata';
 import { aiUsageLogger } from './services/aiUsageLogger';
 import { chatService, type ChatContext } from './chatService';
+import {
+  closeOrphanedTopscholarVoiceSessions,
+  endTopscholarVoiceSession,
+  startTopscholarVoiceSession,
+} from './services/topscholar/voiceUsageService';
 
 /**
  * OpenAI Realtime model backing voice mode.
@@ -166,6 +171,10 @@ interface VoiceConversation {
    * scope was supplied (non-TopScholar business voice).
    */
   topscholarScope?: TopscholarVoiceScope | null;
+  // One row per browser WebSocket connection. Reconnects close the previous
+  // interval and start a new one while retaining the same chat conversation.
+  voiceUsageSessionId?: string;
+  voiceUsageClosed?: boolean;
   /**
    * Curriculum diagrams retrieved for the turn currently being answered, as
    * CANDIDATES only. Deliberately kept OUT of the text handed to the model — a
@@ -244,6 +253,8 @@ interface VoiceConversation {
 }
 
 export class RealtimeVoiceService {
+  private readonly voiceUsageRecovery: Promise<void>;
+  private readonly voiceUsageRotationLocks = new Map<string, Promise<void>>();
   private conversations: Map<string, VoiceConversation> = new Map(); // Now keyed by conversationId
   private readonly HEARTBEAT_INTERVAL = 30000; // 30 seconds
   private readonly HEARTBEAT_TIMEOUT = 180000; // 180 seconds - extended to handle mobile backgrounding and long AI responses
@@ -270,8 +281,23 @@ export class RealtimeVoiceService {
     return !eventResponseId || !conversation.currentResponseId || eventResponseId === conversation.currentResponseId;
   }
 
+  private isClientSocketGone(clientWs: WebSocket): boolean {
+    return clientWs.readyState === WebSocket.CLOSING || clientWs.readyState === WebSocket.CLOSED;
+  }
+
   constructor() {
     console.log('[RealtimeVoice] Service initialized with OpenAI Realtime API');
+    const bootBoundary = new Date();
+    this.voiceUsageRecovery = closeOrphanedTopscholarVoiceSessions(bootBoundary)
+      .then((closed) => {
+        if (closed > 0) {
+          console.log(`[RealtimeVoice] Closed ${closed} orphaned TopScholar voice usage interval(s) after restart`);
+        }
+      })
+      .catch((error) => {
+        // Telemetry recovery must not prevent the application from starting.
+        console.error('[RealtimeVoice] Failed to close orphaned TopScholar voice usage intervals:', error);
+      });
     // Start heartbeat monitor
     this.startHeartbeatMonitor();
   }
@@ -316,6 +342,7 @@ export class RealtimeVoiceService {
       // (no DB hit) when no scope was supplied, i.e. non-TopScholar voice.
       const { cpIds: scopedCpIds, chapter: scopedChapter } =
         await this.resolveVoiceCurriculumScope(businessAccountId, topscholarScope);
+      if (this.isClientSocketGone(clientWs)) return;
 
       // CRITICAL FIX: Check if this is a reconnection with existing conversationId
       if (existingConversationId && this.conversations.has(existingConversationId)) {
@@ -349,6 +376,15 @@ export class RealtimeVoiceService {
         conversation.topscholarCpIds = scopedCpIds;
         conversation.topscholarChapter = scopedChapter;
         conversation.topscholarScope = topscholarScope ?? null;
+        await this.rotateTopscholarVoiceUsageSession(conversation, 'reconnected');
+        if (this.isClientSocketGone(clientWs)) {
+          // A later reconnect may already have superseded this socket. In that
+          // case its own rotation owns the live interval and must not be torn down.
+          if (!(clientWs as any)._superseded) {
+            this.cleanupConversation(existingConversationId, 'client_disconnected_during_reconnect');
+          }
+          return;
+        }
         if (selectedLanguage !== undefined) {
           conversation.selectedLanguage = selectedLanguage;
         }
@@ -371,6 +407,13 @@ export class RealtimeVoiceService {
           } catch (err) {
             console.warn('[RealtimeVoice] Reconnect: failed to refresh instructions:', (err as Error).message);
           }
+        }
+
+        if (this.isClientSocketGone(clientWs)) {
+          if (!(clientWs as any)._superseded) {
+            this.cleanupConversation(existingConversationId, 'client_disconnected_during_reconnect');
+          }
+          return;
         }
 
         // Setup client handlers for new WebSocket
@@ -398,6 +441,7 @@ export class RealtimeVoiceService {
       const settings = await storage.getWidgetSettings(businessAccountId);
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
       const openaiApiKey = await storage.getBusinessAccountOpenAIKey(businessAccountId);
+      if (this.isClientSocketGone(clientWs)) return;
 
       if (!openaiApiKey) {
         this.sendError(clientWs, 'OpenAI API key not configured for this business account');
@@ -464,6 +508,7 @@ export class RealtimeVoiceService {
           topscholarPlanId: topscholarScope?.planId || null,
         });
       }
+      if (this.isClientSocketGone(clientWs)) return;
 
       const conversationId = dbConversation.id; // Stable identifier for entire session
 
@@ -516,6 +561,16 @@ export class RealtimeVoiceService {
 
       // Connect to OpenAI Realtime API
       await this.connectToOpenAI(conversationId, conversation);
+      if (this.isClientSocketGone(clientWs)) {
+        this.cleanupConversation(conversationId, 'client_disconnected_during_openai_setup');
+        return;
+      }
+
+      await this.startTopscholarVoiceUsageSession(conversation);
+      if (this.isClientSocketGone(clientWs)) {
+        this.cleanupConversation(conversationId, 'client_disconnected_during_usage_setup');
+        return;
+      }
 
       // Setup client WebSocket handlers
       this.setupClientHandlers(conversationId, conversation);
@@ -577,12 +632,88 @@ export class RealtimeVoiceService {
     console.log(`[RealtimeVoice] Started heartbeat for conversation ${conversationId}`);
   }
 
+  private async startTopscholarVoiceUsageSession(conversation: VoiceConversation): Promise<void> {
+    if (!isTopscholarAccount(conversation.businessAccountId)) return;
+    if (conversation.voiceUsageClosed) return;
+
+    try {
+      // Do not race a new connection against boot recovery of intervals left
+      // open by a previous process.
+      await this.voiceUsageRecovery;
+      if (conversation.voiceUsageClosed) return;
+
+      const sessionId = await startTopscholarVoiceSession({
+        businessAccountId: conversation.businessAccountId,
+        conversationId: conversation.conversationId,
+        cpIds: conversation.topscholarCpIds,
+        scope: conversation.topscholarScope,
+        isInternalTest: conversation.isInternalTest === true,
+      });
+
+      // Cleanup may have happened while the insert was in flight. Close the new
+      // row immediately instead of leaving an orphan that grows until restart.
+      if (conversation.voiceUsageClosed) {
+        await endTopscholarVoiceSession(sessionId, 'closed_during_start');
+        return;
+      }
+      conversation.voiceUsageSessionId = sessionId;
+    } catch (error) {
+      // Analytics must never prevent a student from using voice mode.
+      console.error('[RealtimeVoice] Failed to start TopScholar voice usage interval:', error);
+    }
+  }
+
+  private closeTopscholarVoiceUsageSession(conversation: VoiceConversation, reason: string): void {
+    const sessionId = conversation.voiceUsageSessionId;
+    if (!sessionId) return;
+    conversation.voiceUsageSessionId = undefined;
+
+    void endTopscholarVoiceSession(sessionId, reason).catch((error) => {
+      console.error('[RealtimeVoice] Failed to close TopScholar voice usage interval:', error);
+    });
+  }
+
+  private async rotateTopscholarVoiceUsageSession(
+    conversation: VoiceConversation,
+    closeReason: string,
+  ): Promise<void> {
+    const conversationId = conversation.conversationId;
+    const priorRotation = this.voiceUsageRotationLocks.get(conversationId) ?? Promise.resolve();
+    const rotation = priorRotation
+      .catch(() => undefined)
+      .then(async () => {
+        const priorSessionId = conversation.voiceUsageSessionId;
+        conversation.voiceUsageSessionId = undefined;
+
+        if (priorSessionId) {
+          try {
+            await endTopscholarVoiceSession(priorSessionId, closeReason);
+          } catch (error) {
+            console.error('[RealtimeVoice] Failed to close reconnecting TopScholar voice usage interval:', error);
+          }
+        }
+
+        await this.startTopscholarVoiceUsageSession(conversation);
+      });
+
+    this.voiceUsageRotationLocks.set(conversationId, rotation);
+    try {
+      await rotation;
+    } finally {
+      if (this.voiceUsageRotationLocks.get(conversationId) === rotation) {
+        this.voiceUsageRotationLocks.delete(conversationId);
+      }
+    }
+  }
+
   // Comprehensive cleanup for a conversation
   private cleanupConversation(conversationId: string, reason: string = 'unknown') {
     const conversation = this.conversations.get(conversationId);
     if (!conversation) return;
 
     console.log('[RealtimeVoice] Cleaning up conversation:', conversationId, 'reason:', reason);
+    conversation.voiceUsageClosed = true;
+    this.closeTopscholarVoiceUsageSession(conversation, reason);
 
     try {
       // A canonical answer remains response-owned until browser playback

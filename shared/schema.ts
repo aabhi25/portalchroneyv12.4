@@ -308,6 +308,35 @@ export const conversations = pgTable("conversations", {
   businessStudentIdx: index("conversations_business_student_idx").on(table.businessAccountId, table.studentId),
 }));
 
+// TopScholar voice-mode connection intervals. These are intentionally separate
+// from conversations: one resumable chat conversation can have multiple voice
+// WebSocket connections, while analytics needs the duration of each connection.
+export const topscholarVoiceSessions = pgTable("topscholar_voice_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  // Kept as an identifier rather than a cascading FK because an empty voice-only
+  // conversation may be deleted during cleanup while its usage interval remains
+  // valid analytics data.
+  conversationId: varchar("conversation_id").notNull(),
+  studentId: text("student_id"),
+  cpIds: jsonb("cp_ids").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  board: text("board"),
+  medium: text("medium"),
+  grade: text("grade"),
+  subject: text("subject"),
+  chapter: text("chapter"),
+  isInternalTest: boolean("is_internal_test").notNull().default(false),
+  connectedAt: timestamp("connected_at").notNull().defaultNow(),
+  disconnectedAt: timestamp("disconnected_at"),
+  disconnectReason: text("disconnect_reason"),
+}, (table) => ({
+  accountConnectedIdx: index("topscholar_voice_sessions_account_connected_idx").on(table.businessAccountId, table.connectedAt),
+  accountStudentIdx: index("topscholar_voice_sessions_account_student_idx").on(table.businessAccountId, table.studentId),
+  openConversationUnique: uniqueIndex("topscholar_voice_sessions_open_conversation_unique")
+    .on(table.conversationId)
+    .where(sql`${table.disconnectedAt} is null`),
+}));
+
 export const messages = pgTable("messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   conversationId: varchar("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),

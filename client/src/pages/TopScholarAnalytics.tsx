@@ -52,6 +52,7 @@ import {
   UserPlus,
   Activity,
   Info,
+  Mic,
 } from "lucide-react";
 import {
   BarChart,
@@ -99,6 +100,11 @@ interface Overview {
     measuredSessions: number;
     avgActiveSeconds: number;
     medianActiveSeconds: number;
+  };
+  voice: {
+    sessions: number;
+    totalSeconds: number;
+    totalMinutes: number;
   };
 }
 interface TopQuestions {
@@ -504,7 +510,7 @@ export default function TopScholarAnalytics() {
       </Card>
 
       {/* Volume KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <KpiCard
           icon={Users}
           label="Students"
@@ -529,6 +535,13 @@ export default function TopScholarAnalytics() {
           value={ov?.avgQuestionsPerStudent ?? "—"}
           sub={ov ? `${ov.avgDoubtsPerSession} per chat session` : undefined}
           description="Doubts Asked divided by Students for the current date range and curriculum filters."
+        />
+        <KpiCard
+          icon={Mic}
+          label="Total Voice Minutes"
+          value={ov ? ov.voice.totalMinutes.toLocaleString(undefined, { maximumFractionDigits: 1 }) : "—"}
+          sub={ov ? `${ov.voice.sessions} voice ${ov.voice.sessions === 1 ? "session" : "sessions"}` : undefined}
+          description="Total time voice mode remained connected during the selected date range and curriculum filters. Idle connected time is included."
         />
       </div>
 
