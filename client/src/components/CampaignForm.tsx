@@ -7,12 +7,13 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import {
   ArrowLeft, Megaphone, FileCode2, Users, Calendar, Bot,
-  MessageSquare, Clock, Sparkles, AlertTriangle, Tags,
+  MessageSquare, Clock, Sparkles, AlertTriangle, Tags, ChevronDown,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { ReplyClassificationEditor } from "@/components/whatsapp/ReplyClassificationEditor";
@@ -740,40 +741,61 @@ export default function CampaignForm({
               <div>
                 <label className="text-sm font-medium text-gray-700">Contact groups <span className="text-red-500">*</span></label>
                 <p className="text-xs text-gray-500 mt-0.5 mb-2">Select one or more groups to receive this campaign.</p>
-                <div className="border rounded-lg divide-y">
-                  {groups.length === 0 && (
-                    <div className="text-sm text-gray-500 p-4 text-center">No groups yet — create a contact group first.</div>
-                  )}
-                  {groups.map(g => {
-                    // An empty group is not a valid audience — the server refuses it too, so it
-                    // is shown but not selectable, with the reason stated inline.
-                    const isEmpty = g.contactCount === 0;
-                    return (
-                      <label
-                        key={g.id}
-                        className={`flex items-center gap-3 px-4 py-3 transition-colors ${
-                          isEmpty ? "opacity-60 cursor-not-allowed" : "hover:bg-gray-50 cursor-pointer"
-                        }`}
-                      >
-                        <Checkbox
-                          checked={selectedGroups.includes(g.id)}
-                          disabled={isEmpty}
-                          onCheckedChange={(checked) => {
-                            setSelectedGroups(prev => checked ? [...prev, g.id] : prev.filter(x => x !== g.id));
-                          }}
-                          data-testid={`checkbox-group-${g.id}`}
-                        />
-                        <Users className="h-4 w-4 text-gray-400 shrink-0" />
-                        <span className="flex-1 text-sm font-medium">{g.name}</span>
-                        {isEmpty ? (
-                          <span className="text-xs text-gray-500">Empty — add contacts to use this</span>
-                        ) : (
-                          <Badge variant="outline" className="text-xs font-normal">{g.contactCount} contacts</Badge>
-                        )}
-                      </label>
-                    );
-                  })}
-                </div>
+                 <DropdownMenu>
+                   <DropdownMenuTrigger asChild>
+                     <Button
+                       type="button"
+                       variant="outline"
+                       className="mt-1 h-11 w-full justify-between rounded-lg border-gray-200 bg-white px-3 text-left font-normal hover:bg-gray-50"
+                       aria-label="Select contact groups"
+                       data-testid="button-select-contact-groups"
+                     >
+                       <span className={selectedGroups.length > 0 ? "truncate text-gray-900" : "truncate text-gray-500"}>
+                         {selectedGroups.length > 0
+                           ? `${selectedGroups.length} group${selectedGroups.length !== 1 ? "s" : ""} selected · ~${totalContacts} recipients`
+                           : groups.length > 0 ? "Select one or more groups" : "No contact groups available"}
+                       </span>
+                       <ChevronDown className="ml-2 h-4 w-4 shrink-0 text-gray-400" />
+                     </Button>
+                   </DropdownMenuTrigger>
+                   <DropdownMenuContent
+                     align="start"
+                     className="max-h-72 w-[var(--radix-dropdown-menu-trigger-width)] min-w-[280px] max-w-[calc(100vw-2rem)]"
+                   >
+                     <DropdownMenuLabel>Choose audience groups</DropdownMenuLabel>
+                     <DropdownMenuSeparator />
+                     {groups.length === 0 ? (
+                       <div className="px-2 py-5 text-center text-sm text-gray-500">
+                         No groups yet — create a contact group first.
+                       </div>
+                     ) : groups.map(g => {
+                       // An empty group is not a valid audience — the server refuses it too, so it
+                       // remains visible in the menu but cannot be selected.
+                       const isEmpty = g.contactCount === 0;
+                       return (
+                         <DropdownMenuCheckboxItem
+                           key={g.id}
+                           checked={selectedGroups.includes(g.id)}
+                           disabled={isEmpty}
+                           onSelect={event => event.preventDefault()}
+                           onCheckedChange={checked => {
+                             setSelectedGroups(prev => checked ? [...prev, g.id] : prev.filter(id => id !== g.id));
+                           }}
+                           className="gap-2 py-2.5"
+                           data-testid={`checkbox-group-${g.id}`}
+                         >
+                           <Users className="h-4 w-4 shrink-0 text-gray-400" />
+                           <span className="min-w-0 flex-1 truncate">{g.name}</span>
+                           {isEmpty ? (
+                             <span className="ml-2 shrink-0 text-xs text-gray-400">Empty</span>
+                           ) : (
+                             <span className="ml-2 shrink-0 text-xs text-gray-500">{g.contactCount} contacts</span>
+                           )}
+                         </DropdownMenuCheckboxItem>
+                       );
+                     })}
+                   </DropdownMenuContent>
+                 </DropdownMenu>
                 {selectedGroups.length > 0 && (
                   <p className="text-xs text-emerald-700 font-medium mt-1.5">
                     {selectedGroups.length} group{selectedGroups.length !== 1 ? "s" : ""} selected · ~{totalContacts} recipients
