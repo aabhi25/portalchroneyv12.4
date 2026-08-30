@@ -339,7 +339,7 @@ export default function TopScholarAnalytics() {
   const studentsQ = useQuery<StudentRosterResponse>({
     queryKey: [`/api/topscholar/analytics/students${buildQs({ ...scopeParams, q: search || undefined, page: String(studentPage), pageSize: "10" })}`],
     enabled: isTopscholar,
-    keepPreviousData: true,
+    placeholderData: (previousData) => previousData,
   });
   const reportQ = useQuery<StudentReport>({
     queryKey: [`/api/topscholar/analytics/students/${openStudentId}${buildQs({ from, to })}`],
@@ -445,13 +445,16 @@ export default function TopScholarAnalytics() {
                   <Calendar
                     mode="range"
                     selected={customRange}
-                    onSelect={setCustomRange}
+                    onSelect={(nextRange) => {
+                      setCustomRange(nextRange);
+                      setStudentPage(1);
+                    }}
                     numberOfMonths={2}
                     disabled={{ after: new Date() }}
                     data-testid="calendar-date-range"
                   />
                   <div className="flex justify-end gap-2 border-t p-2">
-                    <Button variant="ghost" size="sm" onClick={() => setCustomRange(undefined)}>Clear</Button>
+                    <Button variant="ghost" size="sm" onClick={() => { setCustomRange(undefined); setStudentPage(1); }}>Clear</Button>
                     <Button size="sm" onClick={() => setDatePickerOpen(false)} data-testid="button-apply-dates">Apply</Button>
                   </div>
                 </PopoverContent>
