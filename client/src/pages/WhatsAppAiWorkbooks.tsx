@@ -171,18 +171,15 @@ function WorkbooksList() {
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
-  const [campaignId, setCampaignId] = useState("blank");
   const [deleteTarget, setDeleteTarget] = useState<WorkbookListItem | null>(null);
 
   const { data: workbooks = [], isLoading } = useQuery<WorkbookListItem[]>({
     queryKey: ["/api/whatsapp/ai-workbooks"],
   });
-  const { data: campaigns = [] } = useQuery<Campaign[]>({ queryKey: ["/api/whatsapp/campaigns"] });
-
   const create = useMutation({
     mutationFn: () => apiRequest<WorkbookDetail>("POST", "/api/whatsapp/ai-workbooks", {
       name,
-      sourceCampaignId: campaignId === "blank" ? null : campaignId,
+      sourceCampaignId: null,
     }),
     onSuccess: workbook => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/ai-workbooks"] });
@@ -210,7 +207,6 @@ function WorkbooksList() {
   });
 
   const openCreate = () => {
-    setCampaignId("blank");
     setName("New AI Workbook");
     setCreateOpen(true);
   };
@@ -312,30 +308,12 @@ function WorkbooksList() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create AI workbook</DialogTitle>
-            <DialogDescription>Start blank or generate a single table from an existing campaign snapshot.</DialogDescription>
+            <DialogDescription>Start with a clean, independent spreadsheet workspace.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
               <Label>Workbook name</Label>
               <Input value={name} onChange={e => setName(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Source campaign</Label>
-              <Select value={campaignId} onValueChange={value => {
-                setCampaignId(value);
-                const campaign = campaigns.find(c => c.id === value);
-                if (campaign) setName(`${campaign.name} Workbook`);
-              }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="blank">Blank workbook</SelectItem>
-                  {campaigns.map(campaign => (
-                    <SelectItem key={campaign.id} value={campaign.id}>
-                      {campaign.name} · {campaign.repliedCount} replies
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </div>
           </div>
           <DialogFooter>
