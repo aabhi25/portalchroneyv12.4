@@ -4151,7 +4151,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
     conversation.activeOpenAITtsResponseId = responseId;
 
     const supportedVoices = new Set([
-      'alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'marin',
+      'alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'marin', 'cedar',
       'nova', 'onyx', 'sage', 'shimmer', 'verse',
     ]);
     const voice = supportedVoices.has(conversation.selectedVoice || '')

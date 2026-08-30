@@ -952,7 +952,7 @@ var init_schema = __esm({
       // Array of custom avatar URLs: [{url: string, uploadedAt: string}]
       // Voice Mode customization
       voiceSelection: text("voice_selection").notNull().default("shimmer"),
-      // 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' - OpenAI Realtime API voices
+      // OpenAI Realtime voices, including recommended 'marin' and 'cedar'
       voiceModeStyle: text("voice_mode_style").notNull().default("circular"),
       // 'circular' | 'morphing' | 'distorted' | 'angular' - Voice orb shape style
       chatMode: text("chat_mode").notNull().default("both"),
@@ -68362,6 +68362,7 @@ ${curriculum}` : `The curriculum lookup for the student's question "${query}" ha
       "echo",
       "fable",
       "marin",
+      "cedar",
       "nova",
       "onyx",
       "sage",
@@ -76814,25 +76815,17 @@ async function getDoubtsExport(businessAccountId, filters, limit = DOUBT_EXPORT_
     };
   });
 }
-async function getStudentRoster(businessAccountId, filters, opts = {}) {
-  const cpIds = await resolveScopeCpIds(businessAccountId, filters.scope);
-  if (cpIds && cpIds.length === 0) return [];
-  const conds = baseConversationConditions(businessAccountId, cpIds, filters);
-  const search = (opts.search || "").trim();
-  if (search) {
-    conds.push(sql21`(${conversations.studentName} ilike ${"%" + search + "%"} or ${conversations.studentId} ilike ${"%" + search + "%"})`);
-  }
-  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 500);
-  const rows = await db.select({
-    studentKey: sql21`coalesce(${conversations.studentId}, ${conversations.id})`,
-    studentId: sql21`max(${conversations.studentId})`,
-    studentName: sql21`max(${conversations.studentName})`,
-    conversationCount: sql21`count(distinct ${conversations.id})::int`,
-    questionCount: sql21`coalesce(sum((select count(*) from ${messages} m where m.conversation_id = ${conversations.id} and m.role = 'user')), 0)::int`,
-    lastActive: sql21`max(${conversations.updatedAt})`,
-    cpId: sql21`max(${conversations.topscholarCpId})`
-  }).from(conversations).where(and28(...conds)).groupBy(sql21`coalesce(${conversations.studentId}, ${conversations.id})`).orderBy(desc11(sql21`max(${conversations.updatedAt})`)).limit(limit);
-  const mappings = await db.select().from(topscholarCpMappings).where(eq36(topscholarCpMappings.businessAccountId, businessAccountId));
+function studentRosterConditions(businessAccountId, filters, search) {
+  return resolveScopeCpIds(businessAccountId, filters.scope).then((cpIds) => {
+    const conds = baseConversationConditions(businessAccountId, cpIds, filters);
+    const normalizedSearch = (search || "").trim();
+    if (normalizedSearch) {
+      conds.push(sql21`(${conversations.studentName} ilike ${"%" + normalizedSearch + "%"} or ${conversations.studentId} ilike ${"%" + normalizedSearch + "%"})`);
+    }
+    return { cpIds, conds };
+  });
+}
+function mapStudentRosterRows(rows, mappings) {
   const byCp = new Map(mappings.map((m) => [m.cpId, m]));
   return rows.map((r) => {
     const m = r.cpId ? byCp.get(r.cpId) : void 0;
@@ -76846,6 +76839,53 @@ async function getStudentRoster(businessAccountId, filters, opts = {}) {
       grade: m?.grade ?? null
     };
   });
+}
+async function getStudentRoster(businessAccountId, filters, opts = {}) {
+  const { cpIds, conds } = await studentRosterConditions(businessAccountId, filters, opts.search);
+  if (cpIds && cpIds.length === 0) return [];
+  const limit = opts.limit === 0 ? void 0 : Math.min(Math.max(opts.limit ?? 200, 1), 500);
+  const query = db.select({
+    studentKey: sql21`coalesce(${conversations.studentId}, ${conversations.id})`,
+    studentId: sql21`max(${conversations.studentId})`,
+    studentName: sql21`max(${conversations.studentName})`,
+    conversationCount: sql21`count(distinct ${conversations.id})::int`,
+    questionCount: sql21`coalesce(sum((select count(*) from ${messages} m where m.conversation_id = ${conversations.id} and m.role = 'user')), 0)::int`,
+    lastActive: sql21`max(${conversations.updatedAt})`,
+    cpId: sql21`max(${conversations.topscholarCpId})`
+  }).from(conversations).where(and28(...conds)).groupBy(sql21`coalesce(${conversations.studentId}, ${conversations.id})`).orderBy(desc11(sql21`max(${conversations.updatedAt})`), desc11(sql21`coalesce(${conversations.studentId}, ${conversations.id})`));
+  const rows = limit === void 0 ? await query : await query.limit(limit);
+  const mappings = await db.select().from(topscholarCpMappings).where(eq36(topscholarCpMappings.businessAccountId, businessAccountId));
+  return mapStudentRosterRows(rows, mappings);
+}
+async function getStudentRosterPaginated(businessAccountId, filters, opts = {}) {
+  const pageSize = Math.min(Math.max(Math.floor(opts.pageSize ?? 10), 1), 50);
+  const page = Math.max(Math.floor(opts.page ?? 1), 1);
+  const { cpIds, conds } = await studentRosterConditions(businessAccountId, filters, opts.search);
+  if (cpIds && cpIds.length === 0) {
+    return { items: [], total: 0, page, pageSize, totalPages: 0 };
+  }
+  const studentKey = sql21`coalesce(${conversations.studentId}, ${conversations.id})`;
+  const [countRows2, rows] = await Promise.all([
+    db.select({ total: sql21`count(distinct ${studentKey})::int` }).from(conversations).where(and28(...conds)),
+    db.select({
+      studentKey: sql21`coalesce(${conversations.studentId}, ${conversations.id})`,
+      studentId: sql21`max(${conversations.studentId})`,
+      studentName: sql21`max(${conversations.studentName})`,
+      conversationCount: sql21`count(distinct ${conversations.id})::int`,
+      questionCount: sql21`coalesce(sum((select count(*) from ${messages} m where m.conversation_id = ${conversations.id} and m.role = 'user')), 0)::int`,
+      lastActive: sql21`max(${conversations.updatedAt})`,
+      cpId: sql21`max(${conversations.topscholarCpId})`
+    }).from(conversations).where(and28(...conds)).groupBy(studentKey).orderBy(desc11(sql21`max(${conversations.updatedAt})`), desc11(studentKey)).limit(pageSize).offset((page - 1) * pageSize)
+  ]);
+  const mappings = await db.select().from(topscholarCpMappings).where(eq36(topscholarCpMappings.businessAccountId, businessAccountId));
+  const total = countRows2[0]?.total ?? 0;
+  return {
+    items: mapStudentRosterRows(rows, mappings),
+    total,
+    page,
+    pageSize,
+    totalPages: total > 0 ? Math.ceil(total / pageSize) : 0
+  };
 }
 async function getStudentRosterPage(businessAccountId, filters, opts = {}) {
   const empty = { items: [], nextCursor: null };
@@ -77267,13 +77307,14 @@ router5.get("/api/topscholar/analytics/adoption", ...adminGuards, async (req, re
 router5.get("/api/topscholar/analytics/students", ...adminGuards, async (req, res) => {
   const businessAccountId = getBusinessAccountId4(req);
   const search = typeof req.query.q === "string" ? req.query.q : null;
-  const limit = parseLimit(req.query.limit, 200, 500);
-  res.json(await getStudentRoster(businessAccountId, parseFilters(req), { search, limit }));
+  const page = parseLimit(req.query.page, 1, 1e6);
+  const pageSize = parseLimit(req.query.pageSize, 10, 50);
+  res.json(await getStudentRosterPaginated(businessAccountId, parseFilters(req), { search, page, pageSize }));
 });
 router5.get("/api/topscholar/analytics/students/export", ...adminGuards, async (req, res) => {
   const businessAccountId = getBusinessAccountId4(req);
   const search = typeof req.query.q === "string" ? req.query.q : null;
-  const rows = await getStudentRoster(businessAccountId, parseFilters(req), { search, limit: 5e3 });
+  const rows = await getStudentRoster(businessAccountId, parseFilters(req), { search, limit: 0 });
   sendCsv(
     res,
     exportFilename("students"),
@@ -98262,7 +98303,20 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
       const conversationId = req.params.id;
       const messages2 = await storage.getMessagesByConversation(conversationId, businessAccountId);
-      res.json(messages2);
+      const displayMessages = messages2.map((message) => {
+        if (message.role !== "assistant" || !message.metadata) {
+          return message;
+        }
+        try {
+          const metadata = JSON.parse(message.metadata);
+          if (metadata && typeof metadata.formattedContent === "string" && metadata.formattedContent.trim().length > 0) {
+            return { ...message, content: metadata.formattedContent };
+          }
+        } catch {
+        }
+        return message;
+      });
+      res.json(displayMessages);
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
@@ -99879,7 +99933,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(400).json({ error: "Business account not found" });
       }
       const voice = req.query.voice;
-      if (!voice || !["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"].includes(voice)) {
+      if (!voice || !["alloy", "ash", "ballad", "coral", "echo", "fable", "marin", "cedar", "onyx", "nova", "sage", "shimmer", "verse"].includes(voice)) {
         return res.status(400).json({ error: "Invalid voice selection" });
       }
       const apiKey = await storage.getBusinessAccountOpenAIKey(businessAccountId);
@@ -99889,7 +99943,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const openai = new OpenAI40({ apiKey });
       const sampleText = "Hello! I'm Chroney, your AI assistant. How can I help you today?";
       const mp3Response = await openai.audio.speech.create({
-        model: "tts-1",
+        model: "gpt-4o-mini-tts",
         voice,
         input: sampleText,
         speed: 1

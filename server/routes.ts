@@ -28172,7 +28172,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
 
       const voice = req.query.voice as string;
-      if (!voice || !['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer', 'verse'].includes(voice)) {
+      if (!voice || !['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'marin', 'cedar', 'onyx', 'nova', 'sage', 'shimmer', 'verse'].includes(voice)) {
         return res.status(400).json({ error: "Invalid voice selection" });
       }
 
@@ -28187,7 +28187,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       // Generate voice sample
       const sampleText = "Hello! I'm Chroney, your AI assistant. How can I help you today?";
       const mp3Response = await openai.audio.speech.create({
-        model: "tts-1",
+        model: "gpt-4o-mini-tts",
         voice: voice as any,
         input: sampleText,
         speed: 1.0

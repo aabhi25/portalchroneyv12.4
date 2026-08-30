@@ -564,7 +564,7 @@ export const widgetSettings = pgTable("widget_settings", {
   customAvatars: jsonb("custom_avatars"), // Array of custom avatar URLs: [{url: string, uploadedAt: string}]
   
   // Voice Mode customization
-  voiceSelection: text("voice_selection").notNull().default("shimmer"), // 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' - OpenAI Realtime API voices
+  voiceSelection: text("voice_selection").notNull().default("shimmer"), // OpenAI Realtime voices, including recommended 'marin' and 'cedar'
   voiceModeStyle: text("voice_mode_style").notNull().default("circular"), // 'circular' | 'morphing' | 'distorted' | 'angular' - Voice orb shape style
   chatMode: text("chat_mode").notNull().default("both"), // 'both' | 'chat-only' | 'voice-only' - Which modes are available in embedded widget
   

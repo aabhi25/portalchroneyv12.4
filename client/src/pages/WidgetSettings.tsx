@@ -4193,6 +4193,8 @@ export default function WidgetSettings() {
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">OpenAI Voices</p>
                       {[
                         { id: "alloy", label: "Alloy", desc: "Neutral and balanced voice", gender: "Neutral" },
+                        { id: "marin", label: "Marin", desc: "Natural and expressive voice", gender: "Neutral" },
+                        { id: "cedar", label: "Cedar", desc: "Clear and natural voice", gender: "Neutral" },
                         { id: "ash", label: "Ash", desc: "Clear and precise voice", gender: "Male" },
                         { id: "ballad", label: "Ballad", desc: "Melodic and smooth voice", gender: "Male" },
                         { id: "coral", label: "Coral", desc: "Warm and friendly voice", gender: "Female" },
