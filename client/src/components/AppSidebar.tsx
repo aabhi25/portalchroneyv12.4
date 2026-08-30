@@ -302,14 +302,16 @@ export function AppSidebar({ user }: AppSidebarProps) {
                         testId="link-students"
                         gradient="bg-gradient-to-br from-orange-500 to-amber-600"
                       />
-                      <NavItem
-                        icon={BarChart3}
-                        label="Insights"
-                        onClick={() => setLocation("/insights")}
-                        isActive={location === "/insights"}
-                        testId="link-insights"
-                        gradient="bg-gradient-to-br from-purple-500 to-violet-600"
-                      />
+                      {!isTopscholar && (
+                        <NavItem
+                          icon={BarChart3}
+                          label="Insights"
+                          onClick={() => setLocation("/insights")}
+                          isActive={location === "/insights"}
+                          testId="link-insights"
+                          gradient="bg-gradient-to-br from-purple-500 to-violet-600"
+                        />
+                      )}
                       {isTopscholar && (
                         <NavItem
                           icon={TrendingUp}

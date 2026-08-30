@@ -20,11 +20,14 @@ export default function WebsiteNavTabs({ hideHeader }: WebsiteNavTabsProps) {
   const isSuperAdminImpersonating = isSuperAdmin && !!user?.activeBusinessAccountId;
   const showFullFeatures = isSuperAdminImpersonating || systemMode === 'full';
   const hasSupportTicketsEnabled = user?.businessAccount?.supportTicketsEnabled === true;
+  const isTopScholar = user?.businessAccount?.isTopscholar === true;
 
   const tabs = [
     { key: "conversations", label: "Conversations", icon: MessageSquare, path: "/conversations" },
     { key: "leads", label: "Leads", icon: Contact, path: "/admin/leads" },
-    { key: "insights", label: "Insights", icon: BarChart3, path: "/insights" },
+    ...(!isTopScholar
+      ? [{ key: "insights", label: "Insights", icon: BarChart3, path: "/insights" }]
+      : []),
     ...(showFullFeatures && hasSupportTicketsEnabled
       ? [{ key: "tickets", label: "Tickets", icon: LifeBuoy, path: "/tickets" }]
       : []),

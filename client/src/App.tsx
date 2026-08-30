@@ -307,7 +307,9 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                     return <Home />;
                   })()}
                 </Route>
-                <Route path="/insights" component={Insights} />
+                <Route path="/insights">
+                  {() => isTopScholarAccount ? <Redirect to="/admin/topscholar/analytics" /> : <Insights />}
+                </Route>
                 <Route path="/admin/category-settings" component={CategorySettings} />
                 <Route path="/ai-insights" component={AIInsights} />
                 <Route path="/conversations" component={Conversations} />
