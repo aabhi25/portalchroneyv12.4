@@ -12,6 +12,56 @@
   
   var apiBase = currentScript.src.replace(/\/widget-loader\.js.*$/, '');
   var config = { businessAccountId: businessAccountId };
+  var pendingOpenChat = false;
+
+  // A client can put data-chroney-open-chat on any of its own buttons or
+  // links. Capture the click before host-page handlers navigate away, then
+  // hand the request to the widget's public API once it is available.
+  function findOpenChatTrigger(target) {
+    var element = target;
+    while (element && element !== document) {
+      if (element.nodeType === 1 && element.hasAttribute && element.hasAttribute('data-chroney-open-chat')) {
+        return element;
+      }
+      element = element.parentElement;
+    }
+    return null;
+  }
+
+  function handleOpenChatClick(event) {
+    if (event.defaultPrevented || event.button !== 0 ||
+        event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+
+    var trigger = findOpenChatTrigger(event.target);
+    if (!trigger) return;
+
+    event.preventDefault();
+    if (window.HiChroneyWidget && typeof window.HiChroneyWidget.open === 'function') {
+      window.HiChroneyWidget.open();
+    } else {
+      pendingOpenChat = true;
+    }
+  }
+
+  // Install this before the loader's async settings/proactive-guidance checks,
+  // so a trigger is reliable even while widget.js is still downloading.
+  if (!window.__chroneyOpenTriggerBound) {
+    window.__chroneyOpenTriggerBound = true;
+    document.addEventListener('click', handleOpenChatClick, true);
+  }
+
+  // This bridge lets custom client JavaScript call open() immediately after
+  // the loader tag, before the dynamically loaded widget.js replaces it.
+  if (!window.HiChroneyWidget) {
+    window.HiChroneyWidget = {
+      open: function() {
+        pendingOpenChat = true;
+        return false;
+      }
+    };
+  }
 
   // Grade-scoped widget (TopScholar / K12): a client portal that knows the logged-in
   // student injects their board / medium / grade / subject as data attributes on this
@@ -289,6 +339,10 @@
     script.onload = function() {
       if (window.HiChroneyWidget) {
         window.HiChroneyWidget.init(config);
+        if (pendingOpenChat && typeof window.HiChroneyWidget.open === 'function') {
+          pendingOpenChat = false;
+          window.HiChroneyWidget.open();
+        }
       }
     };
     document.body.appendChild(script);

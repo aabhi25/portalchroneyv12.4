@@ -501,6 +501,8 @@ export default function WidgetSettings() {
   const [k12Copied, setK12Copied] = useState(false);
   const [k12SecureCopied, setK12SecureCopied] = useState(false);
   const [k12DevSecureCopied, setK12DevSecureCopied] = useState(false);
+  const [triggerCopied, setTriggerCopied] = useState(false);
+  const [apiCopied, setApiCopied] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [playingVoice, setPlayingVoice] = useState<string | null>(null);
   const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
@@ -1122,6 +1124,20 @@ export default function WidgetSettings() {
 <!-- Business: ${businessName}${businessWebsite ? ` | Website: ${businessWebsite}` : ''} -->
 <script src="${widgetDomain}/widget-loader.js" data-business-id="${businessId}"></script>`;
 
+  const triggerCode = `<!-- Add this to any button or link on the same page as the widget -->
+ <button type="button" data-chroney-open-chat>Talk to a Counsellor</button>
+
+ <!-- Links work too; the chat opens instead of following the href -->
+ <a href="/contact" data-chroney-open-chat>Chat with us</a>`;
+
+  const apiCode = `<!-- Use this when triggering chat from your own JavaScript -->
+ <button id="counsellor-button" type="button">Talk to a Counsellor</button>
+ <script>
+   document.getElementById("counsellor-button").addEventListener("click", function () {
+     window.HiChroneyWidget.open();
+   });
+ </script>`;
+
   // Grade-scoped widget (TopScholar / K12): same universal snippet plus scope
   // attributes. The host portal replaces the placeholders with the logged-in student's
   // values so the tutor only answers from that student's grade and subject. All four
@@ -1612,6 +1628,42 @@ export default function WidgetSettings() {
         description: "Dev embed code copied to clipboard",
       });
       setTimeout(() => setK12DevSecureCopied(false), 2000);
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: "Failed to copy to clipboard",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleCopyTrigger = async () => {
+    try {
+      await navigator.clipboard.writeText(triggerCode);
+      setTriggerCopied(true);
+      toast({
+        title: "Copied!",
+        description: "Button and link trigger examples copied to clipboard",
+      });
+      setTimeout(() => setTriggerCopied(false), 2000);
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: "Failed to copy to clipboard",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleCopyApi = async () => {
+    try {
+      await navigator.clipboard.writeText(apiCode);
+      setApiCopied(true);
+      toast({
+        title: "Copied!",
+        description: "JavaScript trigger example copied to clipboard",
+      });
+      setTimeout(() => setApiCopied(false), 2000);
     } catch (err) {
       toast({
         title: "Error",
@@ -4979,6 +5031,73 @@ export default function WidgetSettings() {
                         </Button>
                       </div>
                     </div>
+
+                     <div className="space-y-3 pt-6 mt-6 border-t border-gray-200">
+                       <div>
+                         <Label className="text-sm font-semibold text-gray-700">
+                           Open Chat from Your Own Button or Link
+                         </Label>
+                         <p className="text-xs text-gray-500 mt-1">
+                           First add the embed code above once. Then add
+                           <code className="mx-1 px-1 py-0.5 bg-gray-100 rounded">data-chroney-open-chat</code>
+                           to any button or link on the same page. Clicking it opens this chat instead of navigating away.
+                         </p>
+                       </div>
+                       <div className="relative">
+                         <Textarea
+                           value={triggerCode}
+                           readOnly
+                           className="font-mono text-xs min-h-[150px] bg-gray-50 border-2 pr-4 resize-none"
+                         />
+                         <Button
+                           onClick={handleCopyTrigger}
+                           size="sm"
+                           className="absolute top-3 right-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+                         >
+                           {triggerCopied ? (
+                             <>
+                               <Check className="w-4 h-4 mr-2" />
+                               Copied!
+                             </>
+                           ) : (
+                             <>
+                               <Copy className="w-4 h-4 mr-2" />
+                               Copy Examples
+                             </>
+                           )}
+                         </Button>
+                       </div>
+                       <div>
+                         <Label className="text-sm font-medium text-gray-700">JavaScript option</Label>
+                         <p className="text-xs text-gray-500 mt-1 mb-2">
+                           Use the public API when the button needs custom website logic before opening the chat.
+                         </p>
+                         <div className="relative">
+                           <Textarea
+                             value={apiCode}
+                             readOnly
+                             className="font-mono text-xs min-h-[145px] bg-gray-50 border-2 pr-4 resize-none"
+                           />
+                           <Button
+                             onClick={handleCopyApi}
+                             size="sm"
+                             className="absolute top-3 right-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+                           >
+                             {apiCopied ? (
+                               <>
+                                 <Check className="w-4 h-4 mr-2" />
+                                 Copied!
+                               </>
+                             ) : (
+                               <>
+                                 <Copy className="w-4 h-4 mr-2" />
+                                 Copy JavaScript
+                               </>
+                             )}
+                           </Button>
+                         </div>
+                       </div>
+                     </div>
 
                     {settings?.k12EducationEnabled && (
                       <div className="space-y-2 pt-6 mt-6 border-t border-gray-200">

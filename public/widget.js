@@ -650,6 +650,21 @@
     visitorToken: null,
     _iframeReady: false,
     _sendMessageToIframe: null,
+    _openWidget: null,
+    _pendingOpen: false,
+
+    // Public host-page API. Calls made before the async widget has finished
+    // initializing are replayed as soon as the launcher is ready.
+    open: function() {
+      if (typeof this._openWidget === 'function') {
+        this._openWidget();
+        return true;
+      }
+
+      this._pendingOpen = true;
+      console.log('[Hi Chroney] Open request queued until the widget is ready');
+      return false;
+    },
     
     init: async function(config) {
       if (!config || !config.businessAccountId) {
@@ -3769,6 +3784,14 @@
           button.style.display = 'none';
         }
       };
+
+      // Make the existing open lifecycle available to host-page buttons and
+      // links without exposing the iframe implementation details.
+      this._openWidget = openWidget;
+      if (this._pendingOpen) {
+        this._pendingOpen = false;
+        setTimeout(openWidget, 0);
+      }
       
       // Set initial button icon based on state
       if (buttonStyle === 'pill') {
