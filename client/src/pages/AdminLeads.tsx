@@ -78,6 +78,11 @@ function friendlySyncError(error: string | null | undefined): string {
   return formatCrmSyncError(error);
 }
 
+function safeExcelCell(value: unknown): string {
+  const text = value == null ? "" : String(value);
+  return /^[=+\-@]/.test(text) ? `'${text}` : text;
+}
+
 export default function AdminLeads() {
   const { toast } = useToast();
   const [currentPage, setCurrentPage] = useState(1);
@@ -104,6 +109,13 @@ export default function AdminLeads() {
     queryKey: ["/api/auth/me"],
   });
   const isSuperAdminImpersonating = currentUser?.role === "super_admin" && !!currentUser?.activeBusinessAccountId;
+
+  useEffect(() => {
+    apiRequest("POST", "/api/audit/client-event", {
+      action: "page.leads.viewed",
+      metadata: {},
+    }).catch(() => {});
+  }, []);
 
   const queryParams = useMemo(() => {
     const params = new URLSearchParams();
@@ -368,6 +380,8 @@ export default function AdminLeads() {
   };
 
   const handleExport = async () => {
+    let deliveredExportId: string | null = null;
+    let deliveredRecordCount = 0;
     try {
       // Build filter params (same as pagination query)
       const exportParams = new URLSearchParams();
@@ -417,7 +431,9 @@ export default function AdminLeads() {
       }
       
       const exportData = await response.json();
+      deliveredExportId = exportData.exportId || null;
       const allLeads = exportData.leads || [];
+      deliveredRecordCount = allLeads.length;
       
       if (allLeads.length === 0) {
         toast({
@@ -430,11 +446,11 @@ export default function AdminLeads() {
 
       // Prepare data for Excel export
       const worksheetData = allLeads.map((lead: Lead) => ({
-        Name: lead.name,
-        Email: lead.email,
-        Phone: lead.phone || "",
-        City: lead.city || "",
-        Message: lead.message || "",
+        Name: safeExcelCell(lead.name),
+        Email: safeExcelCell(lead.email),
+        Phone: safeExcelCell(lead.phone),
+        City: safeExcelCell(lead.city),
+        Message: safeExcelCell(lead.message),
         "Created At": format(new Date(lead.createdAt), "yyyy-MM-dd HH:mm:ss")
       }));
 
@@ -456,12 +472,34 @@ export default function AdminLeads() {
       // Generate Excel file and trigger download
       const filename = `leads-${format(new Date(), "yyyy-MM-dd")}.xlsx`;
       XLSX.writeFile(workbook, filename);
+      apiRequest("POST", "/api/audit/client-event", {
+        action: "leads.export.file_generated",
+        metadata: {
+          format: "xlsx",
+          exportId: deliveredExportId,
+          recordCount: allLeads.length,
+          datePreset,
+          hasSearchFilter: trimmedSearch.length > 0,
+        },
+      }).catch(() => {});
 
       toast({
         title: "Export successful",
         description: `Exported ${allLeads.length} leads to Excel file.`,
       });
     } catch (error: any) {
+      if (deliveredExportId) {
+        apiRequest("POST", "/api/audit/client-event", {
+          action: "leads.export.file_failed",
+          metadata: {
+            format: "xlsx",
+            exportId: deliveredExportId,
+            recordCount: deliveredRecordCount,
+            datePreset,
+            hasSearchFilter: searchQuery.trim().length > 0,
+          },
+        }).catch(() => {});
+      }
       toast({
         title: "Export failed",
         description: error.message || "Failed to export leads",

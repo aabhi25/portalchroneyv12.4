@@ -19,7 +19,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { WhatsAppNavSections } from "@/components/whatsapp/WhatsAppNavSections";
 import { isWhatsappLocation } from "@/components/whatsapp/sections";
 import { Button } from "@/components/ui/button";
-import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Sparkles, Settings, Brain, BarChart3, MessageSquare, ShoppingBag, Calendar, GraduationCap, ChevronRight, Presentation, FileText, Key, LifeBuoy, ClipboardList, Route, Link2, Users, DollarSign, Percent, HardDrive, Gem, Image, Database, Camera, Cloud, Globe, Lightbulb, MessageCircle, MoreHorizontal, Bot, TrendingUp, Zap, BookOpen, Library, HelpCircle as QuizIcon, Briefcase, UserCircle, Terminal, PackageOpen, Megaphone, FileCode2, UsersRound } from "lucide-react";
+import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Sparkles, Settings, Brain, BarChart3, MessageSquare, ShoppingBag, Calendar, GraduationCap, ChevronRight, Presentation, FileText, Key, LifeBuoy, ClipboardList, Route, Link2, Users, DollarSign, Percent, HardDrive, Gem, Image, Database, Camera, Cloud, Globe, Lightbulb, MessageCircle, MoreHorizontal, Bot, TrendingUp, Zap, BookOpen, Library, HelpCircle as QuizIcon, Briefcase, UserCircle, Terminal, PackageOpen, Megaphone, FileCode2, UsersRound, ScrollText } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
@@ -768,6 +768,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
                 <NavItem icon={Cloud} label="Google Photos" onClick={() => setLocation("/super-admin/google-photos")} isActive={location === "/super-admin/google-photos"} testId="link-super-admin-google-photos" gradient="bg-gradient-to-br from-sky-500 to-blue-600" />
                 <NavItem icon={Globe} label="Server Info" onClick={() => setLocation("/super-admin/server-info")} isActive={location === "/super-admin/server-info"} testId="link-super-admin-server-info" gradient="bg-gradient-to-br from-slate-500 to-gray-700" />
                 <NavItem icon={Terminal} label="Live Logs" onClick={() => setLocation("/super-admin/live-logs")} isActive={location === "/super-admin/live-logs"} testId="link-super-admin-live-logs" gradient="bg-gradient-to-br from-green-700 to-emerald-900" />
+                <NavItem icon={ScrollText} label="Audit Logs" onClick={() => setLocation("/super-admin/audit-logs")} isActive={location === "/super-admin/audit-logs"} testId="link-super-admin-audit-logs" gradient="bg-gradient-to-br from-slate-600 to-zinc-800" />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

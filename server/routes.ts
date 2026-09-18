@@ -3,7 +3,7 @@ import { getLogBuffer, logEvents } from './services/logCapture';
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
-import { accountGroupMembers, accountGroups, accountGroupAdmins, businessAccounts, productCategories as productCategoriesTable, sessions, products, productJewelryEmbeddings, users, categories, faqs, trainingDocuments, conversationJourneys, journeySteps, journeyResponses, journeySessions, widgetSettings, scheduleTemplates, trainedUrls, chatMenuConfigs, chatMenuItems, chatMenuItemDetails, whatsappLeads, whatsappLeadAttachments, whatsappFlowSteps, whatsappFlows, whatsappLeadFields, instagramFlowSteps, facebookFlowSteps, conversations, leads, customCrmSettings, customCrmFieldMappings, crmStoreCredentials, smartReplies, messages, conversationAnalysisCache, conversationCategorySettings } from "@shared/schema";
+import { accountGroupMembers, accountGroups, accountGroupAdmins, businessAccounts, productCategories as productCategoriesTable, sessions, products, productJewelryEmbeddings, users, categories, faqs, trainingDocuments, conversationJourneys, journeySteps, journeyResponses, journeySessions, widgetSettings, scheduleTemplates, trainedUrls, chatMenuConfigs, chatMenuItems, chatMenuItemDetails, whatsappLeads, whatsappLeadAttachments, whatsappFlowSteps, whatsappFlows, whatsappLeadFields, instagramFlowSteps, facebookFlowSteps, conversations, leads, customCrmSettings, customCrmFieldMappings, crmStoreCredentials, smartReplies, messages, conversationAnalysisCache, conversationCategorySettings, auditEvents } from "@shared/schema";
 import type { CrmStoreCredential, InsertLead } from "@shared/schema";
 import bcrypt from "bcrypt";
 import { eq, and, isNotNull, isNull, sql, inArray, desc, ilike, asc, gte, lte, count } from "drizzle-orm";
@@ -49,6 +49,7 @@ import {
   insertIdleTimeoutSettingsSchema,
 } from "@shared/schema";
 import { z } from "zod";
+import { recordAuditEvent, recordAuditEventSafely } from "./services/auditService";
 import { chatService } from "./chatService";
 import { claimConversionFire } from "./services/conversion";
 import { llamaService } from "./llamaService";
@@ -8979,6 +8980,13 @@ If you cannot determine the category or the image doesn't match any category, re
       const { username, password } = req.body;
 
       if (!username || !password) {
+        await recordAuditEventSafely(req, {
+          action: "auth.login",
+          outcome: "denied",
+          actorUsername: typeof username === "string" ? username.slice(0, 255) : null,
+          resourceType: "session",
+          metadata: { reason: "missing_credentials" },
+        });
         return res.status(400).json({ error: "Username and password required" });
       }
 
@@ -8986,6 +8994,16 @@ If you cannot determine the category or the image doesn't match any category, re
       const user = await storage.getUserByUsername(username);
 
       if (!user || !(await verifyPassword(password, user.passwordHash))) {
+        await recordAuditEventSafely(req, {
+          action: "auth.login",
+          outcome: "denied",
+          actorUserId: user?.id,
+          actorUsername: String(username).slice(0, 255),
+          actorRole: user?.role,
+          businessAccountId: user?.businessAccountId,
+          resourceType: "session",
+          metadata: { reason: "invalid_credentials" },
+        });
         return res.status(401).json({ error: "Invalid credentials" });
       }
 
@@ -8993,6 +9011,16 @@ If you cannot determine the category or the image doesn't match any category, re
       if (user.role === "business_user" && user.businessAccountId) {
         const businessAccount = await storage.getBusinessAccount(user.businessAccountId);
         if (businessAccount && businessAccount.status === "suspended") {
+          await recordAuditEventSafely(req, {
+            action: "auth.login",
+            outcome: "denied",
+            actorUserId: user.id,
+            actorUsername: user.username,
+            actorRole: user.role,
+            businessAccountId: user.businessAccountId,
+            resourceType: "session",
+            metadata: { reason: "account_suspended" },
+          });
           return res.status(403).json({ error: "Your subscription has expired. Please contact support to reactivate your account." });
         }
       }
@@ -9001,6 +9029,16 @@ If you cannot determine the category or the image doesn't match any category, re
 
       // Update last login
       await storage.updateUserLastLogin(user.id);
+      req.sessionToken = sessionToken;
+      await recordAuditEventSafely(req, {
+        action: "auth.login",
+        outcome: "success",
+        actorUserId: user.id,
+        actorUsername: user.username,
+        actorRole: user.role,
+        businessAccountId: user.businessAccountId,
+        resourceType: "session",
+      });
 
       res.cookie("session", sessionToken, {
         httpOnly: true,
@@ -9028,9 +9066,21 @@ If you cannot determine the category or the image doesn't match any category, re
       if (sessionToken) {
         await deleteSession(sessionToken);
       }
+      await recordAuditEventSafely(req, {
+        action: "auth.logout",
+        outcome: "success",
+        resourceType: "session",
+      });
       res.clearCookie("session");
       res.json({ success: true });
     } catch (error: any) {
+      await recordAuditEventSafely(req, {
+        action: "auth.logout",
+        outcome: "failure",
+        resourceType: "session",
+        metadata: { reason: "session_deletion_failed" },
+      });
+      res.clearCookie("session");
       res.status(500).json({ error: error.message });
     }
   });
@@ -15430,8 +15480,16 @@ Format your response as JSON with this structure:
   // SuperAdmin: Exit impersonation mode (MUST be before :businessAccountId route)
   app.post("/api/super-admin/impersonate/exit", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
+      const previousAccountId = req.user!.businessAccountId;
       // Clear the active business account from the session
       await db.update(sessions).set({ activeBusinessAccountId: null }).where(eq(sessions.sessionToken, req.sessionToken!));
+      await recordAuditEvent(req, {
+        action: "auth.impersonation.ended",
+        outcome: "success",
+        businessAccountId: previousAccountId,
+        resourceType: "business_account",
+        resourceId: previousAccountId,
+      });
       
       console.log(`[SuperAdmin] User ${req.user!.username} exited impersonation mode`);
       
@@ -15459,6 +15517,14 @@ Format your response as JSON with this structure:
       // Update session with the impersonated business account
       const { updateSessionActiveAccount } = await import("./auth");
       await updateSessionActiveAccount(req.sessionToken!, businessAccountId);
+      await recordAuditEvent(req, {
+        action: "auth.impersonation.started",
+        outcome: "success",
+        businessAccountId,
+        resourceType: "business_account",
+        resourceId: businessAccountId,
+        metadata: { businessAccountName: businessAccount.name },
+      });
       
       console.log(`[SuperAdmin] User ${req.user!.username} started impersonating account: ${businessAccount.name} (${businessAccountId})`);
       
@@ -24758,12 +24824,34 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         undefined, // No limit
         undefined  // No offset
       );
+      const exportId = randomUUID();
+      await recordAuditEventSafely(req, {
+        action: "leads.export.data_delivered",
+        outcome: "success",
+        businessAccountId,
+        resourceType: "lead_report",
+        resourceId: exportId,
+        metadata: {
+          format: "xlsx",
+          recordCount: result.total,
+          fromDate: typeof fromDate === "string" ? fromDate : null,
+          toDate: typeof toDate === "string" ? toDate : null,
+          hasSearchFilter: typeof search === "string" && search.trim().length > 0,
+        },
+      });
       
       res.json({
         leads: result.leads,
-        total: result.total
+        total: result.total,
+        exportId,
       });
     } catch (error: any) {
+      await recordAuditEventSafely(req, {
+        action: "leads.export.data_delivered",
+        outcome: "failure",
+        resourceType: "lead_report",
+        metadata: { reason: "export_query_failed" },
+      });
       res.status(500).json({ error: error.message });
     }
   });
@@ -24801,6 +24889,114 @@ Be constructive and helpful. Return ONLY valid JSON.`;
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
+  });
+
+  app.post("/api/audit/client-event", requireAuth, async (req, res) => {
+    const envelope = z.object({
+      action: z.enum(["page.leads.viewed", "leads.export.file_generated", "leads.export.file_failed"]),
+      metadata: z.record(z.unknown()).default({}),
+    }).strict().safeParse(req.body);
+    if (!envelope.success) return res.status(400).json({ error: "Invalid audit event" });
+
+    const { action } = envelope.data;
+    if (action === "page.leads.viewed") {
+      const parsed = z.object({}).strict().safeParse(envelope.data.metadata);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid page event metadata" });
+      await recordAuditEvent(req, {
+        action,
+        outcome: "success",
+        resourceType: "page",
+        resourceId: "/admin/leads",
+        metadata: { source: "client_reported" },
+      });
+      return res.json({ success: true });
+    }
+
+    const exportMetadata = z.object({
+      exportId: z.string().uuid(),
+      format: z.literal("xlsx"),
+      recordCount: z.number().int().nonnegative().max(1_000_000),
+      datePreset: z.enum(["all", "today", "yesterday", "last7", "last30", "custom"]),
+      hasSearchFilter: z.boolean(),
+    }).strict().safeParse(envelope.data.metadata);
+    if (!exportMetadata.success) return res.status(400).json({ error: "Invalid export event metadata" });
+
+    const [matchingExport] = await db
+      .select({ id: auditEvents.id, metadata: auditEvents.metadata })
+      .from(auditEvents)
+      .where(and(
+        eq(auditEvents.action, "leads.export.data_delivered"),
+        eq(auditEvents.resourceId, exportMetadata.data.exportId),
+        eq(auditEvents.actorUserId, req.user!.id),
+        req.user!.businessAccountId
+          ? eq(auditEvents.businessAccountId, req.user!.businessAccountId)
+          : isNull(auditEvents.businessAccountId),
+      ))
+      .limit(1);
+    if (!matchingExport) return res.status(400).json({ error: "Export audit reference not found" });
+    const deliveredCount = Number((matchingExport.metadata as Record<string, unknown>)?.recordCount);
+    if (!Number.isFinite(deliveredCount) || deliveredCount !== exportMetadata.data.recordCount) {
+      return res.status(400).json({ error: "Export record count does not match" });
+    }
+
+    try {
+      await recordAuditEvent(req, {
+        action,
+        outcome: action === "leads.export.file_failed" ? "failure" : "success",
+        resourceType: "lead_report",
+        resourceId: exportMetadata.data.exportId,
+        metadata: { ...exportMetadata.data, source: "client_reported" },
+      });
+    } catch (error: any) {
+      if (error?.code === "23505") {
+        return res.status(409).json({ error: "Export outcome already recorded" });
+      }
+      throw error;
+    }
+    res.json({ success: true });
+  });
+
+  app.get("/api/super-admin/audit-events", requireAuth, requireRole("super_admin"), async (req, res) => {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || "100"), 10) || 100, 1), 500);
+    const action = typeof req.query.action === "string" ? req.query.action.trim().slice(0, 100) : "";
+    const username = typeof req.query.username === "string" ? req.query.username.trim().slice(0, 255) : "";
+    const ip = typeof req.query.ip === "string" ? req.query.ip.trim().slice(0, 100) : "";
+    const account = typeof req.query.businessAccountId === "string" ? req.query.businessAccountId.trim().slice(0, 255) : "";
+    const outcome = typeof req.query.outcome === "string" ? req.query.outcome.trim() : "";
+    const from = typeof req.query.from === "string" ? new Date(req.query.from) : null;
+    const to = typeof req.query.to === "string" ? new Date(req.query.to) : null;
+    const conditions = [];
+    if (action) conditions.push(ilike(auditEvents.action, `%${action}%`));
+    if (username) conditions.push(ilike(auditEvents.actorUsername, `%${username}%`));
+    if (ip) conditions.push(ilike(auditEvents.ipAddress, `%${ip}%`));
+    if (account) conditions.push(eq(auditEvents.businessAccountId, account));
+    if (outcome) conditions.push(eq(auditEvents.outcome, outcome));
+    if (from && !Number.isNaN(from.getTime())) conditions.push(gte(auditEvents.occurredAt, from));
+    if (to && !Number.isNaN(to.getTime())) conditions.push(lte(auditEvents.occurredAt, to));
+
+    const rows = await db
+      .select({
+        id: auditEvents.id,
+        occurredAt: auditEvents.occurredAt,
+        actorUsername: auditEvents.actorUsername,
+        actorRole: auditEvents.actorRole,
+        businessAccountId: auditEvents.businessAccountId,
+        businessAccountName: businessAccounts.name,
+        action: auditEvents.action,
+        resourceType: auditEvents.resourceType,
+        resourceId: auditEvents.resourceId,
+        outcome: auditEvents.outcome,
+        ipAddress: auditEvents.ipAddress,
+        userAgent: auditEvents.userAgent,
+        requestId: auditEvents.requestId,
+        metadata: auditEvents.metadata,
+      })
+      .from(auditEvents)
+      .leftJoin(businessAccounts, eq(auditEvents.businessAccountId, businessAccounts.id))
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(auditEvents.occurredAt))
+      .limit(limit);
+    res.json({ events: rows });
   });
 
   app.get("/api/leads/:id", requireAuth, requireBusinessAccount, async (req, res) => {

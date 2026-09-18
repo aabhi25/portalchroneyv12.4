@@ -21,6 +21,9 @@ import { awaitingVerificationSweepWorker } from "./services/awaitingVerification
 import { conversationSummarySweepWorker } from "./services/conversationSummarySweepWorker";
 
 const app = express();
+// Replit serves the app behind a reverse proxy. Trust the nearest proxy so
+// Express resolves the originating client IP rather than the proxy socket.
+app.set("trust proxy", 1);
 
 // Enable gzip compression for all responses (reduces bandwidth by 70-80%)
 // Skip SSE routes — compression buffering breaks streaming

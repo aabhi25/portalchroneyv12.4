@@ -50,6 +50,7 @@ import GroupTrainingEditor from "@/pages/GroupTrainingEditor";
 import SuperAdminR2Settings from "@/pages/SuperAdminR2Settings";
 import SuperAdminServerInfo from "@/pages/SuperAdminServerInfo";
 import SuperAdminLiveLogs from "@/pages/SuperAdminLiveLogs";
+import SuperAdminAuditLogs from "@/pages/SuperAdminAuditLogs";
 import PublicDemo from "@/pages/PublicDemo";
 import PublicChat from "@/pages/PublicChat";
 import Login from "@/pages/Login";
@@ -259,6 +260,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/super-admin/r2-storage" component={SuperAdminR2Settings} />
                 <Route path="/super-admin/server-info" component={SuperAdminServerInfo} />
                 <Route path="/super-admin/live-logs" component={SuperAdminLiveLogs} />
+                <Route path="/super-admin/audit-logs" component={SuperAdminAuditLogs} />
               </>
             ) : user?.role === "account_group_admin" ? (
               <>

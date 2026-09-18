@@ -190,6 +190,37 @@ export const sessions = pgTable("sessions", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+// Append-only security audit trail. Secrets, session tokens, and lead contents
+// must never be stored in metadata.
+export const auditEvents = pgTable("audit_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  occurredAt: timestamp("occurred_at").notNull().defaultNow(),
+  // Snapshot identifiers intentionally have no foreign keys: deleting a user or
+  // account must not mutate historical audit rows.
+  actorUserId: varchar("actor_user_id"),
+  actorUsername: text("actor_username"),
+  actorRole: text("actor_role"),
+  businessAccountId: varchar("business_account_id"),
+  sessionFingerprint: text("session_fingerprint"),
+  action: text("action").notNull(),
+  resourceType: text("resource_type"),
+  resourceId: text("resource_id"),
+  outcome: text("outcome").notNull(),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  requestId: text("request_id"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+}, (table) => ({
+  occurredAtIdx: index("audit_events_occurred_at_idx").on(table.occurredAt),
+  actorIdx: index("audit_events_actor_user_id_idx").on(table.actorUserId),
+  accountIdx: index("audit_events_business_account_id_idx").on(table.businessAccountId),
+  actionIdx: index("audit_events_action_idx").on(table.action),
+  requestIdx: index("audit_events_request_id_idx").on(table.requestId),
+  oneExportTerminalEventIdx: uniqueIndex("audit_events_one_export_terminal_event_idx")
+    .on(table.resourceId)
+    .where(sql`${table.action} IN ('leads.export.file_generated', 'leads.export.file_failed')`),
+}));
+
 // Phone OTP challenges — opt-in mobile-number verification for widget chats.
 // Scoped per (businessAccountId, conversationId, phoneE164). Stores HMAC-hashed
 // codes only (never plaintext). One row per send-event; latest row is canonical

@@ -24,6 +24,7 @@ __export(schema_exports, {
   aiUsageEvents: () => aiUsageEvents,
   analyzedPages: () => analyzedPages,
   appointments: () => appointments,
+  auditEvents: () => auditEvents,
   backupJobs: () => backupJobs,
   businessAccounts: () => businessAccounts,
   cannedResponses: () => cannedResponses,
@@ -288,7 +289,7 @@ __export(schema_exports, {
 import { sql } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, uuid, numeric, jsonb, customType, integer, index, uniqueIndex, boolean, date, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
-var vector768, vector1536, businessAccounts, users, sessions, phoneOtpChallenges, passwordResetTokens, conversations, topscholarVoiceSessions, messages, uploadedImages, products, productJewelryEmbeddings, faqs, leads, questionBankEntries, widgetSettings, websiteAnalysis, analyzedPages, trainingDocuments, documentChunks, trainedUrls, urlContentChunks, categories, tags, productCategories, productTags, productRelationships, scheduleTemplates, slotOverrides, appointments, demoPages, publicChatLinks, supportTickets, ticketMessages, ticketAttachments, cannedResponses, ticketInsights, conversationJourneys, journeySteps, journeyResponses, journeySessions, visitorDailyStats, aiSuggestions, accountGroups, accountGroupMembers, accountGroupAdmins, accountGroupTraining, accountGroupLeadsquaredFieldMappings, accountGroupJourneys, accountGroupJourneySteps, accountGroupExtraSettings, modelPricing, aiUsageEvents, aiUsageDaily, intentScores, discountRules, discountOffers, exitIntentSettings, idleTimeoutSettings, urgencyOfferSettings, urgencyOffers, erpConfigurations, productEmbeddings, erpSyncLogs, erpProductCache, productImportJobs, openAiBatchJobs, insertBusinessAccountSchema, insertUserSchema, insertSessionSchema, insertPasswordResetTokenSchema, insertConversationSchema, insertMessageSchema, insertUploadedImageSchema, insertProductSchema, insertFaqSchema, insertLeadSchema, insertQuestionBankEntrySchema, insertWidgetSettingsSchema, insertWebsiteAnalysisSchema, insertAnalyzedPageSchema, insertTrainingDocumentSchema, insertCategorySchema, insertTagSchema, insertProductCategorySchema, insertProductTagSchema, insertProductRelationshipSchema, insertScheduleTemplateSchema, insertSlotOverrideSchema, insertAppointmentSchema, insertDemoPageSchema, insertPublicChatLinkSchema, insertSupportTicketSchema, insertTicketMessageSchema, insertTicketAttachmentSchema, insertCannedResponseSchema, insertTicketInsightSchema, insertConversationJourneySchema, insertJourneyStepSchema, insertAccountGroupSchema, insertAccountGroupMemberSchema, insertAccountGroupTrainingSchema, insertAccountGroupLeadsquaredFieldMappingSchema, insertAccountGroupJourneySchema, insertAccountGroupJourneyStepSchema, insertModelPricingSchema, insertAiUsageEventSchema, insertAiUsageDailySchema, insertIntentScoreSchema, insertDiscountRuleSchema, insertDiscountOfferSchema, insertExitIntentSettingsSchema, insertIdleTimeoutSettingsSchema, insertUrgencyOfferSettingsSchema, insertUrgencyOfferSchema, systemSettings, insertSystemSettingsSchema, vistaStudioJobs, insertVistaStudioJobSchema, restoreHistory, insertRestoreHistorySchema, backupJobs, insertBackupJobSchema, guidanceCampaigns, insertGuidanceCampaignSchema, proactiveGuidanceRules, insertProactiveGuidanceRuleSchema, leadsquaredFieldMappings, insertLeadsquaredFieldMappingSchema, salesforceFieldMappings, insertSalesforceFieldMappingSchema, insertErpConfigurationSchema, insertProductEmbeddingSchema, insertErpSyncLogSchema, insertErpProductCacheSchema, insertProductImportJobSchema, insertOpenAiBatchJobSchema, insertTrainedUrlSchema, insertUrlContentChunkSchema, whatsappSettings, insertWhatsappSettingsSchema, whatsappSessions, whatsappWhitelist, insertWhatsappWhitelistSchema, whatsappLeads, insertWhatsappLeadSchema, whatsappLeadAttachments, insertWhatsappLeadAttachmentSchema, whatsappLeadFields, insertWhatsappLeadFieldSchema, whatsappFlows, insertWhatsappFlowSchema, whatsappFlowSteps, insertWhatsappFlowStepSchema, whatsappFlowSessions, insertWhatsappFlowSessionSchema, verificationRuleSets, verificationRules, insertVerificationRuleSetSchema, insertVerificationRuleSchema, contactGroups, insertContactGroupSchema, contactGroupContacts, insertContactGroupContactSchema, whatsappTemplates, insertWhatsappTemplateSchema, marketingCampaigns, insertMarketingCampaignSchema, whatsappCampaignAutomations, whatsappCampaignAutomationRuns, whatsappCampaignAutomationDispatches, marketingCampaignRecipients, insertMarketingCampaignRecipientSchema, marketingCampaignMessages, whatsappAiWorkbooks, whatsappAiWorkbookVersions, whatsappAiWorkbookCampaignLinks, webhookEvents, insertMarketingCampaignMessageSchema, whatsappOptOuts, insertWhatsappOptOutSchema, chatMenuConfigs, insertChatMenuConfigSchema, chatMenuItems, insertChatMenuItemSchema, chatMenuItemDetails, insertChatMenuItemDetailSchema, insertVisitorDailyStatsSchema, instagramSettings, insertInstagramSettingsSchema, instagramMessages, insertInstagramMessageSchema, instagramComments, insertInstagramCommentSchema, instagramFlows, insertInstagramFlowSchema, instagramFlowSteps, insertInstagramFlowStepSchema, instagramFlowSessions, insertInstagramFlowSessionSchema, instagramLeads, insertInstagramLeadSchema, instagramLeadFields, insertInstagramLeadFieldSchema, leadsquaredUrlExtractionCache, leadsquaredUrlRules, masterAiSettings, facebookSettings, insertFacebookSettingsSchema, facebookMessages, insertFacebookMessageSchema, facebookComments, insertFacebookCommentSchema, facebookFlows, insertFacebookFlowSchema, facebookFlowSteps, insertFacebookFlowStepSchema, facebookFlowSessions, insertFacebookFlowSessionSchema, facebookLeads, insertFacebookLeadSchema, facebookLeadFields, insertFacebookLeadFieldSchema, customCrmSettings, insertCustomCrmSettingsSchema, customCrmFieldMappings, insertCustomCrmFieldMappingSchema, crmStoreCredentials, insertCrmStoreCredentialSchema, messagingCredentials, insertMessagingCredentialSchema, customerProfiles, insertCustomerProfileSchema, customerIdentities, insertCustomerIdentitySchema, customerMemorySnapshots, insertCustomerMemorySnapshotSchema, customerMergeAudit, smartReplies, insertSmartReplySchema, conversationAnalysisCache, conversationCategorySettings, documentTypes, insertDocumentTypeSchema, documentTypePromptHistory, k12Subjects, k12Chapters, k12Topics, k12Questions, k12TopicNotes, k12TopicVideos, jobs, jobApplicants, jobApplications, insertJobSchema, insertJobApplicantSchema, insertJobApplicationSchema, demoOrders, insertDemoOrderSchema, topscholarCpMappings, topscholarPlanIds, topscholarPlanCpResolutions, topscholarContentChunks, topscholarContentSync, topscholarEmbedJobs, topscholarEmbedStaging, topscholarPlanRuns, topscholarPlanRunItems, topscholarPlanSyncLeases, insertTopscholarPlanIdSchema, insertTopscholarPlanCpResolutionSchema, insertTopscholarCpMappingSchema, insertTopscholarContentChunkSchema, insertTopscholarContentSyncSchema;
+var vector768, vector1536, businessAccounts, users, sessions, auditEvents, phoneOtpChallenges, passwordResetTokens, conversations, topscholarVoiceSessions, messages, uploadedImages, products, productJewelryEmbeddings, faqs, leads, questionBankEntries, widgetSettings, websiteAnalysis, analyzedPages, trainingDocuments, documentChunks, trainedUrls, urlContentChunks, categories, tags, productCategories, productTags, productRelationships, scheduleTemplates, slotOverrides, appointments, demoPages, publicChatLinks, supportTickets, ticketMessages, ticketAttachments, cannedResponses, ticketInsights, conversationJourneys, journeySteps, journeyResponses, journeySessions, visitorDailyStats, aiSuggestions, accountGroups, accountGroupMembers, accountGroupAdmins, accountGroupTraining, accountGroupLeadsquaredFieldMappings, accountGroupJourneys, accountGroupJourneySteps, accountGroupExtraSettings, modelPricing, aiUsageEvents, aiUsageDaily, intentScores, discountRules, discountOffers, exitIntentSettings, idleTimeoutSettings, urgencyOfferSettings, urgencyOffers, erpConfigurations, productEmbeddings, erpSyncLogs, erpProductCache, productImportJobs, openAiBatchJobs, insertBusinessAccountSchema, insertUserSchema, insertSessionSchema, insertPasswordResetTokenSchema, insertConversationSchema, insertMessageSchema, insertUploadedImageSchema, insertProductSchema, insertFaqSchema, insertLeadSchema, insertQuestionBankEntrySchema, insertWidgetSettingsSchema, insertWebsiteAnalysisSchema, insertAnalyzedPageSchema, insertTrainingDocumentSchema, insertCategorySchema, insertTagSchema, insertProductCategorySchema, insertProductTagSchema, insertProductRelationshipSchema, insertScheduleTemplateSchema, insertSlotOverrideSchema, insertAppointmentSchema, insertDemoPageSchema, insertPublicChatLinkSchema, insertSupportTicketSchema, insertTicketMessageSchema, insertTicketAttachmentSchema, insertCannedResponseSchema, insertTicketInsightSchema, insertConversationJourneySchema, insertJourneyStepSchema, insertAccountGroupSchema, insertAccountGroupMemberSchema, insertAccountGroupTrainingSchema, insertAccountGroupLeadsquaredFieldMappingSchema, insertAccountGroupJourneySchema, insertAccountGroupJourneyStepSchema, insertModelPricingSchema, insertAiUsageEventSchema, insertAiUsageDailySchema, insertIntentScoreSchema, insertDiscountRuleSchema, insertDiscountOfferSchema, insertExitIntentSettingsSchema, insertIdleTimeoutSettingsSchema, insertUrgencyOfferSettingsSchema, insertUrgencyOfferSchema, systemSettings, insertSystemSettingsSchema, vistaStudioJobs, insertVistaStudioJobSchema, restoreHistory, insertRestoreHistorySchema, backupJobs, insertBackupJobSchema, guidanceCampaigns, insertGuidanceCampaignSchema, proactiveGuidanceRules, insertProactiveGuidanceRuleSchema, leadsquaredFieldMappings, insertLeadsquaredFieldMappingSchema, salesforceFieldMappings, insertSalesforceFieldMappingSchema, insertErpConfigurationSchema, insertProductEmbeddingSchema, insertErpSyncLogSchema, insertErpProductCacheSchema, insertProductImportJobSchema, insertOpenAiBatchJobSchema, insertTrainedUrlSchema, insertUrlContentChunkSchema, whatsappSettings, insertWhatsappSettingsSchema, whatsappSessions, whatsappWhitelist, insertWhatsappWhitelistSchema, whatsappLeads, insertWhatsappLeadSchema, whatsappLeadAttachments, insertWhatsappLeadAttachmentSchema, whatsappLeadFields, insertWhatsappLeadFieldSchema, whatsappFlows, insertWhatsappFlowSchema, whatsappFlowSteps, insertWhatsappFlowStepSchema, whatsappFlowSessions, insertWhatsappFlowSessionSchema, verificationRuleSets, verificationRules, insertVerificationRuleSetSchema, insertVerificationRuleSchema, contactGroups, insertContactGroupSchema, contactGroupContacts, insertContactGroupContactSchema, whatsappTemplates, insertWhatsappTemplateSchema, marketingCampaigns, insertMarketingCampaignSchema, whatsappCampaignAutomations, whatsappCampaignAutomationRuns, whatsappCampaignAutomationDispatches, marketingCampaignRecipients, insertMarketingCampaignRecipientSchema, marketingCampaignMessages, whatsappAiWorkbooks, whatsappAiWorkbookVersions, whatsappAiWorkbookCampaignLinks, webhookEvents, insertMarketingCampaignMessageSchema, whatsappOptOuts, insertWhatsappOptOutSchema, chatMenuConfigs, insertChatMenuConfigSchema, chatMenuItems, insertChatMenuItemSchema, chatMenuItemDetails, insertChatMenuItemDetailSchema, insertVisitorDailyStatsSchema, instagramSettings, insertInstagramSettingsSchema, instagramMessages, insertInstagramMessageSchema, instagramComments, insertInstagramCommentSchema, instagramFlows, insertInstagramFlowSchema, instagramFlowSteps, insertInstagramFlowStepSchema, instagramFlowSessions, insertInstagramFlowSessionSchema, instagramLeads, insertInstagramLeadSchema, instagramLeadFields, insertInstagramLeadFieldSchema, leadsquaredUrlExtractionCache, leadsquaredUrlRules, masterAiSettings, facebookSettings, insertFacebookSettingsSchema, facebookMessages, insertFacebookMessageSchema, facebookComments, insertFacebookCommentSchema, facebookFlows, insertFacebookFlowSchema, facebookFlowSteps, insertFacebookFlowStepSchema, facebookFlowSessions, insertFacebookFlowSessionSchema, facebookLeads, insertFacebookLeadSchema, facebookLeadFields, insertFacebookLeadFieldSchema, customCrmSettings, insertCustomCrmSettingsSchema, customCrmFieldMappings, insertCustomCrmFieldMappingSchema, crmStoreCredentials, insertCrmStoreCredentialSchema, messagingCredentials, insertMessagingCredentialSchema, customerProfiles, insertCustomerProfileSchema, customerIdentities, insertCustomerIdentitySchema, customerMemorySnapshots, insertCustomerMemorySnapshotSchema, customerMergeAudit, smartReplies, insertSmartReplySchema, conversationAnalysisCache, conversationCategorySettings, documentTypes, insertDocumentTypeSchema, documentTypePromptHistory, k12Subjects, k12Chapters, k12Topics, k12Questions, k12TopicNotes, k12TopicVideos, jobs, jobApplicants, jobApplications, insertJobSchema, insertJobApplicantSchema, insertJobApplicationSchema, demoOrders, insertDemoOrderSchema, topscholarCpMappings, topscholarPlanIds, topscholarPlanCpResolutions, topscholarContentChunks, topscholarContentSync, topscholarEmbedJobs, topscholarEmbedStaging, topscholarPlanRuns, topscholarPlanRunItems, topscholarPlanSyncLeases, insertTopscholarPlanIdSchema, insertTopscholarPlanCpResolutionSchema, insertTopscholarCpMappingSchema, insertTopscholarContentChunkSchema, insertTopscholarContentSyncSchema;
 var init_schema = __esm({
   "shared/schema.ts"() {
     "use strict";
@@ -527,6 +528,32 @@ var init_schema = __esm({
       expiresAt: timestamp("expires_at").notNull(),
       createdAt: timestamp("created_at").notNull().defaultNow()
     });
+    auditEvents = pgTable("audit_events", {
+      id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+      occurredAt: timestamp("occurred_at").notNull().defaultNow(),
+      // Snapshot identifiers intentionally have no foreign keys: deleting a user or
+      // account must not mutate historical audit rows.
+      actorUserId: varchar("actor_user_id"),
+      actorUsername: text("actor_username"),
+      actorRole: text("actor_role"),
+      businessAccountId: varchar("business_account_id"),
+      sessionFingerprint: text("session_fingerprint"),
+      action: text("action").notNull(),
+      resourceType: text("resource_type"),
+      resourceId: text("resource_id"),
+      outcome: text("outcome").notNull(),
+      ipAddress: text("ip_address"),
+      userAgent: text("user_agent"),
+      requestId: text("request_id"),
+      metadata: jsonb("metadata").$type().notNull().default(sql`'{}'::jsonb`)
+    }, (table) => ({
+      occurredAtIdx: index("audit_events_occurred_at_idx").on(table.occurredAt),
+      actorIdx: index("audit_events_actor_user_id_idx").on(table.actorUserId),
+      accountIdx: index("audit_events_business_account_id_idx").on(table.businessAccountId),
+      actionIdx: index("audit_events_action_idx").on(table.action),
+      requestIdx: index("audit_events_request_id_idx").on(table.requestId),
+      oneExportTerminalEventIdx: uniqueIndex("audit_events_one_export_terminal_event_idx").on(table.resourceId).where(sql`${table.action} IN ('leads.export.file_generated', 'leads.export.file_failed')`)
+    }));
     phoneOtpChallenges = pgTable("phone_otp_challenges", {
       id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
       businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
@@ -16998,7 +17025,7 @@ __export(otp_exports, {
   normalizePhone: () => normalizePhone,
   verifyRecaptchaV2Token: () => verifyRecaptchaV2Token
 });
-import crypto5 from "node:crypto";
+import crypto6 from "node:crypto";
 import { eq as eq9, and as and6, sql as sql5 } from "drizzle-orm";
 async function resolveProviderForBusiness(businessAccountId) {
   try {
@@ -17142,15 +17169,15 @@ function getHmacSecret() {
       console.warn("[OTP] OTP_HMAC_SECRET not set (or too short). Generating ephemeral runtime secret \u2014 codes will be invalidated on restart. Set OTP_HMAC_SECRET for production.");
       warnedMissingHmac = true;
     }
-    cachedHmacSecret = crypto5.randomBytes(32).toString("hex");
+    cachedHmacSecret = crypto6.randomBytes(32).toString("hex");
   }
   return cachedHmacSecret;
 }
 function hashCode(code) {
-  return crypto5.createHmac("sha256", getHmacSecret()).update(code).digest("hex");
+  return crypto6.createHmac("sha256", getHmacSecret()).update(code).digest("hex");
 }
 function generateNumericCode(length) {
-  const buf = crypto5.randomBytes(length);
+  const buf = crypto6.randomBytes(length);
   let out = "";
   for (let i = 0; i < length; i++) out += (buf[i] % 10).toString();
   return out;
@@ -17339,7 +17366,7 @@ var init_otp = __esm({
         const phoneE164 = normalizePhone(phoneRaw);
         if (!phoneE164 || phoneE164.length < 7) return { ok: false, reason: "invalid_phone" };
         const lockMaterial = `otp-issue|${businessAccountId}|${phoneE164}`;
-        const sha = crypto5.createHash("sha256").update(lockMaterial).digest();
+        const sha = crypto6.createHash("sha256").update(lockMaterial).digest();
         let lockKey = 0n;
         for (let i = 0; i < 8; i++) lockKey = lockKey << 8n | BigInt(sha[i]);
         if (lockKey >= 1n << 63n) lockKey -= 1n << 64n;
@@ -17540,7 +17567,7 @@ var init_otp = __esm({
         const submittedHash = hashCode(cleaned);
         const a = Buffer.from(submittedHash, "hex");
         const b = Buffer.from(ch.codeHash, "hex");
-        const match = a.length === b.length && crypto5.timingSafeEqual(a, b);
+        const match = a.length === b.length && crypto6.timingSafeEqual(a, b);
         if (match) {
           await storage.clearConversationAwaitingVerification(conversationId, businessAccountId);
           const updated2 = await storage.markOtpChallengeVerified(ch.id);
@@ -29844,10 +29871,10 @@ var init_cpLock = __esm({
 });
 
 // server/services/topscholar/ingestionService.ts
-import crypto7 from "crypto";
+import crypto8 from "crypto";
 import { and as and25, eq as eq32, ne, inArray as inArray3 } from "drizzle-orm";
 function hashContent(text3) {
-  return crypto7.createHash("sha256").update(text3).digest("hex").slice(0, 32);
+  return crypto8.createHash("sha256").update(text3).digest("hex").slice(0, 32);
 }
 async function upsertSync(businessAccountId, cpId, patch, guardNotCancelled = false) {
   const existing = await db.select({ id: topscholarContentSync.id }).from(topscholarContentSync).where(and25(eq32(topscholarContentSync.businessAccountId, businessAccountId), eq32(topscholarContentSync.cpId, cpId)));
@@ -30629,7 +30656,7 @@ __export(planSyncWorker_exports, {
   retryFailedPlanSyncItems: () => retryFailedPlanSyncItems,
   startPlanSyncWorker: () => startPlanSyncWorker
 });
-import crypto8 from "crypto";
+import crypto9 from "crypto";
 import { and as and27, asc as asc3, desc as desc9, eq as eq35, inArray as inArray4, isNull as isNull8, lt as lt2, ne as ne2, or as or4 } from "drizzle-orm";
 function nowPatch() {
   return { updatedAt: /* @__PURE__ */ new Date() };
@@ -31110,7 +31137,7 @@ var init_planSyncWorker = __esm({
     TERMINAL_ITEM_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
     MAX_SUBMITTED_BATCH_ITEMS_PER_RUN = 2;
     LEASE_MS = 6e4;
-    WORKER_ID = `${process.pid}:${crypto8.randomUUID()}`;
+    WORKER_ID = `${process.pid}:${crypto9.randomUUID()}`;
     processing = false;
     interval = null;
   }
@@ -31124,7 +31151,7 @@ __export(tokenService_exports, {
   verifyLaunchToken: () => verifyLaunchToken,
   verifyLaunchTokenDetailed: () => verifyLaunchTokenDetailed
 });
-import crypto9 from "crypto";
+import crypto10 from "crypto";
 function b64urlEncode(buf) {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
@@ -31136,16 +31163,16 @@ function signLaunchToken(secret, payload) {
   const body = { iat: Math.floor(Date.now() / 1e3), ...payload };
   const json = Buffer.from(JSON.stringify(body), "utf8");
   const encoded = b64urlEncode(json);
-  const sig = crypto9.createHmac("sha256", secret).update(encoded).digest();
+  const sig = crypto10.createHmac("sha256", secret).update(encoded).digest();
   return `${encoded}.${b64urlEncode(sig)}`;
 }
 function verifyLaunchToken(secret, token) {
   try {
     const [encoded, sig] = token.split(".");
     if (!encoded || !sig) return null;
-    const expected = crypto9.createHmac("sha256", secret).update(encoded).digest();
+    const expected = crypto10.createHmac("sha256", secret).update(encoded).digest();
     const got = b64urlDecode(sig);
-    if (expected.length !== got.length || !crypto9.timingSafeEqual(expected, got)) {
+    if (expected.length !== got.length || !crypto10.timingSafeEqual(expected, got)) {
       return null;
     }
     const payload = JSON.parse(b64urlDecode(encoded).toString("utf8"));
@@ -31186,11 +31213,11 @@ function verifyLaunchTokenDetailed(secret, token) {
     checks.push({ ok: false, label: "Signature", detail: "No launch-token secret is configured on this account \u2014 cannot verify." });
     return fail("Launch-token secret is not configured.");
   }
-  const expected = crypto9.createHmac("sha256", secret).update(encoded).digest();
+  const expected = crypto10.createHmac("sha256", secret).update(encoded).digest();
   let sigOk = false;
   try {
     const got = b64urlDecode(sig);
-    sigOk = expected.length === got.length && crypto9.timingSafeEqual(expected, got);
+    sigOk = expected.length === got.length && crypto10.timingSafeEqual(expected, got);
   } catch {
     sigOk = false;
   }
@@ -33214,7 +33241,7 @@ __export(customCrmService_exports, {
   uploadDocumentsToCaprion: () => uploadDocumentsToCaprion,
   verifyCaprionWebhookChecksum: () => verifyCaprionWebhookChecksum
 });
-import crypto11 from "crypto";
+import crypto12 from "crypto";
 import path4 from "path";
 function validateUrl(baseUrl, endpoint) {
   const fullUrl = endpoint.startsWith("http://") || endpoint.startsWith("https://") ? endpoint : `${baseUrl}${endpoint}`;
@@ -33348,7 +33375,7 @@ function generateChecksumHmac(payload, secretKey) {
   const sortedKeys = Object.keys(payload).sort();
   const values = sortedKeys.map((k) => payload[k]);
   const dataString = values.join("||");
-  const hmac = crypto11.createHmac("sha256", secretKey);
+  const hmac = crypto12.createHmac("sha256", secretKey);
   hmac.update(dataString);
   return hmac.digest("hex");
 }
@@ -33357,7 +33384,7 @@ function generateCaprionChecksum(payload, secretKey) {
   const values = sortedKeys.map((k) => String(payload[k] ?? "").trim());
   const dataString = values.join("||");
   const stringWithSecret = dataString + secretKey;
-  const hmac = crypto11.createHmac("sha256", secretKey);
+  const hmac = crypto12.createHmac("sha256", secretKey);
   hmac.update(stringWithSecret);
   return hmac.digest("hex");
 }
@@ -33366,11 +33393,11 @@ function verifyCaprionWebhookChecksum(loanId, loanAmount, urn, status, timestamp
   const cleaned = receivedChecksum.trim().toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(cleaned)) return false;
   const dataString = `${loanId}|${loanAmount}|${urn}|${status}|${timestamp2}`;
-  const hmac = crypto11.createHmac("sha256", secretKey);
+  const hmac = crypto12.createHmac("sha256", secretKey);
   hmac.update(dataString);
   const computed = hmac.digest("hex");
   try {
-    return crypto11.timingSafeEqual(Buffer.from(computed, "hex"), Buffer.from(cleaned, "hex"));
+    return crypto12.timingSafeEqual(Buffer.from(computed, "hex"), Buffer.from(cleaned, "hex"));
   } catch {
     return false;
   }
@@ -58250,7 +58277,7 @@ import { execSync } from "child_process";
 import express2 from "express";
 import cookieParser from "cookie-parser";
 import compression from "compression";
-import crypto12 from "crypto";
+import crypto13 from "crypto";
 import path8 from "path";
 
 // server/routes.ts
@@ -58261,9 +58288,59 @@ init_auth();
 init_schema();
 import { createServer } from "http";
 import bcrypt2 from "bcrypt";
-import { eq as eq70, and as and60, isNotNull as isNotNull6, sql as sql42, inArray as inArray13, desc as desc31, asc as asc14, gte as gte12, lte as lte5, count as count4 } from "drizzle-orm";
+import { eq as eq70, and as and60, isNotNull as isNotNull6, isNull as isNull16, sql as sql42, inArray as inArray13, desc as desc31, ilike as ilike5, asc as asc14, gte as gte12, lte as lte5, count as count4 } from "drizzle-orm";
 import OpenAI40 from "openai";
 import { z as z2 } from "zod";
+
+// server/services/auditService.ts
+init_db();
+init_schema();
+import crypto5 from "crypto";
+var BLOCKED_METADATA_KEYS = /password|secret|token|cookie|authorization|phone|email|message|leadData/i;
+function sanitizeMetadata(metadata = {}) {
+  const safe = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (BLOCKED_METADATA_KEYS.test(key) || value === void 0) continue;
+    if (typeof value === "string") safe[key] = value.slice(0, 500);
+    else if (typeof value === "number" || typeof value === "boolean" || value === null) safe[key] = value;
+    else if (Array.isArray(value)) safe[key] = value.slice(0, 50).map((item) => String(item).slice(0, 100));
+  }
+  return safe;
+}
+function sessionFingerprint(sessionToken) {
+  if (!sessionToken) return null;
+  return crypto5.createHash("sha256").update(sessionToken).digest("hex");
+}
+function getRequestId(req) {
+  const existing = req.headers["x-request-id"];
+  return (Array.isArray(existing) ? existing[0] : existing)?.slice(0, 255) || crypto5.randomUUID();
+}
+async function recordAuditEvent(req, input) {
+  const user = req.user;
+  const [event] = await db.insert(auditEvents).values({
+    actorUserId: input.actorUserId ?? user?.id ?? null,
+    actorUsername: input.actorUsername ?? user?.username ?? null,
+    actorRole: input.actorRole ?? user?.role ?? null,
+    businessAccountId: input.businessAccountId ?? user?.businessAccountId ?? null,
+    sessionFingerprint: sessionFingerprint(req.sessionToken || req.cookies?.session),
+    action: input.action,
+    resourceType: input.resourceType ?? null,
+    resourceId: input.resourceId ?? null,
+    outcome: input.outcome,
+    ipAddress: req.ip || req.socket.remoteAddress || null,
+    userAgent: req.get("user-agent")?.slice(0, 1e3) || null,
+    requestId: getRequestId(req),
+    metadata: sanitizeMetadata(input.metadata)
+  }).returning({ id: auditEvents.id });
+  return event.id;
+}
+async function recordAuditEventSafely(req, input) {
+  try {
+    await recordAuditEvent(req, input);
+  } catch (error) {
+    console.error("[Audit] Failed to persist audit event", input.action, error);
+  }
+}
 
 // server/chatService.ts
 init_llamaService();
@@ -71608,12 +71685,12 @@ import { Router } from "express";
 import { eq as eq28, and as and23, desc as desc8, sql as sql18, or as or3 } from "drizzle-orm";
 
 // server/services/erpClient.ts
-import crypto6 from "crypto";
+import crypto7 from "crypto";
 var ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "default-encryption-key-32chars!";
 function encrypt2(text3) {
-  const iv = crypto6.randomBytes(16);
-  const key = crypto6.scryptSync(ENCRYPTION_KEY, "salt", 32);
-  const cipher = crypto6.createCipheriv("aes-256-cbc", key, iv);
+  const iv = crypto7.randomBytes(16);
+  const key = crypto7.scryptSync(ENCRYPTION_KEY, "salt", 32);
+  const cipher = crypto7.createCipheriv("aes-256-cbc", key, iv);
   let encrypted = cipher.update(text3, "utf8", "hex");
   encrypted += cipher.final("hex");
   return iv.toString("hex") + ":" + encrypted;
@@ -71623,8 +71700,8 @@ function decrypt2(encryptedText) {
     const [ivHex, encrypted] = encryptedText.split(":");
     if (!ivHex || !encrypted) return encryptedText;
     const iv = Buffer.from(ivHex, "hex");
-    const key = crypto6.scryptSync(ENCRYPTION_KEY, "salt", 32);
-    const decipher = crypto6.createDecipheriv("aes-256-cbc", key, iv);
+    const key = crypto7.scryptSync(ENCRYPTION_KEY, "salt", 32);
+    const decipher = crypto7.createDecipheriv("aes-256-cbc", key, iv);
     let decrypted = decipher.update(encrypted, "hex", "utf8");
     decrypted += decipher.final("utf8");
     return decrypted;
@@ -76585,7 +76662,7 @@ init_auth();
 init_config();
 init_tokenService();
 import { Router as Router5 } from "express";
-import crypto10 from "crypto";
+import crypto11 from "crypto";
 import { eq as eq39 } from "drizzle-orm";
 
 // server/services/topscholar/analyticsService.ts
@@ -77601,7 +77678,7 @@ function timingSafeEqualStr(a, b) {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
   if (ab.length !== bb.length) return false;
-  return crypto10.timingSafeEqual(ab, bb);
+  return crypto11.timingSafeEqual(ab, bb);
 }
 async function requirePortalAuth(req, res, next) {
   const provided = extractPortalSecret(req);
@@ -85011,20 +85088,57 @@ data: ${JSON.stringify({ message: error.message })}
     try {
       const { username, password } = req.body;
       if (!username || !password) {
+        await recordAuditEventSafely(req, {
+          action: "auth.login",
+          outcome: "denied",
+          actorUsername: typeof username === "string" ? username.slice(0, 255) : null,
+          resourceType: "session",
+          metadata: { reason: "missing_credentials" }
+        });
         return res.status(400).json({ error: "Username and password required" });
       }
       const user = await storage.getUserByUsername(username);
       if (!user || !await verifyPassword(password, user.passwordHash)) {
+        await recordAuditEventSafely(req, {
+          action: "auth.login",
+          outcome: "denied",
+          actorUserId: user?.id,
+          actorUsername: String(username).slice(0, 255),
+          actorRole: user?.role,
+          businessAccountId: user?.businessAccountId,
+          resourceType: "session",
+          metadata: { reason: "invalid_credentials" }
+        });
         return res.status(401).json({ error: "Invalid credentials" });
       }
       if (user.role === "business_user" && user.businessAccountId) {
         const businessAccount = await storage.getBusinessAccount(user.businessAccountId);
         if (businessAccount && businessAccount.status === "suspended") {
+          await recordAuditEventSafely(req, {
+            action: "auth.login",
+            outcome: "denied",
+            actorUserId: user.id,
+            actorUsername: user.username,
+            actorRole: user.role,
+            businessAccountId: user.businessAccountId,
+            resourceType: "session",
+            metadata: { reason: "account_suspended" }
+          });
           return res.status(403).json({ error: "Your subscription has expired. Please contact support to reactivate your account." });
         }
       }
       const sessionToken = await createSession(user.id);
       await storage.updateUserLastLogin(user.id);
+      req.sessionToken = sessionToken;
+      await recordAuditEventSafely(req, {
+        action: "auth.login",
+        outcome: "success",
+        actorUserId: user.id,
+        actorUsername: user.username,
+        actorRole: user.role,
+        businessAccountId: user.businessAccountId,
+        resourceType: "session"
+      });
       res.cookie("session", sessionToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
@@ -85050,9 +85164,21 @@ data: ${JSON.stringify({ message: error.message })}
       if (sessionToken) {
         await deleteSession(sessionToken);
       }
+      await recordAuditEventSafely(req, {
+        action: "auth.logout",
+        outcome: "success",
+        resourceType: "session"
+      });
       res.clearCookie("session");
       res.json({ success: true });
     } catch (error) {
+      await recordAuditEventSafely(req, {
+        action: "auth.logout",
+        outcome: "failure",
+        resourceType: "session",
+        metadata: { reason: "session_deletion_failed" }
+      });
+      res.clearCookie("session");
       res.status(500).json({ error: error.message });
     }
   });
@@ -90066,7 +90192,15 @@ Format your response as JSON with this structure:
   });
   app2.post("/api/super-admin/impersonate/exit", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
+      const previousAccountId = req.user.businessAccountId;
       await db.update(sessions).set({ activeBusinessAccountId: null }).where(eq70(sessions.sessionToken, req.sessionToken));
+      await recordAuditEvent(req, {
+        action: "auth.impersonation.ended",
+        outcome: "success",
+        businessAccountId: previousAccountId,
+        resourceType: "business_account",
+        resourceId: previousAccountId
+      });
       console.log(`[SuperAdmin] User ${req.user.username} exited impersonation mode`);
       res.json({
         success: true,
@@ -90086,6 +90220,14 @@ Format your response as JSON with this structure:
       }
       const { updateSessionActiveAccount: updateSessionActiveAccount2 } = await Promise.resolve().then(() => (init_auth(), auth_exports));
       await updateSessionActiveAccount2(req.sessionToken, businessAccountId);
+      await recordAuditEvent(req, {
+        action: "auth.impersonation.started",
+        outcome: "success",
+        businessAccountId,
+        resourceType: "business_account",
+        resourceId: businessAccountId,
+        metadata: { businessAccountName: businessAccount.name }
+      });
       console.log(`[SuperAdmin] User ${req.user.username} started impersonating account: ${businessAccount.name} (${businessAccountId})`);
       res.json({
         success: true,
@@ -97402,11 +97544,33 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         void 0
         // No offset
       );
+      const exportId = randomUUID3();
+      await recordAuditEventSafely(req, {
+        action: "leads.export.data_delivered",
+        outcome: "success",
+        businessAccountId,
+        resourceType: "lead_report",
+        resourceId: exportId,
+        metadata: {
+          format: "xlsx",
+          recordCount: result.total,
+          fromDate: typeof fromDate === "string" ? fromDate : null,
+          toDate: typeof toDate === "string" ? toDate : null,
+          hasSearchFilter: typeof search === "string" && search.trim().length > 0
+        }
+      });
       res.json({
         leads: result.leads,
-        total: result.total
+        total: result.total,
+        exportId
       });
     } catch (error) {
+      await recordAuditEventSafely(req, {
+        action: "leads.export.data_delivered",
+        outcome: "failure",
+        resourceType: "lead_report",
+        metadata: { reason: "export_query_failed" }
+      });
       res.status(500).json({ error: error.message });
     }
   });
@@ -97437,6 +97601,95 @@ Be constructive and helpful. Return ONLY valid JSON.`;
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
+  });
+  app2.post("/api/audit/client-event", requireAuth, async (req, res) => {
+    const envelope = z2.object({
+      action: z2.enum(["page.leads.viewed", "leads.export.file_generated", "leads.export.file_failed"]),
+      metadata: z2.record(z2.unknown()).default({})
+    }).strict().safeParse(req.body);
+    if (!envelope.success) return res.status(400).json({ error: "Invalid audit event" });
+    const { action } = envelope.data;
+    if (action === "page.leads.viewed") {
+      const parsed = z2.object({}).strict().safeParse(envelope.data.metadata);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid page event metadata" });
+      await recordAuditEvent(req, {
+        action,
+        outcome: "success",
+        resourceType: "page",
+        resourceId: "/admin/leads",
+        metadata: { source: "client_reported" }
+      });
+      return res.json({ success: true });
+    }
+    const exportMetadata = z2.object({
+      exportId: z2.string().uuid(),
+      format: z2.literal("xlsx"),
+      recordCount: z2.number().int().nonnegative().max(1e6),
+      datePreset: z2.enum(["all", "today", "yesterday", "last7", "last30", "custom"]),
+      hasSearchFilter: z2.boolean()
+    }).strict().safeParse(envelope.data.metadata);
+    if (!exportMetadata.success) return res.status(400).json({ error: "Invalid export event metadata" });
+    const [matchingExport] = await db.select({ id: auditEvents.id, metadata: auditEvents.metadata }).from(auditEvents).where(and60(
+      eq70(auditEvents.action, "leads.export.data_delivered"),
+      eq70(auditEvents.resourceId, exportMetadata.data.exportId),
+      eq70(auditEvents.actorUserId, req.user.id),
+      req.user.businessAccountId ? eq70(auditEvents.businessAccountId, req.user.businessAccountId) : isNull16(auditEvents.businessAccountId)
+    )).limit(1);
+    if (!matchingExport) return res.status(400).json({ error: "Export audit reference not found" });
+    const deliveredCount = Number(matchingExport.metadata?.recordCount);
+    if (!Number.isFinite(deliveredCount) || deliveredCount !== exportMetadata.data.recordCount) {
+      return res.status(400).json({ error: "Export record count does not match" });
+    }
+    try {
+      await recordAuditEvent(req, {
+        action,
+        outcome: action === "leads.export.file_failed" ? "failure" : "success",
+        resourceType: "lead_report",
+        resourceId: exportMetadata.data.exportId,
+        metadata: { ...exportMetadata.data, source: "client_reported" }
+      });
+    } catch (error) {
+      if (error?.code === "23505") {
+        return res.status(409).json({ error: "Export outcome already recorded" });
+      }
+      throw error;
+    }
+    res.json({ success: true });
+  });
+  app2.get("/api/super-admin/audit-events", requireAuth, requireRole("super_admin"), async (req, res) => {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || "100"), 10) || 100, 1), 500);
+    const action = typeof req.query.action === "string" ? req.query.action.trim().slice(0, 100) : "";
+    const username = typeof req.query.username === "string" ? req.query.username.trim().slice(0, 255) : "";
+    const ip = typeof req.query.ip === "string" ? req.query.ip.trim().slice(0, 100) : "";
+    const account = typeof req.query.businessAccountId === "string" ? req.query.businessAccountId.trim().slice(0, 255) : "";
+    const outcome = typeof req.query.outcome === "string" ? req.query.outcome.trim() : "";
+    const from = typeof req.query.from === "string" ? new Date(req.query.from) : null;
+    const to = typeof req.query.to === "string" ? new Date(req.query.to) : null;
+    const conditions = [];
+    if (action) conditions.push(ilike5(auditEvents.action, `%${action}%`));
+    if (username) conditions.push(ilike5(auditEvents.actorUsername, `%${username}%`));
+    if (ip) conditions.push(ilike5(auditEvents.ipAddress, `%${ip}%`));
+    if (account) conditions.push(eq70(auditEvents.businessAccountId, account));
+    if (outcome) conditions.push(eq70(auditEvents.outcome, outcome));
+    if (from && !Number.isNaN(from.getTime())) conditions.push(gte12(auditEvents.occurredAt, from));
+    if (to && !Number.isNaN(to.getTime())) conditions.push(lte5(auditEvents.occurredAt, to));
+    const rows = await db.select({
+      id: auditEvents.id,
+      occurredAt: auditEvents.occurredAt,
+      actorUsername: auditEvents.actorUsername,
+      actorRole: auditEvents.actorRole,
+      businessAccountId: auditEvents.businessAccountId,
+      businessAccountName: businessAccounts.name,
+      action: auditEvents.action,
+      resourceType: auditEvents.resourceType,
+      resourceId: auditEvents.resourceId,
+      outcome: auditEvents.outcome,
+      ipAddress: auditEvents.ipAddress,
+      userAgent: auditEvents.userAgent,
+      requestId: auditEvents.requestId,
+      metadata: auditEvents.metadata
+    }).from(auditEvents).leftJoin(businessAccounts, eq70(auditEvents.businessAccountId, businessAccounts.id)).where(conditions.length ? and60(...conditions) : void 0).orderBy(desc31(auditEvents.occurredAt)).limit(limit);
+    res.json({ events: rows });
   });
   app2.get("/api/leads/:id", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
@@ -100837,8 +101090,8 @@ ${reviewText}`
         });
       }
       await storage.updateShopifyOAuthCredentials(businessAccountId, clientId.trim(), clientSecret.trim(), trimmedUrl);
-      const crypto13 = await import("crypto");
-      const state = crypto13.randomBytes(32).toString("hex");
+      const crypto14 = await import("crypto");
+      const state = crypto14.randomBytes(32).toString("hex");
       await storage.setShopifyOAuthState(businessAccountId, state);
       const baseUrl = "https://portal.aichroney.com";
       const redirectUri = `${baseUrl}/api/shopify/auth/callback`;
@@ -104570,7 +104823,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
       const { instagramService: instagramService2 } = await Promise.resolve().then(() => (init_instagramService(), instagramService_exports));
       const { instagramAutoReplyService: instagramAutoReplyService2 } = await Promise.resolve().then(() => (init_instagramAutoReplyService(), instagramAutoReplyService_exports));
       const { instagramCommentReplyService: instagramCommentReplyService2 } = await Promise.resolve().then(() => (init_instagramCommentReplyService(), instagramCommentReplyService_exports));
-      const crypto13 = await import("crypto");
+      const crypto14 = await import("crypto");
       for (const entry of body.entry || []) {
         if (entry.changes && Array.isArray(entry.changes)) {
           for (const change of entry.changes) {
@@ -104630,7 +104883,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
             if (rawBody) {
               const decryptedAppSecret = instagramService2.getDecryptedAppSecret(settings);
               if (decryptedAppSecret) {
-                const expectedHash = crypto13.createHmac("sha256", decryptedAppSecret).update(rawBody).digest("hex");
+                const expectedHash = crypto14.createHmac("sha256", decryptedAppSecret).update(rawBody).digest("hex");
                 if (signature !== `sha256=${expectedHash}`) {
                   console.warn("[Instagram Webhook] Signature mismatch - skipping");
                   continue;
@@ -107950,6 +108203,7 @@ var conversationSummarySweepWorker = new ConversationSummarySweepWorker();
 // server/index.ts
 initLogCapture();
 var app = express2();
+app.set("trust proxy", 1);
 app.use(compression({
   filter: (req, res) => {
     const contentType = res.getHeader("Content-Type");
@@ -107961,7 +108215,7 @@ app.use(compression({
 app.use("/uploads", express2.static(path8.join(process.cwd(), "uploads")));
 app.use(express2.static(path8.join(process.cwd(), "public")));
 var COOKIE_SECRET = process.env.COOKIE_SECRET || (() => {
-  const randomSecret = crypto12.randomBytes(32).toString("hex");
+  const randomSecret = crypto13.randomBytes(32).toString("hex");
   if (process.env.NODE_ENV === "production") {
     throw new Error("COOKIE_SECRET environment variable must be set in production");
   }
