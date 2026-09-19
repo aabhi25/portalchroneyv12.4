@@ -109,7 +109,7 @@ export default function AdminLeads() {
     queryKey: ["/api/auth/me"],
   });
   const isSuperAdminImpersonating = currentUser?.role === "super_admin" && !!currentUser?.activeBusinessAccountId;
-  const canExportAllLeads = isSuperAdminImpersonating || currentUser?.businessAccount?.leadsExportEnabled === true;
+  const canExportAllLeads = currentUser?.businessAccount?.leadsExportEnabled === true;
 
   useEffect(() => {
     apiRequest("POST", "/api/audit/client-event", {

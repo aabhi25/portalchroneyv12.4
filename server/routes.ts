@@ -24855,7 +24855,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       })();
       
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       res.json(protectLeadPhone(lead, shouldMaskPhone));
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -24941,15 +24941,15 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
 
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const canExportAllLeads = req.user?.role === "super_admin" || businessAccount?.leadsExportEnabled === "true";
-      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      const canExportAllLeads = businessAccount?.leadsExportEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       if (!canExportAllLeads) {
         await recordAuditEventSafely(req, {
           action: "leads.export.data_delivered",
           outcome: "denied",
           businessAccountId,
           resourceType: "lead_report",
-          metadata: { reason: "business_user_export_disabled" },
+          metadata: { reason: "account_export_disabled" },
         });
         return res.status(403).json({ error: "Lead export is not enabled for this business account" });
       }
@@ -25025,7 +25025,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         offset
       );
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       
       res.json({
         leads: result.leads.map(lead => protectLeadPhone(lead, shouldMaskPhone)),
@@ -25155,7 +25155,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(404).json({ error: "Lead not found" });
       }
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       res.json(protectLeadPhone(lead, shouldMaskPhone));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -25257,8 +25257,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         .where(eq(journeyResponses.sessionId, session.sessionId))
         .orderBy(journeySteps.stepOrder);
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const shouldMaskPhone = req.user?.role !== "super_admin" &&
-        businessAccount?.leadPhoneMaskingEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
 
       res.json({
         journeyName: session.journeyName || 'Unknown Journey',
@@ -26458,8 +26457,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return message;
       });
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const shouldMaskPhone = req.user?.role !== "super_admin" &&
-        businessAccount?.leadPhoneMaskingEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       res.json(protectConversationPhoneMessages(displayMessages, shouldMaskPhone));
     } catch (error: any) {
       res.status(500).json({ error: error.message });

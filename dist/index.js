@@ -376,9 +376,9 @@ var init_schema = __esm({
       whatsappMarketingEnabled: text("whatsapp_marketing_enabled").notNull().default("false"),
       // 'true' | 'false' - SuperAdmin toggle for WhatsApp Marketing Campaigns feature (default OFF)
       leadsExportEnabled: text("leads_export_enabled").notNull().default("false"),
-      // 'true' | 'false' - Allow business users to export all leads (superadmins always allowed)
+      // 'true' | 'false' - Allow viewers of this business account to export all leads
       leadPhoneMaskingEnabled: text("lead_phone_masking_enabled").notNull().default("false"),
-      // 'true' | 'false' - Mask lead phone numbers for business users (superadmins always see full numbers)
+      // 'true' | 'false' - Mask lead phone numbers for viewers of this business account
       jobImportConfig: jsonb("job_import_config").$type(),
       systemMode: text("system_mode").notNull().default("full"),
       // 'full' | 'essential' - Full = all features, Essential = core pages only
@@ -97541,7 +97541,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         }
       })();
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       res.json(protectLeadPhone(lead, shouldMaskPhone));
     } catch (error) {
       res.status(400).json({ error: error.message });
@@ -97606,15 +97606,15 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(403).json({ error: "Business account access is no longer authorized" });
       }
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const canExportAllLeads = req.user?.role === "super_admin" || businessAccount?.leadsExportEnabled === "true";
-      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      const canExportAllLeads = businessAccount?.leadsExportEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       if (!canExportAllLeads) {
         await recordAuditEventSafely(req, {
           action: "leads.export.data_delivered",
           outcome: "denied",
           businessAccountId,
           resourceType: "lead_report",
-          metadata: { reason: "business_user_export_disabled" }
+          metadata: { reason: "account_export_disabled" }
         });
         return res.status(403).json({ error: "Lead export is not enabled for this business account" });
       }
@@ -97682,7 +97682,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         offset
       );
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       res.json({
         leads: result.leads.map((lead) => protectLeadPhone(lead, shouldMaskPhone)),
         total: result.total
@@ -97791,7 +97791,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(404).json({ error: "Lead not found" });
       }
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       res.json(protectLeadPhone(lead, shouldMaskPhone));
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -97861,7 +97861,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         stepOrder: journeySteps.stepOrder
       }).from(journeyResponses).leftJoin(journeySteps, eq75(journeyResponses.stepId, journeySteps.id)).where(eq75(journeyResponses.sessionId, session.sessionId)).orderBy(journeySteps.stepOrder);
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       res.json({
         journeyName: session.journeyName || "Unknown Journey",
         completed: session.completed === "true",
@@ -98854,7 +98854,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return message;
       });
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       res.json(protectConversationPhoneMessages(displayMessages, shouldMaskPhone));
     } catch (error) {
       res.status(500).json({ error: error.message });

@@ -363,17 +363,17 @@ export default function Settings() {
                 Leads Export Access
               </CardTitle>
               <CardDescription className="mt-1">
-                Control whether this business account's user can export all leads
+                Control whether leads can be exported while viewing this business account
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-6">
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <Label htmlFor="leads-export-enabled" className="font-medium">
-                    Allow business user to export all leads
+                    Allow lead exports
                   </Label>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Superadmins can always export while viewing this account.
+                    This setting applies to business users and superadmins viewing this account.
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -411,7 +411,7 @@ export default function Settings() {
                       Mask lead phone numbers
                     </Label>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Business users will see only the last four digits. Superadmins always see the full number.
+                      Business users and superadmins viewing this account will see only the last four digits.
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
