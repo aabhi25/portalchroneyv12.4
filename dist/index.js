@@ -375,6 +375,8 @@ var init_schema = __esm({
       // 'true' | 'false' - SuperAdmin toggle for Demo Orders feature (default OFF)
       whatsappMarketingEnabled: text("whatsapp_marketing_enabled").notNull().default("false"),
       // 'true' | 'false' - SuperAdmin toggle for WhatsApp Marketing Campaigns feature (default OFF)
+      leadsExportEnabled: text("leads_export_enabled").notNull().default("false"),
+      // 'true' | 'false' - Allow business users to export all leads (superadmins always allowed)
       jobImportConfig: jsonb("job_import_config").$type(),
       systemMode: text("system_mode").notNull().default("full"),
       // 'full' | 'essential' - Full = all features, Essential = core pages only
@@ -45446,6 +45448,7 @@ function toMeResponseDto(user, businessAccount, activeBusinessAccountId, isTopsc
         jobPortalEnabled: businessAccount.jobPortalEnabled,
         demoOrdersEnabled: businessAccount.demoOrdersEnabled,
         whatsappMarketingEnabled: businessAccount.whatsappMarketingEnabled,
+        leadsExportEnabled: businessAccount.leadsExportEnabled,
         isTopscholar: !!isTopscholar
       }
     };
@@ -45488,6 +45491,7 @@ function toBusinessAccountDto(account) {
     jobPortalEnabled: account.jobPortalEnabled === "true",
     demoOrdersEnabled: account.demoOrdersEnabled === "true",
     whatsappMarketingEnabled: account.whatsappMarketingEnabled === "true",
+    leadsExportEnabled: account.leadsExportEnabled === "true",
     productTier: account.productTier || "chroney",
     systemMode: account.systemMode || "full"
   };
@@ -45512,6 +45516,7 @@ function fromBusinessAccountDto(dto) {
     jobPortalEnabled: dto.jobPortalEnabled ? "true" : "false",
     demoOrdersEnabled: dto.demoOrdersEnabled ? "true" : "false",
     whatsappMarketingEnabled: dto.whatsappMarketingEnabled ? "true" : "false",
+    leadsExportEnabled: dto.leadsExportEnabled ? "true" : "false",
     systemMode: dto.systemMode || "full"
   };
 }
@@ -85786,7 +85791,7 @@ ${instruction}`
   app2.patch("/api/business-accounts/:id/features", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const { id } = req.params;
-      const { shopifyEnabled, appointmentsEnabled, voiceModeEnabled, visualSearchEnabled, jewelryShowcaseEnabled, supportTicketsEnabled, whatsappEnabled, instagramEnabled, facebookEnabled, chroneyEnabled, k12EducationEnabled, jobPortalEnabled, demoOrdersEnabled, whatsappMarketingEnabled, systemMode } = req.body;
+      const { shopifyEnabled, appointmentsEnabled, voiceModeEnabled, visualSearchEnabled, jewelryShowcaseEnabled, supportTicketsEnabled, whatsappEnabled, instagramEnabled, facebookEnabled, chroneyEnabled, k12EducationEnabled, jobPortalEnabled, demoOrdersEnabled, whatsappMarketingEnabled, leadsExportEnabled, systemMode } = req.body;
       const updates = {};
       if (shopifyEnabled !== void 0) {
         if (typeof shopifyEnabled !== "boolean") {
@@ -85871,6 +85876,15 @@ ${instruction}`
           return res.status(400).json({ error: "whatsappMarketingEnabled must be a boolean" });
         }
         updates.whatsappMarketingEnabled = whatsappMarketingEnabled ? "true" : "false";
+      }
+      if (leadsExportEnabled !== void 0) {
+        if (typeof leadsExportEnabled !== "boolean") {
+          return res.status(400).json({ error: "leadsExportEnabled must be a boolean" });
+        }
+        if (!req.user?.activeBusinessAccountId || req.user.activeBusinessAccountId !== id) {
+          return res.status(403).json({ error: "Lead export access can only be changed for the currently accessed business account" });
+        }
+        updates.leadsExportEnabled = leadsExportEnabled ? "true" : "false";
       }
       if (systemMode !== void 0) {
         if (systemMode !== "full" && systemMode !== "essential") {
@@ -97500,11 +97514,41 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       res.status(400).json({ error: error.message });
     }
   });
+  const resolveAuthorizedLeadAccountId = async (user) => {
+    const activeAccountId = user.activeBusinessAccountId || user.businessAccountId;
+    if (!activeAccountId) return null;
+    if (user.role === "super_admin") return activeAccountId;
+    const originalUser = await storage.getUser(user.id);
+    const originalAccountId = originalUser?.businessAccountId;
+    if (!originalAccountId) return null;
+    if (activeAccountId === originalAccountId) return originalAccountId;
+    const linkedAccounts = await storage.getLinkedAccounts(originalAccountId);
+    const targetMembership = linkedAccounts.find((link) => link.businessAccountId === activeAccountId);
+    if (!targetMembership || targetMembership.businessAccount.status !== "active") return null;
+    const originalMembership = linkedAccounts.find((link) => link.businessAccountId === originalAccountId);
+    if (originalMembership?.isPrimary === "true") {
+      const group = await storage.getAccountGroupForBusiness(originalAccountId);
+      if (group?.primaryHasFullAccess !== "true") return null;
+    }
+    return activeAccountId;
+  };
   app2.get("/api/leads/export", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const businessAccountId = req.user?.businessAccountId;
+      const businessAccountId = req.user ? await resolveAuthorizedLeadAccountId(req.user) : null;
       if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
+        return res.status(403).json({ error: "Business account access is no longer authorized" });
+      }
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const canExportAllLeads = req.user?.role === "super_admin" || businessAccount?.leadsExportEnabled === "true";
+      if (!canExportAllLeads) {
+        await recordAuditEventSafely(req, {
+          action: "leads.export.data_delivered",
+          outcome: "denied",
+          businessAccountId,
+          resourceType: "lead_report",
+          metadata: { reason: "business_user_export_disabled" }
+        });
+        return res.status(403).json({ error: "Lead export is not enabled for this business account" });
       }
       const { fromDate, toDate, search } = req.query;
       const result = await storage.getLeadsPaginated(
@@ -97551,9 +97595,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
   });
   app2.get("/api/leads", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const businessAccountId = req.user?.businessAccountId;
+      const businessAccountId = req.user ? await resolveAuthorizedLeadAccountId(req.user) : null;
       if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
+        return res.status(403).json({ error: "Business account access is no longer authorized" });
       }
       const { fromDate, toDate, search, page = "1", limit = "20" } = req.query;
       const pageNum = Math.max(1, parseInt(page) || 1);

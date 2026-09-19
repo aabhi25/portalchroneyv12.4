@@ -109,6 +109,7 @@ export default function AdminLeads() {
     queryKey: ["/api/auth/me"],
   });
   const isSuperAdminImpersonating = currentUser?.role === "super_admin" && !!currentUser?.activeBusinessAccountId;
+  const canExportAllLeads = isSuperAdminImpersonating || currentUser?.businessAccount?.leadsExportEnabled === true;
 
   useEffect(() => {
     apiRequest("POST", "/api/audit/client-event", {
@@ -427,7 +428,8 @@ export default function AdminLeads() {
       });
       
       if (!response.ok) {
-        throw new Error("Failed to fetch leads for export");
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.error || "Failed to fetch leads for export");
       }
       
       const exportData = await response.json();
@@ -538,10 +540,12 @@ export default function AdminLeads() {
                     Sync All to CRM
                   </Button>
                 )}
-                <Button onClick={handleExport} disabled={(data?.total || 0) === 0} data-testid="button-export-leads" className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700">
-                  <Download className="h-4 w-4 mr-2" />
-                  Export All ({data?.total || 0})
-                </Button>
+                {canExportAllLeads && (
+                  <Button onClick={handleExport} disabled={(data?.total || 0) === 0} data-testid="button-export-leads" className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700">
+                    <Download className="h-4 w-4 mr-2" />
+                    Export All ({data?.total || 0})
+                  </Button>
+                )}
               </div>
           </div>
         </CardHeader>

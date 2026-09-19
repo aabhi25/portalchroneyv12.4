@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { getLogBuffer, logEvents } from './services/logCapture';
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
@@ -9817,7 +9817,7 @@ Return ONLY the refined instruction, nothing else.`
   app.patch("/api/business-accounts/:id/features", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const { id } = req.params;
-      const { shopifyEnabled, appointmentsEnabled, voiceModeEnabled, visualSearchEnabled, jewelryShowcaseEnabled, supportTicketsEnabled, whatsappEnabled, instagramEnabled, facebookEnabled, chroneyEnabled, k12EducationEnabled, jobPortalEnabled, demoOrdersEnabled, whatsappMarketingEnabled, systemMode } = req.body;
+      const { shopifyEnabled, appointmentsEnabled, voiceModeEnabled, visualSearchEnabled, jewelryShowcaseEnabled, supportTicketsEnabled, whatsappEnabled, instagramEnabled, facebookEnabled, chroneyEnabled, k12EducationEnabled, jobPortalEnabled, demoOrdersEnabled, whatsappMarketingEnabled, leadsExportEnabled, systemMode } = req.body;
       
       const updates: any = {};
       
@@ -9917,6 +9917,16 @@ Return ONLY the refined instruction, nothing else.`
           return res.status(400).json({ error: "whatsappMarketingEnabled must be a boolean" });
         }
         updates.whatsappMarketingEnabled = whatsappMarketingEnabled ? "true" : "false";
+      }
+
+      if (leadsExportEnabled !== undefined) {
+        if (typeof leadsExportEnabled !== "boolean") {
+          return res.status(400).json({ error: "leadsExportEnabled must be a boolean" });
+        }
+        if (!req.user?.activeBusinessAccountId || req.user.activeBusinessAccountId !== id) {
+          return res.status(403).json({ error: "Lead export access can only be changed for the currently accessed business account" });
+        }
+        updates.leadsExportEnabled = leadsExportEnabled ? "true" : "false";
       }
 
       if (systemMode !== undefined) {
@@ -24812,11 +24822,49 @@ Be constructive and helpful. Return ONLY valid JSON.`;
     }
   });
 
+  const resolveAuthorizedLeadAccountId = async (user: NonNullable<Request["user"]>): Promise<string | null> => {
+    const activeAccountId = user.activeBusinessAccountId || user.businessAccountId;
+    if (!activeAccountId) return null;
+    if (user.role === "super_admin") return activeAccountId;
+
+    const originalUser = await storage.getUser(user.id);
+    const originalAccountId = originalUser?.businessAccountId;
+    if (!originalAccountId) return null;
+    const originalAccount = await storage.getBusinessAccount(originalAccountId);
+    if (!originalAccount || originalAccount.status !== "active") return null;
+    if (activeAccountId === originalAccountId) return originalAccountId;
+
+    const linkedAccounts = await storage.getLinkedAccounts(originalAccountId);
+    const targetMembership = linkedAccounts.find(link => link.businessAccountId === activeAccountId);
+    if (!targetMembership || targetMembership.businessAccount.status !== "active") return null;
+
+    const originalMembership = linkedAccounts.find(link => link.businessAccountId === originalAccountId);
+    if (originalMembership?.isPrimary === "true") {
+      const group = await storage.getAccountGroupForBusiness(originalAccountId);
+      if (group?.primaryHasFullAccess !== "true") return null;
+    }
+
+    return activeAccountId;
+  };
+
   app.get("/api/leads/export", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const businessAccountId = req.user?.businessAccountId;
+      const businessAccountId = req.user ? await resolveAuthorizedLeadAccountId(req.user) : null;
       if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
+        return res.status(403).json({ error: "Business account access is no longer authorized" });
+      }
+
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const canExportAllLeads = req.user?.role === "super_admin" || businessAccount?.leadsExportEnabled === "true";
+      if (!canExportAllLeads) {
+        await recordAuditEventSafely(req, {
+          action: "leads.export.data_delivered",
+          outcome: "denied",
+          businessAccountId,
+          resourceType: "lead_report",
+          metadata: { reason: "business_user_export_disabled" },
+        });
+        return res.status(403).json({ error: "Lead export is not enabled for this business account" });
       }
       
       const { fromDate, toDate, search } = req.query;
@@ -24866,9 +24914,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
 
   app.get("/api/leads", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const businessAccountId = req.user?.businessAccountId;
+      const businessAccountId = req.user ? await resolveAuthorizedLeadAccountId(req.user) : null;
       if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
+        return res.status(403).json({ error: "Business account access is no longer authorized" });
       }
       
       const { fromDate, toDate, search, page = '1', limit = '20' } = req.query;

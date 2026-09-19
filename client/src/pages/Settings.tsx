@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Settings2, AlertCircle, Lock, Loader2, Upload, Trash2, Palette, Sparkles, Check, CheckCircle2, ArrowRight, Database, SlidersHorizontal, RefreshCw } from "lucide-react";
+import { Settings2, AlertCircle, Lock, Loader2, Upload, Trash2, Palette, Sparkles, Check, CheckCircle2, ArrowRight, Database, SlidersHorizontal, RefreshCw, Download } from "lucide-react";
 import type { MeResponseDto } from "@shared/dto";
 import { isTopScholarSuperAdminView } from "@/lib/accountAccess";
 
@@ -72,6 +72,7 @@ export default function Settings() {
   const hasJewelryAccess = productTier === 'jewelry_showcase' || productTier === 'jewelry_showcase_chroney';
   const isK12Education = user?.businessAccount?.k12EducationEnabled === true;
   const canManageTopScholarContent = isTopScholarSuperAdminView(user);
+  const isSuperAdminImpersonating = user?.role === "super_admin" && !!user.activeBusinessAccountId;
 
   const { data: erpConfig } = useQuery<{ configured: boolean; config?: { name: string; isActive: string; lastTestedAt: string | null; lastTestStatus: string | null } } | null>({
     queryKey: ['/api/erp/config'],
@@ -117,6 +118,30 @@ export default function Settings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/k12/image-upload-settings'] });
       toast({ title: 'Setting saved', description: 'Image upload setting has been updated.' });
+    },
+    onError: (error: Error) => {
+      toast({ title: 'Failed to save', description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const leadsExportMutation = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      if (!user?.activeBusinessAccountId) throw new Error("No business account is currently selected");
+      const response = await fetch(`/api/business-accounts/${user.activeBusinessAccountId}/features`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ leadsExportEnabled: enabled }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.error || 'Failed to update lead export access');
+      }
+      return response.json();
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['/api/auth/me'] });
+      toast({ title: 'Setting saved', description: 'Business-user lead export access has been updated.' });
     },
     onError: (error: Error) => {
       toast({ title: 'Failed to save', description: error.message, variant: 'destructive' });
@@ -302,6 +327,46 @@ export default function Settings() {
       </div>
 
       <div className="space-y-6">
+        {isSuperAdminImpersonating && (
+          <Card className="shadow-lg border-gray-200">
+            <CardHeader className="border-b bg-gradient-to-r from-purple-50 to-pink-50 py-4">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Download className="w-4 h-4 text-purple-600" />
+                Leads Export Access
+              </CardTitle>
+              <CardDescription className="mt-1">
+                Control whether this business account's user can export all leads
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="leads-export-enabled" className="font-medium">
+                    Allow business user to export all leads
+                  </Label>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Superadmins can always export while viewing this account.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  {leadsExportMutation.isPending ? (
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  ) : (
+                    <Switch
+                      id="leads-export-enabled"
+                      checked={user?.businessAccount?.leadsExportEnabled ?? false}
+                      onCheckedChange={(checked) => leadsExportMutation.mutate(checked)}
+                    />
+                  )}
+                  <span className="text-xs text-gray-500 w-12">
+                    {user?.businessAccount?.leadsExportEnabled ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {hasJewelryAccess && (
           <Card className="shadow-lg border-gray-200">
             <CardHeader className="border-b bg-gradient-to-r from-purple-50 to-pink-50 py-4">

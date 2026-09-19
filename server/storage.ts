@@ -220,7 +220,7 @@ export interface IStorage {
   updateBusinessAccount(id: string, updates: Partial<{ name: string; website: string; productTier: string }>): Promise<BusinessAccount>;
   updateBusinessAccountDescription(id: string, description: string): Promise<BusinessAccount>;
   updateBusinessAccountStatus(id: string, status: string): Promise<BusinessAccount>;
-  updateBusinessAccountFeatures(id: string, features: Partial<{ shopifyEnabled: string; appointmentsEnabled: string; voiceModeEnabled: string; visualSearchEnabled: string }>): Promise<BusinessAccount>;
+  updateBusinessAccountFeatures(id: string, features: Partial<{ shopifyEnabled: string; appointmentsEnabled: string; voiceModeEnabled: string; visualSearchEnabled: string; leadsExportEnabled: string }>): Promise<BusinessAccount>;
   updateBusinessAccountAutonomousSettings(id: string, settings: Partial<{ autoResolutionEnabled: string; autoResolutionConfidence: string; escalationSensitivity: string; humanOnlyCategories: string }>): Promise<BusinessAccount>;
   updateBusinessAccountOpenAIKey(id: string, apiKey: string | null): Promise<BusinessAccount>;
   updateBusinessAccountElevenLabsKey(id: string, apiKey: string | null): Promise<BusinessAccount>;
@@ -886,7 +886,7 @@ export class DatabaseStorage implements IStorage {
     return account;
   }
 
-  async updateBusinessAccountFeatures(id: string, features: Partial<{ shopifyEnabled: string; appointmentsEnabled: string; voiceModeEnabled: string; visualSearchEnabled: string }>): Promise<BusinessAccount> {
+  async updateBusinessAccountFeatures(id: string, features: Partial<{ shopifyEnabled: string; appointmentsEnabled: string; voiceModeEnabled: string; visualSearchEnabled: string; leadsExportEnabled: string }>): Promise<BusinessAccount> {
     const [account] = await db
       .update(businessAccounts)
       .set({ ...features, updatedAt: new Date() })

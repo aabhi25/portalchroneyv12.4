@@ -26,6 +26,7 @@ export type MeResponseDto = User & {
     jobPortalEnabled: boolean;
     demoOrdersEnabled: boolean;
     whatsappMarketingEnabled: boolean;
+    leadsExportEnabled: boolean;
     isTopscholar: boolean;
   } | null;
 };
@@ -63,6 +64,7 @@ export function toMeResponseDto(
         jobPortalEnabled: businessAccount.jobPortalEnabled,
         demoOrdersEnabled: businessAccount.demoOrdersEnabled,
         whatsappMarketingEnabled: businessAccount.whatsappMarketingEnabled,
+        leadsExportEnabled: businessAccount.leadsExportEnabled,
         isTopscholar: !!isTopscholar,
       },
     };
