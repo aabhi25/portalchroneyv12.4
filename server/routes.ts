@@ -15481,14 +15481,18 @@ Format your response as JSON with this structure:
   app.post("/api/super-admin/impersonate/exit", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const previousAccountId = req.user!.businessAccountId;
-      // Clear the active business account from the session
-      await db.update(sessions).set({ activeBusinessAccountId: null }).where(eq(sessions.sessionToken, req.sessionToken!));
-      await recordAuditEvent(req, {
-        action: "auth.impersonation.ended",
-        outcome: "success",
-        businessAccountId: previousAccountId,
-        resourceType: "business_account",
-        resourceId: previousAccountId,
+      // Keep the session transition and its security audit record atomic. If audit
+      // persistence fails, the session remains unchanged instead of appearing to
+      // fail and then revealing the switched state after a browser refresh.
+      await db.transaction(async (tx) => {
+        await tx.update(sessions).set({ activeBusinessAccountId: null }).where(eq(sessions.sessionToken, req.sessionToken!));
+        await recordAuditEvent(req, {
+          action: "auth.impersonation.ended",
+          outcome: "success",
+          businessAccountId: previousAccountId,
+          resourceType: "business_account",
+          resourceId: previousAccountId,
+        }, tx);
       });
       
       console.log(`[SuperAdmin] User ${req.user!.username} exited impersonation mode`);
@@ -15514,16 +15518,20 @@ Format your response as JSON with this structure:
         return res.status(404).json({ error: "Business account not found" });
       }
       
-      // Update session with the impersonated business account
-      const { updateSessionActiveAccount } = await import("./auth");
-      await updateSessionActiveAccount(req.sessionToken!, businessAccountId);
-      await recordAuditEvent(req, {
-        action: "auth.impersonation.started",
-        outcome: "success",
-        businessAccountId,
-        resourceType: "business_account",
-        resourceId: businessAccountId,
-        metadata: { businessAccountName: businessAccount.name },
+      // Keep the session transition and its security audit record atomic. The
+      // client only navigates after both writes have committed successfully.
+      await db.transaction(async (tx) => {
+        await tx.update(sessions)
+          .set({ activeBusinessAccountId: businessAccountId })
+          .where(eq(sessions.sessionToken, req.sessionToken!));
+        await recordAuditEvent(req, {
+          action: "auth.impersonation.started",
+          outcome: "success",
+          businessAccountId,
+          resourceType: "business_account",
+          resourceId: businessAccountId,
+          metadata: { businessAccountName: businessAccount.name },
+        }, tx);
       });
       
       console.log(`[SuperAdmin] User ${req.user!.username} started impersonating account: ${businessAccount.name} (${businessAccountId})`);

@@ -17,6 +17,8 @@ interface AuditEventInput {
   metadata?: Record<string, unknown>;
 }
 
+type AuditEventWriter = Pick<typeof db, "insert">;
+
 const BLOCKED_METADATA_KEYS = /password|secret|token|cookie|authorization|phone|email|message|leadData/i;
 
 function sanitizeMetadata(metadata: Record<string, unknown> = {}): Record<string, unknown> {
@@ -40,9 +42,13 @@ export function getRequestId(req: Request): string {
   return (Array.isArray(existing) ? existing[0] : existing)?.slice(0, 255) || crypto.randomUUID();
 }
 
-export async function recordAuditEvent(req: Request, input: AuditEventInput): Promise<string> {
+export async function recordAuditEvent(
+  req: Request,
+  input: AuditEventInput,
+  writer: AuditEventWriter = db,
+): Promise<string> {
   const user = req.user;
-  const [event] = await db.insert(auditEvents).values({
+  const [event] = await writer.insert(auditEvents).values({
     actorUserId: input.actorUserId ?? user?.id ?? null,
     actorUsername: input.actorUsername ?? user?.username ?? null,
     actorRole: input.actorRole ?? user?.role ?? null,

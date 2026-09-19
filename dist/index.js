@@ -10788,179 +10788,6 @@ var init_storage = __esm({
   }
 });
 
-// server/auth.ts
-var auth_exports = {};
-__export(auth_exports, {
-  createSession: () => createSession,
-  deleteSession: () => deleteSession,
-  generateSessionToken: () => generateSessionToken,
-  getGroupAdminAccountIdsForGroup: () => getGroupAdminAccountIdsForGroup,
-  getGroupAdminAssignments: () => getGroupAdminAssignments,
-  getGroupAdminPermissions: () => getGroupAdminPermissions,
-  hashPassword: () => hashPassword,
-  requireAuth: () => requireAuth,
-  requireBusinessAccount: () => requireBusinessAccount,
-  requireGroupAdmin: () => requireGroupAdmin,
-  requireRole: () => requireRole,
-  updateSessionActiveAccount: () => updateSessionActiveAccount,
-  validateSession: () => validateSession,
-  verifyPassword: () => verifyPassword
-});
-import bcrypt from "bcrypt";
-import crypto4 from "crypto";
-import { eq as eq5, and as and4, gt } from "drizzle-orm";
-async function hashPassword(password) {
-  return bcrypt.hash(password, SALT_ROUNDS);
-}
-async function verifyPassword(password, hash2) {
-  return bcrypt.compare(password, hash2);
-}
-function generateSessionToken() {
-  return crypto4.randomBytes(32).toString("hex");
-}
-async function createSession(userId) {
-  const sessionToken = generateSessionToken();
-  const expiresAt = new Date(Date.now() + SESSION_DURATION);
-  await db.insert(sessions).values({
-    userId,
-    sessionToken,
-    expiresAt
-  });
-  return sessionToken;
-}
-async function validateSession(sessionToken) {
-  const [session] = await db.select().from(sessions).where(
-    and4(
-      eq5(sessions.sessionToken, sessionToken),
-      gt(sessions.expiresAt, /* @__PURE__ */ new Date())
-    )
-  ).limit(1);
-  if (!session) {
-    return null;
-  }
-  const [user] = await db.select().from(users).where(eq5(users.id, session.userId)).limit(1);
-  if (!user) return null;
-  return {
-    ...user,
-    activeBusinessAccountId: session.activeBusinessAccountId || user.businessAccountId
-  };
-}
-async function updateSessionActiveAccount(sessionToken, activeBusinessAccountId) {
-  await db.update(sessions).set({ activeBusinessAccountId }).where(eq5(sessions.sessionToken, sessionToken));
-}
-async function deleteSession(sessionToken) {
-  await db.delete(sessions).where(eq5(sessions.sessionToken, sessionToken));
-}
-async function requireAuth(req, res, next) {
-  const sessionToken = req.cookies?.session;
-  if (!sessionToken) {
-    return res.status(401).json({ error: "Authentication required" });
-  }
-  const user = await validateSession(sessionToken);
-  if (!user) {
-    return res.status(401).json({ error: "Invalid or expired session" });
-  }
-  req.sessionToken = sessionToken;
-  req.user = {
-    id: user.id,
-    username: user.username,
-    role: user.role,
-    businessAccountId: user.activeBusinessAccountId || user.businessAccountId,
-    activeBusinessAccountId: user.activeBusinessAccountId,
-    mustChangePassword: user.mustChangePassword,
-    tempPasswordExpiry: user.tempPasswordExpiry,
-    lastLoginAt: user.lastLoginAt
-  };
-  next();
-}
-function requireRole(...allowedRoles) {
-  return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({ error: "Authentication required" });
-    }
-    if (!allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({ error: "Insufficient permissions" });
-    }
-    next();
-  };
-}
-function requireBusinessAccount(req, res, next) {
-  if (!req.user) {
-    return res.status(401).json({ error: "Authentication required" });
-  }
-  if (req.user.role === "super_admin") {
-    return next();
-  }
-  if (!req.user.businessAccountId) {
-    return res.status(403).json({ error: "No business account associated" });
-  }
-  next();
-}
-async function getGroupAdminAccountIdsForGroup(userId, groupId) {
-  const [assignment] = await db.select().from(accountGroupAdmins).where(and4(
-    eq5(accountGroupAdmins.userId, userId),
-    eq5(accountGroupAdmins.groupId, groupId)
-  )).limit(1);
-  if (!assignment) {
-    return [];
-  }
-  const groupMembers = await db.select({ businessAccountId: accountGroupMembers.businessAccountId }).from(accountGroupMembers).where(eq5(accountGroupMembers.groupId, groupId));
-  return Array.from(new Set(groupMembers.map((m) => m.businessAccountId)));
-}
-async function getGroupAdminAssignments(userId) {
-  const assignments = await db.select({
-    groupId: accountGroupAdmins.groupId,
-    groupName: accountGroups.name,
-    canViewConversations: accountGroupAdmins.canViewConversations,
-    canViewLeads: accountGroupAdmins.canViewLeads,
-    canViewAnalytics: accountGroupAdmins.canViewAnalytics,
-    canExportData: accountGroupAdmins.canExportData
-  }).from(accountGroupAdmins).innerJoin(accountGroups, eq5(accountGroupAdmins.groupId, accountGroups.id)).where(eq5(accountGroupAdmins.userId, userId));
-  return assignments.map((a) => ({
-    groupId: a.groupId,
-    groupName: a.groupName,
-    canViewConversations: a.canViewConversations === "true",
-    canViewLeads: a.canViewLeads === "true",
-    canViewAnalytics: a.canViewAnalytics === "true",
-    canExportData: a.canExportData === "true"
-  }));
-}
-async function getGroupAdminPermissions(userId, groupId) {
-  const [assignment] = await db.select().from(accountGroupAdmins).where(and4(
-    eq5(accountGroupAdmins.userId, userId),
-    eq5(accountGroupAdmins.groupId, groupId)
-  )).limit(1);
-  if (!assignment) {
-    return null;
-  }
-  return {
-    canViewConversations: assignment.canViewConversations === "true",
-    canViewLeads: assignment.canViewLeads === "true",
-    canViewAnalytics: assignment.canViewAnalytics === "true",
-    canExportData: assignment.canExportData === "true",
-    groupId: assignment.groupId
-  };
-}
-function requireGroupAdmin(req, res, next) {
-  if (!req.user) {
-    return res.status(401).json({ error: "Authentication required" });
-  }
-  if (req.user.role !== "account_group_admin") {
-    return res.status(403).json({ error: "Group admin access required" });
-  }
-  next();
-}
-var SALT_ROUNDS, SESSION_DURATION;
-var init_auth = __esm({
-  "server/auth.ts"() {
-    "use strict";
-    init_db();
-    init_schema();
-    SALT_ROUNDS = 12;
-    SESSION_DURATION = 7 * 24 * 60 * 60 * 1e3;
-  }
-});
-
 // server/llamaService.ts
 var llamaService_exports = {};
 __export(llamaService_exports, {
@@ -45588,8 +45415,8 @@ var init_urgencyOfferService = __esm({
 });
 
 // shared/dto/auth.ts
-var auth_exports2 = {};
-__export(auth_exports2, {
+var auth_exports = {};
+__export(auth_exports, {
   toMeResponseDto: () => toMeResponseDto
 });
 function toMeResponseDto(user, businessAccount, activeBusinessAccountId, isTopscholar) {
@@ -45629,7 +45456,7 @@ function toMeResponseDto(user, businessAccount, activeBusinessAccountId, isTopsc
     businessAccount: null
   };
 }
-var init_auth2 = __esm({
+var init_auth = __esm({
   "shared/dto/auth.ts"() {
     "use strict";
   }
@@ -58284,12 +58111,163 @@ import path8 from "path";
 init_storage();
 init_db();
 init_schema();
-init_auth();
-init_schema();
 import { createServer } from "http";
 import bcrypt2 from "bcrypt";
 import { eq as eq70, and as and60, isNotNull as isNotNull6, isNull as isNull16, sql as sql42, inArray as inArray13, desc as desc31, ilike as ilike5, asc as asc14, gte as gte12, lte as lte5, count as count4 } from "drizzle-orm";
 import OpenAI40 from "openai";
+
+// server/auth.ts
+init_db();
+init_schema();
+import bcrypt from "bcrypt";
+import crypto4 from "crypto";
+import { eq as eq5, and as and4, gt } from "drizzle-orm";
+var SALT_ROUNDS = 12;
+var SESSION_DURATION = 7 * 24 * 60 * 60 * 1e3;
+async function hashPassword(password) {
+  return bcrypt.hash(password, SALT_ROUNDS);
+}
+async function verifyPassword(password, hash2) {
+  return bcrypt.compare(password, hash2);
+}
+function generateSessionToken() {
+  return crypto4.randomBytes(32).toString("hex");
+}
+async function createSession(userId) {
+  const sessionToken = generateSessionToken();
+  const expiresAt = new Date(Date.now() + SESSION_DURATION);
+  await db.insert(sessions).values({
+    userId,
+    sessionToken,
+    expiresAt
+  });
+  return sessionToken;
+}
+async function validateSession(sessionToken) {
+  const [session] = await db.select().from(sessions).where(
+    and4(
+      eq5(sessions.sessionToken, sessionToken),
+      gt(sessions.expiresAt, /* @__PURE__ */ new Date())
+    )
+  ).limit(1);
+  if (!session) {
+    return null;
+  }
+  const [user] = await db.select().from(users).where(eq5(users.id, session.userId)).limit(1);
+  if (!user) return null;
+  return {
+    ...user,
+    activeBusinessAccountId: session.activeBusinessAccountId || user.businessAccountId
+  };
+}
+async function updateSessionActiveAccount(sessionToken, activeBusinessAccountId) {
+  await db.update(sessions).set({ activeBusinessAccountId }).where(eq5(sessions.sessionToken, sessionToken));
+}
+async function deleteSession(sessionToken) {
+  await db.delete(sessions).where(eq5(sessions.sessionToken, sessionToken));
+}
+async function requireAuth(req, res, next) {
+  const sessionToken = req.cookies?.session;
+  if (!sessionToken) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+  const user = await validateSession(sessionToken);
+  if (!user) {
+    return res.status(401).json({ error: "Invalid or expired session" });
+  }
+  req.sessionToken = sessionToken;
+  req.user = {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    businessAccountId: user.activeBusinessAccountId || user.businessAccountId,
+    activeBusinessAccountId: user.activeBusinessAccountId,
+    mustChangePassword: user.mustChangePassword,
+    tempPasswordExpiry: user.tempPasswordExpiry,
+    lastLoginAt: user.lastLoginAt
+  };
+  next();
+}
+function requireRole(...allowedRoles) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
+    next();
+  };
+}
+function requireBusinessAccount(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+  if (req.user.role === "super_admin") {
+    return next();
+  }
+  if (!req.user.businessAccountId) {
+    return res.status(403).json({ error: "No business account associated" });
+  }
+  next();
+}
+async function getGroupAdminAccountIdsForGroup(userId, groupId) {
+  const [assignment] = await db.select().from(accountGroupAdmins).where(and4(
+    eq5(accountGroupAdmins.userId, userId),
+    eq5(accountGroupAdmins.groupId, groupId)
+  )).limit(1);
+  if (!assignment) {
+    return [];
+  }
+  const groupMembers = await db.select({ businessAccountId: accountGroupMembers.businessAccountId }).from(accountGroupMembers).where(eq5(accountGroupMembers.groupId, groupId));
+  return Array.from(new Set(groupMembers.map((m) => m.businessAccountId)));
+}
+async function getGroupAdminAssignments(userId) {
+  const assignments = await db.select({
+    groupId: accountGroupAdmins.groupId,
+    groupName: accountGroups.name,
+    canViewConversations: accountGroupAdmins.canViewConversations,
+    canViewLeads: accountGroupAdmins.canViewLeads,
+    canViewAnalytics: accountGroupAdmins.canViewAnalytics,
+    canExportData: accountGroupAdmins.canExportData
+  }).from(accountGroupAdmins).innerJoin(accountGroups, eq5(accountGroupAdmins.groupId, accountGroups.id)).where(eq5(accountGroupAdmins.userId, userId));
+  return assignments.map((a) => ({
+    groupId: a.groupId,
+    groupName: a.groupName,
+    canViewConversations: a.canViewConversations === "true",
+    canViewLeads: a.canViewLeads === "true",
+    canViewAnalytics: a.canViewAnalytics === "true",
+    canExportData: a.canExportData === "true"
+  }));
+}
+async function getGroupAdminPermissions(userId, groupId) {
+  const [assignment] = await db.select().from(accountGroupAdmins).where(and4(
+    eq5(accountGroupAdmins.userId, userId),
+    eq5(accountGroupAdmins.groupId, groupId)
+  )).limit(1);
+  if (!assignment) {
+    return null;
+  }
+  return {
+    canViewConversations: assignment.canViewConversations === "true",
+    canViewLeads: assignment.canViewLeads === "true",
+    canViewAnalytics: assignment.canViewAnalytics === "true",
+    canExportData: assignment.canExportData === "true",
+    groupId: assignment.groupId
+  };
+}
+function requireGroupAdmin(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+  if (req.user.role !== "account_group_admin") {
+    return res.status(403).json({ error: "Group admin access required" });
+  }
+  next();
+}
+
+// server/routes.ts
+init_schema();
 import { z as z2 } from "zod";
 
 // server/services/auditService.ts
@@ -58315,9 +58293,9 @@ function getRequestId(req) {
   const existing = req.headers["x-request-id"];
   return (Array.isArray(existing) ? existing[0] : existing)?.slice(0, 255) || crypto5.randomUUID();
 }
-async function recordAuditEvent(req, input) {
+async function recordAuditEvent(req, input, writer = db) {
   const user = req.user;
-  const [event] = await db.insert(auditEvents).values({
+  const [event] = await writer.insert(auditEvents).values({
     actorUserId: input.actorUserId ?? user?.id ?? null,
     actorUsername: input.actorUsername ?? user?.username ?? null,
     actorRole: input.actorRole ?? user?.role ?? null,
@@ -71680,7 +71658,6 @@ init_conversationCategorizationService();
 // server/routes/erpRoutes.ts
 init_db();
 init_schema();
-init_auth();
 import { Router } from "express";
 import { eq as eq28, and as and23, desc as desc8, sql as sql18, or as or3 } from "drizzle-orm";
 
@@ -73509,11 +73486,10 @@ var erpRoutes_default = router;
 // server/routes/k12.ts
 init_db();
 init_schema();
-init_auth();
-init_topscholarApiService();
-init_config();
 import { Router as Router2 } from "express";
 import { eq as eq29, and as and24, asc as asc2 } from "drizzle-orm";
+init_topscholarApiService();
+init_config();
 var router2 = Router2();
 function getBusinessAccountId(req) {
   const user = req.user;
@@ -74178,10 +74154,9 @@ var k12_default = router2;
 // server/routes/jobPortal.ts
 init_db();
 init_schema();
-init_auth();
-init_storage();
 import { Router as Router3 } from "express";
 import { eq as eq31 } from "drizzle-orm";
+init_storage();
 
 // server/services/jobImportService.ts
 init_storage();
@@ -74807,13 +74782,12 @@ var jobPortal_default = router3;
 // server/routes/topscholar.ts
 init_db();
 init_schema();
-init_auth();
+import { Router as Router4 } from "express";
+import { and as and28, eq as eq36, desc as desc10, gt as gt2, isNotNull as isNotNull3, isNull as isNull9, inArray as inArray5, ilike as ilike3, sql as sql20 } from "drizzle-orm";
 init_config();
 init_encryptionService();
 init_ingestionService();
 init_mongoContentDb();
-import { Router as Router4 } from "express";
-import { and as and28, eq as eq36, desc as desc10, gt as gt2, isNotNull as isNotNull3, isNull as isNull9, inArray as inArray5, ilike as ilike3, sql as sql20 } from "drizzle-orm";
 
 // server/services/topscholar/contentReader.ts
 init_db();
@@ -76658,12 +76632,11 @@ var topscholar_default = router4;
 // server/routes/topscholarAnalytics.ts
 init_db();
 init_schema();
-init_auth();
-init_config();
-init_tokenService();
 import { Router as Router5 } from "express";
 import crypto11 from "crypto";
 import { eq as eq39 } from "drizzle-orm";
+init_config();
+init_tokenService();
 
 // server/services/topscholar/analyticsService.ts
 init_db();
@@ -77774,11 +77747,10 @@ var topscholarAnalytics_default = router5;
 // server/routes/verification.ts
 init_db();
 init_schema();
-init_auth();
-init_verification();
 import { Router as Router6 } from "express";
 import { and as and37, eq as eq47 } from "drizzle-orm";
 import { z } from "zod";
+init_verification();
 
 // server/services/verification/seed.ts
 init_db();
@@ -85184,7 +85156,7 @@ data: ${JSON.stringify({ message: error.message })}
   });
   app2.get("/api/auth/me", requireAuth, async (req, res) => {
     const sessionUser = req.user;
-    const { toMeResponseDto: toMeResponseDto2 } = await Promise.resolve().then(() => (init_auth2(), auth_exports2));
+    const { toMeResponseDto: toMeResponseDto2 } = await Promise.resolve().then(() => (init_auth(), auth_exports));
     const { toBusinessAccountDto: toBusinessAccountDto2 } = await Promise.resolve().then(() => (init_businessAccount(), businessAccount_exports));
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
     res.setHeader("Pragma", "no-cache");
@@ -90193,13 +90165,15 @@ Format your response as JSON with this structure:
   app2.post("/api/super-admin/impersonate/exit", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const previousAccountId = req.user.businessAccountId;
-      await db.update(sessions).set({ activeBusinessAccountId: null }).where(eq70(sessions.sessionToken, req.sessionToken));
-      await recordAuditEvent(req, {
-        action: "auth.impersonation.ended",
-        outcome: "success",
-        businessAccountId: previousAccountId,
-        resourceType: "business_account",
-        resourceId: previousAccountId
+      await db.transaction(async (tx) => {
+        await tx.update(sessions).set({ activeBusinessAccountId: null }).where(eq70(sessions.sessionToken, req.sessionToken));
+        await recordAuditEvent(req, {
+          action: "auth.impersonation.ended",
+          outcome: "success",
+          businessAccountId: previousAccountId,
+          resourceType: "business_account",
+          resourceId: previousAccountId
+        }, tx);
       });
       console.log(`[SuperAdmin] User ${req.user.username} exited impersonation mode`);
       res.json({
@@ -90218,15 +90192,16 @@ Format your response as JSON with this structure:
       if (!businessAccount) {
         return res.status(404).json({ error: "Business account not found" });
       }
-      const { updateSessionActiveAccount: updateSessionActiveAccount2 } = await Promise.resolve().then(() => (init_auth(), auth_exports));
-      await updateSessionActiveAccount2(req.sessionToken, businessAccountId);
-      await recordAuditEvent(req, {
-        action: "auth.impersonation.started",
-        outcome: "success",
-        businessAccountId,
-        resourceType: "business_account",
-        resourceId: businessAccountId,
-        metadata: { businessAccountName: businessAccount.name }
+      await db.transaction(async (tx) => {
+        await tx.update(sessions).set({ activeBusinessAccountId: businessAccountId }).where(eq70(sessions.sessionToken, req.sessionToken));
+        await recordAuditEvent(req, {
+          action: "auth.impersonation.started",
+          outcome: "success",
+          businessAccountId,
+          resourceType: "business_account",
+          resourceId: businessAccountId,
+          metadata: { businessAccountName: businessAccount.name }
+        }, tx);
       });
       console.log(`[SuperAdmin] User ${req.user.username} started impersonating account: ${businessAccount.name} (${businessAccountId})`);
       res.json({
@@ -107406,7 +107381,6 @@ function serveStatic(app2) {
 
 // server/init.ts
 init_storage();
-init_auth();
 init_jewelryImageGeneratorService();
 init_db();
 init_schema();
