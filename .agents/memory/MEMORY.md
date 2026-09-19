@@ -24,3 +24,4 @@
 - [Workbook automation source locking](workbook-automation-source-locking.md) — bind runs to version ID + revision, and serialize source changes on the workbook row.
 - [Campaign blueprint execution lifecycle](campaign-blueprint-execution-lifecycle.md) — protect referenced drafts, freeze generated executions, and let only the due-time scheduler send them.
 - [Voice session accounting](voice-session-accounting.md) — measure socket intervals, not chat lifetime; serialize reconnect rotation and bound restart recovery before accepting new rows.
+- [Lead phone privacy boundary](lead-phone-privacy-boundary.md) — masking must cover nested CRM payloads and phone-bearing form/journey answers, not only the lead phone column.

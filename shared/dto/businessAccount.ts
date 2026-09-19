@@ -7,7 +7,7 @@ export type ProductTier = 'chroney' | 'jewelry_showcase' | 'jewelry_showcase_chr
 export type SystemMode = 'full' | 'essential';
 
 // BusinessAccountDto with normalized boolean feature flags for API/client
-export type BusinessAccountDto = Omit<BusinessAccount, "shopifyEnabled" | "appointmentsEnabled" | "voiceModeEnabled" | "visualSearchEnabled" | "jewelryShowcaseEnabled" | "supportTicketsEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled" | "chroneyEnabled" | "k12EducationEnabled" | "k12ImageUploadEnabled" | "k12ContentOnlyMode" | "k12VerbatimContentMode" | "jobPortalEnabled" | "demoOrdersEnabled" | "whatsappMarketingEnabled" | "leadsExportEnabled" | "systemMode"> & {
+export type BusinessAccountDto = Omit<BusinessAccount, "shopifyEnabled" | "appointmentsEnabled" | "voiceModeEnabled" | "visualSearchEnabled" | "jewelryShowcaseEnabled" | "supportTicketsEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled" | "chroneyEnabled" | "k12EducationEnabled" | "k12ImageUploadEnabled" | "k12ContentOnlyMode" | "k12VerbatimContentMode" | "jobPortalEnabled" | "demoOrdersEnabled" | "whatsappMarketingEnabled" | "leadsExportEnabled" | "leadPhoneMaskingEnabled" | "systemMode"> & {
   shopifyEnabled: boolean;
   appointmentsEnabled: boolean;
   voiceModeEnabled: boolean;
@@ -26,6 +26,7 @@ export type BusinessAccountDto = Omit<BusinessAccount, "shopifyEnabled" | "appoi
   demoOrdersEnabled: boolean;
   whatsappMarketingEnabled: boolean;
   leadsExportEnabled: boolean;
+  leadPhoneMaskingEnabled: boolean;
   productTier: ProductTier;
   systemMode: SystemMode;
   isLive?: boolean;
@@ -53,6 +54,7 @@ export function toBusinessAccountDto(account: BusinessAccount): BusinessAccountD
     demoOrdersEnabled: account.demoOrdersEnabled === "true",
     whatsappMarketingEnabled: account.whatsappMarketingEnabled === "true",
     leadsExportEnabled: account.leadsExportEnabled === "true",
+    leadPhoneMaskingEnabled: account.leadPhoneMaskingEnabled === "true",
     productTier: (account.productTier || 'chroney') as ProductTier,
     systemMode: (account.systemMode || 'full') as SystemMode,
   };
@@ -80,6 +82,7 @@ export function fromBusinessAccountDto(dto: BusinessAccountDto): BusinessAccount
     demoOrdersEnabled: dto.demoOrdersEnabled ? "true" : "false",
     whatsappMarketingEnabled: dto.whatsappMarketingEnabled ? "true" : "false",
     leadsExportEnabled: dto.leadsExportEnabled ? "true" : "false",
+    leadPhoneMaskingEnabled: dto.leadPhoneMaskingEnabled ? "true" : "false",
     systemMode: dto.systemMode || 'full',
   };
 }

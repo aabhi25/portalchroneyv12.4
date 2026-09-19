@@ -67,6 +67,7 @@ export const businessAccounts = pgTable("business_accounts", {
   demoOrdersEnabled: text("demo_orders_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for Demo Orders feature (default OFF)
   whatsappMarketingEnabled: text("whatsapp_marketing_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for WhatsApp Marketing Campaigns feature (default OFF)
   leadsExportEnabled: text("leads_export_enabled").notNull().default("false"), // 'true' | 'false' - Allow business users to export all leads (superadmins always allowed)
+  leadPhoneMaskingEnabled: text("lead_phone_masking_enabled").notNull().default("false"), // 'true' | 'false' - Mask lead phone numbers for business users (superadmins always see full numbers)
   jobImportConfig: jsonb("job_import_config").$type<{
     apiUrl: string;
     authHeader?: string;

@@ -72,6 +72,10 @@ const toTime = (v: unknown): number => {
 const phoneMatches = (a: unknown, b: unknown) => {
   const da = digits(a);
   const db = digits(b);
+  const hasMaskedValue = asString(a).includes("*") || asString(b).includes("*");
+  if (hasMaskedValue && da.length === 4 && db.length === 4) {
+    return da === db;
+  }
   if (da.length < 7 || db.length < 7) return false;
   return da === db || da.endsWith(db) || db.endsWith(da);
 };

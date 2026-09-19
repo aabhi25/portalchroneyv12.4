@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Settings2, AlertCircle, Lock, Loader2, Upload, Trash2, Palette, Sparkles, Check, CheckCircle2, ArrowRight, Database, SlidersHorizontal, RefreshCw, Download } from "lucide-react";
+import { Settings2, AlertCircle, Lock, Loader2, Upload, Trash2, Palette, Sparkles, Check, CheckCircle2, ArrowRight, Database, SlidersHorizontal, RefreshCw, Download, EyeOff } from "lucide-react";
 import type { MeResponseDto } from "@shared/dto";
 import { isTopScholarSuperAdminView } from "@/lib/accountAccess";
 
@@ -142,6 +142,33 @@ export default function Settings() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['/api/auth/me'] });
       toast({ title: 'Setting saved', description: 'Business-user lead export access has been updated.' });
+    },
+    onError: (error: Error) => {
+      toast({ title: 'Failed to save', description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const leadPhoneMaskingMutation = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      if (!user?.activeBusinessAccountId) throw new Error("No business account is currently selected");
+      const response = await fetch(`/api/business-accounts/${user.activeBusinessAccountId}/features`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ leadPhoneMaskingEnabled: enabled }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.error || 'Failed to update lead phone masking');
+      }
+      return response.json();
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['/api/auth/me'] }),
+        queryClient.invalidateQueries({ queryKey: ['/api/leads'] }),
+      ]);
+      toast({ title: 'Setting saved', description: 'Lead phone masking has been updated.' });
     },
     onError: (error: Error) => {
       toast({ title: 'Failed to save', description: error.message, variant: 'destructive' });
@@ -328,7 +355,8 @@ export default function Settings() {
 
       <div className="space-y-6">
         {isSuperAdminImpersonating && (
-          <Card className="shadow-lg border-gray-200">
+          <div className="space-y-6">
+            <Card className="shadow-lg border-gray-200">
             <CardHeader className="border-b bg-gradient-to-r from-purple-50 to-pink-50 py-4">
               <CardTitle className="text-base flex items-center gap-2">
                 <Download className="w-4 h-4 text-purple-600" />
@@ -364,7 +392,46 @@ export default function Settings() {
                 </div>
               </div>
             </CardContent>
-          </Card>
+            </Card>
+
+            <Card className="shadow-lg border-gray-200">
+              <CardHeader className="border-b bg-gradient-to-r from-purple-50 to-pink-50 py-4">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <EyeOff className="w-4 h-4 text-purple-600" />
+                  Lead Phone Privacy
+                </CardTitle>
+                <CardDescription className="mt-1">
+                  Control whether this business account's user sees masked lead phone numbers
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-6">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <Label htmlFor="lead-phone-masking-enabled" className="font-medium">
+                      Mask lead phone numbers
+                    </Label>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Business users will see only the last four digits. Superadmins always see the full number.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {leadPhoneMaskingMutation.isPending ? (
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    ) : (
+                      <Switch
+                        id="lead-phone-masking-enabled"
+                        checked={user?.businessAccount?.leadPhoneMaskingEnabled ?? false}
+                        onCheckedChange={(checked) => leadPhoneMaskingMutation.mutate(checked)}
+                      />
+                    )}
+                    <span className="text-xs text-gray-500 w-12">
+                      {user?.businessAccount?.leadPhoneMaskingEnabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         {hasJewelryAccess && (

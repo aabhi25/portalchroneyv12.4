@@ -377,6 +377,8 @@ var init_schema = __esm({
       // 'true' | 'false' - SuperAdmin toggle for WhatsApp Marketing Campaigns feature (default OFF)
       leadsExportEnabled: text("leads_export_enabled").notNull().default("false"),
       // 'true' | 'false' - Allow business users to export all leads (superadmins always allowed)
+      leadPhoneMaskingEnabled: text("lead_phone_masking_enabled").notNull().default("false"),
+      // 'true' | 'false' - Mask lead phone numbers for business users (superadmins always see full numbers)
       jobImportConfig: jsonb("job_import_config").$type(),
       systemMode: text("system_mode").notNull().default("full"),
       // 'full' | 'essential' - Full = all features, Essential = core pages only
@@ -45449,6 +45451,7 @@ function toMeResponseDto(user, businessAccount, activeBusinessAccountId, isTopsc
         demoOrdersEnabled: businessAccount.demoOrdersEnabled,
         whatsappMarketingEnabled: businessAccount.whatsappMarketingEnabled,
         leadsExportEnabled: businessAccount.leadsExportEnabled,
+        leadPhoneMaskingEnabled: businessAccount.leadPhoneMaskingEnabled,
         isTopscholar: !!isTopscholar
       }
     };
@@ -45492,6 +45495,7 @@ function toBusinessAccountDto(account) {
     demoOrdersEnabled: account.demoOrdersEnabled === "true",
     whatsappMarketingEnabled: account.whatsappMarketingEnabled === "true",
     leadsExportEnabled: account.leadsExportEnabled === "true",
+    leadPhoneMaskingEnabled: account.leadPhoneMaskingEnabled === "true",
     productTier: account.productTier || "chroney",
     systemMode: account.systemMode || "full"
   };
@@ -45517,6 +45521,7 @@ function fromBusinessAccountDto(dto) {
     demoOrdersEnabled: dto.demoOrdersEnabled ? "true" : "false",
     whatsappMarketingEnabled: dto.whatsappMarketingEnabled ? "true" : "false",
     leadsExportEnabled: dto.leadsExportEnabled ? "true" : "false",
+    leadPhoneMaskingEnabled: dto.leadPhoneMaskingEnabled ? "true" : "false",
     systemMode: dto.systemMode || "full"
   };
 }
@@ -85791,7 +85796,7 @@ ${instruction}`
   app2.patch("/api/business-accounts/:id/features", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const { id } = req.params;
-      const { shopifyEnabled, appointmentsEnabled, voiceModeEnabled, visualSearchEnabled, jewelryShowcaseEnabled, supportTicketsEnabled, whatsappEnabled, instagramEnabled, facebookEnabled, chroneyEnabled, k12EducationEnabled, jobPortalEnabled, demoOrdersEnabled, whatsappMarketingEnabled, leadsExportEnabled, systemMode } = req.body;
+      const { shopifyEnabled, appointmentsEnabled, voiceModeEnabled, visualSearchEnabled, jewelryShowcaseEnabled, supportTicketsEnabled, whatsappEnabled, instagramEnabled, facebookEnabled, chroneyEnabled, k12EducationEnabled, jobPortalEnabled, demoOrdersEnabled, whatsappMarketingEnabled, leadsExportEnabled, leadPhoneMaskingEnabled, systemMode } = req.body;
       const updates = {};
       if (shopifyEnabled !== void 0) {
         if (typeof shopifyEnabled !== "boolean") {
@@ -85885,6 +85890,15 @@ ${instruction}`
           return res.status(403).json({ error: "Lead export access can only be changed for the currently accessed business account" });
         }
         updates.leadsExportEnabled = leadsExportEnabled ? "true" : "false";
+      }
+      if (leadPhoneMaskingEnabled !== void 0) {
+        if (typeof leadPhoneMaskingEnabled !== "boolean") {
+          return res.status(400).json({ error: "leadPhoneMaskingEnabled must be a boolean" });
+        }
+        if (!req.user?.activeBusinessAccountId || req.user.activeBusinessAccountId !== id) {
+          return res.status(403).json({ error: "Lead phone masking can only be changed for the currently accessed business account" });
+        }
+        updates.leadPhoneMaskingEnabled = leadPhoneMaskingEnabled ? "true" : "false";
       }
       if (systemMode !== void 0) {
         if (systemMode !== "full" && systemMode !== "essential") {
@@ -89111,7 +89125,11 @@ ${instruction}`
         return res.status(403).json({ error: "Conversation does not belong to your managed accounts" });
       }
       const messages2 = await storage.getMessagesByConversation(conversationId, conversation.businessAccountId);
-      res.json(messages2);
+      const businessAccount = await storage.getBusinessAccount(conversation.businessAccountId);
+      res.json(protectConversationPhoneMessages(
+        messages2,
+        businessAccount?.leadPhoneMaskingEnabled === "true"
+      ));
     } catch (error) {
       console.error("[Group Admin] Error fetching messages:", error);
       res.status(500).json({ error: error.message });
@@ -89189,13 +89207,20 @@ ${instruction}`
         ...filters,
         includeUniqueLeads: !exportAll && offset === 0
       });
+      const accounts = await Promise.all(accountIds.map((id) => storage.getBusinessAccount(id)));
+      const maskedAccountIds = new Set(
+        accounts.filter((account) => account?.leadPhoneMaskingEnabled === "true").map((account) => account.id)
+      );
+      const protectedLeads = leads3.map(
+        (lead) => protectLeadPhone(lead, maskedAccountIds.has(lead.businessAccountId))
+      );
       res.json({
-        leads: leads3,
+        leads: protectedLeads,
         total,
         uniqueLeads,
         page,
         limit: exportAll ? total : limit,
-        hasMore: exportAll ? false : offset + leads3.length < total,
+        hasMore: exportAll ? false : offset + protectedLeads.length < total,
         export: exportAll
       });
     } catch (error) {
@@ -89232,9 +89257,12 @@ ${instruction}`
         return res.json({ journeyName: null, completed: false, responses: [] });
       }
       const session = sessions2[0];
+      const [sessionAccount] = await db.select({ leadPhoneMaskingEnabled: businessAccounts.leadPhoneMaskingEnabled }).from(journeySessions2).innerJoin(businessAccounts, eq75(journeySessions2.businessAccountId, businessAccounts.id)).where(eq75(journeySessions2.id, session.sessionId)).limit(1);
+      const shouldMaskPhone = sessionAccount?.leadPhoneMaskingEnabled === "true";
       const responses = await db.select({
         response: journeyResponses2.response,
         questionText: journeySteps2.questionText,
+        questionType: journeySteps2.questionType,
         stepOrder: journeySteps2.stepOrder
       }).from(journeyResponses2).leftJoin(journeySteps2, eq75(journeyResponses2.stepId, journeySteps2.id)).where(eq75(journeyResponses2.sessionId, session.sessionId)).orderBy(journeySteps2.stepOrder);
       res.json({
@@ -89242,7 +89270,7 @@ ${instruction}`
         completed: session.completed === "true",
         responses: responses.map((r) => ({
           question: r.questionText || "Unknown",
-          answer: r.response,
+          answer: shouldMaskPhone && isPhoneQuestion(r.questionText, r.questionType) ? maskLeadPhone(r.response) : r.response,
           stepOrder: r.stepOrder || 0
         }))
       });
@@ -89307,14 +89335,17 @@ ${instruction}`
       const responses = await db.select({
         response: journeyResponses2.response,
         questionText: journeySteps2.questionText,
+        questionType: journeySteps2.questionType,
         stepOrder: journeySteps2.stepOrder
       }).from(journeyResponses2).leftJoin(journeySteps2, eq75(journeyResponses2.stepId, journeySteps2.id)).where(eq75(journeyResponses2.sessionId, session.sessionId)).orderBy(journeySteps2.stepOrder);
+      const account = await storage.getBusinessAccount(lead.businessAccountId);
+      const shouldMaskPhone = account?.leadPhoneMaskingEnabled === "true";
       res.json({
         journeyName: session.journeyName || "Unknown Journey",
         completed: session.completed === "true",
         responses: responses.map((r) => ({
           question: r.questionText || "Unknown",
-          answer: r.response,
+          answer: shouldMaskPhone && isPhoneQuestion(r.questionText, r.questionType) ? maskLeadPhone(r.response) : r.response,
           stepOrder: r.stepOrder || 0
         }))
       });
@@ -97432,9 +97463,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
   });
   app2.post("/api/leads", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const businessAccountId = req.user?.businessAccountId;
+      const businessAccountId = req.user ? await resolveAuthorizedLeadAccountId(req.user) : null;
       if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
+        return res.status(403).json({ error: "Business account access is no longer authorized" });
       }
       const validatedData = insertLeadSchema.parse({
         ...req.body,
@@ -97446,7 +97477,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           const settings = await storage.getWidgetSettings(businessAccountId);
           if (settings && settings.leadsquaredEnabled === "true" && settings.leadsquaredAccessKey && settings.leadsquaredSecretKey && settings.leadsquaredRegion) {
             console.log("[LeadSquared] Auto-syncing new lead:", lead.id);
-            const businessAccount = await storage.getBusinessAccount(businessAccountId);
+            const businessAccount2 = await storage.getBusinessAccount(businessAccountId);
             const { decrypt: decrypt3 } = await Promise.resolve().then(() => (init_encryptionService(), encryptionService_exports));
             const decryptedSecretKey = decrypt3(settings.leadsquaredSecretKey);
             const { createLeadSquaredService: createLeadSquaredService2, extractUtmCampaign: extractUtmCampaign2, extractUtmSource: extractUtmSource3, extractUtmMedium: extractUtmMedium3 } = await Promise.resolve().then(() => (init_leadsquaredService(), leadsquaredService_exports));
@@ -97474,8 +97505,8 @@ Be constructive and helpful. Return ONLY valid JSON.`;
                 pageUrl: lead.sourceUrl || null
               },
               business: {
-                name: businessAccount?.name || null,
-                website: businessAccount?.website || null
+                name: businessAccount2?.name || null,
+                website: businessAccount2?.website || null
               }
             };
             console.log("[LeadSquared] Auto-sync using dynamic field mappings, count:", fieldMappings.length);
@@ -97509,7 +97540,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           }
         }
       })();
-      res.json(lead);
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      res.json(protectLeadPhone(lead, shouldMaskPhone));
     } catch (error) {
       res.status(400).json({ error: error.message });
     }
@@ -97521,6 +97554,8 @@ Be constructive and helpful. Return ONLY valid JSON.`;
     const originalUser = await storage.getUser(user.id);
     const originalAccountId = originalUser?.businessAccountId;
     if (!originalAccountId) return null;
+    const originalAccount = await storage.getBusinessAccount(originalAccountId);
+    if (!originalAccount || originalAccount.status !== "active") return null;
     if (activeAccountId === originalAccountId) return originalAccountId;
     const linkedAccounts = await storage.getLinkedAccounts(originalAccountId);
     const targetMembership = linkedAccounts.find((link) => link.businessAccountId === activeAccountId);
@@ -97532,6 +97567,38 @@ Be constructive and helpful. Return ONLY valid JSON.`;
     }
     return activeAccountId;
   };
+  const maskLeadPhone = (phone) => {
+    if (!phone) return phone;
+    const digits = phone.replace(/\D/g, "");
+    if (digits.length === 4) return digits;
+    if (digits.length < 4) return "*".repeat(Math.max(digits.length, 1));
+    return `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`;
+  };
+  const protectLeadPhone = (lead, shouldMask) => {
+    if (!shouldMask || !Object.prototype.hasOwnProperty.call(lead, "phone")) return lead;
+    return {
+      ...lead,
+      phone: maskLeadPhone(lead.phone ?? null),
+      leadsquaredSyncPayload: null,
+      customCrmSyncPayload: null
+    };
+  };
+  const isPhoneQuestion = (question, questionType) => {
+    if (questionType === "phone") return true;
+    const normalized = (question || "").trim().toLowerCase();
+    return (/\b(phone|mobile|telephone|whatsapp)\b/.test(normalized) || /\bcontact\b/.test(normalized) && /\b(number|no\.?)\b/.test(normalized) || /\bnumber\b/.test(normalized) && /\b(call|reach|text)\b/.test(normalized)) && !/\b(email|e-mail)\b/.test(normalized);
+  };
+  const protectConversationPhoneMessages = (messages2, shouldMask) => {
+    if (!shouldMask) return messages2;
+    return messages2.map((message, index2) => {
+      if (message.role !== "user") return message;
+      const previous = messages2[index2 - 1];
+      if (!previous || previous.role !== "assistant" || !isPhoneQuestion(previous.content)) {
+        return message;
+      }
+      return { ...message, content: maskLeadPhone(message.content) || "" };
+    });
+  };
   app2.get("/api/leads/export", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
       const businessAccountId = req.user ? await resolveAuthorizedLeadAccountId(req.user) : null;
@@ -97540,6 +97607,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
       const canExportAllLeads = req.user?.role === "super_admin" || businessAccount?.leadsExportEnabled === "true";
+      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
       if (!canExportAllLeads) {
         await recordAuditEventSafely(req, {
           action: "leads.export.data_delivered",
@@ -97579,7 +97647,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         }
       });
       res.json({
-        leads: result.leads,
+        leads: result.leads.map((lead) => protectLeadPhone(lead, shouldMaskPhone)),
         total: result.total,
         exportId
       });
@@ -97613,8 +97681,10 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         limitNum,
         offset
       );
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
       res.json({
-        leads: result.leads,
+        leads: result.leads.map((lead) => protectLeadPhone(lead, shouldMaskPhone)),
         total: result.total
       });
     } catch (error) {
@@ -97712,15 +97782,17 @@ Be constructive and helpful. Return ONLY valid JSON.`;
   });
   app2.get("/api/leads/:id", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const businessAccountId = req.user?.businessAccountId;
+      const businessAccountId = req.user ? await resolveAuthorizedLeadAccountId(req.user) : null;
       if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
+        return res.status(403).json({ error: "Business account access is no longer authorized" });
       }
       const lead = await storage.getLead(req.params.id, businessAccountId);
       if (!lead) {
         return res.status(404).json({ error: "Lead not found" });
       }
-      res.json(lead);
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      res.json(protectLeadPhone(lead, shouldMaskPhone));
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
@@ -97785,14 +97857,17 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const responses = await db.select({
         response: journeyResponses.response,
         questionText: journeySteps.questionText,
+        questionType: journeySteps.questionType,
         stepOrder: journeySteps.stepOrder
       }).from(journeyResponses).leftJoin(journeySteps, eq75(journeyResponses.stepId, journeySteps.id)).where(eq75(journeyResponses.sessionId, session.sessionId)).orderBy(journeySteps.stepOrder);
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
       res.json({
         journeyName: session.journeyName || "Unknown Journey",
         completed: session.completed === "true",
         responses: responses.map((r) => ({
           question: r.questionText || "Unknown",
-          answer: r.response,
+          answer: shouldMaskPhone && isPhoneQuestion(r.questionText, r.questionType) ? maskLeadPhone(r.response) : r.response,
           stepOrder: r.stepOrder || 0
         }))
       });
@@ -98759,9 +98834,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
   });
   app2.get("/api/conversations/:id/messages", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const businessAccountId = req.user?.businessAccountId;
+      const businessAccountId = req.user ? await resolveAuthorizedLeadAccountId(req.user) : null;
       if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
+        return res.status(403).json({ error: "Business account access is no longer authorized" });
       }
       const conversationId = req.params.id;
       const messages2 = await storage.getMessagesByConversation(conversationId, businessAccountId);
@@ -98778,7 +98853,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         }
         return message;
       });
-      res.json(displayMessages);
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const shouldMaskPhone = req.user?.role !== "super_admin" && businessAccount?.leadPhoneMaskingEnabled === "true";
+      res.json(protectConversationPhoneMessages(displayMessages, shouldMaskPhone));
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
