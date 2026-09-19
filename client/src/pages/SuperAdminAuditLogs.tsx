@@ -1,12 +1,15 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, ShieldCheck } from "lucide-react";
+import { Check, ChevronsUpDown, Search, ShieldCheck } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { cn } from "@/lib/utils";
 
 interface AuditEvent {
   id: string;
@@ -23,11 +26,18 @@ interface AuditEvent {
   metadata: Record<string, unknown>;
 }
 
+interface BusinessAccount {
+  id: string;
+  name: string;
+  website: string;
+}
+
 const emptyFilters = { username: "", action: "", ip: "", businessAccountId: "", outcome: "all", from: "", to: "" };
 
 export default function SuperAdminAuditLogs() {
   const [draft, setDraft] = useState(emptyFilters);
   const [filters, setFilters] = useState(emptyFilters);
+  const [accountSelectorOpen, setAccountSelectorOpen] = useState(false);
   const queryString = useMemo(() => {
     const params = new URLSearchParams({ limit: "250" });
     if (filters.username) params.set("username", filters.username);
@@ -49,6 +59,18 @@ export default function SuperAdminAuditLogs() {
     },
   });
 
+  const { data: businessAccounts = [], isLoading: areAccountsLoading } = useQuery<BusinessAccount[]>({
+    queryKey: ["/api/business-accounts", "all"],
+    queryFn: async () => {
+      const response = await fetch("/api/business-accounts?limit=1000", { credentials: "include" });
+      if (!response.ok) throw new Error("Failed to load business accounts");
+      const responseData = await response.json();
+      return responseData.accounts || responseData;
+    },
+  });
+
+  const selectedBusinessAccount = businessAccounts.find(account => account.id === draft.businessAccountId);
+
   return (
     <div className="p-4 md:p-6 space-y-6">
       <div>
@@ -69,7 +91,63 @@ export default function SuperAdminAuditLogs() {
           <Input placeholder="Username" value={draft.username} onChange={e => setDraft({ ...draft, username: e.target.value })} />
           <Input placeholder="Action, e.g. export" value={draft.action} onChange={e => setDraft({ ...draft, action: e.target.value })} />
           <Input placeholder="IP address" value={draft.ip} onChange={e => setDraft({ ...draft, ip: e.target.value })} />
-          <Input placeholder="Business account ID" value={draft.businessAccountId} onChange={e => setDraft({ ...draft, businessAccountId: e.target.value })} />
+          <Popover open={accountSelectorOpen} onOpenChange={setAccountSelectorOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                role="combobox"
+                aria-expanded={accountSelectorOpen}
+                aria-label="Select business account"
+                className="w-full justify-between font-normal"
+              >
+                <span className="truncate">
+                  {areAccountsLoading
+                    ? "Loading accounts…"
+                    : selectedBusinessAccount?.name || "All business accounts"}
+                </span>
+                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[var(--radix-popover-trigger-width)] min-w-[280px] p-0" align="start">
+              <Command>
+                <CommandInput placeholder="Search business accounts..." />
+                <CommandList>
+                  <CommandEmpty>No business account found.</CommandEmpty>
+                  <CommandGroup>
+                    <CommandItem
+                      value="all business accounts"
+                      onSelect={() => {
+                        setDraft({ ...draft, businessAccountId: "" });
+                        setAccountSelectorOpen(false);
+                      }}
+                    >
+                      <Check className={cn("mr-2 h-4 w-4", draft.businessAccountId ? "opacity-0" : "opacity-100")} />
+                      All business accounts
+                    </CommandItem>
+                    {businessAccounts.map(account => (
+                      <CommandItem
+                        key={account.id}
+                        value={`${account.name} ${account.website || ""} ${account.id}`}
+                        onSelect={() => {
+                          setDraft({ ...draft, businessAccountId: account.id });
+                          setAccountSelectorOpen(false);
+                        }}
+                      >
+                        <Check className={cn(
+                          "mr-2 h-4 w-4",
+                          draft.businessAccountId === account.id ? "opacity-100" : "opacity-0",
+                        )} />
+                        <div className="min-w-0">
+                          <div className="truncate">{account.name}</div>
+                          {account.website && <div className="truncate text-xs text-muted-foreground">{account.website}</div>}
+                        </div>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
           <Input type="date" aria-label="From date" value={draft.from} onChange={e => setDraft({ ...draft, from: e.target.value })} />
           <Input type="date" aria-label="To date" value={draft.to} onChange={e => setDraft({ ...draft, to: e.target.value })} />
           <Select value={draft.outcome} onValueChange={value => setDraft({ ...draft, outcome: value })}>
