@@ -305,6 +305,9 @@ export interface IStorage {
   getLeadsPaginated(businessAccountId: string, filters?: { fromDate?: string; toDate?: string; search?: string }, limit?: number, offset?: number): Promise<{ leads: Lead[]; total: number }>;
   updateLead(id: string, businessAccountId: string, lead: Partial<InsertLead>): Promise<Lead>;
   deleteLead(id: string, businessAccountId: string): Promise<void>;
+  countLeadsForAccount(businessAccountId: string): Promise<number>;
+  deleteSelectedLeads(ids: string[], businessAccountId: string): Promise<number>;
+  deleteAllLeadsForAccount(businessAccountId: string): Promise<number>;
 
   // Question Bank methods
   createQuestionBankEntry(entry: InsertQuestionBankEntry): Promise<QuestionBankEntry>;
@@ -2233,6 +2236,39 @@ export class DatabaseStorage implements IStorage {
 
   async deleteLead(id: string, businessAccountId: string): Promise<void> {
     await db.delete(leads).where(and(eq(leads.id, id), eq(leads.businessAccountId, businessAccountId)));
+  }
+
+  async countLeadsForAccount(businessAccountId: string): Promise<number> {
+    const [result] = await db.select({ total: count() }).from(leads)
+      .where(eq(leads.businessAccountId, businessAccountId));
+    return result?.total ?? 0;
+  }
+
+  async deleteSelectedLeads(ids: string[], businessAccountId: string): Promise<number> {
+    return db.transaction(async (tx) => {
+      const matching = await tx.select({ id: leads.id }).from(leads)
+        .where(and(eq(leads.businessAccountId, businessAccountId), inArray(leads.id, ids)))
+        .for("update");
+      if (matching.length !== ids.length) {
+        throw new Error("Some selected leads no longer exist in the current business account");
+      }
+      const deleted = await tx.delete(leads)
+        .where(and(eq(leads.businessAccountId, businessAccountId), inArray(leads.id, ids)))
+        .returning({ id: leads.id });
+      return deleted.length;
+    });
+  }
+
+  async deleteAllLeadsForAccount(businessAccountId: string): Promise<number> {
+    const result = await db.execute(sql`
+      WITH deleted AS (
+        DELETE FROM ${leads}
+        WHERE ${leads.businessAccountId} = ${businessAccountId}
+        RETURNING 1
+      )
+      SELECT count(*)::int AS deleted_count FROM deleted
+    `);
+    return Number(result.rows[0]?.deleted_count ?? 0);
   }
 
   // Question Bank methods

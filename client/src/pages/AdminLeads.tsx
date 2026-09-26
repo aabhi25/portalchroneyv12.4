@@ -47,6 +47,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 
@@ -94,6 +95,10 @@ export default function AdminLeads() {
   const prevFiltersRef = useRef({ datePreset, fromDate, toDate, searchQuery });
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
+  const [deleteAllConfirmation, setDeleteAllConfirmation] = useState("");
   const [syncAllDialogOpen, setSyncAllDialogOpen] = useState(false);
   const [selectedLeadDetails, setSelectedLeadDetails] = useState<Lead | null>(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
@@ -163,7 +168,7 @@ export default function AdminLeads() {
   }, [datePreset, fromDate, toDate, searchQuery, currentPage]);
 
   const { data, isLoading } = useQuery<{ leads: Lead[]; total: number }>({
-    queryKey: ["/api/leads", queryParams],
+    queryKey: ["/api/leads", currentUser?.activeBusinessAccountId || currentUser?.businessAccount?.id, queryParams],
     queryFn: async () => {
       const response = await fetch(`/api/leads${queryParams}`, {
         credentials: "include",
@@ -177,6 +182,22 @@ export default function AdminLeads() {
 
   const leads = data?.leads || [];
   const totalPages = Math.ceil((data?.total || 0) / itemsPerPage);
+
+  // Selection is limited to the visible page and never carries across accounts or filters.
+  useEffect(() => {
+    setSelectedLeadIds(new Set());
+    setBulkDeleteDialogOpen(false);
+    setDeleteAllDialogOpen(false);
+    setDeleteAllConfirmation("");
+  }, [queryParams, currentUser?.activeBusinessAccountId]);
+
+  const visibleSelectedIds = leads.filter(lead => selectedLeadIds.has(lead.id)).map(lead => lead.id);
+  const allVisibleSelected = leads.length > 0 && visibleSelectedIds.length === leads.length;
+  const { data: deleteAllCount, isLoading: isDeleteAllCountLoading, isError: isDeleteAllCountError } = useQuery<{ total: number }>({
+    queryKey: ["/api/leads/delete-count", currentUser?.activeBusinessAccountId],
+    queryFn: () => apiRequest("GET", "/api/leads/delete-count"),
+    enabled: deleteAllDialogOpen && isSuperAdminImpersonating,
+  });
 
 
   const { data: chatDialogConversation, isLoading: loadingChatDialogConversation } = useQuery<ConversationDetail>({
@@ -301,6 +322,30 @@ export default function AdminLeads() {
       deleteLeadMutation.mutate(leadToDelete.id);
     }
   };
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) => apiRequest<{ deletedCount: number }>("POST", "/api/leads/bulk-delete", { ids }),
+    onSuccess: ({ deletedCount }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"], exact: false });
+      setSelectedLeadIds(new Set());
+      setBulkDeleteDialogOpen(false);
+      toast({ title: "Leads deleted", description: `${deletedCount} lead${deletedCount === 1 ? "" : "s"} deleted.` });
+    },
+    onError: (error: Error) => toast({ title: "Delete failed", description: error.message, variant: "destructive" }),
+  });
+
+  const deleteAllMutation = useMutation({
+    mutationFn: () => apiRequest<{ deletedCount: number }>("POST", "/api/leads/delete-all", { confirmation: "DELETE ALL LEADS" }),
+    onSuccess: ({ deletedCount }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"], exact: false });
+      setSelectedLeadIds(new Set());
+      setDeleteAllDialogOpen(false);
+      setDeleteAllConfirmation("");
+      setCurrentPage(1);
+      toast({ title: "All leads deleted", description: `${deletedCount} lead${deletedCount === 1 ? "" : "s"} deleted from this account.` });
+    },
+    onError: (error: Error) => toast({ title: "Delete failed", description: error.message, variant: "destructive" }),
+  });
 
   // Check if LeadSquared integration is enabled
   const { data: leadsquaredSettings } = useQuery<{ enabled: boolean; hasCredentials: boolean }>({
@@ -524,7 +569,7 @@ export default function AdminLeads() {
               </CardTitle>
               <CardDescription>View and export captured leads from conversations</CardDescription>
             </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap justify-end">
                 {isLeadsquaredConfigured && (
                   <Button 
                     onClick={handleSyncAll} 
@@ -544,6 +589,19 @@ export default function AdminLeads() {
                   <Button onClick={handleExport} disabled={(data?.total || 0) === 0} data-testid="button-export-leads" className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700">
                     <Download className="h-4 w-4 mr-2" />
                     Export All ({data?.total || 0})
+                  </Button>
+                )}
+                {isSuperAdminImpersonating && (
+                  <Button
+                    variant="outline"
+                    className="border-red-300 text-red-700 hover:bg-red-50"
+                    onClick={() => {
+                      queryClient.removeQueries({ queryKey: ["/api/leads/delete-count"] });
+                      setDeleteAllDialogOpen(true);
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete all leads
                   </Button>
                 )}
               </div>
@@ -698,6 +756,17 @@ export default function AdminLeads() {
             )}
           </div>
 
+          {isSuperAdminImpersonating && visibleSelectedIds.length > 0 && (
+            <div className="mb-4 flex items-center gap-3" role="status">
+              <span className="text-sm text-gray-600">{visibleSelectedIds.length} selected on this page</span>
+              <Button size="sm" variant="destructive" onClick={() => setBulkDeleteDialogOpen(true)}>
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete selected
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedLeadIds(new Set())}>Clear selection</Button>
+            </div>
+          )}
+
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <div className="text-center">
@@ -720,6 +789,15 @@ export default function AdminLeads() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-gradient-to-r from-purple-50 to-blue-50 hover:from-purple-50 hover:to-blue-50">
+                    {isSuperAdminImpersonating && (
+                      <TableHead className="w-[44px] px-3">
+                        <Checkbox
+                          aria-label="Select all leads on this page"
+                          checked={allVisibleSelected ? true : visibleSelectedIds.length > 0 ? "indeterminate" : false}
+                          onCheckedChange={(checked) => setSelectedLeadIds(checked === true ? new Set(leads.map(lead => lead.id)) : new Set())}
+                        />
+                      </TableHead>
+                    )}
                     <TableHead className="font-semibold text-gray-900 w-[180px] px-4 py-3">
                       <div className="flex items-center gap-2">
                         <User className="h-4 w-4 text-purple-600" />
@@ -787,6 +865,20 @@ export default function AdminLeads() {
 
                     return (
                       <TableRow key={lead.id} className="group hover:bg-purple-50/50 transition-colors">
+                        {isSuperAdminImpersonating && (
+                          <TableCell className="px-3">
+                            <Checkbox
+                              aria-label={`Select lead ${lead.name || lead.id}`}
+                              checked={selectedLeadIds.has(lead.id)}
+                              onCheckedChange={(checked) => setSelectedLeadIds(previous => {
+                                const next = new Set(previous);
+                                if (checked === true) next.add(lead.id);
+                                else next.delete(lead.id);
+                                return next;
+                              })}
+                            />
+                          </TableCell>
+                        )}
                         <TableCell className="font-medium px-4 py-3">
                           <div className="flex flex-col gap-1">
                             <div className="flex items-center gap-3">
@@ -1064,6 +1156,73 @@ export default function AdminLeads() {
               ) : (
                 'Delete'
               )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={(open) => !bulkDeleteMutation.isPending && setBulkDeleteDialogOpen(open)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete selected leads?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Permanently delete {visibleSelectedIds.length} selected lead{visibleSelectedIds.length === 1 ? "" : "s"} from this business account? This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkDeleteMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              disabled={bulkDeleteMutation.isPending || visibleSelectedIds.length === 0}
+              onClick={(event) => {
+                event.preventDefault();
+                bulkDeleteMutation.mutate(visibleSelectedIds);
+              }}
+            >
+              {bulkDeleteMutation.isPending ? "Deleting..." : `Delete ${visibleSelectedIds.length} leads`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={deleteAllDialogOpen} onOpenChange={(open) => {
+        if (!deleteAllMutation.isPending) {
+          setDeleteAllDialogOpen(open);
+          if (!open) setDeleteAllConfirmation("");
+        }
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete every lead in this business account?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes all leads in {currentUser?.businessAccount?.name || "the current business account"},
+              including leads on other pages and those hidden by search or date filters. It cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <p className="text-sm font-medium">
+              {isDeleteAllCountLoading ? "Counting account leads..." : isDeleteAllCountError ? "Unable to count leads. Try again later." : `${deleteAllCount?.total ?? 0} leads in this account`}
+            </p>
+            <label htmlFor="confirm-delete-all-leads" className="text-sm">Type DELETE ALL LEADS to confirm</label>
+            <Input
+              id="confirm-delete-all-leads"
+              autoComplete="off"
+              value={deleteAllConfirmation}
+              onChange={(event) => setDeleteAllConfirmation(event.target.value)}
+              disabled={deleteAllMutation.isPending}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteAllMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              disabled={deleteAllMutation.isPending || isDeleteAllCountLoading || isDeleteAllCountError || !deleteAllCount?.total || deleteAllConfirmation !== "DELETE ALL LEADS"}
+              onClick={(event) => {
+                event.preventDefault();
+                deleteAllMutation.mutate();
+              }}
+            >
+              {deleteAllMutation.isPending ? "Deleting..." : "Delete all leads"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

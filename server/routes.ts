@@ -25144,6 +25144,18 @@ Be constructive and helpful. Return ONLY valid JSON.`;
     res.json({ events: rows });
   });
 
+  app.get("/api/leads/delete-count", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      if (req.user?.role !== "super_admin" || !req.user.activeBusinessAccountId) {
+        return res.status(403).json({ error: "Only administrators viewing a business account can delete leads" });
+      }
+      const total = await storage.countLeadsForAccount(req.user.activeBusinessAccountId);
+      res.json({ total });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.get("/api/leads/:id", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
       const businessAccountId = req.user ? await resolveAuthorizedLeadAccountId(req.user) : null;
@@ -25157,6 +25169,41 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
       const shouldMaskPhone = businessAccount?.leadPhoneMaskingEnabled === "true";
       res.json(protectLeadPhone(lead, shouldMaskPhone));
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Bulk deletion is always scoped to the active account; request bodies cannot select another account.
+  app.post("/api/leads/bulk-delete", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      if (req.user?.role !== "super_admin" || !req.user.activeBusinessAccountId) {
+        return res.status(403).json({ error: "Only administrators viewing a business account can delete leads" });
+      }
+      const parsed = z.object({
+        ids: z.array(z.string().min(1).max(255)).min(1).max(200),
+      }).strict().safeParse(req.body);
+      if (!parsed.success || new Set(parsed.data.ids).size !== parsed.data.ids.length) {
+        return res.status(400).json({ error: "Provide 1 to 200 unique lead IDs" });
+      }
+      const deletedCount = await storage.deleteSelectedLeads(parsed.data.ids, req.user.activeBusinessAccountId);
+      res.json({ deletedCount });
+    } catch (error: any) {
+      res.status(error.message === "Some selected leads no longer exist in the current business account" ? 409 : 500)
+        .json({ error: error.message });
+    }
+  });
+
+  app.post("/api/leads/delete-all", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      if (req.user?.role !== "super_admin" || !req.user.activeBusinessAccountId) {
+        return res.status(403).json({ error: "Only administrators viewing a business account can delete leads" });
+      }
+      if (req.body?.confirmation !== "DELETE ALL LEADS" || Object.keys(req.body).length !== 1) {
+        return res.status(400).json({ error: "Explicit delete-all confirmation is required" });
+      }
+      const deletedCount = await storage.deleteAllLeadsForAccount(req.user.activeBusinessAccountId);
+      res.json({ deletedCount });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
