@@ -473,7 +473,7 @@ export default function GroupTrainingEditor() {
   useEffect(() => {
     if (groupTraining?.training) {
       const training = groupTraining.training as any;
-      setLsqEnabled(training.leadsquaredEnabled || false);
+      setLsqEnabled(training.leadsquaredEnabled === true || training.leadsquaredEnabled === "true");
       setLsqHost(training.leadsquaredHost || "");
       setLsqAccessKey(training.leadsquaredAccessKey || "");
       // Don't load the actual secret key for security - just show placeholder if it exists
@@ -537,27 +537,32 @@ export default function GroupTrainingEditor() {
     }
   };
   
+  const buildLsqPayload = () => {
+    const payload: any = {
+      leadsquaredEnabled: lsqEnabled,
+      leadsquaredHost: lsqHost,
+      leadsquaredAccessKey: lsqAccessKey,
+      leadsquaredConnectionType: lsqConnectionType,
+      leadsquaredUdsWebhookUrl: lsqUdsUrl.trim(),
+    };
+    // Only include secret key if it was changed
+    if (lsqSecretKeyChanged && lsqSecretKey !== "••••••••••••••••") {
+      payload.leadsquaredSecretKey = lsqSecretKey;
+    }
+    if (lsqUdsKey.trim()) {
+      payload.leadsquaredUdsKey = lsqUdsKey.trim();
+    }
+    if (lsqConnectionType === "uds" && lsqClearApiKeys) {
+      payload.leadsquaredClearApiKeys = true;
+    }
+    return payload;
+  };
+
   const saveLsqSettings = async () => {
     if (!groupId) return;
     try {
       setSavingLsq(true);
-      const payload: any = {
-        leadsquaredEnabled: lsqEnabled,
-        leadsquaredHost: lsqHost,
-        leadsquaredAccessKey: lsqAccessKey,
-        leadsquaredConnectionType: lsqConnectionType,
-        leadsquaredUdsWebhookUrl: lsqUdsUrl.trim(),
-      };
-      if (lsqUdsKey.trim()) {
-        payload.leadsquaredUdsKey = lsqUdsKey.trim();
-      }
-      if (lsqConnectionType === "uds" && lsqClearApiKeys) {
-        payload.leadsquaredClearApiKeys = true;
-      }
-      // Only include secret key if it was changed
-      if (lsqSecretKeyChanged && lsqSecretKey !== "••••••••••••••••") {
-        payload.leadsquaredSecretKey = lsqSecretKey;
-      }
+      const payload = buildLsqPayload();
       
       await apiRequest("PUT", `/api/super-admin/account-groups/${groupId}/training`, payload);
       
@@ -1320,6 +1325,12 @@ export default function GroupTrainingEditor() {
           menuConfig,
           menuItems,
         });
+      }
+      // Publishing LeadSquared copies the *saved* group settings to members, so save
+      // any unsaved connection edits (e.g. a just-pasted UDS URL) first.
+      if (!moduleToPublish || moduleToPublish === 'leadsquared') {
+        await apiRequest("PUT", `/api/super-admin/account-groups/${groupId}/training`, buildLsqPayload());
+        setLsqSecretKeyChanged(false);
       }
       const publishResult = await apiRequest("POST", `/api/super-admin/account-groups/${groupId}/training/publish`, { module: moduleToPublish });
       
