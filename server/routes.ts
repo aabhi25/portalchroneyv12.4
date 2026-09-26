@@ -13981,6 +13981,65 @@ Return ONLY the refined instruction, nothing else.`
     }
   });
 
+  // SuperAdmin: Rename a group admin user. Sessions are keyed by user ID, so the
+  // admin stays logged in; the new name is used from their next login.
+  app.put("/api/super-admin/group-admin-users/:userId/username", requireAuth, requireRole("super_admin"), async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+
+      if (username.length < 3 || username.length > 100) {
+        return res.status(400).json({ error: "Username must be 3–100 characters" });
+      }
+      if (/\s/.test(username)) {
+        return res.status(400).json({ error: "Username cannot contain spaces" });
+      }
+
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.id, userId), eq(users.role, "account_group_admin")));
+      if (!user) {
+        return res.status(404).json({ error: "Group admin user not found" });
+      }
+      if (user.username === username) {
+        return res.json({ success: true, username });
+      }
+
+      // Case-insensitive clash check so "JaroAdmin" can't sit next to "jaroadmin".
+      const [clash] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(sql`lower(${users.username}) = lower(${username})`, sql`${users.id} <> ${userId}`))
+        .limit(1);
+      if (clash) {
+        return res.status(400).json({ error: "Username already exists" });
+      }
+
+      await db.update(users).set({ username }).where(eq(users.id, userId));
+
+      await recordAuditEventSafely(req, {
+        action: "user.username.changed",
+        outcome: "success",
+        actorUserId: req.user!.id,
+        actorUsername: req.user!.username,
+        actorRole: req.user!.role,
+        resourceType: "user",
+        resourceId: userId,
+        metadata: { previousUsername: user.username, newUsername: username },
+      });
+
+      res.json({ success: true, username });
+    } catch (error: any) {
+      // Unique constraint race: another user took the name between check and update.
+      if (error?.code === "23505") {
+        return res.status(400).json({ error: "Username already exists" });
+      }
+      console.error('[SuperAdmin Group Admins] Error renaming user:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // SuperAdmin: Reset password for a group admin user
   app.post("/api/super-admin/group-admin-users/:userId/reset-password", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {

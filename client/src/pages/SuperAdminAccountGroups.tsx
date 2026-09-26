@@ -42,7 +42,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Link2, Unlink, Trash2, Building2, Crown, Search, X, Check, Shield, BarChart3, Users, MessageSquare, Contact, Package, FileQuestion, Calendar, KeyRound, Clock, GraduationCap, RefreshCw, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { Plus, Pencil, Link2, Unlink, Trash2, Building2, Crown, Search, X, Check, Shield, BarChart3, Users, MessageSquare, Contact, Package, FileQuestion, Calendar, KeyRound, Clock, GraduationCap, RefreshCw, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
@@ -172,6 +172,8 @@ export default function SuperAdminAccountGroups() {
   const [newAdminPassword, setNewAdminPassword] = useState("");
   const [createdAdminCredentials, setCreatedAdminCredentials] = useState<{ username: string; tempPassword: string } | null>(null);
   const [resetPasswordAdmin, setResetPasswordAdmin] = useState<{ userId: string; username: string } | null>(null);
+  const [renameAdmin, setRenameAdmin] = useState<{ userId: string; username: string } | null>(null);
+  const [renameUsername, setRenameUsername] = useState("");
   const [resetPassword, setResetPassword] = useState("");
 
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
@@ -500,6 +502,23 @@ export default function SuperAdminAccountGroups() {
       setResetPasswordAdmin(null);
       setResetPassword("");
       toast({ title: "Password Reset", description: `Password for "${data.username}" has been reset. They will need to change it on next login.` });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const renameAdminMutation = useMutation({
+    mutationFn: async (data: { userId: string; username: string }) => {
+      return await apiRequest<{ success: boolean; username: string }>("PUT", `/api/super-admin/group-admin-users/${data.userId}/username`, { username: data.username });
+    },
+    onSuccess: (data) => {
+      const previous = renameAdmin?.username;
+      setRenameAdmin(null);
+      setRenameUsername("");
+      refetchAdmins();
+      queryClient.invalidateQueries({ queryKey: ["/api/super-admin/group-admin-users"] });
+      toast({ title: "Username Updated", description: `"${previous}" is now "${data.username}". They log in with the new username from now on.` });
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -1109,6 +1128,14 @@ export default function SuperAdminAccountGroups() {
                             <Button
                               variant="ghost"
                               size="sm"
+                              title="Change Username"
+                              onClick={() => { setRenameAdmin({ userId: admin.userId, username: admin.username }); setRenameUsername(admin.username); }}
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               title="Reset Password"
                               onClick={() => setResetPasswordAdmin({ userId: admin.userId, username: admin.username })}
                             >
@@ -1285,6 +1312,47 @@ export default function SuperAdminAccountGroups() {
           </p>
           <DialogFooter>
             <Button onClick={() => setCreatedAdminCredentials(null)}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!renameAdmin} onOpenChange={() => { setRenameAdmin(null); setRenameUsername(""); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change Username</DialogTitle>
+            <DialogDescription>
+              New login username for {renameAdmin?.username}. Their password and permissions stay the same, and this applies to every group they admin.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="rename-username">Username</Label>
+            <Input
+              id="rename-username"
+              value={renameUsername}
+              onChange={e => setRenameUsername(e.target.value)}
+              placeholder="e.g. madhu.sawant@jaro.in"
+              autoComplete="off"
+            />
+            <p className="text-xs text-muted-foreground">3–100 characters, no spaces. An email address works.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setRenameAdmin(null); setRenameUsername(""); }}>Cancel</Button>
+            <Button
+              disabled={
+                renameAdminMutation.isPending ||
+                renameUsername.trim().length < 3 ||
+                /\s/.test(renameUsername.trim()) ||
+                renameUsername.trim() === renameAdmin?.username
+              }
+              onClick={() => {
+                if (renameAdmin) {
+                  renameAdminMutation.mutate({ userId: renameAdmin.userId, username: renameUsername.trim() });
+                }
+              }}
+            >
+              {renameAdminMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Save Username
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
