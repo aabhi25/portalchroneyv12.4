@@ -85,6 +85,7 @@ import jobPortalRoutes from "./routes/jobPortal";
 import topscholarRoutes from "./routes/topscholar";
 import topscholarAnalyticsRoutes from "./routes/topscholarAnalytics";
 import verificationRoutes from "./routes/verification";
+import dataRetentionRoutes from "./routes/dataRetention";
 import { validatePhoneNumber } from "@shared/validation/phone";
 import { MAX_IMPORT_ROWS, normalizeColumnKeys } from "@shared/contactImport";
 
@@ -555,6 +556,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Job Portal routes
   app.use(jobPortalRoutes);
   app.use(verificationRoutes);
+  app.use(dataRetentionRoutes);
   
   // Widget routes (must be before authentication routes)
   // Serve minified widget.js for better performance (138KB vs 229KB original)
@@ -15186,18 +15188,25 @@ Return ONLY the refined instruction, nothing else.`
         else if (cls === 'form') formConvs++;
         else chatConvs++;
       }
-      const discountConvs = discountTokens.size;
+      // Records removed by auto-delete still count (anonymous deletion records).
+      const { getPurgedAnalytics } = await import('./services/dataRetentionService');
+      const purged = await getPurgedAnalytics([businessAccountId], dateFrom, dateTo);
+      journeyConvs += purged.conversations.journey;
+      formConvs += purged.conversations.form;
+      chatConvs += purged.conversations.chat;
+      const discountConvs = discountTokens.size + purged.conversations.discount;
       // Derive total from the dedup map — consistent with the breakdown
-      const totalConversations = visitorClass.size;
+      const totalConversations = visitorClass.size + purged.conversations.total;
+      const leadsTotal = totalLeads + purged.leads.total;
       const conversionRate = totalConversations > 0
-        ? Math.round((totalLeads / totalConversations) * 1000) / 10
+        ? Math.round((leadsTotal / totalConversations) * 1000) / 10
         : 0;
 
       res.json({
-        conversationFunnel: { total: totalConversations, leadsGenerated: totalLeads, conversionRate },
+        conversationFunnel: { total: totalConversations, leadsGenerated: leadsTotal, conversionRate },
         conversationBreakdown: { journey: journeyConvs, form: formConvs, chat: chatConvs, discountAvailed: discountConvs, total: totalConversations },
-        leadSources: { form: formLeads, journey: journeyLeads, chat: chatLeads, discountAvailed: discountLeads, total: totalLeads },
-        trafficSources: { paid: paidLeads, organic: organicLeads, total: totalLeads },
+        leadSources: { form: formLeads + purged.leads.form, journey: journeyLeads + purged.leads.journey, chat: chatLeads + purged.leads.chat, discountAvailed: discountLeads + purged.leads.discount, total: leadsTotal },
+        trafficSources: { paid: paidLeads + purged.leads.paid, organic: organicLeads + purged.leads.organic, total: leadsTotal },
       });
     } catch (error: any) {
       console.error('[Analytics] Error fetching account analytics:', error);
@@ -15313,7 +15322,13 @@ Return ONLY the refined instruction, nothing else.`
         }
         for (const t of acctDiscountTokens) allDiscountTokens.add(t);
       }
-      const discountConvs = allDiscountTokens.size;
+      // Records removed by auto-delete still count (anonymous deletion records).
+      const { getPurgedAnalytics } = await import('./services/dataRetentionService');
+      const purgedGroup = await getPurgedAnalytics(accountIds, dateFrom, dateTo);
+      journeyConvs += purgedGroup.conversations.journey;
+      formConvs += purgedGroup.conversations.form;
+      chatConvs += purgedGroup.conversations.chat;
+      const discountConvs = allDiscountTokens.size + purgedGroup.conversations.discount;
       const totalConversations = journeyConvs + formConvs + chatConvs;
 
       // Per-account breakdown
@@ -15387,18 +15402,19 @@ Return ONLY the refined instruction, nothing else.`
           else ao++;
         }
 
+        const purgedAcct = await getPurgedAnalytics([accountId], dateFrom, dateTo);
         accountBreakdown.push({
           accountId,
           accountName: acct.name,
-          conversations: acctConvCount,
+          conversations: acctConvCount + purgedAcct.conversations.total,
           journeyStarted: acctJourneyStarted,
-          leads: acctLeads.length,
-          form: af,
-          journey: aj,
-          chat: ac,
-          discountAvailed: ad,
-          paid: ap,
-          organic: ao,
+          leads: acctLeads.length + purgedAcct.leads.total,
+          form: af + purgedAcct.leads.form,
+          journey: aj + purgedAcct.leads.journey,
+          chat: ac + purgedAcct.leads.chat,
+          discountAvailed: ad + purgedAcct.leads.discount,
+          paid: ap + purgedAcct.leads.paid,
+          organic: ao + purgedAcct.leads.organic,
         });
       }
 

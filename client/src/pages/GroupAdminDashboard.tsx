@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { RetentionBanner, RetentionCountdown, RetentionReportDialog, type AccountRetention } from "@/components/DataRetentionDialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -138,6 +139,7 @@ interface LeadItem {
   leadsquaredSyncPayload?: Record<string, unknown> | null;
   salesforceSyncStatus?: string | null;
   salesforceSyncError?: string | null;
+  salesforceSyncedAt?: string | null;
   topicsOfInterest?: string[] | null;
 }
 
@@ -449,6 +451,23 @@ export default function GroupAdminDashboard() {
     },
     enabled: !!selectedGroupId && canSyncLeads,
   });
+
+  // Auto-delete (data retention) policy per account, for banners and row countdowns.
+  const { data: retentionData } = useQuery<{ accounts: Record<string, AccountRetention | null> }>({
+    queryKey: ["/api/group-admin/groups", selectedGroupId, "data-retention"],
+    queryFn: async () => {
+      const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/data-retention`, { credentials: "include" });
+      if (!res.ok) return { accounts: {} };
+      return res.json();
+    },
+    enabled: !!selectedGroupId && (!!selectedGroup?.canViewLeads || !!selectedGroup?.canViewConversations),
+  });
+  const retentionPolicies = useMemo(
+    () => Object.values(retentionData?.accounts || {}).filter((a): a is AccountRetention => !!a).map(a => a.policy),
+    [retentionData],
+  );
+  const retentionAccountCount = Object.keys(retentionData?.accounts || {}).length;
+  const [retentionReportOpen, setRetentionReportOpen] = useState(false);
 
   const crmByAccount = useMemo(() => {
     const map = new Map<string, AccountCrmStatus>();
@@ -1087,6 +1106,7 @@ export default function GroupAdminDashboard() {
                 </div>
               </div>
 
+              <RetentionBanner policies={retentionPolicies} totalAccounts={retentionAccountCount} onViewReport={() => setRetentionReportOpen(true)} />
               <div className="px-6 py-3 border-b border-gray-100 bg-gradient-to-r from-violet-50/50 to-transparent">
                 <div className="flex items-center gap-2">
                   <Users className="w-4 h-4 text-purple-500" />
@@ -1368,6 +1388,7 @@ export default function GroupAdminDashboard() {
                                 <div>
                                   <div className="text-sm font-medium text-gray-700">{format(new Date(lead.createdAt), "MMM d, yyyy")}</div>
                                   <div className="text-[11px] text-gray-400">{format(new Date(lead.createdAt), "h:mm a")}</div>
+                                  <RetentionCountdown lead={lead} retention={retentionData?.accounts?.[lead.businessAccountId]} />
                                 </div>
                               ) : (
                                 <span className="text-sm text-gray-300">N/A</span>
@@ -1723,6 +1744,7 @@ export default function GroupAdminDashboard() {
                   )}
                 </div>
 
+                <RetentionBanner policies={retentionPolicies} totalAccounts={retentionAccountCount} onViewReport={() => setRetentionReportOpen(true)} />
                 {/* Type Filter Chips */}
                 <div className="px-4 py-2 border-b border-gray-200 flex items-center gap-2 flex-wrap">
                   {([
@@ -2346,6 +2368,13 @@ export default function GroupAdminDashboard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <RetentionReportDialog
+        open={retentionReportOpen}
+        onOpenChange={setRetentionReportOpen}
+        baseUrl={`/api/group-admin/groups/${selectedGroupId}/data-retention/report`}
+        title={selectedGroup?.groupName || "This group"}
+      />
 
       <Dialog open={deleteAllTarget !== null} onOpenChange={(open) => { if (!open && !deleteAllMutation.isPending) closeDeleteAll(); }}>
         <DialogContent className="max-w-md">

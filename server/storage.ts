@@ -5333,11 +5333,15 @@ export class DatabaseStorage implements IStorage {
         .from(faqs)
         .where(eq(faqs.businessAccountId, accountId));
       
+      // Records removed by auto-delete still count (anonymous deletion records).
+      const { getPurgedAnalytics } = await import('./services/dataRetentionService');
+      const purged = await getPurgedAnalytics([accountId], dateFrom, dateTo);
+
       const accountMetrics = {
         businessAccountId: accountId,
         businessName: account.name,
-        leads: leadResult?.count || 0,
-        conversations: conversationResult?.count || 0,
+        leads: (leadResult?.count || 0) + purged.leads.total,
+        conversations: (conversationResult?.count || 0) + purged.conversations.total,
         visitors: visitorCount,
         products: productResult?.count || 0,
         faqs: faqResult?.count || 0,

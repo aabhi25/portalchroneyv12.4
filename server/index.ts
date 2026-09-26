@@ -1,5 +1,8 @@
 import { initLogCapture } from "./services/logCapture";
+import { installLogRedaction } from "./logRedaction";
 initLogCapture();
+// After log capture, so Live Logs also only ever sees masked phones/emails.
+installLogRedaction();
 
 import { execSync } from "child_process";
 import express, { type Request, Response, NextFunction } from "express";
@@ -15,6 +18,7 @@ import { migrateK12NotesAndVideos } from "./scripts/migrateK12NotesVideos";
 import { shopifySyncScheduler } from "./services/shopifySyncScheduler";
 import { leadsquaredRetryWorker } from "./services/leadsquaredRetryWorker";
 import { crmSyncRecoveryWorker } from "./services/crmSyncRecoveryWorker";
+import { dataRetentionWorker } from "./services/dataRetentionWorker";
 import { aiUsageLogger } from "./services/aiUsageLogger";
 import { backupScheduler } from "./services/backupScheduler";
 import { awaitingVerificationSweepWorker } from "./services/awaitingVerificationSweepWorker";
@@ -282,7 +286,8 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
   server.listen({
     port,
     host: "0.0.0.0",
-    reusePort: true,
+    // SO_REUSEPORT isn't supported on macOS (listen fails with ENOTSUP); keep it on Linux.
+    reusePort: process.platform !== "darwin",
   }, () => {
     log(`serving on port ${port}`);
     
@@ -309,6 +314,7 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     // Start CRM sync recovery worker (outbox pattern — retries sessions completed
     // but never CRM-synced, e.g. due to server crash during the async sync)
     crmSyncRecoveryWorker.start();
+    dataRetentionWorker.start();
     
     // Start daily database backup scheduler (4:00 AM IST)
     backupScheduler.start();

@@ -66,6 +66,26 @@ export async function recordAuditEvent(
   return event.id;
 }
 
+/** Audit event raised by the system itself (background workers), with no HTTP request. */
+export async function recordSystemAuditEvent(input: AuditEventInput): Promise<string> {
+  const [event] = await db.insert(auditEvents).values({
+    actorUserId: input.actorUserId ?? null,
+    actorUsername: input.actorUsername ?? "system",
+    actorRole: input.actorRole ?? "system",
+    businessAccountId: input.businessAccountId ?? null,
+    sessionFingerprint: null,
+    action: input.action,
+    resourceType: input.resourceType ?? null,
+    resourceId: input.resourceId ?? null,
+    outcome: input.outcome,
+    ipAddress: null,
+    userAgent: null,
+    requestId: crypto.randomUUID(),
+    metadata: sanitizeMetadata(input.metadata),
+  }).returning({ id: auditEvents.id });
+  return event.id;
+}
+
 export async function recordAuditEventSafely(req: Request, input: AuditEventInput): Promise<void> {
   try {
     await recordAuditEvent(req, input);

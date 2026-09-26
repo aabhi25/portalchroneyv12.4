@@ -42,7 +42,8 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Link2, Unlink, Trash2, Building2, Crown, Search, X, Check, Shield, BarChart3, Users, MessageSquare, Contact, Package, FileQuestion, Calendar, KeyRound, Clock, GraduationCap, RefreshCw, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { DataRetentionDialog } from "@/components/DataRetentionDialog";
+import { Plus, Pencil, Timer, Link2, Unlink, Trash2, Building2, Crown, Search, X, Check, Shield, BarChart3, Users, MessageSquare, Contact, Package, FileQuestion, Calendar, KeyRound, Clock, GraduationCap, RefreshCw, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
@@ -178,6 +179,7 @@ export default function SuperAdminAccountGroups() {
   const [resetPassword, setResetPassword] = useState("");
 
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
+  const [retentionGroup, setRetentionGroup] = useState<{ id: string; name: string } | null>(null);
   const [syncGroup, setSyncGroup] = useState<AccountGroup | null>(null);
   const [syncFilter, setSyncFilter] = useState<'today' | 'yesterday' | 'last3days' | 'last7days'>('today');
   const [syncResults, setSyncResults] = useState<any>(null);
@@ -814,6 +816,15 @@ export default function SuperAdminAccountGroups() {
                       <Button
                         variant="ghost"
                         size="icon"
+                        className="h-8 w-8 text-purple-600 hover:bg-purple-50"
+                        title="Auto-delete (data retention)"
+                        onClick={() => setRetentionGroup({ id: group.id, name: group.name })}
+                      >
+                        <Timer className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         className="h-8 w-8 text-destructive hover:bg-destructive/10"
                         onClick={() => {
                           setGroupToDelete(group);
@@ -1328,6 +1339,16 @@ export default function SuperAdminAccountGroups() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {retentionGroup && (
+        <DataRetentionDialog
+          open={!!retentionGroup}
+          onOpenChange={(o) => { if (!o) setRetentionGroup(null); }}
+          scopeType="group"
+          scopeId={retentionGroup.id}
+          scopeName={retentionGroup.name}
+        />
+      )}
 
       <Dialog open={!!renameAdmin} onOpenChange={() => { setRenameAdmin(null); setRenameUsername(""); }}>
         <DialogContent>

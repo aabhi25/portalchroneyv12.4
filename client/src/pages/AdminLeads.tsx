@@ -4,6 +4,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import WebsiteNavTabs from "@/components/WebsiteNavTabs";
 import { type Lead } from "@shared/schema";
+import { RetentionBanner, RetentionCountdown, type AccountRetention } from "@/components/DataRetentionDialog";
 import { FormSubmissionDetails } from "@/components/FormSubmissionDetails";
 import type { MeResponseDto } from "@shared/dto";
 import { Button } from "@/components/ui/button";
@@ -363,6 +364,17 @@ export default function AdminLeads() {
 
   const isLeadsquaredConfigured = leadsquaredSettings?.enabled && leadsquaredSettings?.hasCredentials;
 
+  // Auto-delete (data retention) policy for this account, for the banner and row countdowns.
+  const { data: retention } = useQuery<{ policy: AccountRetention['policy'] | null; crm: AccountRetention['crm'] }>({
+    queryKey: ["/api/data-retention/effective"],
+    queryFn: async () => {
+      const res = await fetch("/api/data-retention/effective", { credentials: "include" });
+      if (!res.ok) return { policy: null, crm: null };
+      return res.json();
+    },
+  });
+  const accountRetention: AccountRetention | null = retention?.policy ? { policy: retention.policy, crm: retention.crm } : null;
+
   // Check if Salesforce integration is enabled
   const { data: salesforceSettings } = useQuery<{ enabled: boolean; hasCredentials: boolean }>({
     queryKey: ["/api/salesforce/settings"],
@@ -609,6 +621,11 @@ export default function AdminLeads() {
         </CardHeader>
         <CardContent>
           <div>
+          {accountRetention && (
+            <div className="mb-4 -mx-6 -mt-2">
+              <RetentionBanner policies={[accountRetention.policy]} />
+            </div>
+          )}
           {/* Search and Filter Controls */}
           <div className="mb-6 space-y-4">
             <div className="flex flex-col sm:flex-row gap-3">
@@ -890,6 +907,15 @@ export default function AdminLeads() {
                               <span className="text-gray-900 font-medium truncate max-w-[120px]">{lead.name || "Anonymous"}</span>
                             </div>
                             <span className="text-xs text-gray-400 pl-12">{format(new Date(lead.createdAt), "MMM d, h:mm a")}</span>
+                            {accountRetention && (
+                              <div className="pl-12">
+                                <RetentionCountdown
+                                  lead={{ ...lead, createdAt: String(lead.createdAt), leadsquaredSyncedAt: lead.leadsquaredSyncedAt ? String(lead.leadsquaredSyncedAt) : null, salesforceSyncedAt: lead.salesforceSyncedAt ? String(lead.salesforceSyncedAt) : null }}
+                                  retention={accountRetention}
+                                  align="left"
+                                />
+                              </div>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell className="px-4 py-3">

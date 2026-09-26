@@ -194,6 +194,62 @@ export const sessions = pgTable("sessions", {
 
 // Append-only security audit trail. Secrets, session tokens, and lead contents
 // must never be stored in metadata.
+// Data retention ("auto-delete"): a super admin can make a group or a single
+// account keep leads and conversations only temporarily. An account row
+// overrides its groups' rows; with neither, retention is off.
+export const dataRetentionPolicies = pgTable("data_retention_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  scopeType: text("scope_type").notNull(), // 'group' | 'account'
+  scopeId: varchar("scope_id").notNull(), // account_groups.id or business_accounts.id
+  mode: text("mode").notNull().default("off"), // 'off' | 'dry_run' | 'live'
+  deleteSyncedAfterMinutes: integer("delete_synced_after_minutes").notNull().default(1440), // after the last successful CRM sync
+  deleteUnsyncedAfterMinutes: integer("delete_unsynced_after_minutes"), // null = keep leads that never sync
+  deleteIdleChatsAfterMinutes: integer("delete_idle_chats_after_minutes").default(1440), // chats with no lead; null = keep
+  keepAnonymousCounts: boolean("keep_anonymous_counts").notNull().default(true), // count deleted records in dashboards
+  updatedBy: varchar("updated_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("data_retention_policies_scope_idx").on(table.scopeType, table.scopeId),
+]);
+
+// One row per deleted lead / conversation: proof of deletion plus the anonymous
+// facts dashboards need. Never holds names, phones, emails or message text.
+export const dataPurgeLog = pgTable("data_purge_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull(),
+  recordType: text("record_type").notNull(), // 'lead' | 'conversation'
+  recordId: varchar("record_id").notNull(),
+  capturedAt: timestamp("captured_at"), // when the lead/conversation was created
+  purgedAt: timestamp("purged_at").notNull().defaultNow(),
+  reason: text("reason").notNull(), // 'synced_retention' | 'unsynced_retention' | 'idle_chat' | 'with_lead'
+  synced: boolean("synced").notNull().default(false),
+  syncedAt: timestamp("synced_at"),
+  crmLeadId: text("crm_lead_id"), // LeadSquared / Salesforce ID, to trace the record in the client's CRM
+  source: text("source"), // leads: 'form' | 'journey' | 'chat'; conversations: 'journey' | 'form' | 'chat'
+  isDiscount: boolean("is_discount").notNull().default(false),
+  isPaid: boolean("is_paid").notNull().default(false), // lead came from a URL with utm_ params
+  countInAnalytics: boolean("count_in_analytics").notNull().default(true),
+}, (table) => [
+  index("data_purge_log_account_captured_idx").on(table.businessAccountId, table.recordType, table.capturedAt),
+  index("data_purge_log_account_purged_idx").on(table.businessAccountId, table.purgedAt),
+]);
+
+// Latest purge-worker result per account (also holds dry-run counts).
+export const dataRetentionAccountStatus = pgTable("data_retention_account_status", {
+  businessAccountId: varchar("business_account_id").primaryKey(),
+  mode: text("mode").notNull(),
+  lastRunAt: timestamp("last_run_at").notNull(),
+  dueLeads: integer("due_leads").notNull().default(0),
+  dueConversations: integer("due_conversations").notNull().default(0),
+  lastPurgedLeads: integer("last_purged_leads").notNull().default(0),
+  lastPurgedConversations: integer("last_purged_conversations").notNull().default(0),
+  lastError: text("last_error"),
+});
+
+export type DataRetentionPolicy = typeof dataRetentionPolicies.$inferSelect;
+export type DataPurgeLogEntry = typeof dataPurgeLog.$inferSelect;
+
 export const auditEvents = pgTable("audit_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   occurredAt: timestamp("occurred_at").notNull().defaultNow(),

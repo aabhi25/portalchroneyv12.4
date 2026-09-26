@@ -40,7 +40,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Plus, Building2, Pencil, Copy, Check, ShieldCheck, ShoppingBag, Calendar, Sparkles, MoreVertical, Eye, Mic, Camera, Search, Trash2, Gem, Power, LogIn, Headphones, Play, MessageCircle, MessageSquare, GraduationCap, Briefcase, PackageOpen, Megaphone } from "lucide-react";
+import { DataRetentionDialog } from "@/components/DataRetentionDialog";
+import { Plus, Timer, Building2, Pencil, Copy, Check, ShieldCheck, ShoppingBag, Calendar, Sparkles, MoreVertical, Eye, Mic, Camera, Search, Trash2, Gem, Power, LogIn, Headphones, Play, MessageCircle, MessageSquare, GraduationCap, Briefcase, PackageOpen, Megaphone } from "lucide-react";
 import type { BusinessAccountDto, ProductTier, SystemMode } from "@shared/dto/businessAccount";
 import {
   Select,
@@ -52,6 +53,7 @@ import {
 import { SidebarTrigger } from "@/components/ui/sidebar";
 
 export default function SuperAdmin() {
+  const [retentionAccount, setRetentionAccount] = useState<{ id: string; name: string } | null>(null);
   const [newBusinessName, setNewBusinessName] = useState("");
   const [newBusinessWebsite, setNewBusinessWebsite] = useState("");
   const [newUsername, setNewUsername] = useState("");
@@ -2162,6 +2164,10 @@ export default function SuperAdmin() {
                                   <Power className="h-4 w-4 mr-2" />
                                   {business.status === "active" ? "Disable Account" : "Enable Account"}
                                 </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setRetentionAccount({ id: business.id, name: business.name })}>
+                                  <Timer className="h-4 w-4 mr-2" />
+                                  Auto-delete (data retention)
+                                </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => handleDuplicateBusiness(business)}>
                                   <Copy className="h-4 w-4 mr-2" />
                                   Duplicate Account
@@ -2204,6 +2210,15 @@ export default function SuperAdmin() {
           )}
         </div>
       </div>
+      {retentionAccount && (
+        <DataRetentionDialog
+          open={!!retentionAccount}
+          onOpenChange={(o) => { if (!o) setRetentionAccount(null); }}
+          scopeType="account"
+          scopeId={retentionAccount.id}
+          scopeName={retentionAccount.name}
+        />
+      )}
     </div>
   );
 }
