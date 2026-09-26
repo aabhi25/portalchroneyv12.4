@@ -14485,6 +14485,126 @@ Return ONLY the refined instruction, nothing else.`
   });
 
   // ---------------------------------------------------------------------------
+  // Group Admin: delete ALL leads / conversations matching the current filters.
+  // Two steps: preview returns the count plus a snapshot time; delete-all removes
+  // only rows created up to that snapshot, so leads arriving while the admin
+  // confirms are never deleted. Same permissions as bulk delete; always audited.
+  // ---------------------------------------------------------------------------
+  function parseGroupListFilters(source: Record<string, unknown>) {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+    const date = (v: unknown) => {
+      const d = str(v) ? new Date(str(v)!) : undefined;
+      return d && !isNaN(d.getTime()) ? d : undefined;
+    };
+    return {
+      search: str(source.search),
+      fromDate: date(source.fromDate),
+      toDate: date(source.toDate),
+      accountId: str(source.accountId),
+    };
+  }
+
+  function describeGroupListFilters(filters: ReturnType<typeof parseGroupListFilters>) {
+    return {
+      filterSearch: filters.search ? 'yes' : 'no',
+      filterFrom: filters.fromDate?.toISOString() ?? null,
+      filterTo: filters.toDate?.toISOString() ?? null,
+      filterAccountId: filters.accountId ?? 'all',
+    };
+  }
+
+  async function authorizeGroupDelete(req: Request, res: ExpressResponse, groupId: string, kind: 'leads' | 'conversations'): Promise<string[] | null> {
+    const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
+    if (!permissions) {
+      res.status(403).json({ error: "Access denied to this group" });
+      return null;
+    }
+    const canView = kind === 'leads' ? permissions.canViewLeads : permissions.canViewConversations;
+    if (!canView || !permissions.canDeleteData) {
+      res.status(403).json({ error: `No permission to delete ${kind}` });
+      return null;
+    }
+    return await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
+  }
+
+  // Snapshot must be a real past time within the last hour, so a stale or forged value can't widen the delete.
+  function parseDeleteSnapshot(value: unknown): Date | null {
+    const at = typeof value === 'string' ? new Date(value) : null;
+    if (!at || isNaN(at.getTime())) return null;
+    const now = Date.now();
+    if (at.getTime() > now + 5_000 || at.getTime() < now - 60 * 60 * 1000) return null;
+    return at;
+  }
+
+  for (const kind of ['leads', 'conversations'] as const) {
+    // Own path prefix: GET /conversations/:conversationId would otherwise swallow "delete-all".
+    app.get(`/api/group-admin/groups/:groupId/delete-all/${kind}/preview`, requireAuth, requireGroupAdmin, async (req, res) => {
+      try {
+        const accountIds = await authorizeGroupDelete(req, res, req.params.groupId, kind);
+        if (!accountIds) return;
+        const filters = parseGroupListFilters(req.query as Record<string, unknown>);
+        if (kind === 'conversations' && filters.search) {
+          return res.status(400).json({ error: "Clear the search box to delete all conversations" });
+        }
+        const snapshotAt = new Date();
+        const total = kind === 'leads'
+          ? await storage.countLeadsForGroupFilter(accountIds, filters, snapshotAt)
+          : await storage.countConversationsForGroupFilter(accountIds, filters, snapshotAt);
+        res.json({ total, snapshotAt: snapshotAt.toISOString() });
+      } catch (error: any) {
+        console.error(`[Group Admin] Error previewing delete-all ${kind}:`, error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.post(`/api/group-admin/groups/:groupId/delete-all/${kind}`, requireAuth, requireGroupAdmin, async (req, res) => {
+      const { groupId } = req.params;
+      try {
+        const accountIds = await authorizeGroupDelete(req, res, groupId, kind);
+        if (!accountIds) return;
+
+        const body = (req.body || {}) as Record<string, unknown>;
+        if (body.confirmation !== 'DELETE ALL') {
+          return res.status(400).json({ error: "Explicit DELETE ALL confirmation is required" });
+        }
+        const snapshotAt = parseDeleteSnapshot(body.snapshotAt);
+        if (!snapshotAt) {
+          return res.status(400).json({ error: "This confirmation has expired — close the dialog and try again" });
+        }
+        const filters = parseGroupListFilters(body);
+        if (kind === 'conversations' && filters.search) {
+          return res.status(400).json({ error: "Clear the search box to delete all conversations" });
+        }
+
+        const { deletedCount, byAccount } = kind === 'leads'
+          ? await storage.deleteLeadsForGroupFilter(accountIds, filters, snapshotAt)
+          : await storage.deleteConversationsForGroupFilter(accountIds, filters, snapshotAt);
+
+        await recordAuditEventSafely(req, {
+          action: `${kind}.delete_all`,
+          outcome: "success",
+          actorUserId: req.user!.id,
+          actorUsername: req.user!.username,
+          actorRole: req.user!.role,
+          resourceType: "account_group",
+          resourceId: groupId,
+          metadata: {
+            deletedCount,
+            accounts: Object.entries(byAccount).map(([accountId, n]) => `${accountId}:${n}`),
+            snapshotAt: snapshotAt.toISOString(),
+            ...describeGroupListFilters(filters),
+          },
+        });
+
+        res.json({ deletedCount });
+      } catch (error: any) {
+        console.error(`[Group Admin] Error in delete-all ${kind}:`, error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Group Admin: CRM sync (LeadSquared / Salesforce)
   // Requires the canSyncLeads permission (set per admin by the super admin).
   // Leads are always pushed to the CRM configured on the lead's own business

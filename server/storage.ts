@@ -194,6 +194,14 @@ import { eq, desc, asc, count, inArray, sql, and, or, gte, lte, ilike, isNull } 
 import { isTopscholarAccount } from "./services/topscholar/config";
 import { closeDoubt } from "./services/topscholar/doubtSyncService";
 
+/** Filters shared by the group-admin Leads / Conversations lists. */
+export interface GroupListFilters {
+  search?: string;
+  fromDate?: Date;
+  toDate?: Date;
+  accountId?: string;
+}
+
 export interface IStorage {
   // User methods
   getUser(id: string): Promise<User | undefined>;
@@ -311,6 +319,10 @@ export interface IStorage {
   deleteAllLeadsForAccount(businessAccountId: string): Promise<number>;
   deleteLeadsInAccounts(ids: string[], businessAccountIds: string[]): Promise<{ deletedCount: number; byAccount: Record<string, number> }>;
   deleteConversationsInAccounts(ids: string[], businessAccountIds: string[]): Promise<{ deletedCount: number; byAccount: Record<string, number> }>;
+  countLeadsForGroupFilter(accountIds: string[], filters: GroupListFilters, createdBefore: Date): Promise<number>;
+  deleteLeadsForGroupFilter(accountIds: string[], filters: GroupListFilters, createdBefore: Date): Promise<{ deletedCount: number; byAccount: Record<string, number> }>;
+  countConversationsForGroupFilter(accountIds: string[], filters: GroupListFilters, createdBefore: Date): Promise<number>;
+  deleteConversationsForGroupFilter(accountIds: string[], filters: GroupListFilters, createdBefore: Date): Promise<{ deletedCount: number; byAccount: Record<string, number> }>;
 
   // Question Bank methods
   createQuestionBankEntry(entry: InsertQuestionBankEntry): Promise<QuestionBankEntry>;
@@ -5352,6 +5364,62 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  // Account + date conditions shared by the group Conversations list and group
+  // "delete all" (which does not support search).
+  private groupConversationsWhere(accountIds: string[], filters?: GroupListFilters, createdBefore?: Date) {
+    const conditions: any[] = [];
+
+    // Filter by specific account if provided, otherwise use all account IDs
+    if (filters?.accountId && accountIds.includes(filters.accountId)) {
+      conditions.push(eq(conversations.businessAccountId, filters.accountId));
+    } else {
+      conditions.push(inArray(conversations.businessAccountId, accountIds));
+    }
+
+    // Date filters
+    if (filters?.fromDate) {
+      conditions.push(gte(conversations.createdAt, filters.fromDate));
+    }
+    if (filters?.toDate) {
+      const toDate = new Date(filters.toDate);
+      toDate.setHours(23, 59, 59, 999);
+      conditions.push(lte(conversations.createdAt, toDate));
+    }
+    if (createdBefore) {
+      conditions.push(lte(conversations.createdAt, createdBefore));
+    }
+
+    return and(...conditions);
+  }
+
+  async countConversationsForGroupFilter(accountIds: string[], filters: GroupListFilters, createdBefore: Date): Promise<number> {
+    if (accountIds.length === 0) return 0;
+    const [row] = await db.select({ count: count() }).from(conversations).where(this.groupConversationsWhere(accountIds, filters, createdBefore));
+    return row?.count ?? 0;
+  }
+
+  // Batched like leads; messages, journey data and OTP challenges cascade per conversation.
+  async deleteConversationsForGroupFilter(accountIds: string[], filters: GroupListFilters, createdBefore: Date): Promise<{ deletedCount: number; byAccount: Record<string, number> }> {
+    const byAccount: Record<string, number> = {};
+    let deletedCount = 0;
+    if (accountIds.length === 0) return { deletedCount, byAccount };
+    const where = this.groupConversationsWhere(accountIds, filters, createdBefore);
+    for (;;) {
+      const batch = await db.select({ id: conversations.id }).from(conversations).where(where).limit(500);
+      if (batch.length === 0) break;
+      const deleted = await db.delete(conversations)
+        .where(and(inArray(conversations.id, batch.map(r => r.id)), where))
+        .returning({ businessAccountId: conversations.businessAccountId });
+      for (const row of deleted) {
+        const key = row.businessAccountId || 'unknown';
+        byAccount[key] = (byAccount[key] || 0) + 1;
+      }
+      deletedCount += deleted.length;
+      if (deleted.length === 0) break;
+    }
+    return { deletedCount, byAccount };
+  }
+
   async getConversationsForAccounts(accountIds: string[], limit: number, offset: number, filters?: {
     search?: string;
     fromDate?: Date;
@@ -5365,32 +5433,14 @@ export class DatabaseStorage implements IStorage {
       return { conversations: [], total: 0 };
     }
     
-    // Build filter conditions
-    const conditions: any[] = [];
-    
-    // Filter by specific account if provided, otherwise use all account IDs
-    if (filters?.accountId && accountIds.includes(filters.accountId)) {
-      conditions.push(eq(conversations.businessAccountId, filters.accountId));
-    } else {
-      conditions.push(inArray(conversations.businessAccountId, accountIds));
-    }
-    
-    // Date filters
-    if (filters?.fromDate) {
-      conditions.push(gte(conversations.createdAt, filters.fromDate));
-    }
-    if (filters?.toDate) {
-      const toDate = new Date(filters.toDate);
-      toDate.setHours(23, 59, 59, 999);
-      conditions.push(lte(conversations.createdAt, toDate));
-    }
+    const conditions: any[] = [this.groupConversationsWhere(accountIds, filters)];
     
     // Search filter - search by userId
     if (filters?.search) {
       conditions.push(ilike(conversations.userId, `%${filters.search}%`));
     }
     
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = and(...conditions);
     
     // Get total count
     const [countResult] = await db
@@ -5427,6 +5477,70 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  // Shared by the group Leads list and group "delete all", so both always match
+  // the same rows. createdBefore pins a delete to leads that existed at preview time.
+  private groupLeadsWhere(accountIds: string[], filters?: GroupListFilters, createdBefore?: Date) {
+    const conditions: any[] = [];
+
+    // Filter by specific account if provided, otherwise use all account IDs
+    if (filters?.accountId && accountIds.includes(filters.accountId)) {
+      conditions.push(eq(leads.businessAccountId, filters.accountId));
+    } else {
+      conditions.push(inArray(leads.businessAccountId, accountIds));
+    }
+
+    // Date filters
+    if (filters?.fromDate) {
+      conditions.push(gte(leads.createdAt, filters.fromDate));
+    }
+    if (filters?.toDate) {
+      const toDate = new Date(filters.toDate);
+      toDate.setHours(23, 59, 59, 999);
+      conditions.push(lte(leads.createdAt, toDate));
+    }
+    if (createdBefore) {
+      conditions.push(lte(leads.createdAt, createdBefore));
+    }
+
+    // Search filter - search by name, email, or phone
+    if (filters?.search) {
+      conditions.push(
+        or(
+          ilike(leads.name, `%${filters.search}%`),
+          ilike(leads.email, `%${filters.search}%`),
+          ilike(leads.phone, `%${filters.search}%`)
+        )
+      );
+    }
+
+    return and(...conditions);
+  }
+
+  async countLeadsForGroupFilter(accountIds: string[], filters: GroupListFilters, createdBefore: Date): Promise<number> {
+    if (accountIds.length === 0) return 0;
+    const [row] = await db.select({ count: count() }).from(leads).where(this.groupLeadsWhere(accountIds, filters, createdBefore));
+    return row?.count ?? 0;
+  }
+
+  // Deletes in batches so one request never holds a lock on tens of thousands of rows at once.
+  async deleteLeadsForGroupFilter(accountIds: string[], filters: GroupListFilters, createdBefore: Date): Promise<{ deletedCount: number; byAccount: Record<string, number> }> {
+    const byAccount: Record<string, number> = {};
+    let deletedCount = 0;
+    if (accountIds.length === 0) return { deletedCount, byAccount };
+    const where = this.groupLeadsWhere(accountIds, filters, createdBefore);
+    for (;;) {
+      const batch = await db.select({ id: leads.id }).from(leads).where(where).limit(1000);
+      if (batch.length === 0) break;
+      const deleted = await db.delete(leads)
+        .where(and(inArray(leads.id, batch.map(r => r.id)), where))
+        .returning({ businessAccountId: leads.businessAccountId });
+      for (const row of deleted) byAccount[row.businessAccountId] = (byAccount[row.businessAccountId] || 0) + 1;
+      deletedCount += deleted.length;
+      if (deleted.length === 0) break;
+    }
+    return { deletedCount, byAccount };
+  }
+
   async getLeadsForAccounts(accountIds: string[], limit: number, offset: number, filters?: {
     search?: string;
     fromDate?: Date;
@@ -5442,38 +5556,7 @@ export class DatabaseStorage implements IStorage {
       return { leads: [], total: 0, uniqueLeads: filters?.includeUniqueLeads ? 0 : undefined };
     }
     
-    // Build filter conditions
-    const conditions: any[] = [];
-    
-    // Filter by specific account if provided, otherwise use all account IDs
-    if (filters?.accountId && accountIds.includes(filters.accountId)) {
-      conditions.push(eq(leads.businessAccountId, filters.accountId));
-    } else {
-      conditions.push(inArray(leads.businessAccountId, accountIds));
-    }
-    
-    // Date filters
-    if (filters?.fromDate) {
-      conditions.push(gte(leads.createdAt, filters.fromDate));
-    }
-    if (filters?.toDate) {
-      const toDate = new Date(filters.toDate);
-      toDate.setHours(23, 59, 59, 999);
-      conditions.push(lte(leads.createdAt, toDate));
-    }
-    
-    // Search filter - search by name, email, or phone
-    if (filters?.search) {
-      conditions.push(
-        or(
-          ilike(leads.name, `%${filters.search}%`),
-          ilike(leads.email, `%${filters.search}%`),
-          ilike(leads.phone, `%${filters.search}%`)
-        )
-      );
-    }
-    
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = this.groupLeadsWhere(accountIds, filters);
     
     // Get total count; optionally also get unique-leads count using the same method as Group Analytics:
     // deduplicate per-account by email → phone → id, then sum across accounts.

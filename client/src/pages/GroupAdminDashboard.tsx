@@ -802,6 +802,71 @@ export default function GroupAdminDashboard() {
 
   const deleteIds = deleteTarget === 'leads' ? Array.from(selectedLeadIds) : Array.from(selectedConvoIds);
 
+  // ---- Delete ALL matching the current filters (two-step: preview count, then delete) ----
+  const [deleteAllTarget, setDeleteAllTarget] = useState<'leads' | 'conversations' | null>(null);
+  const [deleteAllPreview, setDeleteAllPreview] = useState<{ total: number; snapshotAt: string } | null>(null);
+  const [deleteAllPreviewError, setDeleteAllPreviewError] = useState<string | null>(null);
+  const [deleteAllConfirmText, setDeleteAllConfirmText] = useState("");
+
+  // The filters the list is showing (drop paging params).
+  const filtersFromParams = (params: string) => {
+    const parsed = new URLSearchParams(params);
+    parsed.delete('page');
+    parsed.delete('limit');
+    return parsed;
+  };
+
+  const openDeleteAll = async (target: 'leads' | 'conversations') => {
+    setDeleteAllTarget(target);
+    setDeleteAllPreview(null);
+    setDeleteAllPreviewError(null);
+    setDeleteAllConfirmText("");
+    try {
+      const params = filtersFromParams(target === 'leads' ? leadsQueryParams : convoQueryParams);
+      const data = await apiRequest<{ total: number; snapshotAt: string }>(
+        "GET",
+        `/api/group-admin/groups/${selectedGroupId}/delete-all/${target}/preview?${params.toString()}`,
+      );
+      setDeleteAllPreview(data);
+    } catch (error: any) {
+      setDeleteAllPreviewError(error.message || "Could not count matching items");
+    }
+  };
+
+  const closeDeleteAll = () => {
+    setDeleteAllTarget(null);
+    setDeleteAllPreview(null);
+    setDeleteAllPreviewError(null);
+    setDeleteAllConfirmText("");
+  };
+
+  const deleteAllMutation = useMutation({
+    mutationFn: async () => {
+      const target = deleteAllTarget!;
+      const params = filtersFromParams(target === 'leads' ? leadsQueryParams : convoQueryParams);
+      return await apiRequest<{ deletedCount: number }>("POST", `/api/group-admin/groups/${selectedGroupId}/delete-all/${target}`, {
+        confirmation: "DELETE ALL",
+        snapshotAt: deleteAllPreview?.snapshotAt,
+        ...Object.fromEntries(params.entries()),
+      });
+    },
+    onSuccess: (data) => {
+      const target = deleteAllTarget;
+      toast({
+        title: target === 'leads' ? "All matching leads deleted" : "All matching conversations deleted",
+        description: `${data.deletedCount.toLocaleString()} permanently deleted.`,
+      });
+      if (target === 'leads') setSelectedLeadIds(new Set());
+      else { setSelectedConvoIds(new Set()); setSelectedConversationId(null); }
+      closeDeleteAll();
+      queryClient.invalidateQueries({ queryKey: ["/api/group-admin/groups", selectedGroupId] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Delete failed", description: error.message, variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: ["/api/group-admin/groups", selectedGroupId] });
+    },
+  });
+
   if (loadingGroups) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -1040,6 +1105,15 @@ export default function GroupAdminDashboard() {
                   )}
                   {canDeleteLeads && allLeads.length > 0 && (
                     <div className="ml-auto flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                        onClick={() => openDeleteAll('leads')}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                        Delete all{leadsSearch || leadsDatePreset !== 'all' || leadsAccountFilter !== 'all' ? ' matching' : ''}
+                      </Button>
                       <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
                         <Checkbox
                           aria-label="Select loaded leads"
@@ -1676,6 +1750,19 @@ export default function GroupAdminDashboard() {
                       />
                       {selectedConvoIds.size > 0 ? `${selectedConvoIds.size} selected` : 'Select all on this page'}
                     </label>
+                    {selectedConvoIds.size === 0 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="ml-auto h-7 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                        disabled={convoTypeFilter !== 'all' || !!convoSearch.trim()}
+                        title={convoTypeFilter !== 'all' || convoSearch.trim() ? "Delete all works with the date and account filters only — set the type to All and clear the search" : undefined}
+                        onClick={() => openDeleteAll('conversations')}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                        Delete all{convoDatePreset !== 'all' || convoAccountFilter !== 'all' ? ' matching' : ''}
+                      </Button>
+                    )}
                     {selectedConvoIds.size > 0 && (
                       <div className="ml-auto flex items-center gap-1">
                         <Button size="sm" variant="ghost" className="h-7 text-gray-500" onClick={() => setSelectedConvoIds(new Set())}>
@@ -2247,6 +2334,77 @@ export default function GroupAdminDashboard() {
             >
               {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
               {bulkDeleteMutation.isPending ? 'Deleting…' : `Delete ${deleteIds.length}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteAllTarget !== null} onOpenChange={(open) => { if (!open && !deleteAllMutation.isPending) closeDeleteAll(); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <Trash2 className="w-5 h-5" />
+              Delete all {deleteAllTarget === 'leads' ? 'leads' : 'conversations'}?
+            </DialogTitle>
+            <DialogDescription>
+              {deleteAllTarget === 'leads'
+                ? "Permanently deletes every lead matching the filters below — including leads on pages you haven't scrolled to. Their conversations are kept, and copies already in LeadSquared or Salesforce stay in the CRM."
+                : "Permanently deletes every conversation matching the filters below, with all their messages, journey answers and form data. Leads captured in them are kept but lose their chat link."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {(() => {
+            const isLeads = deleteAllTarget === 'leads';
+            const preset = isLeads ? leadsDatePreset : convoDatePreset;
+            const accountFilter = isLeads ? leadsAccountFilter : convoAccountFilter;
+            const presetLabels: Record<string, string> = { all: 'All time', today: 'Today', yesterday: 'Yesterday', last7: 'Last 7 days', currentMonth: 'This month', lastMonth: 'Last month', custom: 'Custom range' };
+            return (
+              <div className="rounded-md border bg-gray-50 px-3 py-2 text-sm space-y-1">
+                <div><span className="text-gray-500">Accounts:</span> {accountFilter === 'all' ? `All accounts in ${selectedGroup?.groupName || 'this group'}` : (accountsForFilter.find(a => a.businessAccountId === accountFilter)?.businessName || 'Selected account')}</div>
+                <div><span className="text-gray-500">Dates:</span> {presetLabels[preset] || preset}</div>
+                {isLeads && leadsSearch.trim() && <div><span className="text-gray-500">Search:</span> "{leadsSearch.trim()}"</div>}
+              </div>
+            );
+          })()}
+
+          {deleteAllPreviewError ? (
+            <p className="text-sm text-red-600">{deleteAllPreviewError}</p>
+          ) : !deleteAllPreview ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Loader2 className="w-4 h-4 animate-spin" /> Counting…
+            </div>
+          ) : deleteAllPreview.total === 0 ? (
+            <p className="text-sm text-gray-600">Nothing matches these filters.</p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-red-700">
+                {deleteAllPreview.total.toLocaleString()} {deleteAllTarget === 'leads' ? 'lead' : 'conversation'}{deleteAllPreview.total === 1 ? '' : 's'} will be deleted. This cannot be undone.
+              </p>
+              <label htmlFor="confirm-delete-all" className="text-sm text-gray-700 block">
+                Type <span className="font-mono font-semibold">DELETE ALL</span> to confirm
+              </label>
+              <Input
+                id="confirm-delete-all"
+                value={deleteAllConfirmText}
+                onChange={(e) => setDeleteAllConfirmText(e.target.value)}
+                autoComplete="off"
+                disabled={deleteAllMutation.isPending}
+              />
+              {deleteAllMutation.isPending && (
+                <p className="text-xs text-gray-500">Deleting in batches — this can take a minute for large numbers. Keep this window open.</p>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" disabled={deleteAllMutation.isPending} onClick={closeDeleteAll}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={deleteAllMutation.isPending || !deleteAllPreview || deleteAllPreview.total === 0 || deleteAllConfirmText !== "DELETE ALL"}
+              onClick={() => deleteAllMutation.mutate()}
+            >
+              {deleteAllMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+              {deleteAllMutation.isPending ? 'Deleting…' : `Delete ${deleteAllPreview?.total?.toLocaleString() ?? ''}`}
             </Button>
           </DialogFooter>
         </DialogContent>
