@@ -676,6 +676,11 @@ export const widgetSettings = pgTable("widget_settings", {
   leadsquaredRegion: text("leadsquared_region"), // 'india' | 'us' | 'other'
   leadsquaredCustomHost: text("leadsquared_custom_host"), // Custom API host for 'other' region
   leadsquaredEnabled: text("leadsquared_enabled").notNull().default("false"), // 'true' | 'false' - Auto-sync leads to LeadSquared
+  // How leads reach LeadSquared: 'api' = Lead.Capture API with the access/secret keys above;
+  // 'uds' = POST the same mapped fields as flat JSON to the client's Universal Data Sync webhook.
+  leadsquaredConnectionType: text("leadsquared_connection_type").notNull().default("api"), // 'api' | 'uds'
+  leadsquaredUdsWebhookUrl: text("leadsquared_uds_webhook_url"), // UDS Custom/HTTPS trigger URL
+  leadsquaredUdsKey: text("leadsquared_uds_key"), // UDS ickey (encrypted)
 
   // Salesforce CRM Integration
   salesforceEnabled: text("salesforce_enabled").notNull().default("false"), // 'true' | 'false'
@@ -1343,6 +1348,9 @@ export const accountGroupTraining = pgTable("account_group_training", {
   leadsquaredAccessKey: text("leadsquared_access_key"),
   leadsquaredSecretKey: text("leadsquared_secret_key"),
   leadsquaredEnabled: text("leadsquared_enabled").default("false"), // 'true' | 'false'
+  leadsquaredConnectionType: text("leadsquared_connection_type").notNull().default("api"), // 'api' | 'uds'
+  leadsquaredUdsWebhookUrl: text("leadsquared_uds_webhook_url"),
+  leadsquaredUdsKey: text("leadsquared_uds_key"), // encrypted
   leadsquaredLastAppliedAt: timestamp("leadsquared_last_applied_at"), // When LSQ settings were last pushed to member accounts
   // Menu Builder settings for group-level configuration
   menuConfig: jsonb("menu_config"), // Menu config: {enabled, welcomeMessage, avatarUrl, persistentCtaEnabled, persistentCtaLabel, persistentCtaAction, persistentCtaValue}

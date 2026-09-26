@@ -6,6 +6,16 @@ export interface LeadSquaredConfig {
   secretKey: string;
   region: 'india' | 'us' | 'other';
   customHost?: string;
+  /**
+   * When set, leads go to the client's Universal Data Sync (UDS) webhook instead of
+   * the Lead.Capture API. The payload is the same mapped fields, as flat JSON
+   * ({ "FirstName": "...", "mx_Utm_Source": "..." }); the client's UDS flow maps
+   * them onto LeadSquared fields. The API keys are not used in this mode.
+   */
+  uds?: {
+    webhookUrl: string;
+    key?: string; // ickey; optional when already present in the webhook URL
+  };
 }
 
 export interface LeadSquaredLeadData {
@@ -150,6 +160,84 @@ export class LeadSquaredService {
       return this.config.customHost;
     }
     return 'https://api.leadsquared.com';
+  }
+
+  isUds(): boolean {
+    return !!this.config.uds;
+  }
+
+  /**
+   * POST mapped fields to the UDS webhook as flat JSON. UDS accepts the ickey in
+   * the URL or as an "ickey" / "x-access-token" header; we send the header so the
+   * key never appears in URLs or access logs. Any 2xx counts as delivered: UDS may
+   * not return a LeadSquared lead ID, and failures inside the client's flow show
+   * up in their UDS logs rather than here.
+   */
+  async sendToUds(
+    attributeArray: LeadSquaredAttribute[],
+    event: 'create' | 'update' | 'test',
+  ): Promise<{ success: boolean; leadId?: string; message: string; syncPayload?: Record<string, string> }> {
+    const uds = this.config.uds!;
+    if (attributeArray.length === 0) {
+      return { success: false, message: 'No field mappings configured or no data available for sync' };
+    }
+
+    const syncPayload: Record<string, string> = {};
+    for (const attr of attributeArray) {
+      syncPayload[attr.Attribute] = attr.Value;
+    }
+
+    try {
+      console.log(`[LeadSquared UDS] Sending lead (${event}) - Fields:`, Object.keys(syncPayload).join(', '));
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache',
+      };
+      if (uds.key) headers['x-access-token'] = uds.key;
+
+      const response = await fetch(uds.webhookUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(syncPayload),
+        signal: AbortSignal.timeout(30_000),
+      });
+      const text = await response.text();
+      console.log('[LeadSquared UDS] Response status:', response.status);
+
+      if (!response.ok) {
+        let detail = `UDS webhook returned ${response.status} ${response.statusText}`;
+        try {
+          const json = JSON.parse(text);
+          const msg = json.ExceptionMessage || json.Message || json.message || json.error;
+          if (typeof msg === 'string' && msg) detail = `${detail}: ${msg}`;
+        } catch {
+          if (text && text.length < 300) detail = `${detail} — ${text}`;
+        }
+        if (response.status === 401 || response.status === 403) {
+          detail += ' (check the UDS webhook key / ickey)';
+        }
+        return { success: false, message: detail };
+      }
+
+      // Pick up a LeadSquared lead ID if the flow happens to return one.
+      let leadId: string | undefined;
+      try {
+        const json = JSON.parse(text);
+        const candidate = json?.Message?.Id ?? json?.LeadId ?? json?.leadId ?? json?.ProspectId;
+        if (typeof candidate === 'string' && candidate) leadId = candidate;
+      } catch { /* non-JSON acknowledgement is fine */ }
+
+      return {
+        success: true,
+        leadId,
+        message: event === 'test' ? 'Test lead delivered to UDS webhook' : 'Lead delivered to LeadSquared UDS',
+        syncPayload,
+      };
+    } catch (error: any) {
+      const message = error?.name === 'TimeoutError' ? 'UDS webhook timed out after 30s' : (error.message || 'Failed to reach UDS webhook');
+      console.error('[LeadSquared UDS] Send failed:', message);
+      return { success: false, message };
+    }
   }
 
   async testConnection(): Promise<{ success: boolean; message: string; userDetails?: any }> {
@@ -347,6 +435,9 @@ export class LeadSquaredService {
     mappings: LeadsquaredFieldMapping[],
     context: LeadDataContext
   ): Promise<{ success: boolean; leadId?: string; message: string; syncPayload?: Record<string, string>; alreadyExists?: boolean }> {
+    if (this.config.uds) {
+      return this.sendToUds(this.buildAttributesFromMappings(mappings, context), 'create');
+    }
     try {
       const url = `${this.baseUrl}/v2/LeadManagement.svc/Lead.Capture?accessKey=${this.config.accessKey}&secretKey=${this.config.secretKey}`;
       
@@ -453,6 +544,12 @@ export class LeadSquaredService {
     context: LeadDataContext,
     changedFields?: string[]
   ): Promise<{ success: boolean; message: string; syncPayload?: Record<string, string> }> {
+    if (this.config.uds) {
+      // UDS has no update-by-ID call: resend the full mapped lead and let the
+      // flow's lead capture (search by phone/email) update the existing record.
+      // Sending every field (not just changedFields) keeps the search key present.
+      return this.sendToUds(this.buildAttributesFromMappings(mappings, context), 'update');
+    }
     try {
       const url = `${this.baseUrl}/v2/LeadManagement.svc/Lead.Update?accessKey=${this.config.accessKey}&secretKey=${this.config.secretKey}&leadId=${leadId}`;
       
@@ -822,4 +919,112 @@ export async function buildConversationCrmContext(
 
 export async function createLeadSquaredService(config: LeadSquaredConfig): Promise<LeadSquaredService> {
   return new LeadSquaredService(config);
+}
+
+/** The LeadSquared columns shared by widget_settings and account_group_training. */
+export interface LeadSquaredSettingsLike {
+  leadsquaredConnectionType?: string | null;
+  leadsquaredUdsWebhookUrl?: string | null;
+  leadsquaredUdsKey?: string | null;
+  leadsquaredAccessKey?: string | null;
+  leadsquaredSecretKey?: string | null;
+  leadsquaredRegion?: string | null;
+  leadsquaredCustomHost?: string | null;
+}
+
+export function isLeadSquaredUds(settings: LeadSquaredSettingsLike | null | undefined): boolean {
+  return settings?.leadsquaredConnectionType === 'uds';
+}
+
+/**
+ * Whether the settings hold what the chosen connection type needs: a UDS webhook
+ * URL, or API access + secret keys (plus a region when requireRegion is set, to
+ * keep the stricter call sites' existing behaviour).
+ */
+export function hasLeadSquaredCredentials(
+  settings: LeadSquaredSettingsLike | null | undefined,
+  options: { requireRegion?: boolean } = {},
+): boolean {
+  if (!settings) return false;
+  if (isLeadSquaredUds(settings)) return !!settings.leadsquaredUdsWebhookUrl;
+  return !!settings.leadsquaredAccessKey
+    && !!settings.leadsquaredSecretKey
+    && (!options.requireRegion || !!settings.leadsquaredRegion);
+}
+
+/** Builds a LeadSquared client for either connection type, or null if credentials are missing. */
+export async function createLeadSquaredServiceFromSettings(
+  settings: LeadSquaredSettingsLike | null | undefined,
+): Promise<LeadSquaredService | null> {
+  if (!settings || !hasLeadSquaredCredentials(settings)) return null;
+  const { decrypt } = await import('./encryptionService');
+
+  if (isLeadSquaredUds(settings)) {
+    return new LeadSquaredService({
+      accessKey: '',
+      secretKey: '',
+      region: 'other',
+      uds: {
+        webhookUrl: settings.leadsquaredUdsWebhookUrl!,
+        key: settings.leadsquaredUdsKey ? decrypt(settings.leadsquaredUdsKey) : undefined,
+      },
+    });
+  }
+
+  return new LeadSquaredService({
+    accessKey: settings.leadsquaredAccessKey!,
+    secretKey: decrypt(settings.leadsquaredSecretKey!),
+    region: (settings.leadsquaredRegion as 'india' | 'us' | 'other') || 'other',
+    customHost: settings.leadsquaredCustomHost || undefined,
+  });
+}
+
+/**
+ * Obviously-fake lead data for previewing / testing a UDS payload. Every enabled
+ * mapping source gets a value so the preview shows the full field list.
+ */
+export function buildSampleLeadContext(
+  mappings: LeadsquaredFieldMapping[],
+  business: { name?: string | null; website?: string | null },
+): LeadDataContext {
+  const journey: Record<string, string> = {};
+  for (const m of mappings) {
+    if (m.isEnabled === 'true' && m.sourceType === 'dynamic' && m.sourceField?.startsWith('journey.')) {
+      journey[m.sourceField.slice('journey.'.length)] = 'Sample answer';
+    }
+  }
+  const pageUrl = `${business.website || 'https://example.com'}/?utm_source=sample_source&utm_medium=sample_medium&utm_campaign=sample_campaign`;
+  return {
+    lead: {
+      name: 'AI Chroney Test Lead',
+      email: 'test.lead@example.com',
+      phone: '9000000000',
+      whatsapp: '9000000000',
+      createdAt: new Date(),
+      sourceUrl: pageUrl,
+      captchaStatus: 'verified',
+    },
+    session: {
+      city: 'Mumbai',
+      utmSource: 'sample_source',
+      utmMedium: 'sample_medium',
+      utmCampaign: 'sample_campaign',
+      pageUrl,
+    },
+    business: { name: business.name || null, website: business.website || null },
+    urlExtraction: { university: 'Sample University', product: 'Sample Product' },
+    journey,
+    conversation: { summary: 'Sample conversation summary', topics: 'sample, topics' },
+  };
+}
+
+/** UDS webhooks must be HTTPS; returns an error message or null. */
+export function validateUdsWebhookUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return 'UDS webhook URL must start with https://';
+    return null;
+  } catch {
+    return 'UDS webhook URL is not a valid URL';
+  }
 }

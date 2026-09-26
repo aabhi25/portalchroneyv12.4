@@ -4,7 +4,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
 import { accountGroupMembers, accountGroups, accountGroupAdmins, businessAccounts, productCategories as productCategoriesTable, sessions, products, productJewelryEmbeddings, users, categories, faqs, trainingDocuments, conversationJourneys, journeySteps, journeyResponses, journeySessions, widgetSettings, scheduleTemplates, trainedUrls, chatMenuConfigs, chatMenuItems, chatMenuItemDetails, whatsappLeads, whatsappLeadAttachments, whatsappFlowSteps, whatsappFlows, whatsappLeadFields, instagramFlowSteps, facebookFlowSteps, conversations, leads, customCrmSettings, customCrmFieldMappings, crmStoreCredentials, smartReplies, messages, conversationAnalysisCache, conversationCategorySettings, auditEvents } from "@shared/schema";
-import type { CrmStoreCredential, InsertLead, Lead } from "@shared/schema";
+import type { CrmStoreCredential, InsertLead, Lead, LeadsquaredFieldMapping } from "@shared/schema";
 import bcrypt from "bcrypt";
 import { eq, and, isNotNull, isNull, sql, inArray, desc, ilike, asc, gte, lte, count } from "drizzle-orm";
 import OpenAI from "openai";
@@ -3234,21 +3234,12 @@ Return JSON:
       (async () => {
         try {
           const settings = await storage.getWidgetSettings(businessAccountId);
+          const { hasLeadSquaredCredentials, createLeadSquaredServiceFromSettings } = await import('./services/leadsquaredService');
           if (lsqQualification.qualified &&
               settings?.leadsquaredEnabled === 'true' && 
-              settings.leadsquaredAccessKey && 
-              settings.leadsquaredSecretKey) {
+              hasLeadSquaredCredentials(settings)) {
             
-            const { decrypt } = await import('./services/encryptionService');
-            const decryptedSecretKey = decrypt(settings.leadsquaredSecretKey);
-            
-            const { createLeadSquaredService } = await import('./services/leadsquaredService');
-            const leadsquaredService = await createLeadSquaredService({
-              accessKey: settings.leadsquaredAccessKey,
-              secretKey: decryptedSecretKey,
-              region: settings.leadsquaredRegion as 'india' | 'us' | 'other',
-              customHost: settings.leadsquaredCustomHost || undefined,
-            });
+            const leadsquaredService = (await createLeadSquaredServiceFromSettings(settings))!;
 
             const fieldMappings = await storage.getLeadsquaredFieldMappings(businessAccountId);
             const { extractUtmCampaign, extractUtmSource, extractUtmMedium } = await import('./services/leadsquaredService');
@@ -13186,7 +13177,8 @@ Return ONLY the refined instruction, nothing else.`
       res.json({
         groupId,
         groupName: group.name,
-        training: training || null,
+        // The UDS key is write-only from the UI; only report whether one is saved.
+        training: training ? { ...training, leadsquaredUdsKey: undefined, hasUdsKey: !!training.leadsquaredUdsKey } : null,
         memberCount,
       });
     } catch (error: any) {
@@ -13207,6 +13199,10 @@ Return ONLY the refined instruction, nothing else.`
         leadsquaredHost,
         leadsquaredAccessKey,
         leadsquaredSecretKey,
+        leadsquaredConnectionType,
+        leadsquaredUdsWebhookUrl,
+        leadsquaredUdsKey,
+        leadsquaredClearApiKeys,
         menuConfig,
         menuItems,
       } = req.body;
@@ -13229,6 +13225,26 @@ Return ONLY the refined instruction, nothing else.`
         const { encrypt } = await import('./services/encryptionService');
         updateData.leadsquaredSecretKey = encrypt(leadsquaredSecretKey);
       }
+      if (leadsquaredConnectionType !== undefined) {
+        updateData.leadsquaredConnectionType = leadsquaredConnectionType === 'uds' ? 'uds' : 'api';
+      }
+      if (leadsquaredUdsWebhookUrl !== undefined) {
+        const trimmedUrl = String(leadsquaredUdsWebhookUrl || '').trim();
+        if (trimmedUrl) {
+          const { validateUdsWebhookUrl } = await import('./services/leadsquaredService');
+          const urlError = validateUdsWebhookUrl(trimmedUrl);
+          if (urlError) return res.status(400).json({ error: urlError });
+        }
+        updateData.leadsquaredUdsWebhookUrl = trimmedUrl || null;
+      }
+      if (leadsquaredUdsKey) {
+        const { encrypt } = await import('./services/encryptionService');
+        updateData.leadsquaredUdsKey = encrypt(String(leadsquaredUdsKey).trim());
+      }
+      if (leadsquaredClearApiKeys === true && leadsquaredConnectionType === 'uds') {
+        updateData.leadsquaredAccessKey = null;
+        updateData.leadsquaredSecretKey = null;
+      }
       if (menuConfig !== undefined) updateData.menuConfig = menuConfig;
       if (menuItems !== undefined) updateData.menuItems = menuItems;
       
@@ -13239,7 +13255,7 @@ Return ONLY the refined instruction, nothing else.`
       console.log('[Group Training] Successfully updated training for group:', groupId);
       
       // Seed default field mappings if LeadSquared is being enabled and no mappings exist
-      if (leadsquaredEnabled === true && leadsquaredHost) {
+      if (leadsquaredEnabled === true && (leadsquaredHost || leadsquaredUdsWebhookUrl)) {
         await storage.seedDefaultGroupLeadsquaredFieldMappings(groupId);
       }
       
@@ -13253,6 +13269,68 @@ Return ONLY the refined instruction, nothing else.`
     }
   });
   
+  // SuperAdmin: UDS payload preview / test for the group-level LeadSquared settings.
+  // Uses the group's field mappings (what member accounts get on publish).
+  async function buildGroupUdsSample(groupId: string) {
+    const [group, groupMappings] = await Promise.all([
+      storage.getAccountGroup(groupId),
+      storage.getGroupLeadsquaredFieldMappings(groupId),
+    ]);
+    if (!group) return null;
+    const { LeadSquaredService, buildSampleLeadContext } = await import('./services/leadsquaredService');
+    // Group mappings have the same shape minus valueWhenPresent, which the builder treats as unset.
+    const mappings = groupMappings as unknown as LeadsquaredFieldMapping[];
+    const context = buildSampleLeadContext(mappings, { name: `${group.name} (sample account)`, website: null });
+    const attributes = new LeadSquaredService({ accessKey: '', secretKey: '', region: 'other' }).buildAttributesFromMappings(mappings, context);
+    return { attributes, LeadSquaredService };
+  }
+
+  app.get("/api/super-admin/account-groups/:groupId/leadsquared/uds/sample-payload", requireAuth, requireRole("super_admin"), async (req, res) => {
+    try {
+      const sample = await buildGroupUdsSample(req.params.groupId);
+      if (!sample) return res.status(404).json({ error: "Account group not found" });
+      const payload: Record<string, string> = {};
+      for (const attr of sample.attributes) payload[attr.Attribute] = attr.Value;
+      res.json({ payload, fieldCount: Object.keys(payload).length });
+    } catch (error: any) {
+      console.error('[Group LSQ UDS] Sample payload error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/super-admin/account-groups/:groupId/leadsquared/uds/send-test", requireAuth, requireRole("super_admin"), async (req, res) => {
+    try {
+      const { groupId } = req.params;
+      const training = await storage.getAccountGroupTraining(groupId);
+      const { validateUdsWebhookUrl } = await import('./services/leadsquaredService');
+
+      const webhookUrl = String(req.body?.udsWebhookUrl || training?.leadsquaredUdsWebhookUrl || '').trim();
+      if (!webhookUrl) return res.status(400).json({ error: "UDS webhook URL is required" });
+      const urlError = validateUdsWebhookUrl(webhookUrl);
+      if (urlError) return res.status(400).json({ error: urlError });
+
+      let key: string | undefined = req.body?.udsKey ? String(req.body.udsKey).trim() : undefined;
+      if (!key && training?.leadsquaredUdsKey) {
+        const { decrypt } = await import('./services/encryptionService');
+        key = decrypt(training.leadsquaredUdsKey);
+      }
+
+      const sample = await buildGroupUdsSample(groupId);
+      if (!sample) return res.status(404).json({ error: "Account group not found" });
+      const service = new sample.LeadSquaredService({ accessKey: '', secretKey: '', region: 'other', uds: { webhookUrl, key } });
+      const result = await service.sendToUds(sample.attributes, 'test');
+
+      if (result.success) {
+        res.json({ success: true, message: result.message, payload: result.syncPayload, leadId: result.leadId || null });
+      } else {
+        res.status(400).json({ success: false, error: result.message });
+      }
+    } catch (error: any) {
+      console.error('[Group LSQ UDS] Send test error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // SuperAdmin: Publish group training to all member accounts
   app.post("/api/super-admin/account-groups/:groupId/training/publish", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
@@ -13761,7 +13839,8 @@ Return ONLY the refined instruction, nothing else.`
 
         try {
           const settings = await storage.getWidgetSettings(member.businessAccountId);
-          if (!settings || settings.leadsquaredEnabled !== 'true' || !settings.leadsquaredAccessKey || !settings.leadsquaredSecretKey) {
+          const { hasLeadSquaredCredentials, createLeadSquaredServiceFromSettings } = await import('./services/leadsquaredService');
+          if (!settings || settings.leadsquaredEnabled !== 'true' || !hasLeadSquaredCredentials(settings)) {
             accountResult.errors.push('LeadSquared not configured or disabled');
             accountResults.push(accountResult);
             continue;
@@ -13773,13 +13852,7 @@ Return ONLY the refined instruction, nothing else.`
             continue;
           }
 
-          const decryptedSecretKey = decrypt(settings.leadsquaredSecretKey);
-          const leadsquaredService = await createLeadSquaredService({
-            accessKey: settings.leadsquaredAccessKey,
-            secretKey: decryptedSecretKey,
-            region: (settings.leadsquaredRegion as 'india' | 'us' | 'other') || 'other',
-            customHost: settings.leadsquaredCustomHost || undefined,
-          });
+          const leadsquaredService = (await createLeadSquaredServiceFromSettings(settings))!;
 
           const fieldMappings = await storage.getLeadsquaredFieldMappings(member.businessAccountId);
           const businessAccount = await storage.getBusinessAccount(member.businessAccountId);
@@ -17030,20 +17103,11 @@ Important:
                 (async () => {
                   try {
                     const settings = await storage.getWidgetSettings(businessAccountId);
+                    const { hasLeadSquaredCredentials, createLeadSquaredServiceFromSettings, extractUtmCampaign, extractUtmSource, extractUtmMedium } = await import('./services/leadsquaredService');
                     if (settings?.leadsquaredEnabled === 'true' && 
-                        settings.leadsquaredAccessKey && 
-                        settings.leadsquaredSecretKey) {
+                        hasLeadSquaredCredentials(settings)) {
                       
-                      const { decrypt } = await import('./services/encryptionService');
-                      const decryptedSecretKey = decrypt(settings.leadsquaredSecretKey);
-                      
-                      const { createLeadSquaredService, extractUtmCampaign, extractUtmSource, extractUtmMedium } = await import('./services/leadsquaredService');
-                      const leadsquaredService = await createLeadSquaredService({
-                        accessKey: settings.leadsquaredAccessKey,
-                        secretKey: decryptedSecretKey,
-                        region: settings.leadsquaredRegion as 'india' | 'us' | 'other',
-                        customHost: settings.leadsquaredCustomHost || undefined,
-                      });
+                      const leadsquaredService = (await createLeadSquaredServiceFromSettings(settings))!;
 
                       const businessAccount = await storage.getBusinessAccount(businessAccountId);
                       const fieldMappings = await storage.getLeadsquaredFieldMappings(businessAccountId);
@@ -17804,6 +17868,7 @@ Important:
   // Get LeadSquared settings
   app.get("/api/leadsquared/settings", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
+      const { hasLeadSquaredCredentials } = await import('./services/leadsquaredService');
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
       
@@ -17821,7 +17886,12 @@ Important:
         secretKey: null, // Never return secret key to client
         region: settings.leadsquaredRegion || null,
         customHost: settings.leadsquaredCustomHost || null,
-        hasCredentials: !!(settings.leadsquaredAccessKey && settings.leadsquaredSecretKey),
+        // hasCredentials = the active connection (API keys or UDS webhook) is configured.
+        hasCredentials: hasLeadSquaredCredentials(settings),
+        hasApiKeys: !!(settings.leadsquaredAccessKey && settings.leadsquaredSecretKey),
+        connectionType: settings.leadsquaredConnectionType === 'uds' ? 'uds' : 'api',
+        udsWebhookUrl: settings.leadsquaredUdsWebhookUrl || '',
+        hasUdsKey: !!settings.leadsquaredUdsKey,
         extractionDomain: settings.lsqExtractionDomain || '',
         extractionUniversities: settings.lsqExtractionUniversities || '',
         extractionProducts: settings.lsqExtractionProducts || '',
@@ -17839,7 +17909,8 @@ Important:
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
-      const { accessKey, secretKey, region, customHost, enabled } = req.body;
+      const { accessKey, secretKey, region, customHost, enabled, connectionType, udsWebhookUrl, udsKey, clearApiKeys } = req.body;
+      const isUds = connectionType === 'uds';
       
       // Get existing settings
       const existingSettings = await storage.getWidgetSettings(businessAccountId);
@@ -17863,8 +17934,34 @@ Important:
         settingsUpdate.leadsquaredSecretKey = existingSettings.leadsquaredSecretKey;
       }
       
+      // UDS connection. API keys are kept when switching so rolling back is one click,
+      // unless clearApiKeys is sent (after UDS is confirmed working).
+      settingsUpdate.leadsquaredConnectionType = isUds ? 'uds' : 'api';
+      if (udsWebhookUrl !== undefined) {
+        const trimmedUrl = String(udsWebhookUrl || '').trim();
+        if (trimmedUrl) {
+          const { validateUdsWebhookUrl } = await import('./services/leadsquaredService');
+          const urlError = validateUdsWebhookUrl(trimmedUrl);
+          if (urlError) return res.status(400).json({ error: urlError });
+        }
+        settingsUpdate.leadsquaredUdsWebhookUrl = trimmedUrl || null;
+      }
+      if (udsKey) {
+        const { encrypt } = await import('./services/encryptionService');
+        settingsUpdate.leadsquaredUdsKey = encrypt(String(udsKey).trim());
+      }
+      if (isUds && clearApiKeys === true) {
+        settingsUpdate.leadsquaredAccessKey = null;
+        settingsUpdate.leadsquaredSecretKey = null;
+      }
+
       // Validate required fields when enabling
-      if (enabled) {
+      if (enabled && isUds) {
+        const hasUrl = settingsUpdate.leadsquaredUdsWebhookUrl ?? existingSettings?.leadsquaredUdsWebhookUrl;
+        if (!hasUrl) {
+          return res.status(400).json({ error: "UDS webhook URL is required when enabling LeadSquared via UDS" });
+        }
+      } else if (enabled) {
         const hasAccessKey = accessKey || existingSettings?.leadsquaredAccessKey;
         const hasSecretKey = secretKey || existingSettings?.leadsquaredSecretKey;
         const hasRegion = region || existingSettings?.leadsquaredRegion;
@@ -17883,6 +17980,67 @@ Important:
       res.json({ success: true, message: "LeadSquared settings saved successfully" });
     } catch (error: any) {
       console.error('[LeadSquared] Save settings error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // UDS: build the JSON payload this account would send, using sample values.
+  // Nothing is sent; this is what the client's UDS flow maps from.
+  app.get("/api/leadsquared/uds/sample-payload", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      const businessAccountId = req.user!.businessAccountId!;
+      const [fieldMappings, businessAccount] = await Promise.all([
+        storage.getLeadsquaredFieldMappings(businessAccountId),
+        storage.getBusinessAccount(businessAccountId),
+      ]);
+      const { LeadSquaredService, buildSampleLeadContext } = await import('./services/leadsquaredService');
+      const context = buildSampleLeadContext(fieldMappings, { name: businessAccount?.name, website: businessAccount?.website });
+      const service = new LeadSquaredService({ accessKey: '', secretKey: '', region: 'other' });
+      const payload: Record<string, string> = {};
+      for (const attr of service.buildAttributesFromMappings(fieldMappings, context)) {
+        payload[attr.Attribute] = attr.Value;
+      }
+      res.json({ payload, fieldCount: Object.keys(payload).length });
+    } catch (error: any) {
+      console.error('[LeadSquared UDS] Sample payload error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // UDS: send one clearly-labelled test lead to the webhook (unsaved URL/key in the
+  // body take precedence over the saved ones, so it can be tested before saving).
+  app.post("/api/leadsquared/uds/send-test", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      const businessAccountId = req.user!.businessAccountId!;
+      const settings = await storage.getWidgetSettings(businessAccountId);
+      const { validateUdsWebhookUrl, LeadSquaredService, buildSampleLeadContext } = await import('./services/leadsquaredService');
+
+      const webhookUrl = String(req.body?.udsWebhookUrl || settings?.leadsquaredUdsWebhookUrl || '').trim();
+      if (!webhookUrl) return res.status(400).json({ error: "UDS webhook URL is required" });
+      const urlError = validateUdsWebhookUrl(webhookUrl);
+      if (urlError) return res.status(400).json({ error: urlError });
+
+      let key: string | undefined = req.body?.udsKey ? String(req.body.udsKey).trim() : undefined;
+      if (!key && settings?.leadsquaredUdsKey) {
+        const { decrypt } = await import('./services/encryptionService');
+        key = decrypt(settings.leadsquaredUdsKey);
+      }
+
+      const [fieldMappings, businessAccount] = await Promise.all([
+        storage.getLeadsquaredFieldMappings(businessAccountId),
+        storage.getBusinessAccount(businessAccountId),
+      ]);
+      const service = new LeadSquaredService({ accessKey: '', secretKey: '', region: 'other', uds: { webhookUrl, key } });
+      const context = buildSampleLeadContext(fieldMappings, { name: businessAccount?.name, website: businessAccount?.website });
+      const result = await service.sendToUds(service.buildAttributesFromMappings(fieldMappings, context), 'test');
+
+      if (result.success) {
+        res.json({ success: true, message: result.message, payload: result.syncPayload, leadId: result.leadId || null });
+      } else {
+        res.status(400).json({ success: false, error: result.message });
+      }
+    } catch (error: any) {
+      console.error('[LeadSquared UDS] Send test error:', error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -18034,7 +18192,8 @@ Important:
         return res.status(400).json({ error: "LeadSquared integration is not enabled" });
       }
       
-      if (!settings.leadsquaredAccessKey || !settings.leadsquaredSecretKey || !settings.leadsquaredRegion) {
+      const { hasLeadSquaredCredentials, createLeadSquaredServiceFromSettings } = await import('./services/leadsquaredService');
+      if (!hasLeadSquaredCredentials(settings, { requireRegion: true })) {
         return res.status(400).json({ error: "LeadSquared credentials not configured" });
       }
       
@@ -18060,18 +18219,8 @@ Important:
       // Get business account info
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
       
-      // Decrypt the secret key
-      const { decrypt } = await import('./services/encryptionService');
-      const decryptedSecretKey = decrypt(settings.leadsquaredSecretKey);
-      
-      // Create LeadSquared service
-      const { createLeadSquaredService } = await import('./services/leadsquaredService');
-      const leadsquaredService = await createLeadSquaredService({
-        accessKey: settings.leadsquaredAccessKey,
-        secretKey: decryptedSecretKey,
-        region: settings.leadsquaredRegion as 'india' | 'us' | 'other',
-        customHost: settings.leadsquaredCustomHost || undefined,
-      });
+      // Create LeadSquared service (API keys or UDS webhook)
+      const leadsquaredService = (await createLeadSquaredServiceFromSettings(settings))!;
       
       const { extractUtmCampaign, extractUtmSource, extractUtmMedium, buildJourneyCrmContext, buildConversationCrmContext } = await import('./services/leadsquaredService');
       
@@ -24827,28 +24976,18 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         try {
           const settings = await storage.getWidgetSettings(businessAccountId);
           
+          const { hasLeadSquaredCredentials, createLeadSquaredServiceFromSettings } = await import('./services/leadsquaredService');
           if (settings && 
               settings.leadsquaredEnabled === 'true' && 
-              settings.leadsquaredAccessKey && 
-              settings.leadsquaredSecretKey && 
-              settings.leadsquaredRegion) {
+              hasLeadSquaredCredentials(settings, { requireRegion: true })) {
             
             console.log('[LeadSquared] Auto-syncing new lead:', lead.id);
             
             // Get business account info for sync
             const businessAccount = await storage.getBusinessAccount(businessAccountId);
             
-            // Decrypt the secret key
-            const { decrypt } = await import('./services/encryptionService');
-            const decryptedSecretKey = decrypt(settings.leadsquaredSecretKey);
-            
-            const { createLeadSquaredService, extractUtmCampaign, extractUtmSource, extractUtmMedium } = await import('./services/leadsquaredService');
-            const leadsquaredService = await createLeadSquaredService({
-              accessKey: settings.leadsquaredAccessKey,
-              secretKey: decryptedSecretKey,
-              region: settings.leadsquaredRegion as 'india' | 'us' | 'other',
-              customHost: settings.leadsquaredCustomHost || undefined,
-            });
+            const { extractUtmCampaign, extractUtmSource, extractUtmMedium } = await import('./services/leadsquaredService');
+            const leadsquaredService = (await createLeadSquaredServiceFromSettings(settings))!;
             
             // Get field mappings from database (dynamic, configurable)
             const fieldMappings = await storage.getLeadsquaredFieldMappings(businessAccountId);

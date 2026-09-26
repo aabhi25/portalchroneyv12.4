@@ -34,7 +34,8 @@ import {
   ArrowLeft, Save, Upload, Loader2, GraduationCap, AlertTriangle, Check, Plus, Trash2, Edit2, X, 
   Sparkles, Bold, Italic, Route, UserCheck, Phone, Mail, MessageSquare,
   ChevronUp, ChevronDown, User, Brain, AlertCircle, CheckCircle2, Users, Clock, Link2, Eye, EyeOff, Pencil, Menu,
-  Folder, GripVertical, ChevronRight, ExternalLink, FileText, Settings, Volume2, Bell, Zap, ClipboardList
+  Folder, GripVertical, ChevronRight, ExternalLink, FileText, Settings, Volume2, Bell, Zap, ClipboardList,
+  KeyRound, Webhook, Copy, Send, FileJson
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -315,6 +316,19 @@ export default function GroupTrainingEditor() {
   const [lsqSecretKey, setLsqSecretKey] = useState("");
   const [showLsqSecretKey, setShowLsqSecretKey] = useState(false);
   const [lsqSecretKeyChanged, setLsqSecretKeyChanged] = useState(false);
+  // UDS connection (key is write-only: only sent when a new one is typed)
+  const [lsqConnectionType, setLsqConnectionType] = useState<"api" | "uds">("api");
+  const [lsqUdsUrl, setLsqUdsUrl] = useState("");
+  const [lsqUdsKey, setLsqUdsKey] = useState("");
+  const [showLsqUdsKey, setShowLsqUdsKey] = useState(false);
+  const [lsqHasUdsKey, setLsqHasUdsKey] = useState(false);
+  const [lsqHasApiKeys, setLsqHasApiKeys] = useState(false);
+  const [lsqClearApiKeys, setLsqClearApiKeys] = useState(false);
+  const [lsqUdsPreview, setLsqUdsPreview] = useState<Record<string, string> | null>(null);
+  const [loadingLsqUdsPreview, setLoadingLsqUdsPreview] = useState(false);
+  const [testingLsqUds, setTestingLsqUds] = useState(false);
+  const [confirmLsqUdsTestOpen, setConfirmLsqUdsTestOpen] = useState(false);
+  const [lsqUdsTestResult, setLsqUdsTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [savingLsq, setSavingLsq] = useState(false);
   const [lsqFieldMappings, setLsqFieldMappings] = useState<GroupLeadsquaredFieldMapping[]>([]);
   const [loadingLsqMappings, setLoadingLsqMappings] = useState(false);
@@ -466,6 +480,12 @@ export default function GroupTrainingEditor() {
       if (training.leadsquaredSecretKey) {
         setLsqSecretKey("••••••••••••••••");
       }
+      setLsqConnectionType(training.leadsquaredConnectionType === "uds" ? "uds" : "api");
+      setLsqUdsUrl(training.leadsquaredUdsWebhookUrl || "");
+      setLsqHasUdsKey(!!training.hasUdsKey);
+      setLsqHasApiKeys(!!(training.leadsquaredAccessKey && training.leadsquaredSecretKey));
+      setLsqUdsKey("");
+      setLsqClearApiKeys(false);
       
       // Load Menu Builder config
       if (training.menuConfig) {
@@ -525,7 +545,15 @@ export default function GroupTrainingEditor() {
         leadsquaredEnabled: lsqEnabled,
         leadsquaredHost: lsqHost,
         leadsquaredAccessKey: lsqAccessKey,
+        leadsquaredConnectionType: lsqConnectionType,
+        leadsquaredUdsWebhookUrl: lsqUdsUrl.trim(),
       };
+      if (lsqUdsKey.trim()) {
+        payload.leadsquaredUdsKey = lsqUdsKey.trim();
+      }
+      if (lsqConnectionType === "uds" && lsqClearApiKeys) {
+        payload.leadsquaredClearApiKeys = true;
+      }
       // Only include secret key if it was changed
       if (lsqSecretKeyChanged && lsqSecretKey !== "••••••••••••••••") {
         payload.leadsquaredSecretKey = lsqSecretKey;
@@ -553,6 +581,49 @@ export default function GroupTrainingEditor() {
     }
   };
   
+  const loadLsqUdsPreview = async () => {
+    if (!groupId) return;
+    try {
+      setLoadingLsqUdsPreview(true);
+      const data = await apiRequest<{ payload: Record<string, string> }>("GET", `/api/super-admin/account-groups/${groupId}/leadsquared/uds/sample-payload`);
+      setLsqUdsPreview(data.payload);
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message || "Failed to build sample payload", variant: "destructive" });
+    } finally {
+      setLoadingLsqUdsPreview(false);
+    }
+  };
+
+  const copyLsqUdsPreview = async () => {
+    if (!lsqUdsPreview) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(lsqUdsPreview, null, 2));
+      toast({ title: "Copied", description: "Sample payload copied — share it with the client to set up their UDS mapping." });
+    } catch {
+      toast({ title: "Copy failed", description: "Select the text and copy it manually.", variant: "destructive" });
+    }
+  };
+
+  const sendLsqUdsTestLead = async () => {
+    if (!groupId) return;
+    setConfirmLsqUdsTestOpen(false);
+    try {
+      setTestingLsqUds(true);
+      setLsqUdsTestResult(null);
+      const data = await apiRequest<{ message: string; payload?: Record<string, string> }>(
+        "POST",
+        `/api/super-admin/account-groups/${groupId}/leadsquared/uds/send-test`,
+        { udsWebhookUrl: lsqUdsUrl.trim() || undefined, udsKey: lsqUdsKey.trim() || undefined },
+      );
+      setLsqUdsTestResult({ ok: true, message: `${data.message}. Check the client's UDS logs / LeadSquared for "AI Chroney Test Lead".` });
+      if (data.payload) setLsqUdsPreview(data.payload);
+    } catch (error: any) {
+      setLsqUdsTestResult({ ok: false, message: error.message || "UDS webhook call failed" });
+    } finally {
+      setTestingLsqUds(false);
+    }
+  };
+
   const saveLsqFieldMapping = async () => {
     if (!groupId || !newLsqMapping.leadsquaredField || !newLsqMapping.displayName) {
       toast({
@@ -1252,7 +1323,7 @@ export default function GroupTrainingEditor() {
       }
       const publishResult = await apiRequest("POST", `/api/super-admin/account-groups/${groupId}/training/publish`, { module: moduleToPublish });
       
-      if (moduleToPublish === 'leadsquared' && lsqEnabled && lsqHost) {
+      if (moduleToPublish === 'leadsquared' && lsqEnabled && (lsqHost || (lsqConnectionType === 'uds' && lsqUdsUrl))) {
         await apiRequest("POST", `/api/super-admin/account-groups/${groupId}/leadsquared/apply`);
       }
       
@@ -1263,7 +1334,7 @@ export default function GroupTrainingEditor() {
       setHasChanges(false);
       setPublishDialogOpen(null);
       const moduleName = moduleToPublish ? moduleLabels[moduleToPublish] || moduleToPublish : 'Training';
-      const lsqNote = (moduleToPublish === 'leadsquared' && lsqEnabled && lsqHost) ? ' LeadSquared settings also applied.' : '';
+      const lsqNote = (moduleToPublish === 'leadsquared' && lsqEnabled && (lsqHost || (lsqConnectionType === 'uds' && lsqUdsUrl))) ? ' LeadSquared settings also applied.' : '';
       toast({
         title: `${moduleName} Published`,
         description: (data.message || `${moduleName} configuration pushed to all member accounts.`) + lsqNote,
@@ -2091,7 +2162,132 @@ export default function GroupTrainingEditor() {
                   />
                 </div>
                 
-                {/* Credentials Form */}
+                {/* Connection method */}
+                <div className="space-y-2">
+                  <Label>Connection method</Label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {([
+                      { value: "api", title: "LeadSquared API", desc: "Uses the Access Key + Secret Key", Icon: KeyRound },
+                      { value: "uds", title: "Universal Data Sync (UDS)", desc: "Sends leads to the client's UDS webhook — no API keys stored", Icon: Webhook },
+                    ] as const).map(({ value, title, desc, Icon }) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => { setLsqConnectionType(value); setLsqUdsTestResult(null); }}
+                        className={`text-left rounded-lg border p-3 transition-colors ${lsqConnectionType === value ? "border-purple-500 bg-purple-50 ring-1 ring-purple-500" : "hover:bg-muted/50"}`}
+                      >
+                        <div className="flex items-center gap-2 font-medium text-sm">
+                          <Icon className="h-4 w-4 text-purple-600" />
+                          {title}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">{desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Field mappings below (fallbacks, UTM rules, fixed values) apply the same way to both methods.
+                  </p>
+                </div>
+
+                {lsqConnectionType === "uds" ? (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="lsq-uds-url">UDS Webhook URL</Label>
+                    <Input
+                      id="lsq-uds-url"
+                      type="url"
+                      placeholder="https://… (from the Custom / HTTPS trigger of the UDS flow)"
+                      value={lsqUdsUrl}
+                      onChange={(e) => setLsqUdsUrl(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="lsq-uds-key">
+                      UDS Key (ickey)
+                      {lsqHasUdsKey && !lsqUdsKey && (
+                        <span className="text-xs text-muted-foreground ml-2">(leave blank to keep existing)</span>
+                      )}
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="lsq-uds-key"
+                        type={showLsqUdsKey ? "text" : "password"}
+                        placeholder={lsqHasUdsKey ? "••••••••••••" : "Paste the ickey (optional if it's already in the URL)"}
+                        value={lsqUdsKey}
+                        onChange={(e) => setLsqUdsKey(e.target.value)}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+                        onClick={() => setShowLsqUdsKey(!showLsqUdsKey)}
+                      >
+                        {showLsqUdsKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Sent as a request header, never in the URL. Stored encrypted and copied to member accounts on publish.</p>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <Button type="button" variant="outline" className="flex-1" onClick={loadLsqUdsPreview} disabled={loadingLsqUdsPreview}>
+                      {loadingLsqUdsPreview ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileJson className="w-4 h-4 mr-2" />}
+                      Preview payload
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="flex-1"
+                      onClick={() => setConfirmLsqUdsTestOpen(true)}
+                      disabled={testingLsqUds || !lsqUdsUrl.trim()}
+                    >
+                      {testingLsqUds ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
+                      Send test lead
+                    </Button>
+                  </div>
+
+                  {lsqUdsTestResult && (
+                    <div className={`flex items-start gap-2 rounded-md px-3 py-2 text-sm ${lsqUdsTestResult.ok ? "bg-green-50 text-green-800" : "bg-red-50 text-red-700"}`}>
+                      {lsqUdsTestResult.ok ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
+                      <span className="break-words">{lsqUdsTestResult.message}</span>
+                    </div>
+                  )}
+
+                  {lsqUdsPreview && (
+                    <div className="rounded-lg border bg-muted/40">
+                      <div className="flex items-center justify-between px-3 py-2 border-b">
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Sample payload ({Object.keys(lsqUdsPreview).length} fields, sample values) — built from the group's field mappings
+                        </span>
+                        <Button type="button" variant="ghost" size="sm" onClick={copyLsqUdsPreview}>
+                          <Copy className="h-3.5 w-3.5 mr-1" /> Copy
+                        </Button>
+                      </div>
+                      <pre className="text-xs p-3 overflow-x-auto max-h-72">{JSON.stringify(lsqUdsPreview, null, 2)}</pre>
+                    </div>
+                  )}
+
+                  {lsqHasApiKeys && (
+                    <div className="flex items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                      <div className="text-sm">
+                        <div className="font-medium text-amber-900">Remove saved API keys</div>
+                        <p className="text-xs text-amber-800 mt-0.5">
+                          The group's old Access/Secret Key are still saved so you can switch back. Remove them once UDS is confirmed working, then publish so member accounts drop them too.
+                        </p>
+                      </div>
+                      <Switch checked={lsqClearApiKeys} onCheckedChange={setLsqClearApiKeys} />
+                    </div>
+                  )}
+
+                  <Button onClick={saveLsqSettings} disabled={savingLsq}>
+                    {savingLsq ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                    Save Connection
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Saving updates the group only. Publish the LeadSquared module to push it to all member accounts.
+                  </p>
+                </div>
+                ) : (
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="lsq-host">LeadSquared Host URL</Label>
@@ -2146,8 +2342,24 @@ export default function GroupTrainingEditor() {
                     Save Credentials
                   </Button>
                 </div>
+                )}
               </CardContent>
             </Card>
+            <AlertDialog open={confirmLsqUdsTestOpen} onOpenChange={setConfirmLsqUdsTestOpen}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Send a test lead to UDS?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This sends one lead named "AI Chroney Test Lead" (phone 9000000000, test.lead@example.com) to the webhook.
+                    If the client's UDS flow is live, it will be created in their LeadSquared — ask them to delete it afterwards.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={sendLsqUdsTestLead}>Send test lead</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
             
             {/* Field Mappings Card */}
             <Card className="shadow-sm">

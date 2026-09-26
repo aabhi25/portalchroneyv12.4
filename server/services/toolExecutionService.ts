@@ -27,28 +27,20 @@ export async function syncLeadToLeadSquared(
       return;
     }
     
-    if (!settings.leadsquaredAccessKey || !settings.leadsquaredSecretKey || !settings.leadsquaredRegion) {
+    const { hasLeadSquaredCredentials, createLeadSquaredServiceFromSettings, buildJourneyCrmContext, buildConversationCrmContext } = await import('./leadsquaredService');
+    if (!hasLeadSquaredCredentials(settings, { requireRegion: true })) {
       console.log('[LeadSquared-Tool] Auto-sync enabled but credentials not configured');
       return;
     }
-    
-    // Decrypt the stored secret key (it's encrypted in the database)
-    const { decrypt } = await import('./encryptionService');
-    let decryptedSecretKey: string;
+
+    let leadsquaredService;
     try {
-      decryptedSecretKey = decrypt(settings.leadsquaredSecretKey);
+      leadsquaredService = await createLeadSquaredServiceFromSettings(settings);
     } catch (decryptError) {
-      console.error('[LeadSquared-Tool] Failed to decrypt secret key:', decryptError);
+      console.error('[LeadSquared-Tool] Failed to decrypt stored credentials:', decryptError);
       return;
     }
-    
-    const { createLeadSquaredService, buildJourneyCrmContext, buildConversationCrmContext } = await import('./leadsquaredService');
-    const leadsquaredService = await createLeadSquaredService({
-      accessKey: settings.leadsquaredAccessKey,
-      secretKey: decryptedSecretKey,
-      region: settings.leadsquaredRegion as 'india' | 'us' | 'other',
-      customHost: settings.leadsquaredCustomHost || undefined
-    });
+    if (!leadsquaredService) return;
     
     // Get business account info for additional fields
     const businessAccount = await storage.getBusinessAccount(businessAccountId);

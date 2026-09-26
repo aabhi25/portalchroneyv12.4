@@ -4871,6 +4871,9 @@ export class DatabaseStorage implements IStorage {
           updateData.leadsquaredCustomHost = groupTraining.leadsquaredHost ?? null;
           updateData.leadsquaredAccessKey = groupTraining.leadsquaredAccessKey ?? null;
           updateData.leadsquaredSecretKey = groupTraining.leadsquaredSecretKey ?? null;
+          updateData.leadsquaredConnectionType = groupTraining.leadsquaredConnectionType === 'uds' ? 'uds' : 'api';
+          updateData.leadsquaredUdsWebhookUrl = groupTraining.leadsquaredUdsWebhookUrl ?? null;
+          updateData.leadsquaredUdsKey = groupTraining.leadsquaredUdsKey ?? null;
         }
         
         if (Object.keys(updateData).length > 0) {
@@ -5080,13 +5083,16 @@ export class DatabaseStorage implements IStorage {
     for (const member of members) {
       try {
         // Update member account's LSQ settings in widget_settings (source of truth for sync flows)
-        if (groupTraining.leadsquaredHost || groupTraining.leadsquaredAccessKey || groupTraining.leadsquaredSecretKey) {
+        if (groupTraining.leadsquaredHost || groupTraining.leadsquaredAccessKey || groupTraining.leadsquaredSecretKey || groupTraining.leadsquaredUdsWebhookUrl) {
           const lsqUpdate: any = {
             leadsquaredEnabled: groupTraining.leadsquaredEnabled ?? "false",
             leadsquaredRegion: "other",
             leadsquaredCustomHost: groupTraining.leadsquaredHost ?? null,
             leadsquaredAccessKey: groupTraining.leadsquaredAccessKey ?? null,
             leadsquaredSecretKey: groupTraining.leadsquaredSecretKey ?? null,
+            leadsquaredConnectionType: groupTraining.leadsquaredConnectionType === 'uds' ? 'uds' : 'api',
+            leadsquaredUdsWebhookUrl: groupTraining.leadsquaredUdsWebhookUrl ?? null,
+            leadsquaredUdsKey: groupTraining.leadsquaredUdsKey ?? null,
           };
           await this.upsertWidgetSettings(member.businessAccountId, lsqUpdate);
         }

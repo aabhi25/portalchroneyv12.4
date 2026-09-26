@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, CheckCircle2, XCircle, Eye, EyeOff, Plus, Trash2, Pencil, Bot, ArrowLeft, KeyRound, Zap, TableProperties, ExternalLink } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Eye, EyeOff, Plus, Trash2, Pencil, Bot, ArrowLeft, KeyRound, Zap, TableProperties, ExternalLink, Webhook, Copy, Send, FileJson } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -85,8 +85,19 @@ export default function LeadSquaredSettings() {
     region: "india" as "india" | "us" | "other",
     customHost: "",
     hasCredentials: false,
+    hasApiKeys: false,
+    connectionType: "api" as "api" | "uds",
+    udsWebhookUrl: "",
+    hasUdsKey: false,
   });
   const [secretKeyChanged, setSecretKeyChanged] = useState(false);
+  // UDS key is write-only: only sent when the user types a new one.
+  const [udsKey, setUdsKey] = useState("");
+  const [showUdsKey, setShowUdsKey] = useState(false);
+  const [clearApiKeys, setClearApiKeys] = useState(false);
+  const [udsPreview, setUdsPreview] = useState<Record<string, string> | null>(null);
+  const [loadingUdsPreview, setLoadingUdsPreview] = useState(false);
+  const [confirmUdsTestOpen, setConfirmUdsTestOpen] = useState(false);
   const [credentialsCorrupted, setCredentialsCorrupted] = useState(false);
   const [savingExtraction, setSavingExtraction] = useState(false);
   const [extractionSettings, setExtractionSettings] = useState({
@@ -452,7 +463,13 @@ export default function LeadSquaredSettings() {
         region: data.region || "india",
         customHost: data.customHost || "",
         hasCredentials: data.hasCredentials || false,
+        hasApiKeys: data.hasApiKeys || false,
+        connectionType: data.connectionType === "uds" ? "uds" : "api",
+        udsWebhookUrl: data.udsWebhookUrl || "",
+        hasUdsKey: data.hasUdsKey || false,
       });
+      setUdsKey("");
+      setClearApiKeys(false);
       setExtractionSettings({
         extractionDomain: data.extractionDomain || '',
         extractionUniversities: data.extractionUniversities || '',
@@ -476,7 +493,7 @@ export default function LeadSquaredSettings() {
   const testConnection = async () => {
     // Check if we have saved credentials or new credentials
     const hasNewCredentials = settings.accessKey && settings.secretKey;
-    const hasSavedCredentials = settings.hasCredentials;
+    const hasSavedCredentials = settings.hasApiKeys;
     
     if (!hasNewCredentials && !hasSavedCredentials) {
       toast({
@@ -558,14 +575,82 @@ export default function LeadSquaredSettings() {
     }
   };
 
+  const loadUdsPreview = async () => {
+    try {
+      setLoadingUdsPreview(true);
+      const response = await fetch("/api/leadsquared/uds/sample-payload", { credentials: "include" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to build sample payload");
+      setUdsPreview(data.payload);
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } finally {
+      setLoadingUdsPreview(false);
+    }
+  };
+
+  const copyUdsPreview = async () => {
+    if (!udsPreview) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(udsPreview, null, 2));
+      toast({ title: "Copied", description: "Sample payload copied — share it with the client to set up their UDS mapping." });
+    } catch {
+      toast({ title: "Copy failed", description: "Select the text and copy it manually.", variant: "destructive" });
+    }
+  };
+
+  const sendUdsTestLead = async () => {
+    setConfirmUdsTestOpen(false);
+    try {
+      setTesting(true);
+      setConnectionStatus(null);
+      setConnectionMessage("");
+      const response = await fetch("/api/leadsquared/uds/send-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          udsWebhookUrl: settings.udsWebhookUrl.trim() || undefined,
+          udsKey: udsKey.trim() || undefined,
+        }),
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setConnectionStatus("success");
+        setConnectionMessage(`${data.message}. Check the client's UDS logs / LeadSquared for "AI Chroney Test Lead".`);
+        if (data.payload) setUdsPreview(data.payload);
+        toast({ title: "Test Lead Sent", description: data.message });
+      } else {
+        setConnectionStatus("error");
+        setConnectionMessage(data.error || "UDS webhook call failed");
+        toast({ title: "Test Failed", description: data.error || "UDS webhook call failed", variant: "destructive" });
+      }
+    } catch (error: any) {
+      setConnectionStatus("error");
+      setConnectionMessage(error.message);
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const saveSettings = async () => {
     // Validate required fields when enabling
     if (settings.enabled) {
-      const needsAccessKey = !settings.accessKey && !settings.hasCredentials;
-      const needsSecretKey = !settings.secretKey && !settings.hasCredentials;
+      const needsAccessKey = !settings.accessKey && !settings.hasApiKeys;
+      const needsSecretKey = !settings.secretKey && !settings.hasApiKeys;
       const needsRegion = !settings.region;
       
-      if (needsAccessKey || needsSecretKey || needsRegion) {
+      if (settings.connectionType === "uds") {
+        if (!settings.udsWebhookUrl.trim()) {
+          toast({
+            title: "Missing Information",
+            description: "Please enter the UDS webhook URL before enabling",
+            variant: "destructive",
+          });
+          return;
+        }
+      } else if (needsAccessKey || needsSecretKey || needsRegion) {
         toast({
           title: "Missing Information",
           description: "Please enter all required credentials before enabling",
@@ -575,7 +660,7 @@ export default function LeadSquaredSettings() {
       }
     }
 
-    if (settings.enabled && settings.region === "other" && !settings.customHost) {
+    if (settings.enabled && settings.connectionType === "api" && settings.region === "other" && !settings.customHost) {
       toast({
         title: "Missing Custom Host",
         description: "Please enter a custom host URL for the 'Other' region",
@@ -595,6 +680,10 @@ export default function LeadSquaredSettings() {
         region: settings.region,
         customHost: settings.customHost || undefined,
         enabled: settings.enabled,
+        connectionType: settings.connectionType,
+        udsWebhookUrl: settings.udsWebhookUrl.trim(),
+        udsKey: udsKey.trim() || undefined,
+        clearApiKeys: settings.connectionType === "uds" && clearApiKeys,
       };
 
       const response = await fetch("/api/leadsquared/settings", {
@@ -704,7 +793,9 @@ export default function LeadSquaredSettings() {
                 <div className="flex-1 min-w-0">
                   <h3 className="font-semibold text-lg mb-1">Connection Settings</h3>
                   <p className="text-sm text-muted-foreground mb-3">
-                    Configure your LeadSquared API credentials and region
+                    {settings.connectionType === "uds"
+                      ? "Leads are sent to your LeadSquared UDS webhook"
+                      : "Configure your LeadSquared API credentials and region"}
                   </p>
                   {settings.hasCredentials ? (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
@@ -811,10 +902,118 @@ export default function LeadSquaredSettings() {
           <CardHeader>
             <CardTitle>Connection Settings</CardTitle>
             <CardDescription>
-              Configure your LeadSquared API credentials. You can find these in your LeadSquared account settings.
+              Choose how leads reach LeadSquared. Field mappings, fallbacks and UTM rules apply the same way to both methods.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Connection method</Label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {([
+                  { value: "api", title: "LeadSquared API", desc: "Uses your Access Key + Secret Key", Icon: KeyRound },
+                  { value: "uds", title: "Universal Data Sync (UDS)", desc: "Sends leads to your UDS webhook — no API keys stored", Icon: Webhook },
+                ] as const).map(({ value, title, desc, Icon }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => { setSettings({ ...settings, connectionType: value }); setConnectionStatus(null); }}
+                    className={`text-left rounded-lg border p-3 transition-colors ${settings.connectionType === value ? "border-purple-500 bg-purple-50 ring-1 ring-purple-500" : "hover:bg-muted/50"}`}
+                  >
+                    <div className="flex items-center gap-2 font-medium text-sm">
+                      <Icon className="h-4 w-4 text-purple-600" />
+                      {title}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">{desc}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {settings.connectionType === "uds" ? (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="udsWebhookUrl">UDS Webhook URL *</Label>
+                  <Input
+                    id="udsWebhookUrl"
+                    type="url"
+                    placeholder="https://… (from the Custom / HTTPS trigger of the UDS flow)"
+                    value={settings.udsWebhookUrl}
+                    onChange={(e) => setSettings({ ...settings, udsWebhookUrl: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="udsKey">
+                    UDS Key (ickey)
+                    {settings.hasUdsKey && !udsKey && (
+                      <span className="text-xs text-muted-foreground ml-2">(leave blank to keep existing)</span>
+                    )}
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      id="udsKey"
+                      type={showUdsKey ? "text" : "password"}
+                      placeholder={settings.hasUdsKey ? "••••••••••••" : "Paste the ickey (optional if it's already in the URL)"}
+                      value={udsKey}
+                      onChange={(e) => setUdsKey(e.target.value)}
+                      className="pr-10"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                      onClick={() => setShowUdsKey(!showUdsKey)}
+                    >
+                      {showUdsKey ? <EyeOff className="h-4 w-4 text-muted-foreground" /> : <Eye className="h-4 w-4 text-muted-foreground" />}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Sent as a request header, never in the URL. Stored encrypted.</p>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Button type="button" variant="outline" className="flex-1" onClick={loadUdsPreview} disabled={loadingUdsPreview}>
+                    {loadingUdsPreview ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileJson className="mr-2 h-4 w-4" />}
+                    Preview payload
+                  </Button>
+                  <Button
+                    type="button"
+                    className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                    onClick={() => setConfirmUdsTestOpen(true)}
+                    disabled={testing || !settings.udsWebhookUrl.trim()}
+                  >
+                    {testing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                    Send test lead
+                  </Button>
+                </div>
+
+                {udsPreview && (
+                  <div className="rounded-lg border bg-muted/40">
+                    <div className="flex items-center justify-between px-3 py-2 border-b">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Sample payload ({Object.keys(udsPreview).length} fields, sample values) — built from your field mappings
+                      </span>
+                      <Button type="button" variant="ghost" size="sm" onClick={copyUdsPreview}>
+                        <Copy className="h-3.5 w-3.5 mr-1" /> Copy
+                      </Button>
+                    </div>
+                    <pre className="text-xs p-3 overflow-x-auto max-h-72">{JSON.stringify(udsPreview, null, 2)}</pre>
+                  </div>
+                )}
+
+                {settings.hasApiKeys && (
+                  <div className="flex items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <div className="text-sm">
+                      <div className="font-medium text-amber-900">Remove saved API keys</div>
+                      <p className="text-xs text-amber-800 mt-0.5">
+                        The old Access/Secret Key are still saved so you can switch back. Remove them once UDS is confirmed working — they can read the whole CRM.
+                      </p>
+                    </div>
+                    <Switch checked={clearApiKeys} onCheckedChange={setClearApiKeys} />
+                  </div>
+                )}
+              </>
+            ) : (
+            <>
             <div className="space-y-2">
               <Label htmlFor="accessKey">Access Key *</Label>
               <Input
@@ -837,7 +1036,7 @@ export default function LeadSquaredSettings() {
             <div className="space-y-2">
               <Label htmlFor="secretKey">
                 Secret Key * 
-                {settings.hasCredentials && !secretKeyChanged && (
+                {settings.hasApiKeys && !secretKeyChanged && (
                   <span className="text-xs text-muted-foreground ml-2">(leave blank to keep existing)</span>
                 )}
               </Label>
@@ -845,7 +1044,7 @@ export default function LeadSquaredSettings() {
                 <Input
                   id="secretKey"
                   type={showSecretKey ? "text" : "password"}
-                  placeholder={settings.hasCredentials && !secretKeyChanged ? "••••••••••••" : "Enter your LeadSquared Secret Key"}
+                  placeholder={settings.hasApiKeys && !secretKeyChanged ? "••••••••••••" : "Enter your LeadSquared Secret Key"}
                   value={settings.secretKey}
                   onChange={(e) => {
                     setSettings({ ...settings, secretKey: e.target.value });
@@ -915,6 +1114,8 @@ export default function LeadSquaredSettings() {
                 <>Test Connection</>
               )}
             </Button>
+            </>
+            )}
 
             {connectionStatus && (
               <Alert variant={connectionStatus === "success" ? "default" : "destructive"}>
@@ -947,6 +1148,21 @@ export default function LeadSquaredSettings() {
             </div>
           </CardContent>
         </Card>
+        <AlertDialog open={confirmUdsTestOpen} onOpenChange={setConfirmUdsTestOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Send a test lead to UDS?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This sends one lead named "AI Chroney Test Lead" (phone 9000000000, test.lead@example.com) to the webhook.
+                If the client's UDS flow is live, it will be created in their LeadSquared — ask them to delete it afterwards.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={sendUdsTestLead}>Send test lead</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         </div>
       )}
 

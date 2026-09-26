@@ -12,6 +12,18 @@ import { and, eq, isNull, sql } from "drizzle-orm";
  */
 export async function initializeDatabase() {
   try {
+    // LeadSquared UDS connection columns. Added first: background workers and the
+    // steps below read widget_settings / account_group_training.
+    try {
+      for (const table of ['widget_settings', 'account_group_training']) {
+        await db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS leadsquared_connection_type TEXT NOT NULL DEFAULT 'api'`));
+        await db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS leadsquared_uds_webhook_url TEXT`));
+        await db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS leadsquared_uds_key TEXT`));
+      }
+    } catch (err) {
+      console.error('[INIT] Error adding LeadSquared UDS columns:', err);
+    }
+
     // Recover any stuck Vista Studio jobs from previous server session
     try {
       const recoveredCount = await jewelryImageGeneratorService.recoverStuckJobs();

@@ -82,20 +82,12 @@ export class LeadsquaredRetryWorker {
       for (const [businessAccountId, accountRetryLeads] of accountLeads) {
         try {
           const settings = await storage.getWidgetSettings(businessAccountId);
-          if (!settings || settings.leadsquaredEnabled !== 'true' || !settings.leadsquaredAccessKey || !settings.leadsquaredSecretKey) {
+          const { hasLeadSquaredCredentials, createLeadSquaredServiceFromSettings, extractUtmCampaign, extractUtmSource, extractUtmMedium, buildJourneyCrmContext, buildConversationCrmContext } = await import('./leadsquaredService');
+          if (!settings || settings.leadsquaredEnabled !== 'true' || !hasLeadSquaredCredentials(settings)) {
             continue;
           }
 
-          const { decrypt } = await import('./encryptionService');
-          const decryptedSecretKey = decrypt(settings.leadsquaredSecretKey);
-
-          const { createLeadSquaredService, extractUtmCampaign, extractUtmSource, extractUtmMedium, buildJourneyCrmContext, buildConversationCrmContext } = await import('./leadsquaredService');
-          const leadsquaredService = await createLeadSquaredService({
-            accessKey: settings.leadsquaredAccessKey,
-            secretKey: decryptedSecretKey,
-            region: (settings.leadsquaredRegion as 'india' | 'us' | 'other') || 'other',
-            customHost: settings.leadsquaredCustomHost || undefined,
-          });
+          const leadsquaredService = (await createLeadSquaredServiceFromSettings(settings))!;
 
           const fieldMappings = await storage.getLeadsquaredFieldMappings(businessAccountId);
           const businessAccount = await storage.getBusinessAccount(businessAccountId);

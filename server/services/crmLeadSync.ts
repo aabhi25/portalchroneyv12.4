@@ -1,5 +1,6 @@
 import { storage } from "../storage";
 import type { WidgetSettings } from "@shared/schema";
+import { hasLeadSquaredCredentials } from "./leadsquaredService";
 
 /**
  * Single-lead CRM sync shared by the business-account Leads page and the
@@ -26,9 +27,7 @@ interface SyncOptions {
 export function isLeadSquaredConfigured(settings: WidgetSettings | undefined | null): boolean {
   return !!settings
     && settings.leadsquaredEnabled === 'true'
-    && !!settings.leadsquaredAccessKey
-    && !!settings.leadsquaredSecretKey
-    && !!settings.leadsquaredRegion;
+    && hasLeadSquaredCredentials(settings, { requireRegion: true });
 }
 
 export function isSalesforceConfigured(settings: WidgetSettings | undefined | null): boolean {
@@ -51,7 +50,7 @@ export async function syncLeadToLeadSquared(
     return { status: 400, body: { error: "LeadSquared integration is not enabled" } };
   }
 
-  if (!settings.leadsquaredAccessKey || !settings.leadsquaredSecretKey || !settings.leadsquaredRegion) {
+  if (!hasLeadSquaredCredentials(settings, { requireRegion: true })) {
     return { status: 400, body: { error: "LeadSquared credentials not configured" } };
   }
 
@@ -77,23 +76,15 @@ export async function syncLeadToLeadSquared(
 
   const businessAccount = await storage.getBusinessAccount(businessAccountId);
 
-  const { decrypt } = await import('./encryptionService');
-  const decryptedSecretKey = decrypt(settings.leadsquaredSecretKey);
-
   const {
-    createLeadSquaredService,
+    createLeadSquaredServiceFromSettings,
     extractUtmCampaign,
     extractUtmSource,
     extractUtmMedium,
     buildJourneyCrmContext,
     buildConversationCrmContext,
   } = await import('./leadsquaredService');
-  const leadsquaredService = await createLeadSquaredService({
-    accessKey: settings.leadsquaredAccessKey,
-    secretKey: decryptedSecretKey,
-    region: settings.leadsquaredRegion as 'india' | 'us' | 'other',
-    customHost: settings.leadsquaredCustomHost || undefined,
-  });
+  const leadsquaredService = (await createLeadSquaredServiceFromSettings(settings))!;
 
   // Get field mappings from database (dynamic, configurable)
   const fieldMappings = await storage.getLeadsquaredFieldMappings(businessAccountId);

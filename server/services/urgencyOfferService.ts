@@ -339,20 +339,11 @@ export async function redeemUrgencyOffer(
         try {
           const { storage } = await import("../storage");
           const settings = await storage.getWidgetSettings(offer.businessAccountId);
+          const { hasLeadSquaredCredentials, createLeadSquaredServiceFromSettings } = await import('./leadsquaredService');
           if (settings?.leadsquaredEnabled === 'true' &&
-              settings.leadsquaredAccessKey &&
-              settings.leadsquaredSecretKey) {
+              hasLeadSquaredCredentials(settings)) {
 
-            const { decrypt } = await import('./encryptionService');
-            const decryptedSecretKey = decrypt(settings.leadsquaredSecretKey);
-
-            const { createLeadSquaredService } = await import('./leadsquaredService');
-            const leadsquaredService = await createLeadSquaredService({
-              accessKey: settings.leadsquaredAccessKey,
-              secretKey: decryptedSecretKey,
-              region: settings.leadsquaredRegion as 'india' | 'us' | 'other',
-              customHost: settings.leadsquaredCustomHost || undefined,
-            });
+            const leadsquaredService = (await createLeadSquaredServiceFromSettings(settings))!;
 
             const businessAccount = await storage.getBusinessAccount(offer.businessAccountId);
             const fieldMappings = await storage.getLeadsquaredFieldMappings(offer.businessAccountId);

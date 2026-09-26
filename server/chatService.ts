@@ -1925,29 +1925,21 @@ Response:`;
         return; // Auto-sync not enabled
       }
       
-      if (!settings.leadsquaredAccessKey || !settings.leadsquaredSecretKey || !settings.leadsquaredRegion) {
+      // Import and create LeadSquared service (API keys or UDS webhook)
+      const { hasLeadSquaredCredentials, createLeadSquaredServiceFromSettings, extractUtmCampaign, extractUtmSource, extractUtmMedium, buildJourneyCrmContext, buildConversationCrmContext } = await import('./services/leadsquaredService');
+      if (!hasLeadSquaredCredentials(settings, { requireRegion: true })) {
         console.log('[LeadSquared] Auto-sync enabled but credentials not configured');
         return;
       }
-      
-      // Decrypt the stored secret key (it's encrypted in the database)
-      const { decrypt } = await import('./services/encryptionService');
-      let decryptedSecretKey: string;
+
+      let leadsquaredService;
       try {
-        decryptedSecretKey = decrypt(settings.leadsquaredSecretKey);
+        leadsquaredService = await createLeadSquaredServiceFromSettings(settings);
       } catch (decryptError) {
-        console.error('[LeadSquared] Failed to decrypt secret key:', decryptError);
+        console.error('[LeadSquared] Failed to decrypt stored credentials:', decryptError);
         return;
       }
-      
-      // Import and create LeadSquared service
-      const { createLeadSquaredService, extractUtmCampaign, extractUtmSource, extractUtmMedium, buildJourneyCrmContext, buildConversationCrmContext } = await import('./services/leadsquaredService');
-      const leadsquaredService = await createLeadSquaredService({
-        accessKey: settings.leadsquaredAccessKey,
-        secretKey: decryptedSecretKey,
-        region: settings.leadsquaredRegion as 'india' | 'us' | 'other',
-        customHost: settings.leadsquaredCustomHost || undefined
-      });
+      if (!leadsquaredService) return;
       
       // Get business account info for additional fields
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
@@ -3170,7 +3162,8 @@ Response:`;
       // 1) LeadSquared must be enabled + credentials present.
       const settings = await storage.getWidgetSettings(businessAccountId);
       if (!settings?.leadsquaredEnabled || settings.leadsquaredEnabled !== 'true') return;
-      if (!settings.leadsquaredAccessKey || !settings.leadsquaredSecretKey || !settings.leadsquaredRegion) return;
+      const { hasLeadSquaredCredentials } = await import('./services/leadsquaredService');
+      if (!hasLeadSquaredCredentials(settings, { requireRegion: true })) return;
 
       // 2) At least one enabled dynamic conversation.* mapping must be configured.
       const fieldMappings = await storage.getLeadsquaredFieldMappings(businessAccountId);
