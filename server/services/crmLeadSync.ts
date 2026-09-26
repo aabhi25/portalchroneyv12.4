@@ -15,15 +15,6 @@ export interface CrmSyncResult {
   body: Record<string, unknown>;
 }
 
-interface SyncOptions {
-  /**
-   * Bulk syncs reset the retry counters on success and hand failures to the
-   * background retry worker (same behaviour as the super-admin group sync).
-   * Manual single-lead syncs leave the retry fields alone.
-   */
-  scheduleRetryOnFailure?: boolean;
-}
-
 export function isLeadSquaredConfigured(settings: WidgetSettings | undefined | null): boolean {
   return !!settings
     && settings.leadsquaredEnabled === 'true'
@@ -42,7 +33,6 @@ export function isSalesforceConfigured(settings: WidgetSettings | undefined | nu
 export async function syncLeadToLeadSquared(
   businessAccountId: string,
   leadId: string,
-  options: SyncOptions = {},
 ): Promise<CrmSyncResult> {
   const settings = await storage.getWidgetSettings(businessAccountId);
 
@@ -139,7 +129,8 @@ export async function syncLeadToLeadSquared(
       leadsquaredLeadId: result.leadId,
       leadsquaredSyncError: null,
       leadsquaredSyncPayload: result.syncPayload || null,
-      ...(options.scheduleRetryOnFailure ? { leadsquaredRetryCount: '0', leadsquaredNextRetryAt: null } : {}),
+      leadsquaredRetryCount: '0',
+      leadsquaredNextRetryAt: null,
     });
 
     console.log('[LeadSquared] Lead synced successfully:', leadId, '→', result.leadId);
@@ -150,7 +141,10 @@ export async function syncLeadToLeadSquared(
   await storage.updateLead(leadId, businessAccountId, {
     leadsquaredSyncStatus: 'failed',
     leadsquaredSyncError: result.message,
-    ...(options.scheduleRetryOnFailure ? { leadsquaredRetryCount: '0', leadsquaredNextRetryAt: new Date(Date.now() + 60_000) } : {}),
+    // Hand the failure to the background retry worker with a fresh retry budget;
+    // it gives up early (needs_attention) if the error can't be fixed by retrying.
+    leadsquaredRetryCount: '0',
+    leadsquaredNextRetryAt: new Date(Date.now() + 60_000),
   });
 
   return { status: 400, body: { success: false, error: result.message } };

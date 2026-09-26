@@ -30,7 +30,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
-import { Users, MessageSquare, TrendingUp, Building2, Phone, Mail, Download, Search, X, Calendar, ChevronLeft, ChevronRight, ChevronDown, Loader2, BarChart3, Contact, User, Bot, MapPin, ImageIcon, SlidersHorizontal, Sparkles, CheckCircle2, XCircle, MoreVertical, Info, Copy, Eye, FileText, GitBranch, UserCheck, RefreshCw, Upload, Trash2 } from "lucide-react";
+import { Users, MessageSquare, TrendingUp, Building2, Phone, Mail, Download, Search, X, Calendar, ChevronLeft, ChevronRight, ChevronDown, Loader2, BarChart3, Contact, User, Bot, MapPin, ImageIcon, SlidersHorizontal, Sparkles, CheckCircle2, XCircle, MoreVertical, Info, Copy, Eye, FileText, GitBranch, UserCheck, RefreshCw, Upload, Trash2, AlertTriangle, Clock } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import ReactMarkdown from 'react-markdown';
@@ -1381,9 +1381,17 @@ export default function GroupAdminDashboard() {
                                 <div className="flex items-center gap-1 text-green-600" title="Synced to CRM">
                                   <CheckCircle2 className="h-3.5 w-3.5" />
                                 </div>
-                              ) : lead.leadsquaredSyncStatus === 'failed' ? (
-                                <div className="flex items-center gap-1 text-red-600 cursor-help" title={friendlySyncError(lead.leadsquaredSyncError)}>
+                              ) : lead.leadsquaredSyncStatus === 'needs_attention' ? (
+                                <div className="flex items-center gap-1 text-amber-600 cursor-help" title={`Needs attention (not retried automatically): ${friendlySyncError(lead.leadsquaredSyncError)}`}>
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                </div>
+                              ) : lead.leadsquaredSyncStatus === 'failed' || lead.leadsquaredSyncStatus === 'permanently_failed' ? (
+                                <div className="flex items-center gap-1 text-red-600 cursor-help" title={`${lead.leadsquaredSyncStatus === 'failed' ? 'Retrying automatically' : 'Gave up retrying'}: ${friendlySyncError(lead.leadsquaredSyncError)}`}>
                                   <XCircle className="h-3.5 w-3.5" />
+                                </div>
+                              ) : lead.leadsquaredSyncStatus === 'pending' ? (
+                                <div className="flex items-center gap-1 text-gray-400 cursor-help" title="Sync in progress">
+                                  <Clock className="h-3.5 w-3.5" />
                                 </div>
                               ) : !lead.salesforceSyncStatus ? (
                                 <span className="text-gray-300 text-xs">—</span>
@@ -1460,14 +1468,14 @@ export default function GroupAdminDashboard() {
                                     }
                                     return null;
                                   })()}
-                                  {canSyncLeads && crmByAccount.get(lead.businessAccountId)?.leadsquared && (lead.leadsquaredSyncStatus === 'failed' || !lead.leadsquaredSyncStatus) && (
+                                  {canSyncLeads && crmByAccount.get(lead.businessAccountId)?.leadsquared && lead.leadsquaredSyncStatus !== 'synced' && lead.leadsquaredSyncStatus !== 'disqualified' && (
                                     <DropdownMenuItem
                                       onClick={() => syncLeadMutation.mutate({ lead, crm: 'leadsquared' })}
                                       disabled={syncLeadMutation.isPending}
                                       className="cursor-pointer"
                                     >
                                       <RefreshCw className={`h-4 w-4 mr-2 text-blue-600 ${isSyncingLead(lead.id, 'leadsquared') ? 'animate-spin' : ''}`} />
-                                      {lead.leadsquaredSyncStatus === 'failed' ? 'Retry LSQ Sync' : 'Sync to LeadSquared'}
+                                      {lead.leadsquaredSyncStatus && lead.leadsquaredSyncStatus !== 'pending' ? 'Retry LSQ Sync' : 'Sync to LeadSquared'}
                                     </DropdownMenuItem>
                                   )}
                                   {canSyncLeads && crmByAccount.get(lead.businessAccountId)?.salesforce && (lead.salesforceSyncStatus === 'failed' || !lead.salesforceSyncStatus) && (

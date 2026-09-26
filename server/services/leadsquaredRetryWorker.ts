@@ -1,18 +1,40 @@
 import { storage } from "../storage";
 import { db } from "../db";
 import { leads } from "@shared/schema";
-import { and, eq, lte, lt, isNotNull, sql, or, isNull } from "drizzle-orm";
+import { and, lte, lt, sql, or, isNull, inArray, asc } from "drizzle-orm";
+import { classifyLeadsquaredError } from "./leadsquaredService";
 
-const MAX_RETRY_COUNT = 3;
-const RETRY_DELAYS_MS = [
-  1 * 60 * 1000,
-  5 * 60 * 1000,
-  15 * 60 * 1000,
-];
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+// Wait after each failed attempt: 8 attempts spread over ~2 days, so a
+// LeadSquared / UDS outage (or an overnight network problem) doesn't strand leads.
+const RETRY_DELAYS_MS = [1 * MINUTE, 5 * MINUTE, 15 * MINUTE, 1 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, 24 * HOUR];
+const MAX_RETRY_COUNT = RETRY_DELAYS_MS.length;
 const CHECK_INTERVAL_MS = 2 * 60 * 1000;
+// An automatic sync marks the lead 'pending' just before sending. If it is still
+// pending after this long (server restarted/crashed mid-sync), the worker takes over.
+const PENDING_TIMEOUT_MS = 10 * MINUTE;
 
 function getNextRetryDelay(retryCount: number): number {
   return RETRY_DELAYS_MS[Math.min(retryCount, RETRY_DELAYS_MS.length - 1)];
+}
+
+/**
+ * Called by automatic syncs right before sending a lead. If the process dies
+ * before the sync records its result, the worker retries it once the deadline
+ * passes. Leads whose sync is deliberately held back (e.g. awaiting OTP/CAPTCHA
+ * verification) never get marked, so they are never pushed by the worker.
+ */
+export async function markLeadsquaredSyncPending(leadId: string, businessAccountId: string): Promise<void> {
+  try {
+    await storage.updateLead(leadId, businessAccountId, {
+      leadsquaredSyncStatus: 'pending',
+      leadsquaredNextRetryAt: new Date(Date.now() + PENDING_TIMEOUT_MS),
+    });
+  } catch (err) {
+    // Never block the sync itself on the safety net.
+    console.error('[LSQ Retry] Failed to mark lead pending (continuing):', err);
+  }
 }
 
 export class LeadsquaredRetryWorker {
@@ -45,6 +67,36 @@ export class LeadsquaredRetryWorker {
     console.log('[LSQ Retry] Worker stopped');
   }
 
+  private async recordFailure(leadId: string, businessAccountId: string, currentRetryCount: number, message: string) {
+    const newRetryCount = currentRetryCount + 1;
+    if (classifyLeadsquaredError(message) === 'permanent') {
+      await storage.updateLead(leadId, businessAccountId, {
+        leadsquaredSyncStatus: 'needs_attention',
+        leadsquaredSyncError: message,
+        leadsquaredRetryCount: String(newRetryCount),
+        leadsquaredNextRetryAt: null,
+      });
+      console.log(`[LSQ Retry] Lead ${leadId} needs attention (not retrying): ${message}`);
+    } else if (newRetryCount >= MAX_RETRY_COUNT) {
+      await storage.updateLead(leadId, businessAccountId, {
+        leadsquaredSyncStatus: 'permanently_failed',
+        leadsquaredSyncError: message,
+        leadsquaredRetryCount: String(newRetryCount),
+        leadsquaredNextRetryAt: null,
+      });
+      console.log(`[LSQ Retry] Lead ${leadId} permanently failed after ${newRetryCount} attempts: ${message}`);
+    } else {
+      const nextRetryAt = new Date(Date.now() + getNextRetryDelay(newRetryCount));
+      await storage.updateLead(leadId, businessAccountId, {
+        leadsquaredSyncStatus: 'failed',
+        leadsquaredSyncError: message,
+        leadsquaredRetryCount: String(newRetryCount),
+        leadsquaredNextRetryAt: nextRetryAt,
+      });
+      console.log(`[LSQ Retry] Lead ${leadId} failed attempt ${newRetryCount}/${MAX_RETRY_COUNT}, next retry at ${nextRetryAt.toISOString()}: ${message}`);
+    }
+  }
+
   async processRetries() {
     if (this.isProcessing) return;
     this.isProcessing = true;
@@ -56,7 +108,7 @@ export class LeadsquaredRetryWorker {
         .from(leads)
         .where(
           and(
-            eq(leads.leadsquaredSyncStatus, 'failed'),
+            inArray(leads.leadsquaredSyncStatus, ['failed', 'pending']),
             lt(sql`COALESCE(${leads.leadsquaredRetryCount}::int, 0)`, MAX_RETRY_COUNT),
             or(
               isNull(leads.leadsquaredNextRetryAt),
@@ -64,6 +116,8 @@ export class LeadsquaredRetryWorker {
             )
           )
         )
+        // Oldest-due first so one account's backlog can't starve the rest.
+        .orderBy(sql`${leads.leadsquaredNextRetryAt} ASC NULLS FIRST`, asc(leads.createdAt))
         .limit(50);
 
       if (retryableLeads.length === 0) {
@@ -84,6 +138,16 @@ export class LeadsquaredRetryWorker {
           const settings = await storage.getWidgetSettings(businessAccountId);
           const { hasLeadSquaredCredentials, createLeadSquaredServiceFromSettings, extractUtmCampaign, extractUtmSource, extractUtmMedium, buildJourneyCrmContext, buildConversationCrmContext } = await import('./leadsquaredService');
           if (!settings || settings.leadsquaredEnabled !== 'true' || !hasLeadSquaredCredentials(settings)) {
+            // Park these instead of re-selecting them every run (which would starve
+            // other accounts' retries). Manual sync picks them up once fixed.
+            for (const lead of accountRetryLeads) {
+              await storage.updateLead(lead.id, businessAccountId, {
+                leadsquaredSyncStatus: 'needs_attention',
+                leadsquaredSyncError: 'LeadSquared is off or its credentials are missing for this account',
+                leadsquaredNextRetryAt: null,
+              });
+            }
+            console.log(`[LSQ Retry] Account ${businessAccountId}: LeadSquared off/unconfigured — ${accountRetryLeads.length} lead(s) marked needs_attention`);
             continue;
           }
 
@@ -134,52 +198,19 @@ export class LeadsquaredRetryWorker {
                 await storage.updateLead(lead.id, businessAccountId, {
                   leadsquaredSyncStatus: 'synced',
                   leadsquaredSyncedAt: new Date(),
-                  leadsquaredLeadId: result.leadId,
+                  // UDS may not return an ID; keep any ID we already have.
+                  ...(result.leadId ? { leadsquaredLeadId: result.leadId } : {}),
                   leadsquaredSyncError: null,
                   leadsquaredSyncPayload: result.syncPayload || null,
+                  leadsquaredRetryCount: '0',
+                  leadsquaredNextRetryAt: null,
                 });
                 console.log(`[LSQ Retry] Successfully synced lead ${lead.id} on attempt ${currentRetryCount + 1}`);
               } else {
-                const newRetryCount = currentRetryCount + 1;
-                if (newRetryCount >= MAX_RETRY_COUNT) {
-                  await storage.updateLead(lead.id, businessAccountId, {
-                    leadsquaredSyncStatus: 'permanently_failed',
-                    leadsquaredSyncError: result.message,
-                    leadsquaredRetryCount: String(newRetryCount),
-                    leadsquaredNextRetryAt: null,
-                  });
-                  console.log(`[LSQ Retry] Lead ${lead.id} permanently failed after ${newRetryCount} attempts`);
-                } else {
-                  const nextRetryAt = new Date(Date.now() + getNextRetryDelay(newRetryCount));
-                  await storage.updateLead(lead.id, businessAccountId, {
-                    leadsquaredSyncStatus: 'failed',
-                    leadsquaredSyncError: result.message,
-                    leadsquaredRetryCount: String(newRetryCount),
-                    leadsquaredNextRetryAt: nextRetryAt,
-                  });
-                  console.log(`[LSQ Retry] Lead ${lead.id} failed attempt ${newRetryCount}/${MAX_RETRY_COUNT}, next retry at ${nextRetryAt.toISOString()}`);
-                }
+                await this.recordFailure(lead.id, businessAccountId, currentRetryCount, result.message);
               }
             } catch (syncError: any) {
-              const newRetryCount = currentRetryCount + 1;
-              if (newRetryCount >= MAX_RETRY_COUNT) {
-                await storage.updateLead(lead.id, businessAccountId, {
-                  leadsquaredSyncStatus: 'permanently_failed',
-                  leadsquaredSyncError: syncError.message,
-                  leadsquaredRetryCount: String(newRetryCount),
-                  leadsquaredNextRetryAt: null,
-                });
-                console.log(`[LSQ Retry] Lead ${lead.id} permanently failed after ${newRetryCount} attempts: ${syncError.message}`);
-              } else {
-                const nextRetryAt = new Date(Date.now() + getNextRetryDelay(newRetryCount));
-                await storage.updateLead(lead.id, businessAccountId, {
-                  leadsquaredSyncStatus: 'failed',
-                  leadsquaredSyncError: syncError.message,
-                  leadsquaredRetryCount: String(newRetryCount),
-                  leadsquaredNextRetryAt: nextRetryAt,
-                });
-                console.log(`[LSQ Retry] Lead ${lead.id} error on attempt ${newRetryCount}/${MAX_RETRY_COUNT}: ${syncError.message}`);
-              }
+              await this.recordFailure(lead.id, businessAccountId, currentRetryCount, syncError.message);
             }
           }
         } catch (accountError: any) {

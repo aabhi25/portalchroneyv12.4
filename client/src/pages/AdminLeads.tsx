@@ -33,7 +33,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Download, Contact, Mail, Phone, MessageSquare, Calendar, User, Eye, ChevronLeft, ChevronRight, Search, X, CheckCircle2, XCircle, RefreshCw, Loader2, Users, GitBranch, MoreVertical, MapPin, Trash2, Upload, Info, Copy, Bot, Sparkles, Image as ImageIcon, FileText, Filter, Ban } from "lucide-react";
+import { Download, Contact, Mail, Phone, MessageSquare, Calendar, User, Eye, ChevronLeft, ChevronRight, Search, X, CheckCircle2, XCircle, RefreshCw, Loader2, Users, GitBranch, MoreVertical, MapPin, Trash2, Upload, Info, Copy, Bot, Sparkles, Image as ImageIcon, FileText, Filter, Ban, AlertTriangle, Clock } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -959,10 +959,14 @@ export default function AdminLeads() {
                               <div className="text-green-600" title="Synced to LeadSquared"><CheckCircle2 className="h-3.5 w-3.5" /></div>
                             ) : lead.leadsquaredSyncStatus === 'disqualified' ? (
                               <div className="text-amber-600 cursor-help" title={`Not qualified for LeadSquared: ${lead.leadsquaredSyncError || 'answer did not match the configured qualifying values'}`}><Ban className="h-3.5 w-3.5" /></div>
-                            ) : lead.leadsquaredSyncStatus === 'failed' ? (
-                              <div className="text-red-600 cursor-help" title={`LeadSquared: ${friendlySyncError(lead.leadsquaredSyncError)}`}><XCircle className="h-3.5 w-3.5" /></div>
                             ) : syncLeadMutation.isPending && syncLeadMutation.variables === lead.id ? (
                               <div className="text-blue-600"><Loader2 className="h-3.5 w-3.5 animate-spin" /></div>
+                            ) : lead.leadsquaredSyncStatus === 'needs_attention' ? (
+                              <div className="text-amber-600 cursor-help" title={`LeadSquared — needs attention (not retried automatically): ${friendlySyncError(lead.leadsquaredSyncError)}`}><AlertTriangle className="h-3.5 w-3.5" /></div>
+                            ) : lead.leadsquaredSyncStatus === 'failed' || lead.leadsquaredSyncStatus === 'permanently_failed' ? (
+                              <div className="text-red-600 cursor-help" title={`LeadSquared${lead.leadsquaredSyncStatus === 'failed' ? ' (retrying automatically)' : ' (gave up retrying)'}: ${friendlySyncError(lead.leadsquaredSyncError)}`}><XCircle className="h-3.5 w-3.5" /></div>
+                            ) : lead.leadsquaredSyncStatus === 'pending' ? (
+                              <div className="text-gray-400 cursor-help" title="LeadSquared sync in progress"><Clock className="h-3.5 w-3.5" /></div>
                             ) : (
                               <span className="text-gray-300 text-xs">—</span>
                             )}
@@ -1047,14 +1051,14 @@ export default function AdminLeads() {
                                 }
                                 return null;
                               })()}
-                              {isLeadsquaredConfigured && (lead.leadsquaredSyncStatus === 'failed' || !lead.leadsquaredSyncStatus) && (
+                              {isLeadsquaredConfigured && lead.leadsquaredSyncStatus !== 'synced' && lead.leadsquaredSyncStatus !== 'disqualified' && (
                                 <DropdownMenuItem 
                                   onClick={() => handleSyncLead(lead.id)}
                                   disabled={syncLeadMutation.isPending}
                                   className="cursor-pointer"
                                 >
                                   <RefreshCw className={`h-4 w-4 mr-2 text-blue-600 ${syncLeadMutation.isPending && syncLeadMutation.variables === lead.id ? 'animate-spin' : ''}`} />
-                                  {lead.leadsquaredSyncStatus === 'failed' ? 'Retry LSQ Sync' : 'Sync to LeadSquared'}
+                                  {lead.leadsquaredSyncStatus && lead.leadsquaredSyncStatus !== 'pending' ? 'Retry LSQ Sync' : 'Sync to LeadSquared'}
                                 </DropdownMenuItem>
                               )}
                               {isSalesforceConfigured && (lead.salesforceSyncStatus === 'failed' || !lead.salesforceSyncStatus) && (

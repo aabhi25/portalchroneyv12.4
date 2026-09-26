@@ -2013,6 +2013,8 @@ Response:`;
       
       console.log('[LeadSquared] Auto-sync using dynamic field mappings, count:', fieldMappings.length);
       
+      await (await import('./services/leadsquaredRetryWorker')).markLeadsquaredSyncPending(lead.id, businessAccountId);
+
       // If it's an update AND we have a LeadSquared ID, update existing record
       if (isUpdate && lead.leadsquaredLeadId) {
         console.log('[LeadSquared] Auto-syncing lead update:', lead.id, '→', lead.leadsquaredLeadId);

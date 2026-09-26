@@ -3286,6 +3286,7 @@ Return JSON:
               ...(urlExtraction ? { urlExtraction } : {}),
             };
             
+            await (await import('./services/leadsquaredRetryWorker')).markLeadsquaredSyncPending(lead.id, businessAccountId);
             const syncResult = await leadsquaredService.createLeadWithMappings(fieldMappings, leadContext);
             if (syncResult.success) {
               await storage.updateLead(lead.id, businessAccountId, {
@@ -14774,7 +14775,7 @@ Return ONLY the refined instruction, nothing else.`
           runs.push({
             crm: 'LeadSquared',
             leads: await storage.getUnsyncedLeads(id, fromDate, toDate),
-            sync: (leadId) => syncLeadToLeadSquared(id, leadId, { scheduleRetryOnFailure: true }),
+            sync: (leadId) => syncLeadToLeadSquared(id, leadId),
           });
         }
         if (isSalesforceConfigured(settings)) {
@@ -17408,6 +17409,7 @@ Important:
                         },
                       };
                       
+                      await (await import('./services/leadsquaredRetryWorker')).markLeadsquaredSyncPending(lead.id, businessAccountId);
                       const syncResult = await leadsquaredService.createLeadWithMappings(fieldMappings, leadContext);
                       if (syncResult.success) {
                         await storage.updateLead(lead.id, businessAccountId, {
@@ -25295,6 +25297,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
             console.log('[LeadSquared] Auto-sync using dynamic field mappings, count:', fieldMappings.length);
             
             // Sync to LeadSquared with dynamic field mappings
+            await (await import('./services/leadsquaredRetryWorker')).markLeadsquaredSyncPending(lead.id, businessAccountId);
             const result = await leadsquaredService.createLeadWithMappings(fieldMappings, leadContext);
             
             if (result.success) {

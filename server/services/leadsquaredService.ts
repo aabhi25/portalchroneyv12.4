@@ -1018,6 +1018,31 @@ export function buildSampleLeadContext(
   };
 }
 
+/**
+ * Errors retrying cannot fix (bad credentials, unknown field, no mappings, CRM
+ * turned off) are 'permanent': the lead goes to 'needs_attention' straight away
+ * instead of burning retries. Anything else (timeouts, 5xx, 429, network) is
+ * 'transient' and retried. Unknown errors default to transient.
+ */
+export function classifyLeadsquaredError(message: string | null | undefined): 'transient' | 'permanent' {
+  const m = message || '';
+  const permanent = [
+    /no field mappings configured/i,
+    /credentials not configured|integration is not enabled|leadsquared is off/i,
+    /invalid\s*(access|secret)\s*key|access\s*key|secret\s*key|unauthori[sz]ed|authentication failed|access denied|\bickey\b/i,
+    /returned 40[13]\b|:\s*40[013]\s/i,
+    /(attribute|field|schema\s*name)\b.{0,60}\b(not found|does not exist|doesn't exist|is invalid|invalid)/i,
+    /invalid\s+(lead\s+)?(attribute|field|schema)/i,
+    /MXInvalid|MXUnAuthorized|MXAccessDenied/i,
+    /not qualified/i,
+    /decrypt/i,
+  ];
+  if (/\b(429|5\d\d)\b|timed out|timeout|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|network/i.test(m)) {
+    return 'transient';
+  }
+  return permanent.some(re => re.test(m)) ? 'permanent' : 'transient';
+}
+
 /** UDS webhooks must be HTTPS; returns an error message or null. */
 export function validateUdsWebhookUrl(url: string): string | null {
   try {

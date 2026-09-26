@@ -398,6 +398,7 @@ export async function redeemUrgencyOffer(
               ...(urlExtraction ? { urlExtraction } : {}),
             };
 
+            await (await import('./leadsquaredRetryWorker')).markLeadsquaredSyncPending(createdLead.id, offer.businessAccountId);
             const syncResult = await leadsquaredService.createLeadWithMappings(fieldMappings, leadContext);
             if (syncResult.success) {
               await storage.updateLead(createdLead.id, offer.businessAccountId, {

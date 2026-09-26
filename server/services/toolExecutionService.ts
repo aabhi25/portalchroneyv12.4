@@ -138,6 +138,7 @@ export async function syncLeadToLeadSquared(
     
     console.log('[LeadSquared-Tool] Auto-sync using dynamic field mappings, count:', fieldMappings.length);
     
+    await (await import('./leadsquaredRetryWorker')).markLeadsquaredSyncPending(lead.id, businessAccountId);
     if (isUpdate && lead.leadsquaredLeadId) {
       console.log('[LeadSquared-Tool] Auto-syncing lead update:', lead.id, '→', lead.leadsquaredLeadId);
       const result = await leadsquaredService.updateLeadWithMappings(lead.leadsquaredLeadId, fieldMappings, leadContext, changedFields);
