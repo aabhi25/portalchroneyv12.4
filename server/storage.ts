@@ -309,6 +309,8 @@ export interface IStorage {
   countLeadsForAccount(businessAccountId: string): Promise<number>;
   deleteSelectedLeads(ids: string[], businessAccountId: string): Promise<number>;
   deleteAllLeadsForAccount(businessAccountId: string): Promise<number>;
+  deleteLeadsInAccounts(ids: string[], businessAccountIds: string[]): Promise<{ deletedCount: number; byAccount: Record<string, number> }>;
+  deleteConversationsInAccounts(ids: string[], businessAccountIds: string[]): Promise<{ deletedCount: number; byAccount: Record<string, number> }>;
 
   // Question Bank methods
   createQuestionBankEntry(entry: InsertQuestionBankEntry): Promise<QuestionBankEntry>;
@@ -2273,6 +2275,45 @@ export class DatabaseStorage implements IStorage {
         .where(and(eq(leads.businessAccountId, businessAccountId), inArray(leads.id, ids)))
         .returning({ id: leads.id });
       return deleted.length;
+    });
+  }
+
+  // All-or-nothing delete of leads that must all belong to one of the given accounts
+  // (a group's members). Throws if any ID is missing or outside those accounts.
+  async deleteLeadsInAccounts(ids: string[], businessAccountIds: string[]): Promise<{ deletedCount: number; byAccount: Record<string, number> }> {
+    if (ids.length === 0 || businessAccountIds.length === 0) return { deletedCount: 0, byAccount: {} };
+    return db.transaction(async (tx) => {
+      const scope = and(inArray(leads.id, ids), inArray(leads.businessAccountId, businessAccountIds));
+      const matching = await tx.select({ id: leads.id }).from(leads).where(scope).for("update");
+      if (matching.length !== ids.length) {
+        throw new Error("Some selected leads no longer exist or are outside this group");
+      }
+      const deleted = await tx.delete(leads).where(scope)
+        .returning({ id: leads.id, businessAccountId: leads.businessAccountId });
+      const byAccount: Record<string, number> = {};
+      for (const row of deleted) byAccount[row.businessAccountId] = (byAccount[row.businessAccountId] || 0) + 1;
+      return { deletedCount: deleted.length, byAccount };
+    });
+  }
+
+  // Same for conversations. Messages, journey responses/sessions and OTP challenges
+  // cascade; leads, appointments and tickets keep their row with conversation_id cleared.
+  async deleteConversationsInAccounts(ids: string[], businessAccountIds: string[]): Promise<{ deletedCount: number; byAccount: Record<string, number> }> {
+    if (ids.length === 0 || businessAccountIds.length === 0) return { deletedCount: 0, byAccount: {} };
+    return db.transaction(async (tx) => {
+      const scope = and(inArray(conversations.id, ids), inArray(conversations.businessAccountId, businessAccountIds));
+      const matching = await tx.select({ id: conversations.id }).from(conversations).where(scope).for("update");
+      if (matching.length !== ids.length) {
+        throw new Error("Some selected conversations no longer exist or are outside this group");
+      }
+      const deleted = await tx.delete(conversations).where(scope)
+        .returning({ id: conversations.id, businessAccountId: conversations.businessAccountId });
+      const byAccount: Record<string, number> = {};
+      for (const row of deleted) {
+        const key = row.businessAccountId || 'unknown';
+        byAccount[key] = (byAccount[key] || 0) + 1;
+      }
+      return { deletedCount: deleted.length, byAccount };
     });
   }
 

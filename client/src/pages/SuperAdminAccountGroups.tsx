@@ -133,6 +133,7 @@ interface GroupAdmin {
   canViewAnalytics: boolean;
   canExportData: boolean;
   canSyncLeads: boolean;
+  canDeleteData: boolean;
   assignedAt: string;
   userCreatedAt: string;
   lastLoginAt: string | null;
@@ -166,7 +167,7 @@ export default function SuperAdminAccountGroups() {
   const [adminsGroup, setAdminsGroup] = useState<AccountGroup | null>(null);
   const [isAddAdminDialogOpen, setIsAddAdminDialogOpen] = useState(false);
   const [newAdminUserId, setNewAdminUserId] = useState("");
-  const [newAdminPerms, setNewAdminPerms] = useState({ conversations: true, leads: true, analytics: true, export: false, syncLeads: false });
+  const [newAdminPerms, setNewAdminPerms] = useState({ conversations: true, leads: true, analytics: true, export: false, syncLeads: false, deleteData: false });
   const [isCreateAdminUserDialogOpen, setIsCreateAdminUserDialogOpen] = useState(false);
   const [newAdminUsername, setNewAdminUsername] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
@@ -422,7 +423,7 @@ export default function SuperAdminAccountGroups() {
   });
 
   const addGroupAdminMutation = useMutation({
-    mutationFn: async (data: { groupId: string; userId: string; canViewConversations: boolean; canViewLeads: boolean; canViewAnalytics: boolean; canExportData: boolean; canSyncLeads: boolean }) => {
+    mutationFn: async (data: { groupId: string; userId: string; canViewConversations: boolean; canViewLeads: boolean; canViewAnalytics: boolean; canExportData: boolean; canSyncLeads: boolean; canDeleteData: boolean }) => {
       return await apiRequest("POST", `/api/super-admin/account-groups/${data.groupId}/admins`, {
         userId: data.userId,
         canViewConversations: data.canViewConversations,
@@ -430,6 +431,7 @@ export default function SuperAdminAccountGroups() {
         canViewAnalytics: data.canViewAnalytics,
         canExportData: data.canExportData,
         canSyncLeads: data.canSyncLeads,
+        canDeleteData: data.canDeleteData,
       });
     },
     onSuccess: () => {
@@ -437,7 +439,7 @@ export default function SuperAdminAccountGroups() {
       queryClient.invalidateQueries({ queryKey: ["/api/super-admin/group-admin-users"] });
       setIsAddAdminDialogOpen(false);
       setNewAdminUserId("");
-      setNewAdminPerms({ conversations: true, leads: true, analytics: true, export: false, syncLeads: false });
+      setNewAdminPerms({ conversations: true, leads: true, analytics: true, export: false, syncLeads: false, deleteData: false });
       toast({ title: "Admin Added", description: "User has been assigned as group admin" });
     },
     onError: (error: Error) => {
@@ -459,13 +461,14 @@ export default function SuperAdminAccountGroups() {
   });
 
   const updateGroupAdminMutation = useMutation({
-    mutationFn: async (data: { groupId: string; userId: string; canViewConversations: boolean; canViewLeads: boolean; canViewAnalytics: boolean; canExportData: boolean; canSyncLeads: boolean }) => {
+    mutationFn: async (data: { groupId: string; userId: string; canViewConversations: boolean; canViewLeads: boolean; canViewAnalytics: boolean; canExportData: boolean; canSyncLeads: boolean; canDeleteData: boolean }) => {
       return await apiRequest("PUT", `/api/super-admin/account-groups/${data.groupId}/admins/${data.userId}`, {
         canViewConversations: data.canViewConversations,
         canViewLeads: data.canViewLeads,
         canViewAnalytics: data.canViewAnalytics,
         canExportData: data.canExportData,
         canSyncLeads: data.canSyncLeads,
+        canDeleteData: data.canDeleteData,
       });
     },
     onSuccess: () => {
@@ -1093,6 +1096,7 @@ export default function SuperAdminAccountGroups() {
                                 ['canViewAnalytics', 'Analytics'],
                                 ['canExportData', 'Export'],
                                 ['canSyncLeads', 'Sync Leads'],
+                                ['canDeleteData', 'Delete'],
                               ] as const).map(([key, label]) => (
                                 <button
                                   key={key}
@@ -1109,6 +1113,7 @@ export default function SuperAdminAccountGroups() {
                                       canViewAnalytics: admin.canViewAnalytics,
                                       canExportData: admin.canExportData,
                                       canSyncLeads: admin.canSyncLeads,
+                                      canDeleteData: admin.canDeleteData,
                                       [key]: !admin[key],
                                     });
                                   }}
@@ -1221,6 +1226,13 @@ export default function SuperAdminAccountGroups() {
                   <span className="text-sm">Sync Leads to CRM</span>
                   <Switch checked={newAdminPerms.syncLeads} onCheckedChange={v => setNewAdminPerms(p => ({ ...p, syncLeads: v }))} />
                 </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm">
+                    Delete Leads &amp; Conversations
+                    <span className="block text-xs text-muted-foreground">Permanent — deleted data cannot be recovered</span>
+                  </span>
+                  <Switch checked={newAdminPerms.deleteData} onCheckedChange={v => setNewAdminPerms(p => ({ ...p, deleteData: v }))} />
+                </div>
               </div>
             </div>
           </div>
@@ -1238,6 +1250,7 @@ export default function SuperAdminAccountGroups() {
                     canViewAnalytics: newAdminPerms.analytics,
                     canExportData: newAdminPerms.export,
                     canSyncLeads: newAdminPerms.syncLeads,
+                    canDeleteData: newAdminPerms.deleteData,
                   });
                 }
               }}

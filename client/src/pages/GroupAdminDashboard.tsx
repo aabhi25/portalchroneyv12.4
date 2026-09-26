@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -29,7 +30,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
-import { Users, MessageSquare, TrendingUp, Building2, Phone, Mail, Download, Search, X, Calendar, ChevronLeft, ChevronRight, ChevronDown, Loader2, BarChart3, Contact, User, Bot, MapPin, ImageIcon, SlidersHorizontal, Sparkles, CheckCircle2, XCircle, MoreVertical, Info, Copy, Eye, FileText, GitBranch, UserCheck, RefreshCw, Upload } from "lucide-react";
+import { Users, MessageSquare, TrendingUp, Building2, Phone, Mail, Download, Search, X, Calendar, ChevronLeft, ChevronRight, ChevronDown, Loader2, BarChart3, Contact, User, Bot, MapPin, ImageIcon, SlidersHorizontal, Sparkles, CheckCircle2, XCircle, MoreVertical, Info, Copy, Eye, FileText, GitBranch, UserCheck, RefreshCw, Upload, Trash2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import ReactMarkdown from 'react-markdown';
@@ -49,7 +50,11 @@ interface GroupAssignment {
   canViewAnalytics: boolean;
   canExportData: boolean;
   canSyncLeads: boolean;
+  canDeleteData: boolean;
 }
+
+// Server-side cap per bulk delete request.
+const MAX_BULK_DELETE = 200;
 
 type CrmName = 'leadsquared' | 'salesforce';
 type SyncWindow = 'today' | 'yesterday' | 'last3days' | 'last7days';
@@ -749,6 +754,54 @@ export default function GroupAdminDashboard() {
     }
   };
 
+  // ---- Bulk delete (only for admins with the "Delete" permission) ----
+  const canDeleteLeads = !!selectedGroup?.canViewLeads && !!selectedGroup?.canDeleteData;
+  const canDeleteConversations = !!selectedGroup?.canViewConversations && !!selectedGroup?.canDeleteData;
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
+  const [selectedConvoIds, setSelectedConvoIds] = useState<Set<string>>(new Set());
+  const [deleteTarget, setDeleteTarget] = useState<'leads' | 'conversations' | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+
+  // A selection only makes sense for the list it was made on.
+  useEffect(() => { setSelectedLeadIds(new Set()); }, [selectedGroupId, leadsQueryParams]);
+  useEffect(() => { setSelectedConvoIds(new Set()); }, [selectedGroupId, convoQueryParams, convoTypeFilter]);
+
+  const toggleId = (setter: typeof setSelectedLeadIds, id: string, checked: boolean) => {
+    setter(previous => {
+      const next = new Set(previous);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async ({ target, ids }: { target: 'leads' | 'conversations'; ids: string[] }) => {
+      return await apiRequest<{ deletedCount: number }>("POST", `/api/group-admin/groups/${selectedGroupId}/${target}/bulk-delete`, { ids });
+    },
+    onSuccess: (data, { target, ids }) => {
+      toast({
+        title: target === 'leads' ? "Leads deleted" : "Conversations deleted",
+        description: `${data.deletedCount} ${target === 'leads' ? 'lead' : 'conversation'}${data.deletedCount === 1 ? '' : 's'} permanently deleted.`,
+      });
+      if (target === 'leads') {
+        setSelectedLeadIds(new Set());
+      } else {
+        setSelectedConvoIds(new Set());
+        if (selectedConversationId && ids.includes(selectedConversationId)) setSelectedConversationId(null);
+      }
+      setDeleteTarget(null);
+      setDeleteConfirmText("");
+      // Leads, conversations and analytics counts all change.
+      queryClient.invalidateQueries({ queryKey: ["/api/group-admin/groups", selectedGroupId] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Delete failed", description: error.message, variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: ["/api/group-admin/groups", selectedGroupId] });
+    },
+  });
+
+  const deleteIds = deleteTarget === 'leads' ? Array.from(selectedLeadIds) : Array.from(selectedConvoIds);
+
   if (loadingGroups) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -985,6 +1038,31 @@ export default function GroupAdminDashboard() {
                       ({leadsDatePreset === 'custom' ? 'Custom range' : leadsDatePreset === 'today' ? 'Today' : leadsDatePreset === 'yesterday' ? 'Yesterday' : leadsDatePreset === 'last7' ? 'Last 7 days' : leadsDatePreset === 'currentMonth' ? 'This month' : 'Last month'})
                     </span>
                   )}
+                  {canDeleteLeads && allLeads.length > 0 && (
+                    <div className="ml-auto flex items-center gap-2">
+                      <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
+                        <Checkbox
+                          aria-label="Select loaded leads"
+                          checked={selectedLeadIds.size > 0 && (selectedLeadIds.size === Math.min(allLeads.length, MAX_BULK_DELETE) ? true : "indeterminate")}
+                          onCheckedChange={(checked) =>
+                            setSelectedLeadIds(checked === true ? new Set(allLeads.slice(0, MAX_BULK_DELETE).map(l => l.id)) : new Set())
+                          }
+                        />
+                        {selectedLeadIds.size > 0 ? `${selectedLeadIds.size} selected` : `Select ${allLeads.length > MAX_BULK_DELETE ? `first ${MAX_BULK_DELETE}` : 'all loaded'}`}
+                      </label>
+                      {selectedLeadIds.size > 0 && (
+                        <>
+                          <Button size="sm" variant="destructive" className="h-7" onClick={() => setDeleteTarget('leads')}>
+                            <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                            Delete
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-gray-500" onClick={() => setSelectedLeadIds(new Set())}>
+                            Clear
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1120,8 +1198,16 @@ export default function GroupAdminDashboard() {
                       return (
                         <div
                           key={lead.id}
-                          className={`group flex items-center gap-4 px-6 py-3.5 transition-all duration-150 hover:bg-purple-50/40 border-l-3 border-l-transparent hover:border-l-purple-400 cursor-default ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}
+                          className={`group flex items-center gap-4 px-6 py-3.5 transition-all duration-150 hover:bg-purple-50/40 border-l-3 border-l-transparent hover:border-l-purple-400 cursor-default ${selectedLeadIds.has(lead.id) ? 'bg-red-50/40' : index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}
                         >
+                          {canDeleteLeads && (
+                            <Checkbox
+                              aria-label={`Select lead ${lead.name || lead.phone || lead.id}`}
+                              checked={selectedLeadIds.has(lead.id)}
+                              disabled={!selectedLeadIds.has(lead.id) && selectedLeadIds.size >= MAX_BULK_DELETE}
+                              onCheckedChange={(checked) => toggleId(setSelectedLeadIds, lead.id, checked === true)}
+                            />
+                          )}
                           <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm ${isAnonymous ? 'bg-gray-200' : `bg-gradient-to-br ${avatarColors[colorIndex]}`}`}>
                             {isAnonymous ? (
                               <User className="w-4 h-4 text-gray-500" />
@@ -1578,6 +1664,32 @@ export default function GroupAdminDashboard() {
                   ))}
                 </div>
 
+                {canDeleteConversations && filteredConversations.length > 0 && (
+                  <div className="px-4 py-2 border-b border-gray-200 flex items-center gap-2 bg-gray-50/60">
+                    <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
+                      <Checkbox
+                        aria-label="Select conversations on this page"
+                        checked={selectedConvoIds.size > 0 && (filteredConversations.every(c => selectedConvoIds.has(c.id)) ? true : "indeterminate")}
+                        onCheckedChange={(checked) =>
+                          setSelectedConvoIds(checked === true ? new Set(filteredConversations.slice(0, MAX_BULK_DELETE).map(c => c.id)) : new Set())
+                        }
+                      />
+                      {selectedConvoIds.size > 0 ? `${selectedConvoIds.size} selected` : 'Select all on this page'}
+                    </label>
+                    {selectedConvoIds.size > 0 && (
+                      <div className="ml-auto flex items-center gap-1">
+                        <Button size="sm" variant="ghost" className="h-7 text-gray-500" onClick={() => setSelectedConvoIds(new Set())}>
+                          Clear
+                        </Button>
+                        <Button size="sm" variant="destructive" className="h-7" onClick={() => setDeleteTarget('conversations')}>
+                          <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                          Delete
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex-1 overflow-y-auto overscroll-contain">
                   {loadingConversations ? (
                     <div className="flex justify-center py-8">
@@ -1603,6 +1715,16 @@ export default function GroupAdminDashboard() {
                           }`}
                         >
                           <div className="flex items-start gap-3">
+                            {canDeleteConversations && (
+                              <div className="pt-2.5" onClick={(e) => e.stopPropagation()}>
+                                <Checkbox
+                                  aria-label={`Select conversation ${conversation.title || conversation.id}`}
+                                  checked={selectedConvoIds.has(conversation.id)}
+                                  disabled={!selectedConvoIds.has(conversation.id) && selectedConvoIds.size >= MAX_BULK_DELETE}
+                                  onCheckedChange={(checked) => toggleId(setSelectedConvoIds, conversation.id, checked === true)}
+                                />
+                              </div>
+                            )}
                             <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
                               conversation.viaJourney
                                 ? 'bg-gradient-to-br from-violet-500 to-purple-600'
@@ -2078,6 +2200,57 @@ export default function GroupAdminDashboard() {
           )}
         </TabsContent>
       </Tabs>
+
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !bulkDeleteMutation.isPending) { setDeleteTarget(null); setDeleteConfirmText(""); }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <Trash2 className="w-5 h-5" />
+              Delete {deleteIds.length} {deleteTarget === 'leads' ? 'lead' : 'conversation'}{deleteIds.length === 1 ? '' : 's'}?
+            </DialogTitle>
+            <DialogDescription>
+              {deleteTarget === 'leads'
+                ? "The selected leads are permanently removed from AI Chroney. Their conversations are kept, and leads already sent to LeadSquared or Salesforce stay in the CRM."
+                : "The selected conversations and all their messages, journey answers and form data are permanently removed. Leads captured in them are kept but lose their chat link."}
+              {" "}This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label htmlFor="confirm-bulk-delete" className="text-sm text-gray-700">
+              Type <span className="font-mono font-semibold">DELETE</span> to confirm
+            </label>
+            <Input
+              id="confirm-bulk-delete"
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              autoComplete="off"
+              disabled={bulkDeleteMutation.isPending}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={bulkDeleteMutation.isPending}
+              onClick={() => { setDeleteTarget(null); setDeleteConfirmText(""); }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={bulkDeleteMutation.isPending || deleteConfirmText !== "DELETE" || deleteIds.length === 0}
+              onClick={() => deleteTarget && bulkDeleteMutation.mutate({ target: deleteTarget, ids: deleteIds })}
+            >
+              {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+              {bulkDeleteMutation.isPending ? 'Deleting…' : `Delete ${deleteIds.length}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={bulkSyncOpen} onOpenChange={(open) => { if (!bulkSyncMutation.isPending) setBulkSyncOpen(open); }}>
         <DialogContent className="max-w-lg">

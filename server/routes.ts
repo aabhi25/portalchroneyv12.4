@@ -12954,6 +12954,7 @@ Return ONLY the refined instruction, nothing else.`
           canViewAnalytics: accountGroupAdmins.canViewAnalytics,
           canExportData: accountGroupAdmins.canExportData,
           canSyncLeads: accountGroupAdmins.canSyncLeads,
+          canDeleteData: accountGroupAdmins.canDeleteData,
           assignedAt: accountGroupAdmins.createdAt,
           userCreatedAt: users.createdAt,
           lastLoginAt: users.lastLoginAt,
@@ -12971,6 +12972,7 @@ Return ONLY the refined instruction, nothing else.`
           canViewAnalytics: a.canViewAnalytics === "true",
           canExportData: a.canExportData === "true",
           canSyncLeads: a.canSyncLeads === "true",
+          canDeleteData: a.canDeleteData === "true",
           assignedAt: a.assignedAt,
           userCreatedAt: a.userCreatedAt,
           lastLoginAt: a.lastLoginAt,
@@ -13005,7 +13007,7 @@ Return ONLY the refined instruction, nothing else.`
   app.post("/api/super-admin/account-groups/:groupId/admins", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const { groupId } = req.params;
-      const { userId, canViewConversations, canViewLeads, canViewAnalytics, canExportData, canSyncLeads } = req.body;
+      const { userId, canViewConversations, canViewLeads, canViewAnalytics, canExportData, canSyncLeads, canDeleteData } = req.body;
       
       if (!userId) {
         return res.status(400).json({ error: "User ID is required" });
@@ -13049,6 +13051,7 @@ Return ONLY the refined instruction, nothing else.`
         canViewAnalytics: canViewAnalytics ? "true" : "false",
         canExportData: canExportData ? "true" : "false",
         canSyncLeads: canSyncLeads ? "true" : "false",
+        canDeleteData: canDeleteData ? "true" : "false",
       });
       
       res.json({ success: true, message: "User added as group admin" });
@@ -13062,7 +13065,7 @@ Return ONLY the refined instruction, nothing else.`
   app.put("/api/super-admin/account-groups/:groupId/admins/:userId", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const { groupId, userId } = req.params;
-      const { canViewConversations, canViewLeads, canViewAnalytics, canExportData, canSyncLeads } = req.body;
+      const { canViewConversations, canViewLeads, canViewAnalytics, canExportData, canSyncLeads, canDeleteData } = req.body;
       
       // Verify assignment exists
       const [existing] = await db
@@ -13086,6 +13089,7 @@ Return ONLY the refined instruction, nothing else.`
           canExportData: canExportData ? "true" : "false",
           // Older clients don't send canSyncLeads — keep the stored value instead of revoking it.
           ...(canSyncLeads !== undefined ? { canSyncLeads: canSyncLeads ? "true" : "false" } : {}),
+          ...(canDeleteData !== undefined ? { canDeleteData: canDeleteData ? "true" : "false" } : {}),
         })
         .where(and(
           eq(accountGroupAdmins.groupId, groupId),
@@ -14383,6 +14387,100 @@ Return ONLY the refined instruction, nothing else.`
     } catch (error: any) {
       console.error('[Group Admin] Error fetching leads:', error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Group Admin: bulk delete leads / conversations
+  // Requires the canDeleteData permission (set per admin by the super admin) plus
+  // view access to what is being deleted. All-or-nothing, max 200 per request,
+  // scoped to the group's member accounts, and always audit-logged.
+  // ---------------------------------------------------------------------------
+  const groupBulkDeleteBody = z.object({
+    ids: z.array(z.string().min(1).max(255)).min(1).max(200),
+  }).strict();
+
+  app.post("/api/group-admin/groups/:groupId/leads/bulk-delete", requireAuth, requireGroupAdmin, async (req, res) => {
+    const { groupId } = req.params;
+    try {
+      const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
+      if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
+      if (!permissions.canViewLeads || !permissions.canDeleteData) {
+        return res.status(403).json({ error: "No permission to delete leads" });
+      }
+
+      const parsed = groupBulkDeleteBody.safeParse(req.body);
+      if (!parsed.success || new Set(parsed.data.ids).size !== parsed.data.ids.length) {
+        return res.status(400).json({ error: "Provide 1 to 200 unique lead IDs" });
+      }
+
+      const accountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
+      const { deletedCount, byAccount } = await storage.deleteLeadsInAccounts(parsed.data.ids, accountIds);
+
+      await recordAuditEventSafely(req, {
+        action: "leads.bulk_deleted",
+        outcome: "success",
+        actorUserId: req.user!.id,
+        actorUsername: req.user!.username,
+        actorRole: req.user!.role,
+        resourceType: "account_group",
+        resourceId: groupId,
+        // Audit metadata keeps flat values/arrays only (max 50 items): per-account counts as "accountId:count".
+        metadata: {
+          deletedCount,
+          accounts: Object.entries(byAccount).map(([accountId, n]) => `${accountId}:${n}`),
+          leadIds: parsed.data.ids,
+          idsTruncated: parsed.data.ids.length > 50,
+        },
+      });
+
+      res.json({ deletedCount });
+    } catch (error: any) {
+      const outsideScope = /no longer exist or are outside this group/.test(error.message || '');
+      if (!outsideScope) console.error('[Group Admin] Error deleting leads:', error);
+      res.status(outsideScope ? 409 : 500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/group-admin/groups/:groupId/conversations/bulk-delete", requireAuth, requireGroupAdmin, async (req, res) => {
+    const { groupId } = req.params;
+    try {
+      const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
+      if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
+      if (!permissions.canViewConversations || !permissions.canDeleteData) {
+        return res.status(403).json({ error: "No permission to delete conversations" });
+      }
+
+      const parsed = groupBulkDeleteBody.safeParse(req.body);
+      if (!parsed.success || new Set(parsed.data.ids).size !== parsed.data.ids.length) {
+        return res.status(400).json({ error: "Provide 1 to 200 unique conversation IDs" });
+      }
+
+      const accountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
+      const { deletedCount, byAccount } = await storage.deleteConversationsInAccounts(parsed.data.ids, accountIds);
+
+      await recordAuditEventSafely(req, {
+        action: "conversations.bulk_deleted",
+        outcome: "success",
+        actorUserId: req.user!.id,
+        actorUsername: req.user!.username,
+        actorRole: req.user!.role,
+        resourceType: "account_group",
+        resourceId: groupId,
+        // Audit metadata keeps flat values/arrays only (max 50 items): per-account counts as "accountId:count".
+        metadata: {
+          deletedCount,
+          accounts: Object.entries(byAccount).map(([accountId, n]) => `${accountId}:${n}`),
+          conversationIds: parsed.data.ids,
+          idsTruncated: parsed.data.ids.length > 50,
+        },
+      });
+
+      res.json({ deletedCount });
+    } catch (error: any) {
+      const outsideScope = /no longer exist or are outside this group/.test(error.message || '');
+      if (!outsideScope) console.error('[Group Admin] Error deleting conversations:', error);
+      res.status(outsideScope ? 409 : 500).json({ error: error.message });
     }
   });
 

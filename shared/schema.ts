@@ -1328,6 +1328,7 @@ export const accountGroupAdmins = pgTable("account_group_admins", {
   canViewAnalytics: text("can_view_analytics").notNull().default("true"), // 'true' | 'false'
   canExportData: text("can_export_data").notNull().default("false"), // 'true' | 'false'
   canSyncLeads: text("can_sync_leads").notNull().default("false"), // 'true' | 'false' - Can push the group's leads to each account's CRM (LeadSquared/Salesforce)
+  canDeleteData: text("can_delete_data").notNull().default("false"), // 'true' | 'false' - Can permanently delete the group's leads and conversations
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => [
   index("account_group_admins_user_idx").on(table.userId),

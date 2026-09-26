@@ -195,6 +195,7 @@ export async function getGroupAdminAssignments(userId: string) {
       canViewAnalytics: accountGroupAdmins.canViewAnalytics,
       canExportData: accountGroupAdmins.canExportData,
       canSyncLeads: accountGroupAdmins.canSyncLeads,
+      canDeleteData: accountGroupAdmins.canDeleteData,
     })
     .from(accountGroupAdmins)
     .innerJoin(accountGroups, eq(accountGroupAdmins.groupId, accountGroups.id))
@@ -209,6 +210,7 @@ export async function getGroupAdminAssignments(userId: string) {
     canViewAnalytics: a.canViewAnalytics === "true",
     canExportData: a.canExportData === "true",
     canSyncLeads: a.canSyncLeads === "true",
+    canDeleteData: a.canDeleteData === "true",
   }));
 }
 
@@ -234,6 +236,7 @@ export async function getGroupAdminPermissions(userId: string, groupId: string) 
     canViewAnalytics: assignment.canViewAnalytics === "true",
     canExportData: assignment.canExportData === "true",
     canSyncLeads: assignment.canSyncLeads === "true",
+    canDeleteData: assignment.canDeleteData === "true",
     groupId: assignment.groupId,
   };
 }
