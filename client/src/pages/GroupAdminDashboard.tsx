@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
 import { FormSubmissionDetails } from "@/components/FormSubmissionDetails";
-import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
+import { useQuery, useInfiniteQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,8 +29,8 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
-import { Users, MessageSquare, TrendingUp, Building2, Phone, Mail, Download, Search, X, Calendar, ChevronLeft, ChevronRight, ChevronDown, Loader2, BarChart3, Contact, User, Bot, MapPin, ImageIcon, SlidersHorizontal, Sparkles, CheckCircle2, XCircle, MoreVertical, Info, Copy, Eye, FileText, GitBranch, UserCheck } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Users, MessageSquare, TrendingUp, Building2, Phone, Mail, Download, Search, X, Calendar, ChevronLeft, ChevronRight, ChevronDown, Loader2, BarChart3, Contact, User, Bot, MapPin, ImageIcon, SlidersHorizontal, Sparkles, CheckCircle2, XCircle, MoreVertical, Info, Copy, Eye, FileText, GitBranch, UserCheck, RefreshCw, Upload } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -47,6 +48,35 @@ interface GroupAssignment {
   canViewLeads: boolean;
   canViewAnalytics: boolean;
   canExportData: boolean;
+  canSyncLeads: boolean;
+}
+
+type CrmName = 'leadsquared' | 'salesforce';
+type SyncWindow = 'today' | 'yesterday' | 'last3days' | 'last7days';
+
+const SYNC_WINDOW_LABELS: Record<SyncWindow, string> = {
+  today: 'Today',
+  yesterday: 'Yesterday',
+  last3days: 'Last 3 days',
+  last7days: 'Last 7 days',
+};
+
+interface AccountCrmStatus {
+  businessAccountId: string;
+  leadsquared: boolean;
+  salesforce: boolean;
+}
+
+interface UnsyncedPreview {
+  totalUnsynced: number;
+  accounts: { businessAccountId: string; accountName: string; leadsquared: number | null; salesforce: number | null }[];
+}
+
+interface BulkSyncResult {
+  totalSynced: number;
+  totalFailed: number;
+  remaining: number;
+  accounts: { businessAccountId: string; accountName: string; synced: number; failed: number; errors: string[] }[];
 }
 
 interface AccountInfo {
@@ -101,6 +131,8 @@ interface LeadItem {
   leadsquaredSyncError?: string | null;
   leadsquaredSyncedAt?: string | null;
   leadsquaredSyncPayload?: Record<string, unknown> | null;
+  salesforceSyncStatus?: string | null;
+  salesforceSyncError?: string | null;
   topicsOfInterest?: string[] | null;
 }
 
@@ -399,6 +431,98 @@ export default function GroupAdminDashboard() {
   const allLeads = useMemo(() => leadsInfiniteData?.pages.flatMap(p => p.leads) || [], [leadsInfiniteData]);
   const leadsTotal = leadsInfiniteData?.pages[0]?.total || 0;
   const leadsUniqueLeads = leadsInfiniteData?.pages[0]?.uniqueLeads ?? null;
+
+  // ---- CRM sync (only for admins with the "Can sync leads" permission) ----
+  const canSyncLeads = !!selectedGroup?.canViewLeads && !!selectedGroup?.canSyncLeads;
+
+  const { data: crmStatusData } = useQuery<{ accounts: AccountCrmStatus[] }>({
+    queryKey: ["/api/group-admin/groups", selectedGroupId, "crm-status"],
+    queryFn: async () => {
+      const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/crm-status`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch CRM status");
+      return res.json();
+    },
+    enabled: !!selectedGroupId && canSyncLeads,
+  });
+
+  const crmByAccount = useMemo(() => {
+    const map = new Map<string, AccountCrmStatus>();
+    crmStatusData?.accounts.forEach(a => map.set(a.businessAccountId, a));
+    return map;
+  }, [crmStatusData]);
+  const anyCrmConfigured = crmStatusData?.accounts.some(a => a.leadsquared || a.salesforce) ?? false;
+
+  const invalidateLeads = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/group-admin/groups", selectedGroupId, "leads"] });
+  };
+
+  const syncLeadMutation = useMutation({
+    mutationFn: async ({ lead, crm }: { lead: LeadItem; crm: CrmName }) => {
+      return await apiRequest("POST", `/api/group-admin/groups/${selectedGroupId}/leads/${lead.id}/sync`, {
+        businessAccountId: lead.businessAccountId,
+        crm,
+      });
+    },
+    onSuccess: (data: any, { crm }) => {
+      toast({
+        title: crm === 'leadsquared' ? "Synced to LeadSquared" : "Synced to Salesforce",
+        description: data?.message || "Lead synced successfully",
+      });
+      invalidateLeads();
+    },
+    onError: (error: Error, { crm }) => {
+      toast({
+        title: crm === 'leadsquared' ? "LeadSquared Sync Failed" : "Salesforce Sync Failed",
+        description: friendlySyncError(error.message),
+        variant: "destructive",
+      });
+      invalidateLeads();
+    },
+  });
+
+  const isSyncingLead = (leadId: string, crm: CrmName) =>
+    syncLeadMutation.isPending && syncLeadMutation.variables?.lead.id === leadId && syncLeadMutation.variables?.crm === crm;
+
+  const [bulkSyncOpen, setBulkSyncOpen] = useState(false);
+  const [bulkSyncWindow, setBulkSyncWindow] = useState<SyncWindow>('today');
+  const [bulkSyncResult, setBulkSyncResult] = useState<BulkSyncResult | null>(null);
+  const bulkSyncAccountId = leadsAccountFilter !== 'all' ? leadsAccountFilter : undefined;
+
+  const { data: unsyncedPreview, isFetching: loadingUnsyncedPreview } = useQuery<UnsyncedPreview>({
+    queryKey: ["/api/group-admin/groups", selectedGroupId, "crm-unsynced", bulkSyncWindow, bulkSyncAccountId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ filter: bulkSyncWindow });
+      if (bulkSyncAccountId) params.set('accountId', bulkSyncAccountId);
+      const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/crm/unsynced?${params.toString()}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch unsynced leads");
+      return res.json();
+    },
+    enabled: bulkSyncOpen && !bulkSyncResult && !!selectedGroupId && canSyncLeads,
+    // Counts change as leads come in and get synced — always fetch fresh when the dialog opens.
+    staleTime: 0,
+    gcTime: 0,
+  });
+
+  const bulkSyncMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest<BulkSyncResult>("POST", `/api/group-admin/groups/${selectedGroupId}/crm/sync-unsynced`, {
+        filter: bulkSyncWindow,
+        accountId: bulkSyncAccountId,
+      });
+    },
+    onSuccess: (data) => {
+      setBulkSyncResult(data);
+      invalidateLeads();
+    },
+    onError: (error: Error) => {
+      toast({ title: "Sync Failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const openBulkSync = () => {
+    setBulkSyncResult(null);
+    setBulkSyncOpen(true);
+  };
 
   const leadsEndRef = useCallback((node: HTMLDivElement | null) => {
     if (leadsObserverRef.current) leadsObserverRef.current.disconnect();
@@ -809,6 +933,16 @@ export default function GroupAdminDashboard() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {canSyncLeads && anyCrmConfigured && (
+                      <Button
+                        onClick={openBulkSync}
+                        variant="outline"
+                        className="border-green-500 text-green-600 hover:bg-green-50 transition-all duration-200 shadow-sm"
+                      >
+                        <Upload className="w-4 h-4 mr-2" />
+                        Sync to CRM
+                      </Button>
+                    )}
                     {selectedGroup?.canViewLeads && (
                       <Button
                         onClick={downloadLeadsPDF}
@@ -1080,8 +1214,10 @@ export default function GroupAdminDashboard() {
                               )}
                             </div>
 
-                            <div className="min-w-0 flex items-center justify-center">
-                              {lead.leadsquaredSyncStatus === 'synced' ? (
+                            <div className="min-w-0 flex items-center justify-center gap-1">
+                              {isSyncingLead(lead.id, 'leadsquared') ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
+                              ) : lead.leadsquaredSyncStatus === 'synced' ? (
                                 <div className="flex items-center gap-1 text-green-600" title="Synced to CRM">
                                   <CheckCircle2 className="h-3.5 w-3.5" />
                                 </div>
@@ -1089,9 +1225,16 @@ export default function GroupAdminDashboard() {
                                 <div className="flex items-center gap-1 text-red-600 cursor-help" title={friendlySyncError(lead.leadsquaredSyncError)}>
                                   <XCircle className="h-3.5 w-3.5" />
                                 </div>
-                              ) : (
+                              ) : !lead.salesforceSyncStatus ? (
                                 <span className="text-gray-300 text-xs">—</span>
-                              )}
+                              ) : null}
+                              {isSyncingLead(lead.id, 'salesforce') ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+                              ) : lead.salesforceSyncStatus === 'synced' ? (
+                                <div className="text-blue-500" title="Synced to Salesforce"><CheckCircle2 className="h-3.5 w-3.5" /></div>
+                              ) : lead.salesforceSyncStatus === 'failed' ? (
+                                <div className="text-red-600 cursor-help" title={`Salesforce: ${lead.salesforceSyncError || 'Sync failed'}`}><XCircle className="h-3.5 w-3.5" /></div>
+                              ) : null}
                             </div>
 
                             <div className="min-w-0 flex items-center justify-center">
@@ -1157,6 +1300,26 @@ export default function GroupAdminDashboard() {
                                     }
                                     return null;
                                   })()}
+                                  {canSyncLeads && crmByAccount.get(lead.businessAccountId)?.leadsquared && (lead.leadsquaredSyncStatus === 'failed' || !lead.leadsquaredSyncStatus) && (
+                                    <DropdownMenuItem
+                                      onClick={() => syncLeadMutation.mutate({ lead, crm: 'leadsquared' })}
+                                      disabled={syncLeadMutation.isPending}
+                                      className="cursor-pointer"
+                                    >
+                                      <RefreshCw className={`h-4 w-4 mr-2 text-blue-600 ${isSyncingLead(lead.id, 'leadsquared') ? 'animate-spin' : ''}`} />
+                                      {lead.leadsquaredSyncStatus === 'failed' ? 'Retry LSQ Sync' : 'Sync to LeadSquared'}
+                                    </DropdownMenuItem>
+                                  )}
+                                  {canSyncLeads && crmByAccount.get(lead.businessAccountId)?.salesforce && (lead.salesforceSyncStatus === 'failed' || !lead.salesforceSyncStatus) && (
+                                    <DropdownMenuItem
+                                      onClick={() => syncLeadMutation.mutate({ lead, crm: 'salesforce' })}
+                                      disabled={syncLeadMutation.isPending}
+                                      className="cursor-pointer"
+                                    >
+                                      <RefreshCw className={`h-4 w-4 mr-2 text-blue-500 ${isSyncingLead(lead.id, 'salesforce') ? 'animate-spin' : ''}`} />
+                                      {lead.salesforceSyncStatus === 'failed' ? 'Retry SF Sync' : 'Sync to Salesforce'}
+                                    </DropdownMenuItem>
+                                  )}
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             </div>
@@ -1915,6 +2078,115 @@ export default function GroupAdminDashboard() {
           )}
         </TabsContent>
       </Tabs>
+
+      <Dialog open={bulkSyncOpen} onOpenChange={(open) => { if (!bulkSyncMutation.isPending) setBulkSyncOpen(open); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="w-5 h-5 text-green-600" />
+              Sync leads to CRM
+            </DialogTitle>
+            <DialogDescription>
+              Pushes leads that are not yet in the CRM to each account's own LeadSquared / Salesforce, using that account's field mappings.
+              {bulkSyncAccountId
+                ? <> Only <span className="font-medium">{accountsForFilter.find(a => a.businessAccountId === bulkSyncAccountId)?.businessName || 'the selected account'}</span> (from the account filter).</>
+                : <> Covers all accounts in this group.</>}
+            </DialogDescription>
+          </DialogHeader>
+
+          {bulkSyncResult ? (
+            <div className="space-y-3">
+              <div className="flex gap-3">
+                <div className="flex-1 rounded-lg bg-green-50 px-3 py-2">
+                  <div className="text-xs text-green-700">Synced</div>
+                  <div className="text-xl font-semibold text-green-700 tabular-nums">{bulkSyncResult.totalSynced}</div>
+                </div>
+                <div className="flex-1 rounded-lg bg-red-50 px-3 py-2">
+                  <div className="text-xs text-red-700">Failed</div>
+                  <div className="text-xl font-semibold text-red-700 tabular-nums">{bulkSyncResult.totalFailed}</div>
+                </div>
+              </div>
+              {bulkSyncResult.remaining > 0 && (
+                <p className="text-sm text-amber-700 bg-amber-50 rounded-md px-3 py-2">
+                  {bulkSyncResult.remaining} more leads are waiting. Run the sync again to continue.
+                </p>
+              )}
+              {bulkSyncResult.accounts.some(a => a.errors.length > 0) && (
+                <ScrollArea className="max-h-48 rounded-md border">
+                  <div className="p-3 space-y-2">
+                    {bulkSyncResult.accounts.filter(a => a.errors.length > 0).map(a => (
+                      <div key={a.businessAccountId}>
+                        <div className="text-xs font-semibold text-gray-700">{a.accountName}</div>
+                        {a.errors.slice(0, 5).map((err, i) => (
+                          <div key={i} className="text-xs text-red-600 break-words">{friendlySyncError(err)}</div>
+                        ))}
+                        {a.errors.length > 5 && <div className="text-xs text-gray-400">+{a.errors.length - 5} more</div>}
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                {(Object.keys(SYNC_WINDOW_LABELS) as SyncWindow[]).map(w => (
+                  <Button
+                    key={w}
+                    size="sm"
+                    variant={bulkSyncWindow === w ? "default" : "outline"}
+                    onClick={() => setBulkSyncWindow(w)}
+                    disabled={bulkSyncMutation.isPending}
+                  >
+                    {SYNC_WINDOW_LABELS[w]}
+                  </Button>
+                ))}
+              </div>
+
+              {loadingUnsyncedPreview || !unsyncedPreview ? (
+                <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Checking unsynced leads…
+                </div>
+              ) : (
+                <div className="rounded-md border divide-y">
+                  {unsyncedPreview.accounts.filter(a => a.leadsquared !== null || a.salesforce !== null).map(a => (
+                    <div key={a.businessAccountId} className="flex items-center justify-between px-3 py-2 text-sm">
+                      <span className="text-gray-700 truncate mr-3">{a.accountName}</span>
+                      <span className="flex gap-3 text-xs text-gray-500 tabular-nums shrink-0">
+                        {a.leadsquared !== null && <span>LeadSquared: <span className="font-semibold text-gray-800">{a.leadsquared}</span></span>}
+                        {a.salesforce !== null && <span>Salesforce: <span className="font-semibold text-gray-800">{a.salesforce}</span></span>}
+                      </span>
+                    </div>
+                  ))}
+                  {unsyncedPreview.accounts.every(a => a.leadsquared === null && a.salesforce === null) && (
+                    <div className="px-3 py-3 text-sm text-gray-500">No account in this selection has a CRM configured.</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            {bulkSyncResult ? (
+              <Button onClick={() => setBulkSyncOpen(false)}>Done</Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setBulkSyncOpen(false)} disabled={bulkSyncMutation.isPending}>Cancel</Button>
+                <Button
+                  onClick={() => bulkSyncMutation.mutate()}
+                  disabled={bulkSyncMutation.isPending || loadingUnsyncedPreview || !unsyncedPreview || unsyncedPreview.totalUnsynced === 0}
+                  className="bg-green-600 hover:bg-green-700"
+                >
+                  {bulkSyncMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                  {bulkSyncMutation.isPending
+                    ? 'Syncing…'
+                    : unsyncedPreview?.totalUnsynced === 0 ? 'Nothing to sync' : `Sync now (${unsyncedPreview?.totalUnsynced ?? 0} pending)`}
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={detailsDialogOpen} onOpenChange={setDetailsDialogOpen}>
         <DialogContent className="max-w-md max-h-[60vh] overflow-y-auto">

@@ -91,6 +91,12 @@ export async function initializeDatabase() {
       console.error('[INIT] Error adding relay_url column to custom_crm_settings:', err);
     }
 
+    try {
+      await db.execute(sql`ALTER TABLE account_group_admins ADD COLUMN IF NOT EXISTS can_sync_leads TEXT NOT NULL DEFAULT 'false'`);
+    } catch (err) {
+      console.error('[INIT] Error adding can_sync_leads column to account_group_admins:', err);
+    }
+
     // Backfill: every saved WhatsApp template is mirrored from the MSG91
     // dashboard (already Meta-approved). MSG91 has no public create-template
     // API, so the draft/pending lifecycle is meaningless. Flip any legacy

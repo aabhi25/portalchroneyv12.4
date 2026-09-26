@@ -132,6 +132,7 @@ interface GroupAdmin {
   canViewLeads: boolean;
   canViewAnalytics: boolean;
   canExportData: boolean;
+  canSyncLeads: boolean;
   assignedAt: string;
   userCreatedAt: string;
   lastLoginAt: string | null;
@@ -165,7 +166,7 @@ export default function SuperAdminAccountGroups() {
   const [adminsGroup, setAdminsGroup] = useState<AccountGroup | null>(null);
   const [isAddAdminDialogOpen, setIsAddAdminDialogOpen] = useState(false);
   const [newAdminUserId, setNewAdminUserId] = useState("");
-  const [newAdminPerms, setNewAdminPerms] = useState({ conversations: true, leads: true, analytics: true, export: false });
+  const [newAdminPerms, setNewAdminPerms] = useState({ conversations: true, leads: true, analytics: true, export: false, syncLeads: false });
   const [isCreateAdminUserDialogOpen, setIsCreateAdminUserDialogOpen] = useState(false);
   const [newAdminUsername, setNewAdminUsername] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
@@ -419,13 +420,14 @@ export default function SuperAdminAccountGroups() {
   });
 
   const addGroupAdminMutation = useMutation({
-    mutationFn: async (data: { groupId: string; userId: string; canViewConversations: boolean; canViewLeads: boolean; canViewAnalytics: boolean; canExportData: boolean }) => {
+    mutationFn: async (data: { groupId: string; userId: string; canViewConversations: boolean; canViewLeads: boolean; canViewAnalytics: boolean; canExportData: boolean; canSyncLeads: boolean }) => {
       return await apiRequest("POST", `/api/super-admin/account-groups/${data.groupId}/admins`, {
         userId: data.userId,
         canViewConversations: data.canViewConversations,
         canViewLeads: data.canViewLeads,
         canViewAnalytics: data.canViewAnalytics,
         canExportData: data.canExportData,
+        canSyncLeads: data.canSyncLeads,
       });
     },
     onSuccess: () => {
@@ -433,7 +435,7 @@ export default function SuperAdminAccountGroups() {
       queryClient.invalidateQueries({ queryKey: ["/api/super-admin/group-admin-users"] });
       setIsAddAdminDialogOpen(false);
       setNewAdminUserId("");
-      setNewAdminPerms({ conversations: true, leads: true, analytics: true, export: false });
+      setNewAdminPerms({ conversations: true, leads: true, analytics: true, export: false, syncLeads: false });
       toast({ title: "Admin Added", description: "User has been assigned as group admin" });
     },
     onError: (error: Error) => {
@@ -455,12 +457,13 @@ export default function SuperAdminAccountGroups() {
   });
 
   const updateGroupAdminMutation = useMutation({
-    mutationFn: async (data: { groupId: string; userId: string; canViewConversations: boolean; canViewLeads: boolean; canViewAnalytics: boolean; canExportData: boolean }) => {
+    mutationFn: async (data: { groupId: string; userId: string; canViewConversations: boolean; canViewLeads: boolean; canViewAnalytics: boolean; canExportData: boolean; canSyncLeads: boolean }) => {
       return await apiRequest("PUT", `/api/super-admin/account-groups/${data.groupId}/admins/${data.userId}`, {
         canViewConversations: data.canViewConversations,
         canViewLeads: data.canViewLeads,
         canViewAnalytics: data.canViewAnalytics,
         canExportData: data.canExportData,
+        canSyncLeads: data.canSyncLeads,
       });
     },
     onSuccess: () => {
@@ -1065,11 +1068,42 @@ export default function SuperAdminAccountGroups() {
                               </span>
                             </div>
                             <div className="flex gap-2 mt-2 flex-wrap">
-                              {admin.canViewConversations && <Badge variant="secondary">Conversations</Badge>}
-                              {admin.canViewLeads && <Badge variant="secondary">Leads</Badge>}
-                              {admin.canViewAnalytics && <Badge variant="secondary">Analytics</Badge>}
-                              {admin.canExportData && <Badge variant="secondary">Export</Badge>}
+                              {([
+                                ['canViewConversations', 'Conversations'],
+                                ['canViewLeads', 'Leads'],
+                                ['canViewAnalytics', 'Analytics'],
+                                ['canExportData', 'Export'],
+                                ['canSyncLeads', 'Sync Leads'],
+                              ] as const).map(([key, label]) => (
+                                <button
+                                  key={key}
+                                  type="button"
+                                  disabled={updateGroupAdminMutation.isPending}
+                                  title={`${admin[key] ? 'Revoke' : 'Grant'} ${label}`}
+                                  onClick={() => {
+                                    if (!adminsGroup) return;
+                                    updateGroupAdminMutation.mutate({
+                                      groupId: adminsGroup.id,
+                                      userId: admin.userId,
+                                      canViewConversations: admin.canViewConversations,
+                                      canViewLeads: admin.canViewLeads,
+                                      canViewAnalytics: admin.canViewAnalytics,
+                                      canExportData: admin.canExportData,
+                                      canSyncLeads: admin.canSyncLeads,
+                                      [key]: !admin[key],
+                                    });
+                                  }}
+                                >
+                                  <Badge
+                                    variant={admin[key] ? "secondary" : "outline"}
+                                    className={admin[key] ? "cursor-pointer" : "cursor-pointer text-muted-foreground line-through opacity-60"}
+                                  >
+                                    {label}
+                                  </Badge>
+                                </button>
+                              ))}
                             </div>
+                            <p className="text-[11px] text-muted-foreground mt-1">Click a permission to turn it on or off.</p>
                           </div>
                           <div className="flex gap-1">
                             <Button
@@ -1156,6 +1190,10 @@ export default function SuperAdminAccountGroups() {
                   <span className="text-sm">Export Data</span>
                   <Switch checked={newAdminPerms.export} onCheckedChange={v => setNewAdminPerms(p => ({ ...p, export: v }))} />
                 </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm">Sync Leads to CRM</span>
+                  <Switch checked={newAdminPerms.syncLeads} onCheckedChange={v => setNewAdminPerms(p => ({ ...p, syncLeads: v }))} />
+                </div>
               </div>
             </div>
           </div>
@@ -1172,6 +1210,7 @@ export default function SuperAdminAccountGroups() {
                     canViewLeads: newAdminPerms.leads,
                     canViewAnalytics: newAdminPerms.analytics,
                     canExportData: newAdminPerms.export,
+                    canSyncLeads: newAdminPerms.syncLeads,
                   });
                 }
               }}

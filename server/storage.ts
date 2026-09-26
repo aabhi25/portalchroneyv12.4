@@ -302,6 +302,7 @@ export interface IStorage {
   getLeadByConversation(conversationId: string, businessAccountId: string): Promise<Lead | undefined>;
   getAllLeads(businessAccountId: string): Promise<Lead[]>;
   getUnsyncedLeads(businessAccountId: string, fromDate: Date, toDate: Date): Promise<Lead[]>;
+  getSalesforceUnsyncedLeads(businessAccountId: string, fromDate: Date, toDate: Date): Promise<Lead[]>;
   getLeadsPaginated(businessAccountId: string, filters?: { fromDate?: string; toDate?: string; search?: string }, limit?: number, offset?: number): Promise<{ leads: Lead[]; total: number }>;
   updateLead(id: string, businessAccountId: string, lead: Partial<InsertLead>): Promise<Lead>;
   deleteLead(id: string, businessAccountId: string): Promise<void>;
@@ -2161,6 +2162,22 @@ export class DatabaseStorage implements IStorage {
             // up by bulk/manual sync either.
             sql`${leads.leadsquaredSyncStatus} NOT IN ('synced', 'disqualified')`
           )
+        )
+      )
+      .orderBy(desc(leads.createdAt));
+  }
+
+  // Leads created in the window that are not yet in Salesforce (never tried or failed).
+  async getSalesforceUnsyncedLeads(businessAccountId: string, fromDate: Date, toDate: Date): Promise<Lead[]> {
+    return await db
+      .select()
+      .from(leads)
+      .where(
+        and(
+          eq(leads.businessAccountId, businessAccountId),
+          gte(leads.createdAt, fromDate),
+          lte(leads.createdAt, toDate),
+          or(isNull(leads.salesforceSyncStatus), sql`${leads.salesforceSyncStatus} <> 'synced'`)
         )
       )
       .orderBy(desc(leads.createdAt));

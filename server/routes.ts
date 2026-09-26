@@ -1,10 +1,10 @@
-import type { Express, Request } from "express";
+import type { Express, Request, Response as ExpressResponse } from "express";
 import { getLogBuffer, logEvents } from './services/logCapture';
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
 import { accountGroupMembers, accountGroups, accountGroupAdmins, businessAccounts, productCategories as productCategoriesTable, sessions, products, productJewelryEmbeddings, users, categories, faqs, trainingDocuments, conversationJourneys, journeySteps, journeyResponses, journeySessions, widgetSettings, scheduleTemplates, trainedUrls, chatMenuConfigs, chatMenuItems, chatMenuItemDetails, whatsappLeads, whatsappLeadAttachments, whatsappFlowSteps, whatsappFlows, whatsappLeadFields, instagramFlowSteps, facebookFlowSteps, conversations, leads, customCrmSettings, customCrmFieldMappings, crmStoreCredentials, smartReplies, messages, conversationAnalysisCache, conversationCategorySettings, auditEvents } from "@shared/schema";
-import type { CrmStoreCredential, InsertLead } from "@shared/schema";
+import type { CrmStoreCredential, InsertLead, Lead } from "@shared/schema";
 import bcrypt from "bcrypt";
 import { eq, and, isNotNull, isNull, sql, inArray, desc, ilike, asc, gte, lte, count } from "drizzle-orm";
 import OpenAI from "openai";
@@ -12962,6 +12962,7 @@ Return ONLY the refined instruction, nothing else.`
           canViewLeads: accountGroupAdmins.canViewLeads,
           canViewAnalytics: accountGroupAdmins.canViewAnalytics,
           canExportData: accountGroupAdmins.canExportData,
+          canSyncLeads: accountGroupAdmins.canSyncLeads,
           assignedAt: accountGroupAdmins.createdAt,
           userCreatedAt: users.createdAt,
           lastLoginAt: users.lastLoginAt,
@@ -12978,6 +12979,7 @@ Return ONLY the refined instruction, nothing else.`
           canViewLeads: a.canViewLeads === "true",
           canViewAnalytics: a.canViewAnalytics === "true",
           canExportData: a.canExportData === "true",
+          canSyncLeads: a.canSyncLeads === "true",
           assignedAt: a.assignedAt,
           userCreatedAt: a.userCreatedAt,
           lastLoginAt: a.lastLoginAt,
@@ -13012,7 +13014,7 @@ Return ONLY the refined instruction, nothing else.`
   app.post("/api/super-admin/account-groups/:groupId/admins", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const { groupId } = req.params;
-      const { userId, canViewConversations, canViewLeads, canViewAnalytics, canExportData } = req.body;
+      const { userId, canViewConversations, canViewLeads, canViewAnalytics, canExportData, canSyncLeads } = req.body;
       
       if (!userId) {
         return res.status(400).json({ error: "User ID is required" });
@@ -13055,6 +13057,7 @@ Return ONLY the refined instruction, nothing else.`
         canViewLeads: canViewLeads ? "true" : "false",
         canViewAnalytics: canViewAnalytics ? "true" : "false",
         canExportData: canExportData ? "true" : "false",
+        canSyncLeads: canSyncLeads ? "true" : "false",
       });
       
       res.json({ success: true, message: "User added as group admin" });
@@ -13068,7 +13071,7 @@ Return ONLY the refined instruction, nothing else.`
   app.put("/api/super-admin/account-groups/:groupId/admins/:userId", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const { groupId, userId } = req.params;
-      const { canViewConversations, canViewLeads, canViewAnalytics, canExportData } = req.body;
+      const { canViewConversations, canViewLeads, canViewAnalytics, canExportData, canSyncLeads } = req.body;
       
       // Verify assignment exists
       const [existing] = await db
@@ -13090,6 +13093,8 @@ Return ONLY the refined instruction, nothing else.`
           canViewLeads: canViewLeads ? "true" : "false",
           canViewAnalytics: canViewAnalytics ? "true" : "false",
           canExportData: canExportData ? "true" : "false",
+          // Older clients don't send canSyncLeads — keep the stored value instead of revoking it.
+          ...(canSyncLeads !== undefined ? { canSyncLeads: canSyncLeads ? "true" : "false" } : {}),
         })
         .where(and(
           eq(accountGroupAdmins.groupId, groupId),
@@ -14245,6 +14250,224 @@ Return ONLY the refined instruction, nothing else.`
       });
     } catch (error: any) {
       console.error('[Group Admin] Error fetching leads:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Group Admin: CRM sync (LeadSquared / Salesforce)
+  // Requires the canSyncLeads permission (set per admin by the super admin).
+  // Leads are always pushed to the CRM configured on the lead's own business
+  // account, using that account's field mappings.
+  // ---------------------------------------------------------------------------
+
+  // Checks permission and returns the group's account IDs, or sends an error and returns null.
+  async function authorizeGroupLeadSync(req: Request, res: ExpressResponse, groupId: string): Promise<string[] | null> {
+    const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
+    if (!permissions) {
+      res.status(403).json({ error: "Access denied to this group" });
+      return null;
+    }
+    if (!permissions.canViewLeads || !permissions.canSyncLeads) {
+      res.status(403).json({ error: "No permission to sync leads" });
+      return null;
+    }
+    return await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
+  }
+
+  // Same windows as the super-admin group sync.
+  function getGroupSyncWindow(filter: string): { fromDate: Date; toDate: Date } {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dayMs = 24 * 60 * 60 * 1000;
+    switch (filter) {
+      case 'yesterday':
+        return { fromDate: new Date(todayStart.getTime() - dayMs), toDate: todayStart };
+      case 'last3days':
+        return { fromDate: new Date(todayStart.getTime() - 2 * dayMs), toDate: new Date(todayStart.getTime() + dayMs) };
+      case 'last7days':
+        return { fromDate: new Date(todayStart.getTime() - 6 * dayMs), toDate: new Date(todayStart.getTime() + dayMs) };
+      case 'today':
+      default:
+        return { fromDate: todayStart, toDate: new Date(todayStart.getTime() + dayMs) };
+    }
+  }
+
+  // Resolves the accounts a bulk sync should cover: the whole group, or one account in it.
+  function resolveSyncAccountIds(groupAccountIds: string[], accountId: unknown): string[] | null {
+    if (!accountId || accountId === 'all') return groupAccountIds;
+    return groupAccountIds.includes(String(accountId)) ? [String(accountId)] : null;
+  }
+
+  // Which CRMs each account in the group has configured (drives the sync menu items).
+  app.get("/api/group-admin/groups/:groupId/crm-status", requireAuth, requireGroupAdmin, async (req, res) => {
+    try {
+      const accountIds = await authorizeGroupLeadSync(req, res, req.params.groupId);
+      if (!accountIds) return;
+
+      const { isLeadSquaredConfigured, isSalesforceConfigured } = await import('./services/crmLeadSync');
+      const accounts = await Promise.all(accountIds.map(async (id) => {
+        const settings = await storage.getWidgetSettings(id);
+        return {
+          businessAccountId: id,
+          leadsquared: isLeadSquaredConfigured(settings),
+          salesforce: isSalesforceConfigured(settings),
+        };
+      }));
+
+      res.json({ accounts });
+    } catch (error: any) {
+      console.error('[Group Admin CRM Sync] Error fetching CRM status:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Sync one lead to LeadSquared or Salesforce.
+  app.post("/api/group-admin/groups/:groupId/leads/:leadId/sync", requireAuth, requireGroupAdmin, async (req, res) => {
+    try {
+      const { groupId, leadId } = req.params;
+      const { businessAccountId, crm } = req.body as { businessAccountId?: string; crm?: string };
+
+      const accountIds = await authorizeGroupLeadSync(req, res, groupId);
+      if (!accountIds) return;
+
+      // SECURITY: the lead's account must belong to this group; the lookup below
+      // is also scoped to that account, so a lead from another account 404s.
+      if (!businessAccountId || !accountIds.includes(businessAccountId)) {
+        return res.status(404).json({ error: "Lead not found" });
+      }
+
+      const { syncLeadToLeadSquared, syncLeadToSalesforce } = await import('./services/crmLeadSync');
+      let result;
+      if (crm === 'leadsquared') {
+        result = await syncLeadToLeadSquared(businessAccountId, leadId);
+      } else if (crm === 'salesforce') {
+        result = await syncLeadToSalesforce(businessAccountId, leadId);
+      } else {
+        return res.status(400).json({ error: "crm must be 'leadsquared' or 'salesforce'" });
+      }
+
+      console.log(`[Group Admin CRM Sync] ${req.user!.username} synced lead ${leadId} to ${crm}: ${result.status}`);
+      res.status(result.status).json(result.body);
+    } catch (error: any) {
+      console.error('[Group Admin CRM Sync] Error syncing lead:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Preview: how many leads in the window are not yet in each account's CRM.
+  app.get("/api/group-admin/groups/:groupId/crm/unsynced", requireAuth, requireGroupAdmin, async (req, res) => {
+    try {
+      const { groupId } = req.params;
+      const filter = (req.query.filter as string) || 'today';
+
+      const groupAccountIds = await authorizeGroupLeadSync(req, res, groupId);
+      if (!groupAccountIds) return;
+      const accountIds = resolveSyncAccountIds(groupAccountIds, req.query.accountId);
+      if (!accountIds) return res.status(404).json({ error: "Account not found in this group" });
+
+      const { fromDate, toDate } = getGroupSyncWindow(filter);
+      const { isLeadSquaredConfigured, isSalesforceConfigured } = await import('./services/crmLeadSync');
+
+      const accounts = await Promise.all(accountIds.map(async (id) => {
+        const [settings, account] = await Promise.all([storage.getWidgetSettings(id), storage.getBusinessAccount(id)]);
+        const lsq = isLeadSquaredConfigured(settings);
+        const sf = isSalesforceConfigured(settings);
+        return {
+          businessAccountId: id,
+          accountName: account?.name || id,
+          leadsquared: lsq ? (await storage.getUnsyncedLeads(id, fromDate, toDate)).length : null,
+          salesforce: sf ? (await storage.getSalesforceUnsyncedLeads(id, fromDate, toDate)).length : null,
+        };
+      }));
+
+      const totalUnsynced = accounts.reduce((sum, a) => sum + (a.leadsquared || 0) + (a.salesforce || 0), 0);
+      res.json({ filter, totalUnsynced, accounts });
+    } catch (error: any) {
+      console.error('[Group Admin CRM Sync] Error fetching unsynced leads:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Bulk: push every unsynced lead in the window to each account's configured CRM(s).
+  app.post("/api/group-admin/groups/:groupId/crm/sync-unsynced", requireAuth, requireGroupAdmin, async (req, res) => {
+    try {
+      const { groupId } = req.params;
+      const { filter = 'today', accountId } = req.body as { filter?: string; accountId?: string };
+
+      const groupAccountIds = await authorizeGroupLeadSync(req, res, groupId);
+      if (!groupAccountIds) return;
+      const accountIds = resolveSyncAccountIds(groupAccountIds, accountId);
+      if (!accountIds) return res.status(404).json({ error: "Account not found in this group" });
+
+      // Keep one request bounded; anything left over is reported so the admin can run it again.
+      const MAX_LEADS_PER_RUN = 500;
+      let budget = MAX_LEADS_PER_RUN;
+
+      const { fromDate, toDate } = getGroupSyncWindow(filter);
+      const {
+        isLeadSquaredConfigured, isSalesforceConfigured, syncLeadToLeadSquared, syncLeadToSalesforce,
+      } = await import('./services/crmLeadSync');
+
+      let totalSynced = 0;
+      let totalFailed = 0;
+      let remaining = 0;
+      const accounts: any[] = [];
+
+      for (const id of accountIds) {
+        const account = await storage.getBusinessAccount(id);
+        const settings = await storage.getWidgetSettings(id);
+        const accountResult = { businessAccountId: id, accountName: account?.name || id, synced: 0, failed: 0, errors: [] as string[] };
+
+        const runs: { crm: string; leads: Lead[]; sync: (leadId: string) => Promise<{ status: number; body: Record<string, unknown> }> }[] = [];
+        if (isLeadSquaredConfigured(settings)) {
+          runs.push({
+            crm: 'LeadSquared',
+            leads: await storage.getUnsyncedLeads(id, fromDate, toDate),
+            sync: (leadId) => syncLeadToLeadSquared(id, leadId, { scheduleRetryOnFailure: true }),
+          });
+        }
+        if (isSalesforceConfigured(settings)) {
+          runs.push({
+            crm: 'Salesforce',
+            leads: await storage.getSalesforceUnsyncedLeads(id, fromDate, toDate),
+            sync: (leadId) => syncLeadToSalesforce(id, leadId),
+          });
+        }
+
+        for (const run of runs) {
+          for (const lead of run.leads) {
+            if (budget <= 0) {
+              remaining++;
+              continue;
+            }
+            budget--;
+            const label = lead.name || lead.email || lead.phone || lead.id;
+            try {
+              const result = await run.sync(lead.id);
+              if (result.status === 200) {
+                accountResult.synced++;
+                totalSynced++;
+              } else {
+                accountResult.failed++;
+                totalFailed++;
+                accountResult.errors.push(`${run.crm} · ${label}: ${result.body.error || 'Sync failed'}`);
+              }
+            } catch (syncError: any) {
+              accountResult.failed++;
+              totalFailed++;
+              accountResult.errors.push(`${run.crm} · ${label}: ${syncError.message}`);
+            }
+          }
+        }
+
+        accounts.push(accountResult);
+      }
+
+      console.log(`[Group Admin CRM Sync] ${req.user!.username} bulk sync (${filter}) for group ${groupId}: ${totalSynced} synced, ${totalFailed} failed, ${remaining} remaining`);
+      res.json({ success: true, totalSynced, totalFailed, remaining, accounts });
+    } catch (error: any) {
+      console.error('[Group Admin CRM Sync] Error in bulk sync:', error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -17789,125 +18012,9 @@ Important:
   // Manually sync a lead to LeadSquared
   app.post("/api/leadsquared/sync-lead/:leadId", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const user = req.user!;
-      const businessAccountId = user.businessAccountId!;
-      const { leadId } = req.params;
-      
-      // Get LeadSquared settings
-      const settings = await storage.getWidgetSettings(businessAccountId);
-      
-      if (!settings || settings.leadsquaredEnabled !== 'true') {
-        return res.status(400).json({ error: "LeadSquared integration is not enabled" });
-      }
-      
-      if (!settings.leadsquaredAccessKey || !settings.leadsquaredSecretKey || !settings.leadsquaredRegion) {
-        return res.status(400).json({ error: "LeadSquared credentials not configured" });
-      }
-      
-      // SECURITY: Get the lead scoped to businessAccountId (prevents cross-tenant access)
-      const lead = await storage.getLead(leadId, businessAccountId);
-      
-      if (!lead) {
-        return res.status(404).json({ error: "Lead not found" });
-      }
-
-      // 'disqualified' is terminal: the lead form answer did not match the
-      // qualifying values configured for this account, so it must not be pushed
-      // manually either. Keeps manual sync consistent with auto and bulk sync.
-      if (lead.leadsquaredSyncStatus === 'disqualified') {
-        return res.status(400).json({
-          error: "This lead is not qualified for LeadSquared",
-          detail: lead.leadsquaredSyncError || "Its lead form answer did not match the configured qualifying values.",
-        });
-      }
-      
-      // Get business account info
-      const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      
-      // Decrypt the secret key
-      const { decrypt } = await import('./services/encryptionService');
-      const decryptedSecretKey = decrypt(settings.leadsquaredSecretKey);
-      
-      // Create LeadSquared service
-      const { createLeadSquaredService } = await import('./services/leadsquaredService');
-      const leadsquaredService = await createLeadSquaredService({
-        accessKey: settings.leadsquaredAccessKey,
-        secretKey: decryptedSecretKey,
-        region: settings.leadsquaredRegion as 'india' | 'us' | 'other',
-        customHost: settings.leadsquaredCustomHost || undefined,
-      });
-      
-      const { extractUtmCampaign, extractUtmSource, extractUtmMedium, buildJourneyCrmContext, buildConversationCrmContext } = await import('./services/leadsquaredService');
-      
-      // Get field mappings from database (dynamic, configurable)
-      const fieldMappings = await storage.getLeadsquaredFieldMappings(businessAccountId);
-
-      // Journey answers (journey.* mappings) — only queried when a mapping needs them.
-      let journeyContext: Record<string, string> = {};
-      const needsJourney = fieldMappings.some(m => m.isEnabled === 'true' && m.sourceType === 'dynamic' && m.sourceField?.startsWith('journey.'));
-      if (needsJourney) {
-        journeyContext = await buildJourneyCrmContext((lead as any).conversationId);
-      }
-
-      // Conversation summary/topics (conversation.* mappings) — only queried when needed.
-      let conversationContext: { summary?: string | null; topics?: string | null } = {};
-      const needsConversation = fieldMappings.some(m => m.isEnabled === 'true' && m.sourceType === 'dynamic' && m.sourceField?.startsWith('conversation.'));
-      if (needsConversation) {
-        conversationContext = await buildConversationCrmContext((lead as any).conversationId);
-      }
-      
-      // Build context for dynamic field mapping
-      const leadContext = {
-        lead: {
-          name: lead.name || null,
-          email: lead.email || null,
-          phone: lead.phone || null,
-          whatsapp: null,
-          createdAt: lead.createdAt || null,
-          sourceUrl: lead.sourceUrl || null,
-        },
-        session: {
-          city: lead.city || null,
-          utmCampaign: extractUtmCampaign(lead.sourceUrl) || null,
-          utmSource: extractUtmSource(lead.sourceUrl) || null,
-          utmMedium: extractUtmMedium(lead.sourceUrl) || null,
-          pageUrl: lead.sourceUrl || null,
-        },
-        business: {
-          name: businessAccount?.name || null,
-          website: businessAccount?.website || null,
-        },
-        ...(Object.keys(journeyContext).length ? { journey: journeyContext } : {}),
-        ...(conversationContext.summary || conversationContext.topics ? { conversation: conversationContext } : {}),
-      };
-      
-      console.log('[LeadSquared] Manual sync using dynamic field mappings, count:', fieldMappings.length);
-      
-      // Sync to LeadSquared with dynamic field mappings
-      const result = await leadsquaredService.createLeadWithMappings(fieldMappings, leadContext);
-      
-      if (result.success) {
-        // Update lead with sync status
-        await storage.updateLead(leadId, businessAccountId, {
-          leadsquaredSyncStatus: 'synced',
-          leadsquaredSyncedAt: new Date(),
-          leadsquaredLeadId: result.leadId,
-          leadsquaredSyncError: null,
-          leadsquaredSyncPayload: result.syncPayload || null,
-        });
-        
-        console.log('[LeadSquared] Lead synced successfully:', leadId, '→', result.leadId);
-        
-        res.json({ success: true, message: result.message, leadsquaredLeadId: result.leadId });
-      } else {
-        // Update lead with error status
-        await storage.updateLead(leadId, businessAccountId, {
-          leadsquaredSyncStatus: 'failed',
-          leadsquaredSyncError: result.message,
-        });
-        
-        res.status(400).json({ success: false, error: result.message });
-      }
+      const { syncLeadToLeadSquared } = await import('./services/crmLeadSync');
+      const result = await syncLeadToLeadSquared(req.user!.businessAccountId!, req.params.leadId);
+      res.status(result.status).json(result.body);
     } catch (error: any) {
       console.error('[LeadSquared] Sync lead error:', error);
       res.status(500).json({ error: error.message });
@@ -18478,58 +18585,9 @@ Important:
 
   app.post("/api/salesforce/sync-lead/:leadId", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const user = req.user!;
-      const businessAccountId = user.businessAccountId!;
-      const { leadId } = req.params;
-      const settings = await storage.getWidgetSettings(businessAccountId);
-
-      if (!settings || settings.salesforceEnabled !== 'true') {
-        return res.status(400).json({ error: "Salesforce integration is not enabled" });
-      }
-      if (!settings.salesforceClientId || !settings.salesforceClientSecret || !settings.salesforceUsername || !settings.salesforcePassword) {
-        return res.status(400).json({ error: "Salesforce credentials not configured" });
-      }
-
-      const lead = await storage.getLead(leadId, businessAccountId);
-      if (!lead) return res.status(404).json({ error: "Lead not found" });
-
-      const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      const { decrypt } = await import('./services/encryptionService');
-      const { createSalesforceService } = await import('./services/salesforceService');
-      const { extractUtmCampaign, extractUtmSource, extractUtmMedium } = await import('./services/leadsquaredService');
-
-      const service = createSalesforceService({
-        clientId: settings.salesforceClientId,
-        clientSecret: decrypt(settings.salesforceClientSecret),
-        username: settings.salesforceUsername,
-        password: decrypt(settings.salesforcePassword),
-        environment: (settings.salesforceEnvironment || 'production') as 'production' | 'sandbox',
-      });
-
-      const fieldMappings = await storage.getSalesforceFieldMappings(businessAccountId);
-      const leadContext = {
-        lead: { name: lead.name || null, email: lead.email || null, phone: lead.phone || null, whatsapp: null, createdAt: lead.createdAt || null, sourceUrl: lead.sourceUrl || null },
-        session: { city: lead.city || null, utmCampaign: extractUtmCampaign(lead.sourceUrl) || null, utmSource: extractUtmSource(lead.sourceUrl) || null, utmMedium: extractUtmMedium(lead.sourceUrl) || null, pageUrl: lead.sourceUrl || null },
-        business: { name: businessAccount?.name || null, website: businessAccount?.website || null },
-      };
-
-      const result = await service.createLeadWithMappings(fieldMappings, leadContext);
-
-      if (result.success) {
-        await storage.updateLead(leadId, businessAccountId, {
-          salesforceSyncStatus: 'synced',
-          salesforceSyncedAt: new Date(),
-          salesforceLeadId: result.leadId,
-          salesforceSyncError: null,
-        });
-        res.json({ success: true, message: result.message, salesforceLeadId: result.leadId });
-      } else {
-        await storage.updateLead(leadId, businessAccountId, {
-          salesforceSyncStatus: 'failed',
-          salesforceSyncError: result.message,
-        });
-        res.status(400).json({ success: false, error: result.message });
-      }
+      const { syncLeadToSalesforce } = await import('./services/crmLeadSync');
+      const result = await syncLeadToSalesforce(req.user!.businessAccountId!, req.params.leadId);
+      res.status(result.status).json(result.body);
     } catch (error: any) {
       console.error('[Salesforce] Sync lead error:', error);
       res.status(500).json({ error: error.message });
