@@ -1,0 +1,84 @@
+/**
+ * Fake OpenAI server with scripted answers for Aadhaar extraction scenarios.
+ * Point the SDK at it with OPENAI_BASE_URL. Test-only.
+ */
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { verhoeffCheckDigit } from "@shared/aadhaar";
+
+export const VALID = (() => { const b = '23456789012'; return b + verhoeffCheckDigit(b); })();
+export const MISREAD = VALID.slice(0, 6) + ((Number(VALID[6]) + 1) % 10) + VALID.slice(7);
+export const VID = '9123456789012345';
+
+// Scripted answers per scenario: [mini answer, gpt-4o answer]. The scenario id
+// travels in the fake image data URL.
+type Answer = { data: Record<string, string | null>; confidence: number; isValid?: boolean; side?: string | null; delayMs?: number };
+export const SCENARIOS: Record<string, { cls?: string; mini: Answer; gpt4o?: Answer }> = {
+  back_side: {
+    mini: { data: { aadhaar_number: VALID, full_name: null, address: '12 MG Road, Pune, Maharashtra 411001', dob: null, gender: null, father_name: null }, confidence: 0.7, side: 'back' },
+  },
+  vid_on_back: {
+    mini: { data: { aadhaar_number: VID, full_name: null, address: '12 MG Road, Pune 411001', dob: null, gender: null, father_name: null }, confidence: 0.9, side: 'back' },
+    gpt4o: { data: { aadhaar_number: VALID, full_name: null, address: '12 MG Road, Pune 411001', dob: null, gender: null, father_name: null }, confidence: 0.95, side: 'back' },
+  },
+  misread_front: {
+    mini: { data: { aadhaar_number: MISREAD, full_name: 'Asha Verma', address: null, dob: '01/02/1990', gender: 'Female', father_name: null }, confidence: 0.92, side: 'front' },
+    gpt4o: { data: { aadhaar_number: VALID, full_name: 'Asha Verma', address: null, dob: '01/02/1990', gender: 'Female', father_name: null }, confidence: 0.97, side: 'front' },
+  },
+  masked: {
+    mini: { data: { aadhaar_number: 'XXXX XXXX 1234', full_name: 'Asha Verma', address: '12 MG Road, Pune 411001', dob: null, gender: null, father_name: null }, confidence: 0.9, side: null },
+  },
+  slow_tier2: {
+    mini: { data: { aadhaar_number: MISREAD, full_name: null, address: '5 Park Street, Kolkata 700016', dob: null, gender: null, father_name: null }, confidence: 0.8, side: 'back' },
+    gpt4o: { data: { aadhaar_number: VALID, full_name: null, address: null, dob: null, gender: null, father_name: null }, confidence: 0.9, delayMs: 3000 },
+  },
+  both_sides: {
+    mini: { data: { aadhaar_number: `${VALID.slice(0, 4)} ${VALID.slice(4, 8)} ${VALID.slice(8)}`, full_name: 'Asha Verma', address: '12 MG Road, Pune 411001', dob: '01/02/1990', gender: 'Female', father_name: null }, confidence: 0.95, side: null },
+  },
+  not_a_doc: { cls: 'unknown', mini: { data: {}, confidence: 0 } },
+};
+
+export interface Call { kind: 'classify' | 'strict'; model: string; scenario: string; detail?: string; system: string; user: string }
+export const calls: Call[] = [];
+
+export function startFakeOpenAI(): Promise<{ baseUrl: string; close: () => void }> {
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', c => (raw += c));
+    req.on('end', async () => {
+      const body = JSON.parse(raw || '{}');
+      const system = body.messages?.[0]?.content || '';
+      const userParts = body.messages?.[1]?.content || [];
+      const image = userParts.find((p: any) => p.type === 'image_url');
+      const payload = String(image?.image_url?.url || '').split(',')[1] || 'unknown';
+      // The scenario id is either the raw payload or base64 of it (when it went
+      // through the WhatsApp flow as an image buffer).
+      const decoded = Buffer.from(payload, 'base64').toString('utf8');
+      const scenario = SCENARIOS[payload] ? payload : SCENARIOS[decoded] ? decoded : payload;
+      const userText = userParts.find((p: any) => p.type === 'text')?.text || '';
+      const isClassify = /document type classifier/i.test(system);
+      calls.push({ kind: isClassify ? 'classify' : 'strict', model: body.model, scenario, detail: image?.image_url?.detail, system, user: userText });
+      const sc = SCENARIOS[scenario];
+      let content: string;
+      if (isClassify) {
+        content = JSON.stringify({ docType: sc?.cls ?? 'aadhaar', confidence: 0.95, validationNotes: sc?.cls === 'unknown' ? 'appears to be a selfie' : null });
+      } else {
+        const a = body.model === 'gpt-4o' ? (sc.gpt4o || sc.mini) : sc.mini;
+        if (a.delayMs) await new Promise(r => setTimeout(r, a.delayMs));
+        content = JSON.stringify({ extractedData: a.data, confidence: a.confidence, isValid: a.isValid ?? true, validationNotes: null, side: a.side ?? null });
+      }
+      if (res.writableEnded || req.destroyed) return;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'x', object: 'chat.completion', created: 0, model: body.model,
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }));
+    });
+  });
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => {
+    const { port } = server.address() as AddressInfo;
+    resolve({ baseUrl: `http://127.0.0.1:${port}/v1`, close: () => server.close() });
+  }));
+}
+

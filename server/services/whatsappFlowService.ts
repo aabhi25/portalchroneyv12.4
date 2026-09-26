@@ -84,6 +84,9 @@ interface DocTypeState {
   pages: { side: string; extractedData: Record<string, any>; confidence: number; sourceMediaUrl?: string }[];
   mergedData: Record<string, any>;
   dupInfo?: { docLabel: string; maskedNum: string; leadId: string };
+  // Required fields a page showed but that couldn't be read reliably (e.g. an
+  // Aadhaar number that failed its checksum). Drives a precise "re-send" prompt.
+  unreadableFields?: string[];
 }
 
 interface DocumentState {
@@ -3880,12 +3883,22 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     if (!dState || dState.status !== 'processing') return null;
     if (!dState.pages || dState.pages.length < 1) return null;
     const merged = dState.mergedData || {};
+    const unreadable = (dState as { unreadableFields?: string[] }).unreadableFields || [];
     if (normalizedDocType === 'aadhaar') {
+      if (!merged.aadhaar_number && unreadable.includes('aadhaar_number')) {
+        return `I couldn't read your Aadhaar number with certainty. Please send a sharper photo of the *front* of your ${label} (the side with your photo) — flat, well-lit, no glare.`;
+      }
       if (merged.aadhaar_number && !merged.address) {
         return `Please upload the *back* of your ${label} to capture the address.`;
       }
       if (!merged.aadhaar_number && merged.address) {
         return `Please upload the *front* of your ${label} so we can capture your name and Aadhaar number.`;
+      }
+      if (merged.aadhaar_number && merged.address && !merged.full_name) {
+        return `Please upload the *front* of your ${label} (the side with your photo) so we can capture your name.`;
+      }
+      if (merged.full_name && !merged.aadhaar_number && !merged.address) {
+        return `Please upload the *back* of your ${label}, or a clearer photo of the front showing the 12-digit Aadhaar number.`;
       }
     }
     return null;
@@ -4759,12 +4772,13 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     let result: any;
     let multiPageHandled: ProcessResult | null = null;
     try {
-      const visionResults = await documentIdentificationService.identifyDocumentFromPdfImages(
-        businessAccountId,
-        pdfBuffer,
-        pwAllowedDocTypes,
-        password
-      );
+      const visionResults = await this.withProcessingUpdates(businessAccountId, senderPhone, freshSession.id, () =>
+        documentIdentificationService.identifyDocumentFromPdfImages(
+          businessAccountId,
+          pdfBuffer,
+          pwAllowedDocTypes,
+          password
+        ));
       const validResults = visionResults.filter(r => r.documentType !== 'unknown');
       if (validResults.length === 0) {
         const firstNote = visionResults[0]?.validationNotes || '';
@@ -4880,6 +4894,74 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     return this.handleDocumentResult(freshSession, activeFlow.id, result, freshCollectedData, pendingPdfUrl);
   }
 
+  /**
+   * Keeps the customer informed while a document is being read. Starts two timers:
+   * a "still reading" note after 20s and an "almost done" note after 50s (only sent
+   * if processing is still running). Call the returned stop() as soon as the result
+   * is known. One set of timers per customer, so a batch of photos doesn't spam.
+   */
+  private readonly progressTimers = new Map<string, NodeJS.Timeout[]>();
+
+  private startProcessingUpdates(businessAccountId: string, senderPhone: string, sessionId: string): () => void {
+    const key = `${businessAccountId}:${senderPhone}`;
+    if (this.progressTimers.has(key)) return () => {};
+    const send = (text: string) => this.sendFlowText(businessAccountId, senderPhone, sessionId, text)
+      .catch(err => console.error('[WhatsApp Flow] Progress update failed:', err));
+    const timers = [
+      setTimeout(() => send("⏳ Still reading your document — taking a careful look so every digit is right. Please don't resend it."), 20_000),
+      setTimeout(() => send("🔍 Almost done — double-checking the details on your document."), 50_000),
+    ];
+    this.progressTimers.set(key, timers);
+    return () => {
+      timers.forEach(clearTimeout);
+      if (this.progressTimers.get(key) === timers) this.progressTimers.delete(key);
+    };
+  }
+
+  private async withProcessingUpdates<T>(businessAccountId: string, senderPhone: string, sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const stop = this.startProcessingUpdates(businessAccountId, senderPhone, sessionId);
+    try {
+      return await fn();
+    } finally {
+      stop();
+    }
+  }
+
+  private async sendFlowText(businessAccountId: string, senderPhone: string, sessionId: string, text: string): Promise<void> {
+    const { whatsappService } = await import("./whatsappService");
+    const settings = await whatsappService.getSettings(businessAccountId);
+    if (!settings?.msg91AuthKey || !settings?.msg91IntegratedNumberId) return;
+    const { whatsappAutoReplyService } = await import("./whatsappAutoReplyService");
+    await whatsappAutoReplyService.sendFlowResponse(settings, senderPhone, { type: "text", text }, sessionId);
+  }
+
+  /**
+   * Tells the extractor which Aadhaar side we expect next, based on what this
+   * customer has already sent (front captured → this is probably the back, etc.).
+   */
+  private buildAadhaarSideHint(collectedData: Record<string, any>, senderPhone: string): string | undefined {
+    const state = this.getDocumentState(collectedData || {});
+    for (const [dt, docState] of Object.entries(state)) {
+      if (dt.toLowerCase().replace(/_card$/, '') !== 'aadhaar') continue;
+      const merged = (docState as any).mergedData || {};
+      const pages = (docState as any).pages?.length || 0;
+      if (pages < 1) continue;
+      if (docState.status === 'processing' && merged.aadhaar_number && !merged.address) {
+        console.log(`[WhatsApp Flow] Injecting Aadhaar back-side hint for ${senderPhone}`);
+        return `CONTEXT: We already received the FRONT of this Aadhaar card (Aadhaar number ending ${String(merged.aadhaar_number).slice(-4)}). This new image is most likely the BACK side. If it shows an address block and/or QR code, set side='back' and extract the complete residential address. If the 12-digit number is printed, extract it too.`;
+      }
+      if (docState.status === 'processing' && merged.address && !merged.full_name) {
+        console.log(`[WhatsApp Flow] Injecting Aadhaar front-side hint for ${senderPhone}`);
+        return `CONTEXT: We already received the BACK of this Aadhaar card (address collected). This new image is most likely the FRONT side. Set side='front' and extract full_name (the cardholder's name as printed — NOT a C/O name from the address), aadhaar_number, dob, gender.`;
+      }
+      if (docState.status === 'complete' && merged.aadhaar_number && merged.address) {
+        console.log(`[WhatsApp Flow] Injecting Aadhaar front-side enrichment hint for ${senderPhone}`);
+        return `CONTEXT: We already collected the BACK side of this Aadhaar card (Aadhaar number ending ${String(merged.aadhaar_number).slice(-4)}, address collected). This new image is likely the FRONT side. Please set side='front' and extract: full_name (the person's actual name as printed, NOT the C/O address line), dob (date of birth), gender, father_name. The name on the front is the authoritative name for this person.`;
+      }
+    }
+    return undefined;
+  }
+
   private async sendUploadAcknowledgment(businessAccountId: string, senderPhone: string, sessionId: string): Promise<void> {
     try {
       const { whatsappService } = await import("./whatsappService");
@@ -4889,7 +4971,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       await whatsappAutoReplyService.sendFlowResponse(
         settings,
         senderPhone,
-        { type: "text", text: "Analyzing your document..." },
+        { type: "text", text: "📄 Got it! Reading your document now — this usually takes 10–20 seconds." },
         sessionId
       );
     } catch (err) {
@@ -5019,7 +5101,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
                 sessionId: updateSessionId,
               };
             }
-            const visionResults = await documentIdentificationService.identifyDocumentFromPdfImages(businessAccountId, pdfBuffer, documentTypes.map((d: any) => d.docType));
+            const visionResults = await this.withProcessingUpdates(businessAccountId, senderPhone, freshSession.id, () =>
+              documentIdentificationService.identifyDocumentFromPdfImages(businessAccountId, pdfBuffer, documentTypes.map((d: any) => d.docType)));
             const validPdfResults = visionResults.filter((r: any) => r.documentType !== 'unknown');
             if (validPdfResults.length === 0) {
               const firstNote = visionResults[0]?.validationNotes || '';
@@ -5063,31 +5146,21 @@ Return only JSON: {"optionId":"one configured id" | null}`,
               }
               identifyUrl = `data:${convertedMime};base64,${convertedBuf.toString('base64')}`;
             }
-            const preDocState = this.getDocumentState((freshSession.collectedData as Record<string, any>) || {});
-            let sideHint: string | undefined;
-            for (const [dt, state] of Object.entries(preDocState)) {
-              if (dt.toLowerCase() === 'aadhaar') {
-                const mergedData = (state as any).mergedData || {};
-                const hasNumber = mergedData.aadhaar_number;
-                if (state.status === 'processing' && state.pages.length >= 1 && hasNumber && !mergedData.address) {
-                  sideHint = `CONTEXT: We already received ${state.pages.length} page(s) of this Aadhaar card (Aadhaar number: ${hasNumber}, name: ${mergedData.full_name || 'collected'}). This new image is likely the BACK side of the same Aadhaar card. If this image shows an address block and/or QR code, set side='back' and extract the complete residential address into the 'address' field.`;
-                  console.log(`[WhatsApp Flow] Injecting Aadhaar back-side hint for ${senderPhone}`);
-                  break;
-                }
-                if (state.status === 'complete' && state.pages.length >= 1 && hasNumber && mergedData.address) {
-                  sideHint = `CONTEXT: We already collected the BACK side of this Aadhaar card (Aadhaar number: ${hasNumber}, address collected). This new image is likely the FRONT side. Please set side='front' and extract: full_name (the person's actual name as printed, NOT the C/O address line), dob (date of birth), gender, father_name. The name on the front is the authoritative name for this person.`;
-                  console.log(`[WhatsApp Flow] Injecting Aadhaar front-side enrichment hint for ${senderPhone}`);
-                  break;
-                }
-              }
+            const sideHint = this.buildAadhaarSideHint((freshSession.collectedData as Record<string, any>) || {}, senderPhone);
+            const stopUpdates = this.startProcessingUpdates(businessAccountId, senderPhone, freshSession.id);
+            try {
+              result = await documentIdentificationService.identifyDocument(businessAccountId, identifyUrl, sideHint, documentTypes.map((d: any) => d.docType));
+            } finally {
+              stopUpdates();
             }
-            result = await documentIdentificationService.identifyDocument(businessAccountId, identifyUrl, sideHint, documentTypes.map((d: any) => d.docType));
+
           }
 
           const freshCollectedData = (freshSession.collectedData as Record<string, any>) || {};
           const collectedDocs = freshCollectedData._collectedDocuments || {};
 
-          if (result.documentType === "unknown" || result.confidence < 0.3) {
+          const hasAnyField = Object.values(result.extractedData || {}).some((v: any) => v !== null && v !== undefined && String(v).trim() !== '');
+          if (result.documentType === "unknown" || (result.confidence < 0.3 && !hasAnyField && !result._maskedNumber)) {
             decrementPending();
             return {
               handled: true,
@@ -5438,11 +5511,12 @@ Return only JSON: {"optionId":"one configured id" | null}`,
 
         // Vision-only extraction (classify-then-strict per-doc, with Tier 1→2 escalation inside)
         try {
-          const visionResults = await documentIdentificationService.identifyDocumentFromPdfImages(
-            businessAccountId,
-            pdfBuffer,
-            documentTypes.map((d: any) => d.docType)
-          );
+          const visionResults = await this.withProcessingUpdates(businessAccountId, senderPhone, freshSession.id, () =>
+            documentIdentificationService.identifyDocumentFromPdfImages(
+              businessAccountId,
+              pdfBuffer,
+              documentTypes.map((d: any) => d.docType)
+            ));
           const validResults = visionResults.filter(r => r.documentType !== 'unknown');
           console.log(`[WhatsApp Flow] [Timing] PDF total processing: ${Date.now() - pdfStartTime}ms (vision-only, ${validResults.length} docs found)`);
 
@@ -5544,12 +5618,18 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       const dataUrl = `data:${mimeType};base64,${base64Image}`;
 
       let result;
+      // Overall safety net. Must exceed the sum of the per-stage AI budgets
+      // (classify 20s + mini 30s + gpt-4o 45s) or escalations get cut off.
+      const OVERALL_LIMIT_MS = 110_000;
+      const sideHint = this.buildAadhaarSideHint((freshSession.collectedData as Record<string, any>) || {}, senderPhone);
+      const stopUpdates = this.startProcessingUpdates(businessAccountId, senderPhone, freshSession.id);
+      let overallTimer: NodeJS.Timeout | undefined;
       try {
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Document identification timed out after 45 seconds')), 45000)
-        );
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          overallTimer = setTimeout(() => reject(new Error(`Document identification timed out after ${OVERALL_LIMIT_MS / 1000} seconds`)), OVERALL_LIMIT_MS);
+        });
         result = await Promise.race([
-          documentIdentificationService.identifyDocument(businessAccountId, dataUrl, undefined, documentTypes.map((d: any) => d.docType)),
+          documentIdentificationService.identifyDocument(businessAccountId, dataUrl, sideHint, documentTypes.map((d: any) => d.docType)),
           timeoutPromise,
         ]);
       } catch (error) {
@@ -5559,10 +5639,13 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           handled: true,
           response: {
             type: "text",
-            text: "Sorry, I couldn't process that image. Please try uploading again.",
+            text: "Sorry, reading that photo took too long on our side. Please send it once more — a well-lit photo taken straight on works best.",
           },
           sessionId: freshSession.id,
         };
+      } finally {
+        stopUpdates();
+        if (overallTimer) clearTimeout(overallTimer);
       }
 
       const latestImgSession = await this.getActiveSession(businessAccountId, senderPhone);
@@ -5907,11 +5990,13 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           };
         } else {
           await this.completeSession(latestSession.id, latestData);
+          // Only the flow ID is in scope here (there is no activeFlow variable).
+          const completedFlow = await this.getFlowById(flowId);
           return {
             handled: true,
             flowCompleted: true,
             preMessages: textPreMsgs.length > 0 ? textPreMsgs : undefined,
-            response: { type: "text", text: confirmationPrefix + (activeFlow.completionMessage || "Thank you! All documents have been received.") },
+            response: { type: "text", text: confirmationPrefix + (completedFlow?.completionMessage || "Thank you! All documents have been received.") },
             collectedData: latestData,
             sessionId: latestSession.id,
           };
@@ -6416,6 +6501,20 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       return { handled: true, collectedData, sessionId: session.id };
     }
 
+    // Masked Aadhaar (XXXX XXXX 1234): the full number isn't on the document at all,
+    // so asking for a "sharper photo" would never work. Say what is actually needed.
+    if (normalizedMatchedType === 'aadhaar' && result._maskedNumber && !result.extractedData?.aadhaar_number && !docTypeState.mergedData?.aadhaar_number) {
+      console.log(`[WhatsApp Flow] Masked Aadhaar received — asking for the unmasked card`);
+      return {
+        handled: true,
+        response: {
+          type: 'text',
+          text: "This is a *masked* Aadhaar — only the last 4 digits of the number are shown, so we can't use it.\n\nPlease send a photo of your regular Aadhaar card (front and back), or download the *unmasked* e-Aadhaar from the UIDAI website (myaadhaar.uidai.gov.in) and send that.",
+        },
+        sessionId: session.id,
+      };
+    }
+
     const sessionData = await db
       .select({ businessAccountId: whatsappFlowSessions.businessAccountId })
       .from(whatsappFlowSessions)
@@ -6660,21 +6759,35 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     // PR1+PR2: Final-tier validation failure → ask for re-upload immediately.
     // If the strict gpt-4o tier still couldn't read required fields cleanly, there's nothing left
     // to try — discard this page and prompt the user for a sharper re-upload.
+    // If the page still gave us other required fields (e.g. an Aadhaar back side with a
+    // readable address but a misread number), keep the page and ask only for what is
+    // missing. Reject outright only when the page contributes nothing new.
     const finalFailures = (result._validationFailures || []).filter((f: { reason: string }) => f.reason === 'format');
+    const isPresent = (v: any) => v !== null && v !== undefined && String(v).trim() !== '';
+    let newlyUnreadable: string[] = [];
     if (finalFailures.length > 0 && result._extractionTier === 'vision-strict-gpt4o') {
       const docLabel = docTypeConfig?.name || normalizedMatchedType.replace(/_/g, ' ');
-      const failedFieldLabels = finalFailures.map((f: { field: string; label?: string }) => f.label || f.field).join(', ');
-      console.log(`[WhatsApp Flow] Final-tier (vision-strict-gpt4o) validation failed for ${normalizedMatchedType}: ${failedFieldLabels} unreadable — requesting re-upload`);
-      docTypeState.status = 'pending';
-      await this.updateSessionData(session.id, collectedData);
-      return {
-        handled: true,
-        response: {
-          type: 'text',
-          text: `I couldn't read your ${docLabel} clearly — the ${failedFieldLabels} field${finalFailures.length > 1 ? 's were' : ' was'} unreadable. Please re-upload a sharper, well-lit photo of your ${docLabel} (avoid glare, keep all text in focus).`,
-        },
-        sessionId: session.id,
-      };
+      const failedKeys = new Set<string>(finalFailures.map((f: { field: string }) => f.field));
+      const contributes = (docTypeConfig?.extractionFields || []).some((f: { key: string; required?: boolean }) =>
+        f.required && !failedKeys.has(f.key) && isPresent(result.extractedData?.[f.key]));
+      newlyUnreadable = Array.from(failedKeys).filter(k => !isPresent(docTypeState.mergedData?.[k]));
+
+      if (!contributes && newlyUnreadable.length > 0) {
+        const failedFieldLabels = finalFailures.map((f: { field: string; label?: string }) => f.label || f.field).join(', ');
+        const vid = finalFailures.some((f: { expected?: string }) => /VID/.test(f.expected || ''));
+        console.log(`[WhatsApp Flow] Final-tier (vision-strict-gpt4o) validation failed for ${normalizedMatchedType}: ${failedFieldLabels} unreadable — requesting re-upload`);
+        docTypeState.status = docTypeState.pages.length > 0 ? 'processing' : 'pending';
+        await this.updateSessionData(session.id, collectedData);
+        const text = normalizedMatchedType === 'aadhaar'
+          ? vid
+            ? `I could only find the 16-digit *VID* on this photo, not the 12-digit Aadhaar number. Please send a clear photo of the *front* of your Aadhaar (the side with your photo) — the 12-digit number is printed below the photo.`
+            : `I couldn't read the Aadhaar number on this photo with certainty. Please send a sharper photo of the *front* of your Aadhaar (the side with your photo) — flat on a table, good light, no glare or fingers over the number.`
+          : `I couldn't read your ${docLabel} clearly — the ${failedFieldLabels} field${finalFailures.length > 1 ? 's were' : ' was'} unreadable. Please re-upload a sharper, well-lit photo of your ${docLabel} (avoid glare, keep all text in focus).`;
+        return { handled: true, response: { type: 'text', text }, sessionId: session.id };
+      }
+      if (newlyUnreadable.length > 0) {
+        console.log(`[WhatsApp Flow] Keeping ${normalizedMatchedType} page despite unreadable ${newlyUnreadable.join(', ')} — it contributed other fields`);
+      }
     }
 
     docTypeState.pages.push({
@@ -6693,6 +6806,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
         }
       }
       docTypeState.mergedData = merged;
+      docTypeState.unreadableFields = Array.from(new Set([...(docTypeState.unreadableFields || []), ...newlyUnreadable]))
+        .filter(k => !isPresent(merged[k]));
     }
 
     if (await this.isDocTypeComplete(docTypeState.mergedData, normalizedMatchedType, businessAccountId, docTypeState.pages.length)) {
@@ -6851,11 +6966,13 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           };
         } else {
           await this.completeSession(session.id, collectedData);
+          // handleDocumentResult only has the flow ID (there is no activeFlow in scope here).
+          const completedFlow = await this.getFlowById(flowId);
           return {
             handled: true,
             flowCompleted: true,
             preMessages: confirmationPreMessage,
-            response: { type: "text", text: activeFlow.completionMessage || "Thank you! All documents have been received." },
+            response: { type: "text", text: completedFlow?.completionMessage || "Thank you! All documents have been received." },
             collectedData,
             sessionId: session.id,
           };

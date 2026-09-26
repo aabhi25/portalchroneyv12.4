@@ -5,6 +5,14 @@ import { eq } from "drizzle-orm";
 import path from "path";
 import { documentTypeService, DocumentTypeConfig } from "./documentTypeService";
 import { renderPdfPagesToJpegs, PdfRenderError } from "./pdfRenderer";
+import { checkAadhaarNumber } from "@shared/aadhaar";
+
+/** Per-stage AI time budgets. The caller's overall limit must exceed their sum. */
+export const DOC_AI_TIMEOUTS = {
+  classifyMs: 20_000,
+  miniMs: 30_000,
+  gpt4oMs: 45_000,
+};
 
 export interface DocumentIdentificationResult {
   documentType: string;
@@ -33,7 +41,12 @@ export interface DocumentIdentificationResult {
   // "we're having trouble processing your PDF" message instead of a content-rejection.
   _infraError?: boolean;
   _infraErrorCode?: string;
+  // Aadhaar with only the last 4 digits shown (e.g. XXXX XXXX 1234). Not a
+  // reading problem — the full number simply isn't on the document.
+  _maskedNumber?: boolean;
 }
+
+const isAadhaarKey = (docType: string | undefined) => (docType || '').toLowerCase().replace(/_card$/, '') === 'aadhaar';
 
 export interface PdfExtractionResult {
   success: boolean;
@@ -95,7 +108,7 @@ ${fieldDescriptions}
 IMPORTANT - Document Side Detection:
 - For Aadhaar cards:
   * FRONT side: Has the holder's photograph, full name, date of birth, gender, and 12-digit Aadhaar number. Set address=null for front-only images.
-  * BACK side: Has the complete residential address block (door/flat number, street, locality, city, state, PIN code) and a QR code. When you see the back, ALWAYS extract the full address — never return null for the address field if the back side is visible. Set full_name = null for back side — the "C/O SomeName" text inside the address block is the guardian's or parent's name, NOT the cardholder's name; never populate full_name from the back side. Set aadhaar_number = null for back side — extract the Aadhaar number from the front (photo) side only.
+  * BACK side: Has the complete residential address block (door/flat number, street, locality, city, state, PIN code) and a QR code. When you see the back, ALWAYS extract the full address — never return null for the address field if the back side is visible. Set full_name = null for back side — the "C/O SomeName" text inside the address block is the guardian's or parent's name, NOT the cardholder's name; never populate full_name from the back side. If the 12-digit Aadhaar number is also printed on the back, extract it (ignore the 16-digit VID and the Enrolment No.).
   * Set side="back" when there is an address block and QR code but no photograph.
   * If a single image shows BOTH sides (digital Aadhaar / printed sheet), extract all fields including address.
 - For PAN cards: Usually single-sided, always set side to "front".
@@ -413,9 +426,7 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
           // re-extract with Tier 1-strict (gpt-4o-mini, per-doc strict prompt + json_schema).
           // If still failing → Tier 2-strict (gpt-4o, same strict pipeline with escalation reason).
           if (this.isStrictKycType(result.documentType)) {
-            const tier1Failed =
-              (result._validationFailures && result._validationFailures.some(f => f.reason === 'format')) ||
-              result.confidence < 0.85;
+            const tier1Failed = this.needsEscalation(result);
             if (tier1Failed) {
               // Resolve the per-doc-type configured strict model. When configured = gpt-4o,
               // run the strict pipeline directly with gpt-4o (no Tier 2 escalation needed).
@@ -426,8 +437,8 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
                 docCfg?.scanModel === 'gpt-4o' ? 'gpt-4o' : 'gpt-4o-mini';
 
               const reason1 = result._validationFailures?.length
-                ? `Tier 1 produced format-invalid values: ${result._validationFailures.map(f => `${f.field}="${f.value}"`).join(', ')}`
-                : `Tier 1 confidence ${result.confidence} below 0.85 threshold`;
+                ? `Tier 1 produced invalid values: ${result._validationFailures.map(f => `${f.field}="${f.value}" (expected ${f.expected})`).join(', ')}`
+                : `Tier 1 confidence ${result.confidence} too low`;
               console.log(`[Document ID] PDF page ${pageFile} (${result.documentType}): Tier 1 inadequate — ${reason1}. Escalating to strict-${strictTier1Model}.`);
               const tier1Strict = await this.extractFieldsStrict(businessAccountId, result.documentType, [dataUrl], { model: strictTier1Model, escalationReason: reason1 });
               tier1Strict._pageNumber = idx + 1;
@@ -435,15 +446,16 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
               // If we already used gpt-4o, no further escalation is possible.
               if (strictTier1Model === 'gpt-4o') return tier1Strict;
 
-              const tier1StrictFailed =
-                (tier1Strict._validationFailures && tier1Strict._validationFailures.some(f => f.reason === 'format')) ||
-                tier1Strict.confidence < 0.85;
+              const tier1StrictFailed = this.needsEscalation(tier1Strict);
               if (tier1StrictFailed) {
                 const reason2 = tier1Strict._validationFailures?.length
-                  ? `Tier 1-strict still produced format-invalid values: ${tier1Strict._validationFailures.map(f => `${f.field}="${f.value}"`).join(', ')}`
-                  : `Tier 1-strict confidence ${tier1Strict.confidence} below 0.85`;
+                  ? `Tier 1-strict still produced invalid values: ${tier1Strict._validationFailures.map(f => `${f.field}="${f.value}" (expected ${f.expected})`).join(', ')}`
+                  : `Tier 1-strict confidence ${tier1Strict.confidence} too low`;
                 console.log(`[Document ID] PDF page ${pageFile} (${result.documentType}): escalating to Tier 2 (gpt-4o strict). ${reason2}`);
-                const tier2Strict = await this.extractFieldsStrict(businessAccountId, result.documentType, [dataUrl], { model: 'gpt-4o', escalationReason: reason2 });
+                const tier2Strict = this.mergeTierResults(
+                  tier1Strict,
+                  await this.extractFieldsStrict(businessAccountId, result.documentType, [dataUrl], { model: 'gpt-4o', escalationReason: reason2 }),
+                );
                 tier2Strict._pageNumber = idx + 1;
                 return tier2Strict;
               }
@@ -572,6 +584,26 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
   // Other types fall back to legacy non-strict behavior (no behavior change for them).
   private static STRICT_KYC_TYPES = new Set(['aadhaar', 'pan', 'aadhaar_card', 'pan_card']);
 
+  /**
+   * Whether a strict-tier result should be retried with the bigger model.
+   * - Any required field with an invalid format (incl. Aadhaar VID / checksum misread) → retry.
+   * - Masked Aadhaar → never retry (the digits aren't on the document).
+   * - Aadhaar: the number is protected by its checksum, so accept a readable side at
+   *   confidence ≥ 0.6 when it yields the number or the address. A back side with no
+   *   name is expected and is not a reason to retry.
+   * - Everything else keeps the 0.85 floor.
+   */
+  needsEscalation(result: DocumentIdentificationResult): boolean {
+    if (result._validationFailures?.some(f => f.reason === 'format')) return true;
+    if (result._maskedNumber) return false;
+    if (isAadhaarKey(result.documentType)) {
+      const d = result.extractedData || {};
+      const hasUsefulField = !!(d.aadhaar_number || (d.address && String(d.address).trim()));
+      if (result.isValid !== false && hasUsefulField && result.confidence >= 0.6) return false;
+    }
+    return result.confidence < 0.85;
+  }
+
   isStrictKycType(docType: string): boolean {
     if (!docType) return false;
     return DocumentIdentificationService.STRICT_KYC_TYPES.has(docType.toLowerCase());
@@ -610,8 +642,38 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
       }
     }
 
-    const docTypeConfig = await documentTypeService.getDocumentTypeByKey(businessAccountId, result.documentType);
+    const docTypeConfig = await documentTypeService.getDocumentTypeByKey(businessAccountId, result.documentType)
+      || await documentTypeService.getDocumentTypeByKey(businessAccountId, result.documentType.toLowerCase().replace(/_card$/, ''));
     if (!docTypeConfig) return;
+
+    const failures: NonNullable<DocumentIdentificationResult['_validationFailures']> = [];
+
+    // Aadhaar number: tell apart a masked number, the 16-digit VID and a misread
+    // digit (Verhoeff checksum) before the generic regex check below.
+    if (isAadhaarKey(result.documentType) && result.extractedData) {
+      const numberField = docTypeConfig.extractionFields.find(f => f.key === 'aadhaar_number');
+      const raw = result.extractedData.aadhaar_number;
+      if (numberField && raw !== null && raw !== undefined && String(raw).trim() !== '') {
+        const check = checkAadhaarNumber(raw);
+        if (check.kind === 'valid') {
+          result.extractedData.aadhaar_number = check.digits;
+        } else if (check.kind === 'masked') {
+          console.log(`[Document ID] Masked Aadhaar detected (last 4: ${check.lastFour}) — full number not on document`);
+          result._maskedNumber = true;
+          result.extractedData.aadhaar_number = null;
+          result.validationNotes = `${result.validationNotes || ''} [Masked Aadhaar: only the last 4 digits are printed]`.trim();
+        } else {
+          const expected = check.kind === 'vid'
+            ? '12-digit Aadhaar number — the value read was the 16-digit VID'
+            : check.kind === 'checksum'
+              ? '12-digit Aadhaar number — checksum failed, a digit was misread'
+              : numberField.formatDescription || '12-digit number';
+          console.log(`[Document ID] FAIL-CLOSED: aadhaar_number "${check.digits || raw}" rejected (${check.kind}) — nulling field & marking failure`);
+          failures.push({ field: 'aadhaar_number', label: numberField.label, value: String(raw), expected, reason: 'format' });
+          result.extractedData.aadhaar_number = null;
+        }
+      }
+    }
 
     // PR1 FAIL-CLOSED VALIDATION
     // Required field whose value is present but does NOT match formatRegex:
@@ -622,8 +684,6 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
     // Missing required fields are NOT marked as fail-closed here because multi-page docs (e.g. Aadhaar
     // back-side address) can fill them in via merging in handleDocumentResult. Only isDocTypeComplete
     // (called after merge) enforces required-presence + format gate.
-    const failures: NonNullable<DocumentIdentificationResult['_validationFailures']> = [];
-
     for (const field of docTypeConfig.extractionFields) {
       const fieldValue = result.extractedData?.[field.key];
       const isEmpty = fieldValue === null || fieldValue === undefined || String(fieldValue).trim() === '';
@@ -659,6 +719,16 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
   }
 
   private buildStrictPromptForDoc(config: DocumentTypeConfig, escalationReason?: string, verifyStyle: boolean = false): string {
+    const AADHAAR_NUMBER_RULES = `
+═══════════════════════════════════════════════════════════
+AADHAAR NUMBER — READ THIS CAREFULLY
+═══════════════════════════════════════════════════════════
+- The Aadhaar number is EXACTLY 12 digits, printed in three groups of 4 (e.g. "2345 6789 0123"), in large bold type — on the front below the photo, and usually again at the bottom of the back / e-Aadhaar sheet. It never starts with 0 or 1.
+- IGNORE the VID ("VID: 9123 4567 8901 2345" — 16 digits, usually smaller). The VID is NOT the Aadhaar number.
+- IGNORE the Enrolment No. (e.g. "1234/56789/01234", top of an e-Aadhaar letter) and any dates, phone numbers or PIN codes.
+- If the number is MASKED (some digits replaced by X, e.g. "XXXX XXXX 1234"), return it EXACTLY as printed including the X characters — do not invent the hidden digits.
+- The back side / address block: return the full address (house, street, locality, district, state, PIN). "C/O", "S/O", "D/O", "W/O" names inside the address are NOT the cardholder's name.
+`;
     const requiredFields = config.extractionFields.filter(f => f.required);
     const optionalFields = config.extractionFields.filter(f => !f.required);
 
@@ -728,9 +798,17 @@ NON-NEGOTIABLE RULES — VIOLATING ANY OF THESE = SET FIELD TO NULL
 2. If a required field is not 100% legible AND format-valid, return null and explain in validationNotes.
 3. Count digits/characters carefully — a wrong-length number is WORSE than no number.
 4. A blurry, glared, partially occluded, or ambiguous value MUST be returned as null.
-5. confidence = 1.0 ONLY when every required field is unambiguous AND format-valid; otherwise lower it honestly (e.g. 0.5 if you guessed a digit).
+5. confidence describes how legible the fields VISIBLE IN THIS IMAGE are: 1.0 only when every visible field is unambiguous AND format-valid; lower it honestly otherwise (e.g. 0.5 if you guessed a digit).
 6. Set isValid=false if the document looks tampered, expired, illegible, or is a photocopy of a photocopy.
-${customInstructions ? '\nDOC-TYPE-SPECIFIC RULES:\n' + customInstructions + '\n' : ''}
+
+═══════════════════════════════════════════════════════════
+TWO-SIDED DOCUMENTS
+═══════════════════════════════════════════════════════════
+The REQUIRED list is for the whole document across ALL its sides. Many cards print some required fields only on the other side (e.g. Aadhaar: the name is on the front, the address on the back).
+- Return null for fields that are simply not on this side — that is expected.
+- Do NOT lower confidence and do NOT set isValid=false because this image shows only one side.
+- A single image may show BOTH sides (side by side, one above the other, or a printed/e-Aadhaar sheet): extract every field from both.
+${isAadhaarKey(config.key) ? AADHAAR_NUMBER_RULES : ''}${customInstructions ? '\nDOC-TYPE-SPECIFIC RULES:\n' + customInstructions + '\n' : ''}
 ═══════════════════════════════════════════════════════════
 FIELDS TO EXTRACT (output schema is enforced)
 ═══════════════════════════════════════════════════════════
@@ -787,7 +865,7 @@ Return JSON exactly matching the enforced schema. Do not add prose outside the J
     businessAccountId: string,
     docTypeKey: string,
     imageDataUrls: string[],
-    options: { model?: 'gpt-4o-mini' | 'gpt-4o'; escalationReason?: string; sideHint?: string; verifyStyle?: boolean } = {}
+    options: { model?: 'gpt-4o-mini' | 'gpt-4o'; escalationReason?: string; sideHint?: string; verifyStyle?: boolean; timeoutMs?: number } = {}
   ): Promise<DocumentIdentificationResult> {
     const model = options.model || 'gpt-4o-mini';
     const tierLabel: NonNullable<DocumentIdentificationResult['_extractionTier']> =
@@ -829,7 +907,11 @@ Return JSON exactly matching the enforced schema. Do not add prose outside the J
       const verifyStyle = options.verifyStyle ?? this.isVerifyStyleDocType(docTypeConfig);
       const systemPrompt = this.buildStrictPromptForDoc(docTypeConfig, options.escalationReason, verifyStyle);
       const schema = this.buildJsonSchemaForDoc(docTypeConfig);
-      const openai = new OpenAI({ apiKey, timeout: 45000 });
+      const openai = new OpenAI({
+        apiKey,
+        timeout: options.timeoutMs ?? (model === 'gpt-4o' ? DOC_AI_TIMEOUTS.gpt4oMs : DOC_AI_TIMEOUTS.miniMs),
+        maxRetries: 0, // the tier escalation is the retry; SDK retries would blow the time budget
+      });
 
       const userInstruction = verifyStyle
         ? `Decide whether the image(s) below constitute a valid ${docTypeConfig.name}, then return JSON exactly as instructed. Treat all attached images as pages of the same document.`
@@ -939,10 +1021,16 @@ Return JSON exactly matching the enforced schema. Do not add prose outside the J
       }
 
       const allTypes = await documentTypeService.getActiveDocumentTypes(businessAccountId);
+      // Visual cues for the common KYC documents, so a back side (no photo) or a
+      // combined front+back image isn't mistaken for "unknown".
+      const VISUAL_HINTS: Record<string, string> = {
+        aadhaar: 'Indian Aadhaar card (UIDAI). FRONT: photo, name, DOB, gender, 12-digit number. BACK: NO photo — "Unique Identification Authority of India", address block, QR code, often the 12-digit number and a 16-digit VID. It may also be one image showing both sides, a printed or downloaded e-Aadhaar sheet, or a masked Aadhaar. All of these are "aadhaar".',
+        pan: 'Indian PAN card (Income Tax Department): 10-character PAN like ABCDE1234F, name, father\'s name, DOB, photo.',
+      };
       const typeListLines = allowedPairs.map(({ norm }) => {
         const cfg = allTypes.find(t => (t.key || '').toLowerCase().replace(/_card$/, '') === norm);
         const desc = cfg ? `${cfg.name}${(cfg as any).description ? ' — ' + (cfg as any).description : ''}` : norm;
-        return `- "${norm}": ${desc}`;
+        return `- "${norm}": ${desc}${VISUAL_HINTS[norm] ? ` — ${VISUAL_HINTS[norm]}` : ''}`;
       });
 
       const systemPrompt = `You are a document type classifier. Look at the image(s) and pick exactly ONE of the allowed types below.
@@ -958,10 +1046,12 @@ Rules:
 - confidence > 0.8 only when you are sure of the type.
 - Do NOT extract any fields. Classification only.`;
 
-      const openai = new OpenAI({ apiKey, timeout: 20000 });
+      const openai = new OpenAI({ apiKey, timeout: DOC_AI_TIMEOUTS.classifyMs, maxRetries: 0 });
+      // 'high' detail: at 'low' (512px) the text on an Aadhaar back side or a
+      // two-sides-in-one photo is unreadable and the card gets classified "unknown".
       const userContent: any[] = [
         { type: 'text', text: 'Classify the document below.' },
-        ...imageDataUrls.map(url => ({ type: 'image_url' as const, image_url: { url, detail: 'low' as const } })),
+        ...imageDataUrls.map(url => ({ type: 'image_url' as const, image_url: { url, detail: 'high' as const } })),
       ];
 
       const response = await openai.chat.completions.create({
@@ -1052,15 +1142,11 @@ Rules:
       return tier1;
     }
 
-    const tier1Failed =
-      (tier1._validationFailures && tier1._validationFailures.some(f => f.reason === 'format')) ||
-      tier1.confidence < 0.85;
-
-    if (!tier1Failed) return tier1;
+    if (!this.needsEscalation(tier1)) return tier1;
 
     const reason = tier1._validationFailures?.length
-      ? `Tier 1-strict produced format-invalid values: ${tier1._validationFailures.map(f => `${f.field}="${f.value}"`).join(', ')}`
-      : `Tier 1-strict confidence ${tier1.confidence} below 0.85`;
+      ? `Tier 1-strict produced invalid values: ${tier1._validationFailures.map(f => `${f.field}="${f.value}" (expected ${f.expected})`).join(', ')}`
+      : `Tier 1-strict confidence ${tier1.confidence} too low`;
     console.log(`[Document ID] Escalating ${cls.docType} to Tier 2 (gpt-4o strict). ${reason}`);
     const tier2 = await this.extractFieldsStrict(
       businessAccountId,
@@ -1069,7 +1155,40 @@ Rules:
       { model: 'gpt-4o', escalationReason: reason, sideHint }
     );
     if (tier2.documentType !== 'unknown') tier2.documentType = cls.docType;
-    return tier2;
+    return this.mergeTierResults(tier1, tier2);
+  }
+
+  /**
+   * Tier 2 is authoritative, but never lose what Tier 1 read correctly: if Tier 2
+   * timed out or left a field empty that Tier 1 read (and validation accepted),
+   * keep Tier 1's value. Failures stay only for fields still missing.
+   */
+  mergeTierResults(tier1: DocumentIdentificationResult, tier2: DocumentIdentificationResult): DocumentIdentificationResult {
+    const merged: DocumentIdentificationResult = { ...tier2, extractedData: { ...(tier2.extractedData || {}) } };
+    const empty = (v: unknown) => v === null || v === undefined || String(v).trim() === '';
+    let recovered = false;
+    for (const [key, value] of Object.entries(tier1.extractedData || {})) {
+      if (!empty(value) && empty(merged.extractedData[key])) {
+        merged.extractedData[key] = value;
+        recovered = true;
+      }
+    }
+    if (tier2.documentType === 'unknown' && tier1.documentType !== 'unknown') merged.documentType = tier1.documentType;
+    if (!merged.side && tier1.side) merged.side = tier1.side;
+    merged._maskedNumber = tier1._maskedNumber || tier2._maskedNumber;
+    // Keep failures from either tier for fields that are still empty (Tier 2 may
+    // have errored out without validating anything), one entry per field.
+    const failures = [...(tier2._validationFailures || []), ...(tier1._validationFailures || [])]
+      .filter(f => empty(merged.extractedData[f.field]))
+      .filter((f, i, all) => all.findIndex(g => g.field === f.field) === i);
+    merged._validationFailures = failures.length ? failures : undefined;
+    if (recovered) {
+      merged.confidence = Math.max(merged.confidence || 0, Math.min(tier1.confidence || 0, 0.7));
+      // Tier 2 errored/timed out (confidence 0): trust Tier 1's validity verdict.
+      if (tier1.isValid !== false && tier2.confidence === 0) merged.isValid = true;
+      console.log(`[Document ID] Tier merge: kept Tier 1 values for fields Tier 2 left empty (${Object.keys(tier1.extractedData || {}).filter(k => !empty(tier1.extractedData[k]) && empty(tier2.extractedData?.[k])).join(', ')})`);
+    }
+    return merged;
   }
 
   async validateDocumentType(
