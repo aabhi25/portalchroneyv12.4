@@ -318,11 +318,10 @@ export class SocialCommentReplyEngine<S extends CommentSettingsLike> {
         }
 
         if (trainingDocs && trainingDocs.length > 0) {
-          // NOTE: training documents have no title/content columns (these read as undefined);
-          // kept as-is in this refactor — see the report.
           const docSummaries = trainingDocs
             .slice(0, 5)
-            .map(doc => `- ${(doc as any).title}: ${((doc as any).content || "").substring(0, 500)}`)
+            .filter(doc => doc.summary)
+            .map(doc => `- ${doc.originalFilename}: ${(doc.summary || "").substring(0, 500)}`)
             .join("\n");
           staticContext += `TRAINING DOCUMENTS:\n${docSummaries}\n\n`;
         }
@@ -332,21 +331,18 @@ export class SocialCommentReplyEngine<S extends CommentSettingsLike> {
 
       context = cachedContext || "";
 
-      // NOTE: argument order differs from vectorSearchService.search(query, businessAccountId, ...)
-      // and faqEmbeddingService.searchFAQs(query, businessAccountId, ...); kept as-is in this
-      // behaviour-preserving refactor — see the report.
       try {
-        const searchResults: any[] = await (vectorSearchService.search as any)(businessAccountId, commentText, 3);
+        const searchResults = await vectorSearchService.search(commentText, businessAccountId, 3, 0.5);
         if (searchResults && searchResults.length > 0) {
           context += "\nRELEVANT INFORMATION:\n";
           for (const result of searchResults) {
-            context += `- ${result.content?.substring(0, 300) || ""}\n`;
+            context += `- ${result.chunkText?.substring(0, 300) || ""}\n`;
           }
         }
       } catch {}
 
       try {
-        const faqResults = await faqEmbeddingService.searchFAQs(businessAccountId, commentText, 3);
+        const faqResults = await faqEmbeddingService.searchFAQs(commentText, businessAccountId, 3);
         if (faqResults && faqResults.length > 0) {
           context += "\nRELEVANT FAQs:\n";
           for (const faq of faqResults) {

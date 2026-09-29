@@ -29,6 +29,7 @@ function expect(cond: any, label: string, detail?: unknown) {
  */
 const EXCEPTIONS: Record<string, string> = {
   // CRM sync bookkeeping: patches are built in code from sync outcomes, never from a request
+  "server/services/aiBudgetService.ts#recordSpend": "stamps warn/limit notified month; object built in code",
   "server/services/socialLeadCrmSync.ts#recordLsqFailure": "LeadSquared sync status/retry fields built server-side",
   "server/services/socialLeadCrmSync.ts#finish": "Salesforce sync status fields built server-side",
   // storage.ts — internal-only or super-admin paths whose inputs are built server-side
