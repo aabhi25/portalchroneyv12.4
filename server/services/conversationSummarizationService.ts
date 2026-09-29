@@ -3,6 +3,7 @@ import { db } from "../db";
 import { conversations, messages } from "@shared/schema";
 import { eq, and, isNull, sql } from "drizzle-orm";
 import { storage } from "../storage";
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 function extractJson(text: string): Record<string, unknown> {
   try {
@@ -49,8 +50,8 @@ export async function summarizeConversation(
     const model = useMaster ? (master!.primaryModel || 'gpt-4o-mini') : 'gpt-4o-mini';
     const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
     const openai = provider === 'gemini'
-      ? new OpenAI({ apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
-      : new OpenAI({ apiKey: effectiveKey });
+      ? createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
+      : createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: effectiveKey });
 
     const transcript = conversationMessages
       .map(m => `${m.role === 'user' ? 'Visitor' : 'AI'}: ${m.content}`)

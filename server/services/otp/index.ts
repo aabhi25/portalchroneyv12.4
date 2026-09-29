@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../../lib/fetchWithTimeout";
 import crypto from 'node:crypto';
 import { eq, and, sql } from 'drizzle-orm';
 import { storage } from '../../storage';
@@ -494,7 +495,7 @@ export async function verifyRecaptchaV2Token(
     params.set('secret', secretKey);
     params.set('response', token);
     if (remoteIp) params.set('remoteip', remoteIp);
-    const resp = await fetch('https://www.google.com/recaptcha/api/siteverify', {
+    const resp = await fetchWithTimeout('https://www.google.com/recaptcha/api/siteverify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params.toString(),

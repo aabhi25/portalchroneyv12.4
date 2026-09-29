@@ -1,3 +1,4 @@
+import { trackTimer } from "../lib/lifecycle";
 import { db, pool } from "../db";
 import {
   marketingCampaigns,
@@ -2442,9 +2443,9 @@ export function startCampaignScheduler(): void {
   if (schedulerStarted) return;
   schedulerStarted = true;
   const interval = 60 * 1000;
-  setInterval(() => {
+  trackTimer(setInterval(() => {
     marketingCampaignService.runScheduler().catch(err => console.error("[CampaignScheduler] tick error:", err));
-  }, interval);
+  }, interval));
   console.log("[CampaignScheduler] Started (60s interval)");
 
   // Pull-API reconciler — runs every 3 minutes and reconciles any campaign
@@ -2453,8 +2454,8 @@ export function startCampaignScheduler(): void {
   // it, rows can sit in 'queued' for up to 24h before the TTL sweep flips
   // them to 'expired'.
   const reconcileInterval = 3 * 60 * 1000;
-  setInterval(() => {
+  trackTimer(setInterval(() => {
     marketingCampaignService.reconcileAllStale().catch(err => console.error("[CampaignScheduler] reconcile tick error:", err));
-  }, reconcileInterval);
+  }, reconcileInterval));
   console.log("[CampaignScheduler] Pull-API reconciler started (3 min interval)");
 }

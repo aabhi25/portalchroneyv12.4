@@ -8,6 +8,7 @@ import { facebookService } from "./facebookService";
 import { storage } from "../storage";
 import type { FacebookSettings } from "@shared/schema";
 import OpenAI from "openai";
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 interface CommentData {
   commentId: string;
@@ -286,7 +287,7 @@ export class FacebookCommentReplyService {
   private async runVisionAnalysis(mediaUrl: string, apiKey: string, postId: string): Promise<string> {
     try {
       console.log(`[Facebook Comment Reply] Running vision analysis for post ${postId}`);
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.vision, apiKey });
       const visionResponse = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
@@ -383,7 +384,7 @@ export class FacebookCommentReplyService {
     postContext?: string | null
   ): Promise<string | null> {
     try {
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
 
       const systemPrompt = `You are a social media assistant for "${businessName}". You reply to public Facebook comments on behalf of the business.
 
@@ -517,7 +518,7 @@ ${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}`;
     dmTemplate?: string
   ): Promise<string | null> {
     try {
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
 
       const systemPrompt = `You are a helpful assistant for "${businessName}". A user commented on a Facebook post and you are now sending them a private message to continue the conversation.
 

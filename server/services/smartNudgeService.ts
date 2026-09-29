@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { storage } from "../storage";
 import { aiUsageLogger } from "./aiUsageLogger";
+import { createOpenAI } from "../lib/openaiClient";
 
 interface ConversationMessage {
   role: 'user' | 'assistant';
@@ -32,7 +33,7 @@ export class SmartNudgeService {
       throw new Error('OpenAI API key not configured');
     }
 
-    return new OpenAI({ apiKey: businessAccount.openaiApiKey });
+    return createOpenAI({ apiKey: businessAccount.openaiApiKey });
   }
 
   async generateSmartNudge(context: SmartNudgeContext): Promise<SmartNudgeResult> {

@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { storage } from '../storage';
 import { aiUsageLogger } from './aiUsageLogger';
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 const IMAGE_MAX_SIZE = 5 * 1024 * 1024;
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
@@ -17,7 +18,7 @@ export class ImageProcessingService {
     if (!apiKey) {
       throw new Error('OpenAI API key not configured for this business account');
     }
-    return new OpenAI({ apiKey });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.vision, apiKey });
   }
 
   async extractTextFromImage(

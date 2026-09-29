@@ -1,3 +1,4 @@
+import { trackTimer } from "../lib/lifecycle";
 import { db } from "../db";
 import { stripProtectedFields } from "../lib/safeUpdate";
 import { UploadAckCoordinator, type AckDocInfo } from "./uploadAckCoordinator";
@@ -7236,11 +7237,11 @@ Return only JSON: {"optionId":"one configured id" | null}`,
 
   startStuckJourneyRecovery(): void {
     if (this.recoveryInterval) return;
-    this.recoveryInterval = setInterval(() => {
+    this.recoveryInterval = trackTimer(setInterval(() => {
       this.checkAndRecoverStuckSessions().catch(err => {
         console.error("[FlowRecovery] Error in stuck journey recovery:", err);
       });
-    }, this.RECOVERY_INTERVAL_MS);
+    }, this.RECOVERY_INTERVAL_MS));
     console.log("[FlowRecovery] Stuck journey recovery job started (every 3 minutes)");
   }
 

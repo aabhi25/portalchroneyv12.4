@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { storage } from '../../storage';
+import { createOpenAI, OPENAI_TIMEOUTS } from "../../lib/openaiClient";
 
 /**
  * OpenAI Batch API wrapper for cost-efficient bulk embedding generation.
@@ -44,7 +45,7 @@ async function getOpenAIClient(businessAccountId: string): Promise<OpenAI> {
   if (!account?.openaiApiKey) {
     throw new Error('OpenAI API key not configured for this business account');
   }
-  return new OpenAI({ apiKey: account.openaiApiKey });
+  return createOpenAI({ timeout: OPENAI_TIMEOUTS.document, apiKey: account.openaiApiKey });
 }
 
 export interface BatchInputItem {

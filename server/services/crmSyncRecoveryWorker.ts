@@ -1,3 +1,4 @@
+import { trackTimer } from "../lib/lifecycle";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 import { syncWhatsappLeadToCustomCrm, CRM_CLAIM_STALE_MS } from "./customCrmService";
@@ -20,7 +21,7 @@ export class CrmSyncRecoveryWorker {
     this.isRunning = true;
     console.log("[CRM Recovery] Starting outbox recovery worker (every 5 min, first run in 90s)");
 
-    setTimeout(() => this.processRecoveries(), INITIAL_DELAY_MS);
+    trackTimer(setTimeout(() => this.processRecoveries(), INITIAL_DELAY_MS));
 
     this.intervalId = setInterval(async () => {
       await this.processRecoveries();

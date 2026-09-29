@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { z } from 'zod';
 import { LeadsquaredFieldMapping } from '@shared/schema';
 
@@ -254,13 +255,13 @@ export class LeadSquaredService {
       
       console.log(`[LeadSquared] Request URL: ${this.baseUrl}/v2/Authentication.svc/UserByAccessKey.Get?accessKey=***&secretKey=***`);
       
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache',
         },
-      });
+      }, 30_000);
 
       console.log(`[LeadSquared] Response status: ${response.status} ${response.statusText}`);
       
@@ -459,14 +460,14 @@ export class LeadSquaredService {
         syncPayload[attr.Attribute] = attr.Value;
       }
       
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache',
         },
         body: JSON.stringify(attributeArray),
-      });
+      }, 30_000);
 
       console.log('[LeadSquared] Creating lead - Response status:', response.status, response.statusText);
 
@@ -624,14 +625,14 @@ export class LeadSquaredService {
         syncPayload[attr.Attribute] = attr.Value;
       }
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache',
         },
         body: JSON.stringify(attributeArray),
-      });
+      }, 30_000);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -685,14 +686,14 @@ export class LeadSquaredService {
       console.log('[LeadSquared] Creating lead - Host:', this.baseUrl);
       console.log('[LeadSquared] Creating lead - Fields count:', attributeArray.length, '- Fields:', attributeArray.map(a => a.Attribute).join(', '));
       
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache',
         },
         body: JSON.stringify(attributeArray),
-      });
+      }, 30_000);
 
       console.log('[LeadSquared] Creating lead - Response status:', response.status, response.statusText);
 
@@ -764,14 +765,14 @@ export class LeadSquaredService {
       
       const attributeArray = this.buildAttributeArray(leadData as LeadSquaredLeadData);
       
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache',
         },
         body: JSON.stringify(attributeArray),
-      });
+      }, 30_000);
 
       if (!response.ok) {
         const errorText = await response.text();

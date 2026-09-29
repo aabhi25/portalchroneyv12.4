@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { GoogleAuth } from 'google-auth-library';
 import { decrypt } from './encryptionService';
 
@@ -40,7 +41,7 @@ async function fetchWithRetry(
   
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const response = await fetch(url, options);
+      const response = await fetchWithTimeout(url, options);
       
       if (response.status === 429 || (response.status >= 500 && response.status < 600)) {
         const delayMs = baseDelayMs * Math.pow(2, attempt);

@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { db } from '../../db';
 import { conversations, messages } from '@shared/schema';
 import { and, eq, isNull, isNotNull, desc, sql } from 'drizzle-orm';
+import { createOpenAI, OPENAI_TIMEOUTS } from "../../lib/openaiClient";
 
 /**
  * Best-effort learner-sentiment enrichment for TopScholar analytics.
@@ -109,8 +110,8 @@ export async function batchEnrichSentiment(
   const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
   const openai =
     provider === 'gemini'
-      ? new OpenAI({ apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
-      : new OpenAI({ apiKey: effectiveKey });
+      ? createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
+      : createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: effectiveKey });
 
   let processed = 0;
   let failed = 0;

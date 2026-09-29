@@ -1,3 +1,4 @@
+import { fetchWithTimeout, LONG_FETCH_TIMEOUT_MS } from "../lib/fetchWithTimeout";
 import { DetectedJewelry } from './jewelryDetectionService';
 
 export interface CroppedImage {
@@ -112,7 +113,7 @@ class ImageCroppingService {
         console.log('[Image Cropping] Mapping relative URL to absolute for fetch:', finalImageUrl);
       }
 
-      const imageResponse = await fetch(finalImageUrl);
+      const imageResponse = await fetchWithTimeout(finalImageUrl, undefined, LONG_FETCH_TIMEOUT_MS);
       if (!imageResponse.ok) {
         throw new Error(`Failed to fetch image: ${imageResponse.status}`);
       }
@@ -190,7 +191,7 @@ class ImageCroppingService {
     boundingBox: { x: number; y: number; width: number; height: number }
   ): Promise<string> {
     try {
-      const imageResponse = await fetch(imageUrl);
+      const imageResponse = await fetchWithTimeout(imageUrl, undefined, LONG_FETCH_TIMEOUT_MS);
       if (!imageResponse.ok) {
         throw new Error(`Failed to fetch image: ${imageResponse.status}`);
       }

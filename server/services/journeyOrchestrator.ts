@@ -1,5 +1,6 @@
 import { journeyService, type JourneyState } from './journeyService';
 import { conversationMemory } from '../conversationMemory';
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 /**
  * Journey Orchestrator - Unified middleware for conversation journey handling
@@ -242,8 +243,7 @@ export class JourneyOrchestrator {
       throw new Error('OpenAI API key not configured for this business account');
     }
     
-    const OpenAI = (await import('openai')).default;
-    return new OpenAI({ apiKey });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
   }
 
   /**

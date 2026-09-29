@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../../lib/fetchWithTimeout";
 import type { OtpProvider, OtpSendResult } from './types';
 
 export interface Msg91Config {
@@ -22,7 +23,7 @@ export class Msg91OtpProvider implements OtpProvider {
         this.cfg.senderId
       )}`;
 
-      const resp = await fetch(url, {
+      const resp = await fetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'authkey': this.cfg.authKey,

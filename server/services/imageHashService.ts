@@ -1,3 +1,4 @@
+import { fetchWithTimeout, LONG_FETCH_TIMEOUT_MS } from "../lib/fetchWithTimeout";
 import imghash from 'imghash';
 
 class ImageHashService {
@@ -17,7 +18,7 @@ class ImageHashService {
         const base64Data = imageInput.split(',')[1];
         imageBuffer = Buffer.from(base64Data, 'base64');
       } else {
-        const response = await fetch(imageInput);
+        const response = await fetchWithTimeout(imageInput, undefined, LONG_FETCH_TIMEOUT_MS);
         if (!response.ok) {
           throw new Error(`Failed to fetch image: ${response.status}`);
         }

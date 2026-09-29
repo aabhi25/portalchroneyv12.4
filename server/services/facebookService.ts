@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { db } from "../db";
 import { facebookSettings, facebookMessages, facebookComments, businessAccounts, facebookLeads, facebookLeadFields } from "@shared/schema";
 import { eq, and, desc, sql, asc, count } from "drizzle-orm";
@@ -128,14 +129,14 @@ export class FacebookService {
         text: truncatedText.substring(0, 50) + (truncatedText.length > 50 ? "..." : ""),
       });
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
-      });
+      }, 30_000);
 
       const responseData = await response.json();
       console.log(`[Facebook] API response:`, responseData);
@@ -184,14 +185,14 @@ export class FacebookService {
         },
       };
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
-      });
+      }, 30_000);
 
       const responseData = await response.json();
       if (!response.ok) {
@@ -265,14 +266,14 @@ export class FacebookService {
         text: truncatedMessage.substring(0, 50) + (truncatedMessage.length > 50 ? "..." : ""),
       });
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ message: truncatedMessage }),
-      });
+      }, 30_000);
 
       const responseData = await response.json();
       console.log(`[Facebook] Comment reply API response:`, responseData);
@@ -316,14 +317,14 @@ export class FacebookService {
         text: truncatedMessage.substring(0, 50) + (truncatedMessage.length > 50 ? "..." : ""),
       });
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ message: truncatedMessage }),
-      });
+      }, 30_000);
 
       const responseData = await response.json();
       console.log(`[Facebook] Private reply API response:`, responseData);
@@ -487,10 +488,10 @@ export class FacebookService {
     try {
       const url = `${FB_API_BASE}/${psid}?fields=first_name,last_name,profile_pic&access_token=${encodeURIComponent(accessToken)}`;
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "GET",
         headers: { "Accept": "application/json" },
-      });
+      }, 30_000);
 
       if (!response.ok) {
         const errorBody = await response.text();
@@ -689,10 +690,10 @@ export class FacebookService {
       const fields = 'id,message,full_picture,permalink_url,type,attachments{media_type,media,url}';
       const url = `${FB_API_BASE}/${postId}?fields=${fields}&access_token=${encodeURIComponent(accessToken)}`;
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
-      });
+      }, 30_000);
 
       if (!response.ok) {
         const errorBody = await response.text();

@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { storage } from '../storage';
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 export interface JewelryAttributes {
   metalType?: string;
@@ -56,7 +57,7 @@ class JewelryDetectionService {
       return null;
     }
     
-    return new OpenAI({ apiKey: openaiApiKey });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.vision, apiKey: openaiApiKey });
   }
 
   async detectJewelry(imageUrl: string, businessAccountId: string): Promise<JewelryDetectionResult> {

@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { storage } from "../storage";
 import { Message } from "@shared/schema";
+import { createOpenAI } from "../lib/openaiClient";
 
 export async function extractTopicsOfInterest(
   conversationId: string,
@@ -16,7 +17,7 @@ export async function extractTopicsOfInterest(
       return [];
     }
     
-    const openai = new OpenAI({ apiKey });
+    const openai = createOpenAI({ apiKey });
     const messages = await storage.getMessagesByConversation(conversationId, businessAccountId);
     
     if (!messages || messages.length === 0) {

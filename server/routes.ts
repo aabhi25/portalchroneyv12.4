@@ -1,3 +1,4 @@
+import { fetchWithTimeout, LONG_FETCH_TIMEOUT_MS } from "./lib/fetchWithTimeout";
 import type { Express, Request, Response as ExpressResponse } from "express";
 import { getLogBuffer, logEvents } from './services/logCapture';
 import { createServer, type Server } from "http";
@@ -94,6 +95,8 @@ import { inboundMessageLimiter, unsupportedMessageNotice } from "./services/inbo
 import { createMetaWebhookSignatureGuard, describeMetaWebhookSignature, timingSafeEqualStrings } from "./services/metaWebhookSignature";
 import { validatePhoneNumber } from "@shared/validation/phone";
 import { MAX_IMPORT_ROWS, normalizeColumnKeys } from "@shared/contactImport";
+import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
+import { trackTimer, onShutdown } from "./lib/lifecycle";
 
 const execAsync = promisify(exec);
 
@@ -427,7 +430,7 @@ async function translateWidgetText(businessAccountId: string, text: string, targ
   try {
     const businessAccount = await storage.getBusinessAccount(businessAccountId);
     if (!businessAccount || !businessAccount.openaiApiKey) return text;
-    const openai = new OpenAI({ apiKey: businessAccount.openaiApiKey });
+    const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -1957,7 +1960,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         const transcript = history.slice(-20)
           .map(m => `${m.role === 'user' ? 'Student' : 'AI Bot'}: ${String(m.content || '').slice(0, 500)}`)
           .join('\n');
-        const openai = new OpenAI({ apiKey });
+        const openai = createOpenAI({ apiKey });
         const completion = await openai.chat.completions.create({
           model: 'gpt-4o-mini',
           messages: [
@@ -1996,7 +1999,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       const transcript = history.slice(-12)
         .map(m => `${m.role === 'user' ? 'Student' : 'AI Tutor'}: ${String(m.content || '').slice(0, 600)}`)
         .join('\n');
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
       const completion = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
@@ -2255,7 +2258,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
             `You are representing: ${businessAccount.description}` : 
             '';
           
-          const openai = new OpenAI({ apiKey: businessAccount.openaiApiKey });
+          const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
           const completion = await openai.chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [
@@ -2324,7 +2327,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         
         const langName = LANGUAGE_NAMES[targetLang] || targetLang;
         try {
-          const openai = new OpenAI({ apiKey: businessAccount.openaiApiKey });
+          const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
           const completion = await openai.chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [
@@ -2841,7 +2844,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       }
       
       try {
-        const openai = new OpenAI({ apiKey: businessAccount.openaiApiKey });
+        const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
         const completion = await openai.chat.completions.create({
           model: 'gpt-4o-mini',
           messages: [
@@ -2898,7 +2901,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       }
       
       try {
-        const openai = new OpenAI({ apiKey: businessAccount.openaiApiKey });
+        const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
         
         // Create a numbered list for batch translation
         const numberedTexts = texts.map((t: string, i: number) => `${i + 1}. ${t}`).join('\n');
@@ -2981,7 +2984,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       }
 
       try {
-        const openai = new OpenAI({ apiKey: businessAccount.openaiApiKey });
+        const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
 
         let systemPrompt: string;
         let userContent: string;
@@ -3154,7 +3157,7 @@ Return JSON:
         const clientIp = getClientIp(req);
         
         if (clientIp && clientIp !== 'unknown' && !clientIp.startsWith('127.') && !clientIp.startsWith('192.168.') && !clientIp.startsWith('10.') && !clientIp.startsWith('::1')) {
-          const geoResponse = await fetch(`http://ip-api.com/json/${clientIp}?fields=status,city`);
+          const geoResponse = await fetchWithTimeout(`http://ip-api.com/json/${clientIp}?fields=status,city`, undefined, 5_000);
           if (geoResponse.ok) {
             const geoData = await geoResponse.json();
             if (geoData.status === 'success' && geoData.city) {
@@ -4432,7 +4435,7 @@ Return JSON:
               };
               const langName = LANGUAGE_NAMES[targetLanguage];
               if (langName) {
-                const openai = new OpenAI({ apiKey: businessAccount.openaiApiKey });
+                const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
                 const translation = await openai.chat.completions.create({
                   model: 'gpt-4o-mini',
                   messages: [
@@ -4501,7 +4504,7 @@ Return JSON:
             };
             const langName = LANGUAGE_NAMES[targetLanguage];
             if (langName) {
-              const openai = new OpenAI({ apiKey: businessAccount.openaiApiKey });
+              const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
               const translation = await openai.chat.completions.create({
                 model: 'gpt-4o-mini',
                 messages: [
@@ -4605,12 +4608,12 @@ Return JSON:
     return true;
   }
 
-  setInterval(() => {
+  trackTimer(setInterval(() => {
     const now = Date.now();
     for (const [key, entry] of resumeUploadRateLimiter) {
       if (now > entry.resetAt) resumeUploadRateLimiter.delete(key);
     }
-  }, 5 * 60 * 1000);
+  }, 5 * 60 * 1000));
 
   const resumeTextCache = new Map<string, { text: string; businessAccountId: string; createdAt: number; resumeUrl?: string }>();
   const RESUME_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -4634,7 +4637,7 @@ Return JSON:
     return true;
   }
 
-  setInterval(() => {
+  trackTimer(setInterval(() => {
     const now = Date.now();
     for (const [key, entry] of resumeTextCache) {
       if (now - entry.createdAt > RESUME_CACHE_TTL_MS) resumeTextCache.delete(key);
@@ -4645,7 +4648,7 @@ Return JSON:
     for (const [key, entry] of k12ImageUploadRateLimiter) {
       if (now > entry.resetAt) k12ImageUploadRateLimiter.delete(key);
     }
-  }, 2 * 60 * 1000);
+  }, 2 * 60 * 1000));
 
   app.post("/api/chat/widget/resume-upload", multer({
     storage: multer.memoryStorage(),
@@ -5038,7 +5041,7 @@ Return JSON:
 
       if (imageUrl.startsWith('https://')) {
         try {
-          const response = await fetch(imageUrl);
+          const response = await fetchWithTimeout(imageUrl, undefined, LONG_FETCH_TIMEOUT_MS);
           if (!response.ok) {
             return res.status(404).json({ error: "Image file not found" });
           }
@@ -5077,7 +5080,7 @@ Return JSON:
         console.log('[Visual Match] Detecting category from', allCategories.length, 'available categories');
         
         try {
-          const openai = new OpenAI({ apiKey: businessAccount.openaiApiKey });
+          const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
           
           // Build category list for GPT
           const categoryNames = allCategories.map(c => c.name);
@@ -6306,7 +6309,7 @@ If you cannot determine the category or the image doesn't match any category, re
       const imgUrl = imageUrl as string;
 
       if (imgUrl.startsWith('https://')) {
-        const response = await fetch(imgUrl);
+        const response = await fetchWithTimeout(imgUrl, undefined, LONG_FETCH_TIMEOUT_MS);
         if (!response.ok) {
           sendEvent('error', { message: 'Image file not found' });
           return res.end();
@@ -6507,7 +6510,7 @@ If you cannot determine the category or the image doesn't match any category, re
             return res.status(400).json({ error: 'Image URL not from trusted domain' });
           }
           
-          const response = await fetch(fetchUrl);
+          const response = await fetchWithTimeout(fetchUrl, undefined, LONG_FETCH_TIMEOUT_MS);
           if (!response.ok) {
             return res.status(404).json({ error: 'Image file not found' });
           }
@@ -6729,7 +6732,7 @@ If you cannot determine the category or the image doesn't match any category, re
       }
 
       try {
-        const response = await fetch(fetchUrl);
+        const response = await fetchWithTimeout(fetchUrl, undefined, LONG_FETCH_TIMEOUT_MS);
         if (!response.ok) {
           return res.status(404).json({ error: 'Image file not found' });
         }
@@ -7880,7 +7883,7 @@ If you cannot determine the category or the image doesn't match any category, re
           const protocol = domain.includes('localhost') ? 'http' : 'https';
           fetchUrl = `${protocol}://${domain}${imgUrl}`;
         }
-        const response = await fetch(fetchUrl);
+        const response = await fetchWithTimeout(fetchUrl, undefined, LONG_FETCH_TIMEOUT_MS);
         if (!response.ok) {
           return res.status(404).json({ error: 'Image file not found' });
         }
@@ -8108,7 +8111,7 @@ If you cannot determine the category or the image doesn't match any category, re
           const protocol = domain.includes('localhost') ? 'http' : 'https';
           fetchUrl = `${protocol}://${domain}${imgUrl}`;
         }
-        const response = await fetch(fetchUrl);
+        const response = await fetchWithTimeout(fetchUrl, undefined, LONG_FETCH_TIMEOUT_MS);
         if (!response.ok) {
           return res.status(404).json({ error: 'Image file not found' });
         }
@@ -8928,7 +8931,7 @@ If you cannot determine the category or the image doesn't match any category, re
       try {
         const clientIp = getClientIp(req);
         if (clientIp && clientIp !== 'unknown' && !clientIp.startsWith('127.') && !clientIp.startsWith('192.168.') && !clientIp.startsWith('10.') && !clientIp.startsWith('::1')) {
-          const geoResponse = await fetch(`http://ip-api.com/json/${clientIp}?fields=status,city`);
+          const geoResponse = await fetchWithTimeout(`http://ip-api.com/json/${clientIp}?fields=status,city`, undefined, 5_000);
           if (geoResponse.ok) {
             const geoData = await geoResponse.json();
             if (geoData.status === 'success' && geoData.city) {
@@ -9314,7 +9317,7 @@ If you cannot determine the category or the image doesn't match any category, re
       }
 
       // Use OpenAI to refine the instruction
-      const openai = new OpenAI({ apiKey: openaiApiKey });
+      const openai = createOpenAI({ apiKey: openaiApiKey });
       const response = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
@@ -10733,8 +10736,7 @@ Return ONLY the refined instruction, nothing else.`
       };
 
       if (provider === "openai") {
-        const OpenAI = (await import("openai")).default;
-        const client = new OpenAI({ apiKey });
+        const client = createOpenAI({ apiKey });
         await client.chat.completions.create({
           model,
           messages: [{ role: "user", content: "Reply with: OK" }],
@@ -15933,10 +15935,9 @@ Return ONLY the refined instruction, nothing else.`
       });
 
       const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
-      const OpenAIClient = (await import('openai')).default;
       const openai = provider === 'gemini'
-        ? new OpenAIClient({ apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
-        : new OpenAIClient({ apiKey: effectiveKey });
+        ? createOpenAI({ timeout: OPENAI_TIMEOUTS.longGeneration, apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
+        : createOpenAI({ timeout: OPENAI_TIMEOUTS.longGeneration, apiKey: effectiveKey });
       
       const analysisPrompt = `Analyze these customer conversations from the last 7 days and provide a weekly insights report:
 
@@ -16593,7 +16594,7 @@ Format your response as JSON with this structure:
         return res.status(400).json({ error: "OpenAI API key not configured" });
       }
 
-      const openai = new OpenAI({ apiKey: openaiApiKey });
+      const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: openaiApiKey });
 
       // Use GPT-4o to analyze the script
       const completion = await openai.chat.completions.create({
@@ -17271,7 +17272,7 @@ Important:
               try {
                 const clientIp = getClientIp(req);
                 if (clientIp && clientIp !== 'unknown' && !clientIp.startsWith('127.') && !clientIp.startsWith('192.168.') && !clientIp.startsWith('10.') && !clientIp.startsWith('::1')) {
-                  const geoResp = await fetch(`http://ip-api.com/json/${clientIp}?fields=status,city`);
+                  const geoResp = await fetchWithTimeout(`http://ip-api.com/json/${clientIp}?fields=status,city`, undefined, 5_000);
                   if (geoResp.ok) {
                     const geoData = await geoResp.json();
                     if (geoData.status === 'success' && geoData.city) visitorCity = geoData.city;
@@ -17373,7 +17374,7 @@ Important:
                 try {
                   const clientIp = getClientIp(req);
                   if (clientIp && clientIp !== 'unknown' && !clientIp.startsWith('127.') && !clientIp.startsWith('192.168.') && !clientIp.startsWith('10.') && !clientIp.startsWith('::1')) {
-                    const geoResponse = await fetch(`http://ip-api.com/json/${clientIp}?fields=status,city`);
+                    const geoResponse = await fetchWithTimeout(`http://ip-api.com/json/${clientIp}?fields=status,city`, undefined, 5_000);
                     if (geoResponse.ok) {
                       const geoData = await geoResponse.json();
                       if (geoData.status === 'success' && geoData.city) {
@@ -20916,8 +20917,7 @@ Important:
         return res.status(400).json({ error: "No AI API key configured" });
       }
 
-      const OpenAI = (await import('openai')).default;
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
 
       const sampleData = (sampleRows || []).slice(0, 3);
       const redactCell = (val: string): string => {
@@ -22120,7 +22120,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
       if (generatedData.b64_json) {
         resultBuffer = Buffer.from(generatedData.b64_json, 'base64');
       } else if (generatedData.url) {
-        const imgResp = await fetch(generatedData.url);
+        const imgResp = await fetchWithTimeout(generatedData.url, undefined, LONG_FETCH_TIMEOUT_MS);
         if (!imgResp.ok) {
           throw new Error(`Failed to fetch generated image from URL (status ${imgResp.status})`);
         }
@@ -22249,7 +22249,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         productBuffer = Buffer.from(base64Data, 'base64');
       } else if (productImageUrl) {
         // Fetch product image from URL
-        const productFetchResponse = await fetch(productImageUrl);
+        const productFetchResponse = await fetchWithTimeout(productImageUrl, undefined, LONG_FETCH_TIMEOUT_MS);
         if (!productFetchResponse.ok) {
           return res.status(400).json({ error: "Failed to fetch product image" });
         }
@@ -24660,7 +24660,7 @@ Strict Requirements:
       if (!openaiApiKey) {
         return res.status(400).json({ error: "OpenAI API key not configured. Please add your API key in Settings." });
       }
-      const openai = new OpenAI({ apiKey: openaiApiKey });
+      const openai = createOpenAI({ apiKey: openaiApiKey });
       
       // Get existing FAQs to check for duplicates
       const existingFaqs = await storage.getAllFaqs(businessAccountId);
@@ -29034,7 +29034,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(400).json({ error: "OpenAI API key not configured" });
       }
 
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
 
       // Generate voice sample
       const sampleText = "Hello! I'm Chroney, your AI assistant. How can I help you today?";
@@ -29172,7 +29172,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(400).json({ error: "OpenAI API key not configured" });
       }
 
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
 
       // Gather business context
       const [products, faqs, widgetSettings, businessAccount] = await Promise.all([
@@ -29667,7 +29667,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
           const clientIp = getClientIp(req);
           
           if (clientIp && clientIp !== 'unknown' && !clientIp.startsWith('127.') && !clientIp.startsWith('192.168.') && !clientIp.startsWith('10.')) {
-            const geoResponse = await fetch(`http://ip-api.com/json/${clientIp}?fields=status,country,city`);
+            const geoResponse = await fetchWithTimeout(`http://ip-api.com/json/${clientIp}?fields=status,country,city`, undefined, 5_000);
             if (geoResponse.ok) {
               const geoData = await geoResponse.json();
               if (geoData.status === 'success') {
@@ -29731,7 +29731,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
       
       // Generate trivia using GPT-4o-mini
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
       
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -29774,7 +29774,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
       
       // Generate questions using GPT-4o-mini
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
       
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -29829,7 +29829,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
       
       // Generate review summary using GPT-4o-mini
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
       
       const reviewText = reviews && reviews.length > 0 
         ? reviews.slice(0, 10).map((r: any) => `Rating: ${r.rating}/5 - ${r.text}`).join('\n')
@@ -30082,7 +30082,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
 
       // Exchange authorization code for access token
       const tokenUrl = `https://${shop}/admin/oauth/access_token`;
-      const tokenResponse = await fetch(tokenUrl, {
+      const tokenResponse = await fetchWithTimeout(tokenUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -31177,10 +31177,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         };
       });
       const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
-      const OpenAIClient = (await import('openai')).default;
       const openai = provider === 'gemini'
-        ? new OpenAIClient({ apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
-        : new OpenAIClient({ apiKey: effectiveKey });
+        ? createOpenAI({ timeout: OPENAI_TIMEOUTS.longGeneration, apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
+        : createOpenAI({ timeout: OPENAI_TIMEOUTS.longGeneration, apiKey: effectiveKey });
 
       const prompt = `Analyze these customer conversations from the last 7 days and provide a weekly insights report:
 
@@ -31417,8 +31416,8 @@ Format your response as JSON with this structure:
       const model = useMaster ? (master!.primaryModel || 'gpt-4o-mini') : 'gpt-4o-mini';
       const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
       const openai = provider === 'gemini'
-        ? new OpenAI({ apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
-        : new OpenAI({ apiKey: effectiveKey });
+        ? createOpenAI({ apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
+        : createOpenAI({ apiKey: effectiveKey });
 
       const completion = await openai.chat.completions.create({
         model,
@@ -34629,6 +34628,25 @@ Return ONLY a valid JSON object in this format:
 
   const wss = new WebSocketServer({ noServer: true });
 
+  // Graceful shutdown: end voice sessions (records usage, tells the client the
+  // session closed) and close the upgraded sockets — http.Server.close() cannot
+  // finish while WebSocket connections are still open.
+  onShutdown('voice-websockets', async () => {
+    realtimeVoiceService.shutdown();
+    const clients = Array.from(wss.clients);
+    for (const ws of clients) {
+      try { ws.close(1001, 'Server shutting down'); } catch {}
+    }
+    await new Promise<void>((resolve) => {
+      if (clients.length === 0) return resolve();
+      const t = setTimeout(() => {
+        wss.clients.forEach((ws) => { try { ws.terminate(); } catch {} });
+        resolve();
+      }, 2_000);
+      wss.close(() => { clearTimeout(t); resolve(); });
+    });
+  }, 'connections');
+
   // Helper function to extract session cookie from cookie header
   function extractSessionCookie(cookieHeader?: string): string | null {
     if (!cookieHeader) return null;
@@ -35812,7 +35830,7 @@ Return ONLY a valid JSON object in this format:
         return res.status(400).json({ error: "Failed to decrypt access token. Try re-saving your token." });
       }
 
-      const response = await fetch(`https://graph.facebook.com/v21.0/me?fields=name,id&access_token=${encodeURIComponent(decryptedToken)}`);
+      const response = await fetchWithTimeout(`https://graph.facebook.com/v21.0/me?fields=name,id&access_token=${encodeURIComponent(decryptedToken)}`);
       const data = await response.json();
 
       if (response.ok && data.id) {
@@ -36599,7 +36617,7 @@ Return ONLY a valid JSON object in this format:
   app.get("/api/admin/server-info", requireAuth, async (req, res) => {
     if (req.user?.role !== "super_admin") return res.status(403).json({ error: "Forbidden" });
     try {
-      const r = await fetch("https://api.ipify.org?format=json");
+      const r = await fetchWithTimeout("https://api.ipify.org?format=json");
       const data = await r.json() as { ip: string };
       res.json({
         outboundIp: data.ip,

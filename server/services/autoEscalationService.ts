@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { storage } from '../storage';
 import { ticketIntelligenceService } from './ticketIntelligenceService';
+import { createOpenAI } from "../lib/openaiClient";
 
 interface EscalationAnalysis {
   shouldEscalate: boolean;
@@ -22,7 +23,7 @@ export class AutoEscalationService {
       throw new Error('OpenAI API key not configured for this business account');
     }
     
-    return new OpenAI({ apiKey });
+    return createOpenAI({ apiKey });
   }
 
   /**

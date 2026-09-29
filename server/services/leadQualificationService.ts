@@ -1,3 +1,4 @@
+import { trackTimer } from "../lib/lifecycle";
 /**
  * Draft WhatsApp leads (per account, "require PAN + email").
  *
@@ -176,10 +177,10 @@ export async function sweepRecentDrafts(): Promise<number> {
 
 export function startLeadQualificationSweep() {
   if (sweepTimer) return;
-  sweepTimer = setInterval(() => {
+  sweepTimer = trackTimer(setInterval(() => {
     sweepRecentDrafts()
       .then(n => { if (n > 0) console.log(`[LeadQualification] Sweep: ${n} draft(s) became leads`); })
       .catch(err => console.error("[LeadQualification] Sweep error:", err?.message || err));
-  }, SWEEP_EVERY_MS);
+  }, SWEEP_EVERY_MS));
   sweepTimer.unref?.();
 }

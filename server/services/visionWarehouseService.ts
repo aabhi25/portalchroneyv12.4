@@ -1,3 +1,4 @@
+import { fetchWithTimeout, LONG_FETCH_TIMEOUT_MS } from "../lib/fetchWithTimeout";
 import { GoogleAuth } from 'google-auth-library';
 import { decrypt } from './encryptionService';
 
@@ -38,7 +39,7 @@ async function fetchWithRetry(
   
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const response = await fetch(url, options);
+      const response = await fetchWithTimeout(url, options, 60_000);
       
       if (response.status === 429 || (response.status >= 500 && response.status < 600)) {
         const delayMs = baseDelayMs * Math.pow(2, attempt);
@@ -200,13 +201,13 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectId}/locations/${location}/corpora`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -285,7 +286,7 @@ class VisionWarehouseService {
       };
     } else {
       // Fetch image and upload as base64
-      const imageResponse = await fetch(imageUrl);
+      const imageResponse = await fetchWithTimeout(imageUrl, undefined, LONG_FETCH_TIMEOUT_MS);
       if (!imageResponse.ok) {
         throw new Error(`Failed to fetch image from URL: ${imageUrl}`);
       }
@@ -477,7 +478,7 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectId}/locations/${location}/corpora/${corpusId}/indexes`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -487,7 +488,7 @@ class VisionWarehouseService {
         display_name: indexDisplayName,
         description: `Search index for ${indexDisplayName}`,
       }),
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -509,7 +510,7 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectId}/locations/${location}/indexEndpoints`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -518,7 +519,7 @@ class VisionWarehouseService {
       body: JSON.stringify({
         display_name: endpointDisplayName,
       }),
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -549,7 +550,7 @@ class VisionWarehouseService {
     
     const indexName = `projects/${projectId}/locations/${location}/corpora/${corpusId}/indexes/${indexId}`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -560,7 +561,7 @@ class VisionWarehouseService {
           index: indexName,
         },
       }),
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -703,12 +704,12 @@ class VisionWarehouseService {
     const assetName = `projects/${projectId}/locations/${location}/corpora/${corpusId}/assets/${assetId}`;
     const url = `https://warehouse-visionai.googleapis.com/v1/${assetName}`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'DELETE',
       headers: {
         'Authorization': `Bearer ${token}`,
       },
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -725,13 +726,13 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectId}/locations/${location}/corpora/${corpusId}`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -748,13 +749,13 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectId}/locations/${location}/corpora/${corpusId}/assets?page_size=${pageSize}`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -794,12 +795,12 @@ class VisionWarehouseService {
     while (Date.now() - startTime < maxWaitMs) {
       const url = `https://warehouse-visionai.googleapis.com/v1/${operationName}`;
       
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
         },
-      });
+      }, 60_000);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -835,12 +836,12 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectNumber}/locations/${location}/indexEndpoints/${endpointId}`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
       },
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -895,14 +896,14 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectNumber}/locations/${location}/indexEndpoints/${endpointId}:undeployIndex`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({}),
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -927,14 +928,14 @@ class VisionWarehouseService {
     const corpusName = `projects/${projectNumber}/locations/${location}/corpora/${corpusId}`;
     const url = `https://warehouse-visionai.googleapis.com/v1/${corpusName}:analyze`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({}),
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -961,12 +962,12 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectNumber}/locations/${location}/corpora/${corpusId}/indexes/${indexId}`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
       },
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -992,12 +993,12 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/${operationName}`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
       },
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -1029,7 +1030,7 @@ class VisionWarehouseService {
     const indexName = `projects/${projectNumber}/locations/${location}/corpora/${corpusId}/indexes/${indexId}`;
     const url = `https://warehouse-visionai.googleapis.com/v1/${indexName}?update_mask=entire_corpus`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'PATCH',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -1038,7 +1039,7 @@ class VisionWarehouseService {
       body: JSON.stringify({
         entire_corpus: true,
       }),
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -1070,12 +1071,12 @@ class VisionWarehouseService {
     const filter = encodeURIComponent(`metadata.corpus="${corpusName}"`);
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectNumber}/locations/${location}/operations?filter=${filter}`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
       },
-    });
+    }, 60_000);
 
     if (!response.ok) {
       // If filter doesn't work, try without filter and filter locally
@@ -1111,12 +1112,12 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectNumber}/locations/${location}/operations`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
       },
-    });
+    }, 60_000);
 
     if (!response.ok) {
       if (response.status === 404 || response.status === 403) {
@@ -1250,14 +1251,14 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/${operationName}:cancel`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({}),
-    });
+    }, 60_000);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -1284,12 +1285,12 @@ class VisionWarehouseService {
     const indexName = `projects/${projectNumber}/locations/${location}/corpora/${corpusId}/indexes/${indexId}`;
     const url = `https://warehouse-visionai.googleapis.com/v1/${indexName}`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
       },
-    });
+    }, 60_000);
 
     if (response.status === 404) {
       return { exists: false };
@@ -1323,12 +1324,12 @@ class VisionWarehouseService {
     const endpointName = `projects/${projectNumber}/locations/${location}/indexEndpoints/${endpointId}`;
     const url = `https://warehouse-visionai.googleapis.com/v1/${endpointName}`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
       },
-    });
+    }, 60_000);
 
     if (response.status === 404) {
       return { exists: false };
@@ -1361,12 +1362,12 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectNumber}/locations/${location}/corpora/${corpusId}/indexes`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
       },
-    });
+    }, 60_000);
 
     if (!response.ok) {
       if (response.status === 404) {
@@ -1403,12 +1404,12 @@ class VisionWarehouseService {
     
     const url = `https://warehouse-visionai.googleapis.com/v1/projects/${projectNumber}/locations/${location}/indexEndpoints`;
     
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
       },
-    });
+    }, 60_000);
 
     if (!response.ok) {
       if (response.status === 404) {

@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import crypto from "crypto";
 import { storage } from "../storage";
 import { aiUsageLogger } from "./aiUsageLogger";
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 // Embedding cache with content hashing to avoid redundant OpenAI API calls
 interface EmbeddingCacheEntry {
@@ -75,7 +76,7 @@ export class EmbeddingService {
       throw new Error('OpenAI API key not configured for this business account');
     }
 
-    return new OpenAI({ apiKey: businessAccount.openaiApiKey });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: businessAccount.openaiApiKey });
   }
 
   /**

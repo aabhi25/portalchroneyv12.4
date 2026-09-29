@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { storage } from '../storage';
+import { createOpenAI } from "../lib/openaiClient";
 
 export interface ParsedProductQuery {
   productType?: string;
@@ -27,7 +28,7 @@ class ProductQueryParserService {
         return result;
       }
 
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
       
       const response = await openai.chat.completions.create({
         model: 'gpt-4o-mini',

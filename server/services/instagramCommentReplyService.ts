@@ -8,6 +8,7 @@ import { instagramService } from "./instagramService";
 import { storage } from "../storage";
 import type { InstagramSettings } from "@shared/schema";
 import OpenAI from "openai";
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 interface CommentData {
   commentId: string;
@@ -300,7 +301,7 @@ export class InstagramCommentReplyService {
   private async runVisionAnalysis(mediaUrl: string, apiKey: string, postId: string): Promise<string> {
     try {
       console.log(`[Instagram Comment Reply] Running vision analysis for post ${postId}`);
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.vision, apiKey });
       const visionResponse = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
@@ -397,7 +398,7 @@ export class InstagramCommentReplyService {
     postContext?: string | null
   ): Promise<string | null> {
     try {
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
 
       const systemPrompt = `You are a social media assistant for "${businessName}". You reply to public Instagram comments on behalf of the business.
 
@@ -531,7 +532,7 @@ ${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}`;
     dmTemplate?: string
   ): Promise<string | null> {
     try {
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
 
       const systemPrompt = `You are a helpful assistant for "${businessName}". A user commented on an Instagram post and you are now sending them a private DM to continue the conversation.
 

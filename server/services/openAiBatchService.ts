@@ -8,6 +8,7 @@ import {
   OpenAiBatchJob,
 } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 interface BatchEmbeddingRequest {
   custom_id: string;
@@ -61,7 +62,7 @@ export class OpenAiBatchService {
       return false;
     }
 
-    this.openai = new OpenAI({ apiKey });
+    this.openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.document, apiKey });
     return true;
   }
 

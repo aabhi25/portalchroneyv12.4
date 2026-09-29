@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { db } from "../db";
 import { whatsappTemplates, type WhatsappTemplate, type InsertWhatsappTemplate } from "@shared/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
@@ -206,7 +207,7 @@ export const whatsappTemplateService = {
           `?page_size=${PAGE_SIZE}&page_num=${pageNum}&pagination=true&template_status=approved`;
         console.log(`[WhatsappTemplateService] Fetching page ${pageNum}: ${url}`);
 
-        const resp = await fetch(url, {
+        const resp = await fetchWithTimeout(url, {
           method: "GET",
           headers: { authkey: authKey, accept: "application/json", "content-type": "text/plain" },
         });
@@ -418,7 +419,7 @@ export const whatsappTemplateService = {
       let lastStatus = 0;
       let lastBody = "";
       for (const url of candidates) {
-        const resp = await fetch(url, {
+        const resp = await fetchWithTimeout(url, {
           method: "GET",
           headers: { authkey: authKey, accept: "application/json" },
         });

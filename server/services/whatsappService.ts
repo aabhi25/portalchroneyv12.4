@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import OpenAI from "openai";
 import { db } from "../db";
 import { stripProtectedFields } from "../lib/safeUpdate";
@@ -19,6 +20,7 @@ import {
 } from "@shared/schema";
 import { eq, ne, sql, and, or, asc, desc, gte, lte, isNull } from "drizzle-orm";
 import { r2Storage } from "./r2StorageService";
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 function normalizePhone(phone: string): string {
   let p = phone.replace(/[\s\-\(\)]/g, '');
@@ -75,7 +77,7 @@ export class WhatsappService {
 
   constructor() {
     if (process.env.OPENAI_API_KEY) {
-      this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      this.openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: process.env.OPENAI_API_KEY });
     }
   }
 
@@ -1688,7 +1690,7 @@ For example:
     }
 
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `https://control.msg91.com/api/balance.php?authkey=${encodeURIComponent(msg91AuthKey)}&type=4`,
         {
           method: "GET",

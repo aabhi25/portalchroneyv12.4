@@ -1,3 +1,4 @@
+import { trackTimer } from "../../lib/lifecycle";
 import { db } from '../../db';
 import {
   businessAccounts,
@@ -324,11 +325,11 @@ let interval: NodeJS.Timeout | null = null;
 export function startEmbedJobPoller(intervalMs = 60000): void {
   if (interval) return;
   // Kick once shortly after boot to resume any in-flight jobs.
-  setTimeout(() => {
+  trackTimer(setTimeout(() => {
     processPendingEmbedJobs().catch((e) => console.error('[TopScholar EmbedPoller] initial run failed:', e));
-  }, 5000);
-  interval = setInterval(() => {
+  }, 5000));
+  interval = trackTimer(setInterval(() => {
     processPendingEmbedJobs().catch((e) => console.error('[TopScholar EmbedPoller] tick failed:', e));
-  }, intervalMs);
+  }, intervalMs));
   console.log(`[TopScholar EmbedPoller] started (every ${Math.round(intervalMs / 1000)}s)`);
 }

@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { db } from "../db";
 import { instagramSettings, instagramMessages, instagramComments, businessAccounts, instagramLeads, instagramLeadFields } from "@shared/schema";
 import { eq, and, desc, sql, asc, count } from "drizzle-orm";
@@ -99,14 +100,14 @@ export class InstagramService {
         text: truncatedText.substring(0, 50) + (truncatedText.length > 50 ? "..." : ""),
       });
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
-      });
+      }, 30_000);
 
       const responseData = await response.json();
       console.log(`[Instagram] API response:`, responseData);
@@ -156,14 +157,14 @@ export class InstagramService {
         imageUrl: imageUrl.substring(0, 80) + (imageUrl.length > 80 ? "..." : ""),
       });
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
-      });
+      }, 30_000);
 
       const responseData = await response.json();
       console.log(`[Instagram] Image API response:`, responseData);
@@ -309,10 +310,10 @@ export class InstagramService {
     try {
       const url = `${IG_API_BASE}/${igScopedId}?fields=name,username&access_token=${encodeURIComponent(accessToken)}`;
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "GET",
         headers: { "Accept": "application/json" },
-      });
+      }, 30_000);
 
       if (!response.ok) {
         const errorBody = await response.text();
@@ -414,14 +415,14 @@ export class InstagramService {
         },
       };
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
-      });
+      }, 30_000);
 
       const responseData = await response.json();
       if (!response.ok) {
@@ -606,14 +607,14 @@ export class InstagramService {
         text: truncatedMessage.substring(0, 50) + (truncatedMessage.length > 50 ? "..." : ""),
       });
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ message: truncatedMessage }),
-      });
+      }, 30_000);
 
       const responseData = await response.json();
       console.log(`[Instagram] Comment reply API response:`, responseData);
@@ -648,10 +649,10 @@ export class InstagramService {
 
       const url = `${IG_API_BASE}/${mediaId}/comments?fields=id,text,username,timestamp&access_token=${encodeURIComponent(accessToken)}`;
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "GET",
         headers: { "Accept": "application/json" },
-      });
+      }, 30_000);
 
       const responseData = await response.json();
 
@@ -685,10 +686,10 @@ export class InstagramService {
 
       const url = `${IG_API_BASE}/${commentId}?fields=text,username,timestamp&access_token=${encodeURIComponent(accessToken)}`;
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "GET",
         headers: { "Accept": "application/json" },
-      });
+      }, 30_000);
 
       const responseData = await response.json();
 
@@ -767,10 +768,10 @@ export class InstagramService {
       const fields = 'id,caption,media_type,media_url,thumbnail_url,permalink,children{media_type,media_url,thumbnail_url}';
       const url = `${IG_API_BASE}/${mediaId}?fields=${fields}&access_token=${encodeURIComponent(accessToken)}`;
 
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
-      });
+      }, 30_000);
 
       if (!response.ok) {
         const errorBody = await response.text();
