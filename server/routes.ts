@@ -89,6 +89,7 @@ import dataRetentionRoutes from "./routes/dataRetention";
 import whatsappDocumentsRoutes from "./routes/whatsappDocuments";
 import storeSheetRoutes from "./routes/storeSheet";
 import { inboundMessageLimiter, unsupportedMessageNotice } from "./services/inboundMessageLimiter";
+import { createMetaWebhookSignatureGuard, describeMetaWebhookSignature, timingSafeEqualStrings } from "./services/metaWebhookSignature";
 import { validatePhoneNumber } from "@shared/validation/phone";
 import { MAX_IMPORT_ROWS, normalizeColumnKeys } from "@shared/contactImport";
 
@@ -31765,7 +31766,7 @@ Return ONLY a valid JSON object in this format:
         console.log("[MSG91 Webhook] No webhook secret configured for:", businessId);
         return res.status(401).json({ error: "Webhook not configured. Please configure WhatsApp settings first." });
       }
-      if (webhookSecret !== settings.webhookSecret) {
+      if (!timingSafeEqualStrings(webhookSecret, settings.webhookSecret)) {
         console.log("[MSG91 Webhook] Invalid webhook secret for:", businessId);
         return res.status(401).json({ error: "Invalid webhook secret" });
       }
@@ -34659,8 +34660,19 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
+  // Verifies X-Hub-Signature-256 before ANY event (DMs and comments) is processed.
+  const instagramWebhookSignatureGuard = createMetaWebhookSignatureGuard({
+    platform: "instagram",
+    expectedObject: "instagram",
+    lookupAccount: async (igAccountId) => {
+      const { instagramService } = await import("./services/instagramService");
+      const found = await instagramService.findBusinessByIgAccountId(igAccountId);
+      return found ? { businessAccountId: found.businessAccountId, appSecret: found.settings.appSecret } : null;
+    },
+  });
+
   // Instagram Webhook - POST for incoming DMs and Comments
-  app.post("/api/instagram/webhook", async (req, res) => {
+  app.post("/api/instagram/webhook", instagramWebhookSignatureGuard, async (req, res) => {
     res.status(200).send("EVENT_RECEIVED");
 
     try {
@@ -34670,7 +34682,6 @@ Return ONLY a valid JSON object in this format:
       const { instagramService } = await import("./services/instagramService");
       const { instagramAutoReplyService } = await import("./services/instagramAutoReplyService");
       const { instagramCommentReplyService } = await import("./services/instagramCommentReplyService");
-      const crypto = await import("crypto");
 
       for (const entry of body.entry || []) {
         // Handle comment webhook events (changes field)
@@ -34703,6 +34714,14 @@ Return ONLY a valid JSON object in this format:
             }
 
             const { businessAccountId, settings } = businessData;
+
+            const commentBusinessAccount = await db.query.businessAccounts.findFirst({
+              where: eq(businessAccounts.id, businessAccountId)
+            });
+            if (!commentBusinessAccount || commentBusinessAccount.instagramEnabled !== "true") {
+              console.warn(`[Instagram Webhook] Instagram not enabled for business ${businessAccountId} - skipping comment`);
+              continue;
+            }
 
             instagramCommentReplyService.processComment(
               settings,
@@ -34741,27 +34760,7 @@ Return ONLY a valid JSON object in this format:
 
           const { businessAccountId, settings } = businessData;
 
-          if (settings.appSecret) {
-            const signature = req.headers["x-hub-signature-256"] as string;
-            if (!signature) {
-              console.warn("[Instagram Webhook] Missing signature header - skipping");
-              continue;
-            }
-            const rawBody = (req as any).rawBody;
-            if (rawBody) {
-              const decryptedAppSecret = instagramService.getDecryptedAppSecret(settings);
-              if (decryptedAppSecret) {
-                const expectedHash = crypto
-                  .createHmac("sha256", decryptedAppSecret)
-                  .update(rawBody)
-                  .digest("hex");
-                if (signature !== `sha256=${expectedHash}`) {
-                  console.warn("[Instagram Webhook] Signature mismatch - skipping");
-                  continue;
-                }
-              }
-            }
-          }
+          // Signature was verified (or knowingly allowed without a secret) by instagramWebhookSignatureGuard.
 
           if (igMessageId) {
             const existing = await instagramService.findMessageByIgId(igMessageId);
@@ -34898,6 +34897,7 @@ Return ONLY a valid JSON object in this format:
         igAccessToken: settings.igAccessToken ? "••••••••" : null,
         appSecret: settings.appSecret ? "••••••••" : null,
         webhookUrl,
+        ...describeMetaWebhookSignature("instagram", businessAccountId, settings.appSecret),
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -34924,6 +34924,7 @@ Return ONLY a valid JSON object in this format:
         ...settings,
         igAccessToken: settings.igAccessToken ? "••••••••" : null,
         appSecret: settings.appSecret ? "••••••••" : null,
+        ...describeMetaWebhookSignature("instagram", businessAccountId, settings.appSecret),
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -35512,7 +35513,18 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.post("/api/facebook/webhook", async (req, res) => {
+  // Verifies X-Hub-Signature-256 before ANY event (DMs and feed comments) is processed.
+  const facebookWebhookSignatureGuard = createMetaWebhookSignatureGuard({
+    platform: "facebook",
+    expectedObject: "page",
+    lookupAccount: async (pageId) => {
+      const { facebookService } = await import("./services/facebookService");
+      const found = await facebookService.findBusinessByPageId(pageId);
+      return found ? { businessAccountId: found.businessAccountId, appSecret: found.settings.appSecret } : null;
+    },
+  });
+
+  app.post("/api/facebook/webhook", facebookWebhookSignatureGuard, async (req, res) => {
     res.status(200).send("EVENT_RECEIVED");
 
     try {
@@ -35554,6 +35566,14 @@ Return ONLY a valid JSON object in this format:
             }
 
             const { businessAccountId, settings } = businessData;
+
+            const commentBusinessAccount = await db.query.businessAccounts.findFirst({
+              where: eq(businessAccounts.id, businessAccountId)
+            });
+            if (!commentBusinessAccount || commentBusinessAccount.facebookEnabled !== "true") {
+              console.warn(`[Facebook Webhook] Facebook not enabled for business ${businessAccountId} - skipping comment`);
+              continue;
+            }
 
             facebookCommentReplyService.processComment(
               settings,
@@ -35727,6 +35747,7 @@ Return ONLY a valid JSON object in this format:
         pageAccessToken: settings.pageAccessToken ? "••••••••" : null,
         appSecret: settings.appSecret ? "••••••••" : null,
         webhookUrl,
+        ...describeMetaWebhookSignature("facebook", businessAccountId, settings.appSecret),
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -35752,6 +35773,7 @@ Return ONLY a valid JSON object in this format:
         ...settings,
         pageAccessToken: settings.pageAccessToken ? "••••••••" : null,
         appSecret: settings.appSecret ? "••••••••" : null,
+        ...describeMetaWebhookSignature("facebook", businessAccountId, settings.appSecret),
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

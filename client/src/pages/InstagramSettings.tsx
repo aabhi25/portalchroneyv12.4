@@ -19,6 +19,9 @@ interface InstagramSettingsData {
   webhookVerifyToken: string | null;
   autoReplyEnabled: string;
   webhookUrl?: string;
+  needsAppSecret?: boolean;
+  webhookSignatureVerified?: boolean;
+  webhookSignature?: { failingRecently?: boolean; lastFailureAt?: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -231,6 +234,16 @@ export default function InstagramSettings() {
               <p className="text-xs text-muted-foreground">
                 Used to verify webhook signatures. Stored encrypted.
               </p>
+              {settings?.needsAppSecret && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200" data-testid="warning-app-secret-missing">
+                  <strong>App Secret missing:</strong> incoming Instagram webhooks are not being verified, so forged messages cannot be told apart from real ones. Find it in the Meta App Dashboard &rarr; Settings &rarr; Basic &rarr; App Secret, paste it above and save.
+                </div>
+              )}
+              {!settings?.needsAppSecret && settings?.webhookSignature?.failingRecently && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200" data-testid="warning-app-secret-mismatch">
+                  <strong>Webhook signature check failing:</strong> recent webhooks were rejected because their signature did not match the saved App Secret. Check the value in the Meta App Dashboard &rarr; Settings &rarr; Basic &rarr; App Secret (for the same app your Instagram webhook is subscribed through).
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
