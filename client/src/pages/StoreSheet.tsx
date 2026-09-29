@@ -1272,23 +1272,28 @@ export default function StoreSheet() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              variant={chip === "attention" ? "default" : "outline"}
-              className={chip === "attention" ? "bg-amber-500 hover:bg-amber-600" : "text-amber-700 border-amber-200"}
-              aria-pressed={chip === "attention"}
-              onClick={() => setChip(c => (c === "attention" ? null : "attention"))}
-            >
-              <AlertTriangle className="h-3.5 w-3.5 mr-1" /> Needs attention ({attentionCount})
-            </Button>
-            <Button
-              size="sm"
-              variant={chip === "notInJourney" ? "default" : "outline"}
-              aria-pressed={chip === "notInJourney"}
-              onClick={() => setChip(c => (c === "notInJourney" ? null : "notInJourney"))}
-            >
-              Not in journey ({notInJourneyCount})
-            </Button>
+            {/* One view at a time, with "All stores" always visible so it's clear how to get back. */}
+            <div role="radiogroup" aria-label="Which stores to show" className="flex items-center rounded-full border border-slate-200 p-0.5 text-sm">
+              {([
+                [null, `All stores (${rows.length})`],
+                ["attention", `Needs attention (${attentionCount})`],
+                ["notInJourney", `Not in journey (${notInJourneyCount})`],
+              ] as [Chip, string][]).map(([value, label]) => (
+                <button
+                  key={label}
+                  type="button"
+                  role="radio"
+                  aria-checked={chip === value}
+                  onClick={() => setChip(value)}
+                  className={`rounded-full px-3 py-1 flex items-center gap-1 ${chip === value
+                    ? (value === "attention" ? "bg-amber-500 text-white" : "bg-slate-800 text-white")
+                    : "text-slate-600 hover:bg-slate-100"}`}
+                >
+                  {value === "attention" && <AlertTriangle className="h-3.5 w-3.5" />}
+                  {label}
+                </button>
+              ))}
+            </div>
             <label className="flex items-center gap-2 text-sm ml-auto">
               <Switch checked={showLos} onCheckedChange={setShowLos} aria-label="Show LOS names" /> Show LOS names
             </label>
