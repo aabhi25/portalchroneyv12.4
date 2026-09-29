@@ -91,6 +91,9 @@ import verificationRoutes from "./routes/verification";
 import unifiedLeadsRoutes from "./routes/unifiedLeads";
 import { resolveAuthorizedLeadAccountId, maskLeadPhone } from "./lib/leadAccess";
 import dataRetentionRoutes from "./routes/dataRetention";
+import aiUsageRoutes from "./routes/aiUsage";
+import { aiBudgetService, AI_UNAVAILABLE_MESSAGE } from "./services/aiBudgetService";
+import { isAiBudgetExceededError } from "./lib/openaiClient";
 import whatsappDocumentsRoutes from "./routes/whatsappDocuments";
 import storeSheetRoutes from "./routes/storeSheet";
 import { inboundMessageLimiter, unsupportedMessageNotice } from "./services/inboundMessageLimiter";
@@ -524,6 +527,25 @@ async function resolveTopscholarHistoryScope(
   return { studentId: legacyStudentId, secureRefused: false, doubtId: signedDoubtId };
 }
 
+/**
+ * Ends a chat SSE stream with a polite "assistant unavailable" reply — used when
+ * the account's monthly AI limit (block mode) is reached. Uses the regular
+ * content/final/done events so the widget renders it as a normal answer.
+ */
+function writeAiUnavailableSse(res: ExpressResponse): void {
+  if (!res.headersSent) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  res.write(`data: ${JSON.stringify({ type: 'content', data: AI_UNAVAILABLE_MESSAGE })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: 'final', data: AI_UNAVAILABLE_MESSAGE })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: 'done', data: '' })}\n\n`);
+  res.end();
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // One-time data migration: convert legacy systemMode='education_k12' accounts to k12EducationEnabled=true
   try {
@@ -570,6 +592,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(verificationRoutes);
   app.use(unifiedLeadsRoutes);
   app.use(dataRetentionRoutes);
+  app.use(aiUsageRoutes);
   app.use(whatsappDocumentsRoutes);
   app.use(storeSheetRoutes);
   
@@ -930,6 +953,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "OpenAI API key not configured for this business account" });
       }
 
+      // Monthly AI limit reached (block mode): answer politely instead of calling AI.
+      if (await aiBudgetService.isBlockedAsync(businessAccountId)) {
+        return res.json({ response: AI_UNAVAILABLE_MESSAGE, aiUnavailable: true });
+      }
+
       // Process the message
       const result = await chatService.processMessage(message, {
         userId: widgetUserId,
@@ -968,6 +996,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.json({ response: String(result) });
       }
     } catch (error: any) {
+      if (isAiBudgetExceededError(error)) {
+        return res.json({ response: AI_UNAVAILABLE_MESSAGE, aiUnavailable: true });
+      }
       console.error('[Widget Chat] Error:', error);
       res.status(500).json({ error: error.message || "Failed to process message" });
     }
@@ -1392,6 +1423,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.flushHeaders(); // flush now so client fetch() resolves and spinner appears
       res.write(`data: ${JSON.stringify({ type: 'heartbeat' })}\n\n`); // push through TCP stack
+
+      // Monthly AI limit reached (block mode): polite reply, no AI call.
+      if (await aiBudgetService.isBlockedAsync(businessAccountId)) {
+        writeAiUnavailableSse(res);
+        return;
+      }
 
       // Build starter Q&A context string if provided
       let starterQAContextString: string | undefined;
@@ -1828,6 +1865,10 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
 
       res.end();
     } catch (error: any) {
+      if (isAiBudgetExceededError(error) && !res.writableEnded) {
+        writeAiUnavailableSse(res);
+        return;
+      }
       console.error('[Widget Stream] Error:', error);
       res.write(`data: ${JSON.stringify({ type: 'error', data: error.message })}\n\n`);
       res.end();
@@ -21306,11 +21347,18 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
       // This allows the chat service to track conversations for each public session
       const publicUserId = `public_${token}`;
 
+      if (await aiBudgetService.isBlockedAsync(businessAccountId)) {
+        return res.json({ response: AI_UNAVAILABLE_MESSAGE, aiUnavailable: true });
+      }
+
       // Process the message using the chat service
       const response = await processPublicChatMessage(message, businessAccountId, publicUserId);
 
       res.json(response);
     } catch (error: any) {
+      if (isAiBudgetExceededError(error)) {
+        return res.json({ response: AI_UNAVAILABLE_MESSAGE, aiUnavailable: true });
+      }
       console.error('[Public Chat] Error processing message:', error);
       res.status(500).json({ error: error.message });
     }
@@ -21602,6 +21650,12 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
       res.setHeader('X-Accel-Buffering', 'no'); // prevent proxy buffering of the stream
       res.setHeader('Access-Control-Allow-Origin', '*');
 
+      // Monthly AI limit reached (block mode): polite reply, no AI call.
+      if (await aiBudgetService.isBlockedAsync(businessAccountId)) {
+        writeAiUnavailableSse(res);
+        return;
+      }
+
       let resumeText: string | undefined;
       let resumeUrl: string | undefined;
       if (resumeContextId && typeof resumeContextId === 'string') {
@@ -21655,6 +21709,10 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
 
       res.end();
     } catch (error: any) {
+      if (isAiBudgetExceededError(error) && !res.writableEnded) {
+        writeAiUnavailableSse(res);
+        return;
+      }
       console.error('[Public Chat Stream] Error:', error);
       res.write(`data: ${JSON.stringify({ type: 'error', data: error.message })}\n\n`);
       res.end();

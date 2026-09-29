@@ -288,6 +288,8 @@ export function __setErrorReporterForTests(r: ErrorReporter | null): void {
  */
 export function reportError(err: unknown, ctx: ErrorContext = {}): void {
   try {
+    // A refused call because the account's monthly AI limit is reached is expected, not a bug.
+    if ((err as any)?.code === "AI_BUDGET_EXCEEDED" || (err as any)?.cause?.code === "AI_BUDGET_EXCEEDED") return;
     getErrorReporter().report(err, ctx);
   } catch {
     /* never let reporting break the caller */

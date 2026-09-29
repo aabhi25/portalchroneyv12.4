@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { createOpenAI } from "../lib/openaiClient";
+import { aiBudgetService } from "./aiBudgetService";
 import { db } from "../db";
 import { 
   whatsappSettings, 
@@ -145,6 +146,13 @@ export class WhatsappAutoReplyService {
       if (!apiKey) {
         console.error(`[WhatsApp Auto-Reply] No OpenAI API key available`);
         return { success: false, error: "No OpenAI API key configured" };
+      }
+
+      // Monthly AI limit reached (block mode): skip the AI work entirely; the caller
+      // sends the usual (rate-limited) AI-failure notice so the customer isn't left in silence.
+      if (await aiBudgetService.isBlockedAsync(businessAccountId)) {
+        console.warn(`[WhatsApp Auto-Reply] Monthly AI limit reached for ${businessAccountId} — no AI reply`);
+        return { success: false, error: "Monthly AI limit reached", aiFailed: true };
       }
 
       timings.settingsFetch = Date.now() - startTime;

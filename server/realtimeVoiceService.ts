@@ -14,6 +14,7 @@ import { selectRelevantImages, type CurriculumMediaCandidate } from './services/
 import { aiUsageLogger } from './services/aiUsageLogger';
 import { chatService, type ChatContext } from './chatService';
 import { createOpenAI } from "./lib/openaiClient";
+import { aiBudgetService } from "./services/aiBudgetService";
 import {
   closeOrphanedTopscholarVoiceSessions,
   endTopscholarVoiceSession,
@@ -452,6 +453,13 @@ export class RealtimeVoiceService {
 
       if (!businessAccount) {
         this.sendError(clientWs, 'Business account not found');
+        clientWs.close();
+        return;
+      }
+
+      // Monthly AI limit reached (block mode): don't open a Realtime session.
+      if (await aiBudgetService.isBlockedAsync(businessAccountId)) {
+        this.sendError(clientWs, 'The voice assistant is unavailable right now. Please try again later.');
         clientWs.close();
         return;
       }

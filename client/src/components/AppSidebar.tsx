@@ -19,7 +19,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { WhatsAppNavSections } from "@/components/whatsapp/WhatsAppNavSections";
 import { isWhatsappLocation } from "@/components/whatsapp/sections";
 import { Button } from "@/components/ui/button";
-import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Sparkles, Settings, Brain, BarChart3, MessageSquare, ShoppingBag, Calendar, GraduationCap, ChevronRight, Presentation, FileText, Key, LifeBuoy, ClipboardList, Route, Link2, Users, DollarSign, Percent, HardDrive, Gem, Image, Database, Camera, Cloud, Globe, Lightbulb, MessageCircle, MoreHorizontal, Bot, TrendingUp, Zap, BookOpen, Library, HelpCircle as QuizIcon, Briefcase, UserCircle, Terminal, PackageOpen, Megaphone, FileCode2, UsersRound, ScrollText } from "lucide-react";
+import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Sparkles, Settings, Brain, BarChart3, MessageSquare, ShoppingBag, Calendar, GraduationCap, ChevronRight, Presentation, FileText, Key, LifeBuoy, ClipboardList, Route, Link2, Users, DollarSign, Percent, HardDrive, Gem, Image, Database, Camera, Cloud, Globe, Lightbulb, MessageCircle, MoreHorizontal, Bot, TrendingUp, Zap, BookOpen, Library, HelpCircle as QuizIcon, Briefcase, UserCircle, Terminal, PackageOpen, Megaphone, FileCode2, UsersRound, ScrollText, Gauge } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
@@ -760,6 +760,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
                 <NavItem icon={ShieldCheck} label="Business Accounts" onClick={() => setLocation("/super-admin")} isActive={location === "/super-admin"} testId="link-super-admin" gradient="bg-gradient-to-br from-purple-500 to-violet-600" />
                 <NavItem icon={BarChart3} label="Insights" onClick={() => setLocation("/super-admin/insights")} isActive={location === "/super-admin/insights"} testId="link-super-admin-insights" gradient="bg-gradient-to-br from-blue-500 to-indigo-600" />
                 <NavItem icon={DollarSign} label="Cost Analytics" onClick={() => setLocation("/super-admin/costs")} isActive={location === "/super-admin/costs"} testId="link-super-admin-costs" gradient="bg-gradient-to-br from-emerald-500 to-green-600" />
+                <NavItem icon={Gauge} label="Usage & Limits" onClick={() => setLocation("/super-admin/usage")} isActive={location === "/super-admin/usage"} testId="link-super-admin-usage" gradient="bg-gradient-to-br from-teal-500 to-emerald-600" />
                 <NavItem icon={Presentation} label="Demo" onClick={() => setLocation("/super-admin/demo")} isActive={location === "/super-admin/demo"} testId="link-super-admin-demo" gradient="bg-gradient-to-br from-amber-500 to-orange-600" />
                 <NavItem icon={Key} label="API Keys" onClick={() => setLocation("/super-admin/api-keys")} isActive={location === "/super-admin/api-keys"} testId="link-super-admin-api-keys" gradient="bg-gradient-to-br from-rose-500 to-pink-600" />
                 <NavItem icon={Bot} label="Chat APIs" onClick={() => setLocation("/super-admin/chat-apis")} isActive={location === "/super-admin/chat-apis"} testId="link-super-admin-chat-apis" gradient="bg-gradient-to-br from-cyan-500 to-teal-600" />
@@ -782,6 +783,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
 
                 <NavItem icon={Lightbulb} label="Account Insights" onClick={() => setLocation("/group-admin/insights")} isActive={location === "/group-admin/insights"} testId="link-group-admin-insights" gradient="bg-gradient-to-br from-yellow-500 to-amber-600" />
                 <NavItem icon={TrendingUp} label="Group Analytics" onClick={() => setLocation("/group-admin/group-analytics")} isActive={location === "/group-admin/group-analytics"} testId="link-group-admin-group-analytics" gradient="bg-gradient-to-br from-purple-500 to-pink-600" />
+                <NavItem icon={Gauge} label="AI Usage" onClick={() => setLocation("/group-admin/usage")} isActive={location === "/group-admin/usage"} testId="link-group-admin-usage" gradient="bg-gradient-to-br from-teal-500 to-emerald-600" />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -790,6 +792,16 @@ export function AppSidebar({ user }: AppSidebarProps) {
 
       <SidebarFooter className="p-3 border-t border-gray-100/80">
         <SidebarMenu className="space-y-0.5">
+          {showBusinessNav && (
+            <NavItem
+              icon={Gauge}
+              label="Usage"
+              onClick={() => setLocation("/admin/usage")}
+              isActive={location === "/admin/usage"}
+              testId="link-usage"
+              gradient="bg-gradient-to-br from-teal-500 to-emerald-600"
+            />
+          )}
           <NavItem
             icon={Settings}
             label="Settings"

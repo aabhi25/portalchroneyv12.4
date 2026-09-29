@@ -86,18 +86,70 @@ export function resolveOpenAIOptions(opts: CreateOpenAIOptions = {}): ClientOpti
  */
 export function createOpenAI(opts: CreateOpenAIOptions = {}): OpenAI {
   const client = new OpenAI(resolveOpenAIOptions(opts));
-  if (opts.trackUsage !== false) {
-    instrumentClient(client, {
-      feature: opts.feature,
-      businessAccountId: opts.businessAccountId ?? null,
-      category: opts.category,
-      origin: callerFile(),
-      // Only OpenAI itself is known to accept stream_options; don't risk a 400
-      // from other OpenAI-compatible endpoints (e.g. Gemini).
-      injectStreamUsage: !opts.baseURL || /(^|\/\/)(api\.openai\.com|127\.0\.0\.1|localhost)([:/]|$)/.test(opts.baseURL),
-    });
-  }
+  // Always instrumented: an opted-out client (trackUsage: false) still goes
+  // through the monthly budget check; it just doesn't record usage.
+  instrumentClient(client, {
+    feature: opts.feature,
+    businessAccountId: opts.businessAccountId ?? null,
+    category: opts.category,
+    origin: callerFile(),
+    // Only OpenAI itself is known to accept stream_options; don't risk a 400
+    // from other OpenAI-compatible endpoints (e.g. Gemini).
+    injectStreamUsage: !opts.baseURL || /(^|\/\/)(api\.openai\.com|127\.0\.0\.1|localhost)([:/]|$)/.test(opts.baseURL),
+    trackUsage: opts.trackUsage !== false,
+  });
   return client;
+}
+
+// ── monthly AI budget (block mode) ───────────────────────────────────────────
+//
+// When a super admin sets a monthly limit with action "block" and the account's
+// month-to-date spend has reached it, every new call made through a client
+// built here is refused BEFORE any request is sent to OpenAI, by rejecting with
+// AiBudgetExceededError. The decision comes from an in-memory cache owned by
+// server/services/aiBudgetService.ts (registered via setAiBudgetGuard), so the
+// hot path makes no DB query. Calls with no known business account are never
+// blocked, and nothing is blocked while no guard is registered.
+
+export class AiBudgetExceededError extends Error {
+  readonly code = "AI_BUDGET_EXCEEDED";
+  constructor(
+    readonly businessAccountId: string,
+    readonly limitUsd: number,
+    readonly spentUsd: number,
+  ) {
+    super(`Monthly AI budget reached for this account ($${spentUsd.toFixed(2)} of $${limitUsd.toFixed(2)})`);
+    this.name = "AiBudgetExceededError";
+  }
+}
+
+/** True for AiBudgetExceededError (also when wrapped as another error's `cause`). */
+export function isAiBudgetExceededError(err: unknown): err is AiBudgetExceededError {
+  let e: any = err;
+  for (let i = 0; e && i < 5; i++, e = e.cause) {
+    if (e instanceof AiBudgetExceededError || e?.code === "AI_BUDGET_EXCEEDED") return true;
+  }
+  return false;
+}
+
+export interface AiBudgetDecision {
+  blocked: boolean;
+  limitUsd?: number;
+  spentUsd?: number;
+}
+
+export interface AiBudgetGuard {
+  /** Synchronous from cache when warm; a promise only while the cache has never loaded. */
+  check(businessAccountId: string): AiBudgetDecision | Promise<AiBudgetDecision>;
+}
+
+let budgetGuard: AiBudgetGuard | null = null;
+
+export const budgetStats = { blocked: 0, guardErrors: 0 };
+
+/** Registered by aiBudgetService (null unregisters: nothing is blocked). */
+export function setAiBudgetGuard(guard: AiBudgetGuard | null): void {
+  budgetGuard = guard;
 }
 
 // ── usage tracking internals ─────────────────────────────────────────────────
@@ -153,6 +205,8 @@ interface InstrumentConfig {
   category?: TrackedUsageCategory;
   origin: string;
   injectStreamUsage: boolean;
+  /** false: budget check only, no usage recording (default true). */
+  trackUsage?: boolean;
 }
 
 type Api = "chat.completions" | "responses" | "embeddings";
@@ -191,8 +245,42 @@ export function instrumentClient(client: OpenAI, cfg: InstrumentConfig): OpenAI 
 function patchCreate(resource: any, api: Api, cfg: InstrumentConfig) {
   if (!resource || typeof resource.create !== "function") return;
   const original = resource.create;
-  resource.create = function trackedCreate(this: unknown, body: any, options?: any) {
+  const tracked = trackedCreateFn(resource, original, api, cfg);
+  resource.create = function budgetedCreate(this: unknown, body: any, options?: any) {
+    const guard = budgetGuard;
+    const accountId = guard ? sanitizeId(cfg.businessAccountId) ?? currentBusinessAccountId() : null;
+    if (!guard || !accountId) return tracked(body, options);
+    let decision: AiBudgetDecision | Promise<AiBudgetDecision> | null;
+    try {
+      decision = guard.check(accountId);
+    } catch {
+      budgetStats.guardErrors++;
+      decision = null; // fail open: a broken guard must not take AI down
+    }
+    if (decision && typeof (decision as Promise<AiBudgetDecision>).then === "function") {
+      // Cold cache (first call after start): wait for it once, then decide.
+      return (decision as Promise<AiBudgetDecision>)
+        .catch((): AiBudgetDecision => { budgetStats.guardErrors++; return { blocked: false }; })
+        .then((d) => {
+          if (d.blocked) throw budgetError(accountId, d);
+          return tracked(body, options);
+        });
+    }
+    const d = decision as AiBudgetDecision | null;
+    if (d?.blocked) return Promise.reject(budgetError(accountId, d));
+    return tracked(body, options);
+  };
+}
+
+function budgetError(accountId: string, d: AiBudgetDecision): AiBudgetExceededError {
+  budgetStats.blocked++;
+  return new AiBudgetExceededError(accountId, d.limitUsd ?? 0, d.spentUsd ?? 0);
+}
+
+function trackedCreateFn(resource: any, original: any, api: Api, cfg: InstrumentConfig) {
+  return function trackedCreate(body: any, options?: any) {
     const ctx = getRequestContext();
+    if (cfg.trackUsage === false) return original.call(resource, body, options);
     if (ctx?.trackUsage === false) {
       usageTrackingStats.optedOut++;
       return original.call(resource, body, options);

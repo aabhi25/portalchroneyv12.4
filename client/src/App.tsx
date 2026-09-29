@@ -40,6 +40,9 @@ import SuperAdmin from "@/pages/SuperAdmin";
 import SuperAdminSettings from "@/pages/SuperAdminSettings";
 import SuperAdminInsights from "@/pages/SuperAdminInsights";
 import SuperAdminCosts from "@/pages/SuperAdminCosts";
+import SuperAdminUsage from "@/pages/SuperAdminUsage";
+import Usage from "@/pages/Usage";
+import GroupAdminUsage from "@/pages/GroupAdminUsage";
 import SuperAdminMIS from "@/pages/SuperAdminMIS";
 import SuperAdminDemo from "@/pages/SuperAdminDemo";
 import SuperAdminApiKeys from "@/pages/SuperAdminApiKeys";
@@ -135,6 +138,7 @@ import JobPortalJobs from "@/pages/JobPortalJobs";
 import JobPortalApplicants from "@/pages/JobPortalApplicants";
 import NotFound from "@/pages/not-found";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
+import { UsageLimitBanner } from "@/components/UsageLimitBanner";
 import type { MeResponseDto } from "@shared/dto";
 
 function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
@@ -220,6 +224,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
       <SidebarInset>
         {/* Show impersonation banner for SuperAdmins */}
         {user?.role === "super_admin" && <ImpersonationBanner />}
+        {/* Monthly AI limit warning for the account being used / viewed-as. */}
+        {(user?.role !== "account_group_admin" && (user?.role !== "super_admin" || isSuperAdminImpersonating)) && <UsageLimitBanner />}
         <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4 lg:hidden sticky top-0 z-10">
           <SidebarTrigger className="-ml-1" />
           <div className="flex items-center gap-2">
@@ -249,6 +255,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/insights" component={SuperAdminInsights} />
                 <Route path="/super-admin/insights" component={SuperAdminInsights} />
                 <Route path="/super-admin/costs" component={SuperAdminCosts} />
+                <Route path="/super-admin/usage" component={SuperAdminUsage} />
                 <Route path="/super-admin/mis" component={SuperAdminMIS} />
                 <Route path="/super-admin/demo" component={SuperAdminDemo} />
                 <Route path="/super-admin/api-keys" component={SuperAdminApiKeys} />
@@ -284,6 +291,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
 
                 <Route path="/group-admin/insights" component={GroupAdminInsights} />
                 <Route path="/group-admin/group-analytics" component={GroupAnalytics} />
+                <Route path="/group-admin/usage" component={GroupAdminUsage} />
               </>
             ) : (
               <>
@@ -434,6 +442,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                   <SmartReplies channel="website" headerContent={<TrainingNavTabs />} />
                 </Route>
                 <Route path="/admin/settings" component={Settings} />
+                <Route path="/admin/usage" component={Usage} />
               </>
             )}
             <Route component={NotFound} />

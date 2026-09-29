@@ -3,6 +3,7 @@ import { reportError } from "../lib/errorReporter";
 import { runWithContext } from "../lib/requestContext";
 import { storage } from "../storage";
 import { chatService } from "../chatService";
+import { aiBudgetService } from "./aiBudgetService";
 
 // Task #8 — Background sweep that (re)summarizes conversations once they end or
 // go idle. This is the SINGLE summarizer: summaries are no longer produced
@@ -147,6 +148,12 @@ class ConversationSummarySweepWorker {
       for (const row of candidates) {
         const businessAccountId = row.businessAccountId;
         if (!businessAccountId) continue; // Cannot scope a summary without a business.
+
+        // Monthly AI limit reached (block mode): skip quietly, retry next month / when raised.
+        if (aiBudgetService.isBlocked(businessAccountId)) {
+          skipped += 1;
+          continue;
+        }
 
         // Honor exponential backoff for conversations that recently failed.
         const back = this.backoff.get(row.id);
