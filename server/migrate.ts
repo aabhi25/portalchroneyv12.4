@@ -57,21 +57,36 @@ export async function runMigrations(opts: { log?: (msg: string) => void } = {}):
     try {
       await client.query("CREATE EXTENSION IF NOT EXISTS vector").catch(err =>
         log(`Could not create the vector extension (${err.message}) — continuing; it may already exist or need a superuser.`));
-      await client.query("CREATE SCHEMA IF NOT EXISTS drizzle");
-      await client.query(`CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
+      // History lives in drizzle.__drizzle_migrations; if the database user may not create a
+      // schema, keep it in public.__drizzle_migrations instead of refusing to start.
+      let historySchema = "drizzle";
+      const existingHistory = await client.query("SELECT to_regclass('drizzle.__drizzle_migrations') AS d, to_regclass('public.__drizzle_migrations') AS p");
+      if (!existingHistory.rows[0]?.d && existingHistory.rows[0]?.p) {
+        historySchema = "public";
+      } else if (!existingHistory.rows[0]?.d) {
+        try {
+          await client.query("CREATE SCHEMA IF NOT EXISTS drizzle");
+        } catch (err: any) {
+          if (err?.code !== "42501") throw err; // insufficient_privilege
+          historySchema = "public";
+          log("No permission to create the drizzle schema — keeping migration history in public.__drizzle_migrations");
+        }
+      }
+      const history = `"${historySchema}".__drizzle_migrations`;
+      await client.query(`CREATE TABLE IF NOT EXISTS ${history} (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
 
-      const done = await client.query<{ created_at: string }>("SELECT created_at FROM drizzle.__drizzle_migrations ORDER BY created_at DESC LIMIT 1");
+      const done = await client.query<{ created_at: string }>(`SELECT created_at FROM ${history} ORDER BY created_at DESC LIMIT 1`);
       let baselineAdopted = false;
       if (done.rowCount === 0) {
         const existing = await client.query("SELECT to_regclass('public.business_accounts') AS t");
         if (existing.rows[0]?.t) {
           // Existing database (created before migrations were versioned): it already is the baseline.
-          await client.query("INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES ($1, $2)", [fileHash(folder, BASELINE_TAG), baseline.when]);
+          await client.query(`INSERT INTO ${history} (hash, created_at) VALUES ($1, $2)`, [fileHash(folder, BASELINE_TAG), baseline.when]);
           baselineAdopted = true;
           log(`Existing database — recorded ${BASELINE_TAG} as already applied`);
         }
       }
-      const last = Number((await client.query<{ created_at: string }>("SELECT created_at FROM drizzle.__drizzle_migrations ORDER BY created_at DESC LIMIT 1")).rows[0]?.created_at ?? 0);
+      const last = Number((await client.query<{ created_at: string }>(`SELECT created_at FROM ${history} ORDER BY created_at DESC LIMIT 1`)).rows[0]?.created_at ?? 0);
       const pending = entries.filter(e => e.when > last).map(e => e.tag);
 
       if (pending.length === 0) {
@@ -79,7 +94,7 @@ export async function runMigrations(opts: { log?: (msg: string) => void } = {}):
         return { baselineAdopted, applied: [] };
       }
       log(`Applying ${pending.length} migration(s): ${pending.join(", ")}`);
-      await migrate(db, { migrationsFolder: folder });
+      await migrate(db, { migrationsFolder: folder, migrationsSchema: historySchema });
       log("Migrations applied");
       return { baselineAdopted, applied: pending };
     } finally {
