@@ -94,6 +94,20 @@ async function main() {
     expect(r.documentType === 'unknown' && calls.filter(c => c.kind === 'strict').length === 0, "not a document: rejected by classifier");
   }
 
+  // PAN uploaded where only Aadhaar is accepted → unknown with the reason, no gpt-4o spend.
+  {
+    calls.length = 0;
+    const r = await documentIdentificationService.identifyDocument(acct.id, 'data:image/jpeg;base64,pan_card', undefined, ['aadhaar']);
+    expect(r.documentType === 'unknown' && /pan/i.test(r.validationNotes || ''), "PAN in an Aadhaar-only step → unknown, notes say PAN", r);
+    expect(calls.filter(c => c.kind === 'strict').length === 1, "PAN in an Aadhaar-only step → no gpt-4o escalation");
+  }
+  // PAN where PAN is accepted → read as PAN.
+  {
+    calls.length = 0;
+    const r = await documentIdentificationService.identifyDocument(acct.id, 'data:image/jpeg;base64,pan_card', undefined, ['aadhaar', 'pan']);
+    expect(r.documentType === 'pan' && r.extractedData.pan_number === 'APRPC5124K', "PAN in an Aadhaar+PAN step → PAN extracted", r.extractedData);
+  }
+
   // Tier merge rules in isolation.
   {
     const merged = documentIdentificationService.mergeTierResults(

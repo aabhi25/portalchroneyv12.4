@@ -1390,8 +1390,9 @@ Example: {"name": null, "phone": "9876543210", "email": null, "address": "123 Ma
     if (session.currentStepKey === this.UPDATE_MENU_STEP) {
       if (normalizedMessage === "add_docs" || normalizedMessage === "add documents" || normalizedMessage === "update documents") {
         const steps = await this.getFlowSteps(activeFlow.id);
+        const updateDocTypes = this.getUpdateModeDocumentTypes(steps);
         const uploadStep = steps.find(s => s.type === "upload");
-        if (!uploadStep) {
+        if (!uploadStep || updateDocTypes.length === 0) {
           return {
             handled: true,
             response: { type: "text", text: "No document upload step is configured. Please contact support." },
@@ -1421,8 +1422,7 @@ Example: {"name": null, "phone": "9876543210", "email": null, "address": "123 Ma
           ? `We already have: ${docLabels.join(", ")}.`
           : "No documents on file yet.";
 
-        const options = uploadStep.options as FlowStepOptions | null;
-        const documentTypes = options?.documentTypes || [];
+        const documentTypes = updateDocTypes;
         const existingDocKeysNorm = Object.keys(existingDocs).map((k: string) => k.toLowerCase().replace(/_card$/, ''));
         const missingDocs = documentTypes.filter((d: any) => !existingDocKeysNorm.includes(d.docType.toLowerCase().replace(/_card$/, '')));
         const missingText = missingDocs.length > 0
@@ -4918,6 +4918,33 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     };
   }
 
+  /**
+   * Document types a customer may add/replace in "Update Documents": every type
+   * configured on any active upload step of the flow (a flow can collect
+   * Aadhaar in one step and PAN in another). First step wins for label/mandatory.
+   */
+  private getUpdateModeDocumentTypes(steps: WhatsappFlowStep[]): any[] {
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const step of steps) {
+      if (step.type !== 'upload' || (step as any).paused) continue;
+      for (const d of ((step.options as FlowStepOptions | null)?.documentTypes || []) as any[]) {
+        const norm = String(d?.docType || '').toLowerCase().replace(/_card$/, '');
+        if (!norm || seen.has(norm)) continue;
+        seen.add(norm);
+        out.push(d);
+      }
+    }
+    return out;
+  }
+
+  /** The document number field for a doc type (aadhaar_number, pan_number, …), legacy documentNumber last. */
+  private docNumberOf(extractedData: Record<string, any> | undefined): string | undefined {
+    const d = extractedData || {};
+    const v = d.documentNumber || d.pan_number || d.aadhaar_number || d.document_number;
+    return v ? String(v) : undefined;
+  }
+
   private async withProcessingUpdates<T>(businessAccountId: string, senderPhone: string, sessionId: string, fn: () => Promise<T>): Promise<T> {
     const stop = this.startProcessingUpdates(businessAccountId, senderPhone, sessionId);
     try {
@@ -5030,14 +5057,9 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           const collectedData = (session.collectedData as Record<string, any>) || {};
           await this.advanceSession(session.id, this.UPDATE_ADD_DOCS_STEP, collectedData);
         }
-        const uploadStep = steps.find(s => s.type === "upload");
-        if (!uploadStep) {
-          console.log(`[WhatsApp Flow] No upload step found in flow for update mode`);
-          return { handled: false, shouldFallbackToAI: true };
-        }
-        const options = uploadStep.options as FlowStepOptions | null;
-        const documentTypes = options?.documentTypes || [];
+        const documentTypes = this.getUpdateModeDocumentTypes(steps);
         if (documentTypes.length === 0) {
+          console.log(`[WhatsApp Flow] No upload step / document types found in flow for update mode`);
           return { handled: false, shouldFallbackToAI: true };
         }
         const lockKey = `${businessAccountId}:${senderPhone}`;
@@ -5162,15 +5184,25 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           const hasAnyField = Object.values(result.extractedData || {}).some((v: any) => v !== null && v !== undefined && String(v).trim() !== '');
           if (result.documentType === "unknown" || (result.confidence < 0.3 && !hasAnyField && !result._maskedNumber)) {
             decrementPending();
+            const acceptedLabels = documentTypes.map((d: any) => d.label || String(d.docType).replace(/_/g, ' ')).filter(Boolean);
+            const acceptedText = acceptedLabels.join(", ");
+            const notes = String(result.validationNotes || '');
+            const looksLike = /(^|[^a-z])pan([^a-z]|$)/i.test(notes) ? 'PAN card'
+              : /aadhaar/i.test(notes) ? 'Aadhaar card'
+              : /bank statement/i.test(notes) ? 'bank statement' : null;
+            const text = looksLike
+              ? `This looks like a ${looksLike}, but here you can only add or replace: ${acceptedText}. Please upload one of those.`
+              : `I couldn't identify this document. Please upload a clear photo of your ${acceptedText}.`;
+            console.log(`[WhatsApp Flow] Update-docs upload not recognised (${result.documentType}, conf ${result.confidence}) — accepted: [${documentTypes.map((d: any) => d.docType).join(',')}], notes: ${notes}`);
             return {
               handled: true,
-              response: { type: "text", text: "Could not identify this document. Please upload a clearer image of your PAN, Aadhaar, or Bank Statement." },
+              response: { type: "text", text },
               sessionId: freshSession.id,
             };
           }
 
           // Cross-validate Aadhaar/PAN number against lead's original application data
-          const cvDocNumber = result.extractedData?.documentNumber;
+          const cvDocNumber = this.docNumberOf(result.extractedData);
           const cvIsPanOrAadhaar = ['pan', 'pan_card', 'aadhaar', 'aadhaar_card'].includes(result.documentType);
           if (cvDocNumber && cvIsPanOrAadhaar) {
             const cvNormalizeNum = (s: string) => s.replace(/[\s\-\.\/]+/g, '').toUpperCase();
@@ -5202,11 +5234,12 @@ Return only JSON: {"optionId":"one configured id" | null}`,
               const docs = ed._documents || ed._collectedDocuments || {};
               const existingDocEntry = docs[cvMatchedType] || docs[cvMatchedType.replace('_card', '')];
               if (!existingDocEntry) return false;
-              const primaryNum = existingDocEntry.extractedData?.documentNumber;
+              const primaryNum = this.docNumberOf(existingDocEntry.extractedData);
               if (primaryNum && cvNormalizeNum(primaryNum) === cvNormalized) return true;
-              return (existingDocEntry.additionalPhotos || []).some((p: any) =>
-                p.extractedData?.documentNumber && cvNormalizeNum(p.extractedData.documentNumber) === cvNormalized
-              );
+              return (existingDocEntry.additionalPhotos || []).some((p: any) => {
+                const photoNum = this.docNumberOf(p.extractedData);
+                return photoNum && cvNormalizeNum(photoNum) === cvNormalized;
+              });
             });
             if (cvDuplicate) {
               const cvDocLabel = result.documentType.includes('pan') ? 'PAN' : 'Aadhaar';
@@ -5278,8 +5311,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
 
           const existingDoc = collectedDocs[matchedType];
           if (existingDoc) {
-            const existingNumber = existingDoc.extractedData?.documentNumber;
-            const newNumber = result.extractedData?.documentNumber;
+            const existingNumber = this.docNumberOf(existingDoc.extractedData);
+            const newNumber = this.docNumberOf(result.extractedData);
             const isSameDocument = !existingNumber || !newNumber || existingNumber === newNumber;
             if (isSameDocument) {
               const existingSide = existingDoc.side || 'front';

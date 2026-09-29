@@ -1144,6 +1144,15 @@ Rules:
 
     if (!this.needsEscalation(tier1)) return tier1;
 
+    // The model says this isn't the expected document at all (e.g. a PAN uploaded to
+    // an Aadhaar-only step) and read nothing: report "unknown" so the caller replies
+    // "this looks like …" instead of treating it as an empty Aadhaar page. No point
+    // paying for gpt-4o to confirm a clear mismatch.
+    if (this.isClearMismatch(tier1) && /actual_type\s*=|appears to be|looks like|is (a|an) (pan|aadhaar|bank|driving|passport|voter)/i.test(tier1.validationNotes || '')) {
+      console.log(`[Document ID] ${cls.docType} step received a different document (${tier1.validationNotes}) — reporting unknown`);
+      return { ...tier1, documentType: 'unknown' };
+    }
+
     const reason = tier1._validationFailures?.length
       ? `Tier 1-strict produced invalid values: ${tier1._validationFailures.map(f => `${f.field}="${f.value}" (expected ${f.expected})`).join(', ')}`
       : `Tier 1-strict confidence ${tier1.confidence} too low`;
@@ -1155,7 +1164,14 @@ Rules:
       { model: 'gpt-4o', escalationReason: reason, sideHint }
     );
     if (tier2.documentType !== 'unknown') tier2.documentType = cls.docType;
-    return this.mergeTierResults(tier1, tier2);
+    const final = this.mergeTierResults(tier1, tier2);
+    return this.isClearMismatch(final) ? { ...final, documentType: 'unknown' } : final;
+  }
+
+  /** isValid=false with no field read at all → the image isn't this document type. */
+  private isClearMismatch(r: DocumentIdentificationResult): boolean {
+    if (r.isValid !== false || r._maskedNumber) return false;
+    return !Object.values(r.extractedData || {}).some(v => v !== null && v !== undefined && String(v).trim() !== '');
   }
 
   /**

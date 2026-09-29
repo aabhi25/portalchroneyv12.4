@@ -105,6 +105,58 @@ async function main() {
     expect(!/couldn't|could not|sorry/i.test(reply), "both sides in one photo → no error reply", reply);
   }
 
+  // ── "Update Documents" mode ─────────────────────────────────────────────
+  const makeFlow = async (name: string, uploadSteps: { key: string; docs: { docType: string; label: string }[] }[]) => {
+    const [a] = await db.insert(schema.businessAccounts).values({ name, website: 'https://example.com', openaiApiKey: 'sk-test-fake' } as any).returning();
+    const [f] = await db.insert(schema.whatsappFlows).values({ businessAccountId: a.id, name: 'KYC', isActive: 'true' } as any).returning();
+    let order = 1;
+    for (const st of uploadSteps) {
+      await db.insert(schema.whatsappFlowSteps).values({
+        flowId: f.id, stepKey: st.key, stepOrder: order++, type: 'upload', prompt: 'Upload',
+        options: { documentTypes: st.docs.map(d => ({ ...d, isMandatory: true })) },
+      } as any);
+    }
+    return { acct: a, flow: f };
+  };
+  const updateSession = async (acctId: string, flowId: string, phone: string) => {
+    await db.insert(schema.whatsappFlowSessions).values({
+      businessAccountId: acctId, flowId, senderPhone: phone, currentStepKey: '__update_add_docs__', status: 'active',
+      collectedData: { _collectedDocuments: {} }, lastMessageAt: new Date(),
+    } as any);
+  };
+  const sendTo = async (acctId: string, phone: string, scenario: string) => {
+    const r = await whatsappFlowService.processImageUpload(acctId, phone, `https://media.example/${scenario}.jpg`, `${scenario}.jpg`, Buffer.from(scenario));
+    return (r.response as any)?.text || '';
+  };
+
+  // Flow B: Aadhaar and PAN in two separate upload steps (Update Documents used to see only the first).
+  {
+    const { acct: b, flow: fb } = await makeFlow('Two upload steps', [
+      { key: 'upload_aadhaar', docs: [{ docType: 'aadhaar', label: 'Aadhaar Card' }] },
+      { key: 'upload_pan', docs: [{ docType: 'pan', label: 'PAN Card' }] },
+    ]);
+    const P = '919000000201';
+    await updateSession(b.id, fb.id, P);
+    const reply = await sendTo(b.id, P, 'pan_card');
+    const [s1] = await db.select().from(schema.whatsappFlowSessions)
+      .where(and(eq(schema.whatsappFlowSessions.businessAccountId, b.id), eq(schema.whatsappFlowSessions.senderPhone, P)));
+    const docs = ((s1?.collectedData || {}) as any)._collectedDocuments || {};
+    expect(!/couldn't identify|could not identify/i.test(reply), "Update Documents: PAN accepted when PAN is in a later upload step", reply);
+    expect(docs.pan?.extractedData?.pan_number === 'APRPC5124K', "Update Documents: PAN saved with its number", Object.keys(docs));
+  }
+
+  // Flow C: only Aadhaar can be uploaded → clear message instead of "could not identify".
+  {
+    const { acct: c, flow: fc } = await makeFlow('Aadhaar only', [
+      { key: 'upload_aadhaar', docs: [{ docType: 'aadhaar', label: 'Aadhaar Card' }] },
+    ]);
+    const P = '919000000202';
+    await updateSession(c.id, fc.id, P);
+    const reply = await sendTo(c.id, P, 'pan_card');
+    expect(/looks like a PAN card/i.test(reply) && /Aadhaar Card/.test(reply) && !/Bank Statement/.test(reply),
+      "Update Documents: PAN where only Aadhaar is accepted → says so, lists only accepted docs", reply);
+  }
+
   fake.close();
   if (failed > 0) { console.error(`\n${failed} check(s) failed.`); process.exit(1); }
   console.log("\nAll WhatsApp Aadhaar flow checks passed.");

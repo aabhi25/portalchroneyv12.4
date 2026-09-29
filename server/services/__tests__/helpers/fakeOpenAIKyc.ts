@@ -12,8 +12,17 @@ export const VID = '9123456789012345';
 
 // Scripted answers per scenario: [mini answer, gpt-4o answer]. The scenario id
 // travels in the fake image data URL.
-type Answer = { data: Record<string, string | null>; confidence: number; isValid?: boolean; side?: string | null; delayMs?: number };
-export const SCENARIOS: Record<string, { cls?: string; mini: Answer; gpt4o?: Answer }> = {
+type Answer = { data: Record<string, string | null>; confidence: number; isValid?: boolean; side?: string | null; delayMs?: number; notes?: string };
+export const SCENARIOS: Record<string, { cls?: string; mini: Answer; gpt4o?: Answer; byDoc?: Record<string, Answer> }> = {
+  // A PAN card: the Aadhaar extractor says it's a different document; the PAN extractor reads it.
+  pan_card: {
+    cls: 'pan',
+    mini: { data: {}, confidence: 0 },
+    byDoc: {
+      aadhaar: { data: { aadhaar_number: null, full_name: null, address: null, dob: null, gender: null, father_name: null }, confidence: 0, isValid: false, notes: 'actual_type=pan_card' },
+      pan: { data: { pan_number: 'APRPC5124K', full_name: 'PRINCE CHAKRABORTY', dob: '14/06/1989', father_name: 'AVIJIT CHAKRABORTY' }, confidence: 0.96, side: 'front' },
+    },
+  },
   back_side: {
     mini: { data: { aadhaar_number: VALID, full_name: null, address: '12 MG Road, Pune, Maharashtra 411001', dob: null, gender: null, father_name: null }, confidence: 0.7, side: 'back' },
   },
@@ -63,9 +72,10 @@ export function startFakeOpenAI(): Promise<{ baseUrl: string; close: () => void 
       if (isClassify) {
         content = JSON.stringify({ docType: sc?.cls ?? 'aadhaar', confidence: 0.95, validationNotes: sc?.cls === 'unknown' ? 'appears to be a selfie' : null });
       } else {
-        const a = body.model === 'gpt-4o' ? (sc.gpt4o || sc.mini) : sc.mini;
+        const docKey = /extraction specialist for PAN/i.test(system) ? 'pan' : /extraction specialist for Aadhaar/i.test(system) ? 'aadhaar' : '';
+        const a = (sc.byDoc && sc.byDoc[docKey]) || (body.model === 'gpt-4o' ? (sc.gpt4o || sc.mini) : sc.mini);
         if (a.delayMs) await new Promise(r => setTimeout(r, a.delayMs));
-        content = JSON.stringify({ extractedData: a.data, confidence: a.confidence, isValid: a.isValid ?? true, validationNotes: null, side: a.side ?? null });
+        content = JSON.stringify({ extractedData: a.data, confidence: a.confidence, isValid: a.isValid ?? true, validationNotes: a.notes ?? null, side: a.side ?? null });
       }
       if (res.writableEnded || req.destroyed) return;
       res.writeHead(200, { 'Content-Type': 'application/json' });
