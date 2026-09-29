@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { llamaService, LlamaService } from './llamaService';
+import { llamaService, LlamaService, type StreamPromptOptions } from './llamaService';
 import { aiTools, selectRelevantTools, classifyOrderLookupIntent, classifyReturnExchangeIntent } from './aiTools';
 import { ToolExecutionService } from './services/toolExecutionService';
 import { conversationMemory } from './conversationMemory';
@@ -23,6 +23,40 @@ import { validatePhoneNumber } from '../shared/validation/phone';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { pushTextMessage, type DoubtSyncSender } from './services/topscholar/doubtSyncService';
 import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
+import { resolveChatContextMode, type ChatContextMode } from './services/chatContext/config';
+import { buildBusinessProfile, type BusinessProfile } from './services/chatContext/businessProfile';
+import { buildRetrievalQuery, capHistoryForModel } from './services/chatContext/conversationWindow';
+import { retrieveKnowledge } from './services/chatContext/knowledgeRetrieval';
+import { ensurePassageVectors } from './services/chatContext/passageVectors';
+import { embeddingService } from './services/embeddingService';
+
+/** Cached business-context block; `profile` is set in retrieval mode only. */
+interface ContextBundle {
+  text: string;
+  profile: BusinessProfile | null;
+  appointmentBookingEnabled: boolean;
+}
+
+// Messages where the current time (not just the date) can matter to the answer.
+const TIME_SENSITIVE_MESSAGE = /\b(now|today|tonight|tomorrow|open|opening|close|closing|closed|hours?|timings?|time|currently|slots?|appointments?|book|booking|schedule|when|minutes?|asap|soon)\b/i;
+
+/**
+ * Volatile tail for retrieval mode. Day precision by default so the prompt stays
+ * identical within a day (OpenAI prompt caching); the time is added only when the
+ * account books appointments or the message is time-sensitive ("are you open now?").
+ */
+export function buildDateTail(includeTime: boolean, now: Date = new Date()): string {
+  const day = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).format(now);
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
+  const get = (t: string) => parts.find(p => p.type === t)?.value || '';
+  const iso = `${get('year')}-${get('month')}-${get('day')}`;
+  const time = includeTime
+    ? ` Current time: ${new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true }).format(now)} IST.`
+    : '';
+  return `\n\nCURRENT DATE (IST - Indian Standard Time): Today is ${day} (${iso}).${time}
+IMPORTANT: Users booking appointments for future dates is completely normal and expected. Do NOT question, clarify, or confirm that a date is "in the future" - simply proceed with the booking flow by asking for their name and phone number.
+`;
+}
 
 export interface ChatContext {
   userId: string;
@@ -2073,7 +2107,7 @@ Response:`;
       const startTime = Date.now();
       
       // Trigger cache loading by calling buildEnrichedContext
-      await this.buildEnrichedContext(context);
+      await this.buildEnrichedContext(context, await this.resolveContextMode(context));
       
       const duration = Date.now() - startTime;
       console.log(`[Cache Prewarm] Cache warmed successfully in ${duration}ms`);
@@ -2292,13 +2326,14 @@ Response:`;
       
       // Build enriched system context with company info and all FAQs
       // This includes PDF summaries and key points - should answer most questions
-      let systemContext = await this.buildEnrichedContext(context);
+      const contextMode = await this.resolveContextMode(context);
+      let systemContext = await this.buildEnrichedContext(context, contextMode, { userMessage });
 
       // Run RAG search and DB fetches in parallel — they are fully independent
       // RAG embedding call (~200ms) now overlaps with DB reads (~50ms) instead of preceding them
       console.log('[RAG] Running document chunk search for query');
-      const [ragContext, [businessAccount, widgetSettings, existingLead, products]] = await Promise.all([
-        this.addRAGContext(userMessage, context.businessAccountId),
+      const [{ text: ragContext }, [businessAccount, widgetSettings, existingLead, products]] = await Promise.all([
+        this.buildKnowledgeContext(userMessage, history, context, contextMode),
         Promise.all([
           storage.getBusinessAccount(context.businessAccountId),
           storage.getWidgetSettings(context.businessAccountId),
@@ -3697,7 +3732,15 @@ Response:`;
 
       // Build enriched system context with company info and all FAQs
       // This includes PDF summaries and key points - should answer most questions
-      let systemContext = await this.buildEnrichedContext(context);
+      const contextMode = await this.resolveContextMode(context);
+      const retrievalMode = contextMode === 'retrieval';
+      let systemContext = await this.buildEnrichedContext(context, contextMode, { userMessage });
+      // Per-turn status blocks go at the END in retrieval mode so the stable prefix
+      // (instructions + business context) is identical across turns (prompt caching).
+      const addTurnBlock = (block: string) => {
+        if (!block) return;
+        systemContext = retrievalMode ? `${systemContext}\n\n${block}` : block + systemContext;
+      };
 
       // SMART TIMING: Count user messages for lead gate activation
       // Note: history was captured BEFORE the current message was stored, so add 1
@@ -3729,7 +3772,8 @@ Response:`;
       }
       
       // PREPEND the status to systemContext (not append) so it's at the top
-      systemContext = smartTimingPrefix + systemContext;
+      // (appended in retrieval mode — see addTurnBlock)
+      addTurnBlock(smartTimingPrefix);
       
       console.log(`[Smart Timing] Injected status at START: isFirst=${isFirstUserMessage}, count=${userMessageCount}`);
 
@@ -3757,7 +3801,7 @@ Example: "Great! Is there anything else I can help you with?"
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 `;
-        systemContext = handoffGuardrail + systemContext;
+        addTurnBlock(handoffGuardrail);
       } else if (isHandoffComplete) {
         console.log(`[Handoff Guardrail] Handoff complete, user asking new question: "${userMessage.substring(0, 50)}..."`);
       }
@@ -3765,8 +3809,8 @@ Example: "Great! Is there anything else I can help you with?"
       // Run RAG search and DB fetches in parallel — they are fully independent
       // RAG embedding call (~200ms) now overlaps with DB reads (~50ms) instead of preceding them
       console.log('[RAG] Running document chunk search for query');
-      const [ragContext, [businessAccount, widgetSettings, existingLead, products]] = await Promise.all([
-        this.addRAGContext(userMessage, context.businessAccountId),
+      const [knowledge, [businessAccount, widgetSettings, existingLead, products]] = await Promise.all([
+        this.buildKnowledgeContext(userMessage, history, context, contextMode),
         Promise.all([
           storage.getBusinessAccount(context.businessAccountId),
           storage.getWidgetSettings(context.businessAccountId),
@@ -3887,7 +3931,7 @@ Example: "Great! Is there anything else I can help you with?"
       if (serverSideLookupOptions || serverSideReturnExchange) {
         console.log('[RAG Context] Suppressed — order lookup cards active, skipping RAG injection');
       } else {
-        systemContext += ragContext;
+        systemContext += knowledge.text;
       }
 
       // When the customer already identified their order via lookup and this is a return/exchange flow,
@@ -3913,7 +3957,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         const routeInstruction = context.voiceIntentRoute === 'normal_conversation'
           ? `VOICE TURN ROUTING — This utterance was classified as normal conversation, not an academic question. Reply briefly and naturally. Do not call curriculum tools and do not claim the topic is absent from the curriculum.`
           : `VOICE TURN ROUTING — This utterance is ambiguous and must not be treated as an academic question. Briefly ask the student to repeat or state their study question. Do not call curriculum tools and do not claim the topic is absent from the curriculum.`;
-        systemContext = `${routeInstruction}\n\n${systemContext}`;
+        addTurnBlock(`${routeInstruction}\n\n`);
       }
 
       // OTP STRICT MODE: when the conversation is awaiting OTP, restrict the tool
@@ -4057,7 +4101,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         otpState.awaiting_otp === true || otpState.locked === true,
         // Top Scholar content-only K12: force fetch_k12_topic on the first
         // streaming turn so academic answers are always curriculum-grounded.
-        this.shouldForceK12Fetch(context) ? 'fetch_k12_topic' : undefined
+        this.shouldForceK12Fetch(context) ? 'fetch_k12_topic' : undefined,
+        retrievalMode ? await this.buildFirstCallPromptOptions(context, history, knowledge.itemCount > 0 && !(serverSideLookupOptions || serverSideReturnExchange)) : undefined
       )) {
         const delta = chunk.choices[0]?.delta;
         
@@ -4171,7 +4216,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         
         const updatedHistory = conversationMemory.getConversationHistory(context.userId);
         const messages: any[] = [
-          ...updatedHistory,
+          // Retrieval mode: last ~10 turns / 3k tokens, older turns folded into a short note.
+          ...(retrievalMode ? capHistoryForModel(updatedHistory).messages : updatedHistory),
           { role: 'assistant', content: fullResponse, tool_calls: toolCalls }
         ];
 
@@ -5162,85 +5208,26 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
     }
   }
 
-  private async buildEnrichedContext(context: ChatContext): Promise<string> {
-    const startTime = Date.now();
-    
-    // IMPORTANT: customInstructions are NOT cached because they are passed dynamically 
-    // with each request and must always be fresh (user may update them at any time)
-    let customInstructionsContext = '';
-    let fallbackInstructions: string[] = [];
-    
-    if (context.customInstructions && context.customInstructions.trim()) {
-      try {
-        // Try to parse as JSON array (new format)
-        const instructions = JSON.parse(context.customInstructions);
-        if (Array.isArray(instructions) && instructions.length > 0) {
-          // Separate instructions by type
-          const alwaysActiveInstructions = instructions.filter((instr: any) => instr.type === 'always' || !instr.type);
-          const conditionalInstructions = instructions.filter((instr: any) => instr.type === 'conditional');
-          fallbackInstructions = instructions
-            .filter((instr: any) => instr.type === 'fallback')
-            .map((instr: any) => instr.text);
-          
-          // Build always-active instructions context
-          if (alwaysActiveInstructions.length > 0) {
-            const formattedAlwaysActive = alwaysActiveInstructions
-              .map((instr: any, index: number) => `${index + 1}. ${instr.text}`)
-              .join('\n');
-            customInstructionsContext = `CUSTOM BUSINESS INSTRUCTIONS:\nFollow these specific instructions for this business:\n${formattedAlwaysActive}\n\n`;
-          }
-          
-          // Add conditional instructions with their trigger keywords
-          if (conditionalInstructions.length > 0) {
-            const formattedConditional = conditionalInstructions
-              .map((instr: any) => {
-                const keywords = instr.keywords?.join(', ') || '';
-                return `- When user mentions [${keywords}]: ${instr.text}`;
-              })
-              .join('\n');
-            customInstructionsContext += `CONDITIONAL INSTRUCTIONS (apply when keywords are mentioned):\n${formattedConditional}\n\n`;
-          }
-          
-          // Store fallback instructions in context for later use
-          if (fallbackInstructions.length > 0) {
-            // Fallback instructions are NOT added to regular context
-            // They will be applied only when AI cannot answer
-            console.log(`[Context Build] Found ${fallbackInstructions.length} fallback instruction(s) for unknown questions`);
-          }
-          
-          console.log(`[Context Build] Loaded ${alwaysActiveInstructions.length} always-active, ${conditionalInstructions.length} conditional, ${fallbackInstructions.length} fallback instructions (FRESH, not cached)`);
-        }
-      } catch {
-        // Fallback to plain text format (legacy)
-        customInstructionsContext = `CUSTOM BUSINESS INSTRUCTIONS:\nFollow these specific instructions for this business:\n${context.customInstructions}\n\n`;
-        console.log(`[Context Build] Loaded legacy custom instructions (FRESH, not cached)`);
-      }
-    }
-    
-    // Store or clear fallback instructions for use when deflection is detected
-    // IMPORTANT: Always update the cache to prevent stale fallback instructions from being applied
-    if (fallbackInstructions.length > 0) {
-      this.fallbackInstructionsCache.set(context.businessAccountId, fallbackInstructions);
-    } else {
-      // Clear cache when no fallback instructions exist (user may have deleted them)
-      this.fallbackInstructionsCache.delete(context.businessAccountId);
-    }
-    
-    // Phase 3 Task 8: Use cache for business context (FAQs, settings, etc.)
-    // NOTE: customInstructions are handled separately above and prepended to the final result
-    // Content-only K12 (e.g. TopScholar) answers strictly from synced curriculum
-    // via fetch_k12_topic. Omit sales/lead/website/training-doc blocks so the
-    // system prompt stays lean and the model isn't tempted off-curriculum.
-    // The lean variant MUST be cached under its own key: a non-K12 caller (the
-    // widget prewarm has no K12 flags set) would otherwise populate the shared
-    // `context:<id>` entry with the full website/sales context, and the K12 path
-    // would then serve that bloated version, defeating the optimization.
+  /**
+   * Which context builder to use for this turn. TopScholar and K12 content-only
+   * conversations always keep the legacy path (lean curriculum prompt, untouched).
+   */
+  private async resolveContextMode(context: ChatContext): Promise<ChatContextMode> {
+    if (isTopscholarAccount(context.businessAccountId) || this.isK12ContentOnly(context)) return 'legacy';
+    return resolveChatContextMode(context.businessAccountId);
+  }
+
+  /** Cached per account (5 min): the business-context block (+ profile in retrieval mode). */
+  private async getContextBundle(context: ChatContext, mode: ChatContextMode): Promise<ContextBundle> {
     const k12ContentOnly = this.isK12ContentOnly(context);
+    const retrievalMode = mode === 'retrieval' && !k12ContentOnly;
     const cacheKey = k12ContentOnly
       ? BusinessContextCache.KEYS.BUSINESS_CONTEXT_K12(context.businessAccountId)
-      : BusinessContextCache.KEYS.BUSINESS_CONTEXT(context.businessAccountId);
-    
-    const businessContext = await businessContextCache.getOrFetch(cacheKey, async () => {
+      : retrievalMode
+        ? BusinessContextCache.KEYS.BUSINESS_CONTEXT_RETRIEVAL(context.businessAccountId)
+        : BusinessContextCache.KEYS.BUSINESS_CONTEXT(context.businessAccountId);
+
+    return businessContextCache.getOrFetch<ContextBundle>(cacheKey, async () => {
       let enrichedContext = '';
 
       // PARALLEL DATA LOADING: Load all database queries simultaneously for 50-60% faster performance
@@ -5369,7 +5356,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       }
 
       // Add company description
-      if (context.companyDescription) {
+      if (context.companyDescription && !retrievalMode) {
         enrichedContext += `COMPANY INFORMATION:\n${context.companyDescription}\n\n`;
       }
 
@@ -5393,7 +5380,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       // Data already loaded in parallel above
       // TopScholar: skip website analysis — answers come from external curriculum only.
       try {
-        if (websiteContent && !isTopscholarAccount(context.businessAccountId) && !k12ContentOnly) {
+        if (websiteContent && !isTopscholarAccount(context.businessAccountId) && !k12ContentOnly && !retrievalMode) {
           enrichedContext += `BUSINESS KNOWLEDGE (from website analysis):\n`;
           enrichedContext += `You have comprehensive knowledge about this business extracted from their website.\n\n`;
           
@@ -5454,7 +5441,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       // Add analyzed pages content (homepage, additional pages)
       // Data already loaded in parallel above
       try {
-        if (analyzedPages && analyzedPages.length > 0 && !k12ContentOnly) {
+        if (analyzedPages && analyzedPages.length > 0 && !k12ContentOnly && !retrievalMode) {
           enrichedContext += `DETAILED WEBSITE CONTENT:\n`;
           enrichedContext += `Below is detailed information extracted from ${analyzedPages.length} page(s) of the business website.\n\n`;
           
@@ -5506,7 +5493,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       try {
         const completedDocs = trainingDocs.filter(doc => doc.uploadStatus === 'completed');
         
-        if (completedDocs.length > 0 && !k12ContentOnly) {
+        if (completedDocs.length > 0 && !k12ContentOnly && !retrievalMode) {
           enrichedContext += `TRAINING DOCUMENTS KNOWLEDGE:\n`;
           enrichedContext += `The following information has been extracted from uploaded training documents:\n\n`;
           
@@ -5542,8 +5529,116 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         console.error('[Chat Context] Error loading training documents:', error);
       }
 
-      return enrichedContext;
+      // Retrieval mode: a compact, budgeted profile replaces the full website-analysis,
+      // every-page and every-document dumps above. Page / document detail is retrieved
+      // per question (see buildKnowledgeContext).
+      let profile: BusinessProfile | null = null;
+      if (retrievalMode && !isTopscholarAccount(context.businessAccountId)) {
+        profile = buildBusinessProfile({
+          companyDescription: context.companyDescription,
+          website: websiteContent,
+          pages: analyzedPages,
+          docs: trainingDocs,
+        });
+        enrichedContext += profile.text;
+        console.log(`[Context Build] Retrieval mode: profile ${profile.tokens} tokens (corpus ${profile.corpusTokens} tokens, ${profile.passages.length} retrievable passages, inlined=${profile.inlinedAllContent})`);
+      }
+
+      // Booking is live only when the SuperAdmin flag AND the widget toggle are on
+      // (same rule as the tool selection in streamMessage).
+      let appointmentBookingEnabled = false;
+      if (retrievalMode && widgetSettings?.appointmentBookingEnabled === 'true') {
+        const account = await storage.getBusinessAccount(context.businessAccountId).catch(() => undefined);
+        appointmentBookingEnabled = account?.appointmentsEnabled === 'true';
+      }
+
+      return { text: enrichedContext, profile, appointmentBookingEnabled };
     });
+  }
+
+  private async buildEnrichedContext(context: ChatContext, mode: ChatContextMode = 'legacy', opts: { userMessage?: string } = {}): Promise<string> {
+    const startTime = Date.now();
+    
+    // IMPORTANT: customInstructions are NOT cached because they are passed dynamically 
+    // with each request and must always be fresh (user may update them at any time)
+    let customInstructionsContext = '';
+    let fallbackInstructions: string[] = [];
+    
+    if (context.customInstructions && context.customInstructions.trim()) {
+      try {
+        // Try to parse as JSON array (new format)
+        const instructions = JSON.parse(context.customInstructions);
+        if (Array.isArray(instructions) && instructions.length > 0) {
+          // Separate instructions by type
+          const alwaysActiveInstructions = instructions.filter((instr: any) => instr.type === 'always' || !instr.type);
+          const conditionalInstructions = instructions.filter((instr: any) => instr.type === 'conditional');
+          fallbackInstructions = instructions
+            .filter((instr: any) => instr.type === 'fallback')
+            .map((instr: any) => instr.text);
+          
+          // Build always-active instructions context
+          if (alwaysActiveInstructions.length > 0) {
+            const formattedAlwaysActive = alwaysActiveInstructions
+              .map((instr: any, index: number) => `${index + 1}. ${instr.text}`)
+              .join('\n');
+            customInstructionsContext = `CUSTOM BUSINESS INSTRUCTIONS:\nFollow these specific instructions for this business:\n${formattedAlwaysActive}\n\n`;
+          }
+          
+          // Add conditional instructions with their trigger keywords
+          if (conditionalInstructions.length > 0) {
+            const formattedConditional = conditionalInstructions
+              .map((instr: any) => {
+                const keywords = instr.keywords?.join(', ') || '';
+                return `- When user mentions [${keywords}]: ${instr.text}`;
+              })
+              .join('\n');
+            customInstructionsContext += `CONDITIONAL INSTRUCTIONS (apply when keywords are mentioned):\n${formattedConditional}\n\n`;
+          }
+          
+          // Store fallback instructions in context for later use
+          if (fallbackInstructions.length > 0) {
+            // Fallback instructions are NOT added to regular context
+            // They will be applied only when AI cannot answer
+            console.log(`[Context Build] Found ${fallbackInstructions.length} fallback instruction(s) for unknown questions`);
+          }
+          
+          console.log(`[Context Build] Loaded ${alwaysActiveInstructions.length} always-active, ${conditionalInstructions.length} conditional, ${fallbackInstructions.length} fallback instructions (FRESH, not cached)`);
+        }
+      } catch {
+        // Fallback to plain text format (legacy)
+        customInstructionsContext = `CUSTOM BUSINESS INSTRUCTIONS:\nFollow these specific instructions for this business:\n${context.customInstructions}\n\n`;
+        console.log(`[Context Build] Loaded legacy custom instructions (FRESH, not cached)`);
+      }
+    }
+    
+    // Store or clear fallback instructions for use when deflection is detected
+    // IMPORTANT: Always update the cache to prevent stale fallback instructions from being applied
+    if (fallbackInstructions.length > 0) {
+      this.fallbackInstructionsCache.set(context.businessAccountId, fallbackInstructions);
+    } else {
+      // Clear cache when no fallback instructions exist (user may have deleted them)
+      this.fallbackInstructionsCache.delete(context.businessAccountId);
+    }
+    
+    // Phase 3 Task 8: Use cache for business context (FAQs, settings, etc.)
+    // NOTE: customInstructions are handled separately above and prepended to the final result
+    // Content-only K12 (e.g. TopScholar) answers strictly from synced curriculum
+    // via fetch_k12_topic. Omit sales/lead/website/training-doc blocks so the
+    // system prompt stays lean and the model isn't tempted off-curriculum.
+    // The lean variant MUST be cached under its own key: a non-K12 caller (the
+    // widget prewarm has no K12 flags set) would otherwise populate the shared
+    // `context:<id>` entry with the full website/sales context, and the K12 path
+    // would then serve that bloated version, defeating the optimization.
+    const k12ContentOnly = this.isK12ContentOnly(context);
+    const retrievalMode = mode === 'retrieval' && !k12ContentOnly;
+
+    const bundle = await this.getContextBundle(context, retrievalMode ? 'retrieval' : 'legacy');
+    const businessContext = bundle.text;
+    if (bundle.profile && bundle.profile.passages.length > 0 && context.openaiApiKey) {
+      // Background, once per content version: embeddings for page / doc-summary passages.
+      const accountId = context.businessAccountId;
+      ensurePassageVectors(accountId, bundle.profile.passages, texts => embeddingService.generateBatchEmbeddings(texts, accountId)).catch(() => {});
+    }
 
     const elapsed = Date.now() - startTime;
     console.log(`[Context Build] Business context loaded in ${elapsed}ms`);
@@ -5585,7 +5680,11 @@ IMPORTANT: Users booking appointments for future dates is completely normal and 
 
 `;
 
-    let finalContext = dateContext + customInstructionsContext + businessContext;
+    // Retrieval mode: stable content first (custom instructions, business context,
+    // mode prompts, guidelines) and the date last, so the prefix is cacheable.
+    let finalContext = retrievalMode
+      ? customInstructionsContext + businessContext
+      : dateContext + customInstructionsContext + businessContext;
     
     console.log(`[Context Build] Has Custom Instructions: ${finalContext.includes('CUSTOM BUSINESS INSTRUCTIONS')}`);
     console.log(`[Context Build] Custom instructions length: ${customInstructionsContext.length} characters`);
@@ -5842,7 +5941,90 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
 `;
     finalContext += communicationGuidelines;
 
+    if (retrievalMode) {
+      finalContext += buildDateTail(bundle.appointmentBookingEnabled || TIME_SENSITIVE_MESSAGE.test(opts.userMessage || ''));
+    }
+
     return finalContext;
+  }
+
+  /**
+   * Per-turn knowledge for the prompt.
+   *   legacy    — document/URL chunk RAG on the raw message (FAQs are pre-fetched
+   *               separately inside llamaService).
+   *   retrieval — one hybrid, history-aware search over FAQs + document chunks + URL
+   *               chunks + website-page / document-summary passages, de-duplicated and
+   *               token-budgeted (see services/chatContext/knowledgeRetrieval.ts).
+   * `itemCount` is -1 in legacy mode (unknown).
+   */
+  private async buildKnowledgeContext(
+    userMessage: string,
+    history: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
+    context: ChatContext,
+    mode: ChatContextMode,
+  ): Promise<{ text: string; itemCount: number }> {
+    if (mode !== 'retrieval') {
+      return { text: await this.addRAGContext(userMessage, context.businessAccountId), itemCount: -1 };
+    }
+    const msg = (userMessage || '').trim();
+    if (msg.length < 2 || /^(hi+|hey+|hello+|yo|sup|wassup|bye|goodbye|see you|cya|thanks?|thank you|thx|ty)[\s!.]*$/i.test(msg)) {
+      return { text: '', itemCount: 0 };
+    }
+    try {
+      const started = Date.now();
+      const accountId = context.businessAccountId;
+      const bundle = await this.getContextBundle(context, 'retrieval');
+      let query = buildRetrievalQuery(msg, history);
+      // Optional: rewrite short follow-ups into a standalone question with a small LLM
+      // call (off by default — the heuristic query above needs no call).
+      if (query.isFollowUp && process.env.CHAT_QUERY_REWRITE === 'llm' && msg.split(/\s+/).length <= 8) {
+        try {
+          const prior = history.filter(h => h.role === 'user').slice(-2).map(h => h.content).join('\n');
+          const rewritten = await Promise.race([
+            llamaService.generateSimpleResponse(
+              `Rewrite the visitor's last message as one standalone search query, using the earlier messages only to resolve what it refers to. Reply with the query only.\n\nEarlier messages:\n${prior}\n\nLast message: ${msg}`,
+              context.openaiApiKey || undefined,
+            ),
+            new Promise<string>((_, reject) => setTimeout(() => reject(new Error('rewrite timeout')), 2000)),
+          ]);
+          if (rewritten && rewritten.trim().length > 3) {
+            query = { ...query, query: `${rewritten.trim()}\n${query.query}`, primary: `${msg} ${rewritten.trim()}` };
+          }
+        } catch (err) {
+          console.warn('[Knowledge] Query rewrite skipped:', (err as Error)?.message);
+        }
+      }
+      const result = await retrieveKnowledge({
+        businessAccountId: accountId,
+        query,
+        passages: bundle.profile?.passages || [],
+        embedQuery: context.openaiApiKey ? (text) => embeddingService.generateEmbedding(text, accountId) : undefined,
+      });
+      console.log(`[Knowledge] ${result.items.length} item(s) (${result.items.map(i => i.source).join(', ') || 'none'}), ${result.tokens} tokens, from ${result.candidates} candidates in ${Date.now() - started}ms${query.isFollowUp ? ' (follow-up query)' : ''}`);
+      return { text: result.text, itemCount: result.items.length };
+    } catch (error) {
+      console.error('[Knowledge] Retrieval failed (continuing without it):', error);
+      return { text: '', itemCount: 0 };
+    }
+  }
+
+  /** Retrieval-mode extras for the first streaming call (see llamaService StreamPromptOptions). */
+  private async buildFirstCallPromptOptions(
+    context: ChatContext,
+    history: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
+    knowledgePreloaded: boolean,
+  ): Promise<StreamPromptOptions> {
+    const bundle = await this.getContextBundle(context, 'retrieval');
+    const currency = context.currency && context.currencySymbol
+      ? `CURRENCY SETTINGS:\nAll prices should be referenced in ${context.currency} (${context.currencySymbol}). When discussing prices, always use ${context.currencySymbol} as the currency symbol.\n\n`
+      : '';
+    return {
+      businessProfile: `${currency}${bundle.profile?.text || ''}`.trim(),
+      knowledgePreloaded,
+      skipFaqPrefetch: true,
+      modelHistory: capHistoryForModel(history).messages,
+      cacheFriendly: true,
+    };
   }
 
   /**

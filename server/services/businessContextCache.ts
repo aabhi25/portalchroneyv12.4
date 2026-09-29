@@ -22,6 +22,8 @@ export class BusinessContextCache {
     // `context:<id>` entry with the full sales/website context and starve the
     // K12 path of its lean variant.
     BUSINESS_CONTEXT_K12: (businessAccountId: string) => `context:${businessAccountId}:k12co`,
+    // Retrieval-mode website chat: compact profile + retrievable passages (see chatContext/).
+    BUSINESS_CONTEXT_RETRIEVAL: (businessAccountId: string) => `context:${businessAccountId}:rv`,
     INTRO_MESSAGE: (businessAccountId: string) => `intro:${businessAccountId}`,
     WA_BUSINESS_CONTEXT: (businessAccountId: string) => `wa-context:${businessAccountId}`,
   };
@@ -30,6 +32,7 @@ export class BusinessContextCache {
   invalidateBusinessContext(businessAccountId: string) {
     this.invalidate(BusinessContextCache.KEYS.BUSINESS_CONTEXT(businessAccountId));
     this.invalidate(BusinessContextCache.KEYS.BUSINESS_CONTEXT_K12(businessAccountId));
+    this.invalidate(BusinessContextCache.KEYS.BUSINESS_CONTEXT_RETRIEVAL(businessAccountId));
   }
 
   // Invalidation patterns for business account updates
@@ -37,8 +40,8 @@ export class BusinessContextCache {
     const patterns = [
       new RegExp(`^widget:${businessAccountId}$`),
       new RegExp(`^faqs:${businessAccountId}$`),
-      // Catches both `context:<id>` and the `context:<id>:k12co` variant.
-      new RegExp(`^context:${businessAccountId}(:k12co)?$`),
+      // Catches `context:<id>` and the `:k12co` / `:rv` variants.
+      new RegExp(`^context:${businessAccountId}(:k12co|:rv)?$`),
       new RegExp(`^intro:${businessAccountId}$`),
       new RegExp(`^wa-context:${businessAccountId}$`),
     ];

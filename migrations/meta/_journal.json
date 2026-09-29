@@ -29,6 +29,13 @@
       "when": 1790704384032,
       "tag": "0003_social_leads_crm_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790706166902,
+      "tag": "0004_knowledge_vector_hnsw_indexes",
+      "breakpoints": true
     }
   ]
 }
