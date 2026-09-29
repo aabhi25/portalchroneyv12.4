@@ -110,8 +110,8 @@ export async function batchEnrichSentiment(
   const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
   const openai =
     provider === 'gemini'
-      ? createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
-      : createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: effectiveKey });
+      ? createOpenAI({ businessAccountId, timeout: OPENAI_TIMEOUTS.chat, apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
+      : createOpenAI({ businessAccountId, timeout: OPENAI_TIMEOUTS.chat, apiKey: effectiveKey });
 
   let processed = 0;
   let failed = 0;

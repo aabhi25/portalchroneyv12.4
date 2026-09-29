@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { createOpenAI } from "../lib/openaiClient";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db";
 import { businessAccounts, whatsappTemplates } from "@shared/schema";
@@ -110,7 +111,7 @@ export async function suggestAutomationMappings(
   ].join("\n");
 
   try {
-    const openai = new OpenAI({ apiKey, timeout: 20000 });
+    const openai = createOpenAI({ businessAccountId, apiKey, timeout: 20000 });
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0,

@@ -130,7 +130,7 @@ export class WhatsappService {
       };
     }
 
-    const openaiClient = new OpenAI({ apiKey, timeout: 30_000, maxRetries: 1 });
+    const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30_000, maxRetries: 1 });
 
     // Get configured lead fields for this business
     const enabledFields = await this.getEnabledLeadFields(businessAccountId);

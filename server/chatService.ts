@@ -704,7 +704,7 @@ export class ChatService {
   // Simple AI response for spam/gibberish messages - no DB, no tools, just natural response
   private async getSimpleAIResponse(userMessage: string, context: ChatContext): Promise<string> {
     try {
-      const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: context.openaiApiKey! });
+      const openai = createOpenAI({ businessAccountId: context.businessAccountId, timeout: OPENAI_TIMEOUTS.chat, apiKey: context.openaiApiKey! });
       
       const response = await openai.chat.completions.create({
         model: 'gpt-4o-mini',

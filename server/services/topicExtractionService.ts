@@ -17,7 +17,7 @@ export async function extractTopicsOfInterest(
       return [];
     }
     
-    const openai = createOpenAI({ apiKey });
+    const openai = createOpenAI({ businessAccountId, apiKey });
     const messages = await storage.getMessagesByConversation(conversationId, businessAccountId);
     
     if (!messages || messages.length === 0) {

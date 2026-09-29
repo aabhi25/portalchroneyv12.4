@@ -18,7 +18,8 @@ export class ImageProcessingService {
     if (!apiKey) {
       throw new Error('OpenAI API key not configured for this business account');
     }
-    return createOpenAI({ timeout: OPENAI_TIMEOUTS.vision, apiKey });
+    // trackUsage:false — the call on this client is logged via aiUsageLogger.logDocumentAnalysisUsage
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.vision, apiKey, trackUsage: false });
   }
 
   async extractTextFromImage(

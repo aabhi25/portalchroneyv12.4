@@ -57,7 +57,7 @@ class JewelryDetectionService {
       return null;
     }
     
-    return createOpenAI({ timeout: OPENAI_TIMEOUTS.vision, apiKey: openaiApiKey });
+    return createOpenAI({ businessAccountId, timeout: OPENAI_TIMEOUTS.vision, apiKey: openaiApiKey });
   }
 
   async detectJewelry(imageUrl: string, businessAccountId: string): Promise<JewelryDetectionResult> {

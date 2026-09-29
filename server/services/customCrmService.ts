@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { createOpenAI } from "../lib/openaiClient";
 import path from 'path';
 import { eq, and, sql } from 'drizzle-orm';
 import {
@@ -1577,8 +1578,7 @@ export async function resolveStoreCredentialForLead(
       const [bizAcct] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq(businessAccounts.id, businessAccountId)).limit(1);
       const openaiApiKey = bizAcct?.openaiApiKey ? safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
       if (openaiApiKey) {
-        const OpenAI = (await import('openai')).default;
-        const openaiClient = new OpenAI({ apiKey: openaiApiKey, timeout: 15000 });
+        const openaiClient = createOpenAI({ businessAccountId, apiKey: openaiApiKey, timeout: 15000 });
         const storeList = storeCreds.map(sc => ({ id: sc.id, dealerName: sc.dealerName, storeName: sc.storeName, city: sc.city || '', storeId: sc.storeId }));
         const prompt = `Match the lead's store info to the closest store credential.\n\nLead info:\n- Dealer: ${dealerName || 'unknown'}\n- City: ${cityName || 'unknown'}\n- Store: ${storeName || 'unknown'}\n\nAvailable stores (JSON):\n${JSON.stringify(storeList)}\n\nReturn ONLY a JSON object: {"matchedId": "<store id or null>", "confidence": <0.0-1.0>}\nIf no good match exists, return {"matchedId": null, "confidence": 0}`;
         const completion = await openaiClient.chat.completions.create({

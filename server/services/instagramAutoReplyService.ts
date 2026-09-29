@@ -334,7 +334,7 @@ export class InstagramAutoReplyService {
               .filter(c => c.description)
               .map(c => ({ idx: c.originalIndex, desc: c.description! }));
             if (descriptionsToTranslate.length > 0) {
-              const openaiClient = createOpenAI({ apiKey });
+              const openaiClient = createOpenAI({ businessAccountId, apiKey });
               const transResult = await openaiClient.chat.completions.create({
                 model: "gpt-4o-mini",
                 messages: [
@@ -1049,7 +1049,7 @@ IMPORTANT:
     businessAccountId?: string
   ): Promise<{ text: string; productImages?: string[]; productCards?: { name: string; description?: string; price?: number; imageUrl?: string }[]; isProductSelection?: boolean } | null> {
     try {
-      const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
+      const openai = createOpenAI({ businessAccountId, timeout: OPENAI_TIMEOUTS.chat, apiKey });
 
       const now = new Date();
       const istDateFormatter = new Intl.DateTimeFormat('en-IN', {

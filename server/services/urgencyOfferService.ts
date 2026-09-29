@@ -18,7 +18,7 @@ async function getOpenAIForBusiness(businessAccountId: string): Promise<OpenAI |
     return null;
   }
   
-  return createOpenAI({ apiKey });
+  return createOpenAI({ businessAccountId, apiKey });
 }
 
 export interface PurchaseIntentResult {

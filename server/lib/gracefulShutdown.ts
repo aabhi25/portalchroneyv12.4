@@ -140,15 +140,25 @@ export function createGracefulShutdown(opts: GracefulShutdownOptions): ShutdownF
  *   whole server down; Node's default would crash).
  * uncaughtException → log, then graceful shutdown with exit 1 so the
  *   supervisor (pm2) restarts a process whose state may be corrupt.
+ * Both crash paths are also passed to `report` (Sentry, see errorReporter.ts).
  */
-export function installProcessHandlers(shutdown: ShutdownFn, log: Log = defaultLog): void {
+export type ReportFn = (err: unknown, ctx: { source: string; level?: "fatal" | "error" }) => void;
+
+export function installProcessHandlers(shutdown: ShutdownFn, log: Log = defaultLog, report?: ReportFn): void {
+  const safeReport: ReportFn = (err, ctx) => {
+    try { report?.(err, ctx); } catch { /* reporting must never interfere with crash handling */ }
+  };
   process.on("SIGTERM", () => { void shutdown("SIGTERM", 0); });
   process.on("SIGINT", () => { void shutdown("SIGINT", 0); });
   process.on("unhandledRejection", (reason) => {
     log("[Process] Unhandled promise rejection (process kept running):", reason);
+    safeReport(reason, { source: "unhandledRejection", level: "error" });
   });
   process.on("uncaughtException", (err, origin) => {
     log(`[Process] Uncaught exception (${origin}) — shutting down for restart:`, err);
+    // Reported before shutdown starts; the send is flushed by the
+    // "error-reporter" connections hook while the server drains.
+    safeReport(err, { source: `uncaughtException:${origin}`, level: "fatal" });
     void shutdown("uncaughtException", 1);
   });
 }

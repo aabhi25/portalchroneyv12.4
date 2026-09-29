@@ -1,4 +1,5 @@
 import { storage } from "../storage";
+import { reportError } from "../lib/errorReporter";
 import { ShopifyService } from "./shopifyService";
 
 export class ShopifySyncScheduler {
@@ -53,6 +54,7 @@ export class ShopifySyncScheduler {
 
     } catch (error: any) {
       console.error('[Shopify Sync] Error during sync check:', error.message);
+      reportError(error, { source: 'worker:shopify-sync' });
     }
   }
 

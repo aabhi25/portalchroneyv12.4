@@ -1,4 +1,5 @@
 import { databaseBackupService } from "./databaseBackupService";
+import { reportError } from "../lib/errorReporter";
 import { backupJobManager } from "./backupJobManager";
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -57,9 +58,11 @@ class BackupScheduler {
         console.log(`[BackupScheduler] Backup completed — ${result.type} | ${result.filename} | ${((result.size || 0) / 1024 / 1024).toFixed(2)} MB`);
       } else {
         console.error(`[BackupScheduler] Backup failed: ${result.error}`);
+        reportError(new Error(`Scheduled backup failed: ${result.error}`), { source: "worker:backup" });
       }
     } catch (error) {
       console.error("[BackupScheduler] Unexpected error during backup:", error);
+      reportError(error, { source: "worker:backup" });
       backupJobManager.completeJob(jobId, { success: false, error: String(error) });
     }
   }

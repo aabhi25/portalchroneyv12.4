@@ -1,4 +1,5 @@
 import { trackTimer } from "../lib/lifecycle";
+import { reportError } from "../lib/errorReporter";
 import { storage } from "../storage";
 
 // Task #18 — Background sweep that hard-deletes widget conversations that were
@@ -70,6 +71,7 @@ class AwaitingVerificationSweepWorker {
       );
     } catch (err) {
       console.error('[AwaitingVerificationSweep] Tick failed:', err);
+      reportError(err, { source: 'worker:awaiting-verification-sweep' });
     } finally {
       this.running = false;
     }

@@ -17,6 +17,9 @@ import { runMigrations } from "./migrate";
 import { initializePgVector, checkDatabase, endPool } from "./db";
 import type { Server } from "http";
 import { createGracefulShutdown, installProcessHandlers } from "./lib/gracefulShutdown";
+import { reportError, flushErrorReports, getErrorReporter } from "./lib/errorReporter";
+import { requestContextMiddleware } from "./lib/accessLog";
+import { flushUsageRecords } from "./lib/openaiClient";
 import { isShuttingDown, onShutdown } from "./lib/lifecycle";
 import { migrateK12NotesAndVideos } from "./scripts/migrateK12NotesVideos";
 import { shopifySyncScheduler } from "./services/shopifySyncScheduler";
@@ -40,7 +43,10 @@ const shutdown = createGracefulShutdown({
     await Promise.allSettled([endPool(), endExternalContentPools()]);
   },
 });
-installProcessHandlers(shutdown);
+installProcessHandlers(shutdown, undefined, (err, ctx) => reportError(err, ctx));
+// Let queued error reports and AI usage rows go out before the pool closes.
+onShutdown("error-reporter", () => flushErrorReports(3_000), "connections");
+onShutdown("ai-usage-flush", () => flushUsageRecords(), "connections");
 
 // Stop the background schedulers/workers (their timers are also tracked via
 // trackTimer; stop() keeps each worker's own state consistent).
@@ -58,6 +64,10 @@ const app = express();
 // Replit serves the app behind a reverse proxy. Trust the nearest proxy so
 // Express resolves the originating client IP rather than the proxy socket.
 app.set("trust proxy", 1);
+
+// First middleware: X-Request-Id, per-request context (AI usage attribution,
+// error reports) and the one-line access log (JSON in production).
+app.use(requestContextMiddleware());
 
 // Enable gzip compression for all responses (reduces bandwidth by 70-80%)
 // Skip SSE routes — compression buffering breaks streaming
@@ -175,36 +185,6 @@ app.use(express.json({
 app.use(express.urlencoded({ extended: false, limit: '50mb' }));
 app.use(cookieParser(COOKIE_SECRET));
 
-app.use((req, res, next) => {
-  const start = Date.now();
-  const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
-
-  res.on("finish", () => {
-    const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "…";
-      }
-
-      log(logLine);
-    }
-  });
-
-  next();
-});
-
 // Task #4 — build fingerprint. Emit on every boot so deploys can be verified
 // against the version we *think* is running. `BUILD_COMMIT` is supplied at
 // deploy time (e.g. `BUILD_COMMIT=$(git rev-parse --short HEAD) npm start`).
@@ -215,6 +195,9 @@ const BUILD_COMMIT = process.env.BUILD_COMMIT || (() => {
   catch { return 'unknown'; }
 })();
 const BOOTED_AT = new Date().toISOString();
+// Sentry `release`: APP_VERSION when set by the deploy, else the commit.
+if (!process.env.APP_VERSION && BUILD_COMMIT !== 'unknown') process.env.APP_VERSION = BUILD_COMMIT;
+console.log(`[Boot] Error reporting: ${getErrorReporter().enabled ? 'Sentry enabled' : 'disabled (SENTRY_DSN not set)'}`);
 console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} bootedAt=${BOOTED_AT} nodeEnv=${process.env.NODE_ENV || 'development'} verificationDebugBiz=${process.env.VERIFICATION_DEBUG_BIZ_ID || 'off'}`);
 
 (async () => {
@@ -295,10 +278,21 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
   const server = await registerRoutes(app);
   httpServer = server;
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  // Unknown API routes get a JSON 404 (and an honest status in the access log)
+  // instead of falling through to the SPA's index.html with a 200.
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ message: 'Not found' });
+  });
+
+  app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
-    console.error(`[Error] ${status} - ${message}`, err);
+    console.error(`[Error] ${status} - ${message} (requestId=${req.requestId || '-'})`, err);
+    // Only server faults go to Sentry; 4xx (bad JSON, payload too large...) are client errors.
+    if (status >= 500) {
+      reportError(err, { source: "express", tags: { status, method: req.method } });
+    }
+    if (res.headersSent) return _next(err); // let Express close the half-sent response
     res.status(status).json({ message });
   });
 
@@ -379,5 +373,6 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
   // Previously this crashed via the default unhandledRejection behaviour; the
   // global handler now only logs, so exit explicitly and let pm2 retry.
   console.error('[Boot] Fatal startup error — exiting:', err);
+  reportError(err, { source: 'boot', level: 'fatal' });
   void shutdown('startup failure', 1);
 });

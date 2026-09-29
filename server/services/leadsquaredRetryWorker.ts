@@ -1,4 +1,5 @@
 import { trackTimer } from "../lib/lifecycle";
+import { reportError } from "../lib/errorReporter";
 import { storage } from "../storage";
 import { db } from "../db";
 import { leads } from "@shared/schema";
@@ -220,6 +221,7 @@ export class LeadsquaredRetryWorker {
       }
     } catch (error) {
       console.error('[LSQ Retry] Worker error:', error);
+      reportError(error, { source: 'worker:leadsquared-retry' });
     } finally {
       this.isProcessing = false;
     }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createOpenAI } from "../lib/openaiClient";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import OpenAI from "openai";
 import { db } from "../db";
@@ -585,7 +586,7 @@ export const whatsappAiWorkbookService = {
         label: field.label,
         formats: field.formats,
       }));
-      const completion = await new OpenAI({ apiKey, timeout: 15_000 }).chat.completions.create({
+      const completion = await createOpenAI({ businessAccountId, apiKey, timeout: 15_000 }).chat.completions.create({
         model: "gpt-4o-mini",
         temperature: 0,
         response_format: { type: "json_object" },

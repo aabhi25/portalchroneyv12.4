@@ -24,7 +24,8 @@ export class UrlTrainingService {
       throw new Error('OpenAI API key not configured for this business account');
     }
 
-    return createOpenAI({ timeout: OPENAI_TIMEOUTS.longGeneration, apiKey: businessAccount.openaiApiKey });
+    // trackUsage:false — the call on this client is logged via aiUsageLogger.logDocumentAnalysisUsage
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.longGeneration, apiKey: businessAccount.openaiApiKey, trackUsage: false });
   }
 
   async crawlUrl(url: string): Promise<{ title: string; content: string; metaDescription: string }> {

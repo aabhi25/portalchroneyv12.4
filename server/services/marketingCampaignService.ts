@@ -1,4 +1,5 @@
 import { trackTimer } from "../lib/lifecycle";
+import { reportError } from "../lib/errorReporter";
 import { db, pool } from "../db";
 import {
   marketingCampaigns,
@@ -2444,7 +2445,7 @@ export function startCampaignScheduler(): void {
   schedulerStarted = true;
   const interval = 60 * 1000;
   trackTimer(setInterval(() => {
-    marketingCampaignService.runScheduler().catch(err => console.error("[CampaignScheduler] tick error:", err));
+    marketingCampaignService.runScheduler().catch(err => { console.error("[CampaignScheduler] tick error:", err); reportError(err, { source: "worker:campaign-scheduler" }); });
   }, interval));
   console.log("[CampaignScheduler] Started (60s interval)");
 
@@ -2455,7 +2456,7 @@ export function startCampaignScheduler(): void {
   // them to 'expired'.
   const reconcileInterval = 3 * 60 * 1000;
   trackTimer(setInterval(() => {
-    marketingCampaignService.reconcileAllStale().catch(err => console.error("[CampaignScheduler] reconcile tick error:", err));
+    marketingCampaignService.reconcileAllStale().catch(err => { console.error("[CampaignScheduler] reconcile tick error:", err); reportError(err, { source: "worker:campaign-reconcile" }); });
   }, reconcileInterval));
   console.log("[CampaignScheduler] Pull-API reconciler started (3 min interval)");
 }

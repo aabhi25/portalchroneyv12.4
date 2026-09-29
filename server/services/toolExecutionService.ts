@@ -627,7 +627,7 @@ export class ToolExecutionService {
           }
           
           if (apiKey && productsWithMeta.length > 0) {
-            const openai = createOpenAI({ apiKey });
+            const openai = createOpenAI({ businessAccountId: context.businessAccountId, apiKey });
             
             const response = await openai.chat.completions.create({
               model: 'gpt-4o-mini',
@@ -807,7 +807,7 @@ ${productList}`
         return products;
       }
 
-      const openai = createOpenAI({ apiKey });
+      const openai = createOpenAI({ businessAccountId, apiKey });
 
       // Build product list for translation - names only (descriptions translated on-demand in frontend)
       const productsToTranslate = products.map((p, i) => ({
@@ -2468,7 +2468,7 @@ Return JSON:
       if (!apiKey) {
         return this.createErrorResponse('OpenAI API key not configured for this account.');
       }
-      const openai = createOpenAI({ apiKey });
+      const openai = createOpenAI({ businessAccountId, apiKey });
 
       const extractionResponse = await openai.chat.completions.create({
         model: 'gpt-4o-mini',

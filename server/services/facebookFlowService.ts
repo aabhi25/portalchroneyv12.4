@@ -1,4 +1,5 @@
 import { db } from "../db";
+import { createOpenAI } from "../lib/openaiClient";
 import { stripProtectedFields } from "../lib/safeUpdate";
 import {
   facebookFlows,
@@ -103,7 +104,7 @@ export class FacebookFlowService {
       return { extracted: {}, missing: requiredFields };
     }
 
-    const openaiClient = new OpenAI({ apiKey, timeout: 30000 });
+    const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
 
     const fieldsToExtract = requiredFields.filter(f => !this.hasFieldValue(alreadyCollected, f));
 
@@ -209,7 +210,7 @@ Example: {"extracted": {"name": "John", "dob": null}, "followUp": "Thanks John! 
       return { intent: "answer", response: "" };
     }
 
-    const openaiClient = new OpenAI({ apiKey, timeout: 30000 });
+    const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
 
     const fieldLabel = saveToField
       ? saveToField.replace(/_/g, " ").replace(/([A-Z])/g, " $1").toLowerCase().trim()

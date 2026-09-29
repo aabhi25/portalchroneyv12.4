@@ -1,4 +1,5 @@
 import { trackTimer } from "../lib/lifecycle";
+import { createOpenAI } from "../lib/openaiClient";
 import { db } from "../db";
 import { stripProtectedFields } from "../lib/safeUpdate";
 import { UploadAckCoordinator, type AckDocInfo } from "./uploadAckCoordinator";
@@ -318,7 +319,7 @@ export class WhatsappFlowService {
       return { extracted: {}, missing: requiredFields };
     }
 
-    const openaiClient = new OpenAI({ apiKey, timeout: 30000 });
+    const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
 
     const fieldsToExtract = requiredFields.filter(f => !this.hasFieldValue(alreadyCollected, f));
     
@@ -432,7 +433,7 @@ Example: {"extracted": {"name": "John", "dob": null}, "followUp": "Thanks John! 
       return this.generateMissingFieldsPromptStatic(missingFields);
     }
 
-    const openaiClient = new OpenAI({ apiKey, timeout: 30000 });
+    const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
 
     // Format field names for display
     const formatField = (field: string) => 
@@ -515,7 +516,7 @@ Respond with just the message text, no quotes or formatting.`;
       return { intent: "unrelated", response: "Please upload the required documents to continue." };
     }
 
-    const openaiClient = new OpenAI({ apiKey, timeout: 30000 });
+    const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
 
     const normCollected2 = collectedDocTypes.map((k: string) => k.toLowerCase().replace(/_card$/, ''));
     const hasDoc2 = (dt: string) => normCollected2.includes(dt.toLowerCase().replace(/_card$/, ''));
@@ -701,7 +702,7 @@ Return ONLY a valid JSON object:
       return { intent: "answer", response: "" };
     }
 
-    const openaiClient = new OpenAI({ apiKey, timeout: 30000 });
+    const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
 
     const fieldLabel = saveToField
       ? saveToField.replace(/_/g, " ").replace(/([A-Z])/g, " $1").toLowerCase().trim()
@@ -871,7 +872,7 @@ Return ONLY a valid JSON object:
       return { intent: "unknown", response: "" };
     }
 
-    const openaiClient = new OpenAI({ apiKey, timeout: 15000 });
+    const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 15000 });
 
     const contextBlock = flowContext ? `\n${flowContext}\n` : '';
 
@@ -1291,7 +1292,7 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
       return this.parseUpdateDetailsFallback(input);
     }
 
-    const openaiClient = new OpenAI({ apiKey, timeout: 15000 });
+    const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 15000 });
 
     const prompt = `Extract the fields the user wants to update from their message. 
 The user is updating their application details. They may use any format — "Name Rohit", "Name: Rohit", "my name is Rohit", "change address to 123 Main St", etc.
@@ -2397,7 +2398,7 @@ Example: {"name": null, "phone": "9876543210", "email": null, "address": "123 Ma
           try {
             const { apiKey } = await this.getApiKeyForBusiness(businessAccountId);
             if (apiKey) {
-              const openaiClient = new OpenAI({ apiKey, timeout: 15000 });
+              const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 15000 });
               const storeList = storeCreds.map(sc => ({
                 id: sc.id,
                 dealerName: sc.dealerName,
@@ -2543,7 +2544,7 @@ Return ONLY valid JSON (no markdown):
 {"intent": "update_field" | "data_submission" | "none", "fieldsToUpdate": ["key1", "key2"], "response": "short warm acknowledgment OR explanation OR empty string"}`;
 
     try {
-      const openaiClient = new OpenAI({ apiKey, timeout: 15000 });
+      const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 15000 });
       const completion = await openaiClient.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
@@ -2610,7 +2611,7 @@ Return ONLY valid JSON (no markdown):
     if (!apiKey || message.trim().length < 2) return null;
 
     try {
-      const client = new OpenAI({ apiKey, timeout: 12000 });
+      const client = createOpenAI({ businessAccountId, apiKey, timeout: 12000 });
       const completion = await client.chat.completions.create({
         model: "gpt-4o-mini",
         temperature: 0,

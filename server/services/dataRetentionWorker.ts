@@ -1,4 +1,5 @@
 import { trackTimer } from "../lib/lifecycle";
+import { reportError } from "../lib/errorReporter";
 import { recordSystemAuditEvent } from "./auditService";
 import {
   countDueForAccount,
@@ -42,6 +43,7 @@ export class DataRetentionWorker {
       }
     } catch (err) {
       console.error('[Data Retention] Worker error:', err);
+      reportError(err, { source: 'worker:data-retention' });
     } finally {
       this.isProcessing = false;
     }

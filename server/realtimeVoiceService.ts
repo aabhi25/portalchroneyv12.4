@@ -1316,7 +1316,7 @@ export class RealtimeVoiceService {
         return;
       }
 
-      const openai = createOpenAI({ apiKey: conversation.openaiApiKey });
+      const openai = createOpenAI({ apiKey: conversation.openaiApiKey, businessAccountId: conversation.businessAccountId, feature: "voice_transcript_correction", category: "voice_mode" });
       const response = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
@@ -2877,7 +2877,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), VOICE_INTENT_ROUTER_TIMEOUT_MS);
     try {
-      const openai = createOpenAI({ apiKey: conversation.openaiApiKey });
+      const openai = createOpenAI({ apiKey: conversation.openaiApiKey, businessAccountId: conversation.businessAccountId, feature: "voice_intent_router", category: "voice_mode" });
       const result = await openai.chat.completions.create({
         model: VOICE_INTENT_ROUTER_MODEL,
         temperature: 0,
@@ -3304,7 +3304,8 @@ Never infer intent from a single contained word. For example, "What is stop moti
         ? history.map((m) => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${m.content.slice(0, 400)}`).join('\n')
         : '(no earlier messages)';
 
-      const client = createOpenAI({ apiKey: conversation.openaiApiKey });
+      // trackUsage:false — logged below via aiUsageLogger.logUsage (voice_k12_query_rewrite)
+      const client = createOpenAI({ apiKey: conversation.openaiApiKey, trackUsage: false });
       const completion = await client.chat.completions.create({
         model: 'gpt-4o-mini',
         temperature: 0,

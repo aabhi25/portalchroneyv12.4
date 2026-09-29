@@ -239,7 +239,10 @@ class AIUsageLogger {
     }
 
     // Final fallback (gpt-4o-mini pricing)
+    // Cached like a real rate so an unknown model (now common: every OpenAI
+    // call is tracked) costs one DB lookup + one warning per cache TTL, not per call.
     console.warn(`[AIUsageLogger] No pricing found for model ${model}, using gpt-4o-mini pricing as fallback`);
+    this.pricingCache.set(model, DEFAULT_MODEL_PRICING['gpt-4o-mini']);
     return DEFAULT_MODEL_PRICING['gpt-4o-mini'];
   }
 

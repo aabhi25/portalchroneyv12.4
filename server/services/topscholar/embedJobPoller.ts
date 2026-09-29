@@ -1,4 +1,5 @@
 import { trackTimer } from "../../lib/lifecycle";
+import { reportError } from "../../lib/errorReporter";
 import { db } from '../../db';
 import {
   businessAccounts,
@@ -329,7 +330,7 @@ export function startEmbedJobPoller(intervalMs = 60000): void {
     processPendingEmbedJobs().catch((e) => console.error('[TopScholar EmbedPoller] initial run failed:', e));
   }, 5000));
   interval = trackTimer(setInterval(() => {
-    processPendingEmbedJobs().catch((e) => console.error('[TopScholar EmbedPoller] tick failed:', e));
+    processPendingEmbedJobs().catch((e) => { console.error('[TopScholar EmbedPoller] tick failed:', e); reportError(e, { source: 'worker:topscholar-embed-poller' }); });
   }, intervalMs));
   console.log(`[TopScholar EmbedPoller] started (every ${Math.round(intervalMs / 1000)}s)`);
 }

@@ -1,4 +1,6 @@
 import { trackTimer } from "../lib/lifecycle";
+import { reportError } from "../lib/errorReporter";
+import { runWithContext } from "../lib/requestContext";
 import { storage } from "../storage";
 import { chatService } from "../chatService";
 
@@ -159,7 +161,10 @@ class ConversationSummarySweepWorker {
             keyCache.set(businessAccountId, key);
           }
           const openaiApiKey = keyCache.get(businessAccountId) ?? null;
-          const ok = await chatService.summarizeConversationOnIdle(row.id, businessAccountId, openaiApiKey);
+          const ok = await runWithContext(
+            { businessAccountId, feature: 'conversation_summary_sweep' },
+            () => chatService.summarizeConversationOnIdle(row.id, businessAccountId, openaiApiKey),
+          );
           if (ok) {
             summarized += 1;
             this.backoff.delete(row.id);
@@ -184,6 +189,7 @@ class ConversationSummarySweepWorker {
       }
     } catch (err) {
       console.error('[ConversationSummarySweep] Tick failed:', err);
+      reportError(err, { source: 'worker:conversation-summary-sweep' });
     } finally {
       this.running = false;
     }
