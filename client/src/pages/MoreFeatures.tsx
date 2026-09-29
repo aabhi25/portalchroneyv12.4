@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { integrationPath } from "@/pages/settings/settingsPaths";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { LayoutGrid, Sparkles, ClipboardList, Percent, Lightbulb, Link2 } from "lucide-react";
 import type { MeResponseDto } from "@shared/dto";
@@ -9,7 +10,7 @@ const features = [
     title: "CRM",
     description: "Connect your CRM to automatically sync captured leads",
     icon: Link2,
-    path: "/admin/crm",
+    path: integrationPath(),
     color: "bg-purple-100",
     iconColor: "text-purple-600",
   },

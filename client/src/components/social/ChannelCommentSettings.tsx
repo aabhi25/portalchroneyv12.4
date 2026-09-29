@@ -31,7 +31,8 @@ interface CommentSettingsData {
  * replies" toggle is gone: replying to our own comments is always blocked server-side; the
  * commentIgnoreOwnReplies column / API field still exist and are simply not sent.)
  */
-export default function ChannelCommentSettings({ channel }: { channel: SocialChannel }) {
+/** `embedded`: rendered inside the Settings hub, which supplies the page chrome. */
+export default function ChannelCommentSettings({ channel, embedded = false }: { channel: SocialChannel; embedded?: boolean }) {
   const c = SOCIAL_CHANNELS[channel];
   const settingsUrl = `${c.apiBase}/settings`;
   const [, setLocation] = useLocation();
@@ -140,8 +141,8 @@ export default function ChannelCommentSettings({ channel }: { channel: SocialCha
   }
 
   return (
-    <div className={c.usesTabBar ? "min-h-screen bg-gray-50" : "flex flex-col h-full"}>
-      {c.usesTabBar ? (
+    <div className={embedded ? "" : c.usesTabBar ? "min-h-screen bg-gray-50" : "flex flex-col h-full"}>
+      {embedded ? null : c.usesTabBar ? (
         <InstagramTabBar activeTab="comments" />
       ) : (
         <header className="sticky top-0 z-50 flex items-center gap-4 border-b bg-gradient-to-r from-blue-600 to-blue-500 px-4 h-14 shrink-0">
@@ -157,7 +158,7 @@ export default function ChannelCommentSettings({ channel }: { channel: SocialCha
         </header>
       )}
 
-      <div className={c.usesTabBar ? "p-6 space-y-6" : "flex-1 overflow-y-auto p-4 md:p-6 space-y-6 max-w-3xl"}>
+      <div className={embedded ? "space-y-6 max-w-3xl" : c.usesTabBar ? "p-6 space-y-6" : "flex-1 overflow-y-auto p-4 md:p-6 space-y-6 max-w-3xl"}>
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">

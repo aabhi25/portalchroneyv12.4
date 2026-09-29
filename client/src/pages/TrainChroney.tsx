@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dialog";
 import { Brain, Save, Check, Plus, Trash2, Edit2, X, AlertCircle, Sparkles, Loader2, Bold, Italic, GraduationCap, Info, Route, ShieldCheck, AlertTriangle, Lightbulb, TrendingUp, UserCheck, Phone, Mail, MessageSquare, ChevronUp, ChevronDown, User, Settings2, ExternalLink } from "lucide-react";
 import { Link } from "wouter";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { Switch } from "@/components/ui/switch";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
 import { Label } from "@/components/ui/label";
@@ -1929,7 +1930,7 @@ export default function TrainChroney() {
                               <span className="text-xs font-medium text-purple-900 dark:text-purple-200">Verification</span>
                             </div>
                             <Link
-                              href="/admin/otp-settings"
+                              href={SETTINGS_PATHS.otp}
                               data-testid={`link-otp-settings-${field.id}`}
                               className="text-[11px] inline-flex items-center gap-1 text-purple-700 dark:text-purple-300 hover:underline shrink-0"
                             >

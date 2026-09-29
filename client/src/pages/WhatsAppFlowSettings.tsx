@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -530,7 +531,7 @@ export default function WhatsAppFlowSettings() {
             </p>
           </div>
           <Button
-            onClick={() => navigate("/admin/whatsapp-ai-setup")}
+            onClick={() => navigate(SETTINGS_PATHS.whatsappAiReplies)}
             data-testid="button-open-ai-setup"
           >
             Open AI Setup

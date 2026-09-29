@@ -65,7 +65,8 @@ const ACCOUNT_COPY = {
 } as const;
 
 /** Connection + AI auto-reply settings for Instagram or Facebook. */
-export default function ChannelSettings({ channel }: { channel: SocialChannel }) {
+/** `embedded`: rendered inside the Settings hub, which supplies the page chrome. */
+export default function ChannelSettings({ channel, embedded = false }: { channel: SocialChannel; embedded?: boolean }) {
   const c = SOCIAL_CHANNELS[channel];
   const copy = ACCOUNT_COPY[channel];
   const settingsUrl = `${c.apiBase}/settings`;
@@ -157,8 +158,8 @@ export default function ChannelSettings({ channel }: { channel: SocialChannel })
   }
 
   return (
-    <div className={c.usesTabBar ? "min-h-screen bg-gray-50" : "flex flex-col h-full"}>
-      {c.usesTabBar ? (
+    <div className={embedded ? "" : c.usesTabBar ? "min-h-screen bg-gray-50" : "flex flex-col h-full"}>
+      {embedded ? null : c.usesTabBar ? (
         <InstagramTabBar activeTab="" />
       ) : (
         <header className="sticky top-0 z-50 flex items-center gap-4 border-b bg-background px-4 h-14 shrink-0">
@@ -174,7 +175,7 @@ export default function ChannelSettings({ channel }: { channel: SocialChannel })
         </header>
       )}
 
-      <div className={c.usesTabBar ? "p-6 space-y-6" : "flex-1 overflow-y-auto p-4 md:p-6 space-y-6 max-w-3xl"}>
+      <div className={embedded ? "space-y-6 max-w-3xl" : c.usesTabBar ? "p-6 space-y-6" : "flex-1 overflow-y-auto p-4 md:p-6 space-y-6 max-w-3xl"}>
         <Card>
           <CardHeader>
             <CardTitle>Webhook Configuration</CardTitle>

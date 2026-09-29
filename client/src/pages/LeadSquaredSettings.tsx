@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
+import { integrationPath } from "@/pages/settings/settingsPaths";
 import { useQuery } from "@tanstack/react-query";
 import type { MeResponseDto } from "@shared/dto";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,7 +60,8 @@ const DYNAMIC_SOURCE_OPTIONS = [
   { value: 'conversation.topics', label: 'Conversation Topics' },
 ];
 
-export default function LeadSquaredSettings() {
+/** `embedded`: rendered inside the Settings hub, which supplies the page chrome and navigation. */
+export default function LeadSquaredSettings({ embedded = false }: { embedded?: boolean } = {}) {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const { data: currentUser } = useQuery<MeResponseDto>({ queryKey: ["/api/auth/me"] });
@@ -723,7 +725,7 @@ export default function LeadSquaredSettings() {
   if (loading) {
     return (
       <div>
-        <div className="flex items-center justify-center min-h-screen">
+        <div className={`flex items-center justify-center ${embedded ? "py-24" : "min-h-screen"}`}>
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
       </div>
@@ -763,15 +765,17 @@ export default function LeadSquaredSettings() {
           </div>
         ) : (
           <>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="mb-3 -ml-2 text-muted-foreground hover:text-foreground"
-              onClick={() => setLocation("/admin/crm")}
-            >
-              <ArrowLeft className="h-4 w-4 mr-1" />
-              Back to CRM
-            </Button>
+            {!embedded && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mb-3 -ml-2 text-muted-foreground hover:text-foreground"
+                onClick={() => setLocation(integrationPath())}
+              >
+                <ArrowLeft className="h-4 w-4 mr-1" />
+                Back to CRM
+              </Button>
+            )}
             <h1 className="text-3xl font-bold mb-2">LeadSquared CRM Integration</h1>
             <p className="text-muted-foreground">
               Automatically sync captured leads to your LeadSquared CRM account

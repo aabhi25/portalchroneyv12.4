@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -88,14 +89,15 @@ interface LeadField {
 
 const parseUTCDate = (d: string) => new Date(d.endsWith('Z') ? d : d + 'Z');
 
-export default function InstagramLeads() {
+/** `embeddedPage` renders the lead-capture settings inside the Settings hub, without the tab bar. */
+export default function InstagramLeads({ embeddedPage }: { embeddedPage?: "lead-capture-settings" } = {}) {
   const [location, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const currentPage = location.includes("instagram-lead-capture-settings")
+  const currentPage = embeddedPage ?? (location.includes("instagram-lead-capture-settings")
     ? "lead-capture-settings"
-    : "leads";
+    : "leads");
 
   const [leadsPage, setLeadsPage] = useState(1);
   const [leadToDelete, setLeadToDelete] = useState<InstagramLead | null>(null);
@@ -247,10 +249,10 @@ export default function InstagramLeads() {
   });
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <InstagramTabBar activeTab="leads" />
+    <div className={embeddedPage ? "" : "min-h-screen bg-gray-50"}>
+      {!embeddedPage && <InstagramTabBar activeTab="leads" />}
 
-      <div className="p-6">
+      <div className={embeddedPage ? "" : "p-6"}>
         {currentPage === "leads" && (
           <Card className="shadow-lg border-0 rounded-xl overflow-hidden">
             <CardHeader className="flex flex-row items-center justify-between pb-4 bg-gradient-to-r from-pink-50 via-purple-50 to-indigo-50 border-b">
@@ -276,7 +278,7 @@ export default function InstagramLeads() {
                       variant="outline"
                       size="icon"
                       className="rounded-full h-9 w-9 border-slate-200 hover:bg-slate-100 transition-colors"
-                      onClick={() => setLocation("/admin/instagram-lead-capture-settings")}
+                      onClick={() => setLocation(SETTINGS_PATHS.instagramLeadCapture)}
                     >
                       <Settings className="h-4 w-4 text-slate-500" />
                     </Button>

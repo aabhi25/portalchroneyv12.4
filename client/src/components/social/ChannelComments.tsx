@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useLocation } from "wouter";
+import { socialSettingsPath } from "@/pages/settings/settingsPaths";
 import { ArrowLeft, MessageSquareText, Loader2, CheckCircle, XCircle, Clock, SkipForward, Settings } from "lucide-react";
 import InstagramTabBar from "@/components/InstagramTabBar";
 import { SOCIAL_CHANNELS, type SocialChannel } from "./channelConfig";
@@ -93,7 +94,7 @@ export default function ChannelComments({ channel }: { channel: SocialChannel })
     <Button
       variant="outline"
       size="sm"
-      onClick={() => setLocation(c.adminPath("comment-settings"))}
+      onClick={() => setLocation(socialSettingsPath(channel, "comments"))}
       className={className}
     >
       <Settings className="w-4 h-4 mr-1.5" />

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { integrationPath } from "@/pages/settings/settingsPaths";
 import { useQuery } from "@tanstack/react-query";
 import type { MeResponseDto } from "@shared/dto";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -41,7 +42,8 @@ const sectionTitles: Record<string, string> = {
   mappings: 'Field Mappings',
 };
 
-export default function SalesforceSettings() {
+/** `embedded`: rendered inside the Settings hub, which supplies the page chrome and navigation. */
+export default function SalesforceSettings({ embedded = false }: { embedded?: boolean } = {}) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { data: currentUser } = useQuery<MeResponseDto>({ queryKey: ["/api/auth/me"] });
@@ -241,10 +243,12 @@ export default function SalesforceSettings() {
           </div>
         ) : (
           <>
-            <Button variant="ghost" size="sm" className="mb-3 -ml-2 text-muted-foreground hover:text-foreground" onClick={() => setLocation("/admin/crm")}>
-              <ArrowLeft className="h-4 w-4 mr-1" />
-              Back to CRM
-            </Button>
+            {!embedded && (
+              <Button variant="ghost" size="sm" className="mb-3 -ml-2 text-muted-foreground hover:text-foreground" onClick={() => setLocation(integrationPath())}>
+                <ArrowLeft className="h-4 w-4 mr-1" />
+                Back to CRM
+              </Button>
+            )}
             <h1 className="text-3xl font-bold mb-2">Salesforce CRM Integration</h1>
             <p className="text-muted-foreground">Automatically sync captured leads to your Salesforce account</p>
           </>

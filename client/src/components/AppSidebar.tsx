@@ -18,6 +18,7 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { WhatsAppNavSections } from "@/components/whatsapp/WhatsAppNavSections";
 import { isWhatsappLocation } from "@/components/whatsapp/sections";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { Button } from "@/components/ui/button";
 import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Sparkles, Settings, Brain, BarChart3, MessageSquare, ShoppingBag, Calendar, GraduationCap, ChevronRight, Presentation, FileText, Key, LifeBuoy, ClipboardList, Route, Link2, Users, DollarSign, Percent, HardDrive, Gem, Image, Database, Camera, Cloud, Globe, Lightbulb, MessageCircle, MoreHorizontal, Bot, TrendingUp, Zap, BookOpen, Library, HelpCircle as QuizIcon, Briefcase, UserCircle, Terminal, PackageOpen, Megaphone, FileCode2, UsersRound, ScrollText, Gauge } from "lucide-react";
 
@@ -216,14 +217,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
                         gradient="bg-gradient-to-br from-purple-500 to-violet-600"
                       />
                       <NavItem
-                        icon={Settings}
-                        label="Widget"
-                        onClick={() => setLocation("/admin/widget-settings")}
-                        isActive={location === "/admin/widget-settings"}
-                        testId="link-widget"
-                        gradient="bg-gradient-to-br from-gray-500 to-slate-600"
-                      />
-                      <NavItem
                         icon={GraduationCap}
                         label="Training"
                         onClick={() => setLocation("/admin/training")}
@@ -323,14 +316,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
                         />
                       )}
                       <NavItem
-                        icon={Settings}
-                        label="Widget"
-                        onClick={() => setLocation("/admin/widget-settings")}
-                        isActive={location === "/admin/widget-settings"}
-                        testId="link-widget"
-                        gradient="bg-gradient-to-br from-gray-500 to-slate-600"
-                      />
-                      <NavItem
                         icon={GraduationCap}
                         label="Training"
                         onClick={() => setLocation("/admin/training")}
@@ -396,7 +381,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
                         icon={Globe}
                         label="Website"
                         onClick={() => setLocation("/admin/website")}
-                        isActive={location === "/admin/website" || location === "/conversations" || location === "/admin/leads" || location === "/tickets" || location.startsWith("/tickets/") || location === "/insights" || location === "/admin/widget-settings"}
+                        isActive={location === "/admin/website" || location === "/conversations" || location === "/admin/leads" || location === "/tickets" || location.startsWith("/tickets/") || location === "/insights"}
                         testId="link-website-agent"
                         gradient="bg-gradient-to-br from-violet-500 to-purple-600"
                       />
@@ -507,14 +492,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
                       testId="link-insights"
                       gradient="bg-gradient-to-br from-orange-500 to-amber-600"
                     />
-                    <NavItem
-                      icon={Settings}
-                      label="Widget"
-                      onClick={() => setLocation("/admin/widget-settings")}
-                      isActive={location === "/admin/widget-settings"}
-                      testId="link-widget"
-                      gradient="bg-gradient-to-br from-gray-500 to-slate-600"
-                    />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
@@ -578,14 +555,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
                       testId="link-ig-comments"
                       gradient="bg-gradient-to-br from-rose-500 to-pink-600"
                     />
-                    <NavItem
-                      icon={Settings}
-                      label="Settings"
-                      onClick={() => setLocation("/admin/instagram-settings")}
-                      isActive={location === "/admin/instagram-settings"}
-                      testId="link-ig-settings"
-                      gradient="bg-gradient-to-br from-gray-500 to-slate-600"
-                    />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
@@ -634,14 +603,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
                       isActive={location === "/admin/facebook-comments"}
                       testId="link-fb-comments"
                       gradient="bg-gradient-to-br from-rose-500 to-pink-600"
-                    />
-                    <NavItem
-                      icon={Settings}
-                      label="Settings"
-                      onClick={() => setLocation("/admin/facebook-settings")}
-                      isActive={location === "/admin/facebook-settings"}
-                      testId="link-fb-settings"
-                      gradient="bg-gradient-to-br from-gray-500 to-slate-600"
                     />
                   </SidebarMenu>
                 </SidebarGroupContent>
@@ -739,7 +700,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
                       icon={MoreHorizontal}
                       label="More"
                       onClick={() => setLocation("/admin/more")}
-                      isActive={location === "/admin/more" || location.startsWith("/admin/menu-builder") || location === "/ai-insights" || location === "/question-bank" || location === "/admin/smart-discounts" || location.startsWith("/guidance-campaigns") || location === "/admin/crm" || location === "/admin/leadsquared" || location === "/admin/salesforce" || location === "/admin/custom-crm"}
+                      isActive={location === "/admin/more" || location.startsWith("/admin/menu-builder") || location === "/ai-insights" || location === "/question-bank" || location === "/admin/smart-discounts" || location.startsWith("/guidance-campaigns")}
                       testId="link-more"
                       gradient="bg-gradient-to-br from-gray-500 to-slate-600"
                     />
@@ -792,21 +753,11 @@ export function AppSidebar({ user }: AppSidebarProps) {
 
       <SidebarFooter className="p-3 border-t border-gray-100/80">
         <SidebarMenu className="space-y-0.5">
-          {showBusinessNav && (
-            <NavItem
-              icon={Gauge}
-              label="Usage"
-              onClick={() => setLocation("/admin/usage")}
-              isActive={location === "/admin/usage"}
-              testId="link-usage"
-              gradient="bg-gradient-to-br from-teal-500 to-emerald-600"
-            />
-          )}
           <NavItem
             icon={Settings}
             label="Settings"
-            onClick={() => setLocation(isSuperAdmin && !isSuperAdminImpersonating ? "/super-admin/settings" : "/admin/settings")}
-            isActive={location === "/admin/settings" || location === "/super-admin/settings"}
+            onClick={() => setLocation(isSuperAdmin && !isSuperAdminImpersonating ? "/super-admin/settings" : SETTINGS_PATHS.root)}
+            isActive={location === SETTINGS_PATHS.root || location.startsWith(`${SETTINGS_PATHS.root}/`) || location === "/super-admin/settings"}
             testId="link-settings"
             gradient="bg-gradient-to-br from-slate-500 to-gray-600"
           />

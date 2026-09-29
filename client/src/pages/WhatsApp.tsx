@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
 import { useQuery, useMutation, useInfiniteQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -398,7 +399,12 @@ async function readWorkbookFromFile(file: File): Promise<Record<string, unknown>
   return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "", raw: false });
 }
 
-export default function WhatsApp() {
+/**
+ * `embeddedPage` renders one of the settings screens inside the Settings hub
+ * (/admin/settings/channels/whatsapp/...) without this page's own header; the screen is then
+ * chosen by the prop instead of by the URL.
+ */
+export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "lead-capture-settings" } = {}) {
   const [location, setLocation] = useLocation();
   const [copied, setCopied] = useState(false);
   const [selectedLead, setSelectedLead] = useState<WhatsappLead | null>(null);
@@ -439,7 +445,7 @@ export default function WhatsApp() {
     return () => clearTimeout(timer);
   }, [conversationSearch]);
 
-  const currentPage = location.includes("whatsapp-conversations") 
+  const currentPage = embeddedPage ?? (location.includes("whatsapp-conversations") 
     ? "conversations" 
     : location.includes("whatsapp-lead-capture-settings")
     ? "lead-capture-settings"
@@ -453,7 +459,7 @@ export default function WhatsApp() {
     ? "whitelist"
     : location.includes("whatsapp-leads") 
     ? "leads" 
-    : "home";
+    : "home")
 
   const [msg91AuthKey, setMsg91AuthKey] = useState("");
   const [whatsappNumber, setWhatsappNumber] = useState("");
@@ -1105,24 +1111,26 @@ export default function WhatsApp() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 relative overflow-hidden">
+    <div className={embeddedPage ? "relative" : "min-h-screen bg-gray-50 relative overflow-hidden"}>
       {currentPage === "home" && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden="true">
           <MessageCircle className="w-[400px] h-[400px] text-green-500/[0.04]" strokeWidth={1} />
         </div>
       )}
-      <header className="bg-white border-b px-4 py-3 flex items-center gap-4 relative z-10">
-        <SidebarTrigger />
-        <div className="flex items-center gap-2">
-          <div className="p-1 rounded-lg bg-green-500">
-            <MessageCircle className="w-4 h-4 text-white" />
+      {!embeddedPage && (
+        <header className="bg-white border-b px-4 py-3 flex items-center gap-4 relative z-10">
+          <SidebarTrigger />
+          <div className="flex items-center gap-2">
+            <div className="p-1 rounded-lg bg-green-500">
+              <MessageCircle className="w-4 h-4 text-white" />
+            </div>
+            <h1 className="text-lg font-semibold">WhatsApp</h1>
           </div>
-          <h1 className="text-lg font-semibold">WhatsApp</h1>
-        </div>
-      </header>
+        </header>
+      )}
 
 
-      <div className="p-6 relative z-10">
+      <div className={embeddedPage ? "relative z-10" : "p-6 relative z-10"}>
         {currentPage === "home" && (
           <WhatsAppHub marketingEnabled={hasWhatsappMarketingEnabled} />
         )}
@@ -1886,7 +1894,7 @@ export default function WhatsApp() {
                         variant="outline"
                         size="icon"
                         className="rounded-full h-9 w-9 border-slate-200 hover:bg-slate-100 transition-colors"
-                        onClick={() => setLocation("/admin/whatsapp-lead-capture-settings")}
+                        onClick={() => setLocation(SETTINGS_PATHS.whatsappLeadCapture)}
                       >
                         <Settings className="h-4 w-4 text-slate-500" />
                       </Button>
@@ -4007,7 +4015,7 @@ function FlowBuilderSection() {
             <CardTitle>Conversation Flows</CardTitle>
           </div>
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => setLocation("/admin/whatsapp-flow-settings")}>
+            <Button size="sm" variant="outline" onClick={() => setLocation(SETTINGS_PATHS.whatsappFlowSettings)}>
               <Settings className="h-4 w-4" />
             </Button>
             <Button size="sm" onClick={() => setShowNewFlowDialog(true)}>

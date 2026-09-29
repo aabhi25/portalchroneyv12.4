@@ -4,6 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowRight, ArrowLeft, CheckCircle2 } from "lucide-react";
 import { useLocation } from "wouter";
+import { integrationPath, type IntegrationTabId } from "@/pages/settings/settingsPaths";
+
+const isIntegrationTab = (id: string): id is IntegrationTabId =>
+  id === "leadsquared" || id === "salesforce" || id === "custom-crm";
 
 interface CrmIntegration {
   id: string;
@@ -14,7 +18,8 @@ interface CrmIntegration {
   route: string;
 }
 
-export default function CRMIntegrations() {
+/** `embedded`: rendered inside the Settings hub, which supplies the page chrome and navigation. */
+export default function CRMIntegrations({ embedded = false }: { embedded?: boolean } = {}) {
   const [, setLocation] = useLocation();
   const [integrations, setIntegrations] = useState<CrmIntegration[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,7 +43,7 @@ export default function CRMIntegrations() {
 
   return (
     <div>
-      <div className="container mx-auto p-6 max-w-6xl">
+      <div className={embedded ? "" : "container mx-auto p-6 max-w-6xl"}>
         {cameFromWhatsApp && (
           <Button
             variant="ghost"
@@ -52,12 +57,14 @@ export default function CRMIntegrations() {
             Back to WhatsApp
           </Button>
         )}
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold mb-2">CRM Integrations</h1>
-          <p className="text-muted-foreground">
-            Connect your favorite CRM to automatically sync leads captured by Chroney
-          </p>
-        </div>
+        {!embedded && (
+          <div className="mb-6">
+            <h1 className="text-3xl font-bold mb-2">CRM Integrations</h1>
+            <p className="text-muted-foreground">
+              Connect your favorite CRM to automatically sync leads captured by Chroney
+            </p>
+          </div>
+        )}
 
         {!loading && loadError && (
           <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
@@ -120,7 +127,7 @@ export default function CRMIntegrations() {
                       )}
 
                       <Button
-                        onClick={() => setLocation(crm.route)}
+                        onClick={() => setLocation(isIntegrationTab(crm.id) ? integrationPath(crm.id) : crm.route)}
                         disabled={!crm.available}
                         className={crm.available ? "w-full bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600" : "w-full"}
                         variant={crm.available ? "default" : "outline"}

@@ -29,8 +29,8 @@ import SupportTickets from "@/pages/support-tickets";
 import TicketDetail from "@/pages/ticket-detail";
 import AutomationAnalytics from "@/pages/automation-analytics";
 import About from "@/pages/About";
-import WidgetSettings from "@/pages/WidgetSettings";
-import Settings from "@/pages/Settings";
+import SettingsHub from "@/pages/SettingsHub";
+import { SETTINGS_PATHS, LEGACY_SETTINGS_REDIRECTS } from "@/pages/settings/settingsPaths";
 import TrainChroney from "@/pages/TrainChroney";
 import Insights from "@/pages/Insights";
 import AIInsights from "@/pages/AIInsights";
@@ -41,7 +41,6 @@ import SuperAdminSettings from "@/pages/SuperAdminSettings";
 import SuperAdminInsights from "@/pages/SuperAdminInsights";
 import SuperAdminCosts from "@/pages/SuperAdminCosts";
 import SuperAdminUsage from "@/pages/SuperAdminUsage";
-import Usage from "@/pages/Usage";
 import GroupAdminUsage from "@/pages/GroupAdminUsage";
 import SuperAdminMIS from "@/pages/SuperAdminMIS";
 import SuperAdminDemo from "@/pages/SuperAdminDemo";
@@ -67,9 +66,6 @@ import VoiceOrbEmbed from "@/pages/VoiceOrbEmbed";
 import ImportExcel from "@/pages/ImportExcel";
 import Shopify from "@/pages/Shopify";
 import DemoOrders from "@/pages/DemoOrders";
-import ErpSettings from "@/pages/ErpSettings";
-import CategorySettings from "@/pages/CategorySettings";
-import LeadSquaredSettings from "@/pages/LeadSquaredSettings";
 import ScanDocs from "@/pages/ScanDocs";
 import UrlTraining from "@/pages/UrlTraining";
 import ConversationJourneys from "@/pages/ConversationJourneys";
@@ -83,7 +79,6 @@ import ExitIntentSettings from "@/pages/ExitIntentSettings";
 import IdleTimeoutSettings from "@/pages/IdleTimeoutSettings";
 import JewelryShowcase from "@/pages/JewelryShowcase";
 import VistaInsights from "@/pages/VistaInsights";
-import VisualSearchSettings from "@/pages/VisualSearchSettings";
 import Uploads from "@/pages/Uploads";
 import SuperAdminGooglePhotos from "@/pages/SuperAdminGooglePhotos";
 import JewelryImageGenerator from "@/pages/JewelryImageGenerator";
@@ -93,33 +88,24 @@ import GroupAnalytics from "@/pages/GroupAnalytics";
 import RazorpayRizeDemo from "@/pages/RazorpayRizeDemo";
 import WhatsApp from "@/pages/WhatsApp";
 import WhatsAppSectionHub from "@/pages/WhatsAppSectionHub";
-import WhatsAppFlowSettings from "@/pages/WhatsAppFlowSettings";
 import StoreSheet from "@/pages/StoreSheet";
 import WhatsAppAISetup from "@/pages/WhatsAppAISetup";
 import DocumentTypeEditor from "@/pages/DocumentTypeEditor";
 import WAInsights from "@/pages/WAInsights";
-import InstagramSettings from "@/pages/InstagramSettings";
 import InstagramConversations from "@/pages/InstagramConversations";
 import InstagramFlows from "@/pages/InstagramFlows";
 import InstagramLeads from "@/pages/InstagramLeads";
 import InstagramInsights from "@/pages/InstagramInsights";
 import InstagramComments from "@/pages/InstagramComments";
-import InstagramCommentSettings from "@/pages/InstagramCommentSettings";
 import InstagramHome from "@/pages/InstagramHome";
 import FacebookHome from "@/pages/FacebookHome";
-import FacebookSettings from "@/pages/FacebookSettings";
 import FacebookConversations from "@/pages/FacebookConversations";
 import FacebookLeads from "@/pages/FacebookLeads";
 import FacebookFlows from "@/pages/FacebookFlows";
 import FacebookInsights from "@/pages/FacebookInsights";
 import FacebookComments from "@/pages/FacebookComments";
-import FacebookCommentSettings from "@/pages/FacebookCommentSettings";
 import TrainingHome from "@/pages/TrainingHome";
 import MoreFeatures from "@/pages/MoreFeatures";
-import CRMIntegrations from "@/pages/CRMIntegrations";
-import SalesforceSettings from "@/pages/SalesforceSettings";
-import CustomCrmSettings from "@/pages/CustomCrmSettings";
-import OtpSettings from "@/pages/OtpSettings";
 import MenuBuilder from "@/pages/MenuBuilder";
 import SmartReplies from "@/pages/SmartReplies";
 import WebsiteAgent from "@/pages/WebsiteAgent";
@@ -292,6 +278,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/group-admin/insights" component={GroupAdminInsights} />
                 <Route path="/group-admin/group-analytics" component={GroupAnalytics} />
                 <Route path="/group-admin/usage" component={GroupAdminUsage} />
+                <Route path={SETTINGS_PATHS.root}>{() => <SettingsHub user={user} />}</Route>
+                <Route path={`${SETTINGS_PATHS.root}/*`}>{() => <SettingsHub user={user} />}</Route>
               </>
             ) : (
               <>
@@ -313,7 +301,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                       return <Redirect to="/admin/whatsapp-leads" />;
                     }
                     if (user?.businessAccount?.instagramEnabled === true && user?.businessAccount?.chroneyEnabled !== true && user?.businessAccount?.whatsappEnabled !== true) {
-                      return <Redirect to="/admin/instagram-settings" />;
+                      return <Redirect to={SETTINGS_PATHS.instagramConnection} />;
                     }
                     return <Home />;
                   })()}
@@ -321,7 +309,6 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/insights">
                   {() => isTopScholarAccount ? <Redirect to="/admin/topscholar/analytics" /> : <Insights />}
                 </Route>
-                <Route path="/admin/category-settings" component={CategorySettings} />
                 <Route path="/ai-insights" component={AIInsights} />
                 <Route path="/conversations" component={Conversations} />
                 <Route path="/train-chroney" component={TrainChroney} />
@@ -346,8 +333,6 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/products/import-excel" component={ImportExcel} />
                 <Route path="/admin/shopify" component={Shopify} />
                 <Route path="/admin/demo-orders" component={DemoOrders} />
-                <Route path="/admin/erp" component={ErpSettings} />
-                <Route path="/admin/visual-search-settings" component={VisualSearchSettings} />
                 <Route path="/admin/smart-discounts" component={SmartDiscountsHub} />
                 <Route path="/admin/smart-discounts/urgency-offers" component={UrgencyOffersSettings} />
                 <Route path="/admin/smart-discounts/exit-intent" component={ExitIntentSettings} />
@@ -356,11 +341,6 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/vista-insights" component={VistaInsights} />
                 <Route path="/admin/uploads" component={Uploads} />
                 <Route path="/admin/jewelry-image-generator" component={JewelryImageGenerator} />
-                <Route path="/admin/crm" component={CRMIntegrations} />
-                <Route path="/admin/leadsquared" component={LeadSquaredSettings} />
-                <Route path="/admin/salesforce" component={SalesforceSettings} />
-                <Route path="/admin/custom-crm" component={CustomCrmSettings} />
-                <Route path="/admin/otp-settings" component={OtpSettings} />
                 <Route path="/admin/faqs" component={AdminFaqs} />
                 <Route path="/admin/leads" component={AdminLeads} />
                 <Route path="/question-bank" component={QuestionBank} />
@@ -384,16 +364,13 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                   }}
                 </Route>
                 <Route path="/admin/whatsapp-hub/:sectionId" component={WhatsAppSectionHub} />
-                <Route path="/admin/whatsapp-conversations" component={WhatsApp} />
-                <Route path="/admin/whatsapp-leads" component={WhatsApp} />
-                <Route path="/admin/whatsapp-lead-capture-settings" component={WhatsApp} />
-                <Route path="/admin/whatsapp-flows" component={WhatsApp} />
-                <Route path="/admin/whatsapp-flow-settings" component={WhatsAppFlowSettings} />
+                <Route path="/admin/whatsapp-conversations">{() => <WhatsApp />}</Route>
+                <Route path="/admin/whatsapp-leads">{() => <WhatsApp />}</Route>
+                <Route path="/admin/whatsapp-flows">{() => <WhatsApp />}</Route>
                 <Route path="/admin/whatsapp-dealers-stores" component={StoreSheet} />
                 <Route path="/admin/whatsapp-ai-setup" component={WhatsAppAISetup} />
                 <Route path="/admin/document-type-editor/:id" component={DocumentTypeEditor} />
                 <Route path="/admin/document-type-editor" component={DocumentTypeEditor} />
-                <Route path="/admin/whatsapp-config" component={WhatsApp} />
                 <Route path="/admin/whatsapp-smart-replies">{() => <SmartReplies channel="whatsapp" />}</Route>
                 <Route path="/admin/whatsapp-campaign-conversations">{() => <RequireWhatsappMarketing><WhatsAppCampaignConversations /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-ai-workbooks/:id">{({ id }) => <RequireWhatsappMarketing><WhatsAppAiWorkbooks id={id} /></RequireWhatsappMarketing>}</Route>
@@ -409,40 +386,38 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/whatsapp-templates">{() => <RequireWhatsappMarketing><WhatsAppTemplates /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-contact-groups/:id">{() => <RequireWhatsappMarketing><WhatsAppContactGroupDetail /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-contact-groups">{() => <RequireWhatsappMarketing><WhatsAppContactGroups /></RequireWhatsappMarketing>}</Route>
-                <Route path="/admin/whatsapp-whitelist" component={WhatsApp} />
+                <Route path="/admin/whatsapp-whitelist">{() => <WhatsApp />}</Route>
                 <Route path="/admin/wa-insights" component={WAInsights} />
                 <Route path="/admin/training" component={TrainingHome} />
                 <Route path="/admin/instagram" component={InstagramHome} />
-                <Route path="/admin/instagram-settings" component={InstagramSettings} />
                 <Route path="/admin/instagram-conversations" component={InstagramConversations} />
                 <Route path="/admin/instagram-flows" component={InstagramFlows} />
-                <Route path="/admin/instagram-leads" component={InstagramLeads} />
-                <Route path="/admin/instagram-lead-capture-settings" component={InstagramLeads} />
+                <Route path="/admin/instagram-leads">{() => <InstagramLeads />}</Route>
                 <Route path="/admin/instagram-insights" component={InstagramInsights} />
                 <Route path="/admin/instagram-comments" component={InstagramComments} />
-                <Route path="/admin/instagram-comment-settings" component={InstagramCommentSettings} />
                 <Route path="/admin/instagram-smart-replies">{() => <SmartReplies channel="instagram" />}</Route>
                 <Route path="/admin/facebook" component={FacebookHome} />
-                <Route path="/admin/facebook-settings" component={FacebookSettings} />
                 <Route path="/admin/facebook-conversations" component={FacebookConversations} />
                 <Route path="/admin/facebook-leads" component={FacebookLeads} />
                 <Route path="/admin/facebook-flows" component={FacebookFlows} />
                 <Route path="/admin/facebook-insights" component={FacebookInsights} />
                 <Route path="/admin/facebook-comments" component={FacebookComments} />
-                <Route path="/admin/facebook-comment-settings" component={FacebookCommentSettings} />
                 <Route path="/admin/facebook-smart-replies">{() => <SmartReplies channel="facebook" />}</Route>
                 <Route path="/admin/about" component={About} />
                 <Route path="/admin/scan-docs" component={ScanDocs} />
                 <Route path="/admin/url-training" component={UrlTraining} />
                 <Route path="/admin/website" component={WebsiteAgent} />
-                <Route path="/admin/widget-settings" component={WidgetSettings} />
                 <Route path="/admin/more">{() => <MoreFeatures user={user} />}</Route>
                 <Route path="/admin/menu-builder" component={MenuBuilder} />
                 <Route path="/admin/smart-replies">
                   <SmartReplies channel="website" headerContent={<TrainingNavTabs />} />
                 </Route>
-                <Route path="/admin/settings" component={Settings} />
-                <Route path="/admin/usage" component={Usage} />
+                {/* Settings hub. Old standalone settings routes redirect into it (query string kept). */}
+                <Route path={SETTINGS_PATHS.root}>{() => <SettingsHub user={user} />}</Route>
+                <Route path={`${SETTINGS_PATHS.root}/*`}>{() => <SettingsHub user={user} />}</Route>
+                {Object.entries(LEGACY_SETTINGS_REDIRECTS).map(([from, to]) => (
+                  <Route key={from} path={from}>{() => <Redirect to={`${to}${window.location.search}`} replace />}</Route>
+                ))}
               </>
             )}
             <Route component={NotFound} />

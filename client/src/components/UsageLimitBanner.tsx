@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { AlertTriangle } from "lucide-react";
 import { formatUsd, type UsageLimit } from "@/components/usage/usageFormat";
 
@@ -37,7 +38,7 @@ export function UsageLimitBanner() {
       <span className="flex-1">
         {text} <span className="opacity-80">({formatUsd(data?.spentUsd ?? 0)} of {formatUsd(limit.monthlyLimitUsd)})</span>
       </span>
-      <button type="button" className="underline font-medium" onClick={() => setLocation("/admin/usage")}>View usage</button>
+      <button type="button" className="underline font-medium" onClick={() => setLocation(SETTINGS_PATHS.usage)}>View usage</button>
     </div>
   );
 }

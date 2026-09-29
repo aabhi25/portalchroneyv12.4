@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Card, CardContent } from "@/components/ui/card";
@@ -76,7 +77,7 @@ export default function WebsiteAgent() {
       bg: "bg-slate-50",
       hoverBg: "group-hover:bg-slate-100",
       text: "text-slate-600",
-      path: "/admin/widget-settings",
+      path: SETTINGS_PATHS.website,
       show: true,
     },
   ];

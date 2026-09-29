@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { socialSettingsPath } from "@/pages/settings/settingsPaths";
 import { Card, CardContent } from "@/components/ui/card";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Users, MessageCircle, MessageSquareText, Route, BarChart3, Settings, Camera, Square, Zap, type LucideIcon } from "lucide-react";
@@ -76,7 +77,7 @@ export default function ChannelHome({ channel }: { channel: SocialChannel }) {
               <Card
                 key={tile.page}
                 className={`cursor-pointer hover:shadow-md ${cls.card} transition-all group`}
-                onClick={() => setLocation(c.adminPath(tile.page))}
+                onClick={() => setLocation(tile.page === "settings" ? socialSettingsPath(channel, "connection") : c.adminPath(tile.page))}
                 data-testid={`tile-${channel}-${tile.page}`}
               >
                 <CardContent className="pt-6 flex flex-col items-center gap-3 text-center">

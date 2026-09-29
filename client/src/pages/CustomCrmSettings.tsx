@@ -67,7 +67,8 @@ const sectionTitles: Record<string, string> = {
   stores: 'Store Credentials',
 };
 
-export default function CustomCrmSettings() {
+/** `embedded`: rendered inside the Settings hub, which supplies the page chrome and navigation. */
+export default function CustomCrmSettings({ embedded = false }: { embedded?: boolean } = {}) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { data: currentUser } = useQuery<MeResponseDto>({ queryKey: ["/api/auth/me"] });
@@ -700,7 +701,7 @@ export default function CustomCrmSettings() {
   if (loading) {
     return (
       <div>
-        <div className="flex items-center justify-center min-h-screen">
+        <div className={`flex items-center justify-center ${embedded ? "py-24" : "min-h-screen"}`}>
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
       </div>
@@ -724,10 +725,12 @@ export default function CustomCrmSettings() {
           </div>
         ) : (
           <>
-            <Button variant="ghost" size="sm" className="mb-3 -ml-2 text-muted-foreground hover:text-foreground" onClick={() => history.back()}>
-              <ArrowLeft className="h-4 w-4 mr-1" />
-              Back
-            </Button>
+            {!embedded && (
+              <Button variant="ghost" size="sm" className="mb-3 -ml-2 text-muted-foreground hover:text-foreground" onClick={() => history.back()}>
+                <ArrowLeft className="h-4 w-4 mr-1" />
+                Back
+              </Button>
+            )}
             <h1 className="text-3xl font-bold mb-2">{name} Integration</h1>
             <p className="text-muted-foreground">
               Connect to any in-house CRM with configurable API endpoints, authentication, and field mappings

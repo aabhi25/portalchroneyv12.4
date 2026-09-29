@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, MessageSquare, Package, Users, TrendingUp, Clock, Calendar, Brain, Lightbulb, Heart, AlertCircle, Sparkles, ClipboardList, Eye, Monitor, Smartphone, Tablet, Globe, MapPin, Tag, Loader2, ArrowRight, FileText, Zap, Leaf, Percent, RefreshCw, CheckCircle, Settings, X, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link, useLocation } from "wouter";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { format, subDays, startOfDay, endOfDay, startOfMonth, formatDistanceToNow } from "date-fns";
@@ -1168,7 +1169,7 @@ export default function Insights() {
                 variant="ghost"
                 size="sm"
                 className="text-xs gap-1 shrink-0 text-gray-500 hover:text-gray-700"
-                onClick={() => setLocation("/admin/category-settings")}
+                onClick={() => setLocation(SETTINGS_PATHS.conversationCategories)}
                 title="Configure custom categories"
               >
                 <Settings className="w-3.5 h-3.5" />

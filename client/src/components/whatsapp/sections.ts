@@ -4,6 +4,7 @@ import {
   UsersRound, FileCode2, Megaphone, Settings, ShieldCheck, MessageCircle,
   FileSpreadsheet, Table2, Store,
 } from "lucide-react";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 
 /**
  * The one definition of what lives where in the WhatsApp area.
@@ -300,12 +301,14 @@ const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
   },
 ];
 
+// Setup lives in the Settings hub (Settings > Channels > WhatsApp). The old /admin/whatsapp-config
+// route redirects there, so `matches` only needs the legacy path; the hub supplies its own navigation.
 const SETUP_ITEMS: WhatsappNavItem[] = [
   {
     key: "config",
     label: "Connection",
     description: "Credentials, webhook, and the master switch",
-    href: "/admin/whatsapp-config",
+    href: SETTINGS_PATHS.whatsappConnection,
     icon: Settings,
     formerly: "Config",
     sidebarTestId: "link-wa-config",
@@ -386,10 +389,6 @@ export function rememberWhatsappSectionLocation(location: string, sections: What
 export function isWhatsappLocation(location: string): boolean {
   return (
     location.startsWith("/admin/whatsapp") ||
-    location.startsWith("/admin/wa-") ||
-    location === "/admin/crm" ||
-    location === "/admin/leadsquared" ||
-    location === "/admin/salesforce" ||
-    location === "/admin/custom-crm"
+    location.startsWith("/admin/wa-")
   );
 }

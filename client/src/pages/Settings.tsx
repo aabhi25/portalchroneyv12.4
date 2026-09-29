@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Settings2, AlertCircle, Lock, Loader2, Upload, Trash2, Palette, Sparkles, Check, CheckCircle2, ArrowRight, Database, SlidersHorizontal, RefreshCw, Download, EyeOff } from "lucide-react";
 import type { MeResponseDto } from "@shared/dto";
 import { isTopScholarSuperAdminView } from "@/lib/accountAccess";
+import { SETTINGS_PATHS, integrationPath } from "@/pages/settings/settingsPaths";
 
 interface WidgetSettings {
   visualSimilarityThreshold?: string;
@@ -50,7 +51,15 @@ const LUXE_THEMES: Record<ThemePreset, { name: string; description: string; prim
   }
 };
 
-export default function Settings() {
+/**
+ * Account-level settings. Rendered by the Settings hub in two places:
+ *   section="account"       password, Vista look & feel, education/TopScholar options
+ *   section="lead-privacy"  lead export access and lead phone masking
+ * With no `section` everything is shown (the original single page).
+ */
+export default function Settings({ section, embedded = false }: { section?: "account" | "lead-privacy"; embedded?: boolean } = {}) {
+  const showAccount = section !== "lead-privacy";
+  const showPrivacy = section !== "account";
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -81,7 +90,7 @@ export default function Settings() {
       if (!response.ok) return null;
       return response.json();
     },
-    enabled: hasJewelryAccess,
+    enabled: hasJewelryAccess && showAccount && !embedded,
   });
 
   const { data: externalApiConfig } = useQuery<{ configured: boolean; apiBaseUrl: string; apiToken: string } | null>({
@@ -181,7 +190,9 @@ export default function Settings() {
       const response = await fetch('/api/widget-settings', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to fetch settings');
       return response.json();
-    }
+    },
+    // Only the Vista customization card reads these.
+    enabled: hasJewelryAccess && showAccount,
   });
 
   useEffect(() => {
@@ -342,19 +353,55 @@ export default function Settings() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-4xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Settings2 className="w-6 h-6 text-purple-600" />
-          Settings
-        </h1>
-        <p className="text-muted-foreground mt-1">
-          Manage your account settings
-        </p>
-      </div>
+    <div className={embedded ? "max-w-4xl" : "p-4 md:p-6 max-w-4xl mx-auto"}>
+      {!embedded && (
+        <div className="mb-8">
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <Settings2 className="w-6 h-6 text-purple-600" />
+            Settings
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Manage your account settings
+          </p>
+        </div>
+      )}
 
       <div className="space-y-6">
-        {isSuperAdminImpersonating && (
+        {showPrivacy && section === "lead-privacy" && !isSuperAdminImpersonating && (
+          <Card className="shadow-lg border-gray-200" data-testid="card-lead-privacy-readonly">
+            <CardHeader className="border-b bg-gradient-to-r from-purple-50 to-pink-50 py-4">
+              <CardTitle className="text-base flex items-center gap-2">
+                <EyeOff className="w-4 h-4 text-purple-600" />
+                Lead privacy
+              </CardTitle>
+              <CardDescription className="mt-1">
+                These are set for your account by your AI Chroney administrator. Contact support to change them.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6 space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-medium text-sm">Lead exports</p>
+                  <p className="text-sm text-muted-foreground mt-0.5">Whether leads can be downloaded from the Leads pages.</p>
+                </div>
+                <span className="text-xs font-medium text-gray-600 shrink-0" data-testid="text-leads-export-status">
+                  {user?.businessAccount?.leadsExportEnabled ? 'Allowed' : 'Not allowed'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-medium text-sm">Lead phone masking</p>
+                  <p className="text-sm text-muted-foreground mt-0.5">When on, only the last four digits of lead phone numbers are shown.</p>
+                </div>
+                <span className="text-xs font-medium text-gray-600 shrink-0" data-testid="text-lead-phone-masking-status">
+                  {user?.businessAccount?.leadPhoneMaskingEnabled ? 'On' : 'Off'}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {showPrivacy && isSuperAdminImpersonating && (
           <div className="space-y-6">
             <Card className="shadow-lg border-gray-200">
             <CardHeader className="border-b bg-gradient-to-r from-purple-50 to-pink-50 py-4">
@@ -434,6 +481,8 @@ export default function Settings() {
           </div>
         )}
 
+        {showAccount && (
+          <>
         {hasJewelryAccess && (
           <Card className="shadow-lg border-gray-200">
             <CardHeader className="border-b bg-gradient-to-r from-purple-50 to-pink-50 py-4">
@@ -579,8 +628,8 @@ export default function Settings() {
           </Card>
         )}
 
-        {/* Visual Search Settings - Only for Jewelry Showcase users */}
-        {hasJewelryAccess && (
+        {/* Visual Search Settings - Only for Jewelry Showcase users (the Settings hub lists it in its own nav) */}
+        {hasJewelryAccess && !embedded && (
           <Card className="shadow-lg border-gray-200">
             <CardHeader className="border-b bg-gradient-to-r from-amber-50 to-orange-50 py-4">
               <CardTitle className="text-base flex items-center gap-2">
@@ -609,7 +658,7 @@ export default function Settings() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setLocation("/admin/visual-search-settings")}
+                  onClick={() => setLocation(SETTINGS_PATHS.visualSearch)}
                   className="gap-1"
                 >
                   Configure
@@ -620,8 +669,8 @@ export default function Settings() {
           </Card>
         )}
 
-        {/* ERP Integration - Only for Jewelry Showcase users */}
-        {hasJewelryAccess && (
+        {/* ERP Integration - Only for Jewelry Showcase users (the Settings hub lists it under Integrations) */}
+        {hasJewelryAccess && !embedded && (
           <Card className="shadow-lg border-gray-200">
             <CardHeader className="border-b bg-gradient-to-r from-blue-50 to-cyan-50 py-4">
               <CardTitle className="text-base flex items-center gap-2">
@@ -662,7 +711,7 @@ export default function Settings() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setLocation("/admin/erp")}
+                  onClick={() => setLocation(integrationPath("erp"))}
                   className="gap-1"
                 >
                   Configure
@@ -879,6 +928,8 @@ export default function Settings() {
             </form>
           </CardContent>
         </Card>
+          </>
+        )}
       </div>
     </div>
   );

@@ -1,9 +1,10 @@
 import { useLocation } from "wouter";
+import { integrationPath } from "@/pages/settings/settingsPaths";
 import { Link2, Sparkles, ClipboardList, Percent, Lightbulb, LayoutGrid, MoreHorizontal } from "lucide-react";
 
 const tabs = [
   { label: "More Features", path: "/admin/more", icon: MoreHorizontal },
-  { label: "CRM", path: "/admin/crm", icon: Link2, matchPaths: ["/admin/crm", "/admin/leadsquared", "/admin/salesforce", "/admin/custom-crm"] },
+  { label: "CRM", path: integrationPath(), icon: Link2, matchPaths: [integrationPath()] },
   { label: "Chroney IQ", path: "/ai-insights", icon: Sparkles },
   { label: "Gaps", path: "/question-bank", icon: ClipboardList },
   { label: "Smart Discounts", path: "/admin/smart-discounts", icon: Percent },

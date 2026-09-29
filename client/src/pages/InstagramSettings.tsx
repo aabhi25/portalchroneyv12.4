@@ -1,5 +1,5 @@
 import ChannelSettings from "@/components/social/ChannelSettings";
 
-export default function InstagramSettings() {
-  return <ChannelSettings channel="instagram" />;
+export default function InstagramSettings({ embedded = false }: { embedded?: boolean } = {}) {
+  return <ChannelSettings channel="instagram" embedded={embedded} />;
 }

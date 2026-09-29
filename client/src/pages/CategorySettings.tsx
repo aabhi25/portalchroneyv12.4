@@ -18,7 +18,8 @@ interface CategoryItem {
   subcategories: string[];
 }
 
-export default function CategorySettings() {
+/** `embedded`: rendered inside the Settings hub, which supplies the page chrome and navigation. */
+export default function CategorySettings({ embedded = false }: { embedded?: boolean } = {}) {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -156,20 +157,24 @@ export default function CategorySettings() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0">
+    <div className={embedded ? "flex flex-col" : "flex flex-col h-screen bg-gray-50"}>
+      <div className={embedded ? "pb-4" : "bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0"}>
         <div className="flex items-center gap-4">
-          <SidebarTrigger className="text-gray-500 hover:text-gray-700" />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setLocation("/insights")}
-            className="text-gray-500 hover:text-gray-700 gap-1.5"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Insights
-          </Button>
-          <div className="flex items-center gap-3 ml-2">
+          {!embedded && (
+            <>
+              <SidebarTrigger className="text-gray-500 hover:text-gray-700" />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setLocation("/insights")}
+                className="text-gray-500 hover:text-gray-700 gap-1.5"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Back to Insights
+              </Button>
+            </>
+          )}
+          <div className={embedded ? "flex items-center gap-3" : "flex items-center gap-3 ml-2"}>
             <div className="w-10 h-10 bg-gradient-to-br from-teal-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-md">
               <Tag className="w-5 h-5 text-white" />
             </div>
@@ -181,8 +186,8 @@ export default function CategorySettings() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-2xl mx-auto space-y-6">
+      <div className={embedded ? "" : "flex-1 overflow-y-auto p-6"}>
+        <div className={embedded ? "max-w-2xl space-y-6" : "max-w-2xl mx-auto space-y-6"}>
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">

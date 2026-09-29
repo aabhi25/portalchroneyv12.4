@@ -55,7 +55,8 @@ interface TestSendResponse {
 const DEFAULT_TEMPLATE_BODY =
   "Your verification code is {{otp}}. It expires in 5 minutes. Please do not share this code with anyone.";
 
-export default function OtpSettings() {
+/** `embedded`: rendered inside the Settings hub, which supplies the page chrome and navigation. */
+export default function OtpSettings({ embedded = false }: { embedded?: boolean } = {}) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -176,16 +177,18 @@ export default function OtpSettings() {
   const previewBody = (otpTemplateBody || "").replace(/\{\{\s*otp\s*\}\}/gi, "123456");
 
   return (
-    <div className="container mx-auto py-6 px-4 max-w-3xl">
+    <div className={embedded ? "max-w-3xl" : "container mx-auto py-6 px-4 max-w-3xl"}>
       <div className="mb-6 flex items-center gap-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setLocation("/train-chroney")}
-          data-testid="button-back"
-        >
-          <ArrowLeft className="w-4 h-4 mr-1" /> Back
-        </Button>
+        {!embedded && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setLocation("/train-chroney")}
+            data-testid="button-back"
+          >
+            <ArrowLeft className="w-4 h-4 mr-1" /> Back
+          </Button>
+        )}
         <div>
           <h1 className="text-2xl font-semibold">OTP / SMS settings</h1>
           <p className="text-sm text-muted-foreground">

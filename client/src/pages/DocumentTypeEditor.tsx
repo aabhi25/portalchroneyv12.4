@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useRoute } from "wouter";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -103,7 +104,7 @@ export default function DocumentTypeEditor() {
   if (isError) {
     return (
       <div className="p-6 max-w-2xl mx-auto space-y-6">
-        <Button variant="ghost" size="sm" onClick={() => navigate("/admin/whatsapp-flow-settings")}>
+        <Button variant="ghost" size="sm" onClick={() => navigate(SETTINGS_PATHS.whatsappFlowSettings)}>
           <ArrowLeft className="h-4 w-4 mr-1" /> Back
         </Button>
         <Card>
@@ -119,7 +120,7 @@ export default function DocumentTypeEditor() {
   if (!isNew && !docType && data) {
     return (
       <div className="p-6 max-w-2xl mx-auto space-y-6">
-        <Button variant="ghost" size="sm" onClick={() => navigate("/admin/whatsapp-flow-settings")}>
+        <Button variant="ghost" size="sm" onClick={() => navigate(SETTINGS_PATHS.whatsappFlowSettings)}>
           <ArrowLeft className="h-4 w-4 mr-1" /> Back
         </Button>
         <Card>
@@ -136,7 +137,7 @@ export default function DocumentTypeEditor() {
     <EditorForm
       docType={isNew ? undefined : docType}
       isNew={isNew}
-      onNavigateBack={() => navigate("/admin/whatsapp-flow-settings")}
+      onNavigateBack={() => navigate(SETTINGS_PATHS.whatsappFlowSettings)}
       toast={toast}
     />
   );

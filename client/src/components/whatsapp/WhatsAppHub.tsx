@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -154,13 +155,13 @@ function FirstRunChecklist({ r, onOpen }: { r: WhatsappReadiness; onOpen: (href:
       label: "Connect your WhatsApp number",
       hint: "Add your MSG91 auth key and number, then paste the webhook URL into MSG91.",
       done: r.credentialsConfigured,
-      href: "/admin/whatsapp-config",
+      href: SETTINGS_PATHS.whatsappConnection,
     },
     {
       label: "Receive your first message",
       hint: "Send a WhatsApp message to your business number to confirm it arrives.",
       done: r.connectionVerified,
-      href: "/admin/whatsapp-config",
+      href: SETTINGS_PATHS.whatsappConnection,
     },
     {
       label: "Turn on automatic replies",

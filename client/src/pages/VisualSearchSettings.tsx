@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -26,7 +27,8 @@ interface WidgetSettings {
   googleVisionWarehouseProjectNumber?: string;
 }
 
-export default function VisualSearchSettings() {
+/** `embedded`: rendered inside the Settings hub, which supplies the page chrome and navigation. */
+export default function VisualSearchSettings({ embedded = false }: { embedded?: boolean } = {}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -342,16 +344,18 @@ export default function VisualSearchSettings() {
   }, [visualSearchModel, endpointId, credentialsConfigured]);
 
   return (
-    <div className="container mx-auto p-6 max-w-4xl">
+    <div className={embedded ? "max-w-4xl" : "container mx-auto p-6 max-w-4xl"}>
       <div className="mb-6">
-        <Button
-          variant="ghost"
-          onClick={() => setLocation("/admin/settings")}
-          className="gap-2 mb-4"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to Settings
-        </Button>
+        {!embedded && (
+          <Button
+            variant="ghost"
+            onClick={() => setLocation(SETTINGS_PATHS.root)}
+            className="gap-2 mb-4"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to Settings
+          </Button>
+        )}
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <SlidersHorizontal className="w-6 h-6 text-purple-600" />
           Visual Search Settings
