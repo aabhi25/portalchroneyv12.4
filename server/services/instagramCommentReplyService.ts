@@ -9,6 +9,7 @@ import { storage } from "../storage";
 import type { InstagramSettings } from "@shared/schema";
 import OpenAI from "openai";
 import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
+import { commentReplyLimiter } from "./commentReplyLimiter";
 
 interface CommentData {
   commentId: string;
@@ -26,7 +27,7 @@ export class InstagramCommentReplyService {
     commentData: CommentData
   ): Promise<{ success: boolean; reply?: string; error?: string; status: string }> {
     try {
-      console.log(`[Instagram Comment Reply] Processing comment ${commentData.commentId} from @${commentData.commenterUsername || commentData.commenterId}`);
+      console.log(`[Instagram Comment Reply] Processing comment ${commentData.commentId} from ${commentData.commenterId}`);
 
       if (settings.commentAutoReplyEnabled !== "true") {
         console.log(`[Instagram Comment Reply] Comment auto-reply disabled for business: ${businessAccountId}`);
@@ -34,11 +35,11 @@ export class InstagramCommentReplyService {
         return { success: false, error: "Comment auto-reply is disabled", status: "skipped" };
       }
 
-      if (settings.commentIgnoreOwnReplies === "true" && settings.igAccountId) {
-        if (commentData.commenterId === settings.igAccountId) {
-          console.log(`[Instagram Comment Reply] Ignoring own comment from account ${settings.igAccountId}`);
-          return { success: false, error: "Own comment ignored", status: "skipped" };
-        }
+      // Never answer our own account's comments (including our own auto-replies coming back
+      // through the webhook), whatever commentIgnoreOwnReplies says: that would loop forever.
+      if (await this.isOwnComment(settings, businessAccountId, commentData)) {
+        console.log(`[Instagram Comment Reply] Ignoring comment ${commentData.commentId} from our own account`);
+        return { success: false, error: "Own comment ignored", status: "skipped" };
       }
 
       const existing = await this.findCommentByIgId(businessAccountId, commentData.commentId);
@@ -53,12 +54,19 @@ export class InstagramCommentReplyService {
           const commentLower = commentData.commentText.toLowerCase();
           const matched = keywords.some(kw => commentLower.includes(kw.toLowerCase()));
           if (!matched) {
-            console.log(`[Instagram Comment Reply] No keyword match for comment: "${commentData.commentText.substring(0, 50)}..."`);
+            console.log(`[Instagram Comment Reply] No keyword match for comment ${commentData.commentId}`);
             await this.storeComment(businessAccountId, commentData, null, null, "skipped");
             return { success: false, error: "No keyword match", status: "skipped" };
           }
           console.log(`[Instagram Comment Reply] Keyword match found in comment`);
         }
+      }
+
+      const limit = commentReplyLimiter.check("instagram", businessAccountId, commentData.commenterId, commentData.postId);
+      if (!limit.allowed) {
+        console.log(`[Instagram Comment Reply] Hourly ${limit.reason === "commenter" ? "per-commenter" : "per-post"} reply cap reached — not replying to comment ${commentData.commentId}`);
+        await this.storeComment(businessAccountId, commentData, null, null, "skipped");
+        return { success: false, error: limit.reason === "commenter" ? "Too many replies to this commenter" : "Too many replies on this post", status: "skipped" };
       }
 
       if (commentData.postId && settings.commentMaxRepliesPerPost) {
@@ -148,6 +156,17 @@ export class InstagramCommentReplyService {
     } catch {
       return [];
     }
+  }
+
+  /** A comment written by our own Instagram account, or one of our own replies echoed back. */
+  private async isOwnComment(settings: InstagramSettings, businessAccountId: string, commentData: CommentData): Promise<boolean> {
+    if (settings.igAccountId && commentData.commenterId === settings.igAccountId) return true;
+    const [ours] = await db
+      .select({ id: instagramComments.id })
+      .from(instagramComments)
+      .where(and(eq(instagramComments.businessAccountId, businessAccountId), eq(instagramComments.replyCommentId, commentData.commentId)))
+      .limit(1);
+    return !!ours;
   }
 
   private async storeComment(
@@ -486,10 +505,12 @@ ${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}`;
         return;
       }
 
-      const result = await instagramService.sendMessage(settings, commentData.commenterId, dmText);
+      // The commenter may never have messaged us, so this must be a private reply tied to the
+      // comment (recipient: { comment_id }) — a plain DM to their id is rejected by Instagram.
+      const result = await instagramService.sendPrivateReply(settings, commentData.commentId, dmText);
 
       if (result.success) {
-        console.log(`[Instagram Comment DM] Sent DM to ${commentData.commenterUsername || commentData.commenterId}`);
+        console.log(`[Instagram Comment DM] Sent private reply for comment ${commentData.commentId}`);
         await this.updateCommentDmStatus(businessAccountId, commentData.commentId, "sent", dmText);
       } else {
         console.error(`[Instagram Comment DM] Failed: ${result.error}`);

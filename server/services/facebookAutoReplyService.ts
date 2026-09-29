@@ -139,12 +139,54 @@ function extractNameFromConversation(messages: ConversationMessage[]): string | 
 }
 
 export class FacebookAutoReplyService {
+  // Sent when the AI can't produce an answer, so the customer isn't left in silence
+  // (same wording as WhatsApp). At most once every 5 minutes per customer.
+  private readonly AI_FAILURE_REPLY = "Sorry, I'm having trouble answering right now. Please try again in a few minutes.";
+  private aiFailureNoticeAt = new Map<string, number>();
 
+  /**
+   * Replies to one DM. Callers run this inside the per-customer queue (see metaDmHandler),
+   * so replies to the same customer never overlap.
+   */
   async generateAndSendReply(
     businessAccountId: string,
     senderId: string,
     userMessage: string
   ): Promise<{ success: boolean; reply?: string; error?: string }> {
+    const result = await this._generateAndSendReply(businessAccountId, senderId, userMessage);
+    if (result.aiFailed) await this.sendAiFailureNotice(businessAccountId, senderId);
+    const { aiFailed, ...rest } = result;
+    return rest;
+  }
+
+  private async sendAiFailureNotice(businessAccountId: string, senderId: string): Promise<void> {
+    const key = `${businessAccountId}:${senderId}`;
+    if (Date.now() - (this.aiFailureNoticeAt.get(key) || 0) < 5 * 60_000) return;
+    this.aiFailureNoticeAt.set(key, Date.now());
+    if (this.aiFailureNoticeAt.size > 5000) {
+      const cutoff = Date.now() - 5 * 60_000;
+      this.aiFailureNoticeAt.forEach((t, k) => { if (t < cutoff) this.aiFailureNoticeAt.delete(k); });
+    }
+    try {
+      const [settings] = await db.select().from(facebookSettings).where(eq(facebookSettings.businessAccountId, businessAccountId)).limit(1);
+      if (!settings) return;
+      const sent = await facebookService.sendMessage(settings, senderId, this.AI_FAILURE_REPLY);
+      if (!sent.success) {
+        console.error(`[Facebook Auto-Reply] AI failure notice not sent: ${sent.error}`);
+        return;
+      }
+      await facebookService.storeMessage(businessAccountId, senderId, this.AI_FAILURE_REPLY, "outgoing");
+    } catch (err) {
+      console.error("[Facebook Auto-Reply] AI failure notice error:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  private async _generateAndSendReply(
+    businessAccountId: string,
+    senderId: string,
+    userMessage: string
+  ): Promise<{ success: boolean; reply?: string; error?: string; aiFailed?: boolean }> {
+    let replySent = false;
     try {
       console.log(`[Facebook Auto-Reply] Processing message from ${senderId}`);
 
@@ -208,12 +250,12 @@ export class FacebookAutoReplyService {
             const cleaned = liveContact.phone.replace(/[^\d]/g, '');
             if (cleaned.length >= 8 && cleaned.length <= 12) {
               phone = liveContact.phone;
-              console.log(`[Facebook Auto-Reply] Extracted phone from current message: ${phone}`);
+              console.log(`[Facebook Auto-Reply] Phone number found in current message`);
             }
           }
           if (!email && liveContact.email) {
             email = liveContact.email;
-            console.log(`[Facebook Auto-Reply] Extracted email from current message: ${email}`);
+            console.log(`[Facebook Auto-Reply] Email address found in current message`);
           }
         }
 
@@ -258,7 +300,7 @@ export class FacebookAutoReplyService {
       );
 
       if (!aiReply) {
-        return { success: false, error: "Failed to generate AI response" };
+        return { success: false, error: "Failed to generate AI response", aiFailed: true };
       }
 
       let processedReply = aiReply;
@@ -278,6 +320,7 @@ export class FacebookAutoReplyService {
         console.error(`[Facebook Auto-Reply] Failed to send message: ${sendResult.error}`);
         return { success: false, error: sendResult.error };
       }
+      replySent = true;
 
       await facebookService.storeMessage(
         businessAccountId,
@@ -325,7 +368,7 @@ export class FacebookAutoReplyService {
 
     } catch (error) {
       console.error(`[Facebook Auto-Reply] Error:`, error);
-      return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      return { success: false, error: error instanceof Error ? error.message : "Unknown error", aiFailed: !replySent };
     }
   }
 
@@ -491,7 +534,7 @@ IMPORTANT:
         return;
       }
 
-      console.log(`[Facebook Lead Capture] Contact info detected: name=${collected.name || 'N/A'}, phone=${collected.phone || 'N/A'}, email=${collected.email || 'N/A'}`);
+      console.log(`[Facebook Lead Capture] Contact info detected: name=${collected.name ? 'yes' : 'no'}, phone=${collected.phone ? 'yes' : 'no'}, email=${collected.email ? 'yes' : 'no'}`);
 
       if (leadTrainingConfig?.fields) {
         const phoneField = leadTrainingConfig.fields.find(
@@ -501,7 +544,7 @@ IMPORTANT:
           const digitCount = (phoneField as any).digitCount || 10;
           const digitsOnly = collected.phone.replace(/\D/g, '');
           if (digitsOnly.length !== digitCount) {
-            console.log(`[Facebook Lead Capture] Phone ${collected.phone} doesn't match required ${digitCount} digits, skipping lead save`);
+            console.log(`[Facebook Lead Capture] Phone doesn't match required ${digitCount} digits, skipping lead save`);
             return;
           }
         }
@@ -603,7 +646,7 @@ IMPORTANT:
           const profile = await facebookService.getUserProfile(decryptedToken, senderId);
           if (profile?.firstName) {
             const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
-            console.log(`[Facebook Auto-Reply] Resolved name via API: ${fullName}`);
+            console.log(`[Facebook Auto-Reply] Resolved name via API for ${senderId}`);
             return fullName;
           }
         }
@@ -874,7 +917,7 @@ IMPORTANT:
     }
 
     console.log(`[Facebook Auto-Reply] ========== CONTEXT SUMMARY ==========`);
-    console.log(`[Facebook Auto-Reply] User query: "${userMessage}"`);
+    console.log(`[Facebook Auto-Reply] User query: ${userMessage.length} chars`);
     console.log(`[Facebook Auto-Reply] Total context length: ${context.length} chars`);
     console.log(`[Facebook Auto-Reply] Has custom instructions: ${!!widgetCustomInstructions}`);
     console.log(`[Facebook Auto-Reply] Has lead training config: ${!!leadTrainingConfig}`);

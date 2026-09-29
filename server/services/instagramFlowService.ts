@@ -153,7 +153,7 @@ Example: {"extracted": {"name": "John", "dob": null}, "followUp": "Thanks John! 
       try {
         parsed = JSON.parse(cleanJson);
       } catch {
-        console.warn(`[Instagram Flow] AI returned invalid JSON, falling back to static: ${cleanJson.substring(0, 200)}`);
+        console.warn(`[Instagram Flow] AI returned invalid JSON (${cleanJson.length} chars), falling back to static`);
         return { extracted: alreadyCollected, missing: requiredFields.filter(f => !this.hasFieldValue(alreadyCollected, f)) };
       }
 
@@ -172,7 +172,7 @@ Example: {"extracted": {"name": "John", "dob": null}, "followUp": "Thanks John! 
 
       const missing = requiredFields.filter(f => !this.hasFieldValue(allExtracted, f));
 
-      console.log(`[Instagram Flow] AI Extraction - Extracted: ${JSON.stringify(allExtracted)}, Missing: ${missing.join(", ")}`);
+      console.log(`[Instagram Flow] AI Extraction - Extracted fields: [${Object.keys(allExtracted || {}).join(", ")}], Missing: ${missing.join(", ")}`);
 
       return { extracted: allExtracted, missing, followUp: parsed.followUp || undefined };
     } catch (error) {
@@ -273,7 +273,7 @@ Return ONLY a valid JSON object:
         parsed.intent = "answer";
       }
 
-      console.log(`[Instagram Flow] Text Step Intent - Intent: ${parsed.intent}, CleanValue: "${parsed.cleanValue || ''}", Response: "${parsed.response || ''}"`);
+      console.log(`[Instagram Flow] Text Step Intent - Intent: ${parsed.intent}, hasValue: ${!!parsed.cleanValue}, hasResponse: ${!!parsed.response}`);
       return { intent: parsed.intent, response: parsed.response || "", cleanValue: parsed.cleanValue || undefined };
     } catch (error) {
       console.error("[Instagram Flow] Text step intent detection error:", error);
@@ -574,7 +574,7 @@ Return ONLY a valid JSON object:
     prefetchedSession?: InstagramFlowSession | null
   ): Promise<ProcessResult> {
     const startTime = Date.now();
-    console.log(`[Instagram Flow] Processing message from ${senderId}: "${message}"`);
+    console.log(`[Instagram Flow] Processing message from ${senderId} (${(message || '').length} chars)`);
 
     const activeFlow = await this.getActiveFlow(businessAccountId);
     if (!activeFlow) {
@@ -731,7 +731,7 @@ Return ONLY a valid JSON object:
         nextStepKey = resolveNextStepKey(mappedStep || currentStep.defaultNextStep);
         collectedData[currentStep.saveToField || "selection"] = selectedButton.title;
       } else {
-        console.log(`[Instagram Flow] Invalid button selection: "${message}" — re-prompting with buttons`);
+        console.log(`[Instagram Flow] Invalid button selection — re-prompting with buttons`);
         const repromptResponse = this.buildStepResponse(currentStep);
         repromptResponse.text = `Please select one of the options below.\n\n${repromptResponse.text}`;
         return {
@@ -748,7 +748,7 @@ Return ONLY a valid JSON object:
         if (inputValidation) {
           const staticCheck = this.staticValidateInput(message, inputValidation);
           if (!staticCheck.valid) {
-            console.log(`[Instagram Flow] Static validation failed for "${inputValidation}": "${message}"`);
+            console.log(`[Instagram Flow] Static validation failed for "${inputValidation}"`);
             await this.advanceSession(session.id, session.currentStepKey, collectedData);
             return {
               handled: true,
@@ -813,7 +813,7 @@ Return ONLY a valid JSON object:
           };
         }
 
-        console.log(`[Instagram Flow] All required fields collected: ${JSON.stringify(extracted)}`);
+        console.log(`[Instagram Flow] All required fields collected: [${Object.keys(extracted || {}).join(", ")}]`);
       }
 
       nextStepKey = resolveNextStepKey(currentStep.defaultNextStep);

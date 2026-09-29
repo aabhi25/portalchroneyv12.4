@@ -9,6 +9,7 @@ import { storage } from "../storage";
 import type { FacebookSettings } from "@shared/schema";
 import OpenAI from "openai";
 import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
+import { commentReplyLimiter } from "./commentReplyLimiter";
 
 interface CommentData {
   commentId: string;
@@ -26,7 +27,7 @@ export class FacebookCommentReplyService {
     commentData: CommentData
   ): Promise<{ success: boolean; reply?: string; error?: string; status: string }> {
     try {
-      console.log(`[Facebook Comment Reply] Processing comment ${commentData.commentId} from ${commentData.commenterName || commentData.commenterId}`);
+      console.log(`[Facebook Comment Reply] Processing comment ${commentData.commentId} from ${commentData.commenterId}`);
 
       if (settings.commentAutoReplyEnabled !== "true") {
         console.log(`[Facebook Comment Reply] Comment auto-reply disabled for business: ${businessAccountId}`);
@@ -34,11 +35,11 @@ export class FacebookCommentReplyService {
         return { success: false, error: "Comment auto-reply is disabled", status: "skipped" };
       }
 
-      if (settings.commentIgnoreOwnReplies === "true" && settings.pageId) {
-        if (commentData.commenterId === settings.pageId) {
-          console.log(`[Facebook Comment Reply] Ignoring own comment from page ${settings.pageId}`);
-          return { success: false, error: "Own comment ignored", status: "skipped" };
-        }
+      // Never answer our own account's comments (including our own auto-replies coming back
+      // through the webhook), whatever commentIgnoreOwnReplies says: that would loop forever.
+      if (await this.isOwnComment(settings, businessAccountId, commentData)) {
+        console.log(`[Facebook Comment Reply] Ignoring comment ${commentData.commentId} from our own page`);
+        return { success: false, error: "Own comment ignored", status: "skipped" };
       }
 
       const existing = await facebookService.findCommentByFbId(businessAccountId, commentData.commentId);
@@ -53,12 +54,19 @@ export class FacebookCommentReplyService {
           const commentLower = commentData.commentText.toLowerCase();
           const matched = keywords.some(kw => commentLower.includes(kw.toLowerCase()));
           if (!matched) {
-            console.log(`[Facebook Comment Reply] No keyword match for comment: "${commentData.commentText.substring(0, 50)}..."`);
+            console.log(`[Facebook Comment Reply] No keyword match for comment ${commentData.commentId}`);
             await this.storeComment(businessAccountId, commentData, null, null, "skipped");
             return { success: false, error: "No keyword match", status: "skipped" };
           }
           console.log(`[Facebook Comment Reply] Keyword match found in comment`);
         }
+      }
+
+      const limit = commentReplyLimiter.check("facebook", businessAccountId, commentData.commenterId, commentData.postId);
+      if (!limit.allowed) {
+        console.log(`[Facebook Comment Reply] Hourly ${limit.reason === "commenter" ? "per-commenter" : "per-post"} reply cap reached — not replying to comment ${commentData.commentId}`);
+        await this.storeComment(businessAccountId, commentData, null, null, "skipped");
+        return { success: false, error: limit.reason === "commenter" ? "Too many replies to this commenter" : "Too many replies on this post", status: "skipped" };
       }
 
       if (commentData.postId && settings.commentMaxRepliesPerPost) {
@@ -148,6 +156,17 @@ export class FacebookCommentReplyService {
     } catch {
       return [];
     }
+  }
+
+  /** A comment written by our own Page, or one of our own replies echoed back. */
+  private async isOwnComment(settings: FacebookSettings, businessAccountId: string, commentData: CommentData): Promise<boolean> {
+    if (settings.pageId && commentData.commenterId === settings.pageId) return true;
+    const [ours] = await db
+      .select({ id: facebookComments.id })
+      .from(facebookComments)
+      .where(and(eq(facebookComments.businessAccountId, businessAccountId), eq(facebookComments.replyCommentId, commentData.commentId)))
+      .limit(1);
+    return !!ours;
   }
 
   private async storeComment(
@@ -475,7 +494,7 @@ ${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}`;
       const result = await facebookService.sendPrivateReply(settings, commentData.commentId, dmText);
 
       if (result.success) {
-        console.log(`[Facebook Comment DM] Sent private reply to ${commentData.commenterName || commentData.commenterId}`);
+        console.log(`[Facebook Comment DM] Sent private reply for comment ${commentData.commentId}`);
         await this.updateCommentDmStatus(businessAccountId, commentData.commentId, "sent", dmText);
       } else {
         console.error(`[Facebook Comment DM] Failed: ${result.error}`);

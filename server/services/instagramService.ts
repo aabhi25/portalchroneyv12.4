@@ -96,9 +96,7 @@ export class InstagramService {
         message: { text: truncatedText },
       };
 
-      console.log(`[Instagram] Sending message to ${recipientId}:`, {
-        text: truncatedText.substring(0, 50) + (truncatedText.length > 50 ? "..." : ""),
-      });
+      console.log(`[Instagram] Sending message to ${recipientId} (${truncatedText.length} chars)`);
 
       const response = await fetchWithTimeout(url, {
         method: "POST",
@@ -110,7 +108,7 @@ export class InstagramService {
       }, 30_000);
 
       const responseData = await response.json();
-      console.log(`[Instagram] API response:`, responseData);
+      console.log(`[Instagram] Send message: HTTP ${response.status}${responseData?.message_id ? `, message ${responseData.message_id}` : ""}${responseData?.error?.code ? `, error code ${responseData.error.code}` : ""}`);
 
       if (!response.ok) {
         const errorMsg = responseData?.error?.message || `Instagram API error: ${response.status}`;
@@ -126,6 +124,59 @@ export class InstagramService {
       return {
         success: false,
         error: error instanceof Error ? error.message : "Failed to send message",
+      };
+    }
+  }
+
+  /**
+   * Private reply to a comment: a DM to the commenter tied to their comment. Instagram only
+   * accepts a DM to someone who hasn't messaged the account in this form, identified by
+   * the comment rather than the user (recipient: { comment_id }). One per comment, within
+   * 7 days of it.
+   */
+  async sendPrivateReply(
+    settings: InstagramSettings,
+    commentId: string,
+    messageText: string
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    try {
+      const accessToken = this.getDecryptedAccessToken(settings);
+      if (!accessToken) {
+        return { success: false, error: "Instagram access token not configured" };
+      }
+
+      const truncatedText = messageText.length > IG_TEXT_LIMIT
+        ? messageText.substring(0, IG_TEXT_LIMIT - 3) + "..."
+        : messageText;
+
+      console.log(`[Instagram] Sending private reply for comment ${commentId} (${truncatedText.length} chars)`);
+
+      const response = await fetchWithTimeout(`${IG_API_BASE}/me/messages`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          recipient: { comment_id: commentId },
+          message: { text: truncatedText },
+        }),
+      }, 30_000);
+
+      const responseData = await response.json();
+      console.log(`[Instagram] Private reply: HTTP ${response.status}${responseData?.error?.code ? `, error code ${responseData.error.code}` : ""}`);
+
+      if (!response.ok) {
+        const errorMsg = responseData?.error?.message || `Instagram API error: ${response.status}`;
+        return { success: false, error: errorMsg };
+      }
+
+      return { success: true, messageId: responseData.message_id };
+    } catch (error) {
+      console.error(`[Instagram] Private reply error:`, error instanceof Error ? error.message : error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to send private reply",
       };
     }
   }
@@ -153,9 +204,7 @@ export class InstagramService {
         },
       };
 
-      console.log(`[Instagram] Sending image to ${recipientId}:`, {
-        imageUrl: imageUrl.substring(0, 80) + (imageUrl.length > 80 ? "..." : ""),
-      });
+      console.log(`[Instagram] Sending image to ${recipientId}`);
 
       const response = await fetchWithTimeout(url, {
         method: "POST",
@@ -167,7 +216,7 @@ export class InstagramService {
       }, 30_000);
 
       const responseData = await response.json();
-      console.log(`[Instagram] Image API response:`, responseData);
+      console.log(`[Instagram] Send image: HTTP ${response.status}${responseData?.error?.code ? `, error code ${responseData.error.code}` : ""}`);
 
       if (!response.ok) {
         const errorMsg = responseData?.error?.message || `Instagram API error: ${response.status}`;
@@ -603,9 +652,7 @@ export class InstagramService {
 
       const url = `${IG_API_BASE}/${commentId}/replies`;
 
-      console.log(`[Instagram] Replying to comment ${commentId}:`, {
-        text: truncatedMessage.substring(0, 50) + (truncatedMessage.length > 50 ? "..." : ""),
-      });
+      console.log(`[Instagram] Replying to comment ${commentId} (${truncatedMessage.length} chars)`);
 
       const response = await fetchWithTimeout(url, {
         method: "POST",
@@ -617,7 +664,7 @@ export class InstagramService {
       }, 30_000);
 
       const responseData = await response.json();
-      console.log(`[Instagram] Comment reply API response:`, responseData);
+      console.log(`[Instagram] Comment reply: HTTP ${response.status}${responseData?.id ? `, reply ${responseData.id}` : ""}${responseData?.error?.code ? `, error code ${responseData.error.code}` : ""}`);
 
       if (!response.ok) {
         const errorMsg = responseData?.error?.message || `Instagram API error: ${response.status}`;

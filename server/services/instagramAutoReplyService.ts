@@ -142,12 +142,54 @@ function extractNameFromConversation(messages: ConversationMessage[]): string | 
 }
 
 export class InstagramAutoReplyService {
+  // Sent when the AI can't produce an answer, so the customer isn't left in silence
+  // (same wording as WhatsApp). At most once every 5 minutes per customer.
+  private readonly AI_FAILURE_REPLY = "Sorry, I'm having trouble answering right now. Please try again in a few minutes.";
+  private aiFailureNoticeAt = new Map<string, number>();
 
+  /**
+   * Replies to one DM. Callers run this inside the per-customer queue (see metaDmHandler),
+   * so replies to the same customer never overlap.
+   */
   async generateAndSendReply(
     businessAccountId: string,
     senderId: string,
     userMessage: string
   ): Promise<{ success: boolean; reply?: string; error?: string }> {
+    const result = await this._generateAndSendReply(businessAccountId, senderId, userMessage);
+    if (result.aiFailed) await this.sendAiFailureNotice(businessAccountId, senderId);
+    const { aiFailed, ...rest } = result;
+    return rest;
+  }
+
+  private async sendAiFailureNotice(businessAccountId: string, senderId: string): Promise<void> {
+    const key = `${businessAccountId}:${senderId}`;
+    if (Date.now() - (this.aiFailureNoticeAt.get(key) || 0) < 5 * 60_000) return;
+    this.aiFailureNoticeAt.set(key, Date.now());
+    if (this.aiFailureNoticeAt.size > 5000) {
+      const cutoff = Date.now() - 5 * 60_000;
+      this.aiFailureNoticeAt.forEach((t, k) => { if (t < cutoff) this.aiFailureNoticeAt.delete(k); });
+    }
+    try {
+      const [settings] = await db.select().from(instagramSettings).where(eq(instagramSettings.businessAccountId, businessAccountId)).limit(1);
+      if (!settings) return;
+      const sent = await instagramService.sendMessage(settings, senderId, this.AI_FAILURE_REPLY);
+      if (!sent.success) {
+        console.error(`[Instagram Auto-Reply] AI failure notice not sent: ${sent.error}`);
+        return;
+      }
+      await instagramService.storeMessage(businessAccountId, senderId, this.AI_FAILURE_REPLY, "outgoing");
+    } catch (err) {
+      console.error("[Instagram Auto-Reply] AI failure notice error:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  private async _generateAndSendReply(
+    businessAccountId: string,
+    senderId: string,
+    userMessage: string
+  ): Promise<{ success: boolean; reply?: string; error?: string; aiFailed?: boolean }> {
+    let replySent = false;
     try {
       console.log(`[Instagram Auto-Reply] Processing message from ${senderId}`);
 
@@ -211,7 +253,7 @@ export class InstagramAutoReplyService {
           ? Promise.resolve(quickLang)
           : llamaService.detectLanguage(userMessage, apiKey).catch(() => 'en')
       ]);
-      console.log(`[Instagram Auto-Reply] Language detected for "${userMessage.substring(0, 30)}": ${detectedLang}`);
+      console.log(`[Instagram Auto-Reply] Language detected: ${detectedLang}`);
 
       let crossPlatformContext = "";
       let persistedExtractedData: Record<string, any> = {};
@@ -237,12 +279,12 @@ export class InstagramAutoReplyService {
             const cleaned = liveContact.phone.replace(/[^\d]/g, '');
             if (cleaned.length >= 8 && cleaned.length <= 12) {
               phone = liveContact.phone;
-              console.log(`[Instagram Auto-Reply] Extracted phone from current message: ${phone}`);
+              console.log(`[Instagram Auto-Reply] Phone number found in current message`);
             }
           }
           if (!email && liveContact.email) {
             email = liveContact.email;
-            console.log(`[Instagram Auto-Reply] Extracted email from current message: ${email}`);
+            console.log(`[Instagram Auto-Reply] Email address found in current message`);
           }
         }
 
@@ -289,7 +331,7 @@ export class InstagramAutoReplyService {
       );
 
       if (!aiResult) {
-        return { success: false, error: "Failed to generate AI response" };
+        return { success: false, error: "Failed to generate AI response", aiFailed: true };
       }
 
       let processedReply = aiResult.text;
@@ -309,6 +351,7 @@ export class InstagramAutoReplyService {
         console.error(`[Instagram Auto-Reply] Failed to send message: ${sendResult.error}`);
         return { success: false, error: sendResult.error };
       }
+      replySent = true;
 
       await instagramService.storeMessage(
         businessAccountId,
@@ -452,7 +495,7 @@ export class InstagramAutoReplyService {
 
     } catch (error) {
       console.error(`[Instagram Auto-Reply] Error:`, error);
-      return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      return { success: false, error: error instanceof Error ? error.message : "Unknown error", aiFailed: !replySent };
     }
   }
 
@@ -481,15 +524,15 @@ export class InstagramAutoReplyService {
         collected.phone = persistedExtractedData.phone_number;
         collected.mobile = persistedExtractedData.phone_number;
         collected.whatsapp = persistedExtractedData.phone_number;
-        console.log(`[Instagram Auto-Reply] Phone already persisted in lead record: ${persistedExtractedData.phone_number}`);
+        console.log(`[Instagram Auto-Reply] Phone already persisted in lead record`);
       }
       if (persistedExtractedData.email_address && !collected.email) {
         collected.email = persistedExtractedData.email_address;
-        console.log(`[Instagram Auto-Reply] Email already persisted in lead record: ${persistedExtractedData.email_address}`);
+        console.log(`[Instagram Auto-Reply] Email already persisted in lead record`);
       }
       if (persistedExtractedData.customer_name && !collected.name) {
         collected.name = persistedExtractedData.customer_name;
-        console.log(`[Instagram Auto-Reply] Name already persisted in lead record: ${persistedExtractedData.customer_name}`);
+        console.log(`[Instagram Auto-Reply] Name already persisted in lead record`);
       }
     }
 
@@ -637,7 +680,7 @@ IMPORTANT:
         return;
       }
 
-      console.log(`[Instagram Lead Capture] Contact info detected: name=${collected.name || 'N/A'}, phone=${collected.phone || 'N/A'}, email=${collected.email || 'N/A'}`);
+      console.log(`[Instagram Lead Capture] Contact info detected: name=${collected.name ? 'yes' : 'no'}, phone=${collected.phone ? 'yes' : 'no'}, email=${collected.email ? 'yes' : 'no'}`);
 
       if (leadTrainingConfig?.fields) {
         const phoneField = leadTrainingConfig.fields.find(
@@ -647,7 +690,7 @@ IMPORTANT:
           const digitCount = (phoneField as any).digitCount || 10;
           const digitsOnly = collected.phone.replace(/\D/g, '');
           if (digitsOnly.length !== digitCount) {
-            console.log(`[Instagram Lead Capture] Phone ${collected.phone} doesn't match required ${digitCount} digits, skipping lead save`);
+            console.log(`[Instagram Lead Capture] Phone doesn't match required ${digitCount} digits, skipping lead save`);
             return;
           }
         }
@@ -749,7 +792,7 @@ IMPORTANT:
         if (decryptedToken) {
           const profile = await instagramService.getUserProfile(decryptedToken, senderId);
           if (profile?.username) {
-            console.log(`[Instagram Auto-Reply] Resolved username via API: @${profile.username}`);
+            console.log(`[Instagram Auto-Reply] Resolved username via API for ${senderId}`);
             return profile.username;
           }
         }
@@ -1020,7 +1063,7 @@ IMPORTANT:
     }
 
     console.log(`[Instagram Auto-Reply] ========== CONTEXT SUMMARY ==========`);
-    console.log(`[Instagram Auto-Reply] User query: "${userMessage}"`);
+    console.log(`[Instagram Auto-Reply] User query: ${userMessage.length} chars`);
     console.log(`[Instagram Auto-Reply] Total context length: ${context.length} chars`);
     console.log(`[Instagram Auto-Reply] Has custom instructions: ${!!widgetCustomInstructions}`);
     console.log(`[Instagram Auto-Reply] Has lead training config: ${!!leadTrainingConfig}`);
@@ -1263,7 +1306,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
           try {
             const fnName = toolCall.function.name;
             const fnArgs = JSON.parse(toolCall.function.arguments || '{}');
-            console.log(`[Instagram Auto-Reply] Executing tool: ${fnName}(${JSON.stringify(fnArgs)})`);
+            console.log(`[Instagram Auto-Reply] Executing tool: ${fnName}`);
 
             if (fnName === 'get_products') {
               try {
@@ -1310,7 +1353,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
                   tool_call_id: toolCall.id,
                   content: toolResultStr,
                 });
-                console.log(`[Instagram Auto-Reply] Tool result: ${toolResultStr.substring(0, 200)}...`);
+                console.log(`[Instagram Auto-Reply] Tool result: ${toolResultStr.length} chars`);
               } catch (err) {
                 console.error(`[Instagram Auto-Reply] Tool execution error:`, err);
                 toolMessages.push({

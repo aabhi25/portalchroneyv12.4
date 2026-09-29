@@ -125,9 +125,7 @@ export class FacebookService {
         message: { text: truncatedText },
       };
 
-      console.log(`[Facebook] Sending message to ${recipientId}:`, {
-        text: truncatedText.substring(0, 50) + (truncatedText.length > 50 ? "..." : ""),
-      });
+      console.log(`[Facebook] Sending message to ${recipientId} (${truncatedText.length} chars)`);
 
       const response = await fetchWithTimeout(url, {
         method: "POST",
@@ -139,7 +137,7 @@ export class FacebookService {
       }, 30_000);
 
       const responseData = await response.json();
-      console.log(`[Facebook] API response:`, responseData);
+      console.log(`[Facebook] Send message: HTTP ${response.status}${responseData?.message_id ? `, message ${responseData.message_id}` : ""}${responseData?.error?.code ? `, error code ${responseData.error.code}` : ""}`);
 
       if (!response.ok) {
         const errorMsg = responseData?.error?.message || `Facebook API error: ${response.status}`;
@@ -262,9 +260,7 @@ export class FacebookService {
 
       const url = `${FB_API_BASE}/${commentId}/comments`;
 
-      console.log(`[Facebook] Replying to comment ${commentId}:`, {
-        text: truncatedMessage.substring(0, 50) + (truncatedMessage.length > 50 ? "..." : ""),
-      });
+      console.log(`[Facebook] Replying to comment ${commentId} (${truncatedMessage.length} chars)`);
 
       const response = await fetchWithTimeout(url, {
         method: "POST",
@@ -276,7 +272,7 @@ export class FacebookService {
       }, 30_000);
 
       const responseData = await response.json();
-      console.log(`[Facebook] Comment reply API response:`, responseData);
+      console.log(`[Facebook] Comment reply: HTTP ${response.status}${responseData?.id ? `, reply ${responseData.id}` : ""}${responseData?.error?.code ? `, error code ${responseData.error.code}` : ""}`);
 
       if (!response.ok) {
         const errorMsg = responseData?.error?.message || `Facebook API error: ${response.status}`;
@@ -313,9 +309,7 @@ export class FacebookService {
 
       const url = `${FB_API_BASE}/${commentId}/private_replies`;
 
-      console.log(`[Facebook] Sending private reply for comment ${commentId}:`, {
-        text: truncatedMessage.substring(0, 50) + (truncatedMessage.length > 50 ? "..." : ""),
-      });
+      console.log(`[Facebook] Sending private reply for comment ${commentId} (${truncatedMessage.length} chars)`);
 
       const response = await fetchWithTimeout(url, {
         method: "POST",
@@ -327,7 +321,7 @@ export class FacebookService {
       }, 30_000);
 
       const responseData = await response.json();
-      console.log(`[Facebook] Private reply API response:`, responseData);
+      console.log(`[Facebook] Private reply: HTTP ${response.status}${responseData?.error?.code ? `, error code ${responseData.error.code}` : ""}`);
 
       if (!response.ok) {
         const errorMsg = responseData?.error?.message || `Facebook API error: ${response.status}`;
