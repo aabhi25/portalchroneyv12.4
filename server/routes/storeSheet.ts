@@ -1,6 +1,6 @@
 // Dealers & Stores sheet API (see server/services/storeSheetService.ts).
 // Scoped to the caller's active business account; secrets are never returned except through
-// the reveal endpoint, which is limited to super admins and audited.
+// the reveal endpoint, open to anyone with access to the account and audited.
 import { Router, type Request, type Response } from "express";
 import { requireAuth, requireBusinessAccount } from "../auth";
 import * as sheet from "../services/storeSheetService";
@@ -13,7 +13,8 @@ function accountOf(req: Request): string | null {
   const user = (req as any).user;
   return user?.activeBusinessAccountId || user?.businessAccountId || null;
 }
-const isSuperAdmin = (req: Request) => (req as any).user?.role === "super_admin";
+// Anyone who can open the account can view its store secrets (every view is audited).
+const canRevealSecrets = (_req: Request) => true;
 
 function handle(fn: (req: Request, res: Response, businessAccountId: string) => Promise<unknown>) {
   return async (req: Request, res: Response) => {
@@ -30,7 +31,7 @@ function handle(fn: (req: Request, res: Response, businessAccountId: string) => 
   };
 }
 
-router.get("/api/store-sheet", handle((req, _res, id) => sheet.getSheetState(id, isSuperAdmin(req))));
+router.get("/api/store-sheet", handle((req, _res, id) => sheet.getSheetState(id, canRevealSecrets(req))));
 
 router.post("/api/store-sheet/rows", handle((req, _res, id) => sheet.createRow(id, req.body || {})));
 
@@ -47,8 +48,8 @@ router.post("/api/store-sheet/rows/bulk-delete", handle(async (req, _res, id) =>
 }));
 
 router.post("/api/store-sheet/rows/:rowId/reveal-secret", handle(async (req, res, id) => {
-  if (!isSuperAdmin(req)) {
-    res.status(403).json({ error: "Only super admins can view store secrets" });
+  if (!canRevealSecrets(req)) {
+    res.status(403).json({ error: "You don't have permission to view store secrets" });
     return;
   }
   const secret = await sheet.revealSecret(id, req.params.rowId);
@@ -65,7 +66,7 @@ router.put("/api/store-sheet/settings", handle(async (req, _res, id) => {
     enabled: typeof enabled === "boolean" ? enabled : undefined,
     stepLevels: stepLevels && typeof stepLevels === "object" ? stepLevels : undefined,
   });
-  return sheet.getSheetState(id, isSuperAdmin(req));
+  return sheet.getSheetState(id, canRevealSecrets(req));
 }));
 
 router.post("/api/store-sheet/import/preview", handle((req, _res, id) =>
