@@ -1,4 +1,5 @@
 import { trackTimer } from "../lib/lifecycle";
+import { reportError } from "../lib/errorReporter";
 /**
  * Draft WhatsApp leads (per account, "require PAN + email").
  *
@@ -180,7 +181,7 @@ export function startLeadQualificationSweep() {
   sweepTimer = trackTimer(setInterval(() => {
     sweepRecentDrafts()
       .then(n => { if (n > 0) console.log(`[LeadQualification] Sweep: ${n} draft(s) became leads`); })
-      .catch(err => console.error("[LeadQualification] Sweep error:", err?.message || err));
+      .catch(err => { console.error("[LeadQualification] Sweep error:", err?.message || err); reportError(err, { source: "worker:lead-qualification-sweep" }); });
   }, SWEEP_EVERY_MS));
   sweepTimer.unref?.();
 }

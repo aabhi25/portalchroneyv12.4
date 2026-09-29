@@ -76,7 +76,8 @@ export class EmbeddingService {
       throw new Error('OpenAI API key not configured for this business account');
     }
 
-    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: businessAccount.openaiApiKey });
+    // trackUsage:false — every call on this client is logged via aiUsageLogger.logEmbeddingUsage
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: businessAccount.openaiApiKey, trackUsage: false });
   }
 
   /**

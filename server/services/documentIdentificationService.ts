@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { createOpenAI } from "../lib/openaiClient";
 import { db } from "../db";
 import { businessAccounts } from "@shared/schema";
 import { eq } from "drizzle-orm";
@@ -197,7 +198,7 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
       }
 
       const systemPrompt = await this.buildSystemPrompt(businessAccountId);
-      const openai = new OpenAI({ apiKey, timeout: 30000 });
+      const openai = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
 
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -545,7 +546,7 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
       }
 
       const systemPrompt = await this.buildSystemPrompt(businessAccountId);
-      const openai = new OpenAI({ apiKey, timeout: 30000 });
+      const openai = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
       const truncatedText = text.substring(0, 5000);
 
       const response = await openai.chat.completions.create({
@@ -923,7 +924,8 @@ Return JSON exactly matching the enforced schema. Do not add prose outside the J
       const verifyStyle = options.verifyStyle ?? this.isVerifyStyleDocType(docTypeConfig);
       const systemPrompt = this.buildStrictPromptForDoc(docTypeConfig, options.escalationReason, verifyStyle);
       const schema = this.buildJsonSchemaForDoc(docTypeConfig);
-      const openai = new OpenAI({
+      const openai = createOpenAI({
+        businessAccountId,
         apiKey,
         timeout: options.timeoutMs ?? (model === 'gpt-4o' ? DOC_AI_TIMEOUTS.gpt4oMs : DOC_AI_TIMEOUTS.miniMs),
         maxRetries: 0, // the tier escalation is the retry; SDK retries would blow the time budget
@@ -1062,7 +1064,7 @@ Rules:
 - confidence > 0.8 only when you are sure of the type.
 - Do NOT extract any fields. Classification only.`;
 
-      const openai = new OpenAI({ apiKey, timeout: DOC_AI_TIMEOUTS.classifyMs, maxRetries: 0 });
+      const openai = createOpenAI({ businessAccountId, apiKey, timeout: DOC_AI_TIMEOUTS.classifyMs, maxRetries: 0 });
       // 'high' detail: at 'low' (512px) the text on an Aadhaar back side or a
       // two-sides-in-one photo is unreadable and the card gets classified "unknown".
       const userContent: any[] = [

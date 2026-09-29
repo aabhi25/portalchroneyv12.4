@@ -1,4 +1,5 @@
 import { trackTimer } from "../../lib/lifecycle";
+import { reportError } from "../../lib/errorReporter";
 import crypto from 'crypto';
 import { db } from '../../db';
 import {
@@ -782,7 +783,7 @@ export function startPlanSyncWorker(intervalMs = 5000): void {
       .catch((error) => console.error('[TopScholar PlanSync] startup recovery failed:', error));
   }, 6000));
   interval = trackTimer(setInterval(() => {
-    processPendingPlanRuns().catch((error) => console.error('[TopScholar PlanSync] worker tick failed:', error));
+    processPendingPlanRuns().catch((error) => { console.error('[TopScholar PlanSync] worker tick failed:', error); reportError(error, { source: 'worker:topscholar-plan-sync' }); });
   }, intervalMs));
   console.log(`[TopScholar PlanSync] worker started (every ${Math.round(intervalMs / 1000)}s, direct concurrency 1)`);
 }

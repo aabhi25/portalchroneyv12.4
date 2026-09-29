@@ -313,7 +313,7 @@ export async function refreshSnapshot(
     const apiKey = biz[0]?.openaiApiKey || process.env.OPENAI_API_KEY;
     if (!apiKey) return;
 
-    const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
+    const openai = createOpenAI({ businessAccountId, timeout: OPENAI_TIMEOUTS.chat, apiKey });
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [

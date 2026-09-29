@@ -58,7 +58,7 @@ class ConversationAnalyzer {
       throw new Error('OpenAI API key not found for business account');
     }
     
-    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
+    return createOpenAI({ businessAccountId, timeout: OPENAI_TIMEOUTS.chat, apiKey });
   }
 
   /**

@@ -1,4 +1,5 @@
 import { trackTimer } from "../lib/lifecycle";
+import { reportError } from "../lib/errorReporter";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 import { syncWhatsappLeadToCustomCrm, CRM_CLAIM_STALE_MS } from "./customCrmService";
@@ -113,6 +114,7 @@ export class CrmSyncRecoveryWorker {
       }
     } catch (err) {
       console.error("[CRM Recovery] Worker error:", err);
+      reportError(err, { source: "worker:crm-sync-recovery" });
     } finally {
       this.isProcessing = false;
     }

@@ -33,7 +33,8 @@ export class SmartNudgeService {
       throw new Error('OpenAI API key not configured');
     }
 
-    return createOpenAI({ apiKey: businessAccount.openaiApiKey });
+    // trackUsage:false — the call on this client is logged via aiUsageLogger.logUsage
+    return createOpenAI({ apiKey: businessAccount.openaiApiKey, trackUsage: false });
   }
 
   async generateSmartNudge(context: SmartNudgeContext): Promise<SmartNudgeResult> {

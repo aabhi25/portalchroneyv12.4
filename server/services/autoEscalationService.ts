@@ -23,7 +23,7 @@ export class AutoEscalationService {
       throw new Error('OpenAI API key not configured for this business account');
     }
     
-    return createOpenAI({ apiKey });
+    return createOpenAI({ businessAccountId, apiKey });
   }
 
   /**

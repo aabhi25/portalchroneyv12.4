@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { aiUsageLogger } from './services/aiUsageLogger';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
+import { withoutUsageTracking } from "./lib/requestContext";
 
 // Using GPT-4o-mini for customer-facing chat to ensure reliable:
 // - Language matching (English/Hindi/Hinglish)
@@ -183,8 +184,8 @@ async function extractNameWithLLM(conversationHistory: ConversationMessage[], bu
     }
     
     const openaiClient = provider === 'gemini'
-      ? createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey, baseURL: GEMINI_BASE_URL })
-      : createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
+      ? createOpenAI({ businessAccountId, timeout: OPENAI_TIMEOUTS.chat, apiKey, baseURL: GEMINI_BASE_URL })
+      : createOpenAI({ businessAccountId, timeout: OPENAI_TIMEOUTS.chat, apiKey });
     
     const response = await openaiClient.chat.completions.create({
       model: nameModel,
@@ -1032,8 +1033,9 @@ SCRIPT RULE (CRITICAL - check this before responding):
     // Add language override as the LAST message before sending (GPT weights final messages more heavily)
     messages.push({ role: 'system', content: finalOverride });
 
+    // withoutUsageTracking: logged below via aiUsageLogger.logChatUsage
     const response = await this.callWithFallback(
-      async (client, model) => client.chat.completions.create({
+      async (client, model) => withoutUsageTracking(() => client.chat.completions.create({
         model,
         messages: messages,
         tools: tools.length > 0 ? tools : undefined,
@@ -1042,7 +1044,7 @@ SCRIPT RULE (CRITICAL - check this before responding):
         max_tokens: 1000,
       }, {
         timeout: 30000,
-      }),
+      })),
       effectiveApiKey,
       primaryProvider,
       primaryModel
@@ -1477,7 +1479,8 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
       messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength
     );
 
-    const response = await openai.chat.completions.create({
+    // withoutUsageTracking: logged below via aiUsageLogger.logChatUsage
+    const response = await withoutUsageTracking(() => openai.chat.completions.create({
       model: model,
       messages: preparedMessages,
       tools: tools.length > 0 ? tools : undefined,
@@ -1485,7 +1488,7 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
       max_tokens: 1000,
     }, {
       timeout: 30000, // 30-second timeout to prevent hanging requests
-    });
+    }));
 
     // Log AI usage (fire-and-forget)
     if (businessAccountId) {
@@ -1515,7 +1518,8 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
       messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength
     );
 
-    const stream = await openai.chat.completions.create({
+    // withoutUsageTracking: logged below via aiUsageLogger.logChatUsage
+    const stream = await withoutUsageTracking(() => openai.chat.completions.create({
       model: model,
       messages: preparedMessages,
       tools: tools.length > 0 ? tools : undefined,
@@ -1525,7 +1529,7 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
       stream_options: { include_usage: true },
     } as any, {
       timeout: 30000,
-    });
+    }));
 
     let usage: any = undefined;
     for await (const chunk of stream as any) {
@@ -3091,7 +3095,8 @@ Requirements:
 
 Generate only the greeting message, nothing else.`;
 
-    const response = await openai.chat.completions.create({
+    // withoutUsageTracking: logged below via aiUsageLogger.logChatUsage
+    const response = await withoutUsageTracking(() => openai.chat.completions.create({
       model: model,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -3101,7 +3106,7 @@ Generate only the greeting message, nothing else.`;
       max_tokens: 150,
     }, {
       timeout: 60000, // 60-second timeout (should complete much faster, but allows for API delays)
-    });
+    }));
 
     // Log AI usage (fire-and-forget)
     if (businessAccountId) {

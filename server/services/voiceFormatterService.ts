@@ -130,7 +130,7 @@ export async function createVoiceSpeechText(
   const fallback = createVoiceSpeechFallback(displayMarkdown);
   if (!displayMarkdown.trim() || !apiKey) return fallback;
 
-  const client = createOpenAI({ apiKey });
+  const client = createOpenAI({ apiKey, trackUsage: false }); // usage logged via aiUsageLogger.logUsage (voice_mode)
   try {
     const completion = await Promise.race([
       client.chat.completions.create({
@@ -346,7 +346,7 @@ export async function formatVoiceTranscript(
 ): Promise<VoiceFormatResult | null> {
   if (!transcript || transcript.trim().length < 10) return null;
 
-  const client = createOpenAI({ apiKey });
+  const client = createOpenAI({ apiKey, trackUsage: false }); // usage logged via aiUsageLogger.logUsage (voice_mode)
 
   const candidates = diagramCandidates.filter(c => c && /^https?:\/\//i.test(c.url));
   const candidateBlock = candidates.length > 0

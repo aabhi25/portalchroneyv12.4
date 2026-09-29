@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { createOpenAI } from "../lib/openaiClient";
 import { db } from "../db";
 import {
   marketingCampaigns,
@@ -208,7 +209,7 @@ async function classifyInboundReply(opts: {
     .join("\n");
 
   try {
-    const openai = new OpenAI({ apiKey, timeout: 20000 });
+    const openai = createOpenAI({ apiKey, timeout: 20000 });
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -475,7 +476,7 @@ export const campaignAiService = {
       }
       messages.push({ role: "user", content: inboundClipped });
 
-      const openai = new OpenAI({ apiKey, timeout: 30000 });
+      const openai = createOpenAI({ apiKey, timeout: 30000 });
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages,

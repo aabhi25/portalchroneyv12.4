@@ -28,7 +28,7 @@ class ProductQueryParserService {
         return result;
       }
 
-      const openai = createOpenAI({ apiKey });
+      const openai = createOpenAI({ businessAccountId, apiKey });
       
       const response = await openai.chat.completions.create({
         model: 'gpt-4o-mini',

@@ -243,7 +243,7 @@ export class JourneyOrchestrator {
       throw new Error('OpenAI API key not configured for this business account');
     }
     
-    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
+    return createOpenAI({ businessAccountId, timeout: OPENAI_TIMEOUTS.chat, apiKey });
   }
 
   /**

@@ -36,7 +36,8 @@ export class PDFProcessingService {
       throw new Error('OpenAI API key not configured for this business account');
     }
 
-    return createOpenAI({ timeout: OPENAI_TIMEOUTS.document, apiKey: businessAccount.openaiApiKey });
+    // trackUsage:false — every call on this client is logged via aiUsageLogger.logDocumentAnalysisUsage
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.document, apiKey: businessAccount.openaiApiKey, trackUsage: false });
   }
 
   private async extractWithPdfjs(uint8Array: Uint8Array): Promise<{ text: string; pageCount: number }> {
