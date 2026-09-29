@@ -3,6 +3,7 @@ import { storage } from '../storage';
 import { db } from '../db';
 import { aiSuggestions, questionBankEntries, conversations, messages, leads, faqs, products, conversationJourneys } from '../../shared/schema';
 import { eq, and, gte, desc, sql } from 'drizzle-orm';
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 interface AnalysisResult {
   faqSuggestions: FAQSuggestion[];
@@ -57,7 +58,7 @@ class ConversationAnalyzer {
       throw new Error('OpenAI API key not found for business account');
     }
     
-    return new OpenAI({ apiKey });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
   }
 
   /**

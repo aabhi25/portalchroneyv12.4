@@ -22,6 +22,7 @@ import { composeCrossPlatformContext, triggerSnapshotUpdate } from './services/c
 import { validatePhoneNumber } from '../shared/validation/phone';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { pushTextMessage, type DoubtSyncSender } from './services/topscholar/doubtSyncService';
+import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
 
 export interface ChatContext {
   userId: string;
@@ -673,7 +674,7 @@ export class ChatService {
   // Generate a short conversation title from the first user message
   private async generateConversationTitle(userMessage: string, apiKey: string): Promise<string> {
     try {
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
       
       const response = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -703,7 +704,7 @@ export class ChatService {
   // Simple AI response for spam/gibberish messages - no DB, no tools, just natural response
   private async getSimpleAIResponse(userMessage: string, context: ChatContext): Promise<string> {
     try {
-      const openai = new OpenAI({ apiKey: context.openaiApiKey! });
+      const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: context.openaiApiKey! });
       
       const response = await openai.chat.completions.create({
         model: 'gpt-4o-mini',

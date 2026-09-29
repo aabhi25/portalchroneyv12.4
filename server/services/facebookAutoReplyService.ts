@@ -10,6 +10,7 @@ import { storage } from "../storage";
 import { resolveProfile } from "./customerProfileService";
 import { composeCrossPlatformContext, triggerSnapshotUpdate } from "./crossPlatformMemoryService";
 import OpenAI from "openai";
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 interface ConversationMessage {
   role: "user" | "assistant";
@@ -900,7 +901,7 @@ IMPORTANT:
     crossPlatformContext?: string
   ): Promise<string | null> {
     try {
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
 
       const now = new Date();
       const istDateFormatter = new Intl.DateTimeFormat('en-IN', {

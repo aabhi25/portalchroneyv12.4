@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { aiUsageLogger } from './aiUsageLogger';
+import { createOpenAI } from "../lib/openaiClient";
 
 export type StemSubject = 'math' | 'physics' | 'chemistry' | 'biology' | 'cs' | 'other';
 
@@ -129,7 +130,7 @@ export async function createVoiceSpeechText(
   const fallback = createVoiceSpeechFallback(displayMarkdown);
   if (!displayMarkdown.trim() || !apiKey) return fallback;
 
-  const client = new OpenAI({ apiKey });
+  const client = createOpenAI({ apiKey });
   try {
     const completion = await Promise.race([
       client.chat.completions.create({
@@ -345,7 +346,7 @@ export async function formatVoiceTranscript(
 ): Promise<VoiceFormatResult | null> {
   if (!transcript || transcript.trim().length < 10) return null;
 
-  const client = new OpenAI({ apiKey });
+  const client = createOpenAI({ apiKey });
 
   const candidates = diagramCandidates.filter(c => c && /^https?:\/\//i.test(c.url));
   const candidateBlock = candidates.length > 0

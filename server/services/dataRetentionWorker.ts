@@ -1,3 +1,4 @@
+import { trackTimer } from "../lib/lifecycle";
 import { recordSystemAuditEvent } from "./auditService";
 import {
   countDueForAccount,
@@ -22,8 +23,8 @@ export class DataRetentionWorker {
   start() {
     if (this.intervalId) return;
     console.log('[Data Retention] Starting purge worker (every 5 min, first run in 2 min)');
-    setTimeout(() => this.run(), INITIAL_DELAY_MS);
-    this.intervalId = setInterval(() => this.run(), CHECK_INTERVAL_MS);
+    trackTimer(setTimeout(() => this.run(), INITIAL_DELAY_MS));
+    this.intervalId = trackTimer(setInterval(() => this.run(), CHECK_INTERVAL_MS));
   }
 
   stop() {

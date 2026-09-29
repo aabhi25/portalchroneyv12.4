@@ -1,3 +1,4 @@
+import { trackTimer } from "../lib/lifecycle";
 interface CacheEntry<T> {
   data: T;
   timestamp: number;
@@ -135,9 +136,9 @@ export class BusinessContextCache {
   }
 
   startCleanupInterval() {
-    setInterval(() => {
+    trackTimer(setInterval(() => {
       this.cleanupExpired();
-    }, 60 * 1000); // Cleanup every minute
+    }, 60 * 1000)); // Cleanup every minute
   }
 }
 

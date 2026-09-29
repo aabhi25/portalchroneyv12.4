@@ -1,3 +1,4 @@
+import { fetchWithTimeout, LONG_FETCH_TIMEOUT_MS } from "../lib/fetchWithTimeout";
 import OpenAI from 'openai';
 import { toFile } from 'openai';
 import { GoogleGenAI } from '@google/genai';
@@ -53,7 +54,7 @@ export class OpenAIImageProvider implements ImageGenerationProvider {
     if (generatedImageData.b64_json) {
       finalBuffer = Buffer.from(generatedImageData.b64_json, 'base64');
     } else if (generatedImageData.url) {
-      const imageResponse = await fetch(generatedImageData.url);
+      const imageResponse = await fetchWithTimeout(generatedImageData.url, undefined, LONG_FETCH_TIMEOUT_MS);
       const arrayBuffer = await imageResponse.arrayBuffer();
       finalBuffer = Buffer.from(arrayBuffer);
     } else {

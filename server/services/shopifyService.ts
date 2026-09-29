@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 interface ShopifyProduct {
   id: string;
   title: string;
@@ -75,7 +76,7 @@ export class ShopifyService {
     const baseDelay = 1000;
 
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `https://${this.storeUrl}/admin/api/2025-10/graphql.json`,
         {
           method: 'POST',
@@ -84,7 +85,7 @@ export class ShopifyService {
             'X-Shopify-Access-Token': this.accessToken,
           },
           body: JSON.stringify({ query, variables }),
-        }
+        }, 60_000
       );
 
       if (response.status === 429) {
@@ -251,7 +252,7 @@ export class ShopifyService {
       console.log(`[Shopify] Access token length: ${this.accessToken?.length || 0}`);
       console.log(`[Shopify] Access token starts with: ${this.accessToken?.substring(0, 6)}...`);
 
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `https://${this.storeUrl}/admin/api/2025-10/graphql.json`,
         {
           method: 'POST',
@@ -260,7 +261,7 @@ export class ShopifyService {
             'X-Shopify-Access-Token': this.accessToken,
           },
           body: JSON.stringify({ query }),
-        }
+        }, 60_000
       );
 
       console.log(`[Shopify] Connection test response status: ${response.status}`);

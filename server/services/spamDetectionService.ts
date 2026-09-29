@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { createOpenAI } from "../lib/openaiClient";
 
 export interface SpamCheckResult {
   isSpam: boolean;
@@ -62,7 +63,7 @@ export async function classifyMessage(
   
   // For anything else, use AI classification with conservative defaults
   try {
-    const openai = new OpenAI({ apiKey: openaiApiKey });
+    const openai = createOpenAI({ apiKey: openaiApiKey });
     
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -150,8 +151,8 @@ export async function isGibberishAI(
     const spamModel = useMaster ? (master!.primaryModel || 'gpt-4o-mini') : 'gpt-4o-mini';
     const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
     const openai = provider === 'gemini'
-      ? new OpenAI({ apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
-      : new OpenAI({ apiKey: effectiveKey });
+      ? createOpenAI({ apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
+      : createOpenAI({ apiKey: effectiveKey });
     
     const response = await openai.chat.completions.create({
       model: spamModel,

@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { Readable } from 'stream';
 
 const ELEVENLABS_VOICE_MAP: Record<string, string> = {
@@ -160,7 +161,7 @@ export async function searchElevenLabsVoices(
   // { voices, has_more, last_sort_id } — matching what the client expects.
   const url = `https://api.elevenlabs.io/v1/shared-voices?${params.toString()}`;
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: 'GET',
     headers: {
       'xi-api-key': apiKey,

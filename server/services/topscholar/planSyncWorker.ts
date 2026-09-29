@@ -1,3 +1,4 @@
+import { trackTimer } from "../../lib/lifecycle";
 import crypto from 'crypto';
 import { db } from '../../db';
 import {
@@ -776,12 +777,12 @@ export async function processPendingPlanRuns(): Promise<void> {
 /** Starts the durable Plan-sync worker once per process. */
 export function startPlanSyncWorker(intervalMs = 5000): void {
   if (interval) return;
-  setTimeout(() => {
+  trackTimer(setTimeout(() => {
     processPendingPlanRuns()
       .catch((error) => console.error('[TopScholar PlanSync] startup recovery failed:', error));
-  }, 6000);
-  interval = setInterval(() => {
+  }, 6000));
+  interval = trackTimer(setInterval(() => {
     processPendingPlanRuns().catch((error) => console.error('[TopScholar PlanSync] worker tick failed:', error));
-  }, intervalMs);
+  }, intervalMs));
   console.log(`[TopScholar PlanSync] worker started (every ${Math.round(intervalMs / 1000)}s, direct concurrency 1)`);
 }

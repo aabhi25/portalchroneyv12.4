@@ -13,7 +13,10 @@ import path from "path";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { initializeDatabase } from "./init";
-import { initializePgVector } from "./db";
+import { initializePgVector, checkDatabase, endPool } from "./db";
+import type { Server } from "http";
+import { createGracefulShutdown, installProcessHandlers } from "./lib/gracefulShutdown";
+import { isShuttingDown, onShutdown } from "./lib/lifecycle";
 import { migrateK12NotesAndVideos } from "./scripts/migrateK12NotesVideos";
 import { shopifySyncScheduler } from "./services/shopifySyncScheduler";
 import { leadsquaredRetryWorker } from "./services/leadsquaredRetryWorker";
@@ -24,6 +27,31 @@ import { aiUsageLogger } from "./services/aiUsageLogger";
 import { backupScheduler } from "./services/backupScheduler";
 import { awaitingVerificationSweepWorker } from "./services/awaitingVerificationSweepWorker";
 import { conversationSummarySweepWorker } from "./services/conversationSummarySweepWorker";
+
+// Crash-proofing + graceful shutdown (SIGTERM/SIGINT from pm2/systemd, and
+// uncaughtException → exit(1) for a supervisor restart). Installed before
+// anything async starts so early failures are handled too.
+let httpServer: Server | null = null;
+const shutdown = createGracefulShutdown({
+  getServer: () => httpServer,
+  closePool: async () => {
+    const { endExternalContentPools } = await import("./services/topscholar/contentDb");
+    await Promise.allSettled([endPool(), endExternalContentPools()]);
+  },
+});
+installProcessHandlers(shutdown);
+
+// Stop the background schedulers/workers (their timers are also tracked via
+// trackTimer; stop() keeps each worker's own state consistent).
+onShutdown("background-workers", () => {
+  shopifySyncScheduler.stop();
+  leadsquaredRetryWorker.stop();
+  crmSyncRecoveryWorker.stop();
+  dataRetentionWorker.stop();
+  backupScheduler.stop();
+  awaitingVerificationSweepWorker.stop();
+  conversationSummarySweepWorker.stop();
+});
 
 const app = express();
 // Replit serves the app behind a reverse proxy. Trust the nearest proxy so
@@ -118,16 +146,23 @@ app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Readiness — runs subsystem self-tests (currently the PDF rasterizer). 503 here means the
-// instance is up but cannot serve PDF intake. Use this for deploy gating, not for LB liveness.
+// Readiness — runs subsystem self-tests: the database (SELECT 1, 2s budget) and the PDF
+// rasterizer. 503 here means the instance is up but cannot serve traffic properly (DB down,
+// PDF intake broken, or shutting down). Use this for deploy gating, not for LB liveness.
 app.get('/health/ready', async (_req, res) => {
-  const { pdfRendererSelfTest } = await import('./services/pdfRenderer');
-  const pdf = await pdfRendererSelfTest();
-  res.status(pdf.ok ? 200 : 503).json({
-    status: pdf.ok ? 'ok' : 'degraded',
-    timestamp: new Date().toISOString(),
-    checks: { pdfRenderer: pdf },
-  });
+  try {
+    const { pdfRendererSelfTest } = await import('./services/pdfRenderer');
+    const [database, pdf] = await Promise.all([checkDatabase(2_000), pdfRendererSelfTest()]);
+    const shuttingDown = isShuttingDown();
+    const ok = database.ok && pdf.ok && !shuttingDown;
+    res.status(ok ? 200 : 503).json({
+      status: shuttingDown ? 'shutting_down' : ok ? 'ok' : 'degraded',
+      timestamp: new Date().toISOString(),
+      checks: { database, pdfRenderer: pdf },
+    });
+  } catch (err: any) {
+    res.status(503).json({ status: 'error', timestamp: new Date().toISOString(), error: err?.message || String(err) });
+  }
 });
 
 app.use(express.json({
@@ -253,6 +288,7 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
 
   
   const server = await registerRoutes(app);
+  httpServer = server;
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -333,4 +369,10 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     // total AI cost goes down versus the old every-3-messages cadence.
     conversationSummarySweepWorker.start();
   });
-})();
+})().catch((err) => {
+  // Startup failed (DB unreachable, missing ENCRYPTION_KEY in production...).
+  // Previously this crashed via the default unhandledRejection behaviour; the
+  // global handler now only logs, so exit explicitly and let pm2 retry.
+  console.error('[Boot] Fatal startup error — exiting:', err);
+  void shutdown('startup failure', 1);
+});

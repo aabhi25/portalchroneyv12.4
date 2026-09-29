@@ -3,6 +3,7 @@ import { urgencyOfferSettings, urgencyOffers, conversations, messages, businessA
 import { eq, and, desc, gte, or, sql, asc } from "drizzle-orm";
 import OpenAI from "openai";
 import { randomBytes } from "crypto";
+import { createOpenAI } from "../lib/openaiClient";
 
 async function getOpenAIForBusiness(businessAccountId: string): Promise<OpenAI | null> {
   const businessAccount = await db.query.businessAccounts.findFirst({
@@ -16,7 +17,7 @@ async function getOpenAIForBusiness(businessAccountId: string): Promise<OpenAI |
     return null;
   }
   
-  return new OpenAI({ apiKey });
+  return createOpenAI({ apiKey });
 }
 
 export interface PurchaseIntentResult {

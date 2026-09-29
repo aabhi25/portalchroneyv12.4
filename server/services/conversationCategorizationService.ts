@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { db } from "../db";
 import { conversations, messages, widgetSettings, businessAccounts, conversationCategorySettings } from "@shared/schema";
 import { eq, and, isNull, desc, sql } from "drizzle-orm";
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 interface CustomCategoryConfig {
   categories: { name: string; subcategories: string[] }[];
@@ -153,8 +154,8 @@ export async function categorizeConversation(
     const model = useMaster ? (master!.primaryModel || 'gpt-4o-mini') : 'gpt-4o-mini';
     const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
     const openai = provider === 'gemini'
-      ? new OpenAI({ apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
-      : new OpenAI({ apiKey: effectiveKey });
+      ? createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: effectiveKey, baseURL: GEMINI_BASE_URL })
+      : createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: effectiveKey });
 
     const businessContext = await getBusinessContext(businessAccountId);
     const customCategories = await getCustomCategories(businessAccountId);

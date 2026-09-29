@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { aiUsageLogger } from './services/aiUsageLogger';
 import { isTopscholarAccount } from './services/topscholar/config';
+import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
 
 // Using GPT-4o-mini for customer-facing chat to ensure reliable:
 // - Language matching (English/Hindi/Hinglish)
@@ -182,8 +183,8 @@ async function extractNameWithLLM(conversationHistory: ConversationMessage[], bu
     }
     
     const openaiClient = provider === 'gemini'
-      ? new OpenAI({ apiKey, baseURL: GEMINI_BASE_URL })
-      : new OpenAI({ apiKey });
+      ? createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey, baseURL: GEMINI_BASE_URL })
+      : createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
     
     const response = await openaiClient.chat.completions.create({
       model: nameModel,
@@ -653,14 +654,14 @@ export class LlamaService {
     if (!key) {
       throw new Error('No OpenAI API key available. Please configure your API key in Settings.');
     }
-    return new OpenAI({ apiKey: key });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: key });
   }
 
   private getProviderClient(provider: string, apiKey: string): OpenAI {
     if (provider === 'gemini') {
-      return new OpenAI({ apiKey, baseURL: GEMINI_BASE_URL });
+      return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey, baseURL: GEMINI_BASE_URL });
     }
-    return new OpenAI({ apiKey });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
   }
 
   // Gemini 2.5+ are "thinking" models — they reject temperature != 1 with a 400 error.

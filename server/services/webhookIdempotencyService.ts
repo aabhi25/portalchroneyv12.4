@@ -1,3 +1,4 @@
+import { trackTimer } from "../lib/lifecycle";
 import { db } from "../db";
 import { webhookEvents } from "@shared/schema";
 import { and, eq, lt, sql } from "drizzle-orm";
@@ -101,9 +102,9 @@ export function startWebhookCleanupJob(): void {
   if (cleanupStarted) return;
   cleanupStarted = true;
   // Once a day
-  setInterval(() => {
+  trackTimer(setInterval(() => {
     webhookIdempotency.cleanupOlderThan(14)
       .then(n => { if (n > 0) console.log(`[webhookIdempotency] Cleaned ${n} old events`); })
       .catch(err => console.error("[webhookIdempotency] cleanup error:", err));
-  }, 24 * 60 * 60 * 1000);
+  }, 24 * 60 * 60 * 1000));
 }

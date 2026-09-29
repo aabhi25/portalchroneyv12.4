@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { storage } from '../storage';
 import type { SupportTicket } from '@shared/schema';
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 interface TicketAnalysis {
   priority: 'low' | 'medium' | 'high' | 'urgent';
@@ -34,7 +35,7 @@ export class TicketIntelligenceService {
       throw new Error('OpenAI API key not configured for this business account');
     }
     
-    return new OpenAI({ apiKey });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
   }
 
   async analyzeTicket(

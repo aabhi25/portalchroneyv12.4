@@ -3,6 +3,7 @@ import * as cheerio from "cheerio";
 import { storage } from "./storage";
 import { promises as dns } from "dns";
 import { aiUsageLogger } from "./services/aiUsageLogger";
+import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
 
 interface AnalyzedWebsiteContent {
   businessName: string;
@@ -209,7 +210,7 @@ export class WebsiteAnalysisService {
     businessAccountId: string
   ): Promise<string> {
     try {
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.longGeneration, apiKey });
       
       const systemPrompt = `You are a business analyst extracting key information from website content.
 Your task is to analyze the provided content and extract ONLY the most important business-relevant information.
@@ -734,7 +735,7 @@ Extract and organize the key business information as bullet points.`;
    * Merge existing analysis data with new website content using AI
    */
   private async mergeAnalysisData(existingData: AnalyzedWebsiteContent, newContent: string, apiKey: string, businessAccountId: string): Promise<AnalyzedWebsiteContent> {
-    const openai = new OpenAI({ apiKey });
+    const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.longGeneration, apiKey });
 
     const systemPrompt = `You are an expert business analyst specializing in merging and updating business information. Your goal is to combine existing business data with new website content, ensuring no information is lost and new details are added.`;
 
@@ -1332,7 +1333,7 @@ CRITICAL: Do NOT remove any existing data. Only add to it and update when necess
    * Extract data with evidence using strict anti-hallucination prompts
    */
   private async extractWithEvidence(content: string, apiKey: string, businessAccountId: string): Promise<ExtractedDataWithEvidence> {
-    const openai = new OpenAI({ apiKey });
+    const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.longGeneration, apiKey });
 
     const systemPrompt = `You are a precise data extractor. Extract business information that is clearly stated in the provided content.
 

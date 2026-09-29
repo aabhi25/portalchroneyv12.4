@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { pool as localPool } from '../../db';
+import { pool as localPool, hardenPool, withStatementTimeout, DB_POOL_SETTINGS } from '../../db';
 
 /**
  * Config-driven access to the curriculum content store (pgvector).
@@ -18,10 +18,21 @@ export function getContentPool(contentDbUrl: string | null): Pool {
   if (!contentDbUrl) return localPool;
   let p = externalPools.get(contentDbUrl);
   if (!p) {
-    p = new Pool({ connectionString: contentDbUrl });
+    p = hardenPool(new Pool(withStatementTimeout({
+      connectionString: contentDbUrl,
+      connectionTimeoutMillis: DB_POOL_SETTINGS.connectionTimeoutMillis,
+      idleTimeoutMillis: DB_POOL_SETTINGS.idleTimeoutMillis,
+    }, 'topscholar-content')), 'topscholar-content');
     externalPools.set(contentDbUrl, p);
   }
   return p;
+}
+
+/** Ends any client content-DB pools (graceful shutdown, after HTTP drain). */
+export async function endExternalContentPools(): Promise<void> {
+  const pools = Array.from(externalPools.values());
+  externalPools.clear();
+  await Promise.allSettled(pools.map((p) => p.end()));
 }
 
 export function isExternalContentDb(contentDbUrl: string | null): boolean {
@@ -37,6 +48,9 @@ export function isExternalContentDb(contentDbUrl: string | null): boolean {
 export async function ensureContentSchema(pool: Pool): Promise<void> {
   const client = await pool.connect();
   try {
+    // A first-time HNSW build over a large table can exceed the pool-wide
+    // statement_timeout safety net (server/db.ts); lift it for this bootstrap.
+    await client.query('SET statement_timeout = 0');
     await client.query('CREATE EXTENSION IF NOT EXISTS vector');
     await client.query(`
       CREATE TABLE IF NOT EXISTS topscholar_content_chunks (
@@ -90,7 +104,15 @@ export async function ensureContentSchema(pool: Pool): Promise<void> {
         ON topscholar_content_chunks USING hnsw (embedding vector_cosine_ops)
     `);
   } finally {
-    client.release();
+    // Restore the pool-wide statement_timeout before handing the client back;
+    // if that fails, destroy the client rather than return an unbounded one.
+    let restoreErr: Error | undefined;
+    try {
+      await client.query(`SET statement_timeout = ${DB_POOL_SETTINGS.statementTimeoutMs}`);
+    } catch (err: any) {
+      restoreErr = err instanceof Error ? err : new Error(String(err));
+    }
+    client.release(restoreErr);
   }
 }
 

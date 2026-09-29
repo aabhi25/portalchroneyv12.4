@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { createOpenAI } from "../lib/openaiClient";
 
 export interface InstructionConflict {
   instructionIds: string[];
@@ -40,7 +41,7 @@ export class InstructionAnalyzer {
   private openai: OpenAI;
 
   constructor(apiKey: string) {
-    this.openai = new OpenAI({
+    this.openai = createOpenAI({
       apiKey: apiKey,
     });
   }

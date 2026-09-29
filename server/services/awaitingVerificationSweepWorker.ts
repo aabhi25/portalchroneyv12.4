@@ -1,3 +1,4 @@
+import { trackTimer } from "../lib/lifecycle";
 import { storage } from "../storage";
 
 // Task #18 — Background sweep that hard-deletes widget conversations that were
@@ -26,8 +27,8 @@ class AwaitingVerificationSweepWorker {
   start() {
     if (this.intervalId) return;
     // Run once shortly after startup, then on a fixed cadence.
-    setTimeout(() => { void this.runOnce(); }, 30_000);
-    this.intervalId = setInterval(() => { void this.runOnce(); }, SWEEP_INTERVAL_MS);
+    trackTimer(setTimeout(() => { void this.runOnce(); }, 30_000));
+    this.intervalId = trackTimer(setInterval(() => { void this.runOnce(); }, SWEEP_INTERVAL_MS));
     console.log(`[AwaitingVerificationSweep] Started (interval=${SWEEP_INTERVAL_MS / 1000}s, horizon=${STALE_HORIZON_MS / 60000}m).`);
   }
 

@@ -8,6 +8,7 @@ import { embeddingService } from './embeddingService';
 import { db } from '../db';
 import { documentChunks, trainingDocuments } from '../../shared/schema';
 import { eq } from 'drizzle-orm';
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 export interface ProcessedPDFResult {
   extractedText: string;
@@ -35,7 +36,7 @@ export class PDFProcessingService {
       throw new Error('OpenAI API key not configured for this business account');
     }
 
-    return new OpenAI({ apiKey: businessAccount.openaiApiKey });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.document, apiKey: businessAccount.openaiApiKey });
   }
 
   private async extractWithPdfjs(uint8Array: Uint8Array): Promise<{ text: string; pageCount: number }> {

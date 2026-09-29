@@ -13,6 +13,7 @@ import { resolveCpIdsForScope } from './services/topscholar/scopeResolver';
 import { selectRelevantImages, type CurriculumMediaCandidate } from './services/topscholar/mediaMetadata';
 import { aiUsageLogger } from './services/aiUsageLogger';
 import { chatService, type ChatContext } from './chatService';
+import { createOpenAI } from "./lib/openaiClient";
 import {
   closeOrphanedTopscholarVoiceSessions,
   endTopscholarVoiceSession,
@@ -597,8 +598,29 @@ export class RealtimeVoiceService {
     conversation.lastHeartbeat = Date.now();
   }
 
+  /**
+   * Graceful shutdown: stop the heartbeat monitor and close every live voice
+   * conversation (sends `session_closed`, closes the OpenAI socket, records
+   * TopScholar usage). Idempotent.
+   */
+  shutdown(): void {
+    if (this.heartbeatMonitor) {
+      clearInterval(this.heartbeatMonitor);
+      this.heartbeatMonitor = null;
+    }
+    for (const conversationId of Array.from(this.conversations.keys())) {
+      try {
+        this.cleanupConversation(conversationId, 'server_shutdown');
+      } catch (err) {
+        console.error('[RealtimeVoice] Error closing conversation during shutdown:', conversationId, err);
+      }
+    }
+  }
+
+  private heartbeatMonitor: NodeJS.Timeout | null = null;
+
   private startHeartbeatMonitor() {
-    setInterval(() => {
+    this.heartbeatMonitor = setInterval(() => {
       const now = Date.now();
       this.conversations.forEach((conversation, conversationId) => {
         const timeSinceLastActivity = now - conversation.lastHeartbeat;
@@ -1294,7 +1316,7 @@ export class RealtimeVoiceService {
         return;
       }
 
-      const openai = new OpenAI({ apiKey: conversation.openaiApiKey });
+      const openai = createOpenAI({ apiKey: conversation.openaiApiKey });
       const response = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
@@ -2855,7 +2877,7 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), VOICE_INTENT_ROUTER_TIMEOUT_MS);
     try {
-      const openai = new OpenAI({ apiKey: conversation.openaiApiKey });
+      const openai = createOpenAI({ apiKey: conversation.openaiApiKey });
       const result = await openai.chat.completions.create({
         model: VOICE_INTENT_ROUTER_MODEL,
         temperature: 0,
@@ -3282,7 +3304,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
         ? history.map((m) => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${m.content.slice(0, 400)}`).join('\n')
         : '(no earlier messages)';
 
-      const client = new OpenAI({ apiKey: conversation.openaiApiKey });
+      const client = createOpenAI({ apiKey: conversation.openaiApiKey });
       const completion = await client.chat.completions.create({
         model: 'gpt-4o-mini',
         temperature: 0,
@@ -4309,7 +4331,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
     if (remaining) chunks.push(remaining);
 
     try {
-      const client = new OpenAI({ apiKey: conversation.openaiApiKey });
+      const client = createOpenAI({ apiKey: conversation.openaiApiKey });
       for (const chunk of chunks) {
         if (
           abortController.signal.aborted ||

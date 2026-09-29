@@ -13,6 +13,7 @@ import {
 import { eq, and, desc, sql } from "drizzle-orm";
 import { getIdentitiesForProfile } from "./customerProfileService";
 import OpenAI from "openai";
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 interface NormalizedMessage {
   platform: string;
@@ -312,7 +313,7 @@ export async function refreshSnapshot(
     const apiKey = biz[0]?.openaiApiKey || process.env.OPENAI_API_KEY;
     if (!apiKey) return;
 
-    const openai = new OpenAI({ apiKey });
+    const openai = createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [

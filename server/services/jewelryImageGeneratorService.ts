@@ -1,3 +1,4 @@
+import { fetchWithTimeout, LONG_FETCH_TIMEOUT_MS } from "../lib/fetchWithTimeout";
 import { backgroundRemovalService } from './backgroundRemovalService';
 import { db } from '../db';
 import { vistaStudioJobs, businessAccounts } from '../../shared/schema';
@@ -445,7 +446,7 @@ export class JewelryImageGeneratorService {
         apiKey = account.openaiApiKey;
       }
 
-      const originalImageResponse = await fetch(job.originalImageUrl);
+      const originalImageResponse = await fetchWithTimeout(job.originalImageUrl, undefined, LONG_FETCH_TIMEOUT_MS);
       const originalImageBuffer = Buffer.from(await originalImageResponse.arrayBuffer());
 
       const result = await this.generateProductImage(

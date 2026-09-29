@@ -1,3 +1,4 @@
+import { trackTimer } from "../lib/lifecycle";
 import { storage } from "../storage";
 import { db } from "../db";
 import { leads } from "@shared/schema";
@@ -55,7 +56,7 @@ export class LeadsquaredRetryWorker {
       await this.processRetries();
     }, CHECK_INTERVAL_MS);
 
-    setTimeout(() => this.processRetries(), 30_000);
+    trackTimer(setTimeout(() => this.processRetries(), 30_000));
   }
 
   stop() {

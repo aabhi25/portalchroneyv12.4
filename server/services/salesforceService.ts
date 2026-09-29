@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { SalesforceFieldMapping } from '@shared/schema';
 import { LeadDataContext, extractUtmCampaign, extractUtmSource, extractUtmMedium } from './leadsquaredService';
 
@@ -47,7 +48,7 @@ export class SalesforceService {
       password: this.config.password,
     });
 
-    const response = await fetch(`${this.loginUrl}/services/oauth2/token`, {
+    const response = await fetchWithTimeout(`${this.loginUrl}/services/oauth2/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params.toString(),
@@ -169,7 +170,7 @@ export class SalesforceService {
 
       console.log('[Salesforce] Creating lead - Fields:', Object.keys(attributes).join(', '));
 
-      const response = await fetch(`${instanceUrl}/services/data/v58.0/sobjects/Lead/`, {
+      const response = await fetchWithTimeout(`${instanceUrl}/services/data/v58.0/sobjects/Lead/`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -214,7 +215,7 @@ export class SalesforceService {
         return { success: false, message: 'No fields to update' };
       }
 
-      const response = await fetch(`${instanceUrl}/services/data/v58.0/sobjects/Lead/${salesforceLeadId}`, {
+      const response = await fetchWithTimeout(`${instanceUrl}/services/data/v58.0/sobjects/Lead/${salesforceLeadId}`, {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${accessToken}`,

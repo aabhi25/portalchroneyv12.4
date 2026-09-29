@@ -10,6 +10,7 @@ import { extractUtmCampaign, extractUtmSource, extractUtmMedium } from './leadsq
 import { productTextEmbeddingService } from './productTextEmbeddingService';
 import { productQueryParserService } from './productQueryParserService';
 import { validatePhoneNumber } from '../../shared/validation/phone';
+import { createOpenAI } from "../lib/openaiClient";
 
 const IST_TIMEZONE = 'Asia/Kolkata';
 
@@ -626,8 +627,7 @@ export class ToolExecutionService {
           }
           
           if (apiKey && productsWithMeta.length > 0) {
-            const OpenAI = (await import('openai')).default;
-            const openai = new OpenAI({ apiKey });
+            const openai = createOpenAI({ apiKey });
             
             const response = await openai.chat.completions.create({
               model: 'gpt-4o-mini',
@@ -807,8 +807,7 @@ ${productList}`
         return products;
       }
 
-      const OpenAI = (await import('openai')).default;
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
 
       // Build product list for translation - names only (descriptions translated on-demand in frontend)
       const productsToTranslate = products.map((p, i) => ({
@@ -2465,12 +2464,11 @@ Return JSON:
     }
 
     try {
-      const OpenAI = (await import('openai')).default;
       const apiKey = await storage.getBusinessAccountOpenAIKey(businessAccountId);
       if (!apiKey) {
         return this.createErrorResponse('OpenAI API key not configured for this account.');
       }
-      const openai = new OpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey });
 
       const extractionResponse = await openai.chat.completions.create({
         model: 'gpt-4o-mini',

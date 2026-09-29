@@ -7,6 +7,7 @@ import { embeddingService } from "./embeddingService";
 import { db } from "../db";
 import { trainedUrls, urlContentChunks } from "../../shared/schema";
 import { eq, and } from "drizzle-orm";
+import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
 export interface ProcessedUrlResult {
   title: string;
@@ -23,7 +24,7 @@ export class UrlTrainingService {
       throw new Error('OpenAI API key not configured for this business account');
     }
 
-    return new OpenAI({ apiKey: businessAccount.openaiApiKey });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.longGeneration, apiKey: businessAccount.openaiApiKey });
   }
 
   async crawlUrl(url: string): Promise<{ title: string; content: string; metaDescription: string }> {
