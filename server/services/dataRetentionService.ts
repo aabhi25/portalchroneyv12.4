@@ -179,23 +179,20 @@ export async function countDueForAccount(accountId: string, policy: RetentionPol
 // Purge
 // ---------------------------------------------------------------------------
 
-/** Deletes a chat image we stored (R2 or local /uploads). Best effort. */
-async function deleteStoredFile(url: string) {
+/**
+ * Deletes a file we stored: local /uploads, a public R2 URL of our bucket, or a private
+ * `r2private://<key>` reference (sensitive customer documents). Best effort.
+ */
+export async function deleteStoredFile(url: string) {
   try {
     if (url.startsWith('/uploads/')) {
       const filePath = path.join(process.cwd(), url.replace(/^\/+/, ''));
       if (filePath.startsWith(path.join(process.cwd(), 'uploads'))) await fs.promises.unlink(filePath).catch(() => {});
       return;
     }
-    const publicUrl = process.env.R2_PUBLIC_URL?.replace(/\/+$/, '');
     const { r2Storage } = await import('./r2StorageService');
-    let key: string | null = null;
-    if (publicUrl && url.startsWith(publicUrl + '/')) key = url.slice(publicUrl.length + 1);
-    else {
-      const m = url.match(/^https:\/\/pub-[a-z0-9]+\.r2\.dev\/(.+)$/i);
-      if (m) key = m[1];
-    }
-    if (key) await r2Storage.deleteFile(decodeURIComponent(key));
+    // parseRef only matches our own buckets (R2_PUBLIC_URL, pub-*.r2.dev, r2private://).
+    await r2Storage.deleteByRef(url);
   } catch (err: any) {
     console.warn('[Data Retention] Could not delete stored file:', err?.message);
   }

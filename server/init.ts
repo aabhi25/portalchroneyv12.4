@@ -318,6 +318,13 @@ export async function initializeDatabase() {
       console.error('[INIT] Error adding audio/cached rate columns to model_pricing:', err);
     }
 
+    // Webhook idempotency: mark events handled so a retry of an unfinished one isn't dropped.
+    try {
+      await db.execute(sql`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS processed_at TIMESTAMP`);
+    } catch (err) {
+      console.error('[INIT] Error adding processed_at to webhook_events:', err);
+    }
+
     // Resume any interrupted Vision Warehouse syncs
     try {
       await visionWarehouseSyncService.resumeInterruptedSyncs();

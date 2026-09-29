@@ -78,13 +78,36 @@ export async function markSessionExpired(businessAccountId: string, phoneNumber:
   }
 }
 
+const TEMPLATE_SEND_TIMEOUT_MS = 15_000;
+
+/**
+ * True when a fetch failure leaves it unknown whether MSG91 received the
+ * request: our timeout fired, or the connection dropped mid-exchange. Errors
+ * that happen before any byte reaches MSG91 (DNS failure, connection refused)
+ * are definite failures and return false.
+ */
+function isAmbiguousNetworkError(error: unknown): boolean {
+  const err = error as any;
+  const name = String(err?.name || "");
+  if (name === "TimeoutError" || name === "AbortError") return true;
+  const code = String(err?.code || err?.cause?.code || "");
+  if (["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH"].includes(code)) return false;
+  if (["ECONNRESET", "EPIPE", "ETIMEDOUT", "UND_ERR_SOCKET", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"].includes(code)) return true;
+  return /socket hang up|other side closed|terminated/i.test(String(err?.message || "") + " " + String(err?.cause?.message || ""));
+}
+
 export async function sendTemplateMessage(
   settings: WhatsappSettings,
   recipientPhone: string,
   templateName: string,
   params: Record<string, string> = {},
   opts: { language?: string; namespace?: string | null } = {},
-): Promise<{ success: boolean; messageId?: string; error?: string; raw?: any }> {
+): Promise<{ success: boolean; messageId?: string; error?: string; raw?: any; httpStatus?: number; outcomeUnknown?: boolean }> {
+  // Set once the request has been handed to the network. Past that point a
+  // thrown error (timeout, connection reset) does NOT prove MSG91 rejected the
+  // message — it may have been accepted and delivered — so callers must not
+  // blindly resend it.
+  let requestDispatched = false;
   try {
     if (!settings.msg91AuthKey) {
       return { success: false, error: "MSG91 auth key not configured" };
@@ -139,6 +162,7 @@ export async function sendTemplateMessage(
 
     console.log(`[WA Session] Sending template "${templateName}" to ${cleanPhone}`);
 
+    requestDispatched = true;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -147,6 +171,8 @@ export async function sendTemplateMessage(
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
+      // Never let one hung request stall a campaign send loop indefinitely.
+      signal: AbortSignal.timeout(TEMPLATE_SEND_TIMEOUT_MS),
     });
 
     // Read the body first so we can include it in error returns even on non-2xx.
@@ -170,6 +196,10 @@ export async function sendTemplateMessage(
           (responseData && (responseData.errors || responseData.message || responseData.error)) ||
           `MSG91 HTTP ${response.status}`,
         raw: responseData,
+        httpStatus: response.status,
+        // A gateway timeout means MSG91's edge gave up waiting on its own
+        // backend — the message may still have been accepted.
+        outcomeUnknown: response.status === 504 || undefined,
       };
     }
 
@@ -180,6 +210,7 @@ export async function sendTemplateMessage(
         success: false,
         error: responseData.errors || responseData.message || `MSG91 error: ${response.status}`,
         raw: responseData,
+        httpStatus: response.status,
       };
     }
 
@@ -197,6 +228,10 @@ export async function sendTemplateMessage(
         success: false,
         error: "MSG91 accepted the request but returned no message id; cannot track delivery",
         raw: responseData,
+        httpStatus: response.status,
+        // 2xx but the body could not be read (e.g. the timeout fired while
+        // streaming it): MSG91 most likely accepted the message.
+        outcomeUnknown: responseData?._parseError ? true : undefined,
       };
     }
 
@@ -216,6 +251,7 @@ export async function sendTemplateMessage(
     return {
       success: false,
       error: error instanceof Error ? error.message : "Failed to send template",
+      outcomeUnknown: requestDispatched && isAmbiguousNetworkError(error) ? true : undefined,
     };
   }
 }

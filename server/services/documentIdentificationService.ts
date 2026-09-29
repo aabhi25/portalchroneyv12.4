@@ -975,7 +975,7 @@ Return JSON exactly matching the enforced schema. Do not add prose outside the J
         _extractionTier: tierLabel,
       };
 
-      console.log(`[Document ID] Strict ${tierLabel} for ${normalizedKey}: confidence=${result.confidence}, side=${result.side || 'n/a'}, data=${JSON.stringify(result.extractedData)}`);
+      console.log(`[Document ID] Strict ${tierLabel} for ${normalizedKey}: confidence=${result.confidence}, side=${result.side || 'n/a'}, fields=${Object.keys(result.extractedData || {}).filter(k => result.extractedData[k] != null && result.extractedData[k] !== '').join(',')}`);
       await this.validateAndCorrectDocumentType(result, businessAccountId);
       return result;
     } catch (error: any) {

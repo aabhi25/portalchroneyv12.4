@@ -471,18 +471,43 @@ function rowObject(columns: ImportColumn[], row: SourceRecord): Record<string, s
   return values;
 }
 
-function recordKeyForContact(
-  config: Pick<AutomationInput, "recordKeyColumn">,
-  contact: { phone: string; name: string | null; attributes: Record<string, string> | null },
-): string {
-  return configuredColumns(config.recordKeyColumn)
-    .map(column => {
-      if (column === "phone") return contact.phone || "";
-      if (column === "name") return contact.name || "";
-      return contact.attributes?.[column] || "";
-    })
-    .map(value => value.trim())
-    .join(" | ");
+type RunRecipientSnapshot = { recordKey?: string | null; phone?: string | null };
+
+/**
+ * The record keys a review-mode run reserves when it is approved.
+ *
+ * The key is computed exactly once, by evaluateUpload, from the raw
+ * spreadsheet cells — the same value it checks against dispatch history — and
+ * persisted on the run's sourceSnapshot. Approval reuses those stored keys
+ * rather than rebuilding them from the generated contacts: those contacts no
+ * longer carry the configured phone/name columns in their attributes and hold
+ * a normalised phone, so a rebuilt key came out blank (approval refused) or
+ * different from the one checked at upload (the same record reminded again).
+ *
+ * The snapshot must still describe the contact group the campaign will send
+ * to; if that group was edited after review, approval is refused.
+ */
+export function dispatchKeysForReviewedRun(
+  snapshotRecipients: RunRecipientSnapshot[] | null | undefined,
+  contacts: { phone: string | null }[],
+): string[] {
+  if (!Array.isArray(snapshotRecipients) || snapshotRecipients.length === 0) {
+    throw new Error("This run was created before record keys were saved with it. Upload the file again and review the new run.");
+  }
+  const keys = snapshotRecipients.map(recipient => String(recipient?.recordKey ?? "").trim());
+  if (keys.some(key => !key)) {
+    throw new Error("This run has a blank record key and cannot be scheduled");
+  }
+  const phonesOf = (rows: { phone?: string | null }[]) => rows.map(row => String(row?.phone ?? "")).sort();
+  const snapshotPhones = phonesOf(snapshotRecipients);
+  const contactPhones = phonesOf(contacts);
+  if (
+    snapshotPhones.length !== contactPhones.length
+    || snapshotPhones.some((phone, index) => phone !== contactPhones[index])
+  ) {
+    throw new Error("The recipients of this run changed after it was reviewed. Upload the file again and review the new run.");
+  }
+  return keys;
 }
 
 function resolvePreviewParam(value: string, candidate: AutomationCandidate): string {
@@ -1203,22 +1228,21 @@ export const campaignAutomationService = {
 
       const contacts = await tx.select({
         phone: contactGroupContacts.phone,
-        name: contactGroupContacts.name,
-        attributes: contactGroupContacts.attributes,
       }).from(contactGroupContacts)
         .where(and(
           eq(contactGroupContacts.groupId, run.contactGroupId!),
           eq(contactGroupContacts.businessAccountId, businessAccountId),
         ));
-      const dispatches = contacts.map(contact => ({
-        automationId,
-        businessAccountId,
-        runId: run.id,
-        recordKey: recordKeyForContact(activeAutomation, contact),
-      }));
-      if (dispatches.some(dispatch => !dispatch.recordKey)) {
-        throw new Error("This run has a blank record key and cannot be scheduled");
-      }
+      // Reuse the keys evaluateUpload computed (and checked against history)
+      // when the run was created, so the reserved key is byte-for-byte the one
+      // later uploads will look up.
+      const dispatches = dispatchKeysForReviewedRun(run.sourceSnapshot?.recipients, contacts)
+        .map(recordKey => ({
+          automationId,
+          businessAccountId,
+          runId: run.id,
+          recordKey,
+        }));
       const reserved = await tx.insert(whatsappCampaignAutomationDispatches)
         .values(dispatches)
         .onConflictDoNothing()

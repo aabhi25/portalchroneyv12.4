@@ -52,13 +52,21 @@ async function parkUnsendableCampaign(
 ): Promise<void> {
   if (currentStatus !== "scheduled" && currentStatus !== "sending") return;
 
+  // "Already sent" means anything MSG91 may have accepted, not just rows Meta
+  // has confirmed: 'queued' (accepted, awaiting Meta), any row carrying a
+  // provider message id (including ones later marked failed/expired/opted out),
+  // rows whose send outcome is unknown, and rows a worker had claimed mid-send.
   const [dispatched] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(marketingCampaignRecipients)
     .where(
       and(
         eq(marketingCampaignRecipients.campaignId, campaignId),
-        inArray(marketingCampaignRecipients.status, ["sent", "delivered", "read", "replied"]),
+        sql`(
+          ${marketingCampaignRecipients.status} IN ('claimed', 'queued', 'sent', 'delivered', 'read', 'replied')
+          OR ${marketingCampaignRecipients.msg91MessageId} IS NOT NULL
+          OR ${marketingCampaignRecipients.errorMessage} LIKE ${UNKNOWN_OUTCOME_MARKER + "%"}
+        )`,
       ),
     );
 
@@ -128,6 +136,9 @@ async function fetchMsg91Reports(
   authKey: string,
   startDate: Date,
   endDate: Date,
+  // strict: throw instead of returning [] when MSG91 cannot be read, for
+  // callers that must not mistake "couldn't check" for "nothing to report".
+  strict = false,
 ): Promise<Msg91ReportRow[]> {
   const url = `https://control.msg91.com/api/v5/report/logs/wa?startDate=${ymd(startDate)}&endDate=${ymd(endDate)}`;
   try {
@@ -139,10 +150,12 @@ async function fetchMsg91Reports(
         "content-type": "application/json",
       },
       body: JSON.stringify({}),
+      signal: AbortSignal.timeout(30_000),
     });
     if (!resp.ok) {
       const errBody = await resp.text().catch(() => "");
       console.warn(`[Campaign] MSG91 reports HTTP ${resp.status} for ${ymd(startDate)}..${ymd(endDate)}: ${errBody.substring(0, 300)}`);
+      if (strict) throw new Error(`MSG91 reports HTTP ${resp.status}`);
       return [];
     }
     const data: any = await resp.json().catch(() => null);
@@ -160,6 +173,7 @@ async function fetchMsg91Reports(
     })).filter(r => r.requestId);
   } catch (err) {
     console.error(`[Campaign] fetchMsg91Reports error:`, err);
+    if (strict) throw err;
     return [];
   }
 }
@@ -179,7 +193,78 @@ const HEARTBEAT_INTERVAL_MS = 15 * 1000;
 const STALE_CAMPAIGN_HEARTBEAT_MS = 3 * 60 * 1000; // No heartbeat for 3 min ⇒ campaign considered crashed
 const STALE_RECIPIENT_CLAIM_MS = 5 * 60 * 1000;     // claimedAt older than 5 min ⇒ release back to pending
 const SEND_BATCH_SIZE = 20;
-const SEND_DELAY_MS = 250;
+
+/**
+ * Send-loop pacing. Mutable only so tests can shrink the waits; production
+ * code never changes these at runtime.
+ *
+ * MSG91 / Meta throttle a sender that goes too fast (HTTP 429, Meta 130429
+ * throughput, 131056 pair rate limit, 131048 spam rate limit, 80007 WABA rate
+ * limit). A throttled send was NOT accepted, so it is retried rather than
+ * recorded as a permanent failure: the row goes back to 'pending', the loop
+ * backs off exponentially (base → max), the per-message delay grows, and after
+ * `rateLimitPauseAfter` consecutive hits the whole loop pauses for
+ * `rateLimitPauseMs` instead of burning through the rest of the list.
+ */
+export const campaignSendTuning = {
+  sendDelayMs: 250,
+  maxSendDelayMs: 5_000,
+  rateLimitBaseBackoffMs: 5_000,
+  rateLimitMaxBackoffMs: 60_000,
+  rateLimitPauseAfter: 5,
+  rateLimitPauseMs: 3 * 60 * 1000,
+};
+
+/**
+ * Prefix on error_message for a recipient whose send outcome is unknown (the
+ * request timed out or the connection dropped after it was sent). The message
+ * may well have been delivered, so these rows are never re-sent automatically;
+ * "Resend failed" skips them unless the operator explicitly opts in.
+ */
+export const UNKNOWN_OUTCOME_MARKER = "[unknown_outcome]";
+
+const RATE_LIMIT_META_CODES = ["130429", "131048", "131056", "80007", "17", "613"];
+
+/**
+ * Classify a failed sendTemplateMessage result:
+ *  - 'rate_limited': provider throttled us — retry later, never a permanent failure.
+ *  - 'unknown':      we cannot tell whether MSG91 accepted it — do not resend.
+ *  - 'failed':       definite rejection.
+ */
+export function classifySendFailure(result: {
+  error?: unknown;
+  raw?: any;
+  httpStatus?: number;
+  outcomeUnknown?: boolean;
+}): "rate_limited" | "unknown" | "failed" {
+  if (result.httpStatus === 429) return "rate_limited";
+  let text = "";
+  try {
+    text = `${typeof result.error === "string" ? result.error : JSON.stringify(result.error ?? "")} ${JSON.stringify(result.raw ?? "")}`;
+  } catch {
+    text = String(result.error ?? "");
+  }
+  if (/rate[\s_-]*limit|too many requests|throughput|throttl/i.test(text)) return "rate_limited";
+  // Meta error codes arrive as `"code":130429`, `(#131056)`, `error 131048` etc.
+  // The short Graph API codes (17, 613) are only trusted when they appear
+  // as an explicit code field, since bare small numbers occur everywhere.
+  for (const code of RATE_LIMIT_META_CODES) {
+    const explicitField = new RegExp(`"(?:code|error_code|metaErrorCode)"\\s*:\\s*"?${code}"?(?!\\d)`);
+    if (explicitField.test(text)) return "rate_limited";
+    if (code.length >= 5 && new RegExp(`(?<!\\d)${code}(?!\\d)`).test(text)) return "rate_limited";
+  }
+  if (result.outcomeUnknown) return "unknown";
+  return "failed";
+}
+
+/** Exponential back-off for the n-th consecutive rate-limit hit (n ≥ 1), capped. */
+export function rateLimitBackoffMs(consecutiveHits: number): number {
+  const n = Math.max(1, consecutiveHits);
+  return Math.min(
+    campaignSendTuning.rateLimitMaxBackoffMs,
+    campaignSendTuning.rateLimitBaseBackoffMs * 2 ** (n - 1),
+  );
+}
 
 interface CreatePayload {
   name: string;
@@ -1206,6 +1291,28 @@ export const marketingCampaignService = {
     let sent = 0;
     let failed = 0;
     let lastHeartbeat = 0;
+    // Per-message delay: grows while the provider is throttling us and decays
+    // back to the configured floor as sends succeed again.
+    let sendDelayMs = campaignSendTuning.sendDelayMs;
+    let consecutiveRateLimits = 0;
+    const touchHeartbeat = async () => {
+      const now = Date.now();
+      if (now - lastHeartbeat <= HEARTBEAT_INTERVAL_MS) return;
+      lastHeartbeat = now;
+      await db.update(marketingCampaigns)
+        .set({ heartbeatAt: new Date(), updatedAt: new Date() })
+        .where(eq(marketingCampaigns.id, campaignId));
+    };
+    // Sleep in heartbeat-sized slices. A rate-limit back-off can last minutes;
+    // without a live heartbeat the scheduler would treat this worker as crashed
+    // and its forceResume would release the rows we are still holding.
+    const sleepWithHeartbeat = async (ms: number) => {
+      const until = Date.now() + ms;
+      for (let left = ms; left > 0; left = until - Date.now()) {
+        await new Promise(res => setTimeout(res, Math.min(left, HEARTBEAT_INTERVAL_MS)));
+        await touchHeartbeat();
+      }
+    };
     try {
       while (true) {
         // Liveness check + cancellation
@@ -1218,16 +1325,16 @@ export const marketingCampaignService = {
         const batch = await this.claimNextBatch(campaignId, SEND_BATCH_SIZE);
         if (batch.length === 0) break;
 
-        for (const r of batch) {
+        let rateLimited = false;
+        for (let index = 0; index < batch.length; index++) {
+          const r = batch[index];
           // Heartbeat throttled
-          const now = Date.now();
-          if (now - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
-            lastHeartbeat = now;
-            await db.update(marketingCampaigns)
-              .set({ heartbeatAt: new Date(), updatedAt: new Date() })
-              .where(eq(marketingCampaigns.id, campaignId));
-          }
+          await touchHeartbeat();
 
+          // Set as soon as MSG91 hands back a message id. From then on the
+          // message is out of our hands: nothing below may mark it 'failed',
+          // or "Resend failed" would send it a second time.
+          let acceptedMessageId: string | null = null;
           try {
             const optOuts = await contactGroupService.getOptOutSet(businessAccountId);
             if (optOuts.has(r.phone)) {
@@ -1251,7 +1358,7 @@ export const marketingCampaignService = {
                 })
                 .where(eq(marketingCampaignRecipients.id, r.id));
               failed++;
-              await new Promise(res => setTimeout(res, SEND_DELAY_MS));
+              await new Promise(res => setTimeout(res, sendDelayMs));
               continue;
             }
             const sendPhone = normalized.phone;
@@ -1272,6 +1379,7 @@ export const marketingCampaignService = {
               namespace: tpl.namespace,
             });
             if (result.success) {
+              acceptedMessageId = result.messageId || "";
               // Per industry-standard BSP integrations (Twilio, Infobip, Meta
               // Cloud API), a 2xx response from the provider only proves the
               // provider accepted the request — Meta has NOT yet confirmed.
@@ -1288,6 +1396,9 @@ export const marketingCampaignService = {
                   claimedAt: null,
                 })
                 .where(eq(marketingCampaignRecipients.id, r.id));
+              sent++;
+              consecutiveRateLimits = 0;
+              sendDelayMs = Math.max(campaignSendTuning.sendDelayMs, Math.floor(sendDelayMs * 0.9));
 
               const renderedBody = (tpl.bodyText || "").replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n) => params[String(n)] ?? `{{${n}}}`);
               await db.insert(marketingCampaignMessages).values({
@@ -1298,30 +1409,87 @@ export const marketingCampaignService = {
                 body: renderedBody,
                 metadata: { templateName: tpl.name, msg91MessageId: result.messageId || null, sendPhone, buttons: tpl.buttons ?? [] },
               });
-              sent++;
             } else {
+              const errorText = typeof result.error === "string" ? result.error : JSON.stringify(result.error || {}).substring(0, 500);
+              const failureKind = classifySendFailure(result);
+              if (failureKind === "rate_limited") {
+                // Throttled, not rejected: the message was never accepted. Hand
+                // this row and every not-yet-attempted row of the batch back to
+                // 'pending' (they are re-claimed after the back-off, oldest
+                // first) instead of holding claims through a long wait.
+                consecutiveRateLimits++;
+                rateLimited = true;
+                const unattempted = batch.slice(index).map(row => row.id);
+                await db.update(marketingCampaignRecipients)
+                  .set({ status: "pending", claimedAt: null })
+                  .where(and(
+                    inArray(marketingCampaignRecipients.id, unattempted),
+                    eq(marketingCampaignRecipients.status, "claimed"),
+                  ));
+                await db.update(marketingCampaignRecipients)
+                  .set({ providerResponse: result.raw ?? null, errorMessage: `Rate limited by provider, will retry: ${errorText}`.substring(0, 500) })
+                  .where(eq(marketingCampaignRecipients.id, r.id));
+                sendDelayMs = Math.min(campaignSendTuning.maxSendDelayMs, sendDelayMs * 2);
+                break;
+              }
               await db.update(marketingCampaignRecipients)
                 .set({
                   status: "failed",
                   claimedAt: null,
                   providerResponse: result.raw ?? null,
                   sendPhone,
-                  errorMessage: typeof result.error === "string" ? result.error : JSON.stringify(result.error || {}).substring(0, 500),
+                  // An unknown outcome (timeout / dropped connection after the
+                  // request went out) is recorded as failed so the campaign can
+                  // finish, but tagged so "Resend failed" never re-sends a
+                  // message the customer may already have received.
+                  errorMessage: failureKind === "unknown"
+                    ? `${UNKNOWN_OUTCOME_MARKER} Send outcome unknown (${errorText}); not retried automatically to avoid a duplicate message`.substring(0, 500)
+                    : errorText,
                 })
                 .where(eq(marketingCampaignRecipients.id, r.id));
               failed++;
             }
           } catch (err: any) {
-            await db.update(marketingCampaignRecipients)
-              .set({
-                status: "failed",
-                claimedAt: null,
-                errorMessage: (err?.message || String(err)).substring(0, 500),
-              })
-              .where(eq(marketingCampaignRecipients.id, r.id));
-            failed++;
+            if (acceptedMessageId !== null) {
+              // MSG91 already accepted this message; a later step (e.g. the
+              // transcript insert) failed. Never downgrade it to 'failed' — make
+              // sure it is recorded as 'queued' with its provider id so delivery
+              // receipts and reconciliation can find it.
+              console.error(`[Campaign] ${campaignId} post-send bookkeeping failed for accepted recipient ${r.id}:`, err);
+              try {
+                await db.update(marketingCampaignRecipients)
+                  .set({ status: "queued", msg91MessageId: acceptedMessageId || null, claimedAt: null })
+                  .where(and(
+                    eq(marketingCampaignRecipients.id, r.id),
+                    eq(marketingCampaignRecipients.status, "claimed"),
+                  ));
+              } catch (markErr) {
+                console.error(`[Campaign] ${campaignId} could not mark accepted recipient ${r.id} as queued:`, markErr);
+              }
+            } else {
+              await db.update(marketingCampaignRecipients)
+                .set({
+                  status: "failed",
+                  claimedAt: null,
+                  errorMessage: (err?.message || String(err)).substring(0, 500),
+                })
+                .where(eq(marketingCampaignRecipients.id, r.id));
+              failed++;
+            }
           }
-          await new Promise(res => setTimeout(res, SEND_DELAY_MS));
+          await new Promise(res => setTimeout(res, sendDelayMs));
+        }
+
+        if (rateLimited) {
+          const pauseEvery = Math.max(1, campaignSendTuning.rateLimitPauseAfter);
+          const backoffMs = consecutiveRateLimits % pauseEvery === 0
+            ? Math.max(campaignSendTuning.rateLimitPauseMs, rateLimitBackoffMs(consecutiveRateLimits))
+            : rateLimitBackoffMs(consecutiveRateLimits);
+          console.warn(
+            `[Campaign] ${campaignId} rate limited by provider (${consecutiveRateLimits} in a row) — ` +
+              `backing off ${Math.round(backoffMs / 1000)}s, per-message delay now ${sendDelayMs}ms`,
+          );
+          await sleepWithHeartbeat(backoffMs);
         }
 
         await db
@@ -1512,7 +1680,10 @@ export const marketingCampaignService = {
 
     const updates: any = { };
     if (kind === "sent") {
-      if (cur < STATUS_RANK.sent) {
+      // 'expired' only means "we never heard back"; a late 'sent' confirmation
+      // is new information and must win, otherwise the row still looks
+      // resendable. A provider 'failed' is not overridden by an out-of-order 'sent'.
+      if (cur < STATUS_RANK.sent || r.status === "expired") {
         updates.status = "sent";
         if (r.status === "failed" || r.status === "expired") updates.errorMessage = null;
       }
@@ -1938,84 +2109,107 @@ export const marketingCampaignService = {
   },
 
   /**
-   * Operator-initiated retry for a single recipient row. Flips a 'failed' or
-   * 'expired' row back to 'pending', clears prior error/UUID/timestamps so the
-   * send loop sees it as a fresh attempt, then refreshes the campaign's
-   * persisted aggregates so the dashboard tiles update immediately. Idempotent
-   * — calling on a row in any other state is a no-op (returns 0).
+   * Operator-initiated retry for a single recipient row. See requeueAllFailed
+   * for which rows are eligible. Idempotent — calling on a row that is not
+   * eligible is a no-op (returns 0).
    *
    * Tenant scoped: every WHERE clause includes businessAccountId so a request
    * can never resurrect a row outside the caller's tenant.
    */
-  async requeueRecipient(businessAccountId: string, campaignId: string, recipientId: string): Promise<{ requeued: number }> {
-    const result: any = await db.execute(sql`
-      UPDATE ${marketingCampaignRecipients}
-      SET status = 'pending',
-          claimed_at = NULL,
-          error_message = NULL,
-          provider_response = NULL,
-          msg91_message_id = NULL,
-          sent_at = NULL,
-          delivered_at = NULL,
-          read_at = NULL
-      WHERE id = ${recipientId}
-        AND campaign_id = ${campaignId}
-        AND business_account_id = ${businessAccountId}
-        AND status IN ('failed', 'expired')
-      RETURNING id;
-    `);
-    const rows: any[] = (result?.rows as any[]) ?? [];
-    if (rows.length > 0) {
-      await this.recomputeCampaignAggregates(campaignId);
-      // Same completed→sending bump as requeueAllFailed. Without this, the
-      // route's startSend(forceResume:true) call gets rejected by the
-      // "Already completed" guard, and the freshly-pending row sits forever.
-      const [c] = await db
-        .select({ status: marketingCampaigns.status })
-        .from(marketingCampaigns)
-        .where(and(eq(marketingCampaigns.id, campaignId), eq(marketingCampaigns.businessAccountId, businessAccountId)))
-        .limit(1);
-      if (c && (c.status === "completed" || c.status === "draft" || c.status === "scheduled")) {
-        await db
-          .update(marketingCampaigns)
-          .set({ status: "sending", completedAt: null, heartbeatAt: new Date(), updatedAt: new Date() })
-          .where(and(eq(marketingCampaigns.id, campaignId), eq(marketingCampaigns.businessAccountId, businessAccountId)));
-      }
-    }
-    return { requeued: rows.length };
+  async requeueRecipient(
+    businessAccountId: string,
+    campaignId: string,
+    recipientId: string,
+    opts?: { includeAccepted?: boolean },
+  ): Promise<{ requeued: number }> {
+    const requeued = await this.requeueRows(businessAccountId, campaignId, recipientId, opts);
+    if (requeued > 0) await this.wakeCampaignForResend(businessAccountId, campaignId);
+    return { requeued };
   },
 
   /**
-   * Bulk variant of requeueRecipient. Flips every 'failed' / 'expired' row in
-   * a campaign back to 'pending', refreshes aggregates, and — if the campaign
-   * had already settled to 'completed' — bumps it back to 'sending' and kicks
-   * the send loop with forceResume so the freshly-pending rows actually go
-   * out instead of sitting forever.
+   * "Resend failed". Flips eligible 'failed' / 'expired' rows back to
+   * 'pending', refreshes aggregates, and — if the campaign had already settled
+   * to 'completed' — bumps it back to 'sending' and kicks the send loop with
+   * forceResume so the freshly-pending rows actually go out.
+   *
+   * Only rows MSG91 never accepted are eligible by default: no provider
+   * message id and no unknown-outcome marker. A row with a message id was
+   * handed to WhatsApp, and 'expired' usually just means the delivery webhook
+   * was lost — re-sending it would give the customer the same message twice.
+   *
+   * `includeAccepted` is an explicit operator opt-in to also retry rows that
+   * were accepted but are still failed/expired after reconciling with MSG91
+   * (e.g. Meta rejected them after acceptance). Their old message id is kept
+   * until the new send replaces it, so a late receipt for the first attempt
+   * still lands on the row.
    */
-  async requeueAllFailed(businessAccountId: string, campaignId: string): Promise<{ requeued: number }> {
+  async requeueAllFailed(
+    businessAccountId: string,
+    campaignId: string,
+    opts?: { includeAccepted?: boolean },
+  ): Promise<{ requeued: number }> {
+    const requeued = await this.requeueRows(businessAccountId, campaignId, null, opts);
+    if (requeued === 0) return { requeued: 0 };
+    await this.wakeCampaignForResend(businessAccountId, campaignId);
+    // Don't await — startSend runs the send loop in the background and would
+    // otherwise hold the HTTP response open until the entire batch finishes.
+    this.startSend(businessAccountId, campaignId, { forceResume: true }).catch(err => {
+      console.error(`[Campaign] requeueAllFailed → startSend(${campaignId}) error:`, err);
+    });
+    return { requeued };
+  },
+
+  /** Shared row flip for requeueRecipient / requeueAllFailed. Returns rows requeued. */
+  async requeueRows(
+    businessAccountId: string,
+    campaignId: string,
+    recipientId: string | null,
+    opts?: { includeAccepted?: boolean },
+  ): Promise<number> {
+    const includeAccepted = opts?.includeAccepted === true;
+    if (includeAccepted) {
+      // Pull the latest provider status first so rows that were actually
+      // delivered (webhook lost) are promoted out of failed/expired and are no
+      // longer eligible below.
+      try {
+        await this.reconcileCampaign(businessAccountId, campaignId, { includeSettled: true });
+      } catch (err) {
+        console.error(`[Campaign] requeue(${campaignId}) reconcile before resend failed:`, err);
+        throw new Error("Could not confirm delivery status with MSG91; resend of accepted messages was not attempted");
+      }
+    }
     const result: any = await db.execute(sql`
       UPDATE ${marketingCampaignRecipients}
       SET status = 'pending',
           claimed_at = NULL,
           error_message = NULL,
           provider_response = NULL,
-          msg91_message_id = NULL,
           sent_at = NULL,
           delivered_at = NULL,
           read_at = NULL
       WHERE campaign_id = ${campaignId}
         AND business_account_id = ${businessAccountId}
+        AND (${recipientId}::varchar IS NULL OR id = ${recipientId})
         AND status IN ('failed', 'expired')
+        AND (
+          ${includeAccepted}
+          OR (msg91_message_id IS NULL
+              AND COALESCE(error_message, '') NOT LIKE ${UNKNOWN_OUTCOME_MARKER + "%"})
+        )
       RETURNING id;
     `);
     const rows: any[] = (result?.rows as any[]) ?? [];
-    if (rows.length === 0) return { requeued: 0 };
+    if (rows.length > 0) await this.recomputeCampaignAggregates(campaignId);
+    return rows.length;
+  },
 
-    await this.recomputeCampaignAggregates(campaignId);
-
-    // Wake the campaign up if it had already declared completion. Status flip
-    // happens BEFORE startSend so the in-flight guard inside startSend sees a
-    // valid sending campaign rather than rejecting it as 'completed'.
+  /**
+   * Bump a settled campaign back to 'sending' after rows were requeued.
+   * Without this, startSend(forceResume) is rejected by the "Already
+   * completed" guard and the freshly-pending rows sit forever.
+   */
+  async wakeCampaignForResend(businessAccountId: string, campaignId: string): Promise<void> {
     const [c] = await db
       .select({ status: marketingCampaigns.status })
       .from(marketingCampaigns)
@@ -2027,12 +2221,6 @@ export const marketingCampaignService = {
         .set({ status: "sending", completedAt: null, heartbeatAt: new Date(), updatedAt: new Date() })
         .where(and(eq(marketingCampaigns.id, campaignId), eq(marketingCampaigns.businessAccountId, businessAccountId)));
     }
-    // Don't await — startSend runs the send loop in the background and would
-    // otherwise hold the HTTP response open until the entire batch finishes.
-    this.startSend(businessAccountId, campaignId, { forceResume: true }).catch(err => {
-      console.error(`[Campaign] requeueAllFailed → startSend(${campaignId}) error:`, err);
-    });
-    return { requeued: rows.length };
   },
 
   /**
@@ -2043,10 +2231,15 @@ export const marketingCampaignService = {
    * each row is one cheap GET against MSG91 and we batch with bounded
    * concurrency. Idempotent + safe to run repeatedly.
    */
-  async reconcileCampaign(businessAccountId: string, campaignId: string): Promise<{ checked: number; updated: number }> {
+  async reconcileCampaign(
+    businessAccountId: string,
+    campaignId: string,
+    opts?: { includeSettled?: boolean },
+  ): Promise<{ checked: number; updated: number }> {
     const settings = await whatsappService.getSettings(businessAccountId);
     if (!settings?.msg91AuthKey) {
       console.warn(`[Campaign] reconcileCampaign(${campaignId}) — no MSG91 auth key, skipping`);
+      if (opts?.includeSettled) throw new Error("MSG91 auth key not configured");
       return { checked: 0, updated: 0 };
     }
     const rows = await db
@@ -2059,7 +2252,13 @@ export const marketingCampaignService = {
       .where(and(
         eq(marketingCampaignRecipients.businessAccountId, businessAccountId),
         eq(marketingCampaignRecipients.campaignId, campaignId),
-        inArray(marketingCampaignRecipients.status, ["queued", "sent"]),
+        // includeSettled also re-checks accepted rows we gave up on
+        // ('expired' = webhook never arrived), so a resend never repeats a
+        // message MSG91 reports as delivered.
+        inArray(
+          marketingCampaignRecipients.status,
+          opts?.includeSettled ? ["queued", "sent", "failed", "expired"] : ["queued", "sent"],
+        ),
         sql`${marketingCampaignRecipients.msg91MessageId} IS NOT NULL`,
       ));
     if (rows.length === 0) return { checked: 0, updated: 0 };
@@ -2089,7 +2288,7 @@ export const marketingCampaignService = {
     let cursor = new Date(earliest);
     while (cursor <= today) {
       const windowEnd = new Date(Math.min(cursor.getTime() + 2 * 24 * 60 * 60 * 1000, today.getTime()));
-      const chunk = await fetchMsg91Reports(settings.msg91AuthKey!, cursor, windowEnd);
+      const chunk = await fetchMsg91Reports(settings.msg91AuthKey!, cursor, windowEnd, opts?.includeSettled === true);
       console.log(`[Campaign] reconcileCampaign(${campaignId}) MSG91 ${ymd(cursor)}..${ymd(windowEnd)} → ${chunk.length} rows`);
       allReports.push(...chunk);
       cursor = new Date(windowEnd.getTime() + 24 * 60 * 60 * 1000);

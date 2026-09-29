@@ -3514,6 +3514,8 @@ export const webhookEvents = pgTable("webhook_events", {
   providerId: text("provider_id").notNull(), // Provider's unique message/event id (uuid, requestId, etc.)
   kind: text("kind").default("inbound"), // 'inbound' | 'delivery' | 'read' | 'failed' | 'sender_dedup'
   receivedAt: timestamp("received_at").notNull().defaultNow(),
+  // Set once the event was handled; a claim left unfinished (crash/restart) can be taken over by a retry.
+  processedAt: timestamp("processed_at"),
 }, (table) => ({
   uniq: uniqueIndex("webhook_events_biz_source_pid_uniq").on(table.businessAccountId, table.source, table.providerId),
   receivedIdx: index("webhook_events_received_idx").on(table.receivedAt),

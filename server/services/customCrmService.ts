@@ -1,7 +1,33 @@
 import crypto from 'crypto';
 import path from 'path';
-import { CustomCrmSettings, CustomCrmFieldMapping, CrmStoreCredential } from '@shared/schema';
-import { decrypt } from './encryptionService';
+import { eq, and, sql } from 'drizzle-orm';
+import {
+  CustomCrmSettings, CustomCrmFieldMapping, CrmStoreCredential,
+  customCrmSettings, customCrmFieldMappings, crmStoreCredentials, whatsappLeads, whatsappLeadAttachments, businessAccounts,
+} from '@shared/schema';
+import { db } from '../db';
+import { decrypt, safeDecrypt } from './encryptionService';
+
+// Outbound request timeouts. A hung CRM/relay/file host must never pin a sync forever.
+// Mutable so tests can shrink them; production code should treat them as constants.
+export const CRM_TIMEOUTS = {
+  jsonMs: 30_000,      // create-applicant, banking details
+  downloadMs: 60_000,  // fetching a stored document before upload
+  uploadMs: 120_000,   // document upload (direct or via relay)
+};
+
+/** How a failed CRM call should be treated by the retry machinery. */
+export type CrmErrorKind = 'transient' | 'permanent' | 'unknown_outcome';
+
+function isTimeoutError(error: any): boolean {
+  return error?.name === 'TimeoutError' || error?.name === 'AbortError' || error?.cause?.name === 'TimeoutError';
+}
+
+/** 408/429/5xx are worth retrying; any other 4xx is a request the CRM will keep rejecting. */
+export function classifyHttpStatus(status: number): CrmErrorKind {
+  if (status === 408 || status === 429 || status >= 500) return 'transient';
+  return 'permanent';
+}
 
 function validateUrl(baseUrl: string, endpoint: string): { valid: boolean; error?: string; fullUrl: string } {
   const fullUrl = endpoint.startsWith('http://') || endpoint.startsWith('https://')
@@ -322,6 +348,8 @@ export interface SyncLeadResult {
   message: string;
   payload?: Record<string, string>;
   responseData?: any;
+  /** Set on failure: whether retrying can help (see CrmErrorKind). */
+  errorKind?: CrmErrorKind;
 }
 
 export async function syncLead(
@@ -341,6 +369,7 @@ export async function syncLead(
       return {
         success: false,
         message: 'No field mappings configured or no data available for sync',
+        errorKind: 'permanent',
       };
     }
 
@@ -352,13 +381,14 @@ export async function syncLead(
           success: false,
           message: 'Caprion auth requires a matched store credential. Ensure the lead has a store_name that matches a configured store.',
           payload,
+          errorKind: 'permanent',
         };
       }
       try {
         secretForChecksum = decrypt(storeCredential.secret);
       } catch (e) {
         console.error('[CustomCRM] Failed to decrypt store secret:', e);
-        return { success: false, message: 'Failed to decrypt store credential secret' };
+        return { success: false, message: 'Failed to decrypt store credential secret', errorKind: 'permanent' };
       }
     } else if (settings.authType === 'checksum_hmac') {
       if (storeCredential) {
@@ -366,14 +396,14 @@ export async function syncLead(
           secretForChecksum = decrypt(storeCredential.secret);
         } catch (e) {
           console.error('[CustomCRM] Failed to decrypt store secret:', e);
-          return { success: false, message: 'Failed to decrypt store credential secret' };
+          return { success: false, message: 'Failed to decrypt store credential secret', errorKind: 'permanent' };
         }
       } else if (settings.authKey) {
         try {
           secretForChecksum = decrypt(settings.authKey);
         } catch (e) {
           console.error('[CustomCRM] Failed to decrypt authKey:', e);
-          return { success: false, message: 'Failed to decrypt authentication key' };
+          return { success: false, message: 'Failed to decrypt authentication key', errorKind: 'permanent' };
         }
       }
     }
@@ -384,7 +414,7 @@ export async function syncLead(
         decryptedAuthKey = decrypt(settings.authKey);
       } catch (e) {
         console.error('[CustomCRM] Failed to decrypt authKey:', e);
-        return { success: false, message: 'Failed to decrypt authentication key' };
+        return { success: false, message: 'Failed to decrypt authentication key', errorKind: 'permanent' };
       }
     }
 
@@ -470,21 +500,20 @@ export async function syncLead(
       console.log(`[Caprion] Transformed payload fields: ${Object.keys(payload).join(', ')}`);
     }
 
+    // Never log field values or the checksum input: the payload carries Aadhaar, PAN,
+    // DOB, income and address. Field names and counts are enough to debug a mapping.
     if (settings.authType === 'checksum_caprion' && secretForChecksum) {
-      const sortedKeysForLog = Object.keys(payload).sort();
-      const checksumDataString = sortedKeysForLog.map(k => String(payload[k] ?? '').trim()).join('||');
-      console.log(`[Caprion] Checksum data string: ${checksumDataString}`);
       payload['checksum'] = generateCaprionChecksum(payload, secretForChecksum);
-      console.log(`[Caprion] Checksum: ${payload['checksum']}`);
     } else if (settings.authType === 'checksum_hmac' && secretForChecksum) {
       payload['Checksum'] = generateChecksumHmac(payload, secretForChecksum);
     }
 
-    console.log(`[Caprion] Full payload: ${JSON.stringify(payload, null, 2)}`);
+    const emptyFields = Object.keys(payload).filter(k => !String(payload[k] ?? '').trim());
+    console.log(`[CustomCRM] Payload ready: ${Object.keys(payload).length} field(s), ${emptyFields.length} empty${emptyFields.length ? ` (${emptyFields.join(', ')})` : ''}`);
 
     const urlValidation = validateUrl(settings.apiBaseUrl || '', settings.apiEndpoint || '');
     if (!urlValidation.valid) {
-      return { success: false, message: urlValidation.error || 'Invalid API URL', payload };
+      return { success: false, message: urlValidation.error || 'Invalid API URL', payload, errorKind: 'permanent' };
     }
     const url = urlValidation.fullUrl;
 
@@ -538,6 +567,7 @@ export async function syncLead(
         method: 'POST',
         headers: relayHeaders,
         body: JSON.stringify(relayBody),
+        signal: AbortSignal.timeout(CRM_TIMEOUTS.jsonMs),
       });
     } else if (settings.contentType === 'json') {
       headers['Content-Type'] = 'application/json';
@@ -545,6 +575,7 @@ export async function syncLead(
         method,
         headers,
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(CRM_TIMEOUTS.jsonMs),
       });
     } else {
       const formData = new FormData();
@@ -555,12 +586,14 @@ export async function syncLead(
         method,
         headers,
         body: formData,
+        signal: AbortSignal.timeout(CRM_TIMEOUTS.jsonMs),
       });
     }
 
     const responseText = await response.text();
     const contentType = response.headers.get('content-type') || '';
-    console.log(`[CustomCRM] Response status: ${response.status} - Content-Type: ${contentType} - Body: ${responseText.slice(0, 500)}`);
+    // The CRM echoes submitted fields back, so the body is not logged — only its shape.
+    console.log(`[CustomCRM] Response status: ${response.status} - Content-Type: ${contentType} - ${responseText.length} bytes`);
 
     let responseData: any;
     let isJsonResponse = false;
@@ -579,7 +612,7 @@ export async function syncLead(
       const message = crmMsg
         ? `CRM_SYNC_ERROR[json_error]: ${crmMsg} (${httpLabel})`
         : `CRM_SYNC_ERROR[http_error]: ${httpLabel}`;
-      return { success: false, message, payload, responseData };
+      return { success: false, message, payload, responseData, errorKind: classifyHttpStatus(response.status) };
     }
 
     if (!isJsonResponse) {
@@ -587,7 +620,8 @@ export async function syncLead(
       const message = isHtml
         ? `CRM_SYNC_ERROR[html_response]: Caprion returned a server-side error page (HTTP 200 with HTML body). Check Caprion server logs or contact Caprion support.`
         : `CRM_SYNC_ERROR[unknown]: CRM returned a non-JSON response (HTTP 200).`;
-      return { success: false, message, payload, responseData };
+      // An HTML error page is a server-side crash, worth another try later.
+      return { success: false, message, payload, responseData, errorKind: 'transient' };
     }
 
     if (responseData?.success === 0 || responseData?.success === '0' || responseData?.success === false) {
@@ -597,6 +631,7 @@ export async function syncLead(
         message: `CRM_SYNC_ERROR[json_error]: ${crmMsg}`,
         payload,
         responseData,
+        errorKind: 'permanent',
       };
     }
 
@@ -620,21 +655,51 @@ export async function syncLead(
       responseData,
     };
   } catch (error: any) {
-    console.error('[CustomCRM] syncLead error:', error);
-    const isNetwork = error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND' || error.code === 'ERR_INVALID_URL' || (error.message || '').toLowerCase().includes('timeout');
+    // A timeout means the request may have reached the CRM and created the application
+    // before the response was lost. Retrying blindly could create a duplicate applicant.
+    if (isTimeoutError(error)) {
+      console.error(`[CustomCRM] syncLead timed out after ${CRM_TIMEOUTS.jsonMs}ms`);
+      return {
+        success: false,
+        message: `CRM_SYNC_ERROR[network_error]: no response within ${Math.round(CRM_TIMEOUTS.jsonMs / 1000)}s — the application may have been created. Check the CRM before syncing again.`,
+        errorKind: 'unknown_outcome',
+      };
+    }
+    console.error('[CustomCRM] syncLead error:', error?.message || error, error?.cause?.code || '');
+    // Node's fetch wraps socket errors: the code sits on error.cause.
+    const code = error?.code || error?.cause?.code;
+    const isNetwork = code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ECONNRESET' || code === 'EAI_AGAIN' || code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ERR_INVALID_URL' || (error?.message || '').toLowerCase().includes('fetch failed');
     const token = isNetwork ? 'network_error' : 'unknown';
+    // ECONNRESET after the request was written is ambiguous; everything else here failed
+    // before the CRM could act on the request.
+    const errorKind: CrmErrorKind = code === 'ECONNRESET' ? 'unknown_outcome' : 'transient';
     return {
       success: false,
-      message: `CRM_SYNC_ERROR[${token}]: ${error.message || 'Failed to sync lead to Custom CRM'}`,
+      message: `CRM_SYNC_ERROR[${token}]: ${error?.message || 'Failed to sync lead to Custom CRM'}${code ? ` (${code})` : ''}`,
+      errorKind,
     };
   }
 }
 
 export interface DocumentUploadResult {
   documentType: string;
+  /** Stable identity of the file (`category|url`), used to resume only the missing uploads. */
+  documentKey?: string;
   success: boolean;
   message: string;
   responseData?: any;
+}
+
+export function documentKeyFor(docCategory: string, file: DocumentFile): string {
+  // Without the query string: a presigned URL changes every time it is built.
+  return `${docCategory.toLowerCase()}|${file.url.split('?')[0]}`;
+}
+
+export interface DocumentUploadOptions {
+  /** Files already accepted by the CRM on an earlier attempt — not sent again. */
+  skipKeys?: Set<string>;
+  /** Called after each upload that the CRM accepted (used to checkpoint progress). */
+  onUploaded?: (documentKey: string) => Promise<void> | void;
 }
 
 export async function uploadDocumentsToCaprion(
@@ -644,7 +709,8 @@ export async function uploadDocumentsToCaprion(
   documents: Record<string, DocumentFile[]>,
   storeCredential: CrmStoreCredential,
   documentTypeMapping?: Record<string, string>,
-  bankStatementPassword?: string | null
+  bankStatementPassword?: string | null,
+  options: DocumentUploadOptions = {}
 ): Promise<DocumentUploadResult[]> {
   const results: DocumentUploadResult[] = [];
 
@@ -720,25 +786,31 @@ export async function uploadDocumentsToCaprion(
     const caprionDocType = docTypeMap[docCategory.toLowerCase()] || docCategory;
 
     for (const file of files) {
+      const documentKey = documentKeyFor(docCategory, file);
+      if (options.skipKeys?.has(documentKey)) {
+        continue;
+      }
       try {
         const fileUrlValidation = validateUrl(file.url, '');
         if (!fileUrlValidation.valid) {
           results.push({
             documentType: caprionDocType,
+            documentKey,
             success: false,
             message: `Invalid document URL: ${fileUrlValidation.error}`,
           });
           continue;
         }
 
-        console.log(`[CustomCRM] Uploading document: ${caprionDocType} from ${file.url}`);
+        console.log(`[CustomCRM] Uploading document: ${caprionDocType} (AppId: ${applicationId})`);
 
-        const fileResponse = await fetch(file.url);
+        const fileResponse = await fetch(file.url, { signal: AbortSignal.timeout(CRM_TIMEOUTS.downloadMs) });
         if (!fileResponse.ok) {
           results.push({
             documentType: caprionDocType,
+            documentKey,
             success: false,
-            message: `Failed to download document from ${file.url}: HTTP ${fileResponse.status}`,
+            message: `Failed to download ${caprionDocType} from storage: HTTP ${fileResponse.status}`,
           });
           continue;
         }
@@ -802,7 +874,7 @@ export async function uploadDocumentsToCaprion(
         const fileName = `${baseName}${finalExt}`;
 
         if (!existingExt || wasConverted) {
-          console.log(`[Caprion DocUpload] Filename resolved to "${fileName}" (original: "${file.fileName || '(none)'}", mimeType: ${mimeType}${wasConverted ? ', HEIC converted' : ''})`);
+          console.log(`[Caprion DocUpload] Filename extension resolved to "${finalExt}" (mimeType: ${mimeType}${wasConverted ? ', HEIC converted' : ''})`);
         }
 
         const fileBlob = new Blob([fileBuffer], { type: mimeType });
@@ -830,20 +902,9 @@ export async function uploadDocumentsToCaprion(
           metaPayload['document_password'] = bankStatementPassword;
         }
 
-        // Always redact document_password before logging — never let plaintext credentials
-        // reach prod logs. The checksum below uses the unredacted payload.
-        const redactedPayload: Record<string, string> = { ...metaPayload };
-        if (redactedPayload.document_password) redactedPayload.document_password = '***';
-
-        console.log(`[Caprion DocUpload] Payload fields: ${JSON.stringify(redactedPayload)}`);
+        // Log field names only — never values (document_password, sid) or the file URL.
+        console.log(`[Caprion DocUpload] Payload fields: ${Object.keys(metaPayload).join(', ')}`);
         const checksum = generateCaprionChecksum(metaPayload, decryptedSecret);
-
-        const curlFields = Object.entries({ ...redactedPayload, checksum })
-          .map(([k, v]) => `-F "${k}=${v}"`)
-          .join(' \\\n  ');
-        console.log(
-          `[Caprion DocUpload] curl equivalent:\ncurl -X POST ${uploadEndpoint} \\\n  ${curlFields} \\\n  -F "files[]=@<download from: ${file.url}>"`
-        );
 
         let response: Response;
 
@@ -877,6 +938,7 @@ export async function uploadDocumentsToCaprion(
               fileName,
               fileMimeType: mimeType,
             }),
+            signal: AbortSignal.timeout(CRM_TIMEOUTS.uploadMs),
           });
         } else {
           if (wasConverted && settings.relayUrl) {
@@ -892,6 +954,7 @@ export async function uploadDocumentsToCaprion(
           response = await fetch(uploadEndpoint, {
             method: 'POST',
             body: formData,
+            signal: AbortSignal.timeout(CRM_TIMEOUTS.uploadMs),
           });
         }
 
@@ -904,8 +967,6 @@ export async function uploadDocumentsToCaprion(
           /"document_password"\s*:\s*"[^"]*"/g,
           '"document_password":"***"'
         );
-        console.log(`[CustomCRM] Document upload response (${caprionDocType}): ${response.status} - ${safeResponseText.slice(0, 300)}`);
-
         let responseData: any;
         try {
           responseData = JSON.parse(safeResponseText);
@@ -913,28 +974,41 @@ export async function uploadDocumentsToCaprion(
           responseData = { raw: safeResponseText };
         }
 
-        if (response.ok) {
+        // Caprion reports some rejections as HTTP 200 with success: 0.
+        const rejectedInBody = responseData?.success === 0 || responseData?.success === '0' || responseData?.success === false;
+        console.log(`[CustomCRM] Document upload response (${caprionDocType}): ${response.status}${rejectedInBody ? ' (rejected in body)' : ''}`);
+
+        if (response.ok && !rejectedInBody) {
           results.push({
             documentType: caprionDocType,
+            documentKey,
             success: true,
             message: `${caprionDocType} uploaded successfully`,
             responseData,
           });
+          try {
+            await options.onUploaded?.(documentKey);
+          } catch (e: any) {
+            console.error(`[CustomCRM] Failed to checkpoint upload of ${caprionDocType}:`, e?.message || e);
+          }
         } else {
           const errorMsg = responseData?.message || responseData?.error || responseData?.ExceptionMessage || `HTTP ${response.status}`;
           results.push({
             documentType: caprionDocType,
+            documentKey,
             success: false,
             message: `Failed to upload ${caprionDocType}: ${errorMsg}`,
             responseData,
           });
         }
       } catch (error: any) {
-        console.error(`[CustomCRM] Document upload error (${caprionDocType}):`, error);
+        const timedOut = isTimeoutError(error);
+        console.error(`[CustomCRM] Document upload error (${caprionDocType}): ${timedOut ? 'timed out' : (error?.message || error)}`);
         results.push({
           documentType: caprionDocType,
+          documentKey,
           success: false,
-          message: error.message || `Failed to upload ${caprionDocType}`,
+          message: timedOut ? `Upload of ${caprionDocType} timed out` : (error.message || `Failed to upload ${caprionDocType}`),
         });
       }
     }
@@ -979,12 +1053,8 @@ async function uploadBankingDetailsToCaprion(
 
   payload['checksum'] = generateCaprionChecksum(payload, decryptedSecret);
 
-  const bankingCurlFields = Object.entries(payload)
-    .map(([k, v]) => `-F "${k}=${v}"`)
-    .join(' \\\n  ');
-  console.log(
-    `[Caprion BankingUpload] curl equivalent:\ncurl -X POST ${bankingEndpoint} \\\n  ${bankingCurlFields}`
-  );
+  // Account number and IFSC are never logged; only which of them is being sent.
+  console.log(`[Caprion BankingUpload] Fields: ${Object.keys(payload).filter(k => k !== 'checksum').join(', ')}`);
 
   try {
     let response: Response;
@@ -1008,43 +1078,114 @@ async function uploadBankingDetailsToCaprion(
           contentType: 'form-data',
           fields: payload,
         }),
+        signal: AbortSignal.timeout(CRM_TIMEOUTS.jsonMs),
       });
     } else {
       const formData = new FormData();
       for (const [key, value] of Object.entries(payload)) {
         formData.append(key, value);
       }
-      response = await fetch(bankingEndpoint, { method: 'POST', body: formData });
+      response = await fetch(bankingEndpoint, { method: 'POST', body: formData, signal: AbortSignal.timeout(CRM_TIMEOUTS.jsonMs) });
     }
 
     const responseText = await response.text();
 
-    if (response.ok) {
-      console.log(`[CustomCRM] Banking details uploaded successfully: ${responseText.slice(0, 200)}`);
+    let responseData: any = null;
+    try { responseData = JSON.parse(responseText); } catch { /* non-JSON body */ }
+    const rejectedInBody = responseData?.success === 0 || responseData?.success === '0' || responseData?.success === false;
+
+    // The CRM echoes the account number back, so response bodies are not logged or returned.
+    if (response.ok && !rejectedInBody) {
+      console.log(`[CustomCRM] Banking details uploaded successfully (AppId: ${applicationId})`);
       return { success: true, message: 'Banking details uploaded successfully' };
     } else {
-      console.error(`[CustomCRM] Banking details upload failed (${response.status}): ${responseText.slice(0, 300)}`);
-      return { success: false, message: `Banking upload failed with status ${response.status}: ${responseText.slice(0, 200)}` };
+      const crmMsg = typeof responseData?.message === 'string' ? `: ${responseData.message.slice(0, 200)}` : '';
+      console.error(`[CustomCRM] Banking details upload failed (${response.status}${rejectedInBody ? ', rejected in body' : ''})`);
+      return { success: false, message: `Banking upload failed with status ${response.status}${crmMsg}` };
     }
   } catch (e: any) {
-    console.error('[CustomCRM] Banking details upload error:', e);
-    return { success: false, message: e.message || 'Banking upload request failed' };
+    const timedOut = isTimeoutError(e);
+    console.error(`[CustomCRM] Banking details upload error: ${timedOut ? 'timed out' : (e?.message || e)}`);
+    return { success: false, message: timedOut ? 'Banking upload timed out' : (e.message || 'Banking upload request failed') };
   }
 }
+
+/** Progress from an earlier attempt that already created the application in the CRM. */
+export interface SyncResumeState {
+  leadId?: string | null;
+  applicationId?: string | null;
+  applicantId?: string | null;
+  bankingUploaded?: boolean;
+  uploadedDocKeys?: string[];
+}
+
+export interface SyncLeadWithDocumentsOptions {
+  /** When set (with an applicationId), the applicant is NOT created again — only missing banking/documents are sent. */
+  resume?: SyncResumeState;
+  /** Checkpoint hooks, called as soon as each step is accepted by the CRM. */
+  onLeadCreated?: (ids: { leadId?: string; applicationId?: string; applicantId?: string }) => Promise<void> | void;
+  onBankingUploaded?: () => Promise<void> | void;
+  onDocumentUploaded?: (documentKey: string) => Promise<void> | void;
+}
+
+export type SyncLeadWithDocumentsResult = SyncLeadResult & {
+  documentResults?: DocumentUploadResult[];
+  bankingResult?: { success: boolean; message: string };
+  /** synced = everything accepted; partial = applicant exists but banking/documents are missing; failed = no applicant. */
+  outcome: 'synced' | 'partial' | 'failed';
+  /** True when the applicant exists in the CRM (created now or on an earlier attempt). */
+  created: boolean;
+  bankingUploaded?: boolean;
+  uploadedDocKeys?: string[];
+  failedDocuments?: string[];
+};
 
 export async function syncLeadWithDocuments(
   settings: CustomCrmSettings,
   fieldMappings: CustomCrmFieldMapping[],
   leadContext: CustomCrmLeadContext,
-  storeCredential?: CrmStoreCredential
-): Promise<SyncLeadResult & { documentResults?: DocumentUploadResult[]; bankingResult?: { success: boolean; message: string } }> {
-  const leadResult = await syncLead(settings, fieldMappings, leadContext, storeCredential);
+  storeCredential?: CrmStoreCredential,
+  options: SyncLeadWithDocumentsOptions = {}
+): Promise<SyncLeadWithDocumentsResult> {
+  const resume = options.resume;
+  let leadResult: SyncLeadResult;
 
-  if (!leadResult.success) {
-    return leadResult;
+  if (resume?.applicationId) {
+    if (settings.authType === 'checksum_caprion' && !storeCredential) {
+      return {
+        success: false,
+        outcome: 'partial',
+        created: true,
+        errorKind: 'permanent',
+        applicationId: resume.applicationId,
+        message: `CRM_SYNC_ERROR[partial_documents]: Lead created in CRM (AppId ${resume.applicationId}) but its store credential is no longer available, so documents cannot be uploaded`,
+      };
+    }
+    console.log(`[CustomCRM] Resuming AppId ${resume.applicationId} — applicant already created, sending only missing items`);
+    leadResult = {
+      success: true,
+      leadId: resume.leadId || undefined,
+      applicationId: resume.applicationId,
+      applicantId: resume.applicantId || undefined,
+      message: `Lead already in ${settings.name || 'Custom CRM'}`,
+    };
+  } else {
+    leadResult = await syncLead(settings, fieldMappings, leadContext, storeCredential);
+    if (!leadResult.success) {
+      return { ...leadResult, outcome: 'failed', created: false };
+    }
+    try {
+      await options.onLeadCreated?.({ leadId: leadResult.leadId, applicationId: leadResult.applicationId, applicantId: leadResult.applicantId });
+    } catch (e: any) {
+      console.error('[CustomCRM] Failed to checkpoint created lead:', e?.message || e);
+    }
   }
 
-  let finalResult: SyncLeadResult & { documentResults?: DocumentUploadResult[]; bankingResult?: { success: boolean; message: string } } = { ...leadResult };
+  let finalResult: SyncLeadWithDocumentsResult = { ...leadResult, outcome: 'synced', created: true };
+  const problems: string[] = [];
+  let partialKind: CrmErrorKind = 'transient';
+  const documents = leadContext.documents || {};
+  const hasDocuments = Object.values(documents).some(files => files && files.length > 0);
 
   if (settings.authType === 'checksum_caprion' && storeCredential && leadResult.applicationId) {
     const extracted = leadContext.extracted || {};
@@ -1070,7 +1211,8 @@ export async function syncLeadWithDocuments(
       ` | ifsc: ${ifscMapping ? `field-mapping(${ifscMapping.crmField})` : 'fallback-extracted'} → ${ifscCode ? '***set***' : 'null'}`
     );
 
-    if (accountNumber || ifscCode) {
+    let bankingUploaded = !!resume?.bankingUploaded;
+    if ((accountNumber || ifscCode) && !bankingUploaded) {
       console.log(`[CustomCRM] Lead created (AppId: ${leadResult.applicationId}), uploading banking details`);
       const bankingResult = await uploadBankingDetailsToCaprion(
         settings,
@@ -1081,11 +1223,26 @@ export async function syncLeadWithDocuments(
       );
       const bankingSuffix = bankingResult.success ? ' | banking details uploaded' : ` | banking upload failed: ${bankingResult.message}`;
       finalResult = { ...finalResult, message: finalResult.message + bankingSuffix, bankingResult };
+      if (bankingResult.success) {
+        bankingUploaded = true;
+        try {
+          await options.onBankingUploaded?.();
+        } catch (e: any) {
+          console.error('[CustomCRM] Failed to checkpoint banking upload:', e?.message || e);
+        }
+      } else {
+        problems.push('banking details');
+      }
     }
+    finalResult.bankingUploaded = bankingUploaded;
 
-    // Document uploads
-    if (leadResult.applicantId && leadContext.documents && Object.keys(leadContext.documents).length > 0) {
-      console.log(`[CustomCRM] Uploading ${Object.keys(leadContext.documents).length} document type(s)`);
+    // Document uploads. Caprion's UploadDocument only needs application_id, so the
+    // upload is no longer skipped when the CRM does not return an applicant id.
+    const alreadyUploaded = new Set(resume?.uploadedDocKeys || []);
+    if (hasDocuments) {
+      const pendingCount = Object.entries(documents)
+        .reduce((n, [cat, files]) => n + files.filter(f => !alreadyUploaded.has(documentKeyFor(cat, f))).length, 0);
+      console.log(`[CustomCRM] Uploading ${pendingCount} document file(s) (${alreadyUploaded.size} already uploaded earlier)`);
 
       const bankStatementPassword =
         (extracted['_bankStatementPassword'] as string | undefined) ||
@@ -1095,21 +1252,51 @@ export async function syncLeadWithDocuments(
       const documentResults = await uploadDocumentsToCaprion(
         settings,
         leadResult.applicationId,
-        leadResult.applicantId,
-        leadContext.documents,
+        leadResult.applicantId || '',
+        documents,
         storeCredential,
         undefined,
-        bankStatementPassword
+        bankStatementPassword,
+        { skipKeys: alreadyUploaded, onUploaded: options.onDocumentUploaded }
       );
 
-      const successCount = documentResults.filter(r => r.success).length;
-      const failCount = documentResults.filter(r => !r.success).length;
-      const docSummary = failCount > 0
-        ? ` (${successCount} docs uploaded, ${failCount} failed)`
+      const uploadedDocKeys = new Set(alreadyUploaded);
+      for (const r of documentResults) {
+        if (r.success && r.documentKey) uploadedDocKeys.add(r.documentKey);
+      }
+      const failedDocs = documentResults.filter(r => !r.success);
+      const successCount = documentResults.length - failedDocs.length;
+      const docSummary = failedDocs.length > 0
+        ? ` (${successCount} docs uploaded, ${failedDocs.length} failed)`
         : ` (${successCount} docs uploaded)`;
 
-      finalResult = { ...finalResult, message: finalResult.message + docSummary, documentResults };
+      finalResult = {
+        ...finalResult,
+        message: finalResult.message + docSummary,
+        documentResults,
+        uploadedDocKeys: Array.from(uploadedDocKeys),
+        failedDocuments: failedDocs.map(r => r.documentType),
+      };
+      if (failedDocs.length > 0) {
+        problems.push(`${failedDocs.length} document(s): ${Array.from(new Set(failedDocs.map(r => r.documentType))).join(', ')}`);
+      }
     }
+  } else if (settings.authType === 'checksum_caprion' && storeCredential && hasDocuments) {
+    // Applicant created but no application id came back, so documents cannot be attached
+    // — and retrying would only create a second applicant.
+    problems.push('documents (CRM returned no application id)');
+    partialKind = 'permanent';
+  }
+
+  if (problems.length > 0) {
+    const ref = leadResult.applicationId || leadResult.leadId || 'unknown';
+    return {
+      ...finalResult,
+      success: false,
+      outcome: 'partial',
+      errorKind: partialKind,
+      message: `CRM_SYNC_ERROR[partial_documents]: Lead created in CRM (AppId ${ref}) but these were not accepted: ${problems.join('; ')}`,
+    };
   }
 
   return finalResult;
@@ -1172,5 +1359,443 @@ export async function testConnection(
       success: false,
       message: error.message || 'Failed to connect to CRM endpoint',
     };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WhatsApp lead → Custom CRM, with an atomic per-lead claim and retry state.
+//
+// custom_crm_sync_status values used (all pre-existing, all understood by the UI):
+//   NULL     never attempted
+//   pending  a sync is in flight (claimed by one server instance)
+//   synced   applicant created AND every banking/document item accepted
+//   failed   see custom_crm_sync_error; `_crmSync.retryable` says whether the
+//            recovery worker will try again (and `_crmSync.nextRetryAt` when)
+//
+// Retry bookkeeping lives under the reserved `_crmSync` key of the existing
+// custom_crm_sync_payload jsonb column — no schema change needed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Delay before retry N (1-based). Attempt 1 is the first push; attempt 6 is the last. */
+export const CRM_RETRY_DELAYS_MS = [5 * 60_000, 15 * 60_000, 60 * 60_000, 3 * 60 * 60_000, 12 * 60 * 60_000];
+export const CRM_MAX_ATTEMPTS = CRM_RETRY_DELAYS_MS.length + 1;
+/** A 'pending' claim older than this is assumed to belong to a crashed/hung instance. */
+export const CRM_CLAIM_STALE_MS = 10 * 60_000;
+
+export interface CrmSyncMeta {
+  claimId?: string | null;
+  claimedAt?: string | null;
+  prevStatus?: string | null;
+  source?: string;
+  attempts?: number;
+  lastAttemptAt?: string;
+  nextRetryAt?: string | null;
+  retryable?: boolean;
+  errorKind?: CrmErrorKind | null;
+  /** Set just before the create-applicant call; cleared when its outcome is known. */
+  createStartedAt?: string | null;
+  created?: boolean;
+  leadId?: string | null;
+  applicationId?: string | null;
+  applicantId?: string | null;
+  storeCredentialId?: string | null;
+  bankingUploaded?: boolean;
+  uploadedDocKeys?: string[];
+}
+
+export interface WhatsappLeadSyncOptions {
+  /** Manual "Sync" from the dashboard: re-push a synced lead, and ignore retry holds/backoff. */
+  force?: boolean;
+  /** Recovery worker: only claim a failed lead whose nextRetryAt has passed. */
+  respectBackoff?: boolean;
+  /** Skip when the business has auto-sync turned off (worker / automatic triggers). */
+  requireAutoSync?: boolean;
+  /** Label for logs/meta, e.g. 'flow_completed', 'webhook', 'manual', 'bulk', 'recovery'. */
+  source?: string;
+  /** Optional pre-built inputs. Anything omitted is loaded from the database. */
+  settings?: CustomCrmSettings;
+  fieldMappings?: CustomCrmFieldMapping[];
+  leadContext?: CustomCrmLeadContext;
+  storeCredential?: CrmStoreCredential;
+}
+
+export interface WhatsappLeadSyncResult {
+  success: boolean;
+  /** Set when nothing was pushed. */
+  skipped?: 'already_synced' | 'in_progress' | 'not_eligible' | 'not_found' | 'not_configured';
+  /** The lead's custom_crm_sync_status after this call. */
+  status: string | null;
+  message: string;
+  outcome?: 'synced' | 'partial' | 'failed';
+  errorKind?: CrmErrorKind;
+  crmLeadId?: string | null;
+  applicationId?: string | null;
+  documentResults?: DocumentUploadResult[];
+  retryScheduledAt?: string | null;
+}
+
+export function nextCrmRetryAt(attempts: number, now: Date = new Date()): Date | null {
+  if (attempts >= CRM_MAX_ATTEMPTS) return null;
+  const delay = CRM_RETRY_DELAYS_MS[Math.max(0, attempts - 1)] ?? CRM_RETRY_DELAYS_MS[CRM_RETRY_DELAYS_MS.length - 1];
+  return new Date(now.getTime() + delay);
+}
+
+/**
+ * Atomically move the lead to 'pending' and stamp our claim id. Only one caller
+ * (across every server instance) can win for a given lead; everyone else gets null.
+ */
+async function claimLeadForCrmSync(
+  leadId: string,
+  claimId: string,
+  opts: { force: boolean; respectBackoff: boolean; source: string }
+): Promise<CrmSyncMeta | null> {
+  const nowIso = new Date().toISOString();
+  const staleIso = new Date(Date.now() - CRM_CLAIM_STALE_MS).toISOString();
+  const res = await db.execute(sql`
+    UPDATE whatsapp_leads
+    SET custom_crm_sync_status = 'pending',
+        custom_crm_sync_payload = COALESCE(custom_crm_sync_payload, '{}'::jsonb) || jsonb_build_object('_crmSync',
+          (CASE WHEN ${opts.force}::boolean AND custom_crm_sync_status = 'synced'
+                THEN '{}'::jsonb
+                ELSE COALESCE(custom_crm_sync_payload->'_crmSync', '{}'::jsonb) END)
+          || jsonb_build_object(
+               'claimId', ${claimId}::text,
+               'claimedAt', ${nowIso}::text,
+               'prevStatus', custom_crm_sync_status,
+               'source', ${opts.source}::text)
+          || (CASE WHEN ${opts.force}::boolean THEN jsonb_build_object('attempts', 0) ELSE '{}'::jsonb END)),
+        updated_at = NOW()
+    WHERE id = ${leadId}
+      AND (
+        custom_crm_sync_status IS NULL
+        OR custom_crm_sync_status = ''
+        OR (custom_crm_sync_status = 'failed'
+            AND (${opts.force}::boolean OR COALESCE(custom_crm_sync_payload->'_crmSync'->>'retryable', 'true') <> 'false')
+            AND (${opts.force}::boolean OR NOT ${opts.respectBackoff}::boolean
+                 OR (custom_crm_sync_payload->'_crmSync'->>'nextRetryAt' IS NOT NULL
+                     AND (custom_crm_sync_payload->'_crmSync'->>'nextRetryAt')::timestamptz <= ${nowIso}::timestamptz)))
+        OR (custom_crm_sync_status = 'pending'
+            AND (custom_crm_sync_payload->'_crmSync'->>'claimedAt' IS NULL
+                 OR (custom_crm_sync_payload->'_crmSync'->>'claimedAt')::timestamptz < ${staleIso}::timestamptz))
+        OR (${opts.force}::boolean AND custom_crm_sync_status = 'synced')
+      )
+    RETURNING custom_crm_sync_payload->'_crmSync' AS meta
+  `);
+  const row = (res.rows as any[])[0];
+  return row ? ((row.meta as CrmSyncMeta) || {}) : null;
+}
+
+/** Merge a patch into `_crmSync`, but only while we still hold the claim. Also refreshes claimedAt (heartbeat). */
+async function checkpointCrmSync(leadId: string, claimId: string, patch: Partial<CrmSyncMeta>, crmLeadId?: string | null): Promise<boolean> {
+  const body = JSON.stringify({ ...patch, claimedAt: new Date().toISOString() });
+  const res = await db.execute(sql`
+    UPDATE whatsapp_leads
+    SET custom_crm_sync_payload = jsonb_set(custom_crm_sync_payload, '{_crmSync}',
+          COALESCE(custom_crm_sync_payload->'_crmSync', '{}'::jsonb) || ${body}::jsonb),
+        custom_crm_lead_id = COALESCE(${crmLeadId ?? null}::text, custom_crm_lead_id),
+        updated_at = NOW()
+    WHERE id = ${leadId}
+      AND custom_crm_sync_status = 'pending'
+      AND custom_crm_sync_payload->'_crmSync'->>'claimId' = ${claimId}::text
+    RETURNING id
+  `);
+  return res.rows.length > 0;
+}
+
+/** Write the final status and release the claim. Returns false if another instance took the claim over. */
+async function finalizeCrmSync(
+  leadId: string,
+  claimId: string,
+  fields: { status: 'synced' | 'failed'; error: string | null; crmLeadId?: string | null; payload?: Record<string, string>; meta: CrmSyncMeta }
+): Promise<boolean> {
+  const metaJson = JSON.stringify({ ...fields.meta, claimId: null, claimedAt: null });
+  const payloadJson = fields.payload ? JSON.stringify(fields.payload) : null;
+  const res = await db.execute(sql`
+    UPDATE whatsapp_leads
+    SET custom_crm_sync_status = ${fields.status}::text,
+        custom_crm_sync_error = ${fields.error}::text,
+        custom_crm_synced_at = CASE WHEN ${fields.status}::text = 'synced' THEN NOW() ELSE custom_crm_synced_at END,
+        custom_crm_lead_id = COALESCE(${fields.crmLeadId ?? null}::text, custom_crm_lead_id),
+        custom_crm_sync_payload = COALESCE(${payloadJson}::jsonb, custom_crm_sync_payload - '_crmSync', '{}'::jsonb)
+          || jsonb_build_object('_crmSync', ${metaJson}::jsonb),
+        updated_at = NOW()
+    WHERE id = ${leadId}
+      AND custom_crm_sync_status = 'pending'
+      AND custom_crm_sync_payload->'_crmSync'->>'claimId' = ${claimId}::text
+    RETURNING id
+  `);
+  return res.rows.length > 0;
+}
+
+async function buildWhatsappLeadDocuments(leadId: string): Promise<Record<string, DocumentFile[]>> {
+  // Private documents get expiring presigned URLs the CRM can download.
+  const { whatsappService } = await import("./whatsappService");
+  return whatsappService.buildLeadDocumentContext(leadId);
+}
+
+/** Same matching rules as the route/flow callers: exact store+dealer+city, then store+dealer, then store, then AI fuzzy match. */
+export async function resolveStoreCredentialForLead(
+  businessAccountId: string,
+  extractedData: Record<string, any>
+): Promise<CrmStoreCredential | undefined> {
+  const storeName = extractedData.store_name || extractedData.storeName;
+  const dealerName = extractedData.dealer_name || extractedData.dealerName || extractedData.dealer;
+  const cityName = extractedData.city || extractedData.city_name || extractedData.dealer_city || extractedData.dealerCity;
+  if (!storeName && !dealerName) return undefined;
+
+  const storeCreds = await db
+    .select()
+    .from(crmStoreCredentials)
+    .where(and(
+      eq(crmStoreCredentials.businessAccountId, businessAccountId),
+      eq(crmStoreCredentials.isActive, true)
+    ));
+
+  const norm = (v?: string | null) => v ? v.trim().toLowerCase() : '';
+  const nStore = norm(storeName);
+  const nDealer = norm(dealerName);
+  const nCity = norm(cityName);
+
+  let match: CrmStoreCredential | undefined;
+  if (nStore && nDealer && nCity) {
+    match = storeCreds.find(sc => norm(sc.storeName) === nStore && norm(sc.dealerName) === nDealer && norm(sc.city) === nCity);
+  }
+  if (!match && nStore && nDealer) {
+    match = storeCreds.find(sc => norm(sc.storeName) === nStore && norm(sc.dealerName) === nDealer);
+  }
+  if (!match && nStore) {
+    match = storeCreds.find(sc => norm(sc.storeName) === nStore);
+  }
+  if (!match && storeCreds.length > 0 && (nStore || nDealer)) {
+    try {
+      const [bizAcct] = await db.select({ openaiApiKey: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq(businessAccounts.id, businessAccountId)).limit(1);
+      const openaiApiKey = bizAcct?.openaiApiKey ? safeDecrypt(bizAcct.openaiApiKey) : process.env.OPENAI_API_KEY;
+      if (openaiApiKey) {
+        const OpenAI = (await import('openai')).default;
+        const openaiClient = new OpenAI({ apiKey: openaiApiKey, timeout: 15000 });
+        const storeList = storeCreds.map(sc => ({ id: sc.id, dealerName: sc.dealerName, storeName: sc.storeName, city: sc.city || '', storeId: sc.storeId }));
+        const prompt = `Match the lead's store info to the closest store credential.\n\nLead info:\n- Dealer: ${dealerName || 'unknown'}\n- City: ${cityName || 'unknown'}\n- Store: ${storeName || 'unknown'}\n\nAvailable stores (JSON):\n${JSON.stringify(storeList)}\n\nReturn ONLY a JSON object: {"matchedId": "<store id or null>", "confidence": <0.0-1.0>}\nIf no good match exists, return {"matchedId": null, "confidence": 0}`;
+        const completion = await openaiClient.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0,
+          max_tokens: 100,
+          response_format: { type: 'json_object' },
+        });
+        const content = completion.choices[0]?.message?.content;
+        if (content) {
+          const aiResult = JSON.parse(content);
+          if (aiResult.matchedId && aiResult.confidence >= 0.75) {
+            match = storeCreds.find(sc => sc.id === aiResult.matchedId);
+          }
+        }
+      }
+    } catch (aiErr: any) {
+      console.warn('[CRM LeadSync] AI fuzzy store matching failed:', aiErr?.message || aiErr);
+    }
+  }
+  return match;
+}
+
+/**
+ * The single entry point for pushing a WhatsApp lead to the Custom CRM.
+ *
+ * - Claims the lead atomically; a concurrent or repeated call for a lead that is
+ *   already synced or currently syncing is a no-op (unless `force`).
+ * - Persists status, error and retry state itself — callers must NOT write
+ *   custom_crm_sync_* columns afterwards.
+ * - Resumes from a previously created applicant: a retry only re-sends the
+ *   banking details / documents that the CRM has not yet accepted.
+ */
+export async function syncWhatsappLeadToCustomCrm(
+  leadId: string,
+  options: WhatsappLeadSyncOptions = {}
+): Promise<WhatsappLeadSyncResult> {
+  const source = options.source || 'unknown';
+  const force = !!options.force;
+  const tag = `[CRM LeadSync:${source}]`;
+
+  const [lead] = await db.select().from(whatsappLeads).where(eq(whatsappLeads.id, leadId)).limit(1);
+  if (!lead) {
+    return { success: false, skipped: 'not_found', status: null, message: 'WhatsApp lead not found' };
+  }
+
+  let settings = options.settings;
+  if (!settings) {
+    [settings] = await db.select().from(customCrmSettings).where(eq(customCrmSettings.businessAccountId, lead.businessAccountId)).limit(1);
+  }
+  if (!settings || !settings.enabled || !settings.apiBaseUrl || !settings.apiEndpoint || (options.requireAutoSync && !settings.autoSyncEnabled)) {
+    return { success: false, skipped: 'not_configured', status: lead.customCrmSyncStatus ?? null, message: 'Custom CRM sync is not enabled/configured for this account' };
+  }
+
+  const claimId = crypto.randomUUID();
+  const claimed = await claimLeadForCrmSync(leadId, claimId, { force, respectBackoff: !!options.respectBackoff, source });
+  if (!claimed) {
+    const [current] = await db.select({ status: whatsappLeads.customCrmSyncStatus }).from(whatsappLeads).where(eq(whatsappLeads.id, leadId)).limit(1);
+    const status = current?.status ?? null;
+    const skipped = status === 'synced' ? 'already_synced' : status === 'pending' ? 'in_progress' : 'not_eligible';
+    console.log(`${tag} Lead ${leadId} not claimed (status=${status}) — skipping`);
+    return {
+      success: status === 'synced',
+      skipped,
+      status,
+      message: skipped === 'already_synced' ? 'Lead is already synced to the CRM'
+        : skipped === 'in_progress' ? 'A CRM sync for this lead is already in progress'
+        : 'Lead is not due for a CRM retry',
+    };
+  }
+
+  const meta: CrmSyncMeta = { ...claimed };
+  const attempts = (meta.attempts || 0) + 1;
+  const nowIso = new Date().toISOString();
+
+  // A previous instance died between sending the create request and learning its
+  // outcome. Re-sending could create a second applicant, so stop and ask a human.
+  if (meta.prevStatus === 'pending' && meta.createStartedAt && !meta.created) {
+    const error = 'CRM_SYNC_ERROR[network_error]: a previous sync was interrupted while creating the application — it may exist in the CRM. Check the CRM, then use Sync to push again.';
+    await finalizeCrmSync(leadId, claimId, {
+      status: 'failed',
+      error,
+      meta: { ...meta, attempts, lastAttemptAt: nowIso, createStartedAt: null, retryable: false, nextRetryAt: null, errorKind: 'unknown_outcome' },
+    });
+    console.warn(`${tag} Lead ${leadId}: interrupted create detected — held for manual review`);
+    return { success: false, status: 'failed', message: error, outcome: 'failed', errorKind: 'unknown_outcome' };
+  }
+
+  try {
+    const fieldMappings = options.fieldMappings ?? await db
+      .select()
+      .from(customCrmFieldMappings)
+      .where(eq(customCrmFieldMappings.businessAccountId, lead.businessAccountId))
+      .orderBy(customCrmFieldMappings.sortOrder);
+
+    const extractedData = (lead.extractedData as Record<string, any>) || {};
+    const leadContext: CustomCrmLeadContext = options.leadContext ?? {
+      lead: {
+        customerName: lead.customerName || null,
+        customerEmail: lead.customerEmail || null,
+        customerPhone: lead.customerPhone || null,
+        senderPhone: lead.senderPhone || null,
+      },
+      extracted: extractedData,
+      documents: await buildWhatsappLeadDocuments(leadId),
+    };
+
+    const resuming = !!(meta.created && meta.applicationId);
+
+    // Documents must be attached under the same store (sid/secret) that created the
+    // application, so a resumed sync reuses the recorded credential.
+    let storeCredential: CrmStoreCredential | undefined;
+    if (resuming && meta.storeCredentialId) {
+      [storeCredential] = await db.select().from(crmStoreCredentials).where(eq(crmStoreCredentials.id, meta.storeCredentialId)).limit(1);
+    }
+    if (!storeCredential) {
+      storeCredential = options.storeCredential ?? await resolveStoreCredentialForLead(lead.businessAccountId, extractedData);
+    }
+
+    if (!resuming) {
+      await checkpointCrmSync(leadId, claimId, {
+        createStartedAt: new Date().toISOString(),
+        storeCredentialId: storeCredential?.id ?? null,
+        created: false,
+        applicationId: null,
+        applicantId: null,
+        leadId: null,
+        bankingUploaded: false,
+        uploadedDocKeys: [],
+      });
+    }
+
+    const uploadedDocKeys = new Set(meta.uploadedDocKeys || []);
+    console.log(`${tag} Lead ${leadId}: attempt ${attempts}${resuming ? ` (resuming AppId ${meta.applicationId}, ${uploadedDocKeys.size} doc(s) already uploaded)` : ''}`);
+
+    const result = await syncLeadWithDocuments(settings, fieldMappings, leadContext, storeCredential, {
+      resume: resuming ? {
+        leadId: meta.leadId,
+        applicationId: meta.applicationId,
+        applicantId: meta.applicantId,
+        bankingUploaded: meta.bankingUploaded,
+        uploadedDocKeys: Array.from(uploadedDocKeys),
+      } : undefined,
+      onLeadCreated: async (ids) => {
+        meta.created = true;
+        meta.createStartedAt = null;
+        meta.leadId = ids.leadId ?? null;
+        meta.applicationId = ids.applicationId ?? null;
+        meta.applicantId = ids.applicantId ?? null;
+        await checkpointCrmSync(leadId, claimId, {
+          created: true, createStartedAt: null,
+          leadId: meta.leadId, applicationId: meta.applicationId, applicantId: meta.applicantId,
+        }, ids.leadId || ids.applicationId || null);
+      },
+      onBankingUploaded: async () => {
+        meta.bankingUploaded = true;
+        await checkpointCrmSync(leadId, claimId, { bankingUploaded: true });
+      },
+      onDocumentUploaded: async (key) => {
+        uploadedDocKeys.add(key);
+        await checkpointCrmSync(leadId, claimId, { uploadedDocKeys: Array.from(uploadedDocKeys) });
+      },
+    });
+
+    const crmLeadId = result.leadId || result.applicationId || meta.leadId || meta.applicationId || null;
+    const finalMeta: CrmSyncMeta = {
+      ...meta,
+      attempts,
+      lastAttemptAt: nowIso,
+      createStartedAt: null,
+      created: result.created,
+      leadId: result.leadId ?? meta.leadId ?? null,
+      applicationId: result.applicationId ?? meta.applicationId ?? null,
+      applicantId: result.applicantId ?? meta.applicantId ?? null,
+      storeCredentialId: storeCredential?.id ?? meta.storeCredentialId ?? null,
+      bankingUploaded: result.bankingUploaded ?? meta.bankingUploaded ?? false,
+      uploadedDocKeys: result.uploadedDocKeys ?? Array.from(uploadedDocKeys),
+    };
+
+    if (result.outcome === 'synced') {
+      const ok = await finalizeCrmSync(leadId, claimId, {
+        status: 'synced', error: null, crmLeadId, payload: result.payload,
+        meta: { ...finalMeta, retryable: false, nextRetryAt: null, errorKind: null },
+      });
+      if (!ok) console.warn(`${tag} Lead ${leadId}: claim was taken over before the result could be saved`);
+      console.log(`${tag} Lead ${leadId} synced (attempt ${attempts})`);
+      return { success: true, status: 'synced', message: result.message, outcome: 'synced', crmLeadId, applicationId: finalMeta.applicationId, documentResults: result.documentResults };
+    }
+
+    // partial → worth retrying (only the missing items are re-sent); a failed
+    // create follows its error kind.
+    const errorKind: CrmErrorKind = result.errorKind || 'transient';
+    let retryAt = errorKind === 'transient' ? nextCrmRetryAt(attempts) : null;
+    let error = result.message;
+    if (errorKind === 'transient' && !retryAt) {
+      error = `${error} (gave up after ${attempts} attempts — use Sync to try again)`;
+    }
+    const ok = await finalizeCrmSync(leadId, claimId, {
+      status: 'failed', error, crmLeadId: result.created ? crmLeadId : null, payload: result.payload,
+      meta: { ...finalMeta, retryable: !!retryAt, nextRetryAt: retryAt ? retryAt.toISOString() : null, errorKind },
+    });
+    if (!ok) console.warn(`${tag} Lead ${leadId}: claim was taken over before the result could be saved`);
+    console.warn(`${tag} Lead ${leadId} ${result.outcome} (attempt ${attempts}, ${errorKind})${retryAt ? ` — retry at ${retryAt.toISOString()}` : ' — not retrying automatically'}`);
+    return {
+      success: false, status: 'failed', message: error, outcome: result.outcome, errorKind,
+      crmLeadId: result.created ? crmLeadId : null, applicationId: finalMeta.applicationId,
+      documentResults: result.documentResults, retryScheduledAt: retryAt ? retryAt.toISOString() : null,
+    };
+  } catch (err: any) {
+    // Unexpected error (DB, context building). If the create request might already
+    // have gone out, the outcome is unknown — do not retry automatically.
+    const [row] = await db.select({ payload: whatsappLeads.customCrmSyncPayload }).from(whatsappLeads).where(eq(whatsappLeads.id, leadId)).limit(1).catch(() => [] as any[]);
+    const current: CrmSyncMeta = ((row?.payload as any)?._crmSync as CrmSyncMeta) || meta;
+    const ambiguous = !!(current.createStartedAt && !current.created);
+    const errorKind: CrmErrorKind = ambiguous ? 'unknown_outcome' : 'transient';
+    const retryAt = ambiguous ? null : nextCrmRetryAt(attempts);
+    const error = `CRM_SYNC_ERROR[unknown]: ${err?.message || 'CRM sync failed'}`;
+    console.error(`${tag} Lead ${leadId} sync error:`, err?.message || err);
+    await finalizeCrmSync(leadId, claimId, {
+      status: 'failed', error,
+      meta: { ...current, attempts, lastAttemptAt: nowIso, createStartedAt: null, retryable: !!retryAt, nextRetryAt: retryAt ? retryAt.toISOString() : null, errorKind },
+    }).catch(e => console.error(`${tag} Failed to record sync error for ${leadId}:`, e?.message || e));
+    return { success: false, status: 'failed', message: error, outcome: 'failed', errorKind, retryScheduledAt: retryAt ? retryAt.toISOString() : null };
   }
 }

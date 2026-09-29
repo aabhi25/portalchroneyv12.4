@@ -86,6 +86,8 @@ import topscholarRoutes from "./routes/topscholar";
 import topscholarAnalyticsRoutes from "./routes/topscholarAnalytics";
 import verificationRoutes from "./routes/verification";
 import dataRetentionRoutes from "./routes/dataRetention";
+import whatsappDocumentsRoutes from "./routes/whatsappDocuments";
+import { inboundMessageLimiter, unsupportedMessageNotice } from "./services/inboundMessageLimiter";
 import { validatePhoneNumber } from "@shared/validation/phone";
 import { MAX_IMPORT_ROWS, normalizeColumnKeys } from "@shared/contactImport";
 
@@ -557,6 +559,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(jobPortalRoutes);
   app.use(verificationRoutes);
   app.use(dataRetentionRoutes);
+  app.use(whatsappDocumentsRoutes);
   
   // Widget routes (must be before authentication routes)
   // Serve minified widget.js for better performance (138KB vs 229KB original)
@@ -19094,28 +19097,10 @@ Important:
 
   // ========== Custom CRM Integration ==========
 
+  // Document links for the CRM: private documents get expiring presigned URLs.
   async function buildDocumentContext(leadId: string): Promise<Record<string, { url: string; fileName?: string; mimeType?: string }[]>> {
-    const attachments = await db
-      .select({
-        filePath: whatsappLeadAttachments.filePath,
-        fileName: whatsappLeadAttachments.fileName,
-        mimeType: whatsappLeadAttachments.mimeType,
-        documentCategory: whatsappLeadAttachments.documentCategory,
-      })
-      .from(whatsappLeadAttachments)
-      .where(eq(whatsappLeadAttachments.leadId, leadId));
-
-    const docs: Record<string, { url: string; fileName?: string; mimeType?: string }[]> = {};
-    for (const att of attachments) {
-      if (!att.filePath || !att.documentCategory) continue;
-      if (!docs[att.documentCategory]) docs[att.documentCategory] = [];
-      docs[att.documentCategory].push({
-        url: att.filePath,
-        fileName: att.fileName || undefined,
-        mimeType: att.mimeType || undefined,
-      });
-    }
-    return docs;
+    const { whatsappService } = await import("./services/whatsappService");
+    return whatsappService.buildLeadDocumentContext(leadId);
   }
 
   app.get("/api/custom-crm/available-fields", requireAuth, requireBusinessAccount, async (req, res) => {
@@ -19822,32 +19807,17 @@ Important:
           }
         }
 
-        const { syncLeadWithDocuments } = await import('./services/customCrmService');
-        const result = await syncLeadWithDocuments(settings, fieldMappings, leadContext, storeCredential);
+        // Manual "Sync": re-push even if already synced; the service records the outcome.
+        const { syncWhatsappLeadToCustomCrm } = await import('./services/customCrmService');
+        const result = await syncWhatsappLeadToCustomCrm(leadId, {
+          source: 'manual', force: true, settings, fieldMappings, leadContext, storeCredential,
+        });
 
-        if (result.success) {
-          await db.update(whatsappLeads)
-            .set({
-              customCrmSyncStatus: 'synced',
-              customCrmSyncedAt: new Date(),
-              customCrmLeadId: result.leadId || result.applicationId || null,
-              customCrmSyncError: null,
-              customCrmSyncPayload: result.payload as any,
-              updatedAt: new Date(),
-            })
-            .where(eq(whatsappLeads.id, leadId));
-
-          res.json({ success: true, message: result.message, crmLeadId: result.leadId, applicationId: result.applicationId, documentResults: (result as any).documentResults });
+        if (result.skipped === 'in_progress') {
+          res.status(409).json({ success: false, error: result.message });
+        } else if (result.success) {
+          res.json({ success: true, message: result.message, crmLeadId: result.crmLeadId, applicationId: result.applicationId, documentResults: result.documentResults });
         } else {
-          await db.update(whatsappLeads)
-            .set({
-              customCrmSyncStatus: 'failed',
-              customCrmSyncError: result.message,
-              customCrmSyncPayload: result.payload as any,
-              updatedAt: new Date(),
-            })
-            .where(eq(whatsappLeads.id, leadId));
-
           res.status(400).json({ success: false, error: result.message });
         }
       } else {
@@ -19942,9 +19912,10 @@ Important:
           eq(crmStoreCredentials.isActive, true)
         ));
 
-      const { syncLeadWithDocuments } = await import('./services/customCrmService');
+      const { syncWhatsappLeadToCustomCrm } = await import('./services/customCrmService');
       let syncedCount = 0;
       let failedCount = 0;
+      let skippedCount = 0;
       const norm = (s?: string | null) => s ? s.trim().toLowerCase() : '';
 
       for (const lead of unsyncedLeads) {
@@ -20011,49 +19982,25 @@ Important:
             }
           }
 
-          const result = await syncLeadWithDocuments(settings, fieldMappings, leadContext, storeCredential);
-
-          if (result.success) {
-            await db.update(whatsappLeads)
-              .set({
-                customCrmSyncStatus: 'synced',
-                customCrmSyncedAt: new Date(),
-                customCrmLeadId: result.leadId || result.applicationId || null,
-                customCrmSyncError: null,
-                customCrmSyncPayload: result.payload as any,
-                updatedAt: new Date(),
-              })
-              .where(eq(whatsappLeads.id, lead.id));
-            syncedCount++;
-          } else {
-            await db.update(whatsappLeads)
-              .set({
-                customCrmSyncStatus: 'failed',
-                customCrmSyncError: result.message,
-                customCrmSyncPayload: result.payload as any,
-                updatedAt: new Date(),
-              })
-              .where(eq(whatsappLeads.id, lead.id));
-            failedCount++;
-          }
+          // No force: leads held for review (e.g. a create that timed out) are not re-created in bulk.
+          const result = await syncWhatsappLeadToCustomCrm(lead.id, {
+            source: 'bulk', settings, fieldMappings, leadContext, storeCredential,
+          });
+          if (result.skipped) skippedCount++;
+          else if (result.status === 'synced') syncedCount++;
+          else failedCount++;
         } catch (err: any) {
           console.error(`[CRM BulkSync] Error syncing lead ${lead.id}:`, err);
-          await db.update(whatsappLeads)
-            .set({
-              customCrmSyncStatus: 'failed',
-              customCrmSyncError: err.message || 'Unknown error',
-              updatedAt: new Date(),
-            })
-            .where(eq(whatsappLeads.id, lead.id));
           failedCount++;
         }
       }
 
       res.json({
         success: true,
-        message: `Bulk sync complete: ${syncedCount} synced, ${failedCount} failed out of ${unsyncedLeads.length} leads`,
+        message: `Bulk sync complete: ${syncedCount} synced, ${failedCount} failed${skippedCount ? `, ${skippedCount} skipped` : ''} out of ${unsyncedLeads.length} leads`,
         synced: syncedCount,
         failed: failedCount,
+        skipped: skippedCount,
         total: unsyncedLeads.length,
       });
     } catch (error: any) {
@@ -31568,10 +31515,20 @@ Return ONLY a valid JSON object in this format:
 
   // Debug: Log ALL incoming webhook requests (catch-all for debugging)
   app.all("/api/webhook/*", (req, res, next) => {
+    // Path only: the query string can carry the webhook secret.
     console.log("[Webhook Debug] >>>>>> Request received:", req.method, req.path);
-    console.log("[Webhook Debug] Full URL:", req.originalUrl);
     next();
   });
+
+  // Removes the stored files of attachment rows that were just deleted (public or private bucket).
+  async function deleteRetaggedFiles(leadId: string, filePaths: (string | null | undefined)[]) {
+    const refs = filePaths.filter((p): p is string => !!p);
+    if (refs.length === 0) return;
+    const [lead] = await db.select({ businessAccountId: whatsappLeads.businessAccountId }).from(whatsappLeads).where(eq(whatsappLeads.id, leadId)).limit(1);
+    if (!lead) return;
+    const { whatsappService } = await import("./services/whatsappService");
+    await whatsappService.deleteDocumentFiles(lead.businessAccountId, refs);
+  }
 
   async function retagLeadAttachments(leadId: string, collectedDocuments: Record<string, any>, delayMs: number = 3000) {
     try {
@@ -31681,6 +31638,7 @@ Return ONLY a valid JSON object in this format:
             await db
               .delete(whatsappLeadAttachments)
               .where(sql`${whatsappLeadAttachments.id} IN (${sql.join(staleIds.map(id => sql`${id}`), sql`, `)})`);
+            await deleteRetaggedFiles(leadId, staleAttachments.map(a => a.filePath));
             console.log(`[MSG91 Webhook] Retag cleanup: removed ${staleIds.length} superseded ${docType} attachment(s) for lead ${leadId}`);
           }
         }
@@ -31692,19 +31650,13 @@ Return ONLY a valid JSON object in this format:
 
       for (const invalidType of invalidDocTypes) {
         const invalidAtts = allAttachments.filter(att => att.documentCategory === invalidType);
-        for (const att of invalidAtts) {
-          if (att.filePath) {
-            const r2Key = r2Storage.extractKeyFromUrl(att.filePath);
-            if (r2Key && r2Storage.isEnabled()) {
-              await r2Storage.deleteFile(r2Key);
-            }
-          }
-        }
         if (invalidAtts.length > 0) {
           const invalidIds = invalidAtts.map(a => a.id);
           await db
             .delete(whatsappLeadAttachments)
             .where(sql`${whatsappLeadAttachments.id} IN (${sql.join(invalidIds.map(id => sql`${id}`), sql`, `)})`);
+          // After the rows are gone; files still used elsewhere (e.g. the chat copy) are kept.
+          await deleteRetaggedFiles(leadId, invalidAtts.map(a => a.filePath));
           console.log(`[MSG91 Webhook] Retag: deleted ${invalidAtts.length} invalid ${invalidType} attachment(s) and R2 files for lead ${leadId}`);
         }
       }
@@ -31716,6 +31668,38 @@ Return ONLY a valid JSON object in this format:
   // MSG91 Webhook - Receive WhatsApp messages
   // Persistent webhook idempotency (DB-backed; survives pod restarts and works across pods)
   const { webhookIdempotency } = await import("./services/webhookIdempotencyService");
+
+  // Spam / bot-loop protection for inbound texts and button replies (see inboundMessageLimiter).
+  // Opt-out words always get through. Returns true when the message must not be processed.
+  function isInboundLimited(businessId: string, senderPhone: string, text: string, settings: any, uuid?: string): boolean {
+    if (/\b(stop|unsubscribe|opt[-\s]?out)\b/i.test(text || '')) return false;
+    const decision = inboundMessageLimiter.check(`${businessId}:${senderPhone}`, text || '');
+    if (decision.allowed) return false;
+    console.log(`[MSG91 Webhook] Inbound limit (${decision.reason}) for ${senderPhone} until ${new Date(decision.until).toISOString()} — not processing`);
+    if (decision.notify && settings?.msg91AuthKey) {
+      import("./services/whatsappAutoReplyService")
+        .then(({ whatsappAutoReplyService }) => whatsappAutoReplyService.sendSessionAwareMessage(
+          settings, senderPhone, "You're sending messages very quickly. Please wait a few minutes and then send your message again.", uuid,
+        ))
+        .catch(err => console.error("[MSG91 Webhook] Limit notice not sent:", err?.message || err));
+    }
+    return true;
+  }
+
+  // When handling a customer's message fails, tell them instead of leaving them in silence.
+  // At most once every 5 minutes per customer.
+  const failureNoticeSentAt = new Map<string, number>();
+  function notifyCustomerOfFailure(businessId: string, senderPhone: string, settings: any) {
+    const key = `${businessId}:${senderPhone}`;
+    const last = failureNoticeSentAt.get(key) || 0;
+    if (!settings?.msg91AuthKey || Date.now() - last < 5 * 60_000) return;
+    failureNoticeSentAt.set(key, Date.now());
+    import("./services/whatsappAutoReplyService")
+      .then(({ whatsappAutoReplyService }) => whatsappAutoReplyService.sendSessionAwareMessage(
+        settings, senderPhone, "Sorry, we couldn't process your last message because of a problem on our side. Please send it again.",
+      ))
+      .catch(err => console.error("[MSG91 Webhook] Failure notice not sent:", err?.message || err));
+  }
 
   app.post("/api/webhook/msg91/:businessId", async (req, res) => {
     // Log ALL incoming webhook requests immediately
@@ -31730,11 +31714,19 @@ Return ONLY a valid JSON object in this format:
     console.log("[MSG91 Webhook] Headers:", JSON.stringify({
       'content-type': req.headers['content-type'],
       'user-agent': req.headers['user-agent'],
-      'x-webhook-secret': req.headers['x-webhook-secret'],
+      'x-webhook-secret': req.headers['x-webhook-secret'] ? '[present]' : undefined,
     }));
-    console.log("[MSG91 Webhook] Body:", JSON.stringify(req.body, null, 2));
+    // Shape only — the body carries customer phone numbers, message text and media links.
+    const loggableBody = (req.body && typeof req.body === 'object') ? req.body as Record<string, any> : {};
+    console.log("[MSG91 Webhook] Body:", JSON.stringify({
+      keys: Object.keys(loggableBody).slice(0, 30),
+      contentType: loggableBody.contentType ?? loggableBody.content_type ?? loggableBody.type,
+      messageId: loggableBody.uuid ?? loggableBody.messageId ?? loggableBody.message_id ?? loggableBody.id,
+    }));
     console.log("[MSG91 Webhook] ============================================");
     
+    // Set once an inbound message is claimed, so a failure can release it and tell the customer.
+    let claimedInbound: { businessId: string; dedupId: string; senderPhone: string; settings: any } | null = null;
     try {
       const { businessId } = req.params;
       const webhookSecret = req.query.secret as string || req.headers['x-webhook-secret'] as string;
@@ -31931,19 +31923,30 @@ Return ONLY a valid JSON object in this format:
         }
 
         const hasReliableId = !!(uuid || requestId);
+        // Without a provider id, dedupe on sender + content within a 2-minute bucket; without the
+        // bucket the customer could never send the same text ("yes", "ok") twice.
         const dedupId = hasReliableId
           ? messageId
-          : `senderdedup:${senderPhone}:${(text || '').substring(0, 100)}:${contentType}`;
+          : `senderdedup:${senderPhone}:${(text || '').substring(0, 100)}:${contentType}:${Math.floor(Date.now() / 120_000)}`;
         const fresh = await webhookIdempotency.claim(
           businessId,
           "msg91",
           dedupId,
           hasReliableId ? "inbound" : "sender_dedup",
+          true,
         );
         if (!fresh) {
           console.log(`[MSG91 Webhook] Duplicate webhook for ${dedupId} on business ${businessId}, skipping entirely`);
           return res.json({ status: "received", note: "duplicate webhook skipped" });
         }
+        claimedInbound = { businessId, dedupId, senderPhone, settings };
+        // Handled once the webhook has answered without an error; until then a retry of this
+        // message (e.g. after a restart mid-way) is not treated as a duplicate.
+        res.on("finish", () => {
+          if (claimedInbound && res.statusCode < 500) {
+            webhookIdempotency.markProcessed(businessId, "msg91", dedupId).catch(() => {});
+          }
+        });
         if (!hasReliableId) {
           console.log(`[MSG91 Webhook] WARNING: No uuid/requestId in payload, used sender+content dedup`);
         }
@@ -31981,6 +31984,9 @@ Return ONLY a valid JSON object in this format:
         // Process based on content type
         if (contentType === "text" && text) {
           const webhookStartTime = Date.now();
+          if (isInboundLimited(businessId, senderPhone, text, settings, uuid)) {
+            return res.json({ status: "received", note: "rate_limited" });
+          }
           const { whatsappFlowService } = await import("./services/whatsappFlowService");
           const { whatsappAutoReplyService } = await import("./services/whatsappAutoReplyService");
 
@@ -32095,29 +32101,34 @@ Return ONLY a valid JSON object in this format:
           // End marketing campaign ownership gate
           // ============================================================
 
-          const pendingSession = await whatsappFlowService.getActiveSession(businessId, senderPhone);
-          const pendingCollected = (pendingSession?.collectedData as Record<string, any>) || {};
           // AI Setup response mode: 'smart_ai' bypasses scripted flows entirely (AI handles everything).
           // 'guided_flows' / 'both' / null keep flow-first processing.
           const aiResponseMode = settings?.aiResponseMode ?? null;
-          let flowResult;
-          if (aiResponseMode === 'smart_ai') {
-            console.log("[MSG91 Webhook] Smart AI mode — bypassing scripted flows, routing to AI auto-reply");
-            flowResult = { handled: false } as any;
-          } else if (pendingCollected._pendingPdfUrl) {
-            const activeFlow = await whatsappFlowService.getActiveFlow(businessId);
-            const triggerKw = activeFlow?.triggerKeyword?.trim()?.toLowerCase();
-            const normalizedText = text.trim().toLowerCase();
-            if (triggerKw && normalizedText === triggerKw) {
-              console.log("[MSG91 Webhook] Trigger keyword during PDF password flow, restarting journey");
-              flowResult = await whatsappFlowService.processMessage(businessId, senderPhone, text, pendingSession);
+          // Wait for anything still running for this customer (e.g. a document being read),
+          // then read the session fresh, so this message can't overwrite what that saved.
+          const { pendingSession, flowResult } = await whatsappFlowService.runForSender(businessId, senderPhone, async () => {
+            const pendingSession = await whatsappFlowService.getActiveSession(businessId, senderPhone);
+            const pendingCollected = (pendingSession?.collectedData as Record<string, any>) || {};
+            let flowResult;
+            if (aiResponseMode === 'smart_ai') {
+              console.log("[MSG91 Webhook] Smart AI mode — bypassing scripted flows, routing to AI auto-reply");
+              flowResult = { handled: false } as any;
+            } else if (pendingCollected._pendingPdfUrl) {
+              const activeFlow = await whatsappFlowService.getActiveFlow(businessId);
+              const triggerKw = activeFlow?.triggerKeyword?.trim()?.toLowerCase();
+              const normalizedText = text.trim().toLowerCase();
+              if (triggerKw && normalizedText === triggerKw) {
+                console.log("[MSG91 Webhook] Trigger keyword during PDF password flow, restarting journey");
+                flowResult = await whatsappFlowService.processMessage(businessId, senderPhone, text, pendingSession);
+              } else {
+                console.log("[MSG91 Webhook] Session has pending PDF, treating text as password");
+                flowResult = await whatsappFlowService.processPdfPassword(businessId, senderPhone, text);
+              }
             } else {
-              console.log("[MSG91 Webhook] Session has pending PDF, treating text as password");
-              flowResult = await whatsappFlowService.processPdfPassword(businessId, senderPhone, text);
+              flowResult = await whatsappFlowService.processMessage(businessId, senderPhone, text, pendingSession);
             }
-          } else {
-            flowResult = await whatsappFlowService.processMessage(businessId, senderPhone, text, pendingSession);
-          }
+            return { pendingSession, flowResult };
+          });
           
           console.log(`[MSG91 Webhook] [Timing] Flow processing: ${Date.now() - webhookStartTime}ms`);
           
@@ -32235,30 +32246,17 @@ Return ONLY a valid JSON object in this format:
                                 if (autoStoreCredential) console.log(`[CRM AutoSync] Resolved store: ${autoStoreCredential.storeName} (SID: ${autoStoreCredential.sid})`);
                               }
 
-                              const { syncLeadWithDocuments } = await import('./services/customCrmService');
-                              const crmResult = await syncLeadWithDocuments(crmSettings, crmMappings, leadContext, autoStoreCredential);
-
-                              if (crmResult.success) {
-                                await db.update(whatsappLeads)
-                                  .set({
-                                    customCrmSyncStatus: 'synced',
-                                    customCrmSyncedAt: new Date(),
-                                    customCrmLeadId: crmResult.leadId || crmResult.applicationId || null,
-                                    customCrmSyncError: null,
-                                    customCrmSyncPayload: crmResult.payload as any,
-                                    updatedAt: new Date(),
-                                  })
-                                  .where(eq(whatsappLeads.id, updatedLead.id));
+                              // Claims the lead and records the outcome itself; a no-op if the flow-completion
+                              // push already ran (or is running) for this lead.
+                              const { syncWhatsappLeadToCustomCrm } = await import('./services/customCrmService');
+                              const crmResult = await syncWhatsappLeadToCustomCrm(updatedLead.id, {
+                                source: 'webhook', requireAutoSync: true, settings: crmSettings, fieldMappings: crmMappings, leadContext, storeCredential: autoStoreCredential,
+                              });
+                              if (crmResult.skipped) {
+                                console.log('[Custom CRM] Auto-sync not needed:', updatedLead.id, crmResult.message);
+                              } else if (crmResult.success) {
                                 console.log('[Custom CRM] Auto-sync success:', updatedLead.id);
                               } else {
-                                await db.update(whatsappLeads)
-                                  .set({
-                                    customCrmSyncStatus: 'failed',
-                                    customCrmSyncError: crmResult.message,
-                                    customCrmSyncPayload: crmResult.payload as any,
-                                    updatedAt: new Date(),
-                                  })
-                                  .where(eq(whatsappLeads.id, updatedLead.id));
                                 console.error('[Custom CRM] Auto-sync failed:', updatedLead.id, crmResult.message);
                               }
                             }
@@ -32635,17 +32633,14 @@ Return ONLY a valid JSON object in this format:
                                 eq(whatsappLeadAttachments.leadId, attachToLeadId),
                                 eq(whatsappLeadAttachments.mediaUrl, url)
                               ));
-                            if (invalidAtt?.filePath) {
-                              const r2Key = r2Storage.extractKeyFromUrl(invalidAtt.filePath);
-                              if (r2Key && r2Storage.isEnabled()) {
-                                await r2Storage.deleteFile(r2Key);
-                              }
-                            }
                             await db.delete(whatsappLeadAttachments)
                               .where(and(
                                 eq(whatsappLeadAttachments.leadId, attachToLeadId),
                                 eq(whatsappLeadAttachments.mediaUrl, url)
                               ));
+                            if (invalidAtt?.filePath) {
+                              await whatsappService.deleteDocumentFiles(businessId, [invalidAtt.filePath]);
+                            }
                             console.log(`[MSG91 Webhook] Deleted invalid ${matchedDocType} attachment and R2 file for lead ${attachToLeadId}`);
                           } else {
                             const taggedRows = await db.update(whatsappLeadAttachments)
@@ -32892,6 +32887,9 @@ Return ONLY a valid JSON object in this format:
         } else if (contentType === "interactive" || contentType === "button") {
           const webhookStartTime = Date.now();
           const interactiveText = text || caption || "";
+          if (isInboundLimited(businessId, senderPhone, interactiveText, settings, uuid)) {
+            return res.json({ status: "received", note: "rate_limited" });
+          }
 
           // ============================================================
           // Campaign ownership gate for button/interactive replies
@@ -32962,15 +32960,17 @@ Return ONLY a valid JSON object in this format:
           }
           
           if (interactiveText && aiResponseMode !== 'smart_ai') {
-            const pendingSession = await whatsappFlowService.getActiveSession(businessId, senderPhone);
-            const pendingCollected = (pendingSession?.collectedData as Record<string, any>) || {};
-            if (pendingCollected._pendingPdfUrl) {
-              console.log("[MSG91 Webhook] Interactive response during PDF password flow, routing to processPdfPassword:", interactiveText);
-              flowResult = await whatsappFlowService.processPdfPassword(businessId, senderPhone, interactiveText);
-            } else {
+            // Same per-customer queue as text and uploads (see runForSender).
+            flowResult = await whatsappFlowService.runForSender(businessId, senderPhone, async () => {
+              const pendingSession = await whatsappFlowService.getActiveSession(businessId, senderPhone);
+              const pendingCollected = (pendingSession?.collectedData as Record<string, any>) || {};
+              if (pendingCollected._pendingPdfUrl) {
+                console.log("[MSG91 Webhook] Interactive response during PDF password flow, routing to processPdfPassword:", interactiveText);
+                return whatsappFlowService.processPdfPassword(businessId, senderPhone, interactiveText);
+              }
               console.log("[MSG91 Webhook] Processing interactive response through flow:", interactiveText);
-              flowResult = await whatsappFlowService.processMessage(businessId, senderPhone, interactiveText, pendingSession, true);
-            }
+              return whatsappFlowService.processMessage(businessId, senderPhone, interactiveText, pendingSession, true);
+            });
             flowSessionId = flowResult.sessionId;
           }
           
@@ -33099,30 +33099,17 @@ Return ONLY a valid JSON object in this format:
                         if (iAutoStoreCredential) console.log(`[CRM AutoSync] Resolved store (interactive): ${iAutoStoreCredential.storeName} (SID: ${iAutoStoreCredential.sid})`);
                       }
 
-                      const { syncLeadWithDocuments } = await import('./services/customCrmService');
-                      const crmResult = await syncLeadWithDocuments(crmSettings, crmMappings, leadContext, iAutoStoreCredential);
-
-                      if (crmResult.success) {
-                        await db.update(whatsappLeads)
-                          .set({
-                            customCrmSyncStatus: 'synced',
-                            customCrmSyncedAt: new Date(),
-                            customCrmLeadId: crmResult.leadId || crmResult.applicationId || null,
-                            customCrmSyncError: null,
-                            customCrmSyncPayload: crmResult.payload as any,
-                            updatedAt: new Date(),
-                          })
-                          .where(eq(whatsappLeads.id, updatedLead.id));
+                      // Claims the lead and records the outcome itself; a no-op if the flow-completion
+                      // push already ran (or is running) for this lead.
+                      const { syncWhatsappLeadToCustomCrm } = await import('./services/customCrmService');
+                      const crmResult = await syncWhatsappLeadToCustomCrm(updatedLead.id, {
+                        source: 'webhook', requireAutoSync: true, settings: crmSettings, fieldMappings: crmMappings, leadContext, storeCredential: iAutoStoreCredential,
+                      });
+                      if (crmResult.skipped) {
+                        console.log('[Custom CRM] Auto-sync not needed:', updatedLead.id, crmResult.message);
+                      } else if (crmResult.success) {
                         console.log('[Custom CRM] Auto-sync success (interactive):', updatedLead.id);
                       } else {
-                        await db.update(whatsappLeads)
-                          .set({
-                            customCrmSyncStatus: 'failed',
-                            customCrmSyncError: crmResult.message,
-                            customCrmSyncPayload: crmResult.payload as any,
-                            updatedAt: new Date(),
-                          })
-                          .where(eq(whatsappLeads.id, updatedLead.id));
                         console.error('[Custom CRM] Auto-sync failed (interactive):', updatedLead.id, crmResult.message);
                       }
                     }
@@ -33156,23 +33143,31 @@ Return ONLY a valid JSON object in this format:
           
           return;
         } else {
-          // Unknown content type, still save it
-          // Try to get flow session for this user if in an active flow
+          // Voice notes, stickers, locations, videos, contacts… The agent can't read these: store
+          // the message and tell the customer what to send instead, rather than staying silent.
           const { whatsappFlowService } = await import("./services/whatsappFlowService");
-          const flowResult = await whatsappFlowService.processMessage(businessId, senderPhone, text || caption || "");
-          
+          const activeSession = await whatsappFlowService.getActiveSession(businessId, senderPhone);
+
           const lead = await whatsappService.processTextMessage(
             businessId,
             messageId,
             senderPhone,
             text || caption || `[${contentType || 'unknown'} message]`,
             customerName,
-            flowResult.sessionId // Pass the flow session ID
+            activeSession?.id
           );
           if (lead) {
-            console.log("[MSG91 Webhook] Created lead from unknown type:", lead.id, "contentType:", contentType);
+            console.log("[MSG91 Webhook] Created lead from unsupported type:", lead.id, "contentType:", contentType);
           } else {
-            console.log("[MSG91 Webhook] Unknown message processed, no lead created");
+            console.log("[MSG91 Webhook] Unsupported message type stored, no lead created:", contentType);
+          }
+
+          const notice = unsupportedMessageNotice(contentType, !!activeSession);
+          if (notice && settings?.msg91AuthKey) {
+            const { whatsappAutoReplyService } = await import("./services/whatsappAutoReplyService");
+            whatsappAutoReplyService.sendSessionAwareMessage(settings, senderPhone, notice, uuid)
+              .then(r => { if (!r.success) console.log("[MSG91 Webhook] Unsupported-type notice failed:", r.error); })
+              .catch(err => console.error("[MSG91 Webhook] Unsupported-type notice error:", err));
           }
         }
 
@@ -33257,8 +33252,14 @@ Return ONLY a valid JSON object in this format:
       res.status(200).json({ status: "received" });
     } catch (error: any) {
       console.error("[MSG91 Webhook] Error:", error);
+      if (claimedInbound) {
+        const failed = claimedInbound;
+        claimedInbound = null; // not handled — don't mark it processed
+        await webhookIdempotency.release(failed.businessId, "msg91", failed.dedupId);
+        notifyCustomerOfFailure(failed.businessId, failed.senderPhone, failed.settings);
+      }
       // Still return 200 to prevent retries
-      res.status(200).json({ status: "error", message: error.message });
+      if (!res.headersSent) res.status(200).json({ status: "error", message: error.message });
     }
   });
 

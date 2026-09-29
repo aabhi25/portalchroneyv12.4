@@ -7,13 +7,41 @@ import {
   CreateMultipartUploadCommand,
   UploadPartCommand,
   CompleteMultipartUploadCommand,
-  AbortMultipartUploadCommand
+  AbortMultipartUploadCommand,
+  CopyObjectCommand,
+  HeadObjectCommand
 } from "@aws-sdk/client-s3";
 import { Readable } from "stream";
 import { createWriteStream } from "fs";
 import { createGunzip } from "zlib";
-import { randomUUID } from "crypto";
+import { randomUUID, createHash, createHmac } from "crypto";
 import path from "path";
+
+/**
+ * Sensitive customer documents (WhatsApp KYC uploads: Aadhaar, PAN, bank statements)
+ * live in a separate PRIVATE bucket (R2_PRIVATE_BUCKET_NAME). The DB stores a
+ * non-URL reference `r2private://<key>` in place of a public URL; readers resolve it
+ * with getShareableUrl() (external systems) or the authenticated
+ * /api/whatsapp/documents/:attachmentId route (dashboard).
+ */
+export const PRIVATE_REF_PREFIX = "r2private://";
+
+/** SigV4 presigned URLs are valid for at most 7 days. */
+export const MAX_PRESIGN_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+export type StorageRef =
+  | { bucket: "private"; key: string }
+  | { bucket: "public"; key: string };
+
+type S3Like = Pick<S3Client, "send">;
+
+function safeDecode(str: string): string {
+  try { return decodeURIComponent(str); } catch { return str; }
+}
+
+function rfc3986(str: string): string {
+  return encodeURIComponent(str).replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
 
 interface R2Config {
   accountId: string;
@@ -21,11 +49,17 @@ interface R2Config {
   secretAccessKey: string;
   bucketName: string;
   publicUrl?: string;
+  privateBucketName?: string;
 }
 
 class R2StorageService {
-  private client: S3Client | null = null;
+  private client: S3Like | null = null;
   private bucketName: string = "";
+  private privateBucketName: string = "";
+  private accountId: string = "";
+  private accessKeyId: string = "";
+  private secretAccessKey: string = "";
+  private privateFallbackWarned = false;
   private publicUrl: string = "";
   private isConfigured: boolean = false;
   private initPromise: Promise<void> | null = null;
@@ -70,6 +104,10 @@ class R2StorageService {
       });
 
       this.bucketName = config.bucketName;
+      this.accountId = config.accountId;
+      this.accessKeyId = config.accessKeyId;
+      this.secretAccessKey = config.secretAccessKey;
+      this.privateBucketName = this.resolvePrivateBucketName(config);
       
       const trimmedPublicUrl = config.publicUrl?.trim();
       if (trimmedPublicUrl && trimmedPublicUrl.length > 0) {
@@ -79,7 +117,8 @@ class R2StorageService {
       }
       
       this.isConfigured = true;
-      console.log("[R2 Storage] Initialized successfully with bucket:", config.bucketName, "publicUrl:", this.publicUrl);
+      console.log("[R2 Storage] Initialized successfully with bucket:", config.bucketName, "publicUrl:", this.publicUrl,
+        "privateBucket:", this.privateBucketName || "(not configured)");
     } catch (error) {
       console.error("[R2 Storage] Failed to initialize:", error);
       this.isConfigured = false;
@@ -694,6 +733,262 @@ class R2StorageService {
       
       return { success: false, error: error.message };
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private bucket for sensitive customer documents (WhatsApp KYC uploads)
+  // ---------------------------------------------------------------------------
+
+  private resolvePrivateBucketName(config: R2Config): string {
+    const name = (config.privateBucketName || process.env.R2_PRIVATE_BUCKET_NAME || "").trim();
+    if (name && name === config.bucketName) {
+      console.error("[R2 Storage] R2_PRIVATE_BUCKET_NAME must differ from the public bucket — ignoring it; sensitive documents will stay in the public bucket.");
+      return "";
+    }
+    return name;
+  }
+
+  isPrivateBucketConfigured(): boolean {
+    return this.isConfigured && !!this.client && !!this.privateBucketName;
+  }
+
+  isPrivateRef(ref: string | null | undefined): boolean {
+    return typeof ref === "string" && ref.startsWith(PRIVATE_REF_PREFIX);
+  }
+
+  toPrivateRef(key: string): string {
+    return `${PRIVATE_REF_PREFIX}${key}`;
+  }
+
+  /**
+   * Resolves a stored file reference to a bucket + key. Understands `r2private://<key>`
+   * and public URLs of THIS bucket (configured R2_PUBLIC_URL or pub-*.r2.dev). Any other
+   * value (third-party URLs, local paths) returns null so callers never touch objects
+   * they don't own.
+   */
+  parseRef(ref: string | null | undefined): StorageRef | null {
+    if (!ref || typeof ref !== "string") return null;
+    if (ref.startsWith(PRIVATE_REF_PREFIX)) {
+      const key = ref.slice(PRIVATE_REF_PREFIX.length);
+      return key ? { bucket: "private", key } : null;
+    }
+    const envPublic = process.env.R2_PUBLIC_URL?.trim().replace(/\/+$/, "");
+    for (const base of [this.publicUrl?.replace(/\/+$/, ""), envPublic]) {
+      if (base && ref.startsWith(base + "/")) {
+        const key = ref.slice(base.length + 1).split(/[?#]/)[0];
+        return key ? { bucket: "public", key: safeDecode(key) } : null;
+      }
+    }
+    const m = ref.match(/^https:\/\/pub-[a-z0-9]+\.r2\.dev\/([^?#]+)/i);
+    if (m) return { bucket: "public", key: safeDecode(m[1]) };
+    return null;
+  }
+
+  private warnPrivateFallbackOnce() {
+    if (this.privateFallbackWarned) return;
+    this.privateFallbackWarned = true;
+    console.warn("[R2 Storage] WARNING: R2_PRIVATE_BUCKET_NAME is not set — sensitive customer documents are being stored in the PUBLIC bucket. Create a private R2 bucket and set R2_PRIVATE_BUCKET_NAME.");
+  }
+
+  /**
+   * Upload a sensitive customer document. Goes to the private bucket and returns
+   * `ref = r2private://<key>`. If no private bucket is configured, falls back to the
+   * public bucket (legacy behaviour, one-time warning) and `ref` is the public URL.
+   */
+  async uploadSensitiveFile(
+    fileBuffer: Buffer,
+    originalFilename: string,
+    folder: string,
+    contentType: string,
+    businessAccountId?: string
+  ): Promise<{ success: boolean; ref?: string; key?: string; isPrivate?: boolean; error?: string }> {
+    await this.ensureInitialized();
+
+    if (!this.isConfigured || !this.client) {
+      return { success: false, error: "R2 storage not configured" };
+    }
+
+    if (!this.privateBucketName) {
+      this.warnPrivateFallbackOnce();
+      const res = await this.uploadFile(fileBuffer, originalFilename, folder, contentType, businessAccountId);
+      return { success: res.success, ref: res.url, key: res.key, isPrivate: false, error: res.error };
+    }
+
+    try {
+      const ext = path.extname(originalFilename);
+      const key = businessAccountId
+        ? `${folder}/${businessAccountId}/${Date.now()}-${randomUUID()}${ext}`
+        : `${folder}/${Date.now()}-${randomUUID()}${ext}`;
+
+      await this.client.send(new PutObjectCommand({
+        Bucket: this.privateBucketName,
+        Key: key,
+        Body: fileBuffer,
+        ContentType: contentType,
+      }));
+
+      console.log("[R2 Storage] Private file uploaded:", key);
+      return { success: true, ref: this.toPrivateRef(key), key, isPrivate: true };
+    } catch (error: any) {
+      console.error("[R2 Storage] Private upload failed:", error?.message);
+      return { success: false, error: error?.message };
+    }
+  }
+
+  private bucketFor(ref: StorageRef): string {
+    return ref.bucket === "private" ? this.privateBucketName : this.bucketName;
+  }
+
+  /**
+   * Builds a SigV4 query-string presigned GET URL for an object (path-style, R2 S3 endpoint).
+   * Implemented locally so no extra dependency is needed.
+   */
+  presignGetUrl(
+    bucket: string,
+    key: string,
+    ttlSeconds: number,
+    opts: { responseContentDisposition?: string; responseContentType?: string; now?: Date } = {}
+  ): string {
+    if (!this.accountId || !this.accessKeyId || !this.secretAccessKey) {
+      throw new Error("R2 storage not configured");
+    }
+    const expires = Math.max(1, Math.min(MAX_PRESIGN_TTL_SECONDS, Math.floor(ttlSeconds)));
+    const host = `${this.accountId}.r2.cloudflarestorage.com`;
+    const now = opts.now || new Date();
+    const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+    const dateStamp = amzDate.slice(0, 8);
+    const region = "auto";
+    const scope = `${dateStamp}/${region}/s3/aws4_request`;
+    const canonicalUri = `/${rfc3986(bucket)}/${key.split("/").map(rfc3986).join("/")}`;
+
+    const query: Record<string, string> = {
+      "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+      "X-Amz-Content-Sha256": "UNSIGNED-PAYLOAD",
+      "X-Amz-Credential": `${this.accessKeyId}/${scope}`,
+      "X-Amz-Date": amzDate,
+      "X-Amz-Expires": String(expires),
+      "X-Amz-SignedHeaders": "host",
+    };
+    if (opts.responseContentDisposition) query["response-content-disposition"] = opts.responseContentDisposition;
+    if (opts.responseContentType) query["response-content-type"] = opts.responseContentType;
+
+    const canonicalQuery = Object.keys(query).sort()
+      .map(k => `${rfc3986(k)}=${rfc3986(query[k])}`).join("&");
+    const canonicalRequest = [
+      "GET", canonicalUri, canonicalQuery, `host:${host}\n`, "host", "UNSIGNED-PAYLOAD",
+    ].join("\n");
+    const stringToSign = [
+      "AWS4-HMAC-SHA256", amzDate, scope, createHash("sha256").update(canonicalRequest).digest("hex"),
+    ].join("\n");
+    const hmac = (k: Buffer | string, v: string) => createHmac("sha256", k).update(v).digest();
+    const signingKey = hmac(hmac(hmac(hmac(`AWS4${this.secretAccessKey}`, dateStamp), region), "s3"), "aws4_request");
+    const signature = createHmac("sha256", signingKey).update(stringToSign).digest("hex");
+
+    return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+  }
+
+  /** Default TTL for URLs handed to external systems (CRM pushes etc.). */
+  getDefaultShareTtlSeconds(): number {
+    const raw = parseInt(process.env.R2_PRIVATE_SHARE_TTL_SECONDS || "", 10);
+    if (Number.isFinite(raw) && raw > 0) return Math.min(raw, MAX_PRESIGN_TTL_SECONDS);
+    return MAX_PRESIGN_TTL_SECONDS;
+  }
+
+  /**
+   * Returns a URL an external system can fetch. Private refs become a presigned URL
+   * (default TTL R2_PRIVATE_SHARE_TTL_SECONDS, max 7 days); anything else (legacy public
+   * URLs) is returned unchanged. Returns null for a private ref that cannot be signed.
+   */
+  async getShareableUrl(filePath: string | null | undefined, ttlSeconds?: number): Promise<string | null> {
+    if (!filePath) return null;
+    if (!this.isPrivateRef(filePath)) return filePath;
+    await this.ensureInitialized();
+    const ref = this.parseRef(filePath);
+    if (!ref || !this.isPrivateBucketConfigured()) {
+      console.error("[R2 Storage] Cannot sign private document reference — private bucket not configured");
+      return null;
+    }
+    return this.presignGetUrl(this.privateBucketName, ref.key, ttlSeconds ?? this.getDefaultShareTtlSeconds());
+  }
+
+  /** Streams a stored object (private or public bucket) for the authenticated download route. */
+  async getObjectStream(filePath: string): Promise<{ success: boolean; body?: Readable; contentType?: string; contentLength?: number; error?: string }> {
+    await this.ensureInitialized();
+    const ref = this.parseRef(filePath);
+    if (!ref) return { success: false, error: "Unrecognised storage reference" };
+    if (!this.isConfigured || !this.client || !this.bucketFor(ref)) {
+      return { success: false, error: "R2 storage not configured" };
+    }
+    try {
+      const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucketFor(ref), Key: ref.key }));
+      if (!response.Body) return { success: false, error: "File not found" };
+      return {
+        success: true,
+        body: response.Body as Readable,
+        contentType: response.ContentType,
+        contentLength: response.ContentLength,
+      };
+    } catch (error: any) {
+      return { success: false, error: error?.name === "NoSuchKey" ? "File not found" : error?.message };
+    }
+  }
+
+  /**
+   * Deletes the object behind a stored reference (`r2private://` or a public URL of our
+   * bucket). Unknown references are ignored. Logs the key only, never a URL.
+   */
+  async deleteByRef(filePath: string | null | undefined): Promise<{ success: boolean; skipped?: boolean; error?: string }> {
+    const ref = this.parseRef(filePath);
+    if (!ref) return { success: true, skipped: true };
+    await this.ensureInitialized();
+    if (!this.isConfigured || !this.client || !this.bucketFor(ref)) {
+      console.warn(`[R2 Storage] Could not delete ${ref.bucket} object ${ref.key}: storage not configured`);
+      return { success: false, error: "R2 storage not configured" };
+    }
+    try {
+      await this.client.send(new DeleteObjectCommand({ Bucket: this.bucketFor(ref), Key: ref.key }));
+      console.log(`[R2 Storage] Deleted ${ref.bucket} object:`, ref.key);
+      return { success: true };
+    } catch (error: any) {
+      console.warn(`[R2 Storage] Failed to delete ${ref.bucket} object ${ref.key}:`, error?.message);
+      return { success: false, error: error?.message };
+    }
+  }
+
+  /**
+   * Migration helper: copies a public-bucket object into the private bucket under the
+   * same key and verifies it landed. Does not delete the public copy.
+   */
+  async copyPublicToPrivate(key: string): Promise<{ success: boolean; error?: string }> {
+    await this.ensureInitialized();
+    if (!this.isPrivateBucketConfigured() || !this.client) {
+      return { success: false, error: "Private bucket not configured" };
+    }
+    try {
+      await this.client.send(new CopyObjectCommand({
+        Bucket: this.privateBucketName,
+        Key: key,
+        CopySource: `${this.bucketName}/${key.split("/").map(rfc3986).join("/")}`,
+      }));
+      await this.client.send(new HeadObjectCommand({ Bucket: this.privateBucketName, Key: key }));
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.name || error?.message };
+    }
+  }
+
+  /** Test hook: inject a stub S3 client and config. Never used in production code. */
+  configureForTesting(client: S3Like, config: { accountId: string; accessKeyId: string; secretAccessKey: string; bucketName: string; privateBucketName?: string; publicUrl?: string }) {
+    this.client = client;
+    this.bucketName = config.bucketName;
+    this.privateBucketName = config.privateBucketName || "";
+    this.accountId = config.accountId;
+    this.accessKeyId = config.accessKeyId;
+    this.secretAccessKey = config.secretAccessKey;
+    this.publicUrl = config.publicUrl || `https://pub-${config.accountId}.r2.dev`;
+    this.isConfigured = true;
+    this.configSource = "environment";
+    this.privateFallbackWarned = false;
   }
 }
 

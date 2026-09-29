@@ -30,8 +30,17 @@ interface ConversationMessage {
 export class WhatsappAutoReplyService {
   private senderLocks: Map<string, Promise<any>> = new Map();
 
+  // Sent when the AI can't produce an answer, so the customer isn't left in silence.
+  private readonly AI_FAILURE_REPLY = "Sorry, I'm having trouble answering right now. Please try again in a few minutes.";
+  private aiFailureNoticeAt = new Map<string, number>();
+
   private async withSenderLock<T>(senderKey: string, fn: () => Promise<T>): Promise<T> {
-    const existing = this.senderLocks.get(senderKey) || Promise.resolve();
+    // Wait for this customer's previous reply, but never more than 90s: one stuck
+    // call must not silence every later message from the same customer.
+    const existing = Promise.race([
+      this.senderLocks.get(senderKey) || Promise.resolve(),
+      new Promise(resolve => setTimeout(resolve, 90_000).unref?.()),
+    ]);
     const next = existing.then(() => fn(), () => fn());
     this.senderLocks.set(senderKey, next);
     next.finally(() => {
@@ -49,7 +58,24 @@ export class WhatsappAutoReplyService {
     incomingMessageUuid?: string
   ): Promise<{ success: boolean; reply?: string; error?: string }> {
     const senderKey = `${businessAccountId}:${senderPhone}`;
-    return this.withSenderLock(senderKey, () => this._generateAndSendReply(businessAccountId, senderPhone, userMessage, incomingMessageUuid));
+    const result = await this.withSenderLock(senderKey, () => this._generateAndSendReply(businessAccountId, senderPhone, userMessage, incomingMessageUuid));
+    if (result.aiFailed) await this.sendAiFailureNotice(businessAccountId, senderPhone, incomingMessageUuid);
+    const { aiFailed, ...rest } = result;
+    return rest;
+  }
+
+  private async sendAiFailureNotice(businessAccountId: string, senderPhone: string, incomingMessageUuid?: string): Promise<void> {
+    const key = `${businessAccountId}:${senderPhone}`;
+    if (Date.now() - (this.aiFailureNoticeAt.get(key) || 0) < 5 * 60_000) return;
+    this.aiFailureNoticeAt.set(key, Date.now());
+    try {
+      const [settings] = await db.select().from(whatsappSettings).where(eq(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+      if (!settings) return;
+      const sent = await this.sendSessionAwareMessage(settings, senderPhone, this.AI_FAILURE_REPLY, incomingMessageUuid);
+      if (!sent.success) console.error(`[WhatsApp Auto-Reply] AI failure notice not sent: ${sent.error}`);
+    } catch (err) {
+      console.error("[WhatsApp Auto-Reply] AI failure notice error:", err);
+    }
   }
 
   private async _generateAndSendReply(
@@ -57,9 +83,10 @@ export class WhatsappAutoReplyService {
     senderPhone: string,
     userMessage: string,
     incomingMessageUuid?: string
-  ): Promise<{ success: boolean; reply?: string; error?: string }> {
+  ): Promise<{ success: boolean; reply?: string; error?: string; aiFailed?: boolean }> {
     const timings: Record<string, number> = {};
     const startTime = Date.now();
+    let replySent = false;
     try {
       console.log(`[WhatsApp Auto-Reply] Processing message from ${senderPhone}`);
       
@@ -262,7 +289,7 @@ export class WhatsappAutoReplyService {
       
       if (!aiResult) {
         console.log(`[WhatsApp Auto-Reply] [Timing] ${JSON.stringify(timings)} total=${Date.now() - startTime}ms`);
-        return { success: false, error: "Failed to generate AI response" };
+        return { success: false, error: "Failed to generate AI response", aiFailed: true };
       }
       
       let processedReply = aiResult.text;
@@ -280,6 +307,7 @@ export class WhatsappAutoReplyService {
         incomingMessageUuid
       );
       timings.msg91Send = Date.now() - t;
+      replySent = sendResult.success;
       
       if (!sendResult.success) {
         console.error(`[WhatsApp Auto-Reply] Failed to send message: ${sendResult.error}`);
@@ -315,7 +343,7 @@ export class WhatsappAutoReplyService {
               .filter(c => c.description)
               .map(c => ({ idx: c.originalIndex, desc: c.description! }));
             if (descriptionsToTranslate.length > 0) {
-              const openai = new OpenAI({ apiKey });
+              const openai = new OpenAI({ apiKey, timeout: 20_000, maxRetries: 0 });
               const transResult = await openai.chat.completions.create({
                 model: "gpt-4o-mini",
                 messages: [
@@ -433,7 +461,7 @@ export class WhatsappAutoReplyService {
       
     } catch (error) {
       console.error(`[WhatsApp Auto-Reply] Error:`, error);
-      return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      return { success: false, error: error instanceof Error ? error.message : "Unknown error", aiFailed: !replySent };
     }
   }
 
@@ -723,7 +751,8 @@ export class WhatsappAutoReplyService {
     useProductCatalog: boolean = true
   ): Promise<{ text: string; productImages?: string[]; productCards?: { name: string; description?: string; price?: number; imageUrl?: string }[]; isProductSelection?: boolean; hasMoreProducts?: boolean } | null> {
     try {
-      const openai = new OpenAI({ apiKey });
+      // Bounded so a hung request can't leave the customer without any answer.
+      const openai = new OpenAI({ apiKey, timeout: 45_000, maxRetries: 1 });
       
       // Build comprehensive system prompt matching chatbot behavior
       // Add current date context (same as chatbot)
@@ -1321,6 +1350,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
       
       const response = await fetch(url, {
         method: "POST",
+        signal: AbortSignal.timeout(15_000),
         headers: {
           "accept": "application/json",
           "authkey": settings.msg91AuthKey,
@@ -1384,6 +1414,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
 
       const response = await fetch(url, {
         method: "POST",
+        signal: AbortSignal.timeout(15_000),
         headers: {
           "accept": "application/json",
           "authkey": settings.msg91AuthKey,
@@ -1480,6 +1511,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
 
       const response = await fetch(url, {
         method: "POST",
+        signal: AbortSignal.timeout(15_000),
         headers: {
           "accept": "application/json",
           "authkey": settings.msg91AuthKey,
@@ -1562,6 +1594,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
 
       const response = await fetch(url, {
         method: "POST",
+        signal: AbortSignal.timeout(15_000),
         headers: {
           "accept": "application/json",
           "authkey": settings.msg91AuthKey,

@@ -137,6 +137,12 @@ interface WhatsappAttachment {
   caption: string | null;
 }
 
+// Customer documents are served only through the authenticated route (private storage);
+// the raw storage reference is never used in the browser.
+function documentUrl(att: { id: string }): string {
+  return `/api/whatsapp/documents/${encodeURIComponent(att.id)}`;
+}
+
 interface JourneySummary {
   flow_session_id: string;
   flow_name: string;
@@ -1697,9 +1703,9 @@ export default function WhatsApp() {
                                       {msg.attachments.map((att) => (
                                         <div key={att.id}>
                                           {att.fileType === 'image' && att.filePath && (
-                                            <a href={att.filePath} target="_blank" rel="noopener noreferrer">
+                                            <a href={documentUrl(att)} target="_blank" rel="noopener noreferrer">
                                               <img
-                                                src={att.filePath}
+                                                src={documentUrl(att)}
                                                 alt={att.caption || att.fileName || 'Image'}
                                                 className="max-w-full max-h-48 rounded-xl cursor-pointer hover:opacity-90 transition-opacity"
                                               />
@@ -1707,7 +1713,7 @@ export default function WhatsApp() {
                                           )}
                                           {att.fileType !== 'image' && att.filePath && (
                                             <a
-                                              href={att.filePath}
+                                              href={documentUrl(att)}
                                               target="_blank"
                                               rel="noopener noreferrer"
                                               className={`flex items-center gap-2 p-2.5 rounded-xl ${
@@ -2798,7 +2804,7 @@ export default function WhatsApp() {
                       </div>
                       {att.filePath && (
                         <a
-                          href={att.filePath}
+                          href={documentUrl(att)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 hover:underline flex-shrink-0 ml-2"

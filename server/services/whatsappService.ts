@@ -125,7 +125,7 @@ export class WhatsappService {
       };
     }
 
-    const openaiClient = new OpenAI({ apiKey });
+    const openaiClient = new OpenAI({ apiKey, timeout: 30_000, maxRetries: 1 });
 
     // Get configured lead fields for this business
     const enabledFields = await this.getEnabledLeadFields(businessAccountId);
@@ -779,9 +779,9 @@ For example:
       const arrayBuffer = await fileResponse.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
 
-      // Upload to R2 storage
+      // Upload to the private R2 bucket (customer KYC documents must never be publicly readable)
       const r2Folder = `whatsapp/${leadId}`;
-      const r2Result = await r2Storage.uploadFile(
+      const r2Result = await r2Storage.uploadSensitiveFile(
         buffer,
         savedFilename,
         r2Folder,
@@ -789,7 +789,7 @@ For example:
         businessAccountId
       );
 
-      if (!r2Result.success) {
+      if (!r2Result.success || !r2Result.ref) {
         console.error("Failed to upload media to R2:", r2Result.error);
         return;
       }
@@ -803,14 +803,14 @@ For example:
         fileType,
         mimeType,
         fileSize: buffer.length,
-        filePath: r2Result.url || '', // Store R2 URL instead of local path
+        filePath: r2Result.ref, // r2private://<key> (or legacy public URL if no private bucket)
         mediaId,
         mediaUrl,
         caption,
       };
 
       await db.insert(whatsappLeadAttachments).values(attachmentData);
-      console.log(`Saved attachment to R2: ${savedFilename} for lead ${leadId}, URL: ${r2Result.url}`);
+      console.log(`Saved attachment to R2: ${savedFilename} for lead ${leadId}, key: ${r2Result.key}`);
     } catch (error) {
       console.error("Error downloading media:", error);
     }
@@ -863,9 +863,9 @@ For example:
         (mediaType === "image" ? "image/jpeg" : "application/pdf");
       const fileType = mediaType === "image" ? "image" : "pdf";
 
-      // Upload to R2 storage (uploadFile adds businessAccountId to key when provided)
+      // Upload to the private R2 bucket (adds businessAccountId to key when provided)
       const r2Folder = `whatsapp/${leadId}`;
-      const r2Result = await r2Storage.uploadFile(
+      const r2Result = await r2Storage.uploadSensitiveFile(
         buffer,
         savedFilename,
         r2Folder,
@@ -873,7 +873,7 @@ For example:
         businessAccountId
       );
 
-      if (!r2Result.success) {
+      if (!r2Result.success || !r2Result.ref) {
         console.error("Failed to upload media to R2:", r2Result.error);
         return;
       }
@@ -885,14 +885,16 @@ For example:
         fileType,
         mimeType,
         fileSize: buffer.length,
-        filePath: r2Result.url || '', // Store R2 URL instead of local path
+        filePath: r2Result.ref, // r2private://<key> (or legacy public URL if no private bucket)
         mediaUrl,
         caption,
       };
 
       await db.insert(whatsappLeadAttachments).values(attachmentData);
-      console.log(`Saved attachment to R2: ${savedFilename} for lead ${leadId}, URL: ${r2Result.url}`);
-      return r2Result.url;
+      console.log(`Saved attachment to R2: ${savedFilename} for lead ${leadId}, key: ${r2Result.key}`);
+      // Returns the stored reference (not a fetchable URL when private). Callers store it in
+      // _collectedDocuments[].fileUrl / attachment filePath; resolve with r2Storage.getShareableUrl().
+      return r2Result.ref;
     } catch (error) {
       console.error("Error downloading media from URL:", error);
       return undefined;
@@ -1001,7 +1003,166 @@ For example:
   }
 
   async deleteLead(leadId: string): Promise<void> {
+    // Collect document references before the rows go (attachments cascade with the lead).
+    const [owner] = await db
+      .select({ businessAccountId: whatsappLeads.businessAccountId })
+      .from(whatsappLeads)
+      .where(eq(whatsappLeads.id, leadId))
+      .limit(1);
+    const refs = owner ? await this.collectLeadDocumentRefs([leadId]) : [];
+
     await db.delete(whatsappLeads).where(eq(whatsappLeads.id, leadId));
+
+    if (owner && refs.length > 0) {
+      await this.deleteDocumentFiles(owner.businessAccountId, refs);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Customer document storage (private R2 bucket) helpers
+  // ---------------------------------------------------------------------------
+
+  /** Pulls every stored-file reference out of a documents map (_documents / _collectedDocuments). */
+  private extractDocRefs(docs: unknown, into: Set<string>) {
+    if (!docs || typeof docs !== 'object') return;
+    for (const entry of Object.values(docs as Record<string, any>)) {
+      if (!entry || typeof entry !== 'object') continue;
+      if (typeof entry.fileUrl === 'string') into.add(entry.fileUrl);
+      for (const photo of Array.isArray(entry.additionalPhotos) ? entry.additionalPhotos : []) {
+        if (photo && typeof photo.fileUrl === 'string') into.add(photo.fileUrl);
+      }
+    }
+  }
+
+  /**
+   * All R2 document references (attachment filePaths + document fileUrls in extractedData)
+   * belonging to the given leads. Only references pointing at our own buckets are returned.
+   */
+  async collectLeadDocumentRefs(leadIds: string[], executor: any = db): Promise<string[]> {
+    if (leadIds.length === 0) return [];
+    const refs = new Set<string>();
+    const idList = sql.join(leadIds.map(id => sql`${id}`), sql`, `);
+    const atts = await executor
+      .select({ filePath: whatsappLeadAttachments.filePath })
+      .from(whatsappLeadAttachments)
+      .where(sql`${whatsappLeadAttachments.leadId} IN (${idList})`);
+    for (const a of atts as { filePath: string | null }[]) if (a.filePath) refs.add(a.filePath);
+    const leadRows = await executor
+      .select({ extractedData: whatsappLeads.extractedData })
+      .from(whatsappLeads)
+      .where(sql`${whatsappLeads.id} IN (${idList})`);
+    for (const l of leadRows as { extractedData: any }[]) {
+      const ed = (l.extractedData as Record<string, any>) || {};
+      this.extractDocRefs(ed._documents, refs);
+      this.extractDocRefs(ed._collectedDocuments, refs);
+    }
+    return Array.from(refs).filter(r => r2Storage.parseRef(r) !== null);
+  }
+
+  /**
+   * Deletes document files from R2 once no remaining row references them (the same file
+   * can be linked to both a lead and its conversation message, or be carried in another
+   * lead's extracted documents). Best effort: failures are logged by key and never thrown.
+   * Returns the number of files deleted.
+   */
+  async deleteDocumentFiles(businessAccountId: string, refs: string[]): Promise<number> {
+    const candidates = Array.from(new Set(refs.filter(r => r2Storage.parseRef(r) !== null)));
+    if (candidates.length === 0) return 0;
+    let stillUsed = new Set<string>();
+    try {
+      const refArray = sql`ARRAY[${sql.join(candidates.map(r => sql`${r}`), sql`, `)}]::text[]`;
+      const result = await db.execute(sql`
+        SELECT r.ref FROM unnest(${refArray}) AS r(ref)
+        WHERE EXISTS (SELECT 1 FROM whatsapp_lead_attachments a WHERE a.file_path = r.ref)
+           OR EXISTS (
+             SELECT 1 FROM whatsapp_leads l
+             WHERE l.business_account_id = ${businessAccountId}
+               AND l.extracted_data IS NOT NULL
+               AND position(r.ref in l.extracted_data::text) > 0
+           )
+      `);
+      stillUsed = new Set(((result as any).rows || []).map((row: any) => row.ref as string));
+    } catch (err: any) {
+      // If we cannot prove a file is unreferenced, keep it.
+      console.error('[WhatsApp] Could not check document references; skipping file deletion:', err?.message);
+      return 0;
+    }
+    let deleted = 0;
+    for (const ref of candidates) {
+      if (stillUsed.has(ref)) continue;
+      try {
+        const res = await r2Storage.deleteByRef(ref);
+        if (res.success && !res.skipped) deleted++;
+      } catch (err: any) {
+        console.warn(`[WhatsApp] Failed to delete document file ${r2Storage.parseRef(ref)?.key}:`, err?.message);
+      }
+    }
+    return deleted;
+  }
+
+  /**
+   * Attachment lookup for the authenticated document route: only returns the row when
+   * the attachment's lead belongs to businessAccountId.
+   */
+  async getAttachmentForAccount(attachmentId: string, businessAccountId: string) {
+    const [row] = await db
+      .select({
+        id: whatsappLeadAttachments.id,
+        leadId: whatsappLeadAttachments.leadId,
+        fileName: whatsappLeadAttachments.fileName,
+        fileType: whatsappLeadAttachments.fileType,
+        mimeType: whatsappLeadAttachments.mimeType,
+        filePath: whatsappLeadAttachments.filePath,
+      })
+      .from(whatsappLeadAttachments)
+      .innerJoin(whatsappLeads, eq(whatsappLeads.id, whatsappLeadAttachments.leadId))
+      .where(and(
+        eq(whatsappLeadAttachments.id, attachmentId),
+        eq(whatsappLeads.businessAccountId, businessAccountId),
+        eq(whatsappLeadAttachments.businessAccountId, businessAccountId)
+      ))
+      .limit(1);
+    return row || null;
+  }
+
+  /**
+   * Document context for CRM pushes: `{ [documentCategory]: [{ url, fileName, mimeType }] }`
+   * with every URL made fetchable by the external system (presigned for private refs,
+   * default TTL R2_PRIVATE_SHARE_TTL_SECONDS; legacy public URLs unchanged).
+   */
+  async buildLeadDocumentContext(leadId: string): Promise<Record<string, { url: string; fileName?: string; mimeType?: string }[]>> {
+    const attachments = await db
+      .select({
+        filePath: whatsappLeadAttachments.filePath,
+        fileName: whatsappLeadAttachments.fileName,
+        mimeType: whatsappLeadAttachments.mimeType,
+        documentCategory: whatsappLeadAttachments.documentCategory,
+      })
+      .from(whatsappLeadAttachments)
+      .where(eq(whatsappLeadAttachments.leadId, leadId));
+
+    const docs: Record<string, { url: string; fileName?: string; mimeType?: string }[]> = {};
+    for (const att of attachments) {
+      if (!att.filePath || !att.documentCategory) continue;
+      const url = await r2Storage.getShareableUrl(att.filePath);
+      if (!url) continue;
+      if (!docs[att.documentCategory]) docs[att.documentCategory] = [];
+      docs[att.documentCategory].push({
+        url,
+        fileName: att.fileName || undefined,
+        mimeType: att.mimeType || undefined,
+      });
+    }
+    return docs;
+  }
+
+  /** Attachment as sent to the dashboard: storage reference replaced by the authenticated route. */
+  toClientAttachment<T extends { id: string; filePath: string | null; mediaUrl?: string | null }>(att: T): T {
+    return {
+      ...att,
+      filePath: att.filePath ? `/api/whatsapp/documents/${att.id}` : null,
+      mediaUrl: null,
+    };
   }
 
   async updateLeadDocuments(leadId: string, documents: Record<string, any>): Promise<void> {
@@ -1153,10 +1314,12 @@ For example:
   }
 
   async getLeadAttachments(leadId: string) {
-    return await db
+    const rows = await db
       .select()
       .from(whatsappLeadAttachments)
       .where(eq(whatsappLeadAttachments.leadId, leadId));
+    // Only used to render the dashboard — never expose raw storage refs/URLs.
+    return rows.map(att => this.toClientAttachment(att));
   }
 
   async updateLeadStatus(leadId: string, status: string): Promise<WhatsappLead | null> {
@@ -1287,9 +1450,10 @@ For example:
             .where(eq(whatsappLeadAttachments.leadId, existingLead.id));
 
           if (!isUpdateFlow && incomingAttachments.length > 0) {
+            let replacedFilePaths: string[] = [];
             if (newDocCategories.length > 0) {
               const oldToDelete = await db
-                .select({ id: whatsappLeadAttachments.id })
+                .select({ id: whatsappLeadAttachments.id, filePath: whatsappLeadAttachments.filePath })
                 .from(whatsappLeadAttachments)
                 .where(and(
                   eq(whatsappLeadAttachments.leadId, targetLeadId),
@@ -1300,12 +1464,18 @@ For example:
                   .delete(whatsappLeadAttachments)
                   .where(sql`${whatsappLeadAttachments.id} IN (${sql.join(oldToDelete.map(a => sql`${a.id}`), sql`, `)})`);
                 console.log(`[WhatsApp] Deleted ${oldToDelete.length} old attachment(s) from lead ${targetLeadId} (replaced by new uploads: ${newDocCategories.join(', ')})`);
+                replacedFilePaths = oldToDelete.map(a => a.filePath).filter((p): p is string => !!p);
               }
             }
             await db
               .update(whatsappLeadAttachments)
               .set({ leadId: targetLeadId })
               .where(eq(whatsappLeadAttachments.leadId, existingLead.id));
+            if (replacedFilePaths.length > 0) {
+              // Replaced files: remove from R2 unless still referenced elsewhere (runs after the move,
+              // so a file shared with the incoming attachments is kept).
+              await this.deleteDocumentFiles(businessAccountId, replacedFilePaths);
+            }
           } else {
             console.log(`[WhatsApp] Skipping attachment delete+move for lead ${targetLeadId} (isUpdateFlow=${isUpdateFlow}, incomingCount=${incomingAttachments.length}) — docs already saved to target during upload`);
           }
@@ -1647,7 +1817,8 @@ For example:
     sessionStart?: string,
     sessionEnd?: string
   ): Promise<number> {
-    return await db.transaction(async (tx) => {
+    let documentRefs: string[] = [];
+    const deletedCount = await db.transaction(async (tx) => {
       const whereConditions = [
         eq(whatsappLeads.businessAccountId, businessAccountId),
         eq(whatsappLeads.senderPhone, senderPhone),
@@ -1667,12 +1838,22 @@ For example:
 
       const leadIds = leadsToDelete.map(l => l.id);
 
+      // Collect document files before their rows go; deleted from R2 after commit.
+      const refSet = new Set(await this.collectLeadDocumentRefs(leadIds, tx));
+
       await tx
         .delete(whatsappLeadAttachments)
         .where(sql`${whatsappLeadAttachments.leadId} IN (${sql.join(leadIds.map(id => sql`${id}`), sql`, `)})`);
 
       const flowSessionIds = Array.from(new Set(leadsToDelete.map(l => l.flowSessionId).filter(Boolean))) as string[];
       if (flowSessionIds.length > 0) {
+        const sessionRows = await tx
+          .select({ collectedData: whatsappFlowSessions.collectedData })
+          .from(whatsappFlowSessions)
+          .where(sql`${whatsappFlowSessions.id} IN (${sql.join(flowSessionIds.map(id => sql`${id}`), sql`, `)})`);
+        for (const row of sessionRows) {
+          this.extractDocRefs(((row.collectedData as Record<string, any>) || {})._collectedDocuments, refSet);
+        }
         await tx
           .delete(whatsappFlowSessions)
           .where(sql`${whatsappFlowSessions.id} IN (${sql.join(flowSessionIds.map(id => sql`${id}`), sql`, `)})`);
@@ -1684,8 +1865,14 @@ For example:
         .returning();
 
       console.log(`[WhatsApp] Deleted ${result.length} messages for session with ${senderPhone}`);
+      documentRefs = Array.from(refSet);
       return result.length;
     });
+
+    if (documentRefs.length > 0) {
+      await this.deleteDocumentFiles(businessAccountId, documentRefs);
+    }
+    return deletedCount;
   }
 
   async getConversationMessages(
@@ -1804,7 +1991,7 @@ For example:
         if (!attachmentsByLeadId[att.leadId]) {
           attachmentsByLeadId[att.leadId] = [];
         }
-        attachmentsByLeadId[att.leadId].push(att);
+        attachmentsByLeadId[att.leadId].push(this.toClientAttachment(att));
       }
     }
 

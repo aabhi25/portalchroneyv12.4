@@ -94,6 +94,30 @@ interface DocumentState {
   [docType: string]: DocTypeState;
 }
 
+/**
+ * True only when the whole message asks to restart the form ("start over",
+ * "please restart the form", "fir se shuru karo"). Words inside ordinary
+ * sentences ("sending cancelled cheque", "dobara bhejta hu") never match.
+ */
+export function isRestartRequest(message: string): boolean {
+  const text = (message || '').toLowerCase().replace(/['’]/g, '').replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text || text.length > 60) return false;
+  const prefix = '(?:(?:please|pls|plz|kindly|ok|okay|can we|can you|can i|could we|i want to|i wanna|i would like to|id like to|lets|let us|i need to|want to)\\s+)*';
+  const suffix = '(?:\\s+(?:please|pls|plz|now|again|karo|kardo|kar do|karna hai|karte hai|karein|kijiye))*';
+  const core = [
+    'restart(?:\\s+(?:the|my))?(?:\\s+(?:form|application|process|journey))?',
+    'start(?:\\s+(?:the|my))?(?:\\s+(?:form|application))?\\s+(?:over|again|afresh|fresh|from\\s+(?:the\\s+)?(?:beginning|start|scratch))',
+    'begin\\s+again',
+    'fill(?:\\s+(?:it|the\\s+form|form))?\\s+(?:again|fresh|afresh)',
+    '(?:start\\s+)?(?:a\\s+)?new\\s+(?:form|application)',
+    'shuru\\s+se(?:\\s+shuru)?',
+    '(?:fir|phir)\\s*se\\s+(?:shuru|start|bharna|fill)',
+    'dobara\\s+(?:shuru|start|bharna|fill)',
+    'naya\\s+(?:form\\s+)?(?:bharo|bharna|shuru)',
+  ].join('|');
+  return new RegExp(`^${prefix}(?:${core})${suffix}$`).test(text);
+}
+
 export class WhatsappFlowService {
   private readonly DEFAULT_SESSION_TIMEOUT_MINUTES = 30;
   private readonly UPLOAD_DEBOUNCE_MS = 4000;
@@ -160,9 +184,21 @@ export class WhatsappFlowService {
     return result;
   }
 
+  // Longest a message waits for the previous one from the same customer (uploads are capped
+  // at ~110s); after that it runs anyway so one stuck call can't block the customer forever.
+  private readonly SENDER_LOCK_MAX_WAIT_MS = 150_000;
+
   private async withUploadLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
     const existing = this.uploadLocks.get(lockKey) || Promise.resolve();
-    const next = existing.then(fn, fn);
+    let waitTimer: NodeJS.Timeout | undefined;
+    const bounded = Promise.race([
+      existing,
+      new Promise(resolve => { waitTimer = setTimeout(() => {
+        console.warn(`[WhatsApp Flow] Previous message for ${lockKey} still running after ${this.SENDER_LOCK_MAX_WAIT_MS / 1000}s — continuing`);
+        resolve(undefined);
+      }, this.SENDER_LOCK_MAX_WAIT_MS); }),
+    ]).finally(() => clearTimeout(waitTimer));
+    const next = bounded.then(fn, fn);
     this.uploadLocks.set(lockKey, next);
     try {
       return await next;
@@ -171,6 +207,16 @@ export class WhatsappFlowService {
         this.uploadLocks.delete(lockKey);
       }
     }
+  }
+
+  /**
+   * Runs `fn` after any message or upload from the same customer that is still being
+   * processed (same queue as uploads). Every handler rewrites the session's collectedData,
+   * so two running at once would overwrite each other — e.g. a text typed while a document
+   * is being read erased the saved document. Read the session inside `fn`, not before.
+   */
+  runForSender<T>(businessAccountId: string, senderPhone: string, fn: () => Promise<T>): Promise<T> {
+    return this.withUploadLock(`${businessAccountId}:${senderPhone}`, fn);
   }
 
   private cancelUploadDebounce(lockKey: string): void {
@@ -338,7 +384,7 @@ Example: {"extracted": {"name": "John", "dob": null}, "followUp": "Thanks John! 
 
       const missing = requiredFields.filter(f => !this.hasFieldValue(allExtracted, f));
 
-      console.log(`[WhatsApp Flow] AI Extraction - Extracted: ${JSON.stringify(allExtracted)}, Missing: ${missing.join(", ")}`);
+      console.log(`[WhatsApp Flow] AI Extraction - Extracted: [${Object.keys(allExtracted || {}).join(', ')}], Missing: ${missing.join(", ")}`);
 
       return { extracted: allExtracted, missing, followUp: parsed.followUp || undefined };
     } catch (error) {
@@ -726,7 +772,7 @@ Return ONLY a valid JSON object:
         parsed.intent = "answer";
       }
 
-      console.log(`[WhatsApp Flow] Text Step Intent - Intent: ${parsed.intent}, CleanValue: "${parsed.cleanValue || ''}", Response: "${parsed.response || ''}"`);
+      console.log(`[WhatsApp Flow] Text Step Intent - Intent: ${parsed.intent}, hasValue: ${!!parsed.cleanValue}, hasResponse: ${!!parsed.response}`);
       return { intent: parsed.intent, response: parsed.response || "", cleanValue: parsed.cleanValue || undefined };
     } catch (error) {
       console.error("[WhatsApp Flow] Text step intent detection error:", error);
@@ -1254,7 +1300,7 @@ Example: {"name": null, "phone": "9876543210", "email": null, "address": "123 Ma
         }
       }
 
-      console.log(`[WhatsApp Flow] AI parsed update details: ${JSON.stringify(updates)}`);
+      console.log(`[WhatsApp Flow] AI parsed update details: [${Object.keys(updates || {}).join(', ')}]`);
       if (Object.keys(updates).length === 0) {
         return this.parseUpdateDetailsFallback(input);
       }
@@ -2243,26 +2289,9 @@ Example: {"name": null, "phone": "9876543210", "email": null, "address": "123 Ma
 
       const extractedData = (lead.extractedData as Record<string, any>) || {};
 
-      let documents: Record<string, { url: string; fileName?: string; mimeType?: string }[]> = {};
-      const attachments = await db
-        .select({
-          filePath: whatsappLeadAttachments.filePath,
-          fileName: whatsappLeadAttachments.fileName,
-          mimeType: whatsappLeadAttachments.mimeType,
-          documentCategory: whatsappLeadAttachments.documentCategory,
-        })
-        .from(whatsappLeadAttachments)
-        .where(eq(whatsappLeadAttachments.leadId, lead.id));
-
-      for (const att of attachments) {
-        if (!att.filePath || !att.documentCategory) continue;
-        if (!documents[att.documentCategory]) documents[att.documentCategory] = [];
-        documents[att.documentCategory].push({
-          url: att.filePath,
-          fileName: att.fileName || undefined,
-          mimeType: att.mimeType || undefined,
-        });
-      }
+      // Private documents get expiring presigned URLs the CRM can download.
+      const { whatsappService } = await import("./whatsappService");
+      let documents: Record<string, { url: string; fileName?: string; mimeType?: string }[]> = await whatsappService.buildLeadDocumentContext(lead.id);
 
       const leadContext = {
         lead: {
@@ -2370,32 +2399,17 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
 
       console.log(`[CRM AutoSync] Syncing lead ${lead.id} for session ${sessionId}`);
 
-      const { syncLeadWithDocuments } = await import('./customCrmService');
-      const result = await syncLeadWithDocuments(settings, fieldMappings, leadContext, storeCredential);
+      // Claims the lead and records the outcome itself (the webhook may trigger the same push).
+      const { syncWhatsappLeadToCustomCrm } = await import('./customCrmService');
+      const result = await syncWhatsappLeadToCustomCrm(lead.id, {
+        source: 'flow_completed', requireAutoSync: true, settings, fieldMappings, leadContext, storeCredential,
+      });
 
-      if (result.success) {
-        await db.update(whatsappLeads)
-          .set({
-            customCrmSyncStatus: 'synced',
-            customCrmSyncedAt: new Date(),
-            customCrmLeadId: result.leadId || result.applicationId || null,
-            customCrmSyncError: null,
-            customCrmSyncPayload: result.payload as any,
-            updatedAt: new Date(),
-          })
-          .where(eq(whatsappLeads.id, lead.id));
-
+      if (result.skipped) {
+        console.log(`[CRM AutoSync] Lead ${lead.id} not pushed: ${result.message}`);
+      } else if (result.success) {
         console.log(`[CRM AutoSync] Lead ${lead.id} synced successfully: ${result.message}`);
       } else {
-        await db.update(whatsappLeads)
-          .set({
-            customCrmSyncStatus: 'failed',
-            customCrmSyncError: result.message,
-            customCrmSyncPayload: result.payload as any,
-            updatedAt: new Date(),
-          })
-          .where(eq(whatsappLeads.id, lead.id));
-
         console.error(`[CRM AutoSync] Lead ${lead.id} sync failed: ${result.message}`);
       }
     } catch (error) {
@@ -2417,8 +2431,7 @@ If no good match exists, return {"matchedId": null, "confidence": 0}`;
     businessAccountId: string,
     currentStepType?: string
   ): Promise<{ intent: 'update_field' | 'restart' | 'none'; fieldsToUpdate: string[]; response: string }> {
-    const restartRegex = /(start\s*(over|again|fresh|from\s*(the\s*)?beginning)|fill\s*(again|fresh|it\s*again)|cancel|restart|begin\s*again|shuru\s*se|fir\s*se|dobara|naya\s*bharo)/i;
-    if (restartRegex.test(message)) {
+    if (isRestartRequest(message)) {
       return { intent: 'restart', fieldsToUpdate: [], response: "Sure! Let me start the form fresh for you." };
     }
 
@@ -2831,6 +2844,13 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     const globalIntent = !isInteractive
       ? await this.detectGlobalFlowIntent(message, collectedData, steps, businessAccountId, currentStep.type)
       : { intent: 'continue' as const, fieldsToUpdate: [] as string[], response: '' };
+
+    // A bare exit word ("stop", "cancel", "exit"…) ends the form; it never restarts it.
+    if (!isInteractive && this.isExitKeyword(message)) {
+      console.log(`[WhatsApp Flow] Exit keyword at step "${currentStep.stepKey}" — ending session`);
+      await this.expireSession(session.id);
+      return { handled: true, response: { type: "text" as const, text: "Your session has been ended. You can start again anytime." } };
+    }
 
     if (globalIntent.intent === 'restart') {
       const startStep = this.getFirstActiveStep(steps);
@@ -3425,7 +3445,13 @@ Return only JSON: {"optionId":"one configured id" | null}`,
                   }
                 }
               } else {
-                await this.completeSession(session.id, collectedData);
+                // Close the half-filled new application without "completing" it: completion
+                // pushes the lead to the CRM and runs verification, which must not happen for a
+                // form that stopped at the phone number.
+                await db
+                  .update(whatsappFlowSessions)
+                  .set({ status: "expired", collectedData: { ...collectedData, _closedReason: "duplicate_phone_update" }, lastMessageAt: new Date() })
+                  .where(eq(whatsappFlowSessions.id, session.id));
 
                 const updateSession = await this.startUpdateSession(
                   businessAccountId,
@@ -3477,7 +3503,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
         }
         
         // All required fields collected - proceed to next step
-        console.log(`[WhatsApp Flow] All required fields collected: ${JSON.stringify(extracted)}`);
+        console.log(`[WhatsApp Flow] All required fields collected: [${Object.keys(extracted || {}).join(', ')}]`);
       }
       
       nextStepKey = resolveNextStepKey(currentStep.defaultNextStep);
@@ -5301,9 +5327,9 @@ Return only JSON: {"optionId":"one configured id" | null}`,
                 const dist = cvLevenshtein(cvNormalizedVal, cvNormalized);
                 const cvDocLabel = cvIsExtractedPan ? 'PAN' : 'Aadhaar';
                 if (dist <= 3) {
-                  console.log(`[WhatsApp Flow] Update docs OCR tolerance: extracted ${cvDocLabel} "${cvNormalized}" vs application "${cvNormalizedVal}" (distance: ${dist}) — match`);
+                  console.log(`[WhatsApp Flow] Update docs OCR tolerance: extracted ${cvDocLabel} vs application value (distance: ${dist}) — match`);
                 } else {
-                  console.log(`[WhatsApp Flow] Update docs mismatch: extracted ${cvDocLabel} "${cvNormalized}" vs application "${cvNormalizedVal}" (distance: ${dist})`);
+                  console.log(`[WhatsApp Flow] Update docs mismatch: extracted ${cvDocLabel} vs application value (distance: ${dist})`);
                   decrementPending();
                   return {
                     handled: true,
@@ -6760,11 +6786,11 @@ Return only JSON: {"optionId":"one configured id" | null}`,
         if (valMatchesFormat && normalizedVal !== normalizedExtracted) {
           const dist = levenshtein(normalizedVal, normalizedExtracted);
           if (dist <= OCR_TOLERANCE) {
-            console.log(`[WhatsApp Flow] OCR distance ${dist} between extracted ${docLabel} "${normalizedExtracted}" and session value "${normalizedVal}" — within tolerance, treating as match`);
+            console.log(`[WhatsApp Flow] OCR distance ${dist} between extracted ${docLabel} and session value — within tolerance, treating as match`);
           } else {
             docNumberMismatched = true;
             collectedData._docMismatchWarning = `⚠️ The ${docLabel} number on the uploaded document does not match the ${docLabel} you provided earlier. Please re-upload the correct ${docLabel} document.`;
-            console.log(`[WhatsApp Flow] Document mismatch: extracted ${docLabel} "${normalizedExtracted}" does not match session value "${normalizedVal}" (distance: ${dist}, key: ${key})`);
+            console.log(`[WhatsApp Flow] Document mismatch: extracted ${docLabel} does not match session value (distance: ${dist}, key: ${key})`);
           }
           break;
         }
@@ -7202,6 +7228,12 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       return;
     }
 
+    if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+      await this.expireSession(session.id);
+      console.log(`[FlowRecovery] Session ${session.id} is past its timeout — expired, no reminder`);
+      return;
+    }
+
     if (collectedData._confirmationState?.phase === 'awaiting_action' || collectedData._confirmationState?.phase === 'selecting_field' || collectedData._confirmationState?.phase === 'entering_value') {
       console.log(`[FlowRecovery] Skipping session ${session.id} — pending document confirmation (phase: ${collectedData._confirmationState.phase})`);
       return;
@@ -7232,6 +7264,19 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     const hasPendingUploads = this.pendingUploadCount.has(`${session.businessAccountId}:${session.senderPhone}`);
     if (hasPendingUploads) return;
 
+    // Every server instance runs this job. Claim the session first (only one instance can
+    // move lastMessageAt forward from the stale value) so the customer gets one reminder.
+    const claimed = await db
+      .update(whatsappFlowSessions)
+      .set({ lastMessageAt: new Date() })
+      .where(and(
+        eq(whatsappFlowSessions.id, session.id),
+        eq(whatsappFlowSessions.status, "active"),
+        sql`${whatsappFlowSessions.lastMessageAt} < ${new Date(Date.now() - this.STUCK_THRESHOLD_MS).toISOString()}`
+      ))
+      .returning({ id: whatsappFlowSessions.id });
+    if (claimed.length === 0) return;
+
     console.log(`[FlowRecovery] Detected stuck upload session ${session.id} for ${session.senderPhone} — collected: [${collectedDocKeys.join(',')}], missing: [${missingMandatory.join(',')}], pendingPdf: ${hasPendingPdf}`);
 
     const { whatsappService } = await import("./whatsappService");
@@ -7252,6 +7297,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           },
           session.id
         );
+        // One reminder only — cleared again when the customer replies.
+        collectedData._recoveryReminderSent = true;
         await this.updateSessionData(session.id, collectedData);
       } else {
         console.log(`[FlowRecovery] All mandatory docs present, advancing to next step`);
@@ -7323,6 +7370,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           },
           session.id
         );
+        collectedData._recoveryReminderSent = true;
         await this.updateSessionData(session.id, collectedData);
       } else {
         const missingLabels = missingMandatory.map(d => {
