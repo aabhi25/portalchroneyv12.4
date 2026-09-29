@@ -24477,13 +24477,14 @@ Strict Requirements:
   });
 
   // Smart Replies routes
+  const SMART_REPLY_CHANNELS = ["whatsapp", "instagram", "facebook", "website"];
   app.get("/api/smart-replies/:channel", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
       const businessAccountId = req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
       const { channel } = req.params;
-      if (!["whatsapp", "instagram", "website"].includes(channel)) {
-        return res.status(400).json({ error: "Invalid channel. Must be whatsapp, instagram, or website" });
+      if (!SMART_REPLY_CHANNELS.includes(channel)) {
+        return res.status(400).json({ error: "Invalid channel. Must be whatsapp, instagram, facebook, or website" });
       }
       const results = await db
         .select()
@@ -24501,7 +24502,7 @@ Strict Requirements:
       const businessAccountId = req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
       const { channel } = req.params;
-      if (!["whatsapp", "instagram", "website"].includes(channel)) {
+      if (!SMART_REPLY_CHANNELS.includes(channel)) {
         return res.status(400).json({ error: "Invalid channel" });
       }
       const { keywords, responseText, responseUrl, priority, isActive } = req.body;

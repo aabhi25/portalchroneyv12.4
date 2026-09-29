@@ -422,6 +422,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/facebook-insights" component={FacebookInsights} />
                 <Route path="/admin/facebook-comments" component={FacebookComments} />
                 <Route path="/admin/facebook-comment-settings" component={FacebookCommentSettings} />
+                <Route path="/admin/facebook-smart-replies">{() => <SmartReplies channel="facebook" />}</Route>
                 <Route path="/admin/about" component={About} />
                 <Route path="/admin/scan-docs" component={ScanDocs} />
                 <Route path="/admin/url-training" component={UrlTraining} />

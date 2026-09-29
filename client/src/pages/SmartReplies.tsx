@@ -44,7 +44,7 @@ interface SmartReply {
 }
 
 interface SmartRepliesProps {
-  channel: "whatsapp" | "instagram" | "website";
+  channel: "whatsapp" | "instagram" | "facebook" | "website";
   headerContent?: React.ReactNode;
 }
 
@@ -62,7 +62,7 @@ export default function SmartReplies({ channel, headerContent }: SmartRepliesPro
     isActive: true,
   });
 
-  const channelLabel = channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : "Website";
+  const channelLabel = channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : channel === "facebook" ? "Facebook" : "Website";
   const [, setLocation] = useLocation();
 
   const { data, isLoading } = useQuery<{ smartReplies: SmartReply[] }>({
