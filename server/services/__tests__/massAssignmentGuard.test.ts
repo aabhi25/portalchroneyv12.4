@@ -28,6 +28,9 @@ function expect(cond: any, label: string, detail?: unknown) {
  * The enclosing function is the nearest preceding method / function name.
  */
 const EXCEPTIONS: Record<string, string> = {
+  // CRM sync bookkeeping: patches are built in code from sync outcomes, never from a request
+  "server/services/socialLeadCrmSync.ts#recordLsqFailure": "LeadSquared sync status/retry fields built server-side",
+  "server/services/socialLeadCrmSync.ts#finish": "Salesforce sync status fields built server-side",
   // storage.ts — internal-only or super-admin paths whose inputs are built server-side
   "server/storage.ts#updateUser": "super-admin reassigns a user's businessAccountId on purpose; typed { businessAccountId }",
   "server/storage.ts#updateBusinessAccount": "keyed by the account's own id; typed allow-list (name/website/productTier)",
