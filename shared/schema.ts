@@ -596,6 +596,9 @@ export const leads = pgTable("leads", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
   businessCreatedIdx: index("leads_business_created_idx").on(table.businessAccountId, table.createdAt),
+  businessPhoneIdx: index("leads_business_phone_idx").on(table.businessAccountId, table.phone),
+  businessEmailIdx: index("leads_business_email_idx").on(table.businessAccountId, table.email),
+  conversationIdx: index("leads_conversation_idx").on(table.conversationId),
 }));
 
 // Question Bank - Track questions/issues that AI couldn't handle or answer properly
@@ -1300,7 +1303,10 @@ export const journeySessions = pgTable("journey_sessions", {
   
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  conversationIdx: index("journey_sessions_conversation_idx").on(table.conversationId),
+  businessCreatedIdx: index("journey_sessions_business_created_idx").on(table.businessAccountId, table.createdAt),
+}));
 
 // Visitor Daily Stats - Lightweight daily summary of visitor activity
 export const visitorDailyStats = pgTable("visitor_daily_stats", {
@@ -1560,7 +1566,9 @@ export const aiUsageEvents = pgTable("ai_usage_events", {
   costUsd: numeric("cost_usd", { precision: 10, scale: 6 }).notNull().default("0"), // Calculated cost in USD
   metadata: jsonb("metadata"), // Additional context (conversation_id, feature, etc)
   occurredAt: timestamp("occurred_at").notNull().defaultNow(), // When this usage occurred
-});
+}, (table) => ({
+  businessOccurredIdx: index("ai_usage_events_business_occurred_idx").on(table.businessAccountId, table.occurredAt),
+}));
 
 // AI Usage Daily - Aggregated daily summaries for fast reporting
 export const aiUsageDaily = pgTable("ai_usage_daily", {
@@ -2693,7 +2701,7 @@ export const whatsappSettings = pgTable("whatsapp_settings", {
   msg91AuthKey: text("msg91_auth_key"), // Encrypted MSG91 auth key
   whatsappNumber: text("whatsapp_number"), // WhatsApp Business phone number
   webhookSecret: text("webhook_secret"), // Secret for webhook validation
-  extractionFields: jsonb("extraction_fields").$type<string[]>().default(["name", "phone", "email"]), // Fields to extract
+  extractionFields: jsonb("extraction_fields").$type<string[]>().default(["name", "phone", "email", "loan_amount", "loan_type", "address"]), // Fields to extract (default matches production)
   customPrompt: text("custom_prompt"), // Optional custom AI extraction prompt
   autoSyncToLeadsquared: text("auto_sync_to_leadsquared").notNull().default("false"), // 'true' | 'false'
   // Lead capture settings
@@ -2786,6 +2794,10 @@ export const whatsappLeads = pgTable("whatsapp_leads", {
   notes: text("notes"), // Any additional notes
   rawMessage: text("raw_message"), // Original WhatsApp message text
   extractedData: jsonb("extracted_data"), // Full AI extraction result as JSON
+  // Legacy loan-lead columns (exist in production; newer data lives in extractedData)
+  loanAmount: numeric("loan_amount", { precision: 15, scale: 2 }),
+  loanType: text("loan_type"),
+  address: text("address"),
   status: text("status").notNull().default("new"), // 'new' | 'processing' | 'completed' | 'rejected' | 'message_only'
   direction: text("direction").notNull().default("incoming"), // 'incoming' | 'outgoing' - message direction
   flowSessionId: varchar("flow_session_id"), // Links message to a WhatsApp flow session for journey grouping
@@ -2813,6 +2825,8 @@ export const whatsappLeads = pgTable("whatsapp_leads", {
   blankPlaceholderUniqueIdx: uniqueIndex("whatsapp_leads_blank_placeholder_unique_idx")
     .on(table.businessAccountId, table.senderPhone)
     .where(sql`status = 'new' AND customer_name IS NULL AND extracted_data IS NULL`),
+  businessSenderIdx: index("whatsapp_leads_business_sender_idx").on(table.businessAccountId, table.senderPhone),
+  flowSessionIdx: index("whatsapp_leads_flow_session_idx").on(table.flowSessionId),
 }));
 
 export const insertWhatsappLeadSchema = createInsertSchema(whatsappLeads).omit({
@@ -2957,7 +2971,10 @@ export const whatsappFlowSessions = pgTable("whatsapp_flow_sessions", {
   lastMessageAt: timestamp("last_message_at").notNull().defaultNow(),
   expiresAt: timestamp("expires_at"), // Session expiry time (e.g., 24 hours)
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  businessSenderStatusIdx: index("whatsapp_flow_sessions_business_sender_status_idx").on(table.businessAccountId, table.senderPhone, table.status),
+  statusLastMessageIdx: index("whatsapp_flow_sessions_status_last_message_idx").on(table.status, table.lastMessageAt),
+}));
 
 export const insertWhatsappFlowSessionSchema = createInsertSchema(whatsappFlowSessions).omit({
   id: true,
@@ -3244,7 +3261,9 @@ export const marketingCampaigns = pgTable("marketing_campaigns", {
   heartbeatAt: timestamp("heartbeat_at"), // Bumped each send-loop tick; powers stuck-campaign detection
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  recipientWorkbookIdx: index("marketing_campaigns_recipient_workbook_idx").on(table.businessAccountId, table.recipientWorkbookId),
+}));
 
 export const insertMarketingCampaignSchema = createInsertSchema(marketingCampaigns).omit({
   id: true,
@@ -4685,6 +4704,10 @@ export const topscholarContentChunks = pgTable("topscholar_content_chunks", {
   subjectId: text("subject_id"), // CMS-provided subject id (expand-only; nullable for legacy rows)
   chapter: text("chapter"),
   title: text("title"),
+  // Grade scope (see topscholar/contentDb.ts)
+  board: text("board"),
+  medium: text("medium"),
+  grade: text("grade"),
   contentHtml: text("content_html"), // original HTML+MathML for notes / rich rendering
   contentText: text("content_text").notNull(), // plain text used for embedding + display
   sourceRef: text("source_ref"), // e.g. cms object id / page id / question id
@@ -4697,6 +4720,8 @@ export const topscholarContentChunks = pgTable("topscholar_content_chunks", {
 }, (table) => ({
   accountCpIdx: index("topscholar_chunks_account_cp_idx").on(table.businessAccountId, table.cpId),
   accountCpTypeIdx: index("topscholar_chunks_account_cp_type_idx").on(table.businessAccountId, table.cpId, table.contentType),
+  scopeIdx: index("topscholar_chunks_scope_idx").on(table.businessAccountId, table.board, table.medium, table.grade, table.subject, table.cpId),
+  embeddingHnsw: index("topscholar_chunks_embedding_hnsw").using("hnsw", table.embedding.op("vector_cosine_ops")),
 }));
 
 // Per cp_id ingestion/sync state for admin visibility and idempotent re-runs.

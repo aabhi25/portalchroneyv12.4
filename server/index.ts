@@ -13,6 +13,7 @@ import path from "path";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { initializeDatabase } from "./init";
+import { runMigrations } from "./migrate";
 import { initializePgVector, checkDatabase, endPool } from "./db";
 import type { Server } from "http";
 import { createGracefulShutdown, installProcessHandlers } from "./lib/gracefulShutdown";
@@ -235,6 +236,10 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     console.log('[Security] ✓ ENCRYPTION_KEY validated successfully');
   }
   
+  // Apply pending schema migrations first (migrations/*.sql). A failure stops startup: running
+  // this code against a database missing its columns would fail in confusing ways later.
+  await runMigrations();
+
   // Initialize database (create default superadmin if needed)
   await initializeDatabase();
   

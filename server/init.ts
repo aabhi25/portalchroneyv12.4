@@ -10,6 +10,10 @@ import { and, eq, isNull, sql } from "drizzle-orm";
  * Initialize the database with a default superadmin if none exists
  * This runs on server startup to ensure there's always a way to log in
  */
+// NOTE: schema changes no longer go in this file. Add them to shared/schema.ts and generate a
+// migration (npm run db:generate -- --name <what_changed>); server/migrate.ts applies it at
+// startup. The ALTER/CREATE ... IF NOT EXISTS statements below predate migrations and are
+// kept only because they are harmless no-ops on an up-to-date database.
 export async function initializeDatabase() {
   try {
     // Data retention (auto-delete) tables. Created before background workers start.
