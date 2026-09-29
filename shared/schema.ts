@@ -1584,6 +1584,24 @@ export const aiUsageDaily = pgTable("ai_usage_daily", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// AI Usage Limits - optional monthly AI spend limit per business account (set by super admins).
+// No row = no limit. Months are calendar months in IST (Asia/Kolkata), see server/services/aiBudgetService.ts.
+export const aiUsageLimits = pgTable("ai_usage_limits", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }).unique(),
+  monthlyLimitUsd: numeric("monthly_limit_usd", { precision: 12, scale: 2 }).notNull(),
+  warnAtPercent: integer("warn_at_percent").notNull().default(80),
+  action: text("action").notNull().default("warn"), // 'warn' | 'block'
+  // IST month ("YYYY-MM") in which the warn / 100% event was last recorded (once per threshold per month).
+  warnNotifiedMonth: text("warn_notified_month"),
+  limitNotifiedMonth: text("limit_notified_month"),
+  updatedBy: varchar("updated_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export type AiUsageLimit = typeof aiUsageLimits.$inferSelect;
+
 // Behavioral Discount System Tables
 
 // Intent Scores - Calculated purchase intent scores

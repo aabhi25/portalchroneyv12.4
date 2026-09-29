@@ -265,6 +265,10 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
 
   // Initialize AI usage pricing
   await aiUsageLogger.initializePricing();
+
+  // Monthly AI spend limits: load the enforcement cache and refresh it every 60s.
+  const { aiBudgetService } = await import("./services/aiBudgetService");
+  aiBudgetService.start();
   
   // NOTE: We deliberately do NOT call normalizeExistingPhones() any more.
   // That helper used to truncate every stored phone to its last 10 digits,

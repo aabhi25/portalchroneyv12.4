@@ -1,6 +1,7 @@
 import { db } from '../db';
 import { aiUsageEvents, modelPricing } from '../../shared/schema';
 import { eq } from 'drizzle-orm';
+import { aiBudgetService } from './aiBudgetService';
 
 /**
  * Per-1000-token rates in USD.
@@ -310,6 +311,8 @@ class AIUsageLogger {
         costUsd: costUsd.toFixed(6),
         metadata: params.metadata || null,
       });
+      // Keep the monthly-limit cache current without a DB read (see aiBudgetService).
+      aiBudgetService.recordSpend(params.businessAccountId, costUsd);
 
       const audioNote = usage.tokensInputAudio || usage.tokensOutputAudio
         ? ` (audio in:${usage.tokensInputAudio} out:${usage.tokensOutputAudio})`
