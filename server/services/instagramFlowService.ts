@@ -1,4 +1,5 @@
 import { db } from "../db";
+import { stripProtectedFields } from "../lib/safeUpdate";
 import {
   instagramFlows,
   instagramFlowSteps,
@@ -959,7 +960,7 @@ Return ONLY a valid JSON object:
 
     const [updated] = await db
       .update(instagramFlows)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(updates), updatedAt: new Date() })
       .where(eq(instagramFlows.id, flowId))
       .returning();
 
@@ -990,8 +991,8 @@ Return ONLY a valid JSON object:
     const [step] = await db
       .insert(instagramFlowSteps)
       .values({
+        ...stripProtectedFields(stepData, ['flowId']),
         flowId,
-        ...stepData,
       })
       .returning();
 
@@ -1015,7 +1016,7 @@ Return ONLY a valid JSON object:
   ): Promise<InstagramFlowStep | null> {
     const [updated] = await db
       .update(instagramFlowSteps)
-      .set(updates)
+      .set(stripProtectedFields(updates, ['flowId']))
       .where(eq(instagramFlowSteps.id, stepId))
       .returning();
 

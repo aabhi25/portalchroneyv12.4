@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { db } from "../db";
+import { stripProtectedFields } from "../lib/safeUpdate";
 import { refreshLeadQualificationLater } from "./leadQualificationService";
 import { 
   whatsappSettings, 
@@ -89,18 +90,19 @@ export class WhatsappService {
 
   async saveSettings(businessAccountId: string, data: Partial<WhatsappSettings>): Promise<WhatsappSettings> {
     const existing = await this.getSettings(businessAccountId);
-    
+    const safeData = stripProtectedFields(data);
+
     if (existing) {
       const [updated] = await db
         .update(whatsappSettings)
-        .set({ ...data, updatedAt: new Date() })
+        .set({ ...safeData, updatedAt: new Date() })
         .where(eq(whatsappSettings.businessAccountId, businessAccountId))
         .returning();
       return updated;
     } else {
       const [created] = await db
         .insert(whatsappSettings)
-        .values({ businessAccountId, ...data })
+        .values({ ...safeData, businessAccountId })
         .returning();
       return created;
     }

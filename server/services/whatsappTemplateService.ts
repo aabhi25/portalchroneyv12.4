@@ -100,9 +100,14 @@ export const whatsappTemplateService = {
 
   async update(businessAccountId: string, id: string, payload: Partial<InsertWhatsappTemplate>): Promise<WhatsappTemplate | undefined> {
     const updates: any = { updatedAt: new Date() };
+    // Tenant-editable fields only. Approval state (`status`,
+    // `rejectionReason`) and ownership/source fields (`businessAccountId`,
+    // `sourceType`, `sourceWhatsappNumber`, `deletedAt`) are server-controlled:
+    // they are set by create() and the MSG91 sync, never by a PATCH body.
+    // An unapproved template must not be made campaign-ready by the tenant.
     const fields: (keyof InsertWhatsappTemplate)[] = [
       "name", "language", "category", "bodyText", "headerType", "headerText",
-      "headerMediaUrl", "footerText", "buttons", "status", "msg91TemplateId", "namespace", "rejectionReason"
+      "headerMediaUrl", "footerText", "buttons", "msg91TemplateId", "namespace",
     ];
     for (const field of fields) {
       if (payload[field] !== undefined) updates[field] = payload[field];

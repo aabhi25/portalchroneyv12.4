@@ -8,6 +8,8 @@ import type { CrmStoreCredential, InsertLead, Lead, LeadsquaredFieldMapping } fr
 import bcrypt from "bcrypt";
 import { eq, and, isNotNull, isNull, sql, inArray, desc, ilike, asc, gte, lte, count } from "drizzle-orm";
 import OpenAI from "openai";
+import { pickAllowedFields, stripProtectedFields } from "./lib/safeUpdate";
+import { requireOwnedSocialFlow } from "./lib/socialFlowOwnership";
 import {
   hashPassword,
   verifyPassword,
@@ -8709,7 +8711,7 @@ If you cannot determine the category or the image doesn't match any category, re
   app.get("/api/urgency-offer-settings/:campaignId", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
       const { getCampaignById } = await import("./services/urgencyOfferService");
-      const campaign = await getCampaignById(req.params.campaignId);
+      const campaign = await getCampaignById(req.params.campaignId, req.user!.businessAccountId!);
       if (!campaign) return res.status(404).json({ error: "Campaign not found" });
       res.json(campaign);
     } catch (error: any) {
@@ -8749,7 +8751,7 @@ If you cannot determine the category or the image doesn't match any category, re
   app.delete("/api/urgency-offer-settings/:campaignId", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
       const { deleteCampaign } = await import("./services/urgencyOfferService");
-      const deleted = await deleteCampaign(req.params.campaignId);
+      const deleted = await deleteCampaign(req.params.campaignId, req.user!.businessAccountId!);
       if (!deleted) return res.status(404).json({ error: "Campaign not found" });
       console.log(`[Urgency Offer] Deleted campaign ${req.params.campaignId}`);
       res.json({ success: true });
@@ -8772,7 +8774,7 @@ If you cannot determine the category or the image doesn't match any category, re
       const { getAllCampaigns, getCampaignById } = await import("./services/urgencyOfferService");
       
       if (campaignId) {
-        const campaign = await getCampaignById(campaignId);
+        const campaign = await getCampaignById(campaignId, businessAccountId);
         if (!campaign || campaign.businessAccountId !== businessAccountId) {
           return res.json({ isEnabled: false });
         }
@@ -8843,7 +8845,7 @@ If you cannot determine the category or the image doesn't match any category, re
         return res.json({ hasActiveOffer: false });
       }
       
-      const campaign = offer.campaignId ? await getCampaignById(offer.campaignId) : null;
+      const campaign = offer.campaignId ? await getCampaignById(offer.campaignId, businessAccountId) : null;
       
       res.json({
         hasActiveOffer: true,
@@ -24385,6 +24387,14 @@ Strict Requirements:
         ...req.body,
         businessAccountId
       });
+      // Both ends of the relationship must be this account's products.
+      const [sourceProduct, targetProduct] = await Promise.all([
+        storage.getProduct(validatedData.sourceProductId, businessAccountId),
+        storage.getProduct(validatedData.targetProductId, businessAccountId),
+      ]);
+      if (!sourceProduct || !targetProduct) {
+        return res.status(400).json({ error: "Product not found for this business account" });
+      }
       const relationship = await storage.createProductRelationship(validatedData);
       res.json(relationship);
     } catch (error: any) {
@@ -24435,10 +24445,12 @@ Strict Requirements:
         return res.status(400).json({ error: "Business account not found" });
       }
       
+      // Only the relationship's attributes are editable; its products and
+      // owner are fixed (re-pointing could reference another tenant's product).
       const relationship = await storage.updateProductRelationship(
         req.params.id,
         businessAccountId,
-        req.body
+        pickAllowedFields(req.body, ["relationshipType", "weight", "notes"] as const)
       );
       res.json(relationship);
     } catch (error: any) {
@@ -25774,7 +25786,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
       
       const entry = await storage.createQuestionBankEntry({
-        ...req.body,
+        ...stripProtectedFields(req.body),
         businessAccountId,
       });
       res.json(entry);
@@ -26381,7 +26393,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
 
       const attachmentData = {
-        ...req.body,
+        ...stripProtectedFields(req.body),
         ticketId: req.params.id
       };
 
@@ -26429,7 +26441,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
 
       const responseData = {
-        ...req.body,
+        ...stripProtectedFields(req.body),
         businessAccountId
       };
 
@@ -26523,7 +26535,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
 
       const insightData = {
-        ...req.body,
+        ...stripProtectedFields(req.body),
         businessAccountId
       };
 
@@ -35336,6 +35348,9 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
+  // Instagram / Facebook flow routes with a :flowId use requireOwnedSocialFlow
+  // (server/lib/socialFlowOwnership.ts) to scope them to the caller's account.
+
   // Instagram Flows - CRUD
   app.get("/api/instagram/flows", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
@@ -35368,7 +35383,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.get("/api/instagram/flows/:flowId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.get("/api/instagram/flows/:flowId", requireAuth, requireOwnedSocialFlow("instagram"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
       const { instagramFlowService } = await import("./services/instagramFlowService");
@@ -35380,7 +35395,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.put("/api/instagram/flows/:flowId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.put("/api/instagram/flows/:flowId", requireAuth, requireOwnedSocialFlow("instagram"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
       const updates = req.body;
@@ -35393,7 +35408,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.delete("/api/instagram/flows/:flowId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.delete("/api/instagram/flows/:flowId", requireAuth, requireOwnedSocialFlow("instagram"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
       const { instagramFlowService } = await import("./services/instagramFlowService");
@@ -35405,7 +35420,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.post("/api/instagram/flows/:flowId/steps", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.post("/api/instagram/flows/:flowId/steps", requireAuth, requireOwnedSocialFlow("instagram"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
       const stepData = req.body;
@@ -35418,7 +35433,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.put("/api/instagram/flows/:flowId/steps/:stepId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.put("/api/instagram/flows/:flowId/steps/:stepId", requireAuth, requireOwnedSocialFlow("instagram"), async (req: AuthenticatedRequest, res) => {
     try {
       const { stepId } = req.params;
       const updates = req.body;
@@ -35431,7 +35446,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.patch("/api/instagram/flows/:flowId/steps/:stepId/toggle-pause", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.patch("/api/instagram/flows/:flowId/steps/:stepId/toggle-pause", requireAuth, requireOwnedSocialFlow("instagram"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId, stepId } = req.params;
       const [step] = await db
@@ -35455,7 +35470,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.delete("/api/instagram/flows/:flowId/steps/:stepId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.delete("/api/instagram/flows/:flowId/steps/:stepId", requireAuth, requireOwnedSocialFlow("instagram"), async (req: AuthenticatedRequest, res) => {
     try {
       const { stepId } = req.params;
       const { instagramFlowService } = await import("./services/instagramFlowService");
@@ -35467,7 +35482,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.post("/api/instagram/flows/:flowId/steps/reorder", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.post("/api/instagram/flows/:flowId/steps/reorder", requireAuth, requireOwnedSocialFlow("instagram"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
       const { stepIds } = req.body;
@@ -36186,7 +36201,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.get("/api/facebook/flows/:flowId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.get("/api/facebook/flows/:flowId", requireAuth, requireOwnedSocialFlow("facebook"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
       const { facebookFlowService } = await import("./services/facebookFlowService");
@@ -36198,7 +36213,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.put("/api/facebook/flows/:flowId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.put("/api/facebook/flows/:flowId", requireAuth, requireOwnedSocialFlow("facebook"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
       const updates = req.body;
@@ -36211,7 +36226,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.delete("/api/facebook/flows/:flowId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.delete("/api/facebook/flows/:flowId", requireAuth, requireOwnedSocialFlow("facebook"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
       const { facebookFlowService } = await import("./services/facebookFlowService");
@@ -36223,7 +36238,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.post("/api/facebook/flows/:flowId/steps", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.post("/api/facebook/flows/:flowId/steps", requireAuth, requireOwnedSocialFlow("facebook"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
       const stepData = req.body;
@@ -36236,7 +36251,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.put("/api/facebook/flows/:flowId/steps/:stepId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.put("/api/facebook/flows/:flowId/steps/:stepId", requireAuth, requireOwnedSocialFlow("facebook"), async (req: AuthenticatedRequest, res) => {
     try {
       const { stepId } = req.params;
       const updates = req.body;
@@ -36249,7 +36264,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.patch("/api/facebook/flows/:flowId/steps/:stepId/toggle-pause", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.patch("/api/facebook/flows/:flowId/steps/:stepId/toggle-pause", requireAuth, requireOwnedSocialFlow("facebook"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId, stepId } = req.params;
       const [step] = await db
@@ -36273,7 +36288,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.delete("/api/facebook/flows/:flowId/steps/:stepId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.delete("/api/facebook/flows/:flowId/steps/:stepId", requireAuth, requireOwnedSocialFlow("facebook"), async (req: AuthenticatedRequest, res) => {
     try {
       const { stepId } = req.params;
       const { facebookFlowService } = await import("./services/facebookFlowService");
@@ -36285,7 +36300,7 @@ Return ONLY a valid JSON object in this format:
     }
   });
 
-  app.post("/api/facebook/flows/:flowId/steps/reorder", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.post("/api/facebook/flows/:flowId/steps/reorder", requireAuth, requireOwnedSocialFlow("facebook"), async (req: AuthenticatedRequest, res) => {
     try {
       const { flowId } = req.params;
       const { stepIds } = req.body;
@@ -37297,6 +37312,9 @@ Return ONLY a valid JSON object in this format:
       const body = req.body || {};
       const payload = { ...body };
       if (body.scheduledAt !== undefined) payload.scheduledAt = body.scheduledAt ? new Date(body.scheduledAt) : null;
+      // Send-lifecycle states (sending/completed/failed/…) are owned by the send
+      // pipeline. An edit may only keep a campaign as a draft or schedule it.
+      if (payload.status !== undefined && !["draft", "scheduled"].includes(payload.status)) delete payload.status;
       const { marketingCampaignService } = await import("./services/marketingCampaignService");
       // Recipients are snapshotted from the contact groups at the moment the send starts, and
       // the template is dispatched from that point on. Once a campaign has started, its stored

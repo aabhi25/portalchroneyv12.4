@@ -1,4 +1,5 @@
 import { db } from "../db";
+import { stripProtectedFields } from "../lib/safeUpdate";
 import { UploadAckCoordinator, type AckDocInfo } from "./uploadAckCoordinator";
 import {
   whatsappFlows,
@@ -4288,7 +4289,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
 
     const [updated] = await db
       .update(whatsappFlows)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(updates), updatedAt: new Date() })
       .where(eq(whatsappFlows.id, flowId))
       .returning();
 
@@ -4319,8 +4320,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     const [step] = await db
       .insert(whatsappFlowSteps)
       .values({
+        ...stripProtectedFields(stepData, ['flowId']),
         flowId,
-        ...stepData,
       })
       .returning();
 
@@ -4344,7 +4345,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
   ): Promise<WhatsappFlowStep | null> {
     const [updated] = await db
       .update(whatsappFlowSteps)
-      .set(updates)
+      .set(stripProtectedFields(updates, ['flowId']))
       .where(eq(whatsappFlowSteps.id, stepId))
       .returning();
 
