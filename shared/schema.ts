@@ -556,6 +556,8 @@ export const faqs = pgTable("faqs", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
   businessIdx: index("faqs_business_idx").on(table.businessAccountId),
+  // ANN index for the FAQ vector search (`embedding <=> query` = cosine distance).
+  embeddingHnsw: index("faqs_embedding_hnsw").using("hnsw", table.embedding.op("vector_cosine_ops")),
 }));
 
 export const leads = pgTable("leads", {
@@ -883,6 +885,8 @@ export const documentChunks = pgTable("document_chunks", {
 }, (table) => ({
   documentIdx: index("document_chunks_document_idx").on(table.trainingDocumentId),
   businessIdx: index("document_chunks_business_idx").on(table.businessAccountId),
+  // ANN index for document RAG (`embedding <=> query` = cosine distance).
+  embeddingHnsw: index("document_chunks_embedding_hnsw").using("hnsw", table.embedding.op("vector_cosine_ops")),
 }));
 
 // URL Training - External URLs for knowledge base training (similar to PDF training but for web pages)
@@ -922,6 +926,8 @@ export const urlContentChunks = pgTable("url_content_chunks", {
 }, (table) => ({
   urlIdx: index("url_content_chunks_url_idx").on(table.trainedUrlId),
   businessIdx: index("url_content_chunks_business_idx").on(table.businessAccountId),
+  // ANN index for trained-URL RAG (`embedding <=> query` = cosine distance).
+  embeddingHnsw: index("url_content_chunks_embedding_hnsw").using("hnsw", table.embedding.op("vector_cosine_ops")),
 }));
 
 // Product Categories - Hierarchical categories for organizing products

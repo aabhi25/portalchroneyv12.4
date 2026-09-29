@@ -36,6 +36,13 @@
       "when": 1790706266784,
       "tag": "0004_ai_usage_limits",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790708088089,
+      "tag": "0005_knowledge_vector_hnsw_indexes",
+      "breakpoints": true
     }
   ]
 }

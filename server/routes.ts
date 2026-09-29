@@ -1468,7 +1468,10 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
           return city;
         }),
         (!language || language === 'auto')
-          ? llamaService.detectLanguage(message, openaiApiKey).catch(() => undefined)
+          // Heuristics + per-conversation cache first; the AI detector only when unsure.
+          ? import('./services/chatContext/languageSession')
+              .then(({ detectWidgetLanguage }) => detectWidgetLanguage(businessAccountId, widgetUserId, message, openaiApiKey))
+              .catch(() => undefined)
           : Promise.resolve(undefined),
       ]);
 

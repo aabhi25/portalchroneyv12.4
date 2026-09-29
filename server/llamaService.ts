@@ -642,6 +642,23 @@ ${formatted}
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 
+/**
+ * Retrieval-mode options for the first streaming call (website chat). All optional;
+ * omitting them keeps the legacy prompt exactly.
+ */
+export interface StreamPromptOptions {
+  /** Compact business profile appended to the (stable) system prompt. */
+  businessProfile?: string;
+  /** Knowledge (FAQs + documents + pages) was retrieved server-side and is in the context. */
+  knowledgePreloaded?: boolean;
+  /** Skip llamaService's own FAQ pre-fetch (retrieval already covered FAQs). */
+  skipFaqPrefetch?: boolean;
+  /** History sent to the model (capped). Lead-capture logic still uses the full history. */
+  modelHistory?: ConversationMessage[];
+  /** Keep the system prompt identical across turns: the per-message funnel stage moves to the final override. */
+  cacheFriendly?: boolean;
+}
+
 export class LlamaService {
   // Cache master AI settings for 30s to avoid repeated DB queries (called 4-5x per message)
   private masterConfigCache: {
@@ -1572,7 +1589,8 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
     phoneValidationOverride?: string,
     suppressFaqInjection: boolean = false,
     otpVerificationPending: boolean = false,
-    forcedFirstToolName?: string
+    forcedFirstToolName?: string,
+    promptOptions?: StreamPromptOptions
   ) {
     const { openai, model } = await this.resolveMasterConfig(apiKey);
 
@@ -1619,7 +1637,7 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
     // Suppressed when order lookup or return/exchange cards are already showing — the AI
     // must reply with a single brief sentence, not summarise FAQ content about tracking.
     let preFetchedFaqData: { faqs: any[]; searchQuery: string } | null = null;
-    if (businessAccountId && !suppressFaqInjection) {
+    if (businessAccountId && !suppressFaqInjection && !promptOptions?.skipFaqPrefetch) {
       preFetchedFaqData = await preFetchFaqs(userMessage, businessAccountId);
     } else if (suppressFaqInjection) {
       console.log('[FAQ Pre-fetch] Suppressed — order lookup cards active, skipping FAQ injection');
@@ -1725,7 +1743,7 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
 
 You are Chroney, an autonomous sales agent for this business on the Hi Chroney platform.
 You don't just answer questions — you strategically guide every conversation toward the best outcome for both the user and the business.
-${this.getAutonomousAgentInstructions(userMessageCount)}
+${this.getAutonomousAgentInstructions(userMessageCount, !!promptOptions?.cacheFriendly)}
 
 ═══════════════════════════════════════════════════════════════════════════
 RESPONSE LENGTH (ALWAYS FOLLOW)
@@ -2253,7 +2271,9 @@ SCRIPT RULE (CRITICAL - check this before responding):
     // Build tool usage instruction based on whether we have pre-fetched FAQs
     const toolUsageInstruction = preFetchedFaqSection
       ? '1. FAQ KNOWLEDGE PRE-LOADED: Relevant FAQs are provided above. Use them directly to answer - NO NEED to call get_faqs. Only call get_faqs if you need ADDITIONAL info not covered. For products, use get_products tool.'
-      : '1. TOOL USAGE (CRITICAL): For ANY question about the business, products, services, company info - ALWAYS call get_faqs or get_products tools FIRST to search the knowledge base. Never assume you don\'t have info without checking tools.';
+      : promptOptions?.knowledgePreloaded
+        ? '1. BUSINESS KNOWLEDGE PRE-LOADED: The FAQs, website content and document excerpts relevant to this question are provided above (CRITICAL DOCUMENT KNOWLEDGE) together with the BUSINESS PROFILE. Answer directly from them - NO NEED to call get_faqs. Only call get_faqs if you need information that is not covered there. For products, use get_products tool.'
+        : '1. TOOL USAGE (CRITICAL): For ANY question about the business, products, services, company info - ALWAYS call get_faqs or get_products tools FIRST to search the knowledge base. Never assume you don\'t have info without checking tools.';
 
     // SMART TIMING: Check if we should activate the lead gate based on message count
     // userMessageCount > 1 means this is the 2nd+ message and lead gate should be active
@@ -2787,7 +2807,7 @@ Ask for their phone number to arrange the callback. Use warm, natural phrasing �
     // Skip lead collection for gibberish/dismissive inputs to let GPT handle naturally
     
     let finalOverride = `🔒 FINAL RULES (HIGHEST PRIORITY):
-${starterQAContext ? `
+${promptOptions?.cacheFriendly ? `\n${this.getFunnelStageBlock(userMessageCount)}\n` : ''}${starterQAContext ? `
 🎯 GUIDANCE Q&A (ABSOLUTE PRIORITY #0 - OVERRIDE EVERYTHING):
 ${starterQAContext}
 ` : ''}
@@ -2893,12 +2913,17 @@ These instructions from the business owner MUST be followed. They override ALL o
     // Log override length instead of full content (reduces console spam)
     console.log(`[Final Override] Length: ${finalOverride.length} chars`);
 
+    // Retrieval mode: the business profile sits right after the stable system prompt
+    // (same for every turn of every conversation of this business → cacheable prefix).
+    const firstSystemContent = promptOptions?.businessProfile
+      ? `${systemPrompt}\n\n═══════════════════════════════════════════════════════════════════════════\nBUSINESS KNOWLEDGE (always available)\n═══════════════════════════════════════════════════════════════════════════\n${promptOptions.businessProfile}`
+      : systemPrompt;
     const messages: ConversationMessage[] = [
-      { role: 'system', content: systemPrompt },
-      ...conversationHistory,
+      { role: 'system', content: firstSystemContent },
+      ...(promptOptions?.modelHistory ?? conversationHistory),
       { role: 'user', content: userMessage }
     ];
-    
+
     // Add language override as the LAST message before sending (GPT weights final messages more heavily)
     messages.push({ role: 'system', content: finalOverride });
 
@@ -3118,11 +3143,15 @@ Generate only the greeting message, nothing else.`;
     return response.choices[0].message.content || 'Hello! I\'m Chroney, here to help!';
   }
 
-  private getAutonomousAgentInstructions(messageCount: number = 1): string {
+  /** The per-message funnel stage block (moved to the end of the prompt in cache-friendly mode). */
+  private getFunnelStageBlock(messageCount: number = 1): string {
+    return this.funnelStageStrategy(messageCount);
+  }
+
+  private funnelStageStrategy(messageCount: number): string {
     const funnelStage = messageCount <= 1 ? 'discovery' :
                         messageCount <= 3 ? 'interest' :
                         messageCount <= 6 ? 'evaluation' : 'conversion';
-    
     const stageStrategy: Record<string, string> = {
       discovery: `FUNNEL STAGE: DISCOVERY (Message ${messageCount})
 - User is just arriving. Build rapport and intrigue.
@@ -3145,6 +3174,18 @@ Generate only the greeting message, nothing else.`;
 - Remove friction: summarize what they need to do and make it feel simple.
 - If they hesitate, address the specific concern — don't repeat generic info.`
     };
+    return stageStrategy[funnelStage];
+  }
+
+  /**
+   * @param stageSeparately When true the funnel stage (which names the message number and
+   *   so changes every turn) is left out here and rendered in the final override instead,
+   *   keeping this block — and the system prompt — identical across turns.
+   */
+  private getAutonomousAgentInstructions(messageCount: number = 1, stageSeparately: boolean = false): string {
+    const stageText = stageSeparately
+      ? 'FUNNEL STAGE: given in the FINAL RULES at the end (it changes as the conversation progresses).'
+      : this.funnelStageStrategy(messageCount);
 
     return `
 ═══════════════════════════════════════════════════════════════════════════
@@ -3162,7 +3203,7 @@ AUTO-DETECT INDUSTRY FROM CONTEXT:
 - If you see tickets/issues/troubleshooting → you are a SUPPORT resolution expert
 - Adapt your strategy to match the business type automatically
 
-${stageStrategy[funnelStage]}
+${stageText}
 
 ───────────────────────────────────────────────────────────────────────────
 SALES INTELLIGENCE RULES (APPLY TO EVERY RESPONSE):

@@ -1,0 +1,3 @@
+CREATE INDEX IF NOT EXISTS "document_chunks_embedding_hnsw" ON "document_chunks" USING hnsw ("embedding" vector_cosine_ops);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "faqs_embedding_hnsw" ON "faqs" USING hnsw ("embedding" vector_cosine_ops);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "url_content_chunks_embedding_hnsw" ON "url_content_chunks" USING hnsw ("embedding" vector_cosine_ops);
