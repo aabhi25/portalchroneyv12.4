@@ -6,7 +6,7 @@
  *   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55432/postgres?sslmode=disable \
  *   DOC_TEST_DB=1 npx tsx server/services/__tests__/aadhaarWhatsappFlow.integration.test.ts
  */
-import { VALID, startFakeOpenAI } from "./helpers/fakeOpenAIKyc";
+import { VALID, startFakeOpenAI, fakeTiming } from "./helpers/fakeOpenAIKyc";
 
 const url = process.env.DATABASE_URL || '';
 if (process.env.DOC_TEST_DB !== '1' || !/@(127\.0\.0\.1|localhost)[:/]/.test(url)) {
@@ -27,8 +27,15 @@ async function main() {
   const schema = await import("@shared/schema");
   const { eq, and } = await import("drizzle-orm");
   const { whatsappFlowService } = await import("../whatsappFlowService");
+  // Capture the interim messages (acknowledgement / progress) the agent sends.
+  const sentMessages: { phone: string; text: string }[] = [];
+  (whatsappFlowService as any).sendFlowText = async (_b: string, phone: string, _s: string, text: string) => { sentMessages.push({ phone, text }); };
+  const acksFor = (phone: string) => sentMessages.filter(m => m.phone === phone).map(m => m.text);
   const { DOC_AI_TIMEOUTS } = await import("../documentIdentificationService");
-  DOC_AI_TIMEOUTS.gpt4oMs = 1000;
+  DOC_AI_TIMEOUTS.gpt4oMs = 4000;
+  DOC_AI_TIMEOUTS.miniMs = 4000;
+  // Real extractions take several seconds; acknowledgements go out after ~1.5s.
+  fakeTiming.extractionDelayMs = 2000;
 
   const [acct] = await db.insert(schema.businessAccounts).values({ name: 'Caprion WA Test', website: 'https://example.com', openaiApiKey: 'sk-test-fake' } as any).returning();
   const [flow] = await db.insert(schema.whatsappFlows).values({ businessAccountId: acct.id, name: 'KYC', isActive: 'true' } as any).returning();
@@ -62,13 +69,16 @@ async function main() {
     const reply = await send(A, 'masked');
     expect(/masked/i.test(reply) && /UIDAI|myaadhaar/i.test(reply), "masked Aadhaar → clear 'send the unmasked card' reply", reply);
   }
+  expect(acksFor(A).length === 1 && /Got your \*Aadhaar Card\*/.test(acksFor(A)[0]), "ack names the Aadhaar (masked card, classified before extraction)", acksFor(A));
   {
     const reply = await send(A, 'back_side');
     expect(/received/i.test(reply), "back side accepted", reply);
     expect(/\*front\*/.test(reply) && /name/i.test(reply), "back side → asks for the FRONT to capture the name", reply);
   }
   {
+    sentMessages.length = 0;
     const reply = await send(A, 'misread_front');
+    expect(/\*front\* of your Aadhaar Card/.test(acksFor(A)[0] || ''), "after the back, next photo acknowledged as the FRONT", acksFor(A));
     const data = await sessionData(A);
     const merged = data._documentState?.aadhaar?.mergedData || {};
     expect(merged.aadhaar_number === VALID && merged.full_name === 'Asha Verma' && merged.address, "front + back merged: number (checksum-corrected), name, address", merged);
@@ -90,7 +100,9 @@ async function main() {
   const C = '919000000103';
   await newCustomer(C);
   {
+    sentMessages.length = 0;
     const reply = await send(C, 'not_a_doc');
+    expect(acksFor(C).length === 0, "not a document → no 'reading your document' message, straight to the reply", acksFor(C));
     expect(/Aadhaar/i.test(reply) && /upload/i.test(reply), "not a document → asks for the right document", reply);
   }
 
@@ -137,7 +149,9 @@ async function main() {
     ]);
     const P = '919000000201';
     await updateSession(b.id, fb.id, P);
+    sentMessages.length = 0;
     const reply = await sendTo(b.id, P, 'pan_card');
+    expect(acksFor(P)[0] === '📄 Got your *PAN Card* — reading the details now…', "Update Documents: PAN acknowledged as 'Got your PAN Card'", acksFor(P));
     const [s1] = await db.select().from(schema.whatsappFlowSessions)
       .where(and(eq(schema.whatsappFlowSessions.businessAccountId, b.id), eq(schema.whatsappFlowSessions.senderPhone, P)));
     const docs = ((s1?.collectedData || {}) as any)._collectedDocuments || {};
@@ -152,7 +166,10 @@ async function main() {
     ]);
     const P = '919000000202';
     await updateSession(c.id, fc.id, P);
+    sentMessages.length = 0;
     const reply = await sendTo(c.id, P, 'pan_card');
+    expect(/checking your \*Aadhaar Card\*/.test(acksFor(P)[0] || '') && !/Got your \*Aadhaar/.test(acksFor(P)[0] || ''),
+      "Aadhaar-only step: says 'checking your Aadhaar Card', never claims it got an Aadhaar", acksFor(P));
     expect(/looks like a PAN card/i.test(reply) && /Aadhaar Card/.test(reply) && !/Bank Statement/.test(reply),
       "Update Documents: PAN where only Aadhaar is accepted → says so, lists only accepted docs", reply);
   }

@@ -46,6 +46,12 @@ export interface DocumentIdentificationResult {
   _maskedNumber?: boolean;
 }
 
+/** Progress callbacks, e.g. to tell a WhatsApp customer which document we're reading. */
+export interface DocumentIdentificationHooks {
+  /** Called once the document type is known (docType 'unknown' = not an accepted type). */
+  onClassified?: (docType: string, confidence: number, extra?: { pages?: number }) => void;
+}
+
 const isAadhaarKey = (docType: string | undefined) => (docType || '').toLowerCase().replace(/_card$/, '') === 'aadhaar';
 
 export interface PdfExtractionResult {
@@ -163,12 +169,13 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
     businessAccountId: string,
     imageUrl: string,
     sideHint?: string,
-    allowedDocTypes?: string[]
+    allowedDocTypes?: string[],
+    hooks?: DocumentIdentificationHooks
   ): Promise<DocumentIdentificationResult> {
     // Classify-then-strict path (new): when caller scopes to a specific upload step,
     // classify first then run per-doc strict extraction with the configured custom prompt.
     if (allowedDocTypes && allowedDocTypes.length > 0) {
-      return this.classifyAndStrictExtract(businessAccountId, [imageUrl], allowedDocTypes, sideHint);
+      return this.classifyAndStrictExtract(businessAccountId, [imageUrl], allowedDocTypes, sideHint, hooks);
     }
     try {
       const [account] = await db
@@ -332,7 +339,8 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
     businessAccountId: string,
     pdfBuffer: Buffer,
     allowedDocTypes?: string[],
-    password?: string
+    password?: string,
+    hooks?: DocumentIdentificationHooks
   ): Promise<DocumentIdentificationResult[]> {
     const startTime = Date.now();
     let renderedPages: { pageFile: string; dataUrl: string }[];
@@ -344,6 +352,10 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
         dataUrl: `data:image/jpeg;base64,${p.jpegBuffer.toString('base64')}`,
       }));
       console.log(`[Document ID] Rendered ${renderedPages.length} PDF pages via pdfjs-dist in ${Date.now() - startTime}ms`);
+      // Single expected type: the document is "known" as soon as the pages render.
+      if (allowedDocTypes && allowedDocTypes.length === 1) {
+        hooks?.onClassified?.(allowedDocTypes[0], 1, { pages: renderedPages.length });
+      }
     } catch (renderErr: any) {
       const code = renderErr instanceof PdfRenderError ? renderErr.code : 'RENDER_FAILED';
       const isInfra = code === 'DEPENDENCY_MISSING' || code === 'RENDER_FAILED' || code === 'NO_PAGES';
@@ -407,7 +419,11 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
           // The strict extract path already performs Tier 1 (mini) + Tier 2 (gpt-4o) escalation
           // internally via classifyAndStrictExtract, so the legacy tier block below is skipped.
           if (allowedDocTypes && allowedDocTypes.length > 0) {
-            const r = await this.classifyAndStrictExtract(businessAccountId, [dataUrl], allowedDocTypes);
+            // Report the first page's classification only (it names the whole PDF).
+            const pageHooks: DocumentIdentificationHooks | undefined = idx === 0 && allowedDocTypes.length > 1 && hooks?.onClassified
+              ? { onClassified: (t, c) => hooks.onClassified!(t, c, { pages: pageDataUrls.length }) }
+              : undefined;
+            const r = await this.classifyAndStrictExtract(businessAccountId, [dataUrl], allowedDocTypes, undefined, pageHooks);
             r._pageNumber = idx + 1;
             console.log(`[Document ID] PDF page ${pageFile}: ${r.documentType} (confidence: ${r.confidence}, tier: ${r._extractionTier})`);
             return r;
@@ -1092,9 +1108,18 @@ Rules:
     businessAccountId: string,
     imageDataUrls: string[],
     allowedDocTypes: string[],
-    sideHint?: string
+    sideHint?: string,
+    hooks?: DocumentIdentificationHooks
   ): Promise<DocumentIdentificationResult> {
     const cls = await this.classifyDocumentScoped(businessAccountId, imageDataUrls, allowedDocTypes);
+    try {
+      // Only a real classification counts: with a single allowed type the classifier is
+      // skipped, so the type isn't verified yet (the caller already knows the expected type).
+      const distinctAllowed = new Set(allowedDocTypes.map(t => t.toLowerCase().replace(/_card$/, '')));
+      if (distinctAllowed.size > 1) hooks?.onClassified?.(cls.docType, cls.confidence);
+    } catch (e) {
+      console.warn('[Document ID] onClassified hook failed (ignored):', e);
+    }
     if (cls.docType === 'unknown') {
       return {
         documentType: 'unknown',

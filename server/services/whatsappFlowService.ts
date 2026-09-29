@@ -1,4 +1,5 @@
 import { db } from "../db";
+import { UploadAckCoordinator, type AckDocInfo } from "./uploadAckCoordinator";
 import {
   whatsappFlows,
   whatsappFlowSteps,
@@ -170,16 +171,6 @@ export class WhatsappFlowService {
         this.uploadLocks.delete(lockKey);
       }
     }
-  }
-
-  private shouldSendAck(lockKey: string): boolean {
-    const lastAck = this.uploadAckSent.get(lockKey);
-    const now = Date.now();
-    if (!lastAck || now - lastAck > 10000) {
-      this.uploadAckSent.set(lockKey, now);
-      return true;
-    }
-    return false;
   }
 
   private cancelUploadDebounce(lockKey: string): void {
@@ -4902,6 +4893,55 @@ Return only JSON: {"optionId":"one configured id" | null}`,
    */
   private readonly progressTimers = new Map<string, NodeJS.Timeout[]>();
 
+  /** First message after an upload: names the document when known (see uploadAckCoordinator.ts). */
+  private readonly ackCoordinator = new UploadAckCoordinator((ctx, text) =>
+    this.sendFlowText(ctx.businessAccountId, ctx.senderPhone, ctx.sessionId, text));
+
+  /** Which Aadhaar side we expect next for this customer, if any. */
+  private expectedAadhaarSide(collectedData: Record<string, any>): 'front' | 'back' | null {
+    const state = this.getDocumentState(collectedData || {});
+    for (const [dt, docState] of Object.entries(state)) {
+      if (dt.toLowerCase().replace(/_card$/, '') !== 'aadhaar' || docState.status !== 'processing') continue;
+      const merged = docState.mergedData || {};
+      if (merged.aadhaar_number && !merged.address) return 'back';
+      if (merged.address && !merged.full_name) return 'front';
+    }
+    return null;
+  }
+
+  private ackDocFor(documentTypes: any[], docType: string, collectedData: Record<string, any>, verified: boolean): AckDocInfo | null {
+    const norm = String(docType || '').toLowerCase().replace(/_card$/, '');
+    const cfg = documentTypes.find((d: any) => String(d.docType).toLowerCase().replace(/_card$/, '') === norm);
+    if (!cfg) return null;
+    return {
+      label: cfg.label || norm.replace(/_/g, ' '),
+      kind: norm,
+      side: norm === 'aadhaar' ? this.expectedAadhaarSide(collectedData) : null,
+      verified,
+    };
+  }
+
+  /** Call when an upload arrives, before it is queued behind the per-customer lock. */
+  private noteUploadArrived(lockKey: string, businessAccountId: string, senderPhone: string, sessionId: string, documentTypes: any[], collectedData: Record<string, any>) {
+    const known = documentTypes.length === 1
+      ? this.ackDocFor(documentTypes, documentTypes[0].docType, collectedData, false)
+      : null;
+    this.ackCoordinator.onUploadArrived(lockKey, { businessAccountId, senderPhone, sessionId }, known);
+  }
+
+  /** Hooks passed to the document AI so the acknowledgement can name the document. */
+  private ackHooks(lockKey: string, documentTypes: any[], collectedData: Record<string, any>) {
+    return {
+      onClassified: (docType: string, confidence: number, extra?: { pages?: number }) => {
+        const multi = documentTypes.length > 1;
+        if (docType === 'unknown') return this.ackCoordinator.onClassified(lockKey, null, confidence);
+        const doc = this.ackDocFor(documentTypes, docType, collectedData, multi);
+        if (!doc) return this.ackCoordinator.onClassified(lockKey, null, confidence);
+        this.ackCoordinator.onClassified(lockKey, { ...doc, pages: extra?.pages }, confidence);
+      },
+    };
+  }
+
   private startProcessingUpdates(businessAccountId: string, senderPhone: string, sessionId: string): () => void {
     const key = `${businessAccountId}:${senderPhone}`;
     if (this.progressTimers.has(key)) return () => {};
@@ -4989,23 +5029,6 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     return undefined;
   }
 
-  private async sendUploadAcknowledgment(businessAccountId: string, senderPhone: string, sessionId: string): Promise<void> {
-    try {
-      const { whatsappService } = await import("./whatsappService");
-      const settings = await whatsappService.getSettings(businessAccountId);
-      if (!settings?.msg91AuthKey || !settings?.msg91IntegratedNumberId) return;
-      const { whatsappAutoReplyService } = await import("./whatsappAutoReplyService");
-      await whatsappAutoReplyService.sendFlowResponse(
-        settings,
-        senderPhone,
-        { type: "text", text: "📄 Got it! Reading your document now — this usually takes 10–20 seconds." },
-        sessionId
-      );
-    } catch (err) {
-      console.error("[WhatsApp Flow] Failed to send upload ack:", err);
-    }
-  }
-
   async processImageUpload(
     businessAccountId: string,
     senderPhone: string,
@@ -5064,11 +5087,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
         }
         const lockKey = `${businessAccountId}:${senderPhone}`;
         this.cancelUploadDebounce(lockKey);
-        if (this.shouldSendAck(lockKey)) {
-          this.sendUploadAcknowledgment(businessAccountId, senderPhone, session.id).catch(err =>
-            console.error("[WhatsApp Flow] Ack message error:", err)
-          );
-        }
+        this.noteUploadArrived(lockKey, businessAccountId, senderPhone, session.id, documentTypes, (session.collectedData as Record<string, any>) || {});
         const pendingCount = (this.pendingUploadCount.get(lockKey) || 0) + 1;
         this.pendingUploadCount.set(lockKey, pendingCount);
         const decrementPending = () => {
@@ -5077,6 +5096,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           if (remaining <= 0) {
             this.pendingUploadCount.delete(lockKey);
             this.uploadAckSent.delete(lockKey);
+            this.ackCoordinator.onDone(lockKey);
           } else {
             this.pendingUploadCount.set(lockKey, remaining);
           }
@@ -5124,7 +5144,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
               };
             }
             const visionResults = await this.withProcessingUpdates(businessAccountId, senderPhone, freshSession.id, () =>
-              documentIdentificationService.identifyDocumentFromPdfImages(businessAccountId, pdfBuffer, documentTypes.map((d: any) => d.docType)));
+              documentIdentificationService.identifyDocumentFromPdfImages(businessAccountId, pdfBuffer, documentTypes.map((d: any) => d.docType), undefined,
+                this.ackHooks(lockKey, documentTypes, (freshSession.collectedData as Record<string, any>) || {})));
             const validPdfResults = visionResults.filter((r: any) => r.documentType !== 'unknown');
             if (validPdfResults.length === 0) {
               const firstNote = visionResults[0]?.validationNotes || '';
@@ -5171,7 +5192,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
             const sideHint = this.buildAadhaarSideHint((freshSession.collectedData as Record<string, any>) || {}, senderPhone);
             const stopUpdates = this.startProcessingUpdates(businessAccountId, senderPhone, freshSession.id);
             try {
-              result = await documentIdentificationService.identifyDocument(businessAccountId, identifyUrl, sideHint, documentTypes.map((d: any) => d.docType));
+              result = await documentIdentificationService.identifyDocument(businessAccountId, identifyUrl, sideHint, documentTypes.map((d: any) => d.docType),
+                this.ackHooks(lockKey, documentTypes, (freshSession.collectedData as Record<string, any>) || {}));
             } finally {
               stopUpdates();
             }
@@ -5441,11 +5463,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
 
     this.cancelUploadDebounce(lockKey);
 
-    if (this.shouldSendAck(lockKey)) {
-      this.sendUploadAcknowledgment(businessAccountId, senderPhone, session.id).catch(err =>
-        console.error("[WhatsApp Flow] Ack message error:", err)
-      );
-    }
+    this.noteUploadArrived(lockKey, businessAccountId, senderPhone, session.id, documentTypes, (session.collectedData as Record<string, any>) || {});
 
     if (!this.pendingUploadCount.has(lockKey)) {
       this.batchResponseSent.delete(lockKey);
@@ -5460,6 +5478,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       if (remaining <= 0) {
         this.pendingUploadCount.delete(lockKey);
         this.uploadAckSent.delete(lockKey);
+        this.ackCoordinator.onDone(lockKey);
       } else {
         this.pendingUploadCount.set(lockKey, remaining);
       }
@@ -5548,7 +5567,9 @@ Return only JSON: {"optionId":"one configured id" | null}`,
             documentIdentificationService.identifyDocumentFromPdfImages(
               businessAccountId,
               pdfBuffer,
-              documentTypes.map((d: any) => d.docType)
+              documentTypes.map((d: any) => d.docType),
+              undefined,
+              this.ackHooks(lockKey, documentTypes, freshData)
             ));
           const validResults = visionResults.filter(r => r.documentType !== 'unknown');
           console.log(`[WhatsApp Flow] [Timing] PDF total processing: ${Date.now() - pdfStartTime}ms (vision-only, ${validResults.length} docs found)`);
@@ -5662,7 +5683,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           overallTimer = setTimeout(() => reject(new Error(`Document identification timed out after ${OVERALL_LIMIT_MS / 1000} seconds`)), OVERALL_LIMIT_MS);
         });
         result = await Promise.race([
-          documentIdentificationService.identifyDocument(businessAccountId, dataUrl, sideHint, documentTypes.map((d: any) => d.docType)),
+          documentIdentificationService.identifyDocument(businessAccountId, dataUrl, sideHint, documentTypes.map((d: any) => d.docType),
+            this.ackHooks(lockKey, documentTypes, (freshSession.collectedData as Record<string, any>) || {})),
           timeoutPromise,
         ]);
       } catch (error) {
@@ -5789,6 +5811,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     if (immediateResult.flowCompleted) {
       this.pendingUploadCount.delete(lockKey);
       this.uploadAckSent.delete(lockKey);
+      this.ackCoordinator.onDone(lockKey);
       this.batchAcceptedCounts.delete(lockKey);
       this.batchTotalProcessedCounts.delete(lockKey);
       this.batchPreExistingCompleted.delete(lockKey);
@@ -5800,6 +5823,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       console.log(`[WhatsApp Flow] Step advanced from ${session.currentStepKey} to ${freshSessionAfterDoc.currentStepKey} after processing upload — sending response immediately (not suppressing)`);
       this.pendingUploadCount.delete(lockKey);
       this.uploadAckSent.delete(lockKey);
+      this.ackCoordinator.onDone(lockKey);
       this.batchAcceptedCounts.delete(lockKey);
       this.batchTotalProcessedCounts.delete(lockKey);
       this.batchPreExistingCompleted.delete(lockKey);
@@ -5818,6 +5842,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       this.batchResponseSent.delete(lockKey);
       this.pendingUploadCount.delete(lockKey);
       this.uploadAckSent.delete(lockKey);
+      this.ackCoordinator.onDone(lockKey);
       this.batchAcceptedCounts.delete(lockKey);
       this.batchTotalProcessedCounts.delete(lockKey);
       this.batchPreExistingCompleted.delete(lockKey);
@@ -5836,6 +5861,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
 
     this.pendingUploadCount.delete(lockKey);
     this.uploadAckSent.delete(lockKey);
+    this.ackCoordinator.onDone(lockKey);
 
     // Architect-recommended single-upload short-circuit. When the batch processed exactly
     // ONE upload (no duplicates, no other parallel files), there is nothing to merge —

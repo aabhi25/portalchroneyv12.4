@@ -50,6 +50,9 @@ export const SCENARIOS: Record<string, { cls?: string; mini: Answer; gpt4o?: Ans
 export interface Call { kind: 'classify' | 'strict'; model: string; scenario: string; detail?: string; system: string; user: string }
 export const calls: Call[] = [];
 
+/** Extra delay on extraction answers, to mimic real AI latency in conversation tests. */
+export const fakeTiming = { extractionDelayMs: 0 };
+
 export function startFakeOpenAI(): Promise<{ baseUrl: string; close: () => void }> {
   const server = http.createServer((req, res) => {
     let raw = '';
@@ -74,10 +77,13 @@ export function startFakeOpenAI(): Promise<{ baseUrl: string; close: () => void 
       } else {
         const docKey = /extraction specialist for PAN/i.test(system) ? 'pan' : /extraction specialist for Aadhaar/i.test(system) ? 'aadhaar' : '';
         const a = (sc.byDoc && sc.byDoc[docKey]) || (body.model === 'gpt-4o' ? (sc.gpt4o || sc.mini) : sc.mini);
-        if (a.delayMs) await new Promise(r => setTimeout(r, a.delayMs));
+        const delay = (a.delayMs || 0) + fakeTiming.extractionDelayMs;
+        if (delay) await new Promise(r => setTimeout(r, delay));
         content = JSON.stringify({ extractedData: a.data, confidence: a.confidence, isValid: a.isValid ?? true, validationNotes: a.notes ?? null, side: a.side ?? null });
       }
-      if (res.writableEnded || req.destroyed) return;
+      // The client may have given up (timeout); check the response side — req is
+      // already "destroyed" once its body has been read.
+      if (res.writableEnded || res.destroyed) return;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         id: 'x', object: 'chat.completion', created: 0, model: body.model,
