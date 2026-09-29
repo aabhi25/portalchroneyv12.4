@@ -25,6 +25,7 @@ const SOURCE_FIELD_OPTIONS = [
   { value: 'lead.whatsapp', label: 'Lead — WhatsApp' },
   { value: 'lead.createdAt', label: 'Lead — Created At' },
   { value: 'lead.sourceUrl', label: 'Lead — Source URL' },
+  { value: 'lead.channel', label: 'Lead — Channel (Website / Instagram / Facebook)' },
   { value: 'session.city', label: 'Session — City' },
   { value: 'session.pageUrl', label: 'Session — Page URL' },
   { value: 'session.utmCampaign', label: 'Session — UTM Campaign' },

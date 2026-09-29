@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import InstagramTabBar from "@/components/InstagramTabBar";
+import { SocialLeadCrmCell, SocialSyncAllButton, useSocialCrmConfig, type SocialLeadCrmFields } from "@/components/leads/SocialLeadCrmSync";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -63,7 +64,7 @@ import {
   Users,
 } from "lucide-react";
 
-interface InstagramLead {
+interface InstagramLead extends SocialLeadCrmFields {
   id: string;
   senderId: string;
   senderUsername: string | null;
@@ -103,6 +104,7 @@ export default function InstagramLeads() {
   const [newFieldLabel, setNewFieldLabel] = useState("");
   const [newFieldType, setNewFieldType] = useState("text");
   const leadsPerPage = 10;
+  const { configured: configuredCrms } = useSocialCrmConfig();
 
   const { data: settingsData } = useQuery({
     queryKey: ["/api/instagram/settings"],
@@ -265,6 +267,8 @@ export default function InstagramLeads() {
                   Leads captured from Instagram DMs with AI-extracted information
                 </CardDescription>
               </div>
+              <div className="flex items-center gap-2">
+              <SocialSyncAllButton channel="instagram" configured={configuredCrms} />
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -282,6 +286,7 @@ export default function InstagramLeads() {
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
               {leadsLoading ? (
@@ -312,6 +317,9 @@ export default function InstagramLeads() {
                               {field.fieldLabel} <span className="text-[10px] font-normal normal-case tracking-normal text-slate-400">(AI Extracted)</span>
                             </TableHead>
                           ))}
+                          {configuredCrms.length > 0 && (
+                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-slate-500 py-3">CRM</TableHead>
+                          )}
                           <TableHead className="text-xs font-semibold uppercase tracking-wider text-slate-500 py-3 pr-6 text-right">Actions</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -352,6 +360,11 @@ export default function InstagramLeads() {
                                 </TableCell>
                               );
                             })}
+                            {configuredCrms.length > 0 && (
+                              <TableCell className="py-4">
+                                <SocialLeadCrmCell channel="instagram" lead={lead} configured={configuredCrms} />
+                              </TableCell>
+                            )}
                             <TableCell className="py-4 pr-6">
                               <div className="flex items-center justify-end gap-1">
                                 <TooltipProvider>

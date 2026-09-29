@@ -584,6 +584,9 @@ export class InstagramService {
       })
       .returning();
 
+    // Push to the account's CRM(s) in the background (no-op when none auto-syncs).
+    (await import("./socialLeadCrmSync")).triggerSocialLeadCrmSync("instagram", lead.id);
+
     return lead;
   }
   async replyToComment(

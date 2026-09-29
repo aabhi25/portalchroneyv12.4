@@ -88,6 +88,8 @@ import jobPortalRoutes from "./routes/jobPortal";
 import topscholarRoutes from "./routes/topscholar";
 import topscholarAnalyticsRoutes from "./routes/topscholarAnalytics";
 import verificationRoutes from "./routes/verification";
+import unifiedLeadsRoutes from "./routes/unifiedLeads";
+import { resolveAuthorizedLeadAccountId, maskLeadPhone } from "./lib/leadAccess";
 import dataRetentionRoutes from "./routes/dataRetention";
 import whatsappDocumentsRoutes from "./routes/whatsappDocuments";
 import storeSheetRoutes from "./routes/storeSheet";
@@ -566,6 +568,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Job Portal routes
   app.use(jobPortalRoutes);
   app.use(verificationRoutes);
+  app.use(unifiedLeadsRoutes);
   app.use(dataRetentionRoutes);
   app.use(whatsappDocumentsRoutes);
   app.use(storeSheetRoutes);
@@ -19121,6 +19124,7 @@ Important:
         { value: 'lead.customerEmail', label: 'Customer Email' },
         { value: 'lead.customerPhone', label: 'Customer Phone' },
         { value: 'lead.senderPhone', label: 'Sender Phone' },
+        { value: 'lead.channel', label: 'Channel (WhatsApp / Instagram / Facebook)' },
       ];
 
       const configuredLeadFields = await db
@@ -25317,38 +25321,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
     }
   });
 
-  const resolveAuthorizedLeadAccountId = async (user: NonNullable<Request["user"]>): Promise<string | null> => {
-    const activeAccountId = user.activeBusinessAccountId || user.businessAccountId;
-    if (!activeAccountId) return null;
-    if (user.role === "super_admin") return activeAccountId;
-
-    const originalUser = await storage.getUser(user.id);
-    const originalAccountId = originalUser?.businessAccountId;
-    if (!originalAccountId) return null;
-    const originalAccount = await storage.getBusinessAccount(originalAccountId);
-    if (!originalAccount || originalAccount.status !== "active") return null;
-    if (activeAccountId === originalAccountId) return originalAccountId;
-
-    const linkedAccounts = await storage.getLinkedAccounts(originalAccountId);
-    const targetMembership = linkedAccounts.find(link => link.businessAccountId === activeAccountId);
-    if (!targetMembership || targetMembership.businessAccount.status !== "active") return null;
-
-    const originalMembership = linkedAccounts.find(link => link.businessAccountId === originalAccountId);
-    if (originalMembership?.isPrimary === "true") {
-      const group = await storage.getAccountGroupForBusiness(originalAccountId);
-      if (group?.primaryHasFullAccess !== "true") return null;
-    }
-
-    return activeAccountId;
-  };
-
-  const maskLeadPhone = (phone: string | null): string | null => {
-    if (!phone) return phone;
-    const digits = phone.replace(/\D/g, "");
-    if (digits.length === 4) return digits;
-    if (digits.length < 4) return "*".repeat(Math.max(digits.length, 1));
-    return `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`;
-  };
+  // resolveAuthorizedLeadAccountId / maskLeadPhone live in server/lib/leadAccess.ts (shared with the unified Leads view).
 
   const protectLeadPhone = <T extends { phone?: string | null }>(lead: T, shouldMask: boolean): T => {
     if (!shouldMask || !Object.prototype.hasOwnProperty.call(lead, "phone")) return lead;

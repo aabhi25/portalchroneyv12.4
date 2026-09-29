@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { SocialLeadCrmCell, SocialSyncAllButton, useSocialCrmConfig, type SocialLeadCrmFields } from "@/components/leads/SocialLeadCrmSync";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,7 +54,7 @@ import {
 } from "lucide-react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 
-interface FacebookLead {
+interface FacebookLead extends SocialLeadCrmFields {
   id: string;
   senderId: string;
   senderName: string | null;
@@ -67,6 +68,7 @@ const parseUTCDate = (d: string) => new Date(d.endsWith('Z') ? d : d + 'Z');
 
 export default function FacebookLeads() {
   const [, setLocation] = useLocation();
+  const { configured: configuredCrms } = useSocialCrmConfig();
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -159,6 +161,7 @@ export default function FacebookLeads() {
                 Leads captured from Facebook Messenger conversations with AI-extracted information
               </CardDescription>
             </div>
+            <SocialSyncAllButton channel="facebook" configured={configuredCrms} />
           </CardHeader>
           <CardContent className="p-0">
             <div className="flex items-center gap-3 px-6 py-4 border-b bg-white">
@@ -214,6 +217,9 @@ export default function FacebookLeads() {
                         <TableHead className="text-xs font-semibold uppercase tracking-wider text-slate-500 py-3">Sender</TableHead>
                         <TableHead className="text-xs font-semibold uppercase tracking-wider text-slate-500 py-3">Extracted Data</TableHead>
                         <TableHead className="text-xs font-semibold uppercase tracking-wider text-slate-500 py-3">Status</TableHead>
+                        {configuredCrms.length > 0 && (
+                          <TableHead className="text-xs font-semibold uppercase tracking-wider text-slate-500 py-3">CRM</TableHead>
+                        )}
                         <TableHead className="text-xs font-semibold uppercase tracking-wider text-slate-500 py-3 pr-6 text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -266,6 +272,11 @@ export default function FacebookLeads() {
                           <TableCell className="py-4">
                             {getStatusBadge(lead.status)}
                           </TableCell>
+                          {configuredCrms.length > 0 && (
+                            <TableCell className="py-4">
+                              <SocialLeadCrmCell channel="facebook" lead={lead} configured={configuredCrms} />
+                            </TableCell>
+                          )}
                           <TableCell className="py-4 pr-6">
                             <div className="flex items-center justify-end gap-1">
                               <TooltipProvider>

@@ -3858,11 +3858,32 @@ export const instagramLeads = pgTable("instagram_leads", {
   flowSessionId: varchar("flow_session_id"),
   extractedData: jsonb("extracted_data").$type<Record<string, any>>().default({}),
   status: text("status").notNull().default("new"),
+  // CRM sync tracking — same meaning as the matching columns on `leads` / `whatsapp_leads`.
+  leadsquaredSyncStatus: text("leadsquared_sync_status"), // null | 'pending' | 'synced' | 'failed' | 'needs_attention' | 'permanently_failed'
+  leadsquaredSyncedAt: timestamp("leadsquared_synced_at"),
+  leadsquaredLeadId: text("leadsquared_lead_id"),
+  leadsquaredSyncError: text("leadsquared_sync_error"),
+  leadsquaredSyncPayload: jsonb("leadsquared_sync_payload"),
+  leadsquaredRetryCount: integer("leadsquared_retry_count").notNull().default(0),
+  leadsquaredNextRetryAt: timestamp("leadsquared_next_retry_at"), // retry due / stale 'pending' claim deadline
+  salesforceSyncStatus: text("salesforce_sync_status"), // null | 'pending' | 'synced' | 'failed'
+  salesforceSyncedAt: timestamp("salesforce_synced_at"),
+  salesforceLeadId: text("salesforce_lead_id"),
+  salesforceSyncError: text("salesforce_sync_error"),
+  salesforceSyncStartedAt: timestamp("salesforce_sync_started_at"), // when the current 'pending' claim was taken
+  customCrmSyncStatus: text("custom_crm_sync_status"), // null | 'pending' | 'synced' | 'failed' (retry state in custom_crm_sync_payload._crmSync)
+  customCrmLeadId: text("custom_crm_lead_id"),
+  customCrmSyncError: text("custom_crm_sync_error"),
+  customCrmSyncPayload: jsonb("custom_crm_sync_payload"),
+  customCrmSyncedAt: timestamp("custom_crm_synced_at"),
   receivedAt: timestamp("received_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
   businessReceivedIdx: index("instagram_leads_business_received_idx").on(table.businessAccountId, table.receivedAt),
+  // CRM retry workers look up leads by sync status.
+  lsqRetryIdx: index("instagram_leads_lsq_retry_idx").on(table.leadsquaredSyncStatus, table.leadsquaredNextRetryAt),
+  customCrmStatusIdx: index("instagram_leads_custom_crm_status_idx").on(table.customCrmSyncStatus),
 }));
 
 export const insertInstagramLeadSchema = createInsertSchema(instagramLeads).omit({
@@ -4099,11 +4120,32 @@ export const facebookLeads = pgTable("facebook_leads", {
   flowSessionId: varchar("flow_session_id"),
   extractedData: jsonb("extracted_data").$type<Record<string, any>>().default({}),
   status: text("status").notNull().default("new"),
+  // CRM sync tracking — same meaning as the matching columns on `leads` / `whatsapp_leads`.
+  leadsquaredSyncStatus: text("leadsquared_sync_status"), // null | 'pending' | 'synced' | 'failed' | 'needs_attention' | 'permanently_failed'
+  leadsquaredSyncedAt: timestamp("leadsquared_synced_at"),
+  leadsquaredLeadId: text("leadsquared_lead_id"),
+  leadsquaredSyncError: text("leadsquared_sync_error"),
+  leadsquaredSyncPayload: jsonb("leadsquared_sync_payload"),
+  leadsquaredRetryCount: integer("leadsquared_retry_count").notNull().default(0),
+  leadsquaredNextRetryAt: timestamp("leadsquared_next_retry_at"), // retry due / stale 'pending' claim deadline
+  salesforceSyncStatus: text("salesforce_sync_status"), // null | 'pending' | 'synced' | 'failed'
+  salesforceSyncedAt: timestamp("salesforce_synced_at"),
+  salesforceLeadId: text("salesforce_lead_id"),
+  salesforceSyncError: text("salesforce_sync_error"),
+  salesforceSyncStartedAt: timestamp("salesforce_sync_started_at"), // when the current 'pending' claim was taken
+  customCrmSyncStatus: text("custom_crm_sync_status"), // null | 'pending' | 'synced' | 'failed' (retry state in custom_crm_sync_payload._crmSync)
+  customCrmLeadId: text("custom_crm_lead_id"),
+  customCrmSyncError: text("custom_crm_sync_error"),
+  customCrmSyncPayload: jsonb("custom_crm_sync_payload"),
+  customCrmSyncedAt: timestamp("custom_crm_synced_at"),
   receivedAt: timestamp("received_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
   businessReceivedIdx: index("facebook_leads_business_received_idx").on(table.businessAccountId, table.receivedAt),
+  // CRM retry workers look up leads by sync status.
+  lsqRetryIdx: index("facebook_leads_lsq_retry_idx").on(table.leadsquaredSyncStatus, table.leadsquaredNextRetryAt),
+  customCrmStatusIdx: index("facebook_leads_custom_crm_status_idx").on(table.customCrmSyncStatus),
 }));
 
 export const insertFacebookLeadSchema = createInsertSchema(facebookLeads).omit({
