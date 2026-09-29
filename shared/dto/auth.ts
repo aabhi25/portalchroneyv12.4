@@ -1,8 +1,11 @@
 import type { User } from "../schema";
 import type { BusinessAccountDto, ProductTier, SystemMode } from "./businessAccount";
 
+// Never sent to the browser: the password hash and the temporary password itself.
+type SafeUser = Omit<User, "passwordHash" | "tempPassword">;
+
 // MeResponseDto - Response type for /api/auth/me endpoint
-export type MeResponseDto = User & {
+export type MeResponseDto = SafeUser & {
   activeBusinessAccountId?: string | null; // For multi-account switching
   businessAccount?: {
     id: string;
@@ -39,9 +42,10 @@ export function toMeResponseDto(
   activeBusinessAccountId?: string | null,
   isTopscholar?: boolean
 ): MeResponseDto {
+  const { passwordHash: _passwordHash, tempPassword: _tempPassword, ...safeUser } = user;
   if (businessAccount) {
     return {
-      ...user,
+      ...safeUser,
       activeBusinessAccountId: activeBusinessAccountId || null,
       businessAccount: {
         id: businessAccount.id,
@@ -73,7 +77,7 @@ export function toMeResponseDto(
   }
   
   return {
-    ...user,
+    ...safeUser,
     activeBusinessAccountId: activeBusinessAccountId || null,
     businessAccount: null,
   };

@@ -21770,7 +21770,8 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
   app.get("/api/business-accounts/:id/users", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const users = await storage.getUsersByBusinessAccount(req.params.id);
-      res.json(users);
+      // Password hashes never leave the server.
+      res.json(users.map(({ passwordHash: _passwordHash, ...u }) => u));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
