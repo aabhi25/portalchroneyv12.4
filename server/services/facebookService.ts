@@ -549,6 +549,9 @@ export class FacebookService {
       })
       .returning();
 
+    // Push to the account's CRM(s) in the background (no-op when none auto-syncs).
+    (await import("./socialLeadCrmSync")).triggerSocialLeadCrmSync("facebook", lead.id);
+
     return lead;
   }
 

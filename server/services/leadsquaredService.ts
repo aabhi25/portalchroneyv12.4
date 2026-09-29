@@ -43,6 +43,9 @@ export interface LeadDataContext {
     // CAPTCHA verification outcome for this lead's conversation:
     // 'verified' | 'unverified'. Mappable to a CRM field.
     captchaStatus?: string | null;
+    // Where the lead came from: 'Website' (default when unset) | 'Instagram' | 'Facebook'.
+    // Mappable as lead.channel.
+    channel?: string | null;
   };
   session: {
     city?: string | null;
@@ -396,6 +399,7 @@ export class LeadSquaredService {
         case 'createdAt': return lead.createdAt ? lead.createdAt.toISOString() : undefined;
         case 'sourceUrl': return lead.sourceUrl || undefined;
         case 'captchaStatus': return lead.captchaStatus || undefined;
+        case 'channel': return lead.channel || 'Website';
       }
     } else if (category === 'session') {
       const session = context.session;

@@ -45,6 +45,7 @@ const DYNAMIC_SOURCE_OPTIONS = [
   { value: 'lead.createdAt', label: 'Lead Created At' },
   { value: 'lead.sourceUrl', label: 'Lead Source URL (Page URL)' },
   { value: 'lead.captchaStatus', label: 'CAPTCHA Status (verified/unverified)' },
+  { value: 'lead.channel', label: 'Lead Channel (Website / Instagram / Facebook)' },
   { value: 'session.city', label: 'Visitor City' },
   { value: 'session.utmCampaign', label: 'UTM Campaign' },
   { value: 'session.utmSource', label: 'UTM Source' },

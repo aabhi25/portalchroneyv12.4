@@ -116,6 +116,7 @@ export class SalesforceService {
         case 'whatsapp': return context.lead.whatsapp || undefined;
         case 'createdAt': return context.lead.createdAt ? context.lead.createdAt.toISOString() : undefined;
         case 'sourceUrl': return context.lead.sourceUrl || undefined;
+        case 'channel': return context.lead.channel || 'Website';
       }
     } else if (category === 'session') {
       switch (field) {

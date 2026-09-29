@@ -10,14 +10,19 @@ const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 // Wait after each failed attempt: 8 attempts spread over ~2 days, so a
 // LeadSquared / UDS outage (or an overnight network problem) doesn't strand leads.
-const RETRY_DELAYS_MS = [1 * MINUTE, 5 * MINUTE, 15 * MINUTE, 1 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, 24 * HOUR];
-const MAX_RETRY_COUNT = RETRY_DELAYS_MS.length;
+export const LSQ_RETRY_DELAYS_MS = [1 * MINUTE, 5 * MINUTE, 15 * MINUTE, 1 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, 24 * HOUR];
+export const LSQ_MAX_RETRY_COUNT = LSQ_RETRY_DELAYS_MS.length;
+const RETRY_DELAYS_MS = LSQ_RETRY_DELAYS_MS;
+const MAX_RETRY_COUNT = LSQ_MAX_RETRY_COUNT;
 const CHECK_INTERVAL_MS = 2 * 60 * 1000;
 // An automatic sync marks the lead 'pending' just before sending. If it is still
 // pending after this long (server restarted/crashed mid-sync), the worker takes over.
-const PENDING_TIMEOUT_MS = 10 * MINUTE;
+export const LSQ_PENDING_TIMEOUT_MS = 10 * MINUTE;
+const PENDING_TIMEOUT_MS = LSQ_PENDING_TIMEOUT_MS;
+// Instagram/Facebook leads never attempted (no contact info yet at capture) are picked up for this long.
+const SOCIAL_LOOKBACK_MS = 3 * 24 * HOUR;
 
-function getNextRetryDelay(retryCount: number): number {
+export function getNextRetryDelay(retryCount: number): number {
   return RETRY_DELAYS_MS[Math.min(retryCount, RETRY_DELAYS_MS.length - 1)];
 }
 
@@ -99,6 +104,52 @@ export class LeadsquaredRetryWorker {
     }
   }
 
+  /**
+   * Instagram / Facebook leads (same schedule and statuses as website leads):
+   *   - 'failed' leads whose retry is due, and 'pending' claims whose holder died;
+   *   - leads from the last few days that were never attempted but now have a phone/email
+   *     (e.g. the DM gave the name first and the number later), for accounts with LeadSquared on.
+   * This only nominates; each lead is claimed atomically inside syncSocialLeadToLeadSquared.
+   */
+  async processSocialRetries() {
+    const { syncSocialLeadToLeadSquared } = await import('./socialLeadCrmSync');
+    const { reachableContactSql, SOCIAL_LEAD_TABLE } = await import('./socialLeadFields');
+    const nowIso = new Date().toISOString();
+    const lookbackIso = new Date(Date.now() - SOCIAL_LOOKBACK_MS).toISOString();
+    for (const channel of ['instagram', 'facebook'] as const) {
+      try {
+        const table = sql.raw(`"${SOCIAL_LEAD_TABLE[channel]}"`);
+        const res = await db.execute(sql`
+          SELECT l.id
+          FROM ${table} l
+          WHERE (
+            l.leadsquared_sync_status IN ('failed', 'pending')
+            AND l.leadsquared_retry_count < ${MAX_RETRY_COUNT}
+            AND (l.leadsquared_next_retry_at IS NULL OR l.leadsquared_next_retry_at <= ${nowIso}::timestamp)
+          ) OR (
+            (l.leadsquared_sync_status IS NULL OR l.leadsquared_sync_status = '')
+            AND l.received_at > ${lookbackIso}::timestamp
+            AND ${reachableContactSql('l')}
+            AND EXISTS (SELECT 1 FROM widget_settings ws
+                        WHERE ws.business_account_id = l.business_account_id AND ws.leadsquared_enabled = 'true')
+          )
+          ORDER BY l.leadsquared_next_retry_at ASC NULLS LAST, l.received_at ASC
+          LIMIT 50
+        `);
+        for (const row of res.rows as { id: string }[]) {
+          try {
+            const r = await syncSocialLeadToLeadSquared(channel, row.id, { mode: 'retry', source: 'retry' });
+            if (!r.skipped) console.log(`[LSQ Retry] ${channel} lead ${row.id} → ${r.status}`);
+          } catch (err: any) {
+            console.error(`[LSQ Retry] ${channel} lead ${row.id} error:`, err?.message);
+          }
+        }
+      } catch (err: any) {
+        console.error(`[LSQ Retry] ${channel} leads error:`, err?.message);
+      }
+    }
+  }
+
   async processRetries() {
     if (this.isProcessing) return;
     this.isProcessing = true;
@@ -123,6 +174,7 @@ export class LeadsquaredRetryWorker {
         .limit(50);
 
       if (retryableLeads.length === 0) {
+        await this.processSocialRetries();
         return;
       }
 
@@ -219,6 +271,7 @@ export class LeadsquaredRetryWorker {
           console.error(`[LSQ Retry] Error processing account ${businessAccountId}:`, accountError.message);
         }
       }
+      await this.processSocialRetries();
     } catch (error) {
       console.error('[LSQ Retry] Worker error:', error);
       reportError(error, { source: 'worker:leadsquared-retry' });

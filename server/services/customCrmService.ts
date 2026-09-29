@@ -61,6 +61,8 @@ export interface CustomCrmLeadContext {
     customerEmail?: string | null;
     customerPhone?: string | null;
     senderPhone?: string | null;
+    /** 'Website' | 'WhatsApp' | 'Instagram' | 'Facebook' — mappable as lead.channel. */
+    channel?: string | null;
   };
   extracted?: Record<string, string | null>;
   documents?: Record<string, DocumentFile[]>;
@@ -98,6 +100,7 @@ export function resolveFieldValue(
         case 'customerEmail': return lead.customerEmail || undefined;
         case 'customerPhone': return lead.customerPhone || undefined;
         case 'senderPhone': return lead.senderPhone || undefined;
+        case 'channel': return lead.channel || undefined;
       }
     } else if (category === 'extracted' && leadContext.extracted) {
       const val = leadContext.extracted[field];
@@ -1450,16 +1453,30 @@ export function nextCrmRetryAt(attempts: number, now: Date = new Date()): Date |
  * Atomically move the lead to 'pending' and stamp our claim id. Only one caller
  * (across every server instance) can win for a given lead; everyone else gets null.
  */
-async function claimLeadForCrmSync(
+/**
+ * Lead tables that carry the custom_crm_sync_* columns and use this claim/retry protocol.
+ * A fixed whitelist: the name is spliced into SQL.
+ */
+export type CrmLeadTable = 'whatsapp_leads' | 'instagram_leads' | 'facebook_leads';
+const CRM_LEAD_TABLES: ReadonlySet<CrmLeadTable> = new Set<CrmLeadTable>(['whatsapp_leads', 'instagram_leads', 'facebook_leads']);
+function crmLeadTable(table: CrmLeadTable) {
+  if (!CRM_LEAD_TABLES.has(table)) throw new Error(`Unsupported CRM lead table: ${table}`);
+  return sql.raw(`"${table}"`);
+}
+
+export async function claimLeadForCrmSync(
   leadId: string,
   claimId: string,
   // keepApplication: documentsOnly — a synced lead is re-claimed but keeps its recorded application.
-  opts: { force: boolean; respectBackoff: boolean; source: string; keepApplication?: boolean }
+  // skipSynced: a forced (manual) claim still never re-pushes a lead that is already synced.
+  // onlyNew: claim only a lead that was never attempted (automatic triggers).
+  opts: { force: boolean; respectBackoff: boolean; source: string; keepApplication?: boolean; skipSynced?: boolean; onlyNew?: boolean },
+  table: CrmLeadTable = 'whatsapp_leads',
 ): Promise<CrmSyncMeta | null> {
   const nowIso = new Date().toISOString();
   const staleIso = new Date(Date.now() - CRM_CLAIM_STALE_MS).toISOString();
   const res = await db.execute(sql`
-    UPDATE whatsapp_leads
+    UPDATE ${crmLeadTable(table)}
     SET custom_crm_sync_status = 'pending',
         custom_crm_sync_payload = COALESCE(custom_crm_sync_payload, '{}'::jsonb) || jsonb_build_object('_crmSync',
           (CASE WHEN ${opts.force}::boolean AND NOT ${!!opts.keepApplication}::boolean AND custom_crm_sync_status = 'synced'
@@ -1484,8 +1501,9 @@ async function claimLeadForCrmSync(
         OR (custom_crm_sync_status = 'pending'
             AND (custom_crm_sync_payload->'_crmSync'->>'claimedAt' IS NULL
                  OR (custom_crm_sync_payload->'_crmSync'->>'claimedAt')::timestamptz < ${staleIso}::timestamptz))
-        OR (${opts.force}::boolean AND custom_crm_sync_status = 'synced')
+        OR (${opts.force}::boolean AND NOT ${!!opts.skipSynced}::boolean AND custom_crm_sync_status = 'synced')
       )
+      AND (NOT ${!!opts.onlyNew}::boolean OR custom_crm_sync_status IS NULL OR custom_crm_sync_status = '')
     RETURNING custom_crm_sync_payload->'_crmSync' AS meta
   `);
   const row = (res.rows as any[])[0];
@@ -1493,10 +1511,10 @@ async function claimLeadForCrmSync(
 }
 
 /** Merge a patch into `_crmSync`, but only while we still hold the claim. Also refreshes claimedAt (heartbeat). */
-async function checkpointCrmSync(leadId: string, claimId: string, patch: Partial<CrmSyncMeta>, crmLeadId?: string | null): Promise<boolean> {
+export async function checkpointCrmSync(leadId: string, claimId: string, patch: Partial<CrmSyncMeta>, crmLeadId?: string | null, table: CrmLeadTable = 'whatsapp_leads'): Promise<boolean> {
   const body = JSON.stringify({ ...patch, claimedAt: new Date().toISOString() });
   const res = await db.execute(sql`
-    UPDATE whatsapp_leads
+    UPDATE ${crmLeadTable(table)}
     SET custom_crm_sync_payload = jsonb_set(custom_crm_sync_payload, '{_crmSync}',
           COALESCE(custom_crm_sync_payload->'_crmSync', '{}'::jsonb) || ${body}::jsonb),
         custom_crm_lead_id = COALESCE(${crmLeadId ?? null}::text, custom_crm_lead_id),
@@ -1510,15 +1528,16 @@ async function checkpointCrmSync(leadId: string, claimId: string, patch: Partial
 }
 
 /** Write the final status and release the claim. Returns false if another instance took the claim over. */
-async function finalizeCrmSync(
+export async function finalizeCrmSync(
   leadId: string,
   claimId: string,
-  fields: { status: 'synced' | 'failed'; error: string | null; crmLeadId?: string | null; payload?: Record<string, string>; meta: CrmSyncMeta }
+  fields: { status: 'synced' | 'failed'; error: string | null; crmLeadId?: string | null; payload?: Record<string, string>; meta: CrmSyncMeta },
+  table: CrmLeadTable = 'whatsapp_leads',
 ): Promise<boolean> {
   const metaJson = JSON.stringify({ ...fields.meta, claimId: null, claimedAt: null });
   const payloadJson = fields.payload ? JSON.stringify(fields.payload) : null;
   const res = await db.execute(sql`
-    UPDATE whatsapp_leads
+    UPDATE ${crmLeadTable(table)}
     SET custom_crm_sync_status = ${fields.status}::text,
         custom_crm_sync_error = ${fields.error}::text,
         custom_crm_synced_at = CASE WHEN ${fields.status}::text = 'synced' THEN NOW() ELSE custom_crm_synced_at END,
@@ -1700,6 +1719,7 @@ export async function syncWhatsappLeadToCustomCrm(
         customerEmail: lead.customerEmail || null,
         customerPhone: lead.customerPhone || null,
         senderPhone: lead.senderPhone || null,
+        channel: 'WhatsApp',
       },
       extracted: extractedData,
       documents: await buildWhatsappLeadDocuments(leadId),

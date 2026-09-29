@@ -51,6 +51,22 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useLocation } from "wouter";
+import {
+  CHANNEL_META,
+  CRM_LABEL,
+  ChannelBadge,
+  ChannelLeadDetailsDialog,
+  CrmStatusIcon,
+  canResync,
+  type ChannelFilter,
+  type CrmConfig,
+  type LeadChannel,
+  type SocialCrm,
+  type UnifiedLeadRow,
+  type UnifiedLeadsResponse,
+} from "@/components/leads/UnifiedLeadParts";
 
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import * as XLSX from "xlsx";
@@ -93,7 +109,10 @@ export default function AdminLeads() {
   const [fromDate, setFromDate] = useState<Date | undefined>(undefined);
   const [toDate, setToDate] = useState<Date | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState('');
-  const prevFiltersRef = useRef({ datePreset, fromDate, toDate, searchQuery });
+  const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all');
+  const prevFiltersRef = useRef({ datePreset, fromDate, toDate, searchQuery, channelFilter });
+  const [, setLocation] = useLocation();
+  const [channelDetailsRow, setChannelDetailsRow] = useState<UnifiedLeadRow | null>(null);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
@@ -162,16 +181,18 @@ export default function AdminLeads() {
     if (to) params.append('toDate', to.toISOString());
     const trimmedSearch = searchQuery.trim();
     if (trimmedSearch) params.append('search', trimmedSearch);
+    if (channelFilter !== 'all') params.append('channel', channelFilter);
     params.append('page', currentPage.toString());
     params.append('limit', itemsPerPage.toString());
-    
-    return params.toString() ? `?${params.toString()}` : '';
-  }, [datePreset, fromDate, toDate, searchQuery, currentPage]);
 
-  const { data, isLoading } = useQuery<{ leads: Lead[]; total: number }>({
-    queryKey: ["/api/leads", currentUser?.activeBusinessAccountId || currentUser?.businessAccount?.id, queryParams],
+    return params.toString() ? `?${params.toString()}` : '';
+  }, [datePreset, fromDate, toDate, searchQuery, channelFilter, currentPage]);
+
+  // All channels the account has (Website, WhatsApp, Instagram, Facebook), merged and paged by the server.
+  const { data, isLoading } = useQuery<UnifiedLeadsResponse>({
+    queryKey: ["/api/leads", "unified", currentUser?.activeBusinessAccountId || currentUser?.businessAccount?.id, queryParams],
     queryFn: async () => {
-      const response = await fetch(`/api/leads${queryParams}`, {
+      const response = await fetch(`/api/leads/unified${queryParams}`, {
         credentials: "include",
       });
       if (!response.ok) {
@@ -181,7 +202,11 @@ export default function AdminLeads() {
     },
   });
 
-  const leads = data?.leads || [];
+  const rows: UnifiedLeadRow[] = data?.leads || [];
+  // Website rows carry the full Lead record; selection / delete / form / journey stay website-only.
+  const leads: Lead[] = rows.filter(r => r.channel === 'website').map(r => r.detail as Lead);
+  const availableChannels: LeadChannel[] = data?.channels || ['website'];
+  const hasOtherChannels = availableChannels.length > 1;
   const totalPages = Math.ceil((data?.total || 0) / itemsPerPage);
 
   // Selection is limited to the visible page and never carries across accounts or filters.
@@ -247,13 +272,14 @@ export default function AdminLeads() {
       prev.datePreset !== datePreset ||
       prev.fromDate !== fromDate ||
       prev.toDate !== toDate ||
-      prev.searchQuery !== searchQuery;
-    
+      prev.searchQuery !== searchQuery ||
+      prev.channelFilter !== channelFilter;
+
     if (hasChanged) {
       setCurrentPage(1);
-      prevFiltersRef.current = { datePreset, fromDate, toDate, searchQuery };
+      prevFiltersRef.current = { datePreset, fromDate, toDate, searchQuery, channelFilter };
     }
-  }, [datePreset, fromDate, toDate, searchQuery]);
+  }, [datePreset, fromDate, toDate, searchQuery, channelFilter]);
 
   // Clamp currentPage to totalPages when results change, reset to page 1 if no results
   useEffect(() => {
@@ -401,10 +427,56 @@ export default function AdminLeads() {
     },
   });
 
-  // Sync all leads to LeadSquared mutation
+  // CRMs that Instagram / Facebook / WhatsApp rows can be pushed to (also covers the Custom CRM).
+  const { data: crmConfig } = useQuery<CrmConfig | null>({
+    queryKey: ["/api/social-leads/crm-config", currentUser?.activeBusinessAccountId || currentUser?.businessAccount?.id],
+    queryFn: async () => {
+      const res = await fetch("/api/social-leads/crm-config", { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: hasOtherChannels,
+  });
+  const configuredSocialCrms: SocialCrm[] = crmConfig
+    ? (Object.keys(crmConfig) as SocialCrm[]).filter(c => crmConfig[c].configured)
+    : [];
+  const socialChannelsEnabled = availableChannels.filter((c): c is 'instagram' | 'facebook' => c === 'instagram' || c === 'facebook');
+
+  // Manual sync / retry for one non-website row.
+  const channelSyncMutation = useMutation({
+    mutationFn: async ({ row, crm }: { row: UnifiedLeadRow; crm: SocialCrm }) => {
+      if (row.channel === 'whatsapp') {
+        return await apiRequest("POST", `/api/custom-crm/sync-lead/${row.id}`, { leadType: 'whatsapp' });
+      }
+      return await apiRequest("POST", `/api/social-leads/${row.channel}/${row.id}/sync`, { crm });
+    },
+    onSuccess: (res: any, { crm }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"], exact: false });
+      toast({ title: "Sync complete", description: res?.message || `Lead sent to ${CRM_LABEL[crm]}` });
+    },
+    onError: (error: any, { crm }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"], exact: false });
+      toast({ title: `${CRM_LABEL[crm]} sync failed`, description: error.message, variant: "destructive" });
+    },
+  });
+
+  // Sync all: website leads to LeadSquared, plus Instagram / Facebook leads to every configured CRM.
   const syncAllMutation = useMutation({
     mutationFn: async () => {
-      return await apiRequest("POST", "/api/leadsquared/sync-all");
+      const includeWebsite = channelFilter === 'all' || channelFilter === 'website';
+      const socialTargets = configuredSocialCrms.length
+        ? socialChannelsEnabled.filter(c => channelFilter === 'all' || channelFilter === c)
+        : [];
+      const messages: string[] = [];
+      if (includeWebsite && isLeadsquaredConfigured) {
+        const web: any = await apiRequest("POST", "/api/leadsquared/sync-all");
+        messages.push(web?.message || `Website: synced ${web?.synced ?? 0}`);
+      }
+      for (const ch of socialTargets) {
+        const r: any = await apiRequest("POST", `/api/social-leads/${ch}/sync-all`, {});
+        messages.push(`${CHANNEL_META[ch].label}: ${r?.message || ''}`);
+      }
+      return { message: messages.join(' · ') || 'Nothing to sync' };
     },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/leads"], exact: false });
@@ -476,11 +548,12 @@ export default function AdminLeads() {
       if (to) exportParams.append('toDate', to.toISOString());
       const trimmedSearch = searchQuery.trim();
       if (trimmedSearch) exportParams.append('search', trimmedSearch);
-      
+      if (channelFilter !== 'all') exportParams.append('channel', channelFilter);
+
       const exportQueryString = exportParams.toString() ? `?${exportParams.toString()}` : '';
-      
-      // Fetch leads using dedicated export endpoint with filters
-      const response = await fetch(`/api/leads/export${exportQueryString}`, {
+
+      // Same filters as the list (all channels); the server applies export permission + phone masking.
+      const response = await fetch(`/api/leads/unified/export${exportQueryString}`, {
         credentials: "include",
       });
       
@@ -504,14 +577,27 @@ export default function AdminLeads() {
       }
 
       // Prepare data for Excel export
-      const worksheetData = allLeads.map((lead: Lead) => ({
-        Name: safeExcelCell(lead.name),
-        Email: safeExcelCell(lead.email),
-        Phone: safeExcelCell(lead.phone),
-        City: safeExcelCell(lead.city),
-        Message: safeExcelCell(lead.message),
-        "Created At": format(new Date(lead.createdAt), "yyyy-MM-dd HH:mm:ss")
-      }));
+      const crmSummary = (row: UnifiedLeadRow) => [
+        row.crm.leadsquared?.status ? `LeadSquared: ${row.crm.leadsquared.status}` : null,
+        row.crm.salesforce?.status ? `Salesforce: ${row.crm.salesforce.status}` : null,
+        row.crm.customCrm?.status ? `Custom CRM: ${row.crm.customCrm.status}` : null,
+      ].filter(Boolean).join(', ');
+      const worksheetData = (allLeads as UnifiedLeadRow[]).map((row) => {
+        const website = row.channel === 'website' ? (row.detail as Lead) : null;
+        const extracted: Record<string, any> = row.detail?.extractedData || {};
+        return {
+          Channel: CHANNEL_META[row.channel].label,
+          Name: safeExcelCell(row.name),
+          Email: safeExcelCell(row.email),
+          Phone: safeExcelCell(row.phone),
+          City: safeExcelCell(website ? website.city : extracted.city),
+          Message: safeExcelCell(website ? website.message : Object.entries(extracted)
+            .filter(([k, v]) => !/name|phone|mobile|email|whatsapp/i.test(k) && v != null && typeof v !== 'object')
+            .map(([k, v]) => `${k}: ${v}`).join('; ')),
+          "CRM Sync": safeExcelCell(crmSummary(row)),
+          "Created At": format(new Date(row.capturedAt), "yyyy-MM-dd HH:mm:ss"),
+        };
+      });
 
       // Create workbook and worksheet
       const worksheet = XLSX.utils.json_to_sheet(worksheetData);
@@ -520,11 +606,13 @@ export default function AdminLeads() {
 
       // Set column widths for better readability
       worksheet["!cols"] = [
+        { wch: 12 }, // Channel
         { wch: 20 }, // Name
         { wch: 30 }, // Email
         { wch: 15 }, // Phone
         { wch: 15 }, // City
         { wch: 40 }, // Message
+        { wch: 30 }, // CRM Sync
         { wch: 20 }, // Created At
       ];
 
@@ -567,6 +655,118 @@ export default function AdminLeads() {
     }
   };
 
+  const crmTargetsFor = (row: UnifiedLeadRow): { crm: SocialCrm; label: string; state: UnifiedLeadRow['crm']['customCrm'] }[] => {
+    if (row.channel === 'whatsapp') {
+      const out: { crm: SocialCrm; label: string; state: UnifiedLeadRow['crm']['customCrm'] }[] = [];
+      if (row.crm.leadsquared) out.push({ crm: 'leadsquared', label: 'LeadSquared', state: row.crm.leadsquared });
+      if (crmConfig?.custom_crm.configured) out.push({ crm: 'custom_crm', label: 'Custom CRM', state: row.crm.customCrm });
+      return out;
+    }
+    return configuredSocialCrms.map(crm => ({
+      crm,
+      label: CRM_LABEL[crm],
+      state: crm === 'leadsquared' ? row.crm.leadsquared : crm === 'salesforce' ? row.crm.salesforce : row.crm.customCrm,
+    }));
+  };
+
+  // WhatsApp / Instagram / Facebook row of the unified list.
+  const renderChannelRow = (row: UnifiedLeadRow) => {
+    const extracted: Record<string, any> = row.detail?.extractedData || {};
+    const contactKeys = /name|phone|mobile|email|whatsapp/i;
+    const extras = Object.entries(extracted)
+      .filter(([k, v]) => !contactKeys.test(k) && v !== null && v !== undefined && typeof v !== 'object' && String(v).trim() !== '')
+      .slice(0, 3);
+    const targets = crmTargetsFor(row);
+    const syncing = channelSyncMutation.isPending && channelSyncMutation.variables?.row.key === row.key;
+    const funnel = row.channel === 'whatsapp' ? 'Via WhatsApp' : row.detail?.flowSessionId ? 'Via Flow' : 'Via DM';
+    const initials = (row.name || '?').split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+    return (
+      <TableRow key={row.key} className="group hover:bg-purple-50/50 transition-colors cursor-pointer" onClick={() => setChannelDetailsRow(row)} data-testid={`row-lead-${row.channel}`}>
+        {isSuperAdminImpersonating && <TableCell className="px-3" />}
+        <TableCell className="font-medium px-4 py-3">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-3">
+              <Avatar className="h-9 w-9 flex-shrink-0 bg-gradient-to-br from-slate-500 to-slate-600">
+                <AvatarFallback className="text-white font-semibold bg-transparent text-sm">{initials}</AvatarFallback>
+              </Avatar>
+              <span className="text-gray-900 font-medium truncate max-w-[120px]">{row.name || "Anonymous"}</span>
+            </div>
+            <span className="text-xs text-gray-400 pl-12">{format(new Date(row.capturedAt), "MMM d, h:mm a")}</span>
+          </div>
+        </TableCell>
+        {hasOtherChannels && <TableCell className="px-4 py-3"><ChannelBadge channel={row.channel} /></TableCell>}
+        <TableCell className="px-4 py-3">
+          {row.phone ? <span className="text-sm text-green-600 font-mono">{row.phone}</span> : <span className="text-gray-400 text-sm">—</span>}
+        </TableCell>
+        <TableCell className="px-4 py-3">
+          {row.email ? <span className="text-sm text-gray-700 truncate block max-w-[160px]" title={row.email}>{row.email}</span> : <span className="text-gray-400 text-sm">—</span>}
+        </TableCell>
+        <TableCell className="px-4 py-3">
+          {typeof extracted.city === 'string' && extracted.city ? <span className="text-sm text-gray-600">{extracted.city}</span> : <span className="text-gray-400 text-sm">—</span>}
+        </TableCell>
+        <TableCell className="px-4 py-3">
+          {extras.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {extras.map(([k, v]) => (
+                <span key={k} className="px-2 py-0.5 text-xs font-medium rounded-full bg-slate-100 text-slate-700 truncate max-w-[160px]" title={`${k}: ${v}`}>
+                  {String(v)}
+                </span>
+              ))}
+            </div>
+          ) : <span className="text-gray-400 text-sm">—</span>}
+        </TableCell>
+        <TableCell className="px-4 py-3">
+          <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">{funnel}</span>
+        </TableCell>
+        <TableCell className="px-2 py-3">
+          <div className="flex items-center gap-1.5">
+            {syncing ? (
+              <div className="text-blue-600"><Loader2 className="h-3.5 w-3.5 animate-spin" /></div>
+            ) : targets.length === 0 ? (
+              <span className="text-gray-300 text-xs">—</span>
+            ) : (
+              targets.map(t => <CrmStatusIcon key={t.crm} label={t.label} state={t.state} />)
+            )}
+          </div>
+        </TableCell>
+        <TableCell className="text-center px-2 py-3" onClick={(e) => e.stopPropagation()}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="icon" variant="ghost" className="h-8 w-8 text-gray-400 hover:text-gray-600" aria-label="Lead actions">
+                <MoreVertical className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onClick={() => setChannelDetailsRow(row)} className="cursor-pointer">
+                <Info className="h-4 w-4 mr-2 text-blue-600" />
+                View Details
+              </DropdownMenuItem>
+              {CHANNEL_META[row.channel].page && (
+                <DropdownMenuItem onClick={() => setLocation(CHANNEL_META[row.channel].page!)} className="cursor-pointer">
+                  <Eye className="h-4 w-4 mr-2 text-purple-600" />
+                  Open in {CHANNEL_META[row.channel].label}
+                </DropdownMenuItem>
+              )}
+              {targets
+                .filter(t => canResync(t.state) && (row.channel !== 'whatsapp' || t.crm === 'custom_crm'))
+                .map(t => (
+                  <DropdownMenuItem
+                    key={t.crm}
+                    onClick={() => channelSyncMutation.mutate({ row, crm: t.crm })}
+                    disabled={channelSyncMutation.isPending}
+                    className="cursor-pointer"
+                  >
+                    <RefreshCw className={`h-4 w-4 mr-2 text-blue-600 ${syncing ? 'animate-spin' : ''}`} />
+                    {t.state?.status ? `Retry ${t.label} Sync` : `Sync to ${t.label}`}
+                  </DropdownMenuItem>
+                ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </TableCell>
+      </TableRow>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <WebsiteNavTabs />
@@ -579,11 +779,16 @@ export default function AdminLeads() {
                 <Contact className="w-6 h-6 text-purple-600" />
                 Leads Management
               </CardTitle>
-              <CardDescription>View and export captured leads from conversations</CardDescription>
+              <CardDescription>
+                {hasOtherChannels
+                  ? `View and export leads from ${availableChannels.map(c => CHANNEL_META[c].label).join(', ')}`
+                  : 'View and export captured leads from conversations'}
+              </CardDescription>
             </div>
               <div className="flex gap-2 flex-wrap justify-end">
-                {isLeadsquaredConfigured && (
-                  <Button 
+                {((isLeadsquaredConfigured && (channelFilter === 'all' || channelFilter === 'website')) ||
+                  (configuredSocialCrms.length > 0 && socialChannelsEnabled.some(c => channelFilter === 'all' || channelFilter === c))) && (
+                  <Button
                     onClick={handleSyncAll} 
                     disabled={(data?.total || 0) === 0 || syncAllMutation.isPending} 
                     variant="outline"
@@ -650,6 +855,20 @@ export default function AdminLeads() {
                   </Button>
                 )}
               </div>
+
+              {hasOtherChannels && (
+                <Select value={channelFilter} onValueChange={(v) => setChannelFilter(v as ChannelFilter)}>
+                  <SelectTrigger className="w-full sm:w-[160px]" data-testid="select-channel-filter" aria-label="Channel">
+                    <SelectValue placeholder="All channels" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All channels</SelectItem>
+                    {availableChannels.map(c => (
+                      <SelectItem key={c} value={c}>{CHANNEL_META[c].label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
 
               {/* Date Filter Buttons */}
               <div className="flex gap-2 flex-wrap">
@@ -744,9 +963,10 @@ export default function AdminLeads() {
             </div>
 
             {/* Active Filters Display */}
-            {(searchQuery || datePreset !== 'all') && (
+            {(searchQuery || datePreset !== 'all' || channelFilter !== 'all') && (
               <div className="flex items-center gap-2 text-sm text-gray-600">
                 <span className="font-medium">Active filters:</span>
+                {channelFilter !== 'all' && <ChannelBadge channel={channelFilter} />}
                 {searchQuery && (
                   <Badge variant="secondary" className="gap-1">
                     <Search className="h-3 w-3" />
@@ -791,14 +1011,16 @@ export default function AdminLeads() {
                 <p className="text-sm text-muted-foreground">Loading leads...</p>
               </div>
             </div>
-          ) : leads.length === 0 ? (
+          ) : rows.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <div className="w-20 h-20 rounded-full bg-gradient-to-br from-purple-100 to-blue-100 flex items-center justify-center mb-4">
                 <Contact className="w-10 h-10 text-purple-600" />
               </div>
               <h3 className="text-lg font-semibold text-gray-900 mb-2">No leads yet</h3>
               <p className="text-sm text-muted-foreground max-w-md">
-                Leads will appear here when users provide their contact information through the AI chat.
+                {searchQuery || datePreset !== 'all' || channelFilter !== 'all'
+                  ? 'No leads match these filters.'
+                  : 'Leads will appear here when users provide their contact information through the AI chat.'}
               </p>
             </div>
           ) : (
@@ -821,10 +1043,19 @@ export default function AdminLeads() {
                         Name
                       </div>
                     </TableHead>
+                    {hasOtherChannels && (
+                      <TableHead className="font-semibold text-gray-900 w-[110px] px-4 py-3">Channel</TableHead>
+                    )}
                     <TableHead className="font-semibold text-gray-900 w-[140px] px-4 py-3">
                       <div className="flex items-center gap-2">
                         <Phone className="h-4 w-4 text-green-600" />
                         Phone
+                      </div>
+                    </TableHead>
+                    <TableHead className="font-semibold text-gray-900 w-[170px] px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <Mail className="h-4 w-4 text-blue-600" />
+                        Email
                       </div>
                     </TableHead>
                     <TableHead className="font-semibold text-gray-900 w-[100px] px-4 py-3">
@@ -855,8 +1086,10 @@ export default function AdminLeads() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {leads.map((lead: Lead, index: number) => {
-                    const getInitials = (name: string | null) => {
+                  {rows.map((row: UnifiedLeadRow) => {
+                    if (row.channel !== 'website') return renderChannelRow(row);
+                    const lead = row.detail as Lead;
+                    const getInitials= (name: string | null) => {
                       if (!name) return "?";
                       return name
                         .split(" ")
@@ -918,6 +1151,9 @@ export default function AdminLeads() {
                             )}
                           </div>
                         </TableCell>
+                        {hasOtherChannels && (
+                          <TableCell className="px-4 py-3"><ChannelBadge channel="website" /></TableCell>
+                        )}
                         <TableCell className="px-4 py-3">
                           {lead.phone ? (
                             <a 
@@ -926,6 +1162,13 @@ export default function AdminLeads() {
                             >
                               {lead.phone}
                             </a>
+                          ) : (
+                            <span className="text-gray-400 text-sm">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="px-4 py-3">
+                          {lead.email ? (
+                            <span className="text-sm text-gray-700 truncate block max-w-[160px]" title={lead.email}>{lead.email}</span>
                           ) : (
                             <span className="text-gray-400 text-sm">—</span>
                           )}
@@ -1264,7 +1507,9 @@ export default function AdminLeads() {
           <AlertDialogHeader>
             <AlertDialogTitle>Sync All Leads to CRM</AlertDialogTitle>
             <AlertDialogDescription>
-              This will sync all unsynced leads to your LeadSquared CRM account. Leads that are already synced will be skipped.
+              This will sync all unsynced {channelFilter === 'all' ? '' : `${CHANNEL_META[channelFilter].label} `}leads to your CRM
+              {channelFilter === 'all' ? ' (website leads go to LeadSquared; Instagram and Facebook leads go to every configured CRM)' : ''}.
+              Leads that are already synced will be skipped.
               <div className="mt-2 p-3 bg-blue-50 rounded-md text-blue-700 text-sm">
                 This may take a few moments depending on the number of leads.
               </div>
@@ -1478,6 +1723,13 @@ export default function AdminLeads() {
           )}
         </DialogContent>
       </Dialog>
+
+      <ChannelLeadDetailsDialog
+        row={channelDetailsRow}
+        open={!!channelDetailsRow}
+        onOpenChange={(open) => { if (!open) setChannelDetailsRow(null); }}
+        onOpenChannelPage={(path) => { setChannelDetailsRow(null); setLocation(path); }}
+      />
 
       <Dialog open={chatDialogOpen} onOpenChange={(open) => { setChatDialogOpen(open); if (!open) setChatDialogConversationId(null); }}>
         <DialogContent className="max-w-2xl w-full max-h-[85vh] flex flex-col p-0 gap-0">

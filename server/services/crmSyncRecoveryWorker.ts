@@ -39,6 +39,55 @@ export class CrmSyncRecoveryWorker {
   }
 
   /**
+   * Instagram / Facebook leads, same three cases as WhatsApp (never attempted and now
+   * reachable, failed with a due retry, stale 'pending' claim). Claimed atomically inside
+   * syncSocialLeadToCustomCrm.
+   */
+  private async processSocialRecoveries(nowIso: string, staleIso: string, lookbackIso: string) {
+    const { syncSocialLeadToCustomCrm } = await import("./socialLeadCrmSync");
+    const { reachableContactSql, SOCIAL_LEAD_TABLE } = await import("./socialLeadFields");
+    for (const channel of ["instagram", "facebook"] as const) {
+      try {
+        const table = sql.raw(`"${SOCIAL_LEAD_TABLE[channel]}"`);
+        const res = await db.execute(sql`
+          SELECT l.id AS lead_id, l.custom_crm_sync_status AS status
+          FROM ${table} l
+          INNER JOIN custom_crm_settings ccs
+            ON ccs.business_account_id = l.business_account_id
+            AND ccs.enabled = true
+            AND ccs.auto_sync_enabled = true
+          WHERE (
+              (l.custom_crm_sync_status IS NULL OR l.custom_crm_sync_status = '')
+              AND l.received_at > ${lookbackIso}::timestamp
+              AND ${reachableContactSql("l")}
+            )
+            OR (
+              l.custom_crm_sync_status = 'failed'
+              AND l.custom_crm_sync_payload->'_crmSync'->>'retryable' = 'true'
+              AND (l.custom_crm_sync_payload->'_crmSync'->>'nextRetryAt')::timestamptz <= ${nowIso}::timestamptz
+            )
+            OR (
+              l.custom_crm_sync_status = 'pending'
+              AND (l.custom_crm_sync_payload->'_crmSync'->>'claimedAt')::timestamptz < ${staleIso}::timestamptz
+            )
+          ORDER BY l.updated_at ASC
+          LIMIT ${BATCH_SIZE}
+        `);
+        for (const { lead_id, status } of res.rows as { lead_id: string; status: string | null }[]) {
+          try {
+            const result = await syncSocialLeadToCustomCrm(channel, lead_id, { mode: "retry", source: "recovery", requireAutoSync: true });
+            console.log(`[CRM Recovery] ${channel} lead ${lead_id} (was ${status ?? "unsynced"}) → ${result.skipped ? `skipped: ${result.skipped}` : result.status}`);
+          } catch (err: any) {
+            console.error(`[CRM Recovery] Error syncing ${channel} lead ${lead_id}:`, err?.message);
+          }
+        }
+      } catch (err: any) {
+        console.error(`[CRM Recovery] ${channel} leads error:`, err?.message);
+      }
+    }
+  }
+
+  /**
    * Picks up three kinds of WhatsApp leads for auto-sync businesses:
    *   1. never attempted (status NULL) after their flow completed — the original outbox case;
    *   2. 'failed' with a scheduled retry that is now due (capped exponential backoff,
@@ -91,6 +140,8 @@ export class CrmSyncRecoveryWorker {
       `);
 
       const leads = rows.rows as { lead_id: string; status: string | null }[];
+
+      await this.processSocialRecoveries(nowIso, staleIso, lookbackIso);
 
       if (leads.length === 0) return;
 

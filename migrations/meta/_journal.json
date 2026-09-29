@@ -22,6 +22,13 @@
       "when": 1790702440442,
       "tag": "0002_hot_path_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790704384032,
+      "tag": "0003_social_leads_crm_sync",
+      "breakpoints": true
     }
   ]
 }

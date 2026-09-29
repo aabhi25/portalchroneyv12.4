@@ -588,6 +588,8 @@ IMPORTANT:
               updatedAt: new Date(),
             })
             .where(eq(facebookLeads.id, existingLead.id));
+          // New contact data (e.g. a phone after the name) may make it pushable to the CRM.
+          (await import("./socialLeadCrmSync")).triggerSocialLeadCrmSync("facebook", existingLead.id, "lead_updated");
 
           console.log(`[Facebook Lead Capture] Updated existing lead ${existingLead.id} with new data`);
         } else {
