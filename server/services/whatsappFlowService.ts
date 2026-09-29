@@ -1070,7 +1070,40 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
     return flow || null;
   }
 
+  /**
+   * The flow's steps. Dropdown steps linked to the Dealers & Stores sheet get their options
+   * from the sheet when it is switched on (see storeSheetService.applySheetToSteps).
+   */
   async getFlowSteps(flowId: string): Promise<WhatsappFlowStep[]> {
+    return this.withSheetOptions(flowId, await this.loadFlowSteps(flowId));
+  }
+
+  private readonly flowAccountIds = new Map<string, string>();
+
+  private async withSheetOptions(flowId: string, steps: WhatsappFlowStep[]): Promise<WhatsappFlowStep[]> {
+    if (!steps.some(s => (s.options as any)?.sheetLevel)) return steps;
+    try {
+      let accountId = this.flowAccountIds.get(flowId);
+      if (!accountId) {
+        const flow = await this.getFlowById(flowId);
+        if (!flow) return steps;
+        accountId = flow.businessAccountId;
+        this.flowAccountIds.set(flowId, accountId);
+      }
+      const { getSheetSnapshot, applySheetToSteps } = await import("./storeSheetService");
+      return applySheetToSteps(steps, await getSheetSnapshot(accountId));
+    } catch (err: any) {
+      console.error(`[WhatsApp Flow] Dealers & Stores options unavailable for flow ${flowId}, using the journey's own lists:`, err?.message || err);
+      return steps;
+    }
+  }
+
+  /** Steps as saved by the journey editor (hand-made lists, without the sheet applied). */
+  async getStoredFlowSteps(flowId: string): Promise<WhatsappFlowStep[]> {
+    return this.loadFlowSteps(flowId);
+  }
+
+  private async loadFlowSteps(flowId: string): Promise<WhatsappFlowStep[]> {
     const cached = this.getCached(this.stepsCache, flowId);
     if (cached !== undefined) {
       return cached;
@@ -1160,7 +1193,11 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
         )
       )
       .limit(1);
-    return step || null;
+    if (!step) return null;
+    if (!(step.options as any)?.sheetLevel) return step;
+    // A linked step's options depend on the other linked steps, so apply the sheet to the whole flow.
+    const all = (await this.loadFlowSteps(flowId)).map(s => s.id === step.id ? step : s);
+    return (await this.withSheetOptions(flowId, all)).find(s => s.id === step.id) || step;
   }
 
   async findCompletedLeadForSender(

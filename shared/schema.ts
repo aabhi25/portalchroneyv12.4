@@ -2709,7 +2709,8 @@ export const whatsappSettings = pgTable("whatsapp_settings", {
   newApplicationCooldownDays: integer("new_application_cooldown_days").notNull().default(7),
   phoneNumberLength: integer("phone_number_length").notNull().default(10),
   updateLeadEnabled: text("update_lead_enabled").notNull().default("true"), // 'true' | 'false' - show Add Documents / Update Details options for duplicate phone
-  requirePanEmailForLead: text("require_pan_email_for_lead").notNull().default("false"), // 'true' → a record is a draft (not listed, not synced) until a valid PAN and email are collected
+  requirePanEmailForLead: text("require_pan_email_for_lead").notNull().default("false"),
+  storeSheetEnabled: text("store_sheet_enabled").notNull().default("false"), // 'true' → journey steps tagged options.sheetLevel read Dealers & Stores // 'true' → a record is a draft (not listed, not synced) until a valid PAN and email are collected
   useMasterTraining: text("use_master_training").notNull().default("true"), // 'true' | 'false' - apply custom AI instructions in WhatsApp flow
   useLeadTraining: text("use_lead_training").notNull().default("true"), // 'true' | 'false' - apply lead training config in WhatsApp flow
   whitelistEnabled: text("whitelist_enabled").notNull().default("false"), // 'true' | 'false' - only process messages from whitelisted numbers
@@ -4195,6 +4196,12 @@ export const crmStoreCredentials = pgTable("crm_store_credentials", {
   sid: text("sid").notNull(),
   secret: text("secret").notNull(),
   isActive: boolean("is_active").notNull().default(true),
+  // Dealers & Stores sheet (shared/storeSheet.ts): names customers see in the journey
+  // (default to dealer_name / store_name) and the store's EMI schemes.
+  displayDealerName: text("display_dealer_name"),
+  displayStoreName: text("display_store_name"),
+  emiSchemes: jsonb("emi_schemes").notNull().default(sql`'[]'::jsonb`),
+  showInJourney: boolean("show_in_journey").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

@@ -333,6 +333,17 @@ export async function initializeDatabase() {
       console.error('[INIT] Error adding lead qualification columns:', err);
     }
 
+    // Dealers & Stores sheet.
+    try {
+      await db.execute(sql`ALTER TABLE crm_store_credentials ADD COLUMN IF NOT EXISTS display_dealer_name TEXT`);
+      await db.execute(sql`ALTER TABLE crm_store_credentials ADD COLUMN IF NOT EXISTS display_store_name TEXT`);
+      await db.execute(sql`ALTER TABLE crm_store_credentials ADD COLUMN IF NOT EXISTS emi_schemes JSONB NOT NULL DEFAULT '[]'::jsonb`);
+      await db.execute(sql`ALTER TABLE crm_store_credentials ADD COLUMN IF NOT EXISTS show_in_journey BOOLEAN NOT NULL DEFAULT true`);
+      await db.execute(sql`ALTER TABLE whatsapp_settings ADD COLUMN IF NOT EXISTS store_sheet_enabled TEXT NOT NULL DEFAULT 'false'`);
+    } catch (err) {
+      console.error('[INIT] Error adding Dealers & Stores columns:', err);
+    }
+
     // Resume any interrupted Vision Warehouse syncs
     try {
       await visionWarehouseSyncService.resumeInterruptedSyncs();

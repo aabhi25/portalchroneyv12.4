@@ -2,7 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Sparkles, Route, Zap, MessagesSquare, Contact, BarChart3, Link2,
   UsersRound, FileCode2, Megaphone, Settings, ShieldCheck, MessageCircle,
-  FileSpreadsheet, Table2,
+  FileSpreadsheet, Table2, Store,
 } from "lucide-react";
 
 /**
@@ -166,6 +166,17 @@ const LEAD_GEN_ITEMS: WhatsappNavItem[] = [
     tone: "bg-purple-50 group-hover:bg-purple-100",
     matches: l => l === "/admin/whatsapp-flows" || l === "/admin/whatsapp-flow-settings",
     blocked: r => (r.responseMode === "smart_ai" ? "Skipped — reply mode is Smart AI" : undefined),
+  },
+  {
+    key: "dealers-stores",
+    label: "Dealers & stores",
+    description: "Dealers, stores and EMI schemes used by your journey dropdowns and CRM",
+    href: "/admin/whatsapp-dealers-stores",
+    icon: Store,
+    sidebarTestId: "link-wa-dealers-stores",
+    gradient: "bg-gradient-to-br from-teal-500 to-emerald-600",
+    tone: "bg-teal-50 group-hover:bg-teal-100",
+    matches: l => l === "/admin/whatsapp-dealers-stores",
   },
   {
     key: "smart-replies",

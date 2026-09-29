@@ -87,6 +87,7 @@ import topscholarAnalyticsRoutes from "./routes/topscholarAnalytics";
 import verificationRoutes from "./routes/verification";
 import dataRetentionRoutes from "./routes/dataRetention";
 import whatsappDocumentsRoutes from "./routes/whatsappDocuments";
+import storeSheetRoutes from "./routes/storeSheet";
 import { inboundMessageLimiter, unsupportedMessageNotice } from "./services/inboundMessageLimiter";
 import { validatePhoneNumber } from "@shared/validation/phone";
 import { MAX_IMPORT_ROWS, normalizeColumnKeys } from "@shared/contactImport";
@@ -560,6 +561,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(verificationRoutes);
   app.use(dataRetentionRoutes);
   app.use(whatsappDocumentsRoutes);
+  app.use(storeSheetRoutes);
   
   // Widget routes (must be before authentication routes)
   // Serve minified widget.js for better performance (138KB vs 229KB original)
@@ -34431,7 +34433,8 @@ Return ONLY a valid JSON object in this format:
       if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
       if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
       const { whatsappFlowService } = await import("./services/whatsappFlowService");
-      const steps = await whatsappFlowService.getFlowSteps(flowId);
+      // The editor edits the saved steps, never the lists built from Dealers & Stores.
+      const steps = await whatsappFlowService.getStoredFlowSteps(flowId);
       res.json({ steps });
     } catch (error: any) {
       console.error("Error fetching WhatsApp flow steps:", error);

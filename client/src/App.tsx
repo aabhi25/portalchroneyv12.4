@@ -91,6 +91,7 @@ import RazorpayRizeDemo from "@/pages/RazorpayRizeDemo";
 import WhatsApp from "@/pages/WhatsApp";
 import WhatsAppSectionHub from "@/pages/WhatsAppSectionHub";
 import WhatsAppFlowSettings from "@/pages/WhatsAppFlowSettings";
+import StoreSheet from "@/pages/StoreSheet";
 import WhatsAppAISetup from "@/pages/WhatsAppAISetup";
 import DocumentTypeEditor from "@/pages/DocumentTypeEditor";
 import WAInsights from "@/pages/WAInsights";
@@ -380,6 +381,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/whatsapp-lead-capture-settings" component={WhatsApp} />
                 <Route path="/admin/whatsapp-flows" component={WhatsApp} />
                 <Route path="/admin/whatsapp-flow-settings" component={WhatsAppFlowSettings} />
+                <Route path="/admin/whatsapp-dealers-stores" component={StoreSheet} />
                 <Route path="/admin/whatsapp-ai-setup" component={WhatsAppAISetup} />
                 <Route path="/admin/document-type-editor/:id" component={DocumentTypeEditor} />
                 <Route path="/admin/document-type-editor" component={DocumentTypeEditor} />

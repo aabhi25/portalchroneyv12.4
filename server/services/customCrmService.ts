@@ -1714,6 +1714,28 @@ export async function syncWhatsappLeadToCustomCrm(
       [storeCredential] = await db.select().from(crmStoreCredentials).where(eq(crmStoreCredentials.id, meta.storeCredentialId)).limit(1);
     }
     if (!storeCredential) {
+      // Dealers & Stores sheet on: use exactly the store the customer picked — never a guess.
+      const { findSheetRowForLead } = await import('./storeSheetService');
+      const sheet = await findSheetRowForLead(lead.businessAccountId, extractedData);
+      if (sheet) {
+        const problem = !sheet.row
+          ? `store "${sheet.label || 'not selected'}" is not in Dealers & Stores (or matches more than one row)`
+          : !sheet.row.sid?.trim() || !sheet.row.secret?.trim()
+            ? `store "${sheet.label}" has no SID/secret in Dealers & Stores`
+            : null;
+        if (problem) {
+          const error = `CRM_SYNC_ERROR[store_not_mapped]: ${problem}. Fix it in Dealers & Stores, then use Sync.`;
+          await finalizeCrmSync(leadId, claimId, {
+            status: 'failed', error,
+            meta: { ...meta, attempts, lastAttemptAt: nowIso, createStartedAt: null, retryable: false, nextRetryAt: null, errorKind: 'permanent' },
+          });
+          console.warn(`${tag} Lead ${leadId} not sent: ${problem}`);
+          return { success: false, status: 'failed', message: error, outcome: 'failed', errorKind: 'permanent' };
+        }
+        storeCredential = sheet.row;
+      }
+    }
+    if (!storeCredential) {
       storeCredential = options.storeCredential ?? await resolveStoreCredentialForLead(lead.businessAccountId, extractedData);
     }
 

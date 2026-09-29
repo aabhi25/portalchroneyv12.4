@@ -1139,6 +1139,18 @@ export default function CustomCrmSettings() {
 
       {activeSection === 'stores' && (
         <div className="space-y-6">
+          <Alert className="border-teal-200 bg-teal-50">
+            <Store className="h-4 w-4 text-teal-700" />
+            <AlertDescription className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-teal-900">
+              <span>
+                <span className="font-medium">Stores are now managed in Dealers &amp; Stores.</span>{' '}
+                One sheet holds each store's dealer, city, EMI schemes, SID and secret — for the WhatsApp journey and the CRM.
+              </span>
+              <Button size="sm" className="shrink-0" onClick={() => setLocation('/admin/whatsapp-dealers-stores')}>
+                Open Dealers &amp; Stores
+              </Button>
+            </AlertDescription>
+          </Alert>
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">

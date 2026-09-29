@@ -3935,6 +3935,13 @@ function FlowBuilderSection() {
       }
     }
     
+    // Keep the link to the Dealers & Stores sheet (set on that screen, not here).
+    const sheetLevel = (editingStep?.options as any)?.sheetLevel;
+    if (stepType === "dropdown" && sheetLevel) {
+      options = options || {};
+      options.sheetLevel = sheetLevel;
+    }
+
     // Add documentTypes for upload steps
     if (stepType === "upload" && stepDocumentTypes.length > 0) {
       options = options || {};
@@ -4651,6 +4658,13 @@ function FlowBuilderSection() {
 
             {stepType === "dropdown" && (
               <div className="space-y-3">
+                {(editingStep?.options as any)?.sheetLevel && (
+                  <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                    This step is linked to <strong>Dealers &amp; Stores</strong> ({(editingStep?.options as any).sheetLevel === "emi" ? "EMI scheme" : (editingStep?.options as any).sheetLevel}).
+                    While that sheet is switched on, customers see options from the sheet and the list below is not used.{" "}
+                    <button type="button" className="underline font-medium" onClick={() => setLocation("/admin/whatsapp-dealers-stores")}>Open Dealers &amp; Stores</button>
+                  </div>
+                )}
                 {/* Static dropdown items — hidden when dependent mode is on */}
                 {stepDependsOnFields.length === 0 && (
                   <>
