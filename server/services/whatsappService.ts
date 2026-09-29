@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { db } from "../db";
+import { refreshLeadQualificationLater } from "./leadQualificationService";
 import { 
   whatsappSettings, 
   whatsappLeads, 
@@ -911,9 +912,13 @@ For example:
       includeMessageOnly?: boolean; // If true, include 'message_only' status entries
       dateFrom?: Date;
       dateTo?: Date;
+      // Accounts that require PAN + email: 'leads' (default) or 'drafts' still waiting for them.
+      view?: 'leads' | 'drafts';
     } = {}
-  ): Promise<{ leads: WhatsappLead[]; total: number }> {
-    const { limit = 20, offset = 0, status, search, includeMessageOnly = false, dateFrom, dateTo } = options;
+  ): Promise<{ leads: WhatsappLead[]; total: number; qualificationRequired: boolean; draftCount: number }> {
+    const { limit = 20, offset = 0, status, search, includeMessageOnly = false, dateFrom, dateTo, view = 'leads' } = options;
+    const { isQualificationRequired, qualifiedCondition } = await import("./leadQualificationService");
+    const qualificationRequired = await isQualificationRequired(businessAccountId);
 
     // Build where conditions - filter out 'message_only' entries unless explicitly requested
     const whereConditions = [eq(whatsappLeads.businessAccountId, businessAccountId)];
@@ -921,6 +926,10 @@ For example:
     if (!includeMessageOnly && !status) {
       // Exclude 'message_only' status entries from leads list by default
       whereConditions.push(ne(whatsappLeads.status, "message_only"));
+    }
+
+    if (qualificationRequired && !includeMessageOnly) {
+      whereConditions.push(qualifiedCondition(view !== 'drafts'));
     }
     
     if (status) {
@@ -977,14 +986,32 @@ For example:
       }
     }
 
+    const { evaluateLeadQualification } = await import("@shared/leadQualification");
     const leadsWithAttachmentCount = leads.map(l => ({
       ...l,
       attachmentCount: attachmentCounts[l.id] || 0,
+      // Drafts: what is still needed before this becomes a lead, e.g. ["PAN", "Email"].
+      ...(qualificationRequired && !l.qualifiedAt ? { draftMissing: evaluateLeadQualification(l).missing } : {}),
     }));
+
+    let draftCount = 0;
+    if (qualificationRequired) {
+      const [drafts] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(whatsappLeads)
+        .where(and(
+          eq(whatsappLeads.businessAccountId, businessAccountId),
+          ne(whatsappLeads.status, "message_only"),
+          qualifiedCondition(false),
+        ));
+      draftCount = Number(drafts?.count ?? 0);
+    }
 
     return {
       leads: leadsWithAttachmentCount,
       total: Number(countResult?.count ?? 0),
+      qualificationRequired,
+      draftCount,
     };
   }
 
@@ -1187,6 +1214,7 @@ For example:
       .where(eq(whatsappLeads.id, leadId));
     
     console.log(`[WhatsApp] Updated lead ${leadId} with ${Object.keys(documents).length} documents`);
+    refreshLeadQualificationLater(leadId);
   }
 
   async syncLeadDocuments(leadId: string, collectedDocs: Record<string, any>): Promise<void> {
@@ -1237,6 +1265,7 @@ For example:
     const validCount = Object.keys(nextDocs).length;
     const invalidCount = Object.values(collectedDocs).filter((d: any) => d?.isValid === false).length;
     console.log(`[WhatsApp] Synced documents for lead ${leadId}: ${validCount} valid, ${invalidCount} invalid (moved to _rejectedDocuments)`);
+    refreshLeadQualificationLater(leadId);
   }
 
   async findLeadByFlowSession(businessAccountId: string, flowSessionId: string): Promise<WhatsappLead | null> {
@@ -1332,6 +1361,26 @@ For example:
   }
 
   async updateLeadWithFlowData(
+    businessAccountId: string,
+    senderPhone: string,
+    collectedData: Record<string, any>,
+    flowSessionId?: string,
+    flowCompleted?: boolean
+  ): Promise<WhatsappLead | null> {
+    const lead = await this.writeFlowDataToLead(businessAccountId, senderPhone, collectedData, flowSessionId, flowCompleted);
+    if (lead) {
+      // Draft → lead once a valid PAN and email are in (accounts that require them).
+      try {
+        const { refreshLeadQualification } = await import("./leadQualificationService");
+        await refreshLeadQualification(lead.id);
+      } catch (err: any) {
+        console.error(`[WhatsApp] Lead qualification check failed for ${lead.id}:`, err?.message || err);
+      }
+    }
+    return lead;
+  }
+
+  private async writeFlowDataToLead(
     businessAccountId: string,
     senderPhone: string,
     collectedData: Record<string, any>,

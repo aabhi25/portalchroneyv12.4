@@ -34,6 +34,7 @@ interface WhatsappSettings {
   newApplicationCooldownDays: number;
   phoneNumberLength: number;
   updateLeadEnabled: boolean;
+  requirePanEmailForLead: boolean;
   useMasterTraining: boolean;
   useLeadTraining: boolean;
   sessionTemplateName: string | null;
@@ -262,6 +263,7 @@ export default function WhatsAppFlowSettings() {
   const [cooldownDays, setCooldownDays] = useState(7);
   const [phoneNumberLength, setPhoneNumberLength] = useState(10);
   const [updateLeadEnabled, setUpdateLeadEnabled] = useState(true);
+  const [requirePanEmailForLead, setRequirePanEmailForLead] = useState(false);
   const [useMasterTraining, setUseMasterTraining] = useState(true);
   const [useLeadTraining, setUseLeadTraining] = useState(true);
   const [docConfirmationEnabled, setDocConfirmationEnabled] = useState(false);
@@ -283,6 +285,7 @@ export default function WhatsAppFlowSettings() {
       setCooldownDays(settingsData.settings.newApplicationCooldownDays ?? 7);
       setPhoneNumberLength(settingsData.settings.phoneNumberLength ?? 10);
       setUpdateLeadEnabled(settingsData.settings.updateLeadEnabled !== false);
+      setRequirePanEmailForLead(settingsData.settings.requirePanEmailForLead === true);
       setUseMasterTraining(settingsData.settings.useMasterTraining !== false);
       setUseLeadTraining(settingsData.settings.useLeadTraining !== false);
       setDocConfirmationEnabled(settingsData.settings.docConfirmationEnabled === "true");
@@ -291,6 +294,18 @@ export default function WhatsAppFlowSettings() {
       setDocConfirmationFooter(settingsData.settings.docConfirmationFooter || "Are these details correct?");
     }
   }, [settingsData]);
+
+  // Before turning "require PAN + email" on: how many records stay leads and how many become drafts.
+  const turningOnQualification = requirePanEmailForLead && settingsData?.settings.requirePanEmailForLead !== true;
+  const { data: qualificationPreview } = useQuery({
+    queryKey: ["/api/whatsapp/lead-qualification/preview"],
+    enabled: turningOnQualification,
+    queryFn: async () => {
+      const res = await fetch("/api/whatsapp/lead-qualification/preview", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load preview");
+      return res.json() as Promise<{ total: number; leads: number; drafts: number }>;
+    },
+  });
 
   const saveMutation = useMutation({
     mutationFn: async (data: Record<string, unknown>) => {
@@ -306,6 +321,7 @@ export default function WhatsAppFlowSettings() {
     onSuccess: () => {
       toast({ title: "Flow settings saved" });
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/leads"] });
     },
   });
 
@@ -314,6 +330,7 @@ export default function WhatsAppFlowSettings() {
       newApplicationCooldownDays: cooldownDays,
       phoneNumberLength: phoneNumberLength,
       updateLeadEnabled: updateLeadEnabled,
+      requirePanEmailForLead: requirePanEmailForLead,
       useMasterTraining: useMasterTraining,
       useLeadTraining: useLeadTraining,
       docConfirmationEnabled: docConfirmationEnabled,
@@ -357,6 +374,27 @@ export default function WhatsAppFlowSettings() {
               checked={updateLeadEnabled}
               onCheckedChange={setUpdateLeadEnabled}
             />
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label>Require PAN and email for a lead</Label>
+                <p className="text-sm text-gray-500">
+                  A chat becomes a lead, and is sent to the CRM, only once a valid PAN and email have been collected. Until then it is kept as a draft with its chat and documents.
+                </p>
+              </div>
+              <Switch
+                checked={requirePanEmailForLead}
+                onCheckedChange={setRequirePanEmailForLead}
+              />
+            </div>
+            {turningOnQualification && qualificationPreview && (
+              <p className="text-sm rounded-md bg-amber-50 text-amber-800 px-3 py-2">
+                After saving, {qualificationPreview.leads} of {qualificationPreview.total} current leads stay leads and{" "}
+                {qualificationPreview.drafts} move to Drafts. Nothing is deleted.
+              </p>
+            )}
           </div>
 
           <div className="flex items-center justify-between">

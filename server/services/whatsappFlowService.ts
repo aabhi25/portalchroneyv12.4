@@ -2220,6 +2220,16 @@ Example: {"name": null, "phone": "9876543210", "email": null, "address": "123 Ma
         return;
       }
 
+      // TIER 0: an "Update Documents / Details" session names the lead it updates.
+      let updateLead: typeof whatsappLeads.$inferSelect | undefined;
+      if (typeof collectedData._updateExistingLeadId === 'string') {
+        [updateLead] = await db
+          .select()
+          .from(whatsappLeads)
+          .where(and(eq(whatsappLeads.businessAccountId, businessAccountId), eq(whatsappLeads.id, collectedData._updateExistingLeadId)))
+          .limit(1);
+      }
+
       // TIER 1: Authoritative — lead directly linked to this session via flowSessionId.
       // Order by named-first so that if multiple leads share the same session (e.g. blank
       // leads created by follow-up messages after completion), the populated lead wins.
@@ -2272,8 +2282,8 @@ Example: {"name": null, "phone": "9876543210", "email": null, "address": "123 Ma
         fallbackLead = found;
       }
 
-      const resolvedVia = sessionLead ? 'session_id' : namedLead ? 'customer_name' : 'phone_fallback';
-      const lead = sessionLead ?? namedLead ?? fallbackLead;
+      const resolvedVia = updateLead ? 'update_session' : sessionLead ? 'session_id' : namedLead ? 'customer_name' : 'phone_fallback';
+      const lead = updateLead ?? sessionLead ?? namedLead ?? fallbackLead;
 
       if (!lead) {
         console.log(`[CRM AutoSync] No lead found for ${senderPhone}`);
@@ -2283,7 +2293,10 @@ Example: {"name": null, "phone": "9876543210", "email": null, "address": "123 Ma
       console.log(`[CRM AutoSync] Lead resolved via ${resolvedVia}: ${lead.id}`);
 
       if (lead.customCrmSyncStatus === 'synced') {
-        console.log(`[CRM AutoSync] Lead ${lead.id} already synced, skipping`);
+        // Documents sent after the lead was synced go to the same CRM application.
+        const { syncWhatsappLeadToCustomCrm } = await import('./customCrmService');
+        const docResult = await syncWhatsappLeadToCustomCrm(lead.id, { source: 'new_documents', documentsOnly: true, requireAutoSync: true, settings, fieldMappings });
+        console.log(`[CRM AutoSync] Lead ${lead.id} already synced — new documents: ${docResult.skipped ? `skipped (${docResult.message})` : docResult.message}`);
         return;
       }
 

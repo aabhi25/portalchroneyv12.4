@@ -1412,6 +1412,11 @@ export interface WhatsappLeadSyncOptions {
   requireAutoSync?: boolean;
   /** Label for logs/meta, e.g. 'flow_completed', 'webhook', 'manual', 'bulk', 'recovery'. */
   source?: string;
+  /**
+   * Only send documents the CRM hasn't received yet to the application this lead already
+   * created (e.g. Aadhaar sent after the lead was synced). Never creates an applicant.
+   */
+  documentsOnly?: boolean;
   /** Optional pre-built inputs. Anything omitted is loaded from the database. */
   settings?: CustomCrmSettings;
   fieldMappings?: CustomCrmFieldMapping[];
@@ -1422,7 +1427,7 @@ export interface WhatsappLeadSyncOptions {
 export interface WhatsappLeadSyncResult {
   success: boolean;
   /** Set when nothing was pushed. */
-  skipped?: 'already_synced' | 'in_progress' | 'not_eligible' | 'not_found' | 'not_configured';
+  skipped?: 'already_synced' | 'in_progress' | 'not_eligible' | 'not_found' | 'not_configured' | 'draft';
   /** The lead's custom_crm_sync_status after this call. */
   status: string | null;
   message: string;
@@ -1447,7 +1452,8 @@ export function nextCrmRetryAt(attempts: number, now: Date = new Date()): Date |
 async function claimLeadForCrmSync(
   leadId: string,
   claimId: string,
-  opts: { force: boolean; respectBackoff: boolean; source: string }
+  // keepApplication: documentsOnly — a synced lead is re-claimed but keeps its recorded application.
+  opts: { force: boolean; respectBackoff: boolean; source: string; keepApplication?: boolean }
 ): Promise<CrmSyncMeta | null> {
   const nowIso = new Date().toISOString();
   const staleIso = new Date(Date.now() - CRM_CLAIM_STALE_MS).toISOString();
@@ -1455,7 +1461,7 @@ async function claimLeadForCrmSync(
     UPDATE whatsapp_leads
     SET custom_crm_sync_status = 'pending',
         custom_crm_sync_payload = COALESCE(custom_crm_sync_payload, '{}'::jsonb) || jsonb_build_object('_crmSync',
-          (CASE WHEN ${opts.force}::boolean AND custom_crm_sync_status = 'synced'
+          (CASE WHEN ${opts.force}::boolean AND NOT ${!!opts.keepApplication}::boolean AND custom_crm_sync_status = 'synced'
                 THEN '{}'::jsonb
                 ELSE COALESCE(custom_crm_sync_payload->'_crmSync', '{}'::jsonb) END)
           || jsonb_build_object(
@@ -1628,8 +1634,26 @@ export async function syncWhatsappLeadToCustomCrm(
     return { success: false, skipped: 'not_configured', status: lead.customCrmSyncStatus ?? null, message: 'Custom CRM sync is not enabled/configured for this account' };
   }
 
+  // Accounts that require PAN + email: a draft is never sent (the LOS would reject it).
+  const { isQualificationRequired, refreshLeadQualification } = await import('./leadQualificationService');
+  if (await isQualificationRequired(lead.businessAccountId)) {
+    const check = await refreshLeadQualification(leadId, { pushToCrm: false });
+    if (check && !check.qualification.qualified && !lead.qualifiedAt) {
+      const message = `Draft — waiting for a valid ${check.qualification.missing.join(' and ')} before this can be sent to the CRM`;
+      console.log(`${tag} Lead ${leadId} not sent: ${message}`);
+      return { success: false, skipped: 'draft', status: lead.customCrmSyncStatus ?? null, message };
+    }
+  }
+
+  if (options.documentsOnly) {
+    const meta = ((lead.customCrmSyncPayload as any)?._crmSync || {}) as CrmSyncMeta;
+    if (!(meta.created && meta.applicationId)) {
+      return { success: false, skipped: 'not_eligible', status: lead.customCrmSyncStatus ?? null, message: 'No CRM application recorded for this lead to attach documents to' };
+    }
+  }
+
   const claimId = crypto.randomUUID();
-  const claimed = await claimLeadForCrmSync(leadId, claimId, { force, respectBackoff: !!options.respectBackoff, source });
+  const claimed = await claimLeadForCrmSync(leadId, claimId, { force: force || !!options.documentsOnly, respectBackoff: !!options.respectBackoff, source, keepApplication: !!options.documentsOnly });
   if (!claimed) {
     const [current] = await db.select({ status: whatsappLeads.customCrmSyncStatus }).from(whatsappLeads).where(eq(whatsappLeads.id, leadId)).limit(1);
     const status = current?.status ?? null;

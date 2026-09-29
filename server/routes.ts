@@ -31686,6 +31686,12 @@ Return ONLY a valid JSON object in this format:
     return true;
   }
 
+  // Insights: accounts that require PAN + email count drafts as not-yet-leads.
+  async function leadsOnlySql(businessAccountId: string) {
+    const { isQualificationRequired } = await import("./services/leadQualificationService");
+    return (await isQualificationRequired(businessAccountId)) ? sql`AND qualified_at IS NOT NULL` : sql``;
+  }
+
   // When handling a customer's message fails, tell them instead of leaving them in silence.
   // At most once every 5 minutes per customer.
   const failureNoticeSentAt = new Map<string, number>();
@@ -33444,6 +33450,7 @@ Return ONLY a valid JSON object in this format:
       if (body.newApplicationCooldownDays !== undefined) updateData.newApplicationCooldownDays = Math.max(0, parseInt(body.newApplicationCooldownDays) || 7);
       if (body.phoneNumberLength !== undefined) updateData.phoneNumberLength = Math.max(1, Math.min(20, parseInt(body.phoneNumberLength) || 10));
       if (body.updateLeadEnabled !== undefined) updateData.updateLeadEnabled = body.updateLeadEnabled === false ? "false" : "true";
+      if (body.requirePanEmailForLead !== undefined) updateData.requirePanEmailForLead = body.requirePanEmailForLead === true ? "true" : "false";
       if (body.useMasterTraining !== undefined) updateData.useMasterTraining = body.useMasterTraining === false ? "false" : "true";
       if (body.useLeadTraining !== undefined) updateData.useLeadTraining = body.useLeadTraining === false ? "false" : "true";
       if (body.whitelistEnabled !== undefined) {
@@ -33496,6 +33503,16 @@ Return ONLY a valid JSON object in this format:
       if (body.useProductCatalogKnowledge !== undefined) updateData.useProductCatalogKnowledge = body.useProductCatalogKnowledge === false ? "false" : "true";
 
       const settings = await whatsappService.saveSettings(businessAccountId, updateData);
+
+      if (updateData.requirePanEmailForLead !== undefined) {
+        const { forgetQualificationSetting, evaluateAccountLeads } = await import("./services/leadQualificationService");
+        forgetQualificationSetting(businessAccountId);
+        // Existing records that already have PAN + email stay leads; the rest become drafts.
+        if (updateData.requirePanEmailForLead === "true") {
+          const summary = await evaluateAccountLeads(businessAccountId, { apply: true });
+          console.log(`[WhatsApp] Require PAN + email turned on for ${businessAccountId}: ${summary.leads} lead(s), ${summary.drafts} draft(s)`);
+        }
+      }
 
       // Must go through the same redaction as GET. Returning the saved row directly handed
       // msg91AuthKey and webhookSecret back on every save, which defeated sanitizing GET at all.
@@ -33813,7 +33830,7 @@ Return ONLY a valid JSON object in this format:
       // Total qualified leads (non message_only)
       const leadsRows = await db.execute(sql`
         SELECT 
-          COUNT(*) FILTER (WHERE status != 'message_only' AND direction = 'incoming') as qualified_leads,
+          COUNT(*) FILTER (WHERE status != 'message_only' AND direction = 'incoming' ${await leadsOnlySql(businessAccountId)}) as qualified_leads,
           COUNT(*) FILTER (WHERE direction = 'incoming') as total_incoming,
           COUNT(*) FILTER (WHERE direction = 'outgoing') as total_outgoing,
           COUNT(DISTINCT sender_phone) FILTER (WHERE direction = 'incoming') as unique_senders
@@ -33855,7 +33872,7 @@ Return ONLY a valid JSON object in this format:
       const dailyLeadsRows = await db.execute(sql`
         SELECT 
           DATE(received_at) as date,
-          COUNT(*) FILTER (WHERE status != 'message_only' AND direction = 'incoming') as leads
+          COUNT(*) FILTER (WHERE status != 'message_only' AND direction = 'incoming' ${await leadsOnlySql(businessAccountId)}) as leads
         FROM whatsapp_leads
         WHERE business_account_id = ${businessAccountId}
           AND received_at >= ${chartStart}
@@ -33941,6 +33958,7 @@ Return ONLY a valid JSON object in this format:
           WHERE business_account_id = ${businessAccountId}
             AND direction = 'incoming'
             AND status != 'message_only'
+            ${await leadsOnlySql(businessAccountId)}
           ORDER BY received_at DESC
           LIMIT 10
         )
@@ -33988,6 +34006,21 @@ Return ONLY a valid JSON object in this format:
   });
 
   // Get WhatsApp leads
+  // How many records would stay leads / become drafts if "require PAN + email" were turned on.
+  app.get("/api/whatsapp/lead-qualification/preview", requireAuth, async (req: any, res) => {
+    try {
+      const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
+      if (!businessAccountId) {
+        return res.status(400).json({ error: "No active business account" });
+      }
+      const { evaluateAccountLeads } = await import("./services/leadQualificationService");
+      res.json(await evaluateAccountLeads(businessAccountId, { apply: false }));
+    } catch (error: any) {
+      console.error("Error previewing lead qualification:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.get("/api/whatsapp/leads", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
@@ -34001,13 +34034,14 @@ Return ONLY a valid JSON object in this format:
         return res.status(403).json({ error: "WhatsApp is not enabled for this business account" });
       }
 
-      const { limit, offset, status, search, dateFrom, dateTo } = req.query;
+      const { limit, offset, status, search, dateFrom, dateTo, view } = req.query;
       const { whatsappService } = await import("./services/whatsappService");
       const result = await whatsappService.getLeads(businessAccountId, {
         limit: limit ? parseInt(limit as string) : 20,
         offset: offset ? parseInt(offset as string) : 0,
         status: status as string | undefined,
         search: search as string | undefined,
+        view: view === 'drafts' ? 'drafts' : 'leads',
         dateFrom: dateFrom ? new Date(dateFrom as string) : undefined,
         dateTo: dateTo ? new Date(dateTo as string) : undefined,
       });

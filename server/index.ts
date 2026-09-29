@@ -18,6 +18,7 @@ import { migrateK12NotesAndVideos } from "./scripts/migrateK12NotesVideos";
 import { shopifySyncScheduler } from "./services/shopifySyncScheduler";
 import { leadsquaredRetryWorker } from "./services/leadsquaredRetryWorker";
 import { crmSyncRecoveryWorker } from "./services/crmSyncRecoveryWorker";
+import { startLeadQualificationSweep } from "./services/leadQualificationService";
 import { dataRetentionWorker } from "./services/dataRetentionWorker";
 import { aiUsageLogger } from "./services/aiUsageLogger";
 import { backupScheduler } from "./services/backupScheduler";
@@ -314,6 +315,7 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     // Start CRM sync recovery worker (outbox pattern — retries sessions completed
     // but never CRM-synced, e.g. due to server crash during the async sync)
     crmSyncRecoveryWorker.start();
+    startLeadQualificationSweep();
     dataRetentionWorker.start();
     
     // Start daily database backup scheduler (4:00 AM IST)

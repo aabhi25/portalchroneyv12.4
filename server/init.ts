@@ -325,6 +325,14 @@ export async function initializeDatabase() {
       console.error('[INIT] Error adding processed_at to webhook_events:', err);
     }
 
+    // Draft WhatsApp leads until a valid PAN + email are collected (per account).
+    try {
+      await db.execute(sql`ALTER TABLE whatsapp_settings ADD COLUMN IF NOT EXISTS require_pan_email_for_lead TEXT NOT NULL DEFAULT 'false'`);
+      await db.execute(sql`ALTER TABLE whatsapp_leads ADD COLUMN IF NOT EXISTS qualified_at TIMESTAMP`);
+    } catch (err) {
+      console.error('[INIT] Error adding lead qualification columns:', err);
+    }
+
     // Resume any interrupted Vision Warehouse syncs
     try {
       await visionWarehouseSyncService.resumeInterruptedSyncs();

@@ -125,6 +125,8 @@ interface WhatsappLead {
   direction: 'incoming' | 'outgoing' | null;
   flowSessionId?: string | null;
   attachments?: WhatsappAttachment[];
+  // Draft (account requires PAN + email): what is still missing, e.g. ["PAN", "Email"].
+  draftMissing?: string[];
 }
 
 interface WhatsappAttachment {
@@ -464,6 +466,7 @@ export default function WhatsApp() {
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(false);
   const [newApplicationCooldownDays, setNewApplicationCooldownDays] = useState(7);
   const [leadsPage, setLeadsPage] = useState(1);
+  const [leadsView, setLeadsView] = useState<"leads" | "drafts">("leads");
   const [leadsSearchInput, setLeadsSearchInput] = useState("");
   const [leadsSearch, setLeadsSearch] = useState("");
   const [leadToDelete, setLeadToDelete] = useState<WhatsappLead | null>(null);
@@ -520,7 +523,7 @@ export default function WhatsApp() {
   };
 
   const { data: leadsData, isLoading: leadsLoading, isFetching: leadsFetching } = useQuery({
-    queryKey: ["/api/whatsapp/leads", leadsPage, leadsDateFilter, leadsCustomFrom?.toISOString(), leadsCustomTo?.toISOString(), leadsSearch],
+    queryKey: ["/api/whatsapp/leads", leadsPage, leadsDateFilter, leadsCustomFrom?.toISOString(), leadsCustomTo?.toISOString(), leadsSearch, leadsView],
     queryFn: async () => {
       const offset = (leadsPage - 1) * leadsPerPage;
       const { dateFrom, dateTo } = getLeadsDateRange();
@@ -528,9 +531,10 @@ export default function WhatsApp() {
       if (dateFrom) params.set("dateFrom", dateFrom);
       if (dateTo) params.set("dateTo", dateTo);
       if (leadsSearch.trim()) params.set("search", leadsSearch.trim());
+      if (leadsView === "drafts") params.set("view", "drafts");
       const res = await fetch(`/api/whatsapp/leads?${params.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch leads");
-      return res.json() as Promise<{ leads: WhatsappLead[]; total: number }>;
+      return res.json() as Promise<{ leads: WhatsappLead[]; total: number; qualificationRequired?: boolean; draftCount?: number }>;
     },
   });
 
@@ -1794,12 +1798,28 @@ export default function WhatsApp() {
                     <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
                   ) : leadsData?.total !== undefined && (
                     <Badge variant="secondary" className="rounded-full px-2.5 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-700 border-0">
-                      {leadsData.total} {leadsData.total === 1 ? 'lead' : 'leads'}
+                      {leadsData.total} {leadsView === "drafts" ? (leadsData.total === 1 ? 'draft' : 'drafts') : (leadsData.total === 1 ? 'lead' : 'leads')}
                     </Badge>
+                  )}
+                  {leadsData?.qualificationRequired && (
+                    <div className="flex items-center rounded-full border border-slate-200 p-0.5 text-xs">
+                      {(["leads", "drafts"] as const).map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          className={`rounded-full px-3 py-1 ${leadsView === v ? "bg-emerald-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                          onClick={() => { setLeadsView(v); setLeadsPage(1); }}
+                        >
+                          {v === "leads" ? "Leads" : `Drafts${leadsData.draftCount ? ` (${leadsData.draftCount})` : ""}`}
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </div>
                 <CardDescription className="text-sm text-muted-foreground">
-                  Leads captured from WhatsApp messages with AI-extracted information
+                  {leadsView === "drafts"
+                    ? "Chats still waiting for a valid PAN and email. They become leads, and are sent to the CRM, as soon as both are collected."
+                    : "Leads captured from WhatsApp messages with AI-extracted information"}
                 </CardDescription>
               </div>
               <div className="flex items-center gap-2">
@@ -2061,7 +2081,11 @@ export default function WhatsApp() {
                             {customCrmEnabled && (
                               <TableCell className="py-4 text-center">
                                 <div className="flex items-center justify-center gap-1">
-                                  {(lead as any).customCrmSyncStatus === 'synced' ? (
+                                  {lead.draftMissing && lead.draftMissing.length > 0 ? (
+                                    <Badge variant="secondary" className="rounded-full px-2 py-0.5 text-[11px] font-medium bg-amber-100 text-amber-800 border-0 whitespace-nowrap">
+                                      Needs {lead.draftMissing.join(" + ")}
+                                    </Badge>
+                                  ) : (lead as any).customCrmSyncStatus === 'synced' ? (
                                     <TooltipProvider>
                                       <Tooltip>
                                         <TooltipTrigger>
@@ -2084,7 +2108,7 @@ export default function WhatsApp() {
                                   ) : (
                                     <span className="text-slate-300 text-xs">—</span>
                                   )}
-                                  {(!(lead as any).customCrmSyncStatus || (lead as any).customCrmSyncStatus === 'failed') && (
+                                  {!lead.draftMissing?.length && (!(lead as any).customCrmSyncStatus || (lead as any).customCrmSyncStatus === 'failed') && (
                                     <Button
                                       variant="ghost"
                                       size="icon"

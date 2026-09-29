@@ -2709,6 +2709,7 @@ export const whatsappSettings = pgTable("whatsapp_settings", {
   newApplicationCooldownDays: integer("new_application_cooldown_days").notNull().default(7),
   phoneNumberLength: integer("phone_number_length").notNull().default(10),
   updateLeadEnabled: text("update_lead_enabled").notNull().default("true"), // 'true' | 'false' - show Add Documents / Update Details options for duplicate phone
+  requirePanEmailForLead: text("require_pan_email_for_lead").notNull().default("false"), // 'true' → a record is a draft (not listed, not synced) until a valid PAN and email are collected
   useMasterTraining: text("use_master_training").notNull().default("true"), // 'true' | 'false' - apply custom AI instructions in WhatsApp flow
   useLeadTraining: text("use_lead_training").notNull().default("true"), // 'true' | 'false' - apply lead training config in WhatsApp flow
   whitelistEnabled: text("whitelist_enabled").notNull().default("false"), // 'true' | 'false' - only process messages from whitelisted numbers
@@ -2798,6 +2799,7 @@ export const whatsappLeads = pgTable("whatsapp_leads", {
   // Verification engine (Task #5 — configurable verification engine POC)
   verificationResults: jsonb("verification_results"), // Last verification run result (see VerificationResult shape)
   verificationRunAt: timestamp("verification_run_at"), // When verification was last run on this lead
+  qualifiedAt: timestamp("qualified_at"), // First time a valid PAN + email were present (see shared/leadQualification.ts); null = draft where required
   lastMessageAt: timestamp("last_message_at"), // When the most recent message was received (for sorting by activity)
   lastMessage: text("last_message"), // Text of the most recent message
   conversationCount: integer("conversation_count").notNull().default(1), // Number of messages/interactions on this lead

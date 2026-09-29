@@ -39,6 +39,7 @@ export function toWhatsappSettingsDto(settings: any) {
     newApplicationCooldownDays: settings.newApplicationCooldownDays ?? 7,
     phoneNumberLength: settings.phoneNumberLength ?? 10,
     updateLeadEnabled: settings.updateLeadEnabled !== "false",
+    requirePanEmailForLead: settings.requirePanEmailForLead === "true",
     whitelistEnabled: settings.whitelistEnabled === "true",
     useCaseMode: settings.useCaseMode || "lead_capture",
     // AI Setup fields
