@@ -1,4 +1,5 @@
 import { db } from "../db";
+import { stripProtectedFields } from "../lib/safeUpdate";
 import { urgencyOfferSettings, urgencyOffers, conversations, messages, businessAccounts, leads } from "@shared/schema";
 import { eq, and, desc, gte, or, sql, asc } from "drizzle-orm";
 import OpenAI from "openai";
@@ -108,9 +109,11 @@ export async function getAllCampaigns(businessAccountId: string) {
   });
 }
 
-export async function getCampaignById(campaignId: string) {
+// Campaign reads/writes are always scoped to the caller's business account:
+// a campaign UUID alone must never reach another tenant's campaign.
+export async function getCampaignById(campaignId: string, businessAccountId: string) {
   return await db.query.urgencyOfferSettings.findFirst({
-    where: eq(urgencyOfferSettings.id, campaignId)
+    where: and(eq(urgencyOfferSettings.id, campaignId), eq(urgencyOfferSettings.businessAccountId, businessAccountId))
   });
 }
 
@@ -118,28 +121,29 @@ export async function upsertCampaign(
   businessAccountId: string,
   settings: Partial<typeof urgencyOfferSettings.$inferInsert> & { id?: string }
 ) {
-  const { id: campaignId, ...settingsData } = settings;
+  const campaignId = settings.id;
+  const settingsData = stripProtectedFields(settings);
 
   if (campaignId) {
-    const existing = await getCampaignById(campaignId);
+    const existing = await getCampaignById(campaignId, businessAccountId);
     if (existing) {
       const [updated] = await db.update(urgencyOfferSettings)
         .set({ ...settingsData, updatedAt: new Date() })
-        .where(eq(urgencyOfferSettings.id, campaignId))
+        .where(and(eq(urgencyOfferSettings.id, campaignId), eq(urgencyOfferSettings.businessAccountId, businessAccountId)))
         .returning();
       return updated;
     }
   }
 
   const [created] = await db.insert(urgencyOfferSettings)
-    .values({ businessAccountId, ...settingsData })
+    .values({ ...settingsData, businessAccountId } as typeof urgencyOfferSettings.$inferInsert)
     .returning();
   return created;
 }
 
-export async function deleteCampaign(campaignId: string) {
+export async function deleteCampaign(campaignId: string, businessAccountId: string) {
   const [deleted] = await db.delete(urgencyOfferSettings)
-    .where(eq(urgencyOfferSettings.id, campaignId))
+    .where(and(eq(urgencyOfferSettings.id, campaignId), eq(urgencyOfferSettings.businessAccountId, businessAccountId)))
     .returning();
   return deleted;
 }

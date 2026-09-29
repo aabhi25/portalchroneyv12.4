@@ -1,4 +1,5 @@
 // Reference: javascript_database blueprint - updated for chat application
+import { stripProtectedFields } from './lib/safeUpdate';
 import { 
   users, 
   conversations, 
@@ -2035,7 +2036,7 @@ export class DatabaseStorage implements IStorage {
   async updateProduct(id: string, businessAccountId: string, productData: Partial<InsertProduct>): Promise<Product> {
     const [product] = await db
       .update(products)
-      .set({ ...productData, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(productData), updatedAt: new Date() })
       .where(and(eq(products.id, id), eq(products.businessAccountId, businessAccountId)))
       .returning();
     
@@ -2111,7 +2112,7 @@ export class DatabaseStorage implements IStorage {
   async updateFaq(id: string, businessAccountId: string, faqData: Partial<InsertFaq>): Promise<Faq> {
     const [faq] = await db
       .update(faqs)
-      .set({ ...faqData, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(faqData), updatedAt: new Date() })
       .where(and(eq(faqs.id, id), eq(faqs.businessAccountId, businessAccountId)))
       .returning();
     
@@ -2259,7 +2260,7 @@ export class DatabaseStorage implements IStorage {
   async updateLead(id: string, businessAccountId: string, leadData: Partial<InsertLead>): Promise<Lead> {
     const [lead] = await db
       .update(leads)
-      .set({ ...leadData, createdAt: undefined as any, updatedAt: new Date() }) // Prevent createdAt from being updated, set updatedAt
+      .set({ ...stripProtectedFields(leadData), createdAt: undefined as any, updatedAt: new Date() }) // Prevent createdAt from being updated, set updatedAt
       .where(and(eq(leads.id, id), eq(leads.businessAccountId, businessAccountId)))
       .returning();
     return lead;
@@ -2419,7 +2420,7 @@ export class DatabaseStorage implements IStorage {
   ): Promise<QuestionBankEntry> {
     const [entry] = await db
       .update(questionBankEntries)
-      .set({ ...updates, updatedAt: sql`NOW()` })
+      .set({ ...stripProtectedFields(updates), updatedAt: sql`NOW()` })
       .where(and(eq(questionBankEntries.id, id), eq(questionBankEntries.businessAccountId, businessAccountId)))
       .returning();
     return entry;
@@ -2919,7 +2920,7 @@ export class DatabaseStorage implements IStorage {
   async updateCategory(id: string, businessAccountId: string, category: Partial<InsertCategory>): Promise<Category> {
     const [updated] = await db
       .update(categories)
-      .set({ ...category, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(category), updatedAt: new Date() })
       .where(
         and(
           eq(categories.id, id),
@@ -2974,7 +2975,7 @@ export class DatabaseStorage implements IStorage {
   async updateTag(id: string, businessAccountId: string, tag: Partial<InsertTag>): Promise<Tag> {
     const [updated] = await db
       .update(tags)
-      .set({ ...tag, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(tag), updatedAt: new Date() })
       .where(
         and(
           eq(tags.id, id),
@@ -3165,7 +3166,7 @@ export class DatabaseStorage implements IStorage {
   async updateProductRelationship(id: string, businessAccountId: string, relationship: Partial<InsertProductRelationship>): Promise<ProductRelationship> {
     const [updated] = await db
       .update(productRelationships)
-      .set({ ...relationship, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(relationship), updatedAt: new Date() })
       .where(
         and(
           eq(productRelationships.id, id),
@@ -3389,7 +3390,7 @@ export class DatabaseStorage implements IStorage {
   ): Promise<ScheduleTemplate> {
     const [updated] = await db
       .update(scheduleTemplates)
-      .set({ ...template, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(template), updatedAt: new Date() })
       .where(and(eq(scheduleTemplates.id, id), eq(scheduleTemplates.businessAccountId, businessAccountId)))
       .returning();
     return updated;
@@ -3430,7 +3431,7 @@ export class DatabaseStorage implements IStorage {
   ): Promise<SlotOverride> {
     const [updated] = await db
       .update(slotOverrides)
-      .set({ ...override, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(override), updatedAt: new Date() })
       .where(and(eq(slotOverrides.id, id), eq(slotOverrides.businessAccountId, businessAccountId)))
       .returning();
     return updated;
@@ -3746,7 +3747,7 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(supportTickets)
       .set({ 
-        ...updates,
+        ...stripProtectedFields(updates),
         updatedAt: new Date()
       })
       .where(and(
@@ -3997,7 +3998,7 @@ export class DatabaseStorage implements IStorage {
   ): Promise<TicketMessage> {
     const [updated] = await db
       .update(ticketMessages)
-      .set(updates)
+      .set(stripProtectedFields(updates, ['ticketId']))
       .where(eq(ticketMessages.id, id))
       .returning();
     
@@ -4088,7 +4089,7 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(cannedResponses)
       .set({
-        ...updates,
+        ...stripProtectedFields(updates),
         updatedAt: new Date()
       })
       .where(and(
@@ -4172,7 +4173,7 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(ticketInsights)
       .set({
-        ...updates,
+        ...stripProtectedFields(updates),
         updatedAt: new Date()
       })
       .where(and(
@@ -4245,7 +4246,7 @@ export class DatabaseStorage implements IStorage {
   async updateJourney(id: string, businessAccountId: string, updates: Partial<InsertConversationJourney>): Promise<ConversationJourney> {
     const [updated] = await db
       .update(conversationJourneys)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(updates), updatedAt: new Date() })
       .where(and(
         eq(conversationJourneys.id, id),
         eq(conversationJourneys.businessAccountId, businessAccountId)
@@ -4280,7 +4281,7 @@ export class DatabaseStorage implements IStorage {
   async updateJourneyStep(id: string, journeyId: string, updates: Partial<InsertJourneyStep>): Promise<JourneyStep> {
     const [updated] = await db
       .update(journeySteps)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(updates, ['journeyId']), updatedAt: new Date() })
       .where(and(
         eq(journeySteps.id, id),
         eq(journeySteps.journeyId, journeyId)
@@ -4340,7 +4341,7 @@ export class DatabaseStorage implements IStorage {
   async updateGroupJourney(id: string, groupId: string, updates: Partial<InsertAccountGroupJourney>): Promise<AccountGroupJourney> {
     const [updated] = await db
       .update(accountGroupJourneys)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(updates, ['groupId']), updatedAt: new Date() })
       .where(and(
         eq(accountGroupJourneys.id, id),
         eq(accountGroupJourneys.groupId, groupId)
@@ -4375,7 +4376,7 @@ export class DatabaseStorage implements IStorage {
   async updateGroupJourneyStep(id: string, journeyId: string, updates: Partial<InsertAccountGroupJourneyStep>): Promise<AccountGroupJourneyStep> {
     const [updated] = await db
       .update(accountGroupJourneySteps)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(updates, ['journeyId']), updatedAt: new Date() })
       .where(and(
         eq(accountGroupJourneySteps.id, id),
         eq(accountGroupJourneySteps.journeyId, journeyId)
@@ -5782,7 +5783,7 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(discountRules)
       .set({
-        ...updates,
+        ...stripProtectedFields(updates),
         updatedAt: new Date()
       })
       .where(and(
@@ -6046,7 +6047,7 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(proactiveGuidanceRules)
       .set({
-        ...updates,
+        ...stripProtectedFields(updates),
         updatedAt: new Date()
       })
       .where(and(
@@ -6120,7 +6121,7 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(guidanceCampaigns)
       .set({
-        ...updates,
+        ...stripProtectedFields(updates),
         updatedAt: new Date()
       })
       .where(and(
@@ -6179,7 +6180,7 @@ export class DatabaseStorage implements IStorage {
   async updateLeadsquaredFieldMapping(id: string, businessAccountId: string, updates: Partial<InsertLeadsquaredFieldMapping>): Promise<LeadsquaredFieldMapping | undefined> {
     const [updated] = await db
       .update(leadsquaredFieldMappings)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(updates), updatedAt: new Date() })
       .where(and(
         eq(leadsquaredFieldMappings.id, id),
         eq(leadsquaredFieldMappings.businessAccountId, businessAccountId)
@@ -6252,7 +6253,7 @@ export class DatabaseStorage implements IStorage {
   async updateSalesforceFieldMapping(id: string, businessAccountId: string, updates: Partial<InsertSalesforceFieldMapping>): Promise<SalesforceFieldMapping | undefined> {
     const [updated] = await db
       .update(salesforceFieldMappings)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(updates), updatedAt: new Date() })
       .where(and(
         eq(salesforceFieldMappings.id, id),
         eq(salesforceFieldMappings.businessAccountId, businessAccountId)
@@ -6697,7 +6698,7 @@ export class DatabaseStorage implements IStorage {
   async updateFacebookFlow(id: string, businessAccountId: string, updates: Partial<InsertFacebookFlow>): Promise<FacebookFlow> {
     const [flow] = await db
       .update(facebookFlows)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...stripProtectedFields(updates), updatedAt: new Date() })
       .where(
         and(
           eq(facebookFlows.id, id),
@@ -6738,7 +6739,7 @@ export class DatabaseStorage implements IStorage {
   async updateFacebookFlowStep(id: string, flowId: string, updates: Partial<InsertFacebookFlowStep>): Promise<FacebookFlowStep> {
     const [step] = await db
       .update(facebookFlowSteps)
-      .set(updates)
+      .set(stripProtectedFields(updates, ['flowId']))
       .where(
         and(
           eq(facebookFlowSteps.id, id),
@@ -6904,7 +6905,7 @@ export class DatabaseStorage implements IStorage {
         }
       }
     }
-    const [job] = await db.update(jobs).set({ ...updates, updatedAt: new Date() }).where(and(eq(jobs.id, id), eq(jobs.businessAccountId, businessAccountId))).returning();
+    const [job] = await db.update(jobs).set({ ...stripProtectedFields(updates), updatedAt: new Date() }).where(and(eq(jobs.id, id), eq(jobs.businessAccountId, businessAccountId))).returning();
     return job || undefined;
   }
 
@@ -6932,7 +6933,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateApplicant(id: string, businessAccountId: string, updates: Partial<InsertJobApplicant>): Promise<JobApplicant | undefined> {
-    const [applicant] = await db.update(jobApplicants).set(updates).where(and(eq(jobApplicants.id, id), eq(jobApplicants.businessAccountId, businessAccountId))).returning();
+    const [applicant] = await db.update(jobApplicants).set(stripProtectedFields(updates)).where(and(eq(jobApplicants.id, id), eq(jobApplicants.businessAccountId, businessAccountId))).returning();
     return applicant || undefined;
   }
 
@@ -6982,7 +6983,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateApplication(id: string, businessAccountId: string, updates: Partial<InsertJobApplication>): Promise<JobApplication | undefined> {
-    const [application] = await db.update(jobApplications).set({ ...updates, updatedAt: new Date() }).where(and(eq(jobApplications.id, id), eq(jobApplications.businessAccountId, businessAccountId))).returning();
+    const [application] = await db.update(jobApplications).set({ ...stripProtectedFields(updates, ['jobId', 'applicantId']), updatedAt: new Date() }).where(and(eq(jobApplications.id, id), eq(jobApplications.businessAccountId, businessAccountId))).returning();
     return application || undefined;
   }
 
