@@ -70,6 +70,21 @@ interface User {
   businessAccountId: string | null;
 }
 
+/**
+ * The chat stream sends products as a JSON string of {items, pagination, searchQuery}
+ * (older servers sent a plain array). Same handling as the embedded widget (EmbedChat).
+ */
+function parseProductsEvent(raw: unknown): any[] | null {
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray((parsed as any).items)) return (parsed as any).items;
+  } catch (err) {
+    console.error('[Chat] Could not read products data:', err);
+  }
+  return null;
+}
+
 export default function Home() {
   const [isExpanded, setIsExpanded] = useState(true);
   const [message, setMessage] = useState("");
@@ -361,7 +376,7 @@ export default function Home() {
                 streamedContent += data.data;
                 updateStreamingMessage();
               } else if (data.type === 'products') {
-                productsData = data.data;
+                productsData = parseProductsEvent(data.data);
               } else if (data.type === 'appointment_slots') {
                 console.log('[Appointments] Received slots for calendar:', data.data);
                 appointmentSlotsData = JSON.parse(data.data);
@@ -498,7 +513,7 @@ export default function Home() {
                 updateStreamingMessage(); // Batched update
               } else if (data.type === 'products') {
                 // Capture product data for special rendering in local variable
-                productsData = typeof data.data === 'string' ? JSON.parse(data.data) : data.data;
+                productsData = parseProductsEvent(data.data);
                 console.log('[Chat] Received products data:', productsData);
               } else if (data.type === 'appointment_slots') {
                 console.log('[Appointments] Received slots for calendar:', data.data);
