@@ -4,6 +4,7 @@ import { isTopscholarAccount } from './services/topscholar/config';
 import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
 import { withoutUsageTracking } from "./lib/requestContext";
 import { assistantAskedForNameIn, emailInMessage, isDecline, isValidLeadName, nameStatedInHistory } from './services/leadCapture/detectors';
+import { selectInstructionsForMessage } from './services/chatContext/customInstructions';
 
 // Using GPT-4o-mini for customer-facing chat to ensure reliable:
 // - Language matching (English/Hindi/Hinglish)
@@ -284,7 +285,8 @@ async function preFetchFaqs(
       userMessage,
       businessAccountId,
       3, // Top 3 most relevant (reduced from 5)
-      0.4 // 40% similarity threshold (lower = more results)
+      0.4, // 40% similarity threshold (lower = more results)
+      'website'
     );
     
     if (vectorResults.length === 0) {
@@ -350,7 +352,8 @@ async function keywordFallbackFaqSearch(
 ): Promise<{ faqs: any[]; searchQuery: string } | null> {
   try {
     const { storage } = await import('./storage');
-    const businessFaqs = await storage.getAllFaqs(businessAccountId);
+    const { appliesToChannel } = await import('@shared/knowledgeChannels');
+    const businessFaqs = (await storage.getAllFaqs(businessAccountId)).filter(f => appliesToChannel(f.channels, 'website'));
     
     if (!businessFaqs || businessFaqs.length === 0) {
       return null;
@@ -1956,57 +1959,17 @@ SCRIPT RULE (CRITICAL - check this before responding):
     // Build custom instructions with conditional filtering based on user message keywords
     let extractedCustomInstructions = '';
     if (rawCustomInstructions && rawCustomInstructions.trim()) {
-      // Note: We cannot cache because conditional instructions depend on user message
-      try {
-        const instructions = JSON.parse(rawCustomInstructions);
-        if (Array.isArray(instructions) && instructions.length > 0) {
-          const userMessageLower = userMessage.toLowerCase();
-          
-          // Map instructions with original indices, then filter, preserving original numbering
-          const indexedInstructions = instructions.map((instr: any, originalIndex: number) => ({
-            ...instr,
-            originalIndex: originalIndex + 1, // 1-based indexing for display
-          }));
-          
-          // Filter instructions: include "always" instructions and "conditional" only when keywords match
-          // IMPORTANT: "fallback" instructions are EXCLUDED here - they are only applied later when AI deflects
-          const applicableInstructions = indexedInstructions.filter((instr: any) => {
-            const instrType = instr.type || 'always'; // Default to 'always' for legacy instructions
-            
-            // EXCLUDE fallback instructions from initial prompt - they are applied separately after deflection detection
-            if (instrType === 'fallback') {
-              return false;
-            }
-            
-            if (instrType === 'always') {
-              return true; // Always include "always" type instructions
-            }
-            
-            if (instrType === 'conditional' && instr.keywords && Array.isArray(instr.keywords)) {
-              // Only include if any keyword is found in user message
-              const keywordMatch = instr.keywords.some((keyword: string) => 
-                userMessageLower.includes(keyword.toLowerCase())
-              );
-              if (keywordMatch) {
-                console.log(`[Conditional Instruction] Triggered by keyword match: ${instr.keywords.join(', ')}`);
-              }
-              return keywordMatch;
-            }
-            
-            return true; // Include by default if type is unknown (legacy support)
-          });
-          
-          if (applicableInstructions.length > 0) {
-            // Use original indices to preserve ordering/numbering
-            const formattedInstructions = applicableInstructions
-              .map((instr: any) => `${instr.originalIndex}. ${instr.text}`)
-              .join('\n');
-            extractedCustomInstructions = `Follow these instructions:\n${formattedInstructions}`;
-            console.log(`[Final Override] Applied ${applicableInstructions.length}/${instructions.length} custom instructions (filtered by type/keywords)`);
-          }
+      // Note: We cannot cache because conditional instructions depend on user message.
+      // Shared parser (services/chatContext/customInstructions.ts); website-tagged or untagged only.
+      const selection = selectInstructionsForMessage(rawCustomInstructions, userMessage, 'website');
+      for (const instr of selection.matchedConditional) {
+        console.log(`[Conditional Instruction] Triggered by keyword match: ${(instr.keywords || []).join(', ')}`);
+      }
+      if (selection.text) {
+        extractedCustomInstructions = selection.text;
+        if (selection.total > 0) {
+          console.log(`[Final Override] Applied ${selection.applied}/${selection.total} custom instructions (filtered by type/keywords)`);
         }
-      } catch (e) {
-        extractedCustomInstructions = `Follow these instructions:\n${rawCustomInstructions}`;
       }
     } else {
       // Fallback: try to extract from systemContext (legacy behavior)
@@ -2625,7 +2588,7 @@ REMEMBER:
     return instructions[responseLength] || instructions.balanced;
   }
 
-  private getPersonalityTraits(personality: string): string {
+  getPersonalityTraits(personality: string): string {
     const traits: Record<string, string> = {
       friendly: `- Warm and approachable, like talking to a helpful friend
 - Casual yet professional

@@ -2,6 +2,8 @@ import { db } from '../db';
 import { faqs, businessAccounts } from '../../shared/schema';
 import { embeddingService } from './embeddingService';
 import { eq, sql, and, isNull, isNotNull } from 'drizzle-orm';
+import { channelCondition } from './chatContext/channelSql';
+import type { KnowledgeChannel } from '../../shared/knowledgeChannels';
 
 export interface FAQSearchResult {
   id: string;
@@ -73,7 +75,9 @@ class FAQEmbeddingService {
     query: string,
     businessAccountId: string,
     topK: number = 3,
-    similarityThreshold: number = 0.5
+    similarityThreshold: number = 0.5,
+    /** Only FAQs used on this channel (untagged FAQs are used everywhere). Omitted = no filter. */
+    channel?: KnowledgeChannel | null
   ): Promise<FAQSearchResult[]> {
     try {
       if (!query || query.trim().length === 0) {
@@ -94,7 +98,8 @@ class FAQEmbeddingService {
         .where(
           and(
             eq(faqs.businessAccountId, businessAccountId),
-            sql`${faqs.embedding} IS NOT NULL`
+            sql`${faqs.embedding} IS NOT NULL`,
+            channelCondition(faqs.channels, channel)
           )
         )
         .orderBy(sql`${faqs.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`)

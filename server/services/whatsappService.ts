@@ -171,7 +171,11 @@ For example:
 - "Customer name Ravi, ph 9876543210" should extract name and phone
 - Names like "Mr. Sharma" or "Priya ji" should be cleaned to just the name`;
 
-    const prompt = customPrompt || defaultPrompt;
+    // Always the extraction prompt above. whatsapp_settings.customPrompt is the AI reply persona
+    // ("WhatsApp-only instructions"), not an extraction prompt: using it as this JSON-mode system
+    // prompt made a saved persona break lead extraction. `customPrompt` is ignored on purpose.
+    void customPrompt;
+    const prompt = defaultPrompt;
 
     try {
       const response = await openaiClient.chat.completions.create({
@@ -381,7 +385,6 @@ For example:
     flowSessionId?: string
   ): Promise<WhatsappLead | null> {
     const settings = await this.getSettings(businessAccountId);
-    const customPrompt = settings?.customPrompt || undefined;
     const isFlowOnlyMode = settings?.leadGenerationMode === 'flow_only';
 
     // Check if lead capture is enabled
@@ -434,7 +437,7 @@ For example:
     };
     const extracted = flowSessionId
       ? emptyExtracted
-      : await this.extractLeadInfo(messageText, businessAccountId, customPrompt);
+      : await this.extractLeadInfo(messageText, businessAccountId);
 
     // Determine if this message qualifies as a lead
     // Flow messages always qualify (the flow session itself tracks the lead)

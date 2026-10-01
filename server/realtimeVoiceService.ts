@@ -1,6 +1,8 @@
 import WebSocket from 'ws';
 import OpenAI from 'openai';
 import { storage } from './storage';
+import { appliesToChannel } from '@shared/knowledgeChannels';
+import { filterCustomInstructionsForChannel } from './services/chatContext/customInstructions';
 import { conversationMemory } from './conversationMemory';
 import { aiTools } from './aiTools';
 import { ToolExecutionService } from './services/toolExecutionService';
@@ -673,7 +675,8 @@ export class RealtimeVoiceService {
         companyDescription: businessAccount.description || '',
         currency: settings?.currency || 'USD',
         currencySymbol: settings?.currency === 'USD' ? '$' : '€',
-        customInstructions: settings?.customInstructions || undefined,
+        // Voice is part of the website widget: website-tagged or untagged instructions only.
+        customInstructions: filterCustomInstructionsForChannel(settings?.customInstructions, 'website') || undefined,
         systemMode: (settings as any)?.systemMode || 'full',
         k12EducationEnabled: (businessAccount as any).k12EducationEnabled === 'true',
         k12ContentOnly: (businessAccount as any).k12ContentOnlyMode === 'true',
@@ -1975,7 +1978,7 @@ export class RealtimeVoiceService {
 
     // Load FAQs
     try {
-      const faqs = await storage.getAllFaqs(businessAccountId);
+      const faqs = (await storage.getAllFaqs(businessAccountId)).filter(f => appliesToChannel(f.channels, 'website'));
       if (faqs.length > 0) {
         context += `KNOWLEDGE BASE (FAQs):\nYou have complete knowledge of the following frequently asked questions. Answer these questions directly from your knowledge without mentioning FAQs:\n\n`;
         faqs.forEach((faq, index) => {
@@ -2099,7 +2102,7 @@ export class RealtimeVoiceService {
 
     // Load analyzed pages (limit to avoid token overflow)
     try {
-      const analyzedPages = await storage.getAnalyzedPages(businessAccountId);
+      const analyzedPages = (await storage.getAnalyzedPages(businessAccountId)).filter(p => appliesToChannel(p.channels, 'website'));
       if (analyzedPages && analyzedPages.length > 0) {
         const validPages = analyzedPages.filter(page => 
           page.extractedContent && 
@@ -2135,7 +2138,7 @@ export class RealtimeVoiceService {
 
     // Load training documents
     try {
-      const trainingDocs = await storage.getTrainingDocuments(businessAccountId);
+      const trainingDocs = (await storage.getTrainingDocuments(businessAccountId)).filter(d => appliesToChannel(d.channels, 'website'));
       const completedDocs = trainingDocs.filter(doc => doc.uploadStatus === 'completed');
       if (completedDocs.length > 0) {
         context += `TRAINING DOCUMENTS KNOWLEDGE:\n`;

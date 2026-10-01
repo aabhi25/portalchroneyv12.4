@@ -71,6 +71,13 @@
       "when": 1790871441194,
       "tag": "0009_whatsapp_handoff",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790874775758,
+      "tag": "0010_training_channels",
+      "breakpoints": true
     }
   ]
 }

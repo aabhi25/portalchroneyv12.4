@@ -148,6 +148,8 @@ interface Instruction {
   text: string;
   type: 'always' | 'conditional' | 'fallback';
   keywords?: string[];
+  /** Channel tag set on Train Chroney (no picker here). Kept as-is via the object spreads below. */
+  channels?: string[] | null;
 }
 
 interface GroupLeadsquaredFieldMapping {

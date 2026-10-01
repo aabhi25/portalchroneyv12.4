@@ -7,6 +7,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
+import { ChannelPicker, ChannelBadge, ChannelFilterSelect, matchesChannelFilter, type ChannelFilterValue } from "@/components/ChannelPicker";
+import { type KnowledgeChannel } from "@shared/knowledgeChannels";
 import { useToast } from "@/hooks/use-toast";
 import { 
   Loader2, 
@@ -99,6 +101,7 @@ interface AnalyzedPage {
   businessAccountId: string;
   pageUrl: string;
   extractedContent?: string | null;
+  channels?: string[] | null;
   analyzedAt: string;
   createdAt: string;
 }
@@ -129,6 +132,7 @@ export default function About() {
   const [pageToDelete, setPageToDelete] = useState<string | null>(null);
   const [selectedPageContent, setSelectedPageContent] = useState<{url: string; content: string | null} | null>(null);
   const previousStatusRef = useRef<string | null>(null);
+  const [pageChannelFilter, setPageChannelFilter] = useState<ChannelFilterValue>("all");
 
   const { data: accountInfo } = useQuery<BusinessAccountInfo>({
     queryKey: ["/api/about"],
@@ -312,6 +316,38 @@ export default function About() {
     },
     onError: (error) => {
       setShowResetDialog(false);
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const pageChannelsMutation = useMutation({
+    mutationFn: async ({ id, channels }: { id: string; channels: KnowledgeChannel[] | null }) => {
+      const response = await fetch(`/api/analyzed-pages/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ channels }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || "Failed to update channels");
+      }
+
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/analyzed-pages"] });
+      toast({
+        title: "Channels Updated",
+        description: "The page's channels were saved.",
+      });
+    },
+    onError: (error) => {
       toast({
         title: "Error",
         description: error.message,
@@ -729,13 +765,20 @@ export default function About() {
           <TabsContent value="pages" className="mt-6">
             <Card className="shadow-md border-gray-200/60 bg-white/80 backdrop-blur-sm">
               <CardHeader className="border-b bg-gradient-to-r from-purple-50/50 to-blue-50/50">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-purple-600" />
-                  Analyzed Pages Timeline
-                </CardTitle>
-                <CardDescription>
-                  View all pages that have been analyzed and their extracted content
-                </CardDescription>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <FileText className="w-5 h-5 text-purple-600" />
+                      Analyzed Pages Timeline
+                    </CardTitle>
+                    <CardDescription>
+                      View all pages that have been analyzed and their extracted content
+                    </CardDescription>
+                  </div>
+                  {analyzedPagesData && analyzedPagesData.length > 0 && (
+                    <ChannelFilterSelect value={pageChannelFilter} onChange={setPageChannelFilter} />
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="pt-6">
                 {!analyzedPagesData || analyzedPagesData.length === 0 ? (
@@ -744,10 +787,17 @@ export default function About() {
                     <h3 className="text-lg font-semibold text-gray-900 mb-2">No Analyzed Pages Yet</h3>
                     <p className="text-gray-600">Start by analyzing your website to see the results here</p>
                   </div>
+                ) : !analyzedPagesData.some(p => matchesChannelFilter(p.channels, pageChannelFilter)) ? (
+                  <div className="text-center py-12">
+                    <p className="text-gray-600 mb-4">No pages are used on this channel</p>
+                    <Button variant="outline" size="sm" onClick={() => setPageChannelFilter("all")}>
+                      Show all channels
+                    </Button>
+                  </div>
                 ) : (
                   <div className="space-y-3">
                     <Accordion type="single" collapsible className="space-y-2">
-                      {analyzedPagesData.map((page, index) => {
+                      {analyzedPagesData.filter(p => matchesChannelFilter(p.channels, pageChannelFilter)).map((page, index) => {
                         const url = new URL(page.pageUrl);
                         const pathParts = url.pathname.split('/').filter(Boolean);
                         const pageName = pathParts[pathParts.length - 1] || 'Homepage';
@@ -771,6 +821,7 @@ export default function About() {
                                   <p className="text-xs text-gray-500 mt-0.5">{page.pageUrl}</p>
                                 </div>
                                 <div className="flex items-center gap-2">
+                                  <ChannelBadge channels={page.channels} />
                                   <Badge variant="outline" className="text-xs">
                                     {new Date(page.analyzedAt).toLocaleDateString()}
                                   </Badge>
@@ -782,7 +833,13 @@ export default function About() {
                                 <p className="text-xs text-gray-500">
                                   Analyzed: {new Date(page.analyzedAt).toLocaleString()}
                                 </p>
-                                <div className="flex gap-2">
+                                <div className="flex items-center gap-2">
+                                  <ChannelPicker
+                                    compact
+                                    value={page.channels ?? null}
+                                    disabled={pageChannelsMutation.isPending}
+                                    onChange={(channels) => pageChannelsMutation.mutate({ id: page.id, channels })}
+                                  />
                                   <Button
                                     onClick={() => setSelectedPageContent({ url: page.pageUrl, content: page.extractedContent || null })}
                                     variant="outline"

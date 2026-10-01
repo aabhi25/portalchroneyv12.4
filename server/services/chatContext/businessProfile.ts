@@ -6,6 +6,7 @@
  * Pure functions — no DB or network — so they are easy to test and benchmark.
  */
 import { estimateTokens, truncateToTokens } from './tokens';
+import { appliesToChannel, type KnowledgeChannel } from '../../../shared/knowledgeChannels';
 
 export interface WebsiteFacts {
   businessName?: string;
@@ -21,13 +22,14 @@ export interface WebsiteFacts {
   additionalInfo?: string;
 }
 
-export interface ProfilePage { pageUrl: string; extractedContent: string | null }
+export interface ProfilePage { pageUrl: string; extractedContent: string | null; channels?: string[] | null }
 export interface ProfileDoc {
   id?: string;
   originalFilename: string;
   summary: string | null;
   keyPoints: string | null;
   uploadStatus: string;
+  channels?: string[] | null;
 }
 
 export interface ProfileSource {
@@ -42,6 +44,8 @@ export interface KnowledgePassage {
   source: 'page' | 'doc_summary';
   title: string;
   text: string;
+  /** Channel tags of the page / document it came from (NULL = every channel). */
+  channels?: string[] | null;
 }
 
 export interface BusinessProfile {
@@ -138,7 +142,7 @@ export function buildKnowledgePassages(src: ProfileSource): KnowledgePassage[] {
   for (const page of usablePages(src.pages)) {
     const title = pageTitleFromUrl(page.pageUrl);
     splitIntoPassages(page.extractedContent || '').forEach((text, i) => {
-      passages.push({ id: `page:${page.pageUrl}#${i}`, source: 'page', title, text });
+      passages.push({ id: `page:${page.pageUrl}#${i}`, source: 'page', title, text, channels: page.channels ?? null });
     });
   }
   for (const doc of completedDocs(src.docs)) {
@@ -146,7 +150,7 @@ export function buildKnowledgePassages(src: ProfileSource): KnowledgePassage[] {
     const body = [doc.summary ? `Summary: ${doc.summary}` : '', kp.length ? `Key points:\n${kp.map(k => `- ${k}`).join('\n')}` : '']
       .filter(Boolean).join('\n');
     splitIntoPassages(body).forEach((text, i) => {
-      passages.push({ id: `doc:${doc.id || doc.originalFilename}#${i}`, source: 'doc_summary', title: doc.originalFilename, text });
+      passages.push({ id: `doc:${doc.id || doc.originalFilename}#${i}`, source: 'doc_summary', title: doc.originalFilename, text, channels: doc.channels ?? null });
     });
   }
   return passages;
@@ -157,9 +161,14 @@ export function buildKnowledgePassages(src: ProfileSource): KnowledgePassage[] {
  * the whole block stays within `budgetTokens`.
  */
 export function buildBusinessProfile(
-  src: ProfileSource,
-  opts: { budgetTokens?: number; inlineCorpusTokens?: number } = {},
+  srcIn: ProfileSource,
+  opts: { budgetTokens?: number; inlineCorpusTokens?: number; channel?: KnowledgeChannel | null } = {},
 ): BusinessProfile {
+  // Channel tags: pages / documents limited to other channels are not part of this profile at all
+  // (not inlined, not listed, not retrievable). No channel = everything, as before.
+  const src: ProfileSource = opts.channel
+    ? { ...srcIn, pages: srcIn.pages.filter(p => appliesToChannel(p.channels, opts.channel)), docs: srcIn.docs.filter(d => appliesToChannel(d.channels, opts.channel)) }
+    : srcIn;
   const budget = opts.budgetTokens ?? PROFILE_BUDGET_TOKENS;
   const inlineLimit = opts.inlineCorpusTokens ?? INLINE_CORPUS_TOKENS;
   const w = src.website || null;

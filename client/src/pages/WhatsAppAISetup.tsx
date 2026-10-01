@@ -7,6 +7,14 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, Loader2, Sparkles, Bot, Route, Layers,
@@ -16,16 +24,59 @@ import { AI_AGENT_TEMPLATES } from "@/lib/aiAgentTemplates";
 
 type AiResponseMode = "smart_ai" | "guided_flows" | "both" | null;
 type UseCaseMode = "lead_capture" | "direct_sales" | "customer_support";
+type InstructionsMode = "add" | "replace";
+type WaPersonality = "friendly" | "professional" | "funny" | "polite" | "casual";
+type WaResponseLength = "concise" | "balanced" | "detailed";
 
 interface AiSetupSettings {
   autoReplyEnabled: boolean;
   customPrompt: string | null;
+  /** The EFFECTIVE goal (explicit choice, or the default the server derives). */
   useCaseMode: UseCaseMode;
+  /** True when the business picked the goal itself. */
+  useCaseModeExplicit?: boolean;
   aiResponseMode: AiResponseMode;
   useFaqKnowledge: boolean;
   useDocumentKnowledge: boolean;
   useWebsiteKnowledge: boolean;
   useProductCatalogKnowledge: boolean;
+  /** null = same as the website widget. */
+  personality: WaPersonality | null;
+  /** null = same as the website widget. */
+  responseLength: WaResponseLength | null;
+  /** How the WhatsApp-only instructions combine with Train Chroney instructions. */
+  instructionsMode: InstructionsMode;
+  /** Kept in sync with instructionsMode by the server (add = true, replace = false). */
+  useMasterTraining: boolean;
+  useLeadTraining: boolean;
+}
+
+interface WebsiteAnswerStyle {
+  personality: string;
+  responseLength: string;
+}
+
+const PERSONALITY_OPTIONS: { value: WaPersonality; label: string }[] = [
+  { value: "friendly", label: "Friendly" },
+  { value: "professional", label: "Professional" },
+  { value: "funny", label: "Funny" },
+  { value: "polite", label: "Polite" },
+  { value: "casual", label: "Casual" },
+];
+
+const RESPONSE_LENGTH_OPTIONS: { value: WaResponseLength; label: string }[] = [
+  { value: "concise", label: "Concise" },
+  { value: "balanced", label: "Balanced" },
+  { value: "detailed", label: "Detailed" },
+];
+
+/** Select sentinel for "Same as website" (stored as null). */
+const INHERIT = "inherit";
+
+function optionLabel(options: { value: string; label: string }[], value: string | null | undefined): string | null {
+  if (!value) return null;
+  const hit = options.find((o) => o.value === value);
+  return hit ? hit.label : value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 const RESPONSE_MODES: { value: Exclude<AiResponseMode, null>; title: string; desc: string; icon: typeof Bot }[] = [
@@ -86,13 +137,18 @@ export default function WhatsAppAISetup() {
   const [useDocumentKnowledge, setUseDocumentKnowledge] = useState(true);
   const [useWebsiteKnowledge, setUseWebsiteKnowledge] = useState(true);
   const [useProductCatalogKnowledge, setUseProductCatalogKnowledge] = useState(true);
+  const [personality, setPersonality] = useState<WaPersonality | null>(null);
+  const [responseLength, setResponseLength] = useState<WaResponseLength | null>(null);
+  const [instructionsMode, setInstructionsMode] = useState<InstructionsMode>("add");
+  const [useMasterTraining, setUseMasterTraining] = useState(true);
+  const [useLeadTraining, setUseLeadTraining] = useState(true);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["/api/whatsapp/settings"],
     queryFn: async () => {
       const res = await fetch("/api/whatsapp/settings", { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch WhatsApp settings");
-      return res.json() as Promise<{ settings: AiSetupSettings }>;
+      return res.json() as Promise<{ settings: AiSetupSettings; websiteAnswerStyle?: WebsiteAnswerStyle }>;
     },
   });
 
@@ -107,7 +163,15 @@ export default function WhatsAppAISetup() {
     setUseDocumentKnowledge(s.useDocumentKnowledge ?? true);
     setUseWebsiteKnowledge(s.useWebsiteKnowledge ?? true);
     setUseProductCatalogKnowledge(s.useProductCatalogKnowledge ?? true);
+    setPersonality(s.personality ?? null);
+    setResponseLength(s.responseLength ?? null);
+    setInstructionsMode(s.instructionsMode === "replace" ? "replace" : "add");
+    setUseMasterTraining(s.useMasterTraining ?? true);
+    setUseLeadTraining(s.useLeadTraining ?? true);
   }, [data]);
+
+  const websitePersonalityLabel = optionLabel(PERSONALITY_OPTIONS, data?.websiteAnswerStyle?.personality);
+  const websiteResponseLengthLabel = optionLabel(RESPONSE_LENGTH_OPTIONS, data?.websiteAnswerStyle?.responseLength);
 
   const mutation = useMutation({
     mutationFn: async (payload: Partial<AiSetupSettings>) => {
@@ -134,8 +198,25 @@ export default function WhatsAppAISetup() {
   const saveField = (payload: Partial<AiSetupSettings>) => mutation.mutate(payload);
 
   const handleSavePersona = () => {
-    saveField({ customPrompt: customPrompt.trim() || null });
-    toast({ title: "AI personality saved" });
+    mutation.mutate(
+      { customPrompt: customPrompt.trim() || null },
+      { onSuccess: () => toast({ title: "WhatsApp instructions saved" }) },
+    );
+  };
+
+  // The server keeps instructionsMode and useMasterTraining in sync (add = on, replace = off);
+  // mirror that locally so the radio and the switch move together right away. The query is
+  // invalidated after every save, so both re-sync from the server's answer.
+  const handleInstructionsMode = (mode: InstructionsMode) => {
+    setInstructionsMode(mode);
+    setUseMasterTraining(mode === "add");
+    saveField({ instructionsMode: mode });
+  };
+
+  const handleUseMasterTraining = (on: boolean) => {
+    setUseMasterTraining(on);
+    setInstructionsMode(on ? "add" : "replace");
+    saveField({ useMasterTraining: on });
   };
 
   if (isLoading) {
@@ -246,15 +327,15 @@ export default function WhatsAppAISetup() {
         </CardContent>
       </Card>
 
-      {/* 3. AI Personality */}
+      {/* 3. WhatsApp-only instructions */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-purple-600" />
-            <CardTitle>AI Personality</CardTitle>
+            <CardTitle>WhatsApp-only instructions</CardTitle>
           </div>
           <CardDescription>
-            Describe the AI's tone, style, and sales approach. Pick a template to start, then edit it.
+            Extra instructions used only on WhatsApp. Pick a template to start, then edit it.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -280,7 +361,7 @@ export default function WhatsAppAISetup() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="customPrompt">Agent Instructions</Label>
+            <Label htmlFor="customPrompt">Instructions</Label>
             <Textarea
               id="customPrompt"
               placeholder="Describe your AI agent's personality, tone, sales approach, and behavior. Pick a template above to get started, then customize it for your business."
@@ -309,8 +390,136 @@ export default function WhatsAppAISetup() {
 
           <div className="flex justify-end pt-2 border-t">
             <Button onClick={handleSavePersona} disabled={mutation.isPending} data-testid="button-save-persona">
-              {mutation.isPending ? "Saving..." : "Save Personality"}
+              {mutation.isPending ? "Saving..." : "Save instructions"}
             </Button>
+          </div>
+
+          <div className="space-y-3 pt-2 border-t">
+            <Label className="text-sm">How should these work with your Train Chroney instructions?</Label>
+            <RadioGroup
+              value={instructionsMode}
+              onValueChange={(v) => handleInstructionsMode(v as InstructionsMode)}
+              className="gap-3"
+            >
+              <div className="flex items-start gap-3">
+                <RadioGroupItem
+                  value="add"
+                  id="instructions-mode-add"
+                  className="mt-0.5"
+                  data-testid="radio-instructions-mode-add"
+                />
+                <Label htmlFor="instructions-mode-add" className="font-normal cursor-pointer">
+                  <span className="block text-sm font-medium text-gray-900">Add to my main instructions</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Train Chroney instructions and these both apply
+                  </span>
+                </Label>
+              </div>
+              <div className="flex items-start gap-3">
+                <RadioGroupItem
+                  value="replace"
+                  id="instructions-mode-replace"
+                  className="mt-0.5"
+                  data-testid="radio-instructions-mode-replace"
+                />
+                <Label htmlFor="instructions-mode-replace" className="font-normal cursor-pointer">
+                  <span className="block text-sm font-medium text-gray-900">Use instead of my main instructions</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Train Chroney instructions are not used on WhatsApp
+                  </span>
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
+
+          <div className="space-y-1 pt-2 border-t">
+            <div className="flex items-center justify-between gap-4 py-2">
+              <div>
+                <div className="font-medium text-sm text-gray-900">Use Train Chroney instructions</div>
+                <div className="text-sm text-muted-foreground">
+                  Apply the instructions from Train Chroney to WhatsApp replies.
+                </div>
+              </div>
+              <Switch
+                checked={useMasterTraining}
+                onCheckedChange={handleUseMasterTraining}
+                data-testid="switch-use-master-training"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 py-2 border-t">
+              <div>
+                <div className="font-medium text-sm text-gray-900">Use Lead Training</div>
+                <div className="text-sm text-muted-foreground">
+                  Follow your Lead Training settings when collecting customer details.
+                </div>
+              </div>
+              <Switch
+                checked={useLeadTraining}
+                onCheckedChange={(v) => {
+                  setUseLeadTraining(v);
+                  saveField({ useLeadTraining: v });
+                }}
+                data-testid="switch-use-lead-training"
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 3b. Answer style */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Answer style on WhatsApp</CardTitle>
+          <CardDescription>
+            Keep the same style as your website chat, or pick a different one for WhatsApp.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label className="text-sm">Personality</Label>
+            <Select
+              value={personality ?? INHERIT}
+              onValueChange={(v) => {
+                const next = v === INHERIT ? null : (v as WaPersonality);
+                setPersonality(next);
+                saveField({ personality: next });
+              }}
+            >
+              <SelectTrigger data-testid="select-wa-personality">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={INHERIT}>
+                  {websitePersonalityLabel ? `Same as website (${websitePersonalityLabel})` : "Same as website"}
+                </SelectItem>
+                {PERSONALITY_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-sm">Response length</Label>
+            <Select
+              value={responseLength ?? INHERIT}
+              onValueChange={(v) => {
+                const next = v === INHERIT ? null : (v as WaResponseLength);
+                setResponseLength(next);
+                saveField({ responseLength: next });
+              }}
+            >
+              <SelectTrigger data-testid="select-wa-response-length">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={INHERIT}>
+                  {websiteResponseLengthLabel ? `Same as website (${websiteResponseLengthLabel})` : "Same as website"}
+                </SelectItem>
+                {RESPONSE_LENGTH_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>
@@ -353,6 +562,9 @@ export default function WhatsAppAISetup() {
               </button>
             );
           })}
+          <p className="text-xs text-muted-foreground">
+            Capture leads is meant for your own staff submitting customer leads.
+          </p>
         </CardContent>
       </Card>
 

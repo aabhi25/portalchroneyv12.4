@@ -423,6 +423,9 @@ export default function WhatsAppFlowSettings() {
               onCheckedChange={setUseLeadTraining}
             />
           </div>
+          <p className="text-xs text-muted-foreground">
+            These are also in WhatsApp → AI Setup → WhatsApp-only instructions.
+          </p>
 
           <div className="space-y-2">
             <Label htmlFor="cooldownDays">New Application Cooldown (Days)</Label>

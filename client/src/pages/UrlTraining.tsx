@@ -7,6 +7,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
+import { ChannelPicker, ChannelBadge, ChannelFilterSelect, matchesChannelFilter, type ChannelFilterValue } from "@/components/ChannelPicker";
+import { type KnowledgeChannel } from "@shared/knowledgeChannels";
+import { apiRequest } from "@/lib/queryClient";
 import {
   Link2,
   Plus,
@@ -64,6 +67,7 @@ interface TrainedUrl {
   crawledAt?: string | null;
   processedAt?: string | null;
   embeddedAt?: string | null;
+  channels?: string[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -77,6 +81,8 @@ export default function UrlTraining() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [urlToDelete, setUrlToDelete] = useState<string | null>(null);
   const [selectedUrl, setSelectedUrl] = useState<TrainedUrl | null>(null);
+  const [newUrlChannels, setNewUrlChannels] = useState<KnowledgeChannel[] | null>(null);
+  const [channelFilter, setChannelFilter] = useState<ChannelFilterValue>("all");
 
   const { data: trainedUrls = [], isLoading } = useQuery<TrainedUrl[]>({
     queryKey: ["/api/trained-urls"],
@@ -90,6 +96,8 @@ export default function UrlTraining() {
     },
   });
 
+  const visibleUrls = trainedUrls.filter(u => matchesChannelFilter(u.channels, channelFilter));
+
   const stats = {
     total: trainedUrls.length,
     completed: trainedUrls.filter(u => u.status === 'completed' && u.embeddingStatus === 'completed').length,
@@ -101,7 +109,7 @@ export default function UrlTraining() {
   };
 
   const addUrlMutation = useMutation({
-    mutationFn: async (data: { url: string; description?: string }) => {
+    mutationFn: async (data: { url: string; description?: string; channels?: KnowledgeChannel[] | null }) => {
       const response = await fetch("/api/trained-urls", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -120,6 +128,7 @@ export default function UrlTraining() {
       queryClient.invalidateQueries({ queryKey: ["/api/trained-urls"] });
       setUrl("");
       setDescription("");
+      setNewUrlChannels(null);
       setIsAddingUrl(false);
       toast({
         title: "URL Added",
@@ -162,6 +171,26 @@ export default function UrlTraining() {
       toast({
         title: "Error",
         description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const channelsMutation = useMutation({
+    mutationFn: async ({ id, channels }: { id: string; channels: KnowledgeChannel[] | null }) => {
+      return await apiRequest("PATCH", `/api/trained-urls/${id}`, { channels });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trained-urls"] });
+      toast({
+        title: "Channels Updated",
+        description: "The URL's channels were saved.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update channels",
         variant: "destructive",
       });
     },
@@ -218,7 +247,11 @@ export default function UrlTraining() {
       return;
     }
 
-    addUrlMutation.mutate({ url, description: description || undefined });
+    addUrlMutation.mutate({
+      url,
+      description: description || undefined,
+      ...(newUrlChannels ? { channels: newUrlChannels } : {}),
+    });
   };
 
   const getStatusBadge = (trainedUrl: TrainedUrl) => {
@@ -337,6 +370,11 @@ export default function UrlTraining() {
                 rows={2}
               />
             </div>
+            <ChannelPicker
+              value={newUrlChannels}
+              onChange={setNewUrlChannels}
+              disabled={addUrlMutation.isPending}
+            />
             <Button 
               onClick={handleAddUrl} 
               disabled={addUrlMutation.isPending || !url.trim()}
@@ -359,13 +397,20 @@ export default function UrlTraining() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Link2 className="w-5 h-5" />
-            Trained URLs ({trainedUrls.length})
-          </CardTitle>
-          <CardDescription>
-            URLs that have been crawled and processed for AI training
-          </CardDescription>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Link2 className="w-5 h-5" />
+                Trained URLs ({trainedUrls.length})
+              </CardTitle>
+              <CardDescription>
+                URLs that have been crawled and processed for AI training
+              </CardDescription>
+            </div>
+            {trainedUrls.length > 0 && (
+              <ChannelFilterSelect value={channelFilter} onChange={setChannelFilter} />
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -378,9 +423,16 @@ export default function UrlTraining() {
               <p>No URLs added yet</p>
               <p className="text-sm">Add a URL above to start training your AI</p>
             </div>
+          ) : visibleUrls.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <p className="mb-3">No URLs are used on this channel</p>
+              <Button variant="outline" size="sm" onClick={() => setChannelFilter("all")}>
+                Show all channels
+              </Button>
+            </div>
           ) : (
             <Accordion type="single" collapsible className="w-full">
-              {trainedUrls.map((trainedUrl) => (
+              {visibleUrls.map((trainedUrl) => (
                 <AccordionItem key={trainedUrl.id} value={trainedUrl.id}>
                   <AccordionTrigger className="hover:no-underline">
                     <div className="flex items-center gap-3 flex-1 text-left">
@@ -394,6 +446,7 @@ export default function UrlTraining() {
                         </p>
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
+                        <ChannelBadge channels={trainedUrl.channels} />
                         {getStatusBadge(trainedUrl)}
                         {trainedUrl.embeddedChunkCount && parseInt(trainedUrl.embeddedChunkCount) > 0 && (
                           <Badge variant="outline" className="text-xs">
@@ -459,6 +512,12 @@ export default function UrlTraining() {
                           Added {format(new Date(trainedUrl.createdAt), "MMM d, yyyy")}
                         </span>
                         <div className="flex-1" />
+                        <ChannelPicker
+                          compact
+                          value={trainedUrl.channels ?? null}
+                          disabled={channelsMutation.isPending}
+                          onChange={(channels) => channelsMutation.mutate({ id: trainedUrl.id, channels })}
+                        />
                         <Button
                           variant="ghost"
                           size="sm"

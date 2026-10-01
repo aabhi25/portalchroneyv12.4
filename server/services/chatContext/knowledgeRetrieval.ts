@@ -20,6 +20,8 @@ import type { RetrievalQuery } from './conversationWindow';
 import { jaccard, keywordPatterns, lexicalScore, queryTerms, tokenSet } from './lexical';
 import { cosine, getPassageVector, truncateNormalize } from './passageVectors';
 import { estimateTokens, truncateToTokens } from './tokens';
+import { channelCondition } from './channelSql';
+import { appliesToChannel, type KnowledgeChannel } from '../../../shared/knowledgeChannels';
 
 export type KnowledgeSource = 'faq' | 'document' | 'url' | 'page' | 'doc_summary';
 
@@ -69,6 +71,13 @@ export interface RetrieveInput {
   /** Returns the query embedding, or null when embeddings are unavailable. */
   embedQuery?: (text: string) => Promise<number[] | null>;
   options?: Partial<RetrievalOptions>;
+  /**
+   * Channel asking (website / whatsapp / instagram / facebook): items tagged for other channels
+   * are left out. Omitted = no channel filter.
+   */
+  channel?: KnowledgeChannel | null;
+  /** Sources to search (all on by default). WhatsApp passes its per-source knowledge toggles. */
+  sources?: Partial<Record<KnowledgeSource, boolean>>;
 }
 
 interface Candidate {
@@ -105,8 +114,9 @@ const likeAny = (column: SQL | any, patterns: string[]) =>
 const matchCount = (column: SQL | any, patterns: string[]) =>
   sql.join(patterns.map(p => sql`(CASE WHEN ${column} ILIKE ${p} THEN 1 ELSE 0 END)`), sql` + `);
 
-async function faqCandidates(accountId: string, vec: string | null, patterns: string[], k: number): Promise<Candidate[]> {
+async function faqCandidates(accountId: string, vec: string | null, patterns: string[], k: number, channel?: KnowledgeChannel | null): Promise<Candidate[]> {
   const out: Candidate[] = [];
+  const onChannel = channelCondition(faqs.channels, channel);
   const toCand = (r: { id: string; question: string; answer: string; distance: number | null }): Candidate => ({
     key: `faq:${r.id}`, source: 'faq', title: r.question, text: `Q: ${r.question}\nA: ${r.answer}`,
     vectorScore: r.distance == null ? null : 1 - Number(r.distance),
@@ -118,14 +128,14 @@ async function faqCandidates(accountId: string, vec: string | null, patterns: st
     vec
       ? withVectorScan(q => q.select({ id: faqs.id, question: faqs.question, answer: faqs.answer, distance: sql<number>`${faqs.embedding} <=> ${vec}::vector` })
           .from(faqs)
-          .where(and(eq(faqs.businessAccountId, accountId), isNotNull(faqs.embedding)))
+          .where(and(eq(faqs.businessAccountId, accountId), isNotNull(faqs.embedding), onChannel))
           .orderBy(sql`${faqs.embedding} <=> ${vec}::vector`)
           .limit(k))
       : Promise.resolve([]),
     patterns.length
       ? db.select({ id: faqs.id, question: faqs.question, answer: faqs.answer, distance })
           .from(faqs)
-          .where(and(eq(faqs.businessAccountId, accountId), sql`(${likeAny(faqs.question, patterns)} OR ${likeAny(faqs.answer, patterns)})`))
+          .where(and(eq(faqs.businessAccountId, accountId), sql`(${likeAny(faqs.question, patterns)} OR ${likeAny(faqs.answer, patterns)})`, onChannel))
           .orderBy(sql`(${matchCount(faqs.question, patterns)}) DESC`)
           .limit(k)
       : Promise.resolve([]),
@@ -134,11 +144,11 @@ async function faqCandidates(accountId: string, vec: string | null, patterns: st
   return out;
 }
 
-async function documentCandidates(accountId: string, vec: string | null, patterns: string[], k: number): Promise<Candidate[]> {
+async function documentCandidates(accountId: string, vec: string | null, patterns: string[], k: number, channel?: KnowledgeChannel | null): Promise<Candidate[]> {
   const cols = {
     id: documentChunks.id, text: documentChunks.chunkText, title: trainingDocuments.originalFilename,
   };
-  const base = and(eq(documentChunks.businessAccountId, accountId), eq(trainingDocuments.uploadStatus, 'completed'));
+  const base = and(eq(documentChunks.businessAccountId, accountId), eq(trainingDocuments.uploadStatus, 'completed'), channelCondition(trainingDocuments.channels, channel));
   const distance = vec
     ? sql<number | null>`CASE WHEN ${documentChunks.embedding} IS NULL THEN NULL ELSE ${documentChunks.embedding} <=> ${vec}::vector END`
     : sql<number | null>`NULL`;
@@ -166,7 +176,7 @@ async function documentCandidates(accountId: string, vec: string | null, pattern
   }));
 }
 
-async function urlCandidates(accountId: string, vec: string | null, patterns: string[], k: number): Promise<Candidate[]> {
+async function urlCandidates(accountId: string, vec: string | null, patterns: string[], k: number, channel?: KnowledgeChannel | null): Promise<Candidate[]> {
   const cols = {
     id: urlContentChunks.id, text: urlContentChunks.chunkText, title: trainedUrls.title, url: trainedUrls.url,
   };
@@ -174,6 +184,7 @@ async function urlCandidates(accountId: string, vec: string | null, patterns: st
     eq(urlContentChunks.businessAccountId, accountId),
     eq(trainedUrls.status, 'completed'),
     eq(trainedUrls.embeddingStatus, 'completed'),
+    channelCondition(trainedUrls.channels, channel),
   );
   const distance = vec
     ? sql<number | null>`CASE WHEN ${urlContentChunks.embedding} IS NULL THEN NULL ELSE ${urlContentChunks.embedding} <=> ${vec}::vector END`
@@ -363,22 +374,27 @@ export async function retrieveKnowledge(input: RetrieveInput): Promise<Retrieval
   const settle = async (p: Promise<Candidate[]>, label: string): Promise<Candidate[]> => {
     try { return await p; } catch (err) { console.error(`[ChatContext] ${label} retrieval failed:`, (err as Error)?.message); return []; }
   };
+  const channel = input.channel || null;
+  const use = (source: KnowledgeSource) => input.sources?.[source] !== false;
+  const none = Promise.resolve([] as Candidate[]);
   const lookups: Array<Promise<Candidate[]>> = [
-    settle(faqCandidates(businessAccountId, vec, patterns, k), 'FAQ'),
-    settle(documentCandidates(businessAccountId, vec, patterns, k), 'Document'),
-    settle(urlCandidates(businessAccountId, vec, patterns, k), 'URL'),
+    use('faq') ? settle(faqCandidates(businessAccountId, vec, patterns, k, channel), 'FAQ') : none,
+    use('document') ? settle(documentCandidates(businessAccountId, vec, patterns, k, channel), 'Document') : none,
+    use('url') ? settle(urlCandidates(businessAccountId, vec, patterns, k, channel), 'URL') : none,
   ];
   if (vecPrimary) {
     lookups.push(
-      settle(faqCandidates(businessAccountId, vecPrimary, [], k), 'FAQ'),
-      settle(documentCandidates(businessAccountId, vecPrimary, [], k), 'Document'),
-      settle(urlCandidates(businessAccountId, vecPrimary, [], k), 'URL'),
+      use('faq') ? settle(faqCandidates(businessAccountId, vecPrimary, [], k, channel), 'FAQ') : none,
+      use('document') ? settle(documentCandidates(businessAccountId, vecPrimary, [], k, channel), 'Document') : none,
+      use('url') ? settle(urlCandidates(businessAccountId, vecPrimary, [], k, channel), 'URL') : none,
     );
   }
   const dbCandidates = ([] as Candidate[]).concat(...(await Promise.all(lookups)));
+  // Passages come from the caller's (per-channel) profile; filter again defensively.
+  const passages = (input.passages || []).filter(p => use(p.source) && appliesToChannel(p.channels, channel));
   const passC = [
-    ...passageCandidates(businessAccountId, input.passages || [], terms, embedding ? truncateNormalize(embedding) : null, k),
-    ...(primaryEmbedding ? passageCandidates(businessAccountId, input.passages || [], terms, truncateNormalize(primaryEmbedding), k) : []),
+    ...passageCandidates(businessAccountId, passages, terms, embedding ? truncateNormalize(embedding) : null, k),
+    ...(primaryEmbedding ? passageCandidates(businessAccountId, passages, terms, truncateNormalize(primaryEmbedding), k) : []),
   ];
 
   const all = [...dbCandidates, ...passC];

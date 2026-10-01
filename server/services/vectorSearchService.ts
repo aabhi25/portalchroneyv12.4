@@ -2,6 +2,8 @@ import { db } from '../db';
 import { documentChunks, trainingDocuments, urlContentChunks, trainedUrls } from '../../shared/schema';
 import { embeddingService } from './embeddingService';
 import { eq, sql, and } from 'drizzle-orm';
+import { channelCondition } from './chatContext/channelSql';
+import type { KnowledgeChannel } from '../../shared/knowledgeChannels';
 
 export interface SearchResult {
   chunkId: string;
@@ -150,7 +152,9 @@ export class VectorSearchService {
     query: string,
     businessAccountId: string,
     topK: number = 5,
-    similarityThreshold: number = 0.7
+    similarityThreshold: number = 0.7,
+    /** Only documents / trained URLs used on this channel (untagged = every channel). Omitted = no filter. */
+    channel?: KnowledgeChannel | null
   ): Promise<SearchResult[]> {
     try {
       // Validate query
@@ -160,7 +164,7 @@ export class VectorSearchService {
       }
 
       // Check result cache first
-      const resultCacheKey = this.getResultCacheKey(query, businessAccountId, topK, similarityThreshold);
+      const resultCacheKey = this.getResultCacheKey(query, businessAccountId, topK, similarityThreshold) + (channel ? `:${channel}` : '');
       const cachedResults = this.getCachedResults(resultCacheKey);
       if (cachedResults) {
         console.log('[VectorSearch] Result cache HIT - returning cached results');
@@ -190,7 +194,8 @@ export class VectorSearchService {
           .where(
             and(
               eq(documentChunks.businessAccountId, businessAccountId),
-              eq(trainingDocuments.uploadStatus, 'completed')
+              eq(trainingDocuments.uploadStatus, 'completed'),
+              channelCondition(trainingDocuments.channels, channel)
             )
           )
           .orderBy(sql`${documentChunks.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`)
@@ -216,7 +221,8 @@ export class VectorSearchService {
             and(
               eq(urlContentChunks.businessAccountId, businessAccountId),
               eq(trainedUrls.status, 'completed'),
-              eq(trainedUrls.embeddingStatus, 'completed')
+              eq(trainedUrls.embeddingStatus, 'completed'),
+              channelCondition(trainedUrls.channels, channel)
             )
           )
           .orderBy(sql`${urlContentChunks.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`)
@@ -259,7 +265,7 @@ export class VectorSearchService {
       // If no results from vector search, try keyword fallback for person names and proper nouns
       if (searchResults.length === 0) {
         console.log('[VectorSearch] No vector results - trying keyword fallback');
-        const keywordResults = await this.keywordFallbackSearch(query, businessAccountId, topK);
+        const keywordResults = await this.keywordFallbackSearch(query, businessAccountId, topK, channel);
         if (keywordResults.length > 0) {
           console.log(`[VectorSearch] Keyword fallback found ${keywordResults.length} chunks`);
           // Cache keyword fallback results too
@@ -287,7 +293,8 @@ export class VectorSearchService {
   private async keywordFallbackSearch(
     query: string,
     businessAccountId: string,
-    topK: number = 5
+    topK: number = 5,
+    channel?: KnowledgeChannel | null
   ): Promise<SearchResult[]> {
     try {
       // Extract potential keywords from query (remove common words)
@@ -323,6 +330,7 @@ export class VectorSearchService {
             and(
               eq(documentChunks.businessAccountId, businessAccountId),
               eq(trainingDocuments.uploadStatus, 'completed'),
+              channelCondition(trainingDocuments.channels, channel),
               sql`LOWER(${documentChunks.chunkText}) LIKE ANY(ARRAY[${sql.join(
                 keywords.map(kw => sql`${'%' + kw + '%'}`),
                 sql`, `
@@ -351,6 +359,7 @@ export class VectorSearchService {
               eq(urlContentChunks.businessAccountId, businessAccountId),
               eq(trainedUrls.status, 'completed'),
               eq(trainedUrls.embeddingStatus, 'completed'),
+              channelCondition(trainedUrls.channels, channel),
               sql`LOWER(${urlContentChunks.chunkText}) LIKE ANY(ARRAY[${sql.join(
                 keywords.map(kw => sql`${'%' + kw + '%'}`),
                 sql`, `
