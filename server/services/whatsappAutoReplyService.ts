@@ -5,17 +5,25 @@ import { db } from "../db";
 import { 
   whatsappSettings, 
   whatsappLeads,
+  whatsappFlows,
+  whatsappFlowSessions,
   businessAccounts,
   widgetSettings,
   type WhatsappSettings,
   type InsertWhatsappLead
 } from "@shared/schema";
-import { eq, and, desc, gte } from "drizzle-orm";
+import { eq, and, desc, asc, gte, ne } from "drizzle-orm";
 import { llamaService, LlamaService } from "../llamaService";
 import { vectorSearchService } from "./vectorSearchService";
 import { faqEmbeddingService } from "./faqEmbeddingService";
 import { businessContextCache, BusinessContextCache } from "./businessContextCache";
-import { buildLeadTrainingPrompt } from "./leadTrainingPrompt";
+import { socialLeadContact } from "./socialLeadFields";
+import { refreshLeadQualificationLater } from "./leadQualificationService";
+import { isValidEmail } from "@shared/leadQualification";
+import {
+  normalizeChannelLeadFields, analyzeLeadConversation, resolveNextLeadAsk, buildChannelLeadPrompt, describeLeadDecision,
+  currentConversation, ensureCurrentMessage, CONVERSATION_FETCH_LIMIT, type ChatTurn, type KnownContact,
+} from "./leadCapture/channelLeadFields";
 import { storage } from "../storage";
 import { resolveProfile } from "./customerProfileService";
 import { composeCrossPlatformContext, triggerSnapshotUpdate } from "./crossPlatformMemoryService";
@@ -28,6 +36,33 @@ interface ConversationMessage {
   content: string;
   timestamp: Date;
 }
+
+/**
+ * Smart Lead Training for one WhatsApp reply (see buildLeadPlan): the lead-capture instruction
+ * and, when leads may be saved, the capture_lead tool that writes name / email onto the lead.
+ */
+interface WhatsappLeadPlan {
+  prompt: string;
+  captureLead: ((args: { name?: unknown; email?: unknown }) => Promise<{ saved: boolean; message: string }>) | null;
+  /** The instruction recomputed after capture_lead saved something (so the saved detail isn't asked again). */
+  refreshPrompt: () => Promise<string>;
+}
+
+const CAPTURE_LEAD_TOOL_NAME = "capture_lead";
+const CAPTURE_LEAD_TOOL = {
+  type: "function",
+  function: {
+    name: CAPTURE_LEAD_TOOL_NAME,
+    description: "Save the customer's name and/or email address on their WhatsApp lead as soon as they share it (partial details are fine). Never use it for phone numbers — the WhatsApp number is already known.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "The customer's name exactly as they gave it" },
+        email: { type: "string", description: "The customer's email address" },
+      },
+    },
+  },
+};
 
 export class WhatsappAutoReplyService {
   private senderLocks: Map<string, Promise<any>> = new Map();
@@ -195,11 +230,13 @@ export class WhatsappAutoReplyService {
       }
 
       let flowContext = "";
+      let recentFlowData: Record<string, any> | null = null;
       try {
         const { whatsappFlowService } = await import("./whatsappFlowService");
         const recentSession = await whatsappFlowService.getMostRecentSession(businessAccountId, senderPhone);
         if (recentSession?.collectedData && typeof recentSession.collectedData === 'object' && !Array.isArray(recentSession.collectedData)) {
           const data = recentSession.collectedData as Record<string, any>;
+          recentFlowData = data; // flow answers count as "already collected" for lead training
 
           // Denylist of sensitive PII that should NEVER be sent to the LLM
           const SENSITIVE_KEY_PATTERNS = [
@@ -274,6 +311,15 @@ export class WhatsappAutoReplyService {
         console.log(`[WhatsApp Auto-Reply] Lead training disabled — skipping lead training config`);
       }
 
+      let leadPlan: WhatsappLeadPlan | null = null;
+      if (effectiveLeadTraining) {
+        try {
+          leadPlan = await this.buildLeadPlan(businessAccountId, senderPhone, userMessage, effectiveLeadTraining, settings, recentFlowData);
+        } catch (err) {
+          console.error("[WhatsApp Auto-Reply] Lead timing error (non-fatal):", err instanceof Error ? err.message : err);
+        }
+      }
+
       t = Date.now();
       const personaPrompt = settings.customPrompt || undefined;
       const useCaseMode = (settings as any).useCaseMode || "lead_capture";
@@ -285,7 +331,7 @@ export class WhatsappAutoReplyService {
         combinedInstructions || undefined,
         businessAccount.name || "the business",
         businessAccount.description || undefined,
-        effectiveLeadTraining,
+        leadPlan,
         detectedLang,
         crossPlatformContext || undefined,
         businessAccountId,
@@ -506,6 +552,146 @@ export class WhatsappAutoReplyService {
       }));
   }
 
+  /**
+   * Smart Lead Training on WhatsApp (same timing rules as Instagram / Facebook DMs, see
+   * leadCapture/channelLeadFields): one detail at a time, never the phone (WhatsApp already has
+   * it), nothing at all while a guided flow / journey session is active (the flow collects the
+   * data then). Counts and "already asked" come from the stored messages, "already have" from the
+   * WhatsApp lead, the latest flow answers and the chat. Returns null when there is nothing to do.
+   */
+  private async buildLeadPlan(
+    businessAccountId: string,
+    senderPhone: string,
+    userMessage: string,
+    leadTrainingConfig: unknown,
+    settings: WhatsappSettings,
+    recentFlowData: Record<string, any> | null,
+  ): Promise<WhatsappLeadPlan | null> {
+    const fields = normalizeChannelLeadFields(leadTrainingConfig, { excludeKinds: ["phone"] });
+    if (fields.length === 0) return null;
+    if ((settings as any).aiResponseMode !== "smart_ai" && await this.hasActiveFlowSession(businessAccountId, senderPhone)) {
+      console.log(`[WhatsApp Auto-Reply] Guided flow in progress — no lead-capture asks on top of it`);
+      return null;
+    }
+    // Leads are saved only when lead capture is on and not limited to flows.
+    const canSave = settings.leadCaptureEnabled !== "false" && settings.leadGenerationMode !== "flow_only";
+    const captureTool = canSave ? CAPTURE_LEAD_TOOL_NAME : null;
+    const conversation = await this.loadLeadConversation(businessAccountId, senderPhone, userMessage);
+    const compute = async (log: boolean) => {
+      const state = analyzeLeadConversation(fields, conversation, await this.savedContact(businessAccountId, senderPhone, recentFlowData));
+      const decision = resolveNextLeadAsk(fields, state);
+      if (log) console.log(`[WhatsApp Auto-Reply] Lead timing: ${describeLeadDecision(decision, state)}${captureTool ? " (capture tool on)" : ""}`);
+      return buildChannelLeadPrompt(decision, state, fields, { channel: "whatsapp", captureTool });
+    };
+    return {
+      prompt: await compute(true),
+      captureLead: canSave ? (args) => this.saveCapturedContact(businessAccountId, senderPhone, args) : null,
+      refreshPrompt: () => compute(false),
+    };
+  }
+
+  /** A guided flow session is running for this customer (status active, not past its expiry, flow still on). */
+  private async hasActiveFlowSession(businessAccountId: string, senderPhone: string): Promise<boolean> {
+    const [session] = await db
+      .select({ expiresAt: whatsappFlowSessions.expiresAt })
+      .from(whatsappFlowSessions)
+      .innerJoin(whatsappFlows, eq(whatsappFlows.id, whatsappFlowSessions.flowId))
+      .where(and(
+        eq(whatsappFlowSessions.businessAccountId, businessAccountId),
+        eq(whatsappFlowSessions.senderPhone, senderPhone),
+        eq(whatsappFlowSessions.status, "active"),
+        eq(whatsappFlows.isActive, "true"),
+      ))
+      .orderBy(desc(whatsappFlowSessions.createdAt))
+      .limit(1);
+    return !!session && (!session.expiresAt || new Date(session.expiresAt) > new Date());
+  }
+
+  /** The customer's current conversation from stored messages (survives restarts; cut at 24 h of silence). */
+  private async loadLeadConversation(businessAccountId: string, senderPhone: string, userMessage: string): Promise<ChatTurn[]> {
+    const rows = await db
+      .select({ rawMessage: whatsappLeads.rawMessage, direction: whatsappLeads.direction, receivedAt: whatsappLeads.receivedAt })
+      .from(whatsappLeads)
+      .where(and(eq(whatsappLeads.businessAccountId, businessAccountId), eq(whatsappLeads.senderPhone, senderPhone)))
+      .orderBy(desc(whatsappLeads.receivedAt))
+      .limit(CONVERSATION_FETCH_LIMIT);
+    const turns: ChatTurn[] = rows
+      .reverse()
+      .filter(r => r.rawMessage)
+      .map(r => ({ role: r.direction === "outgoing" ? "assistant" as const : "user" as const, content: r.rawMessage || "", at: r.receivedAt }));
+    // The webhook stores the incoming message before replying, except on some flow hand-offs.
+    return currentConversation(ensureCurrentMessage(turns, userMessage));
+  }
+
+  /** Name / email already known: the WhatsApp lead(s) of this number, then the latest flow answers. */
+  private async savedContact(businessAccountId: string, senderPhone: string, recentFlowData: Record<string, any> | null): Promise<KnownContact> {
+    const rows = await db
+      .select({ customerName: whatsappLeads.customerName, customerEmail: whatsappLeads.customerEmail, extractedData: whatsappLeads.extractedData })
+      .from(whatsappLeads)
+      .where(and(
+        eq(whatsappLeads.businessAccountId, businessAccountId),
+        eq(whatsappLeads.senderPhone, senderPhone),
+        ne(whatsappLeads.status, "message_only"),
+      ))
+      .orderBy(desc(whatsappLeads.receivedAt))
+      .limit(10);
+    const known: KnownContact = {};
+    for (const row of rows) {
+      const fromData = socialLeadContact(row.extractedData as Record<string, any> | null);
+      known.name = known.name || row.customerName?.trim() || fromData.name;
+      known.email = known.email || row.customerEmail?.trim() || fromData.email;
+    }
+    if (recentFlowData) {
+      const fromFlow = socialLeadContact(recentFlowData);
+      known.name = known.name || fromFlow.name;
+      known.email = known.email || fromFlow.email;
+    }
+    return known;
+  }
+
+  /**
+   * capture_lead: writes the name / email onto this number's WhatsApp lead (the same record the
+   * message extraction merges into: the first non-message_only incoming row, else the first row).
+   */
+  private async saveCapturedContact(
+    businessAccountId: string,
+    senderPhone: string,
+    args: { name?: unknown; email?: unknown },
+  ): Promise<{ saved: boolean; message: string }> {
+    const rawName = typeof args?.name === "string" ? args.name.trim().replace(/\s+/g, " ") : "";
+    const rawEmail = typeof args?.email === "string" ? args.email.trim() : "";
+    const name = rawName && rawName.length <= 100 && /[A-Za-z\u00C0-\u024F\u0900-\u0DFF]/.test(rawName) && !/[@\d]/.test(rawName) ? rawName : null;
+    const email = rawEmail && isValidEmail(rawEmail) ? rawEmail : null;
+    if (!name && !email) {
+      return { saved: false, message: "Nothing saved: pass the customer's name and/or a valid email address." };
+    }
+    const rows = await db
+      .select()
+      .from(whatsappLeads)
+      .where(and(
+        eq(whatsappLeads.businessAccountId, businessAccountId),
+        eq(whatsappLeads.senderPhone, senderPhone),
+        eq(whatsappLeads.direction, "incoming"),
+      ))
+      .orderBy(asc(whatsappLeads.receivedAt));
+    const lead = rows.find(l => l.status !== "message_only") || rows[0];
+    if (!lead) {
+      return { saved: false, message: "Not saved right now; continue the conversation normally." };
+    }
+    const extractedData: Record<string, any> = { ...((lead.extractedData as Record<string, any>) || {}) };
+    const update: Record<string, any> = { updatedAt: new Date() };
+    if (name) { update.customerName = name; extractedData.customer_name = name; }
+    if (email) { update.customerEmail = email; extractedData.customer_email = email; }
+    update.extractedData = extractedData;
+    if (lead.status === "message_only") update.status = "new";
+    await db.update(whatsappLeads).set(update).where(eq(whatsappLeads.id, lead.id));
+    // PAN + email draft leads: an email may complete the lead.
+    if (email) refreshLeadQualificationLater(lead.id);
+    const what = [name && "name", email && "email address"].filter(Boolean).join(" and ");
+    console.log(`[WhatsApp Auto-Reply] ${CAPTURE_LEAD_TOOL_NAME}: saved ${what} on lead ${lead.id}`);
+    return { saved: true, message: `Saved the customer's ${what}. Thank them briefly and continue.` };
+  }
+
   private async buildBusinessContext(
     businessAccountId: string,
     userMessage: string,
@@ -683,9 +869,14 @@ export class WhatsappAutoReplyService {
       
       // DYNAMIC: Per-message searches + fresh leadTrainingConfig — all run in parallel.
       // Document vector search and FAQ search are gated by their respective knowledge toggles.
+      // A failed search (e.g. embeddings unavailable) must not also drop the lead training config.
+      const searchFailed = (what: string) => (err: unknown) => {
+        console.error(`[WhatsApp Auto-Reply] ${what} search failed (non-fatal):`, err instanceof Error ? err.message : err);
+        return [];
+      };
       const [searchResults, relevantFaqs, freshWidgetSettingArr] = await Promise.all([
-        useDocument ? vectorSearchService.search(userMessage, businessAccountId, 5, 0.50) : Promise.resolve([]),
-        useFaq ? faqEmbeddingService.searchFAQs(userMessage, businessAccountId, 5, 0.50) : Promise.resolve([]),
+        useDocument ? vectorSearchService.search(userMessage, businessAccountId, 5, 0.50).catch(searchFailed("Document")) : Promise.resolve([]),
+        useFaq ? faqEmbeddingService.searchFAQs(userMessage, businessAccountId, 5, 0.50).catch(searchFailed("FAQ")) : Promise.resolve([]),
         db.select().from(widgetSettings).where(eq(widgetSettings.businessAccountId, businessAccountId)).limit(1)
       ]);
 
@@ -750,7 +941,7 @@ export class WhatsappAutoReplyService {
     customPrompt?: string,
     businessName: string = "the business",
     businessDescription?: string,
-    leadTrainingConfig?: any | null,
+    leadPlan?: WhatsappLeadPlan | null,
     detectedLanguage?: string,
     crossPlatformContext?: string,
     businessAccountId?: string,
@@ -999,9 +1190,6 @@ These rules are MANDATORY and override ALL other instructions.
 
       console.log(`[WhatsApp Auto-Reply] Prompt mode: ${promptMode} (persona configured: ${hasPersona}) | Use case mode: ${useCaseMode || "lead_capture"}`);
 
-      // Count AI responses in conversation history for custom timing
-      const responseCount = conversationHistory.filter(msg => msg.role === 'assistant').length;
-
       const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
         { role: "system", content: systemPrompt }
       ];
@@ -1014,27 +1202,15 @@ These rules are MANDATORY and override ALL other instructions.
         });
       }
 
-      // Inject lead training prompt as LAST system message (after conversation history)
-      // This position gets highest attention weight from GPT — matching phoneValidationOverride pattern
-      if (leadTrainingConfig) {
-        // WhatsApp already provides the user's phone — strip mobile/whatsapp fields entirely
-        const whatsappLeadConfig = JSON.parse(JSON.stringify(leadTrainingConfig));
-        if (whatsappLeadConfig.fields && Array.isArray(whatsappLeadConfig.fields)) {
-          whatsappLeadConfig.fields = whatsappLeadConfig.fields.filter(
-            (f: any) => f.id !== 'mobile' && f.id !== 'whatsapp'
-          );
-          console.log(`[WhatsApp Auto-Reply] Stripped mobile/whatsapp fields from lead training (WhatsApp already has phone)`);
-        }
-
-        const leadPrompt = buildLeadTrainingPrompt(whatsappLeadConfig, responseCount, 'whatsapp');
-        if (leadPrompt) {
-          messages.push({ role: "system", content: leadPrompt });
-          console.log(`[WhatsApp Auto-Reply] Injected lead training as FINAL system message (${leadPrompt.length} chars, responseCount=${responseCount})`);
-        }
-
-        // Skip phone validation gate on WhatsApp — phone is already known
+      // Lead-capture instruction after the conversation history (most attention from the model).
+      // Built by buildLeadPlan: WhatsApp never asks for the phone, so no phone validation here.
+      let leadPromptMessage: { role: "system"; content: string } | null = null;
+      if (leadPlan?.prompt) {
+        leadPromptMessage = { role: "system", content: leadPlan.prompt };
+        messages.push(leadPromptMessage);
+        console.log(`[WhatsApp Auto-Reply] Injected lead training as FINAL system message (${leadPlan.prompt.length} chars)`);
       }
-      
+
       if (crossPlatformContext) {
         messages.push({ role: "system", content: crossPlatformContext });
         console.log(`[WhatsApp Auto-Reply] Cross-platform context injected (${crossPlatformContext.length} chars)`);
@@ -1091,6 +1267,9 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
           console.log(`[WhatsApp Auto-Reply] Tool selection error (non-fatal):`, err);
         }
       }
+      if (leadPlan?.captureLead) {
+        tools = [...(tools || []), CAPTURE_LEAD_TOOL];
+      }
 
       const requestParams: any = {
         model: "gpt-4o-mini",
@@ -1118,13 +1297,27 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
         const collectedProductCards: { name: string; description?: string; price?: number; imageUrl?: string }[] = [];
         let hasMoreProducts = false;
 
+        let usedProductTool = false;
+        let leadSaved = false;
         for (const toolCall of assistantMessage.tool_calls) {
           try {
             const fnName = toolCall.function.name;
             const fnArgs = JSON.parse(toolCall.function.arguments || '{}');
-            console.log(`[WhatsApp Auto-Reply] Executing tool: ${fnName}(${JSON.stringify(fnArgs)})`);
+            // capture_lead arguments are the customer's name / email: not logged.
+            console.log(`[WhatsApp Auto-Reply] Executing tool: ${fnName}${fnName === CAPTURE_LEAD_TOOL_NAME ? '' : `(${JSON.stringify(fnArgs)})`}`);
 
-            if (fnName === 'get_products') {
+            if (fnName === CAPTURE_LEAD_TOOL_NAME && leadPlan?.captureLead) {
+              let result: { saved: boolean; message: string };
+              try {
+                result = await leadPlan.captureLead(fnArgs);
+              } catch (err) {
+                console.error(`[WhatsApp Auto-Reply] ${CAPTURE_LEAD_TOOL_NAME} failed:`, err instanceof Error ? err.message : err);
+                result = { saved: false, message: "Not saved right now; continue the conversation normally." };
+              }
+              leadSaved = leadSaved || result.saved;
+              toolMessages.push({ role: "tool", tool_call_id: toolCall.id, content: result.message });
+            } else if (fnName === 'get_products') {
+              usedProductTool = true;
               try {
                 const result = await ToolExecutionService.executeTool(
                   'get_products',
@@ -1196,15 +1389,25 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
           }
         }
 
-        const cleanedUserMsg = userMessage.trim().replace(/[^\w\s]/g, '').trim();
-        const isNumberSelection = /^\d{1,2}$/.test(cleanedUserMsg) || /^(option|number|item|choice)\s*\d{1,2}$/i.test(cleanedUserMsg);
+        // A saved name / email must not be asked again in this same reply: refresh the lead instruction.
+        if (leadSaved && leadPlan && leadPromptMessage) {
+          try {
+            leadPromptMessage.content = await leadPlan.refreshPrompt() || "Lead capture: nothing more to ask in this reply.";
+          } catch (err) {
+            console.error("[WhatsApp Auto-Reply] Lead instruction refresh failed (non-fatal):", err instanceof Error ? err.message : err);
+          }
+        }
 
+        const cleanedUserMsg = userMessage.trim().replace(/[^\w\s]/g, '').trim();
+        const isNumberSelection = usedProductTool && (/^\d{1,2}$/.test(cleanedUserMsg) || /^(option|number|item|choice)\s*\d{1,2}$/i.test(cleanedUserMsg));
+
+        // Product formatting rules only when products were fetched (not after capture_lead alone).
         if (isNumberSelection) {
           toolMessages.push({
             role: "system",
             content: `WHATSAPP FORMAT — PRODUCT SELECTION RESPONSE: The user selected a specific product by number. Give a detailed, enthusiastic response about this product. Include the full description, key features, and price if available. End by offering next steps like "Would you like to book a free consultation?" or "Want to explore customization options?" Do NOT say "Reply with a number" — they already selected. Do NOT include image URLs or links. Use *bold* for the product name. Keep it conversational and helpful.`
           });
-        } else {
+        } else if (usedProductTool) {
           toolMessages.push({
             role: "system",
             content: `WHATSAPP FORMAT: Do NOT list individual product names or descriptions — those details will be sent separately as image captions. Instead, write a brief, friendly intro message (e.g., "Here are some wardrobe designs for you!") that naturally references what the user asked for. End with "Reply with a number to know more!" Keep it to 2-3 short sentences max. Do NOT include image URLs or links.`
@@ -1230,6 +1433,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
           };
         } catch (followUpErr) {
           console.error(`[WhatsApp Auto-Reply] Follow-up completion after tool call failed:`, followUpErr);
+          if (!usedProductTool) return null;
           return { text: "I'm having trouble fetching product details right now. Please try again in a moment!" };
         }
       }
