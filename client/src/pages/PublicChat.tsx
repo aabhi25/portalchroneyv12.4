@@ -940,12 +940,16 @@ export default function PublicChat() {
       let streamedContent = '';
       let buffer = '';
       let pendingUpdate = false;
+      let finalized = false;
 
       const updateStreamingMessage = () => {
         if (pendingUpdate) return;
         pendingUpdate = true;
         
         requestAnimationFrame(() => {
+          pendingUpdate = false;
+          // The final event already committed the message (with cards / pagination).
+          if (finalized) return;
           setMessages(prev => {
             const filtered = prev.filter(m => m.id !== aiMessageId);
             return [...filtered, {
@@ -1021,7 +1025,32 @@ export default function PublicChat() {
                   conversationIdRef.current = formStepData.conversationId;
                 }
               } else if (data.type === 'final') {
-                animateTyping(data.data, aiMessageId, productsData, productsPagination, productsSearchQuery, appointmentSlotsData, jobsDataItems, jobsApplicantIdValue);
+                if (streamedContent) {
+                  // The answer already streamed in as it was written: commit the final text
+                  // (and cards) in place instead of clearing it and re-typing it word by word.
+                  finalized = true;
+                  const finalText = typeof data.data === 'string' ? data.data : streamedContent;
+                  setMessages(prev => {
+                    const existing = prev.find(m => m.id === aiMessageId);
+                    const filtered = prev.filter(m => m.id !== aiMessageId);
+                    return [...filtered, {
+                      ...(existing || {}),
+                      id: aiMessageId,
+                      role: 'assistant',
+                      content: finalText,
+                      timestamp: existing?.timestamp || new Date(),
+                      products: productsData || existing?.products,
+                      pagination: productsPagination || (existing as any)?.pagination,
+                      searchQuery: productsSearchQuery || (existing as any)?.searchQuery,
+                      appointmentSlots: appointmentSlotsData || (existing as any)?.appointmentSlots,
+                      jobs: jobsDataItems || (existing as any)?.jobs,
+                      applicantId: jobsApplicantIdValue !== undefined ? jobsApplicantIdValue : (existing as any)?.applicantId,
+                    } as any];
+                  });
+                  setStreamingMessageId(null);
+                } else {
+                  animateTyping(data.data, aiMessageId, productsData, productsPagination, productsSearchQuery, appointmentSlotsData, jobsDataItems, jobsApplicantIdValue);
+                }
               }
             } catch (e) {
               console.error('Failed to parse SSE data:', e);

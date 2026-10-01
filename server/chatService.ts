@@ -11,7 +11,7 @@ import { journeyService } from './services/journeyService';
 import { journeyOrchestrator } from './services/journeyOrchestrator';
 import { vectorSearchService } from './services/vectorSearchService';
 import { checkDiscountEligibility } from './services/nudgeOrchestrationService';
-import { isGibberishAI } from './services/spamDetectionService';
+import { isGibberishAI, spamCheckReason } from './services/spamDetectionService';
 import { categorizeAndSaveConversation } from './services/conversationCategorizationService';
 import { summarizeAndSaveConversation } from './services/conversationSummarizationService';
 import { buildOtpGatingOverride } from './services/leadTrainingPrompt';
@@ -37,6 +37,10 @@ import { ensurePassageVectors } from './services/chatContext/passageVectors';
 import { buildCustomInstructionsBlock } from './services/chatContext/customInstructions';
 import { appliesToChannel } from '@shared/knowledgeChannels';
 import { embeddingService } from './services/embeddingService';
+import { smallTalkKind } from './services/chatContext/smallTalk';
+import { accountHasKnowledge } from './services/chatContext/knowledgePresence';
+import { embedQueryCached } from './services/chatContext/queryEmbeddingCache';
+import { ChatTurnTiming } from './services/chatContext/chatTiming';
 
 /** Cached business-context block; `profile` is set in retrieval mode only. */
 interface ContextBundle {
@@ -889,6 +893,58 @@ export class ChatService {
   // NOTE: Do not trim() here as it removes spaces from streaming chunks
   private stripFallbackMarker(response: string): string {
     return response.replace(/\[\[FALLBACK\]\]\s*/g, '');
+  }
+
+  /**
+   * Incremental filter for text streamed live to the visitor: complete [[FALLBACK]] markers
+   * are stripped and a trailing partial marker ("…[[FALL") is held back until the next delta
+   * shows whether it is one, so the marker is never visible. What it has sent is always a
+   * prefix of stripFallbackMarker(all text so far), so the streamed text ends up equal to
+   * the stripped answer.
+   */
+  private createLiveTextFilter() {
+    const MARKER = '[[FALLBACK]]';
+    let raw = '';
+    let sent = '';
+    const visible = (final: boolean): string => {
+      const clean = this.stripFallbackMarker(raw);
+      if (final) return clean;
+      for (let k = Math.min(MARKER.length - 1, clean.length); k > 0; k--) {
+        if (MARKER.startsWith(clean.slice(clean.length - k))) return clean.slice(0, clean.length - k);
+      }
+      return clean;
+    };
+    const advance = (final: boolean): string => {
+      const v = visible(final);
+      if (v.length > sent.length && v.startsWith(sent)) {
+        const piece = v.slice(sent.length);
+        sent = v;
+        return piece;
+      }
+      return '';
+    };
+    return {
+      /** Add a delta; returns the newly visible text ('' when nothing new can be shown yet). */
+      push: (delta: string): string => { raw += delta; return advance(false); },
+      /** Add a delta without sending anything yet (it goes out with flush()). */
+      hold: (delta: string): void => { raw += delta; },
+      /** End of the stream: returns whatever was still held back. */
+      flush: (): string => advance(true),
+      /** Everything sent so far. */
+      sent: (): string => sent,
+    };
+  }
+
+  /**
+   * Joins a live-streamed preamble ("Let me check that for you.") and the answer written
+   * after the tool call: nothing when either side already has the whitespace, a paragraph
+   * break after a finished sentence, otherwise a space.
+   */
+  private preambleSeparator(preamble: string, next: string): string {
+    if (!preamble.trim() || !next) return '';
+    if (/\s$/.test(preamble) || /^\s/.test(next)) return '';
+    if (/[.!?:;…。)\]]$/.test(preamble) || new RegExp('\\p{Extended_Pictographic}$', 'u').test(preamble)) return '\n\n';
+    return ' ';
   }
   
   // Process conditional placeholders in fallback templates based on lead data
@@ -1906,6 +1962,37 @@ Response:`;
     } catch (error: any) {
       console.error('[LeadSquared] Auto-sync error:', error);
       // Don't throw - sync is non-blocking
+    }
+  }
+
+  /**
+   * Chat-open warm-up (call fire-and-forget when the widget / public chat loads): put this
+   * account's business-context bundle (FAQs, products, pages, documents… ~0.85 s to load) into
+   * the cache so the visitor's first message finds it ready. Skips when the cached copy is
+   * fresh (< 3 min old); refreshes an older one so it doesn't expire mid-conversation. Only
+   * the fields the bundle depends on matter (account, description, currency, K12 flags), and
+   * they must match what the chat route passes so the same cache key is warmed.
+   */
+  async prewarmContextBundle(context: ChatContext): Promise<'fresh' | 'warmed' | 'failed'> {
+    try {
+      const mode = await this.resolveContextMode(context);
+      const k12ContentOnly = this.isK12ContentOnly(context);
+      const retrievalMode = mode === 'retrieval' && !k12ContentOnly;
+      const key = k12ContentOnly
+        ? BusinessContextCache.KEYS.BUSINESS_CONTEXT_K12(context.businessAccountId)
+        : retrievalMode
+          ? BusinessContextCache.KEYS.BUSINESS_CONTEXT_RETRIEVAL(context.businessAccountId)
+          : BusinessContextCache.KEYS.BUSINESS_CONTEXT(context.businessAccountId);
+      const age = businessContextCache.freshAgeMs(key);
+      if (age !== null && age < 3 * 60 * 1000) return 'fresh';
+      const started = Date.now();
+      // An older copy keeps serving while the fresh one loads.
+      await this.getContextBundle(context, mode, { refresh: age !== null });
+      console.log(`[Chat Prewarm] Business context ready for ${context.businessAccountId} in ${Date.now() - started}ms`);
+      return 'warmed';
+    } catch (error) {
+      console.error('[Chat Prewarm] Failed (non-fatal):', error);
+      return 'failed';
     }
   }
 
@@ -3098,7 +3185,27 @@ Response:`;
     }
   }
 
+  /**
+   * Text / voice chat turn as a stream of events (content deltas, cards, final, done).
+   * Thin wrapper: runs the turn and logs one [ChatTiming] line when it ends, whichever
+   * path it took (see services/chatContext/chatTiming.ts).
+   */
   async *streamMessage(userMessage: string, context: ChatContext) {
+    const timing = new ChatTurnTiming(userMessage);
+    try {
+      for await (const event of this.streamMessageTurn(userMessage, context, timing)) {
+        if (event.type === 'content' && typeof event.data === 'string' && event.data) timing.mark('first content');
+        else if (event.type === 'error') timing.outcome = 'error';
+        if (event.type === 'done') timing.mark('done');
+        yield event;
+      }
+    } finally {
+      timing.mark('done');
+      timing.log();
+    }
+  }
+
+  private async *streamMessageTurn(userMessage: string, context: ChatContext, timing: ChatTurnTiming) {
     try {
       // TopScholar is a signed student tutoring surface, not a sales widget.
       // Never run generic widget lead capture, OTP, or contact-gating there:
@@ -3109,9 +3216,29 @@ Response:`;
         console.log('[TopScholar] Lead capture and verification flow disabled for tutoring conversation');
       }
 
+      // SPEED: start the read-only lookups this turn will need right away, so they run while
+      // the conversation / history / OTP / lead steps below do their (ordered) work. Each is
+      // awaited at the point it was awaited before, so results and error handling are the
+      // same; `.catch(() => {})` only keeps an unused rejection (early-return paths) from
+      // surfacing as an unhandled rejection.
+      const quiet = <T,>(p: Promise<T>): Promise<T> => { p.catch(() => {}); return p; };
+      const contextModeP = quiet(this.resolveContextMode(context));
+      // Business context bundle (cached 5 min per account; joins the chat-open prewarm when
+      // that is still loading). buildEnrichedContext below reads it from the cache.
+      quiet(contextModeP.then(mode => this.getContextBundle(context, mode)));
+      const accountConfigP = quiet(Promise.all([
+        storage.getBusinessAccount(context.businessAccountId),
+        storage.getWidgetSettings(context.businessAccountId),
+        storage.getAllProducts(context.businessAccountId),
+      ]));
+      const hasActiveJourneysP = context.skipLeadTraining
+        ? Promise.resolve(false)
+        : quiet(journeyService.hasActiveJourneys(context.businessAccountId));
+
       // Get conversation history to check if this is a new conversation. The memory is a cache:
       // after an idle gap / restart / on another instance it is reloaded from the database first,
       // so a resumed conversation is never mistaken for a brand-new one.
+      const historyStarted = Date.now();
       let existingHistory = conversationMemory.getConversationHistory(context.userId);
       if (existingHistory.length === 0) {
         const priorConversationId = await this.peekExistingConversationId(context).catch(() => undefined);
@@ -3124,9 +3251,17 @@ Response:`;
 
       // SPAM DETECTION: Check first message - if spam, use simplified path (no DB, no journeys, just AI response)
       // Skip spam check for resume uploads, job applications, and K12 image uploads — they must go through the full AI flow
-      if (isFirstMessage && context.openaiApiKey && !userMessage.startsWith('[RESUME_UPLOAD]') && !userMessage.startsWith('[JOB_APPLY]') && !userMessage.startsWith('[IMAGE_UPLOAD]') && !context.resumeText && !context.imageText) {
-        const spamCheck = await isGibberishAI(userMessage, context.openaiApiKey);
+      // SPEED: the AI check (one LLM round trip) only runs when cheap local heuristics flag the
+      // message (links, keyboard mashing, no vowels, repeated characters, symbols, test inputs…);
+      // ordinary greetings and questions skip it — the AI answers "OK" for those anyway.
+      const spamEligible = isFirstMessage && !!context.openaiApiKey && !userMessage.startsWith('[RESUME_UPLOAD]') && !userMessage.startsWith('[JOB_APPLY]') && !userMessage.startsWith('[IMAGE_UPLOAD]') && !context.resumeText && !context.imageText;
+      const spamFlag = spamEligible ? (smallTalkKind(userMessage) ? null : spamCheckReason(userMessage)) : null;
+      if (!spamEligible) timing.stage('spam', 'n/a');
+      else if (!spamFlag) timing.stage('spam', 'skipped');
+      if (spamEligible && spamFlag) {
+        const spamCheck = await timing.time('spam', () => isGibberishAI(userMessage, context.openaiApiKey!), spamFlag);
         if (spamCheck.isSpam && spamCheck.confidence === 'high') {
+          timing.outcome = 'spam';
           console.log('[Chat] Spam detected - using simplified response path:', userMessage.substring(0, 50));
           
           // Yield temp conversation ID
@@ -3148,9 +3283,11 @@ Response:`;
       }
       
       // Get or create conversation (normal flow)
+      const historyResumed = Date.now();
       const conversationId = await this.getOrCreateConversation(context);
       // Memory must hold THIS conversation's history (reload from the DB when needed).
       await this.ensureHistoryLoaded(context.userId, conversationId);
+      timing.stage('history', (historyResumed - historyStarted) + (Date.now() - historyResumed));
 
       // Yield conversationId first so client can store it for persistence
       yield { type: 'conversation_id' as const, data: conversationId };
@@ -3231,11 +3368,19 @@ Response:`;
           }
         }
 
+        // SPEED: the OTP state and the awaiting-verification flag are independent reads (both
+        // after the auto-detect above) — load them together.
+        const otpStarted = Date.now();
+        const awaitingFlagP: Promise<{ ok: true; value: boolean } | { ok: false; error: unknown }> =
+          storage.isConversationAwaitingVerification(conversationId, context.businessAccountId)
+            .then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
         try {
           otpState = await OtpService.getLatestStateForConversation(context.businessAccountId, conversationId);
         } catch (err) {
           console.error('[OTP] Failed to load state for conversation:', err);
         }
+        const awaitingFlagResult = await awaitingFlagP;
+        timing.stage('otp', Date.now() - otpStarted);
 
         // Task #9 (Option A): a freshly-issued OTP challenge this turn (was NOT
         // already awaiting before auto-detect, now is) means the OTP dialog will
@@ -3250,8 +3395,10 @@ Response:`;
         // do NOT call the model, do NOT update conversation title. The widget's
         // composer is already locked client-side; this is server defense-in-depth.
         try {
-          const awaitingFlag = await storage.isConversationAwaitingVerification(conversationId, context.businessAccountId);
+          if (!awaitingFlagResult.ok) throw awaitingFlagResult.error;
+          const awaitingFlag = awaitingFlagResult.value;
           if (awaitingFlag) {
+            timing.outcome = 'awaiting_verification';
             // CAPTCHA gate: when this business uses the CAPTCHA (not OTP) gate,
             // an awaiting_verification conversation means the visitor hasn't
             // passed the reCAPTCHA challenge yet (or it failed). Refuse with a
@@ -3382,6 +3529,19 @@ Response:`;
         ? history[history.length - 1].content
         : undefined;
 
+      // SPEED: the knowledge search (query embedding + FAQ / document / URL lookups — the
+      // slowest step before the model call) only needs the visitor's message and the history
+      // BEFORE it, so it starts now and runs while the lead / journey / persistence steps below
+      // do their ordered work. It is read-only. Same inputs as before: the K12 image question
+      // text when one was uploaded, and it is re-run below if the history gets reloaded.
+      const searchMessage = (context.imageText && userMessage.startsWith('[IMAGE_UPLOAD]') && context.imageText.trim().length > 0)
+        ? context.imageText.trim()
+        : userMessage;
+      const historyForSearch = history;
+      const earlyKnowledgeP = userMessage.startsWith('[JOB_APPLY]')
+        ? null
+        : quiet(contextModeP.then(mode => this.buildKnowledgeContext(searchMessage, historyForSearch, context, mode, timing)));
+
       // Auto-detect and capture contact information from user message (skipped for guidance /
       // tutoring surfaces). Awaited: it is pure regex when nothing is detected, and the lead row
       // must be up to date before this turn's lead plan is computed. Skipped when it already ran
@@ -3401,11 +3561,14 @@ Response:`;
       
       // PERFORMANCE: Early check if business has any active journeys
       // Skip all journey processing if no journeys exist for this account
-      const hasActiveJourneys = !context.skipLeadTraining &&
-        await journeyService.hasActiveJourneys(context.businessAccountId);
+      // (lookup started at the top of the turn)
+      const hasActiveJourneys = await hasActiveJourneysP;
       let isJourneyActive = false;
-      
-      if (hasActiveJourneys) {
+
+      // SPEED: the journey-guideline lookup (reads), storing the visitor's message and the
+      // smart-reply lookup are independent — run them together. The visitor's message is
+      // still persisted before any reply is stored.
+      const loadJourneyGuidelines = async () => {
         // Auto-inject journey conversational guidelines if not already provided and if journey is active
         if (!context.journeyConversationalGuidelines) {
           const activeJourneyState = await journeyService.getJourneyState(conversationId);
@@ -3427,11 +3590,23 @@ Response:`;
             }
           }
         }
-      }
-      
+      };
+
+      // Smart replies are matched on the same text as before (the K12 image question when one
+      // was uploaded); not for [JOB_APPLY], which never reached the smart-reply check.
+      const smartReplyP = userMessage.startsWith('[JOB_APPLY]')
+        ? null
+        : quiet((async () => {
+            const { getSmartReplyResponse } = await import('./services/smartReplyService');
+            return getSmartReplyResponse(context.businessAccountId, "website", searchMessage);
+          })());
+
       // Store user message in memory and database
       conversationMemory.storeMessage(context.userId, 'user', userMessage);
-      await this.storeMessageInDB(conversationId, 'user', userMessage, undefined, context.imageUrl);
+      await Promise.all([
+        hasActiveJourneys ? loadJourneyGuidelines() : Promise.resolve(),
+        this.storeMessageInDB(conversationId, 'user', userMessage, undefined, context.imageUrl),
+      ]);
 
       if (userMessage.startsWith('[JOB_APPLY]')) {
         const applyMatch = userMessage.match(/\|jobId:([^|]+)\|applicantId:([^|]+)/);
@@ -3502,9 +3677,9 @@ Response:`;
       }
 
       try {
-        const { getSmartReplyResponse } = await import('./services/smartReplyService');
-        const smartReply = await getSmartReplyResponse(context.businessAccountId, "website", userMessage);
+        const smartReply = smartReplyP ? await smartReplyP : null;
         if (smartReply) {
+          timing.outcome = 'smart_reply';
           console.log(`[Chat Stream] Smart reply matched: "${smartReply.matchedKeyword}" — returning configured response directly (skipping AI)`);
           conversationMemory.storeMessage(context.userId, 'assistant', smartReply.text);
           await this.storeMessageInDB(conversationId, 'assistant', smartReply.text);
@@ -3600,18 +3775,29 @@ Response:`;
       let hasToolCalls = false;
       const toolCalls: any[] = [];
       let bufferedContent: string[] = []; // Buffer content to conditionally stream
-      // Voice turns stream the first answer live (as text chat buffers it whole to decide
-      // tool calls / deflection first): voice speaks sentence by sentence, so buffering here
-      // delayed the first audio by the whole generation. Not when the answer might be
-      // replaced afterwards (phone-validation rewrite, a configured fallback template).
+      // LIVE STREAMING (text chat — website widget, Home test chat, public chat link — and
+      // voice): the first answer is sent as the model writes it instead of being buffered
+      // whole. It stays buffered when the answer might be replaced afterwards (phone-number
+      // rewrite, a configured fallback template) and stops at the first tool call; a
+      // [[FALLBACK]] marker is held back and stripped, never shown (see createLiveTextFilter).
       let liveStreamed = false;
-      let livePending = '';
+      const liveFilter = this.createLiveTextFilter();
 
       // Build enriched system context with company info and all FAQs
       // This includes PDF summaries and key points - should answer most questions
-      const contextMode = await this.resolveContextMode(context);
+      // SPEED: the context assembly (business bundle — usually already cached / loading since
+      // the top of the turn), the visitor-message count, the saved lead and the account config
+      // are independent reads — load them together. The lead is read after this turn's
+      // auto-capture and journey steps, as before.
+      const contextMode = await contextModeP;
       const retrievalMode = contextMode === 'retrieval';
-      let systemContext = await this.buildEnrichedContext(context, contextMode, { userMessage });
+      const [builtContext, turnCount, existingLead, [businessAccount, widgetSettings, products]] = await Promise.all([
+        timing.time('context', () => this.buildEnrichedContext(context, contextMode, { userMessage })),
+        this.countTurnFromDb(context.userId, conversationId),
+        storage.getLeadByConversation(conversationId, context.businessAccountId),
+        accountConfigP,
+      ]);
+      let systemContext = builtContext;
       // Per-turn status blocks go at the END in retrieval mode so the stable prefix
       // (instructions + business context) is identical across turns (prompt caching).
       const addTurnBlock = (block: string) => {
@@ -3621,8 +3807,12 @@ Response:`;
 
       // Visitor message number, counted in the database (custom "ask on message #N" timing must
       // survive idle expiry, restarts and multiple instances). Reloads memory if it is behind.
-      const turnCount = await this.countTurnFromDb(context.userId, conversationId);
       if (turnCount.reloaded) history = this.historyBeforeCurrent(context.userId, userMessage);
+      // The early knowledge search used the history as it was; when the memory had to be
+      // reloaded from the database, search again with the reloaded history (as before).
+      const knowledgeP = earlyKnowledgeP && !turnCount.reloaded
+        ? earlyKnowledgeP
+        : quiet(this.buildKnowledgeContext(userMessage, history, context, contextMode, timing));
       const userMessageCount = Math.max(turnCount.n, history.filter(m => m.role === 'user').length + 1);
       console.log(`[Lead Timing] Visitor message #${userMessageCount} (db=${turnCount.n}, history=${history.length})`);
 
@@ -3655,18 +3845,7 @@ Example: "Great! Is there anything else I can help you with?"
         console.log(`[Handoff Guardrail] Handoff complete, user asking new question: "${userMessage.substring(0, 50)}..."`);
       }
 
-      // Run RAG search and DB fetches in parallel — they are fully independent
-      // RAG embedding call (~200ms) now overlaps with DB reads (~50ms) instead of preceding them
-      console.log('[RAG] Running document chunk search for query');
-      const [knowledge, [businessAccount, widgetSettings, existingLead, products]] = await Promise.all([
-        this.buildKnowledgeContext(userMessage, history, context, contextMode),
-        Promise.all([
-          storage.getBusinessAccount(context.businessAccountId),
-          storage.getWidgetSettings(context.businessAccountId),
-          storage.getLeadByConversation(conversationId, context.businessAccountId),
-          storage.getAllProducts(context.businessAccountId)
-        ])
-      ]);
+      // Knowledge search (started early), account config and the saved lead were loaded above.
       // ragContext append is deferred below — skipped when lookup/return-exchange cards are shown
 
       if (context.resumeText) {
@@ -3679,32 +3858,38 @@ Example: "Great! Is there anything else I can help you with?"
         console.log(`[Chat Stream] Image text injected into system context (${context.imageText.length} chars)`);
       }
 
-      try {
-        if (existingLead && (existingLead.phone || existingLead.email)) {
-          // Profile link (verified only for an OTP-verified phone); another channel's conversation
-          // is shared only over verified links (composeCrossPlatformContext).
-          const linked = await resolveWebsiteProfile({
-            businessAccountId: context.businessAccountId,
-            conversationId,
-            visitorToken: context.visitorToken || null,
-            lead: existingLead,
-            city: context.visitorCity || null,
-          });
-          const platformUserId = linked?.platformUserId || context.visitorToken || conversationId;
-          const profile = linked ? { id: linked.profileId } : null;
-          if (profile) {
-            const isFirstMsg = !history.some((m: any) => m.role === 'assistant');
-            const crossPlatformCtx = await composeCrossPlatformContext(context.businessAccountId, "website", profile.id, isFirstMsg, platformUserId);
-            if (crossPlatformCtx) {
-              systemContext += `\n\n${crossPlatformCtx}`;
-              console.log(`[Chat-Stream] Cross-platform context injected (${crossPlatformCtx.length} chars, firstMsg: ${isFirstMsg})`);
+      // SPEED: the cross-platform memory lookup, tool selection (+ order-intent checks) and this
+      // turn's lead plan are independent of each other — run them together (with the knowledge
+      // search started earlier). Their results are applied below in the same order as before.
+      const crossPlatformP = (async (): Promise<string> => {
+        try {
+          if (existingLead && (existingLead.phone || existingLead.email)) {
+            // Profile link (verified only for an OTP-verified phone); another channel's conversation
+            // is shared only over verified links (composeCrossPlatformContext).
+            const linked = await resolveWebsiteProfile({
+              businessAccountId: context.businessAccountId,
+              conversationId,
+              visitorToken: context.visitorToken || null,
+              lead: existingLead,
+              city: context.visitorCity || null,
+            });
+            const platformUserId = linked?.platformUserId || context.visitorToken || conversationId;
+            const profile = linked ? { id: linked.profileId } : null;
+            if (profile) {
+              const isFirstMsg = !history.some((m: any) => m.role === 'assistant');
+              const crossPlatformCtx = await composeCrossPlatformContext(context.businessAccountId, "website", profile.id, isFirstMsg, platformUserId);
+              if (crossPlatformCtx) {
+                console.log(`[Chat-Stream] Cross-platform context injected (${crossPlatformCtx.length} chars, firstMsg: ${isFirstMsg})`);
+              }
+              triggerSnapshotUpdate(context.businessAccountId, profile.id, "website", platformUserId);
+              return crossPlatformCtx || '';
             }
-            triggerSnapshotUpdate(context.businessAccountId, profile.id, "website", platformUserId);
           }
+        } catch (err) {
+          console.error("[Chat-Stream] Cross-platform context error (non-fatal):", err);
         }
-      } catch (err) {
-        console.error("[Chat-Stream] Cross-platform context error (non-fatal):", err);
-      }
+        return '';
+      })();
 
       // Appointments are enabled only if BOTH business account AND widget settings allow it
       const appointmentsEnabled = !context.skipLeadTraining &&
@@ -3722,7 +3907,20 @@ Example: "Great! Is there anything else I can help you with?"
       //
       // Run selectRelevantTools and both intent checks in parallel to reduce latency.
       const offerCaptureLead = !context.skipLeadTraining && this.leadFieldsMissing(widgetSettings?.leadTrainingConfig, existingLead);
-      const [selectedTools, orderLookupIntent, returnExchangeIntent] = await Promise.all([
+
+      // Extract lead training config for enforcement
+      // Skip lead training entirely for guidance chatbot
+      const leadTrainingConfig = context.skipLeadTraining ? null : (widgetSettings?.leadTrainingConfig as any);
+      const otpPendingForLead = otpState.awaiting_otp === true || otpState.locked === true;
+      // LEAD COLLECTION PLAN for this turn (services/leadCapture): the ONE field to ask now (if any),
+      // whether it blocks answering, refusal caps, phone-number check. Its block is the only lead
+      // instruction the model gets. Pending OTP replaces it with the OTP strict-mode block.
+      const preparedP = timing.time('lead', () => this.prepareLeadTurnFor({
+        context, conversationId, leadTrainingConfig, existingLead, history, userMessage,
+        n: userMessageCount, otpPending: otpPendingForLead,
+      }));
+
+      const [[selectedTools, orderLookupIntent, returnExchangeIntent], crossPlatformCtx, prepared, knowledge] = await Promise.all([timing.time('tools', () => Promise.all([
         skipToolsForHandoff
           ? Promise.resolve([] as typeof import('./aiTools').aiTools)
           : selectRelevantTools(context.resumeText ? `[RESUME_UPLOAD] Please analyze my resume and find matching jobs` : userMessage, appointmentsEnabled, isJourneyActive, hasProducts, history, context.openaiApiKey || undefined, context.systemMode, context.k12EducationEnabled, context.jobPortalEnabled, context.demoOrdersEnabled, offerCaptureLead),
@@ -3732,7 +3930,10 @@ Example: "Great! Is there anything else I can help you with?"
         context.demoOrdersEnabled
           ? classifyReturnExchangeIntent(userMessage, history, context.openaiApiKey || undefined)
           : Promise.resolve(false),
-      ]);
+      ])), crossPlatformP, preparedP, knowledgeP]);
+      if (crossPlatformCtx) {
+        systemContext += `\n\n${crossPlatformCtx}`;
+      }
       let relevantTools = context.skipLeadTraining
         ? selectedTools.filter((tool: any) => tool.function.name !== 'capture_lead')
         : selectedTools;
@@ -3741,18 +3942,6 @@ Example: "Great! Is there anything else I can help you with?"
         console.log(`[Handoff Guardrail] Tools disabled for this request - AI will respond conversationally`);
       }
 
-      // Extract lead training config for enforcement
-      // Skip lead training entirely for guidance chatbot
-      const leadTrainingConfig = context.skipLeadTraining ? null : (widgetSettings?.leadTrainingConfig as any);
-      
-      // LEAD COLLECTION PLAN for this turn (services/leadCapture): the ONE field to ask now (if any),
-      // whether it blocks answering, refusal caps, phone-number check. Its block is the only lead
-      // instruction the model gets. Pending OTP replaces it with the OTP strict-mode block.
-      const otpPendingForLead = otpState.awaiting_otp === true || otpState.locked === true;
-      const prepared = await this.prepareLeadTurnFor({
-        context, conversationId, leadTrainingConfig, existingLead, history, userMessage,
-        n: userMessageCount, otpPending: otpPendingForLead,
-      });
       let leadTurn: LeadTurn | null = prepared.turn;
       const leadForTurn = prepared.lead;
       const phoneValidationFailed = !!leadTurn?.phoneOverride;
@@ -3928,6 +4117,19 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       // Pass userMessageCount for SMART timing lead gate activation
       // Phone validation: pass as last-position system message override (highest GPT attention weight)
       // instead of replacing user message, so AI has full context to respond naturally
+      const fallbackTemplateConfigured = !!(this.fallbackInstructionsCache.get(context.businessAccountId)?.length);
+      const liveAllowed = !phoneValidationFailed && !fallbackTemplateConfigured;
+      timing.delivery = liveAllowed ? 'live' : `buffered (${phoneValidationFailed ? 'phone_validation' : 'fallback_template'})`;
+      const turnOptions: StreamTurnOptions = {
+        leadBlock: leadTurn?.block || undefined,
+        leadBlocksAnswer: leadTurn?.plan.next?.mode === 'block',
+        leadAsksNow: !!(leadTurn?.plan.next || leadTurn?.plan.intentOption || leadTurn?.plan.callbackConfirm),
+        otpBlock: otpTurnBlock || undefined,
+        voiceStyleBlock: context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : undefined,
+        skipFaqPrefetch: knowledge.skipFaqPrefetch || undefined,
+      };
+      const firstCallPromptOptions = retrievalMode ? await this.buildFirstCallPromptOptions(context, history, knowledge.itemCount > 0 && !(serverSideLookupOptions || serverSideReturnExchange)) : undefined;
+      timing.mark('llm request');
       for await (const chunk of llamaService.streamToolAwareResponse(
         userMessage,
         streamTools,
@@ -3959,17 +4161,12 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         // Top Scholar content-only K12: force fetch_k12_topic on the first
         // streaming turn so academic answers are always curriculum-grounded.
         this.shouldForceK12Fetch(context) ? 'fetch_k12_topic' : undefined,
-        retrievalMode ? await this.buildFirstCallPromptOptions(context, history, knowledge.itemCount > 0 && !(serverSideLookupOptions || serverSideReturnExchange)) : undefined,
-        {
-          leadBlock: leadTurn?.block || undefined,
-          leadBlocksAnswer: leadTurn?.plan.next?.mode === 'block',
-          leadAsksNow: !!(leadTurn?.plan.next || leadTurn?.plan.intentOption || leadTurn?.plan.callbackConfirm),
-          otpBlock: otpTurnBlock || undefined,
-          voiceStyleBlock: context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : undefined,
-        } satisfies StreamTurnOptions
+        firstCallPromptOptions,
+        turnOptions,
       )) {
         const delta = chunk.choices[0]?.delta;
-        
+        if (delta && (delta.content || delta.tool_calls)) timing.mark('first token');
+                
         // Check for tool calls
         if (delta.tool_calls) {
           hasToolCalls = true;
@@ -3987,25 +4184,34 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           }
         }
         
-        // Buffer text content instead of streaming immediately
+        // Text content: sent live when allowed (see liveAllowed), always kept in the buffer
         if (delta.content) {
           fullResponse += delta.content;
           bufferedContent.push(delta.content);
-          if (context.voiceResponseStyle && !hasToolCalls && !phoneValidationFailed
-            && !(this.fallbackInstructionsCache.get(context.businessAccountId)?.length)) {
-            // Hold back anything that could be the start of a [[FALLBACK]] marker.
-            livePending = this.stripFallbackMarker(livePending + delta.content);
-            const cut = livePending.lastIndexOf('[');
-            const ready = cut >= 0 && livePending.length - cut < 12 ? livePending.slice(0, cut) : livePending;
-            livePending = livePending.slice(ready.length);
+          if (liveAllowed && !hasToolCalls) {
+            const ready = liveFilter.push(delta.content);
             if (ready) {
               liveStreamed = true;
               yield { type: 'content' as const, data: ready };
             }
+          } else if (liveStreamed) {
+            // A tool call arrived after the visitor already saw the start of the text: keep
+            // the text in the filter so the preamble flushed below is complete.
+            liveFilter.hold(delta.content);
           }
         }
       }
       } // end else (non-short-circuit streaming path)
+      timing.toolCalls = toolCalls.length;
+
+      // The model wrote some text, then called a tool: that text (the "preamble") is already on
+      // the visitor's screen. Send the rest of it (anything held back while checking for a
+      // [[FALLBACK]] marker) now; the tool's answer is appended to it below and the stored /
+      // final message is preamble + answer — exactly what the visitor saw.
+      if (hasToolCalls && liveStreamed) {
+        const rest = liveFilter.flush();
+        if (rest) yield { type: 'content' as const, data: rest };
+      }
 
       // FALLBACK INSTRUCTION HANDLING: If AI deflects, use user-defined fallback template DIRECTLY
       if (!hasToolCalls && this.isDeflectionResponse(fullResponse)) {
@@ -4056,7 +4262,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       let contentAlreadyYielded = false;
       if (!hasToolCalls) {
         if (liveStreamed) {
-          const rest = this.stripFallbackMarker(livePending);
+          // Already streamed as written: send only what was held back.
+          const rest = liveFilter.flush();
           if (rest) yield { type: 'content', data: rest };
         } else {
           for (const content of bufferedContent) {
@@ -4435,6 +4642,18 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         // tool-call → second-LLM cycle to finish before showing anything).
         let finalContent = '';
         let streamedTokens = false;
+        // Text the visitor already saw before the tool call (see above); the answer continues it.
+        const preamble = liveStreamed ? liveFilter.sent() : '';
+        const hasPreamble = preamble.trim().length > 0;
+        let preambleSep = '';
+        let preambleSepDecided = false;
+        const decideSep = (next: string) => {
+          if (preambleSepDecided || !hasPreamble) return;
+          preambleSepDecided = true;
+          preambleSep = this.preambleSeparator(preamble, next);
+        };
+        // Hold back / strip a [[FALLBACK]] marker in the continuation as well.
+        const continuationFilter = this.createLiveTextFilter();
         for await (const token of llamaService.continueToolConversationStream(
           messagesWithSystem,
           continuationTools,
@@ -4449,7 +4668,25 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         )) {
           finalContent += token;
           streamedTokens = true;
-          yield { type: 'content' as const, data: token };
+          if (token) timing.mark('first token');
+          const ready = continuationFilter.push(token);
+          if (ready) {
+            if (hasPreamble && !preambleSepDecided) {
+              decideSep(ready);
+              if (preambleSep) yield { type: 'content' as const, data: preambleSep };
+            }
+            yield { type: 'content' as const, data: ready };
+          }
+        }
+        {
+          const rest = continuationFilter.flush();
+          if (rest) {
+            if (hasPreamble && !preambleSepDecided) {
+              decideSep(rest);
+              if (preambleSep) yield { type: 'content' as const, data: preambleSep };
+            }
+            yield { type: 'content' as const, data: rest };
+          }
         }
         void streamedTokens;
         
@@ -4708,7 +4945,18 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         
         // SAFETY: Always strip [[FALLBACK]] marker before yielding (in case it leaked through)
         finalContent = this.stripFallbackMarker(finalContent);
-        
+
+        // The message the visitor saw = preamble (if any) + this answer. Stored and sent as
+        // `final` so history, the admin transcript and the client all agree.
+        if (hasPreamble) {
+          if (finalContent && finalContent.trim()) {
+            decideSep(finalContent);
+            finalContent = `${preamble}${preambleSep}${finalContent}`;
+          } else {
+            finalContent = preamble;
+          }
+        }
+
         // Extract product IDs for metadata storage
         const productIds = productData && Array.isArray(productData) 
           ? productData.map((p: any) => p.id).filter(Boolean) 
@@ -4940,7 +5188,13 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         // sent no arguments, so buffered content was discarded), send the finalResponse now.
         if (!contentAlreadyYielded && finalResponse && finalResponse.trim()) {
           console.log('[Chat Stream] Yielding finalResponse that was not yet sent to frontend (Gemini empty tool-call guard)');
-          yield { type: 'content', data: finalResponse };
+          // Part of it may already have streamed live before the (empty) tool call: send only the rest.
+          const alreadyShown = liveStreamed ? liveFilter.sent() : '';
+          if (!alreadyShown) {
+            yield { type: 'content', data: finalResponse };
+          } else if (finalResponse.startsWith(alreadyShown) && finalResponse.length > alreadyShown.length) {
+            yield { type: 'content', data: finalResponse.slice(alreadyShown.length) };
+          }
         }
 
         // Emit order lookup option cards when server-side intent was detected
@@ -5123,7 +5377,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
   }
 
   /** Cached per account (5 min): the business-context block (+ profile in retrieval mode). */
-  private async getContextBundle(context: ChatContext, mode: ChatContextMode): Promise<ContextBundle> {
+  private async getContextBundle(context: ChatContext, mode: ChatContextMode, opts: { refresh?: boolean } = {}): Promise<ContextBundle> {
     const k12ContentOnly = this.isK12ContentOnly(context);
     const retrievalMode = mode === 'retrieval' && !k12ContentOnly;
     const cacheKey = k12ContentOnly
@@ -5132,7 +5386,11 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         ? BusinessContextCache.KEYS.BUSINESS_CONTEXT_RETRIEVAL(context.businessAccountId)
         : BusinessContextCache.KEYS.BUSINESS_CONTEXT(context.businessAccountId);
 
-    return businessContextCache.getOrFetch<ContextBundle>(cacheKey, async () => {
+    // refresh: reload while the current copy keeps serving (chat-open prewarm of an ageing entry).
+    const fetchOrRefresh = opts.refresh
+      ? <T,>(key: string, fn: () => Promise<T>) => businessContextCache.refresh<T>(key, fn)
+      : <T,>(key: string, fn: () => Promise<T>) => businessContextCache.getOrFetch<T>(key, fn);
+    return fetchOrRefresh<ContextBundle>(cacheKey, async () => {
       let enrichedContext = '';
 
       // PARALLEL DATA LOADING: Load all database queries simultaneously for 50-60% faster performance
@@ -5824,18 +6082,48 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
     history: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
     context: ChatContext,
     mode: ChatContextMode,
-  ): Promise<{ text: string; itemCount: number }> {
-    if (mode !== 'retrieval') {
-      return { text: await this.addRAGContext(userMessage, context.businessAccountId), itemCount: -1 };
-    }
+    timing?: ChatTurnTiming,
+  ): Promise<{ text: string; itemCount: number; skipFaqPrefetch?: boolean }> {
     const msg = (userMessage || '').trim();
-    if (msg.length < 2 || /^(hi+|hey+|hello+|yo|sup|wassup|bye|goodbye|see you|cya|thanks?|thank you|thx|ty)[\s!.]*$/i.test(msg)) {
+    const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content;
+    // Small talk ("hey wassup", "thank you so much", "kaise ho"; "ok" unless it answers a
+    // question the assistant asked) has nothing to find in the knowledge base.
+    const smallTalk = msg.length < 2
+      || /^(hi+|hey+|hello+|yo|sup|wassup|bye|goodbye|see you|cya|thanks?|thank you|thx|ty)[\s!.]*$/i.test(msg)
+      || !!smallTalkKind(msg, lastAssistant);
+    if (mode !== 'retrieval') {
+      // Legacy: document-chunk RAG + the FAQ pre-fetch in llamaService. Accounts with no
+      // knowledge at all and small talk skip both.
+      if (!(await accountHasKnowledge(context.businessAccountId))) {
+        timing?.stage('knowledge', 'skipped (no_knowledge)');
+        return { text: '', itemCount: -1, skipFaqPrefetch: true };
+      }
+      if (smallTalk) {
+        timing?.stage('knowledge', 'skipped (small_talk, legacy)');
+        return { text: '', itemCount: -1, skipFaqPrefetch: true };
+      }
+      const started = Date.now();
+      const text = await this.addRAGContext(userMessage, context.businessAccountId);
+      timing?.stage('knowledge', Date.now() - started, 'legacy');
+      return { text, itemCount: -1 };
+    }
+    if (smallTalk) {
+      timing?.stage('knowledge', 'skipped (small_talk)');
       return { text: '', itemCount: 0 };
     }
     try {
       const started = Date.now();
       const accountId = context.businessAccountId;
-      const bundle = await this.getContextBundle(context, 'retrieval');
+      const [bundle, hasKnowledge] = await Promise.all([
+        this.getContextBundle(context, 'retrieval'),
+        accountHasKnowledge(accountId),
+      ]);
+      // No FAQs / documents / URLs / pages and no profile passages: every lookup would come
+      // back empty — skip the query embedding and the searches.
+      if (!hasKnowledge && !(bundle.profile?.passages?.length)) {
+        timing?.stage('knowledge', 'skipped (no_knowledge)');
+        return { text: '', itemCount: 0 };
+      }
       let query = buildRetrievalQuery(msg, history);
       // Optional: rewrite short follow-ups into a standalone question with a small LLM
       // call (off by default — the heuristic query above needs no call).
@@ -5860,10 +6148,14 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
         businessAccountId: accountId,
         query,
         passages: bundle.profile?.passages || [],
-        embedQuery: context.openaiApiKey ? (text) => embeddingService.generateEmbedding(text, accountId) : undefined,
+        // Query embeddings are cached per account (10 min LRU) and shared while in flight.
+        embedQuery: context.openaiApiKey
+          ? (text) => embedQueryCached(accountId, text, t => embeddingService.generateEmbedding(t, accountId))
+          : undefined,
         channel: 'website',
       });
       console.log(`[Knowledge] ${result.items.length} item(s) (${result.items.map(i => i.source).join(', ') || 'none'}), ${result.tokens} tokens, from ${result.candidates} candidates in ${Date.now() - started}ms${query.isFollowUp ? ' (follow-up query)' : ''}`);
+      timing?.stage('knowledge', Date.now() - started, `${result.items.length} items`);
       return { text: result.text, itemCount: result.items.length };
     } catch (error) {
       console.error('[Knowledge] Retrieval failed (continuing without it):', error);

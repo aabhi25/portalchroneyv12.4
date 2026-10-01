@@ -197,6 +197,7 @@ import { eq, desc, asc, count, inArray, sql, and, or, gte, lte, ilike, isNull } 
 import { isTopscholarAccount } from "./services/topscholar/config";
 import { mergeGroupLeadConfigIntoAccount } from "@shared/leadTrainingConfig";
 import { businessContextCache } from "./services/businessContextCache";
+import { invalidateKnowledgePresence } from "./services/chatContext/knowledgePresence";
 
 /** Per-member outcome of a group publish (see publishGroupTrainingToMembers). */
 export interface GroupPublishMemberResult {
@@ -2086,6 +2087,7 @@ export class DatabaseStorage implements IStorage {
       .insert(faqs)
       .values(insertFaq)
       .returning();
+    invalidateKnowledgePresence(faq.businessAccountId);
     
     // Embed FAQ asynchronously (don't block the response)
     this.embedFaqAsync(faq.id, faq.question, faq.answer, faq.businessAccountId);
@@ -2832,6 +2834,7 @@ export class DatabaseStorage implements IStorage {
       .insert(analyzedPages)
       .values(values)
       .returning();
+    invalidateKnowledgePresence(created.businessAccountId);
     return created;
   }
 
@@ -2867,6 +2870,7 @@ export class DatabaseStorage implements IStorage {
       .insert(trainingDocuments)
       .values(document)
       .returning();
+    invalidateKnowledgePresence(created.businessAccountId);
     return created;
   }
 

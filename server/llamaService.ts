@@ -472,6 +472,11 @@ export interface StreamTurnOptions {
   otpBlock?: string;
   /** Voice turns: spoken-style reply rules (services/voice/voiceStyle). Goes last, before OTP. */
   voiceStyleBlock?: string;
+  /**
+   * Legacy context mode: skip the server-side FAQ pre-fetch (small talk such as "hey wassup" /
+   * "thank you so much", or an account with no FAQs at all — nothing to find).
+   */
+  skipFaqPrefetch?: boolean;
 }
 
 export class LlamaService {
@@ -1463,8 +1468,10 @@ ${extraFinalBlock.trim()}` : ''}`;
     // Suppressed when order lookup or return/exchange cards are already showing — the AI
     // must reply with a single brief sentence, not summarise FAQ content about tracking.
     let preFetchedFaqData: { faqs: any[]; searchQuery: string } | null = null;
-    if (businessAccountId && !suppressFaqInjection && !promptOptions?.skipFaqPrefetch) {
+    if (businessAccountId && !suppressFaqInjection && !promptOptions?.skipFaqPrefetch && !turnOptions?.skipFaqPrefetch) {
       preFetchedFaqData = await preFetchFaqs(userMessage, businessAccountId);
+    } else if (turnOptions?.skipFaqPrefetch && !suppressFaqInjection) {
+      console.log('[FAQ Pre-fetch] Skipped — small talk or no FAQs for this account');
     } else if (suppressFaqInjection) {
       console.log('[FAQ Pre-fetch] Suppressed — order lookup cards active, skipping FAQ injection');
     }

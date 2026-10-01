@@ -8,6 +8,9 @@ interface CacheEntry<T> {
 
 export class BusinessContextCache {
   private cache: Map<string, CacheEntry<any>> = new Map();
+  // Fetches in progress: a second caller for the same key (e.g. the chat-open prewarm
+  // still loading when the first message arrives) joins it instead of loading again.
+  private inflight: Map<string, Promise<any>> = new Map();
   private readonly TTL_MS = 5 * 60 * 1000; // 5 minutes
   private readonly MAX_ENTRIES = 100; // Maximum cache size to prevent memory leaks
 
@@ -25,6 +28,10 @@ export class BusinessContextCache {
     // Retrieval-mode website chat: compact profile + retrievable passages (see chatContext/).
     BUSINESS_CONTEXT_RETRIEVAL: (businessAccountId: string) => `context:${businessAccountId}:rv`,
     INTRO_MESSAGE: (businessAccountId: string) => `intro:${businessAccountId}`,
+    // Widget greeting per language / settings fingerprint (see GET /api/chat/widget/intro).
+    INTRO_VARIANT: (businessAccountId: string, variant: string) => `intro:${businessAccountId}:${variant}`,
+    // Whether the account has any FAQs / documents / URLs / pages (chatContext/knowledgePresence).
+    KNOWLEDGE_PRESENCE: (businessAccountId: string) => `context:${businessAccountId}:kp`,
     WA_BUSINESS_CONTEXT: (businessAccountId: string) => `wa-context:${businessAccountId}`,
   };
 
@@ -33,6 +40,13 @@ export class BusinessContextCache {
     this.invalidate(BusinessContextCache.KEYS.BUSINESS_CONTEXT(businessAccountId));
     this.invalidate(BusinessContextCache.KEYS.BUSINESS_CONTEXT_K12(businessAccountId));
     this.invalidate(BusinessContextCache.KEYS.BUSINESS_CONTEXT_RETRIEVAL(businessAccountId));
+    this.invalidate(BusinessContextCache.KEYS.KNOWLEDGE_PRESENCE(businessAccountId));
+  }
+
+  /** Drop the cached widget greetings (every language) of one account. */
+  invalidateIntro(businessAccountId: string) {
+    const id = businessAccountId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    this.invalidatePattern(new RegExp(`^intro:${id}(:.*)?$`));
   }
 
   // Invalidation patterns for business account updates. Drops everything cached
@@ -44,9 +58,9 @@ export class BusinessContextCache {
     const patterns = [
       new RegExp(`^widget:${id}$`),
       new RegExp(`^faqs:${id}$`),
-      // Catches `context:<id>` and the `:k12co` / `:rv` variants.
-      new RegExp(`^context:${id}(:k12co|:rv)?$`),
-      new RegExp(`^intro:${id}$`),
+      // Catches `context:<id>` and the `:k12co` / `:rv` / `:kp` variants.
+      new RegExp(`^context:${id}(:k12co|:rv|:kp)?$`),
+      new RegExp(`^intro:${id}(:.*)?$`),
       // WhatsApp context keys carry a knowledge-toggle suffix (`:w1d0` etc.).
       new RegExp(`^wa-context:${id}(:.*)?$`),
       // Instagram / Facebook DM context (per platform suffix).
@@ -72,21 +86,61 @@ export class BusinessContextCache {
       return cached.data as T;
     }
 
-    console.log(`[Cache MISS] ${key} - fetching fresh data`);
-    const data = await fetchFn();
-    
-    if (this.cache.size >= this.MAX_ENTRIES) {
-      this.evictLRU();
+    const pending = this.inflight.get(key);
+    if (pending) {
+      console.log(`[Cache JOIN] ${key} - joining a load already in progress`);
+      return pending as Promise<T>;
     }
-    
-    this.cache.set(key, {
-      data,
-      timestamp: now,
-      lastAccessed: now,
-      ttl: ttlMs || this.TTL_MS
-    });
 
-    return data;
+    console.log(`[Cache MISS] ${key} - fetching fresh data`);
+    return this.load(key, fetchFn, ttlMs);
+  }
+
+  /**
+   * Reload a key in the background of its current value: callers keep getting the cached
+   * copy (if still fresh) until the new one is stored. Joins a load already in progress.
+   */
+  async refresh<T>(key: string, fetchFn: () => Promise<T>, ttlMs?: number): Promise<T> {
+    const pending = this.inflight.get(key);
+    if (pending) return pending as Promise<T>;
+    console.log(`[Cache REFRESH] ${key}`);
+    return this.load(key, fetchFn, ttlMs);
+  }
+
+  private async load<T>(key: string, fetchFn: () => Promise<T>, ttlMs?: number): Promise<T> {
+    const now = Date.now();
+    const self: { load?: Promise<T> } = {};
+    const load: Promise<T> = (async () => {
+      const data = await fetchFn();
+      // Invalidated while loading → hand the result to the callers but don't keep it.
+      if (this.inflight.get(key) === self.load) {
+        if (!this.cache.has(key) && this.cache.size >= this.MAX_ENTRIES) {
+          this.evictLRU();
+        }
+        this.cache.set(key, {
+          data,
+          timestamp: now,
+          lastAccessed: now,
+          ttl: ttlMs || this.TTL_MS
+        });
+      }
+      return data;
+    })();
+    self.load = load;
+    this.inflight.set(key, load);
+    try {
+      return await load;
+    } finally {
+      if (this.inflight.get(key) === load) this.inflight.delete(key);
+    }
+  }
+
+  /** Age in ms of a fresh cached entry, or null (missing / expired). */
+  freshAgeMs(key: string): number | null {
+    const cached = this.cache.get(key);
+    if (!cached) return null;
+    const age = Date.now() - cached.timestamp;
+    return age < (cached.ttl || this.TTL_MS) ? age : null;
   }
 
   private evictLRU() {
@@ -108,6 +162,7 @@ export class BusinessContextCache {
 
   invalidate(key: string) {
     this.cache.delete(key);
+    this.inflight.delete(key);
     console.log(`[Cache INVALIDATE] ${key}`);
   }
 
@@ -119,12 +174,16 @@ export class BusinessContextCache {
         count++;
       }
     }
+    for (const key of Array.from(this.inflight.keys())) {
+      if (pattern.test(key)) this.inflight.delete(key);
+    }
     console.log(`[Cache INVALIDATE PATTERN] ${pattern} - removed ${count} entries`);
   }
 
   clear() {
     const size = this.cache.size;
     this.cache.clear();
+    this.inflight.clear();
     console.log(`[Cache CLEAR] Removed ${size} entries`);
   }
 

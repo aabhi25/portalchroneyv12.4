@@ -201,6 +201,51 @@ Respond with ONLY "SPAM" or "OK" - nothing else.`
   }
 }
 
+/**
+ * Cheap, local pre-filter for the first-message AI spam check (isGibberishAI costs one
+ * LLM round trip, 0.5–1.5 s, on every new conversation). Returns why the message
+ * looks suspicious enough to ask the AI, or null for an ordinary greeting / question,
+ * which skips the AI check (it would answer "OK" for those anyway).
+ *
+ * Errs towards flagging: a false positive only costs the AI check that used to run on
+ * every first message; a false negative sends a gibberish first message down the
+ * normal chat path instead of the simplified spam reply.
+ */
+// Unicode-aware patterns (constructor form: the server tsconfig targets ES5).
+const LETTER_RE = new RegExp('\\p{L}', 'gu');
+const REPEATED_CHAR_RE = new RegExp('(.)\\1{4,}', 'u');
+const REPEATED_CHUNK_RE = new RegExp('(\\p{L}{2,4})\\1{2,}', 'u');
+const SYMBOL_RE = new RegExp("[^\\p{L}\\p{M}\\p{N}\\s.,!?'\"’()\\-:;₹$%&/]", 'gu');
+
+export function spamCheckReason(message: string): string | null {
+  const text = String(message || '').trim();
+  if (!text) return 'empty';
+  // Single characters / symbols: isGibberishAI rules on these locally (no AI call).
+  if (text.length === 1) return 'single_character';
+  if (/(https?:\/\/|www\.|\b[a-z0-9-]{2,}\.(com|net|org|in|io|co|xyz|ru|info|biz|top|click|link|site|online|shop|app|me|ly|gl|tk|cn)\b)/i.test(text)) return 'link';
+  if (/<[a-z/][^>]*>|\{\{|\}\}|\[url|javascript:/i.test(text)) return 'markup';
+  if (/@[a-z0-9-]+\.[a-z]{2,}/i.test(text)) return 'email_or_handle';
+  // The AI prompt treats test inputs ("test", "testing 123") as spam — keep asking it.
+  if (/\b(test|testing|tester|asdf|qwerty|lorem|ipsum)\b/i.test(text)) return 'test_input';
+  const letters = text.match(LETTER_RE) || [];
+  if (letters.length === 0) return 'no_letters';
+  if (REPEATED_CHAR_RE.test(text.replace(/\s+/g, ''))) return 'repeated_characters';
+  if (REPEATED_CHUNK_RE.test(text.replace(/\s+/g, '').toLowerCase())) return 'repeated_pattern';
+  const symbols = text.match(SYMBOL_RE) || [];
+  if (text.length >= 4 && symbols.length / text.length > 0.3) return 'excessive_symbols';
+  if (/(qwer|wert|erty|rtyu|tyui|yuio|uiop|asdf|sdfg|dfgh|fghj|ghjk|hjkl|zxcv|xcvb|cvbn|vbnm)/i.test(text)) return 'keyboard_mash';
+  for (const token of text.split(/\s+/)) {
+    if (token.length > 30) return 'long_token';
+    const latin = (token.match(/[a-z]/gi) || []).join('').toLowerCase();
+    if (latin.length < 4) continue;
+    const vowels = (latin.match(/[aeiouy]/g) || []).length;
+    if (vowels === 0) return 'no_vowels';
+    if (latin.length >= 6 && vowels / latin.length < 0.25) return 'low_vowel_ratio';
+    if (/[bcdfghjklmnpqrstvwxz]{5,}/.test(latin)) return 'consonant_run';
+  }
+  return null;
+}
+
 export function isGibberish(message: string): SpamCheckResult {
   if (!message || typeof message !== 'string') {
     return { isSpam: true, reason: 'empty_message', confidence: 'high' };

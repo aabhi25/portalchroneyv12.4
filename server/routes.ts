@@ -58,6 +58,7 @@ import { claimConversionFire } from "./services/conversion";
 import { llamaService } from "./llamaService";
 import { conversationMemory } from "./conversationMemory";
 import { businessContextCache, BusinessContextCache } from "./services/businessContextCache";
+import { invalidateKnowledgePresence } from "./services/chatContext/knowledgePresence";
 import { journeyService } from "./services/journeyService";
 import { pdfProcessingService } from "./services/pdfProcessingService";
 import { renderInsightsPdf, renderAnalyticsPdf, renderLeadsPdf } from "./services/pdfReportService";
@@ -67,7 +68,7 @@ import { aiUsageLogger } from "./services/aiUsageLogger";
 import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID, randomBytes, createHash } from "crypto";
 import fs from "fs";
 import net from "net";
 import { exec } from "child_process";
@@ -169,6 +170,75 @@ const updateWebsiteAnalysisSchema = z.object({
 });
 
 // Helper function to generate intro messages for public chat
+// Currency symbols used by the website chat routes (widget + public chat link stream).
+const WIDGET_CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: "$", EUR: "€", GBP: "£", JPY: "¥", CNY: "¥", INR: "₹", AUD: "A$",
+  CAD: "C$", CHF: "CHF", SEK: "kr", NZD: "NZ$", SGD: "S$", HKD: "HK$",
+  NOK: "kr", MXN: "$", BRL: "R$", ZAR: "R", KRW: "₩", TRY: "₺",
+  RUB: "₽", IDR: "Rp", THB: "฿", MYR: "RM"
+};
+
+// Currency symbols used by the Home test chat (POST /api/chat, /api/chat/stream).
+const HOME_CHAT_CURRENCY_SYMBOLS: Record<string, string> = {
+  'INR': '₹', 'USD': '$', 'AED': 'د.إ', 'EUR': '€', 'GBP': '£',
+  'AUD': 'A$', 'CAD': 'C$', 'CHF': 'CHF', 'CNY': '¥', 'JPY': '¥',
+  'KRW': '₩', 'SGD': 'S$', 'HKD': 'HK$', 'NZD': 'NZ$', 'SEK': 'kr',
+  'NOK': 'kr', 'DKK': 'kr', 'PLN': 'zł', 'BRL': 'R$', 'MXN': '$',
+  'ZAR': 'R', 'TRY': '₺', 'RUB': '₽'
+};
+
+// Chat-open warm-up: when the widget / public chat loads, put the account's business-context
+// bundle into the cache (fire-and-forget) so the visitor's first message doesn't wait ~0.85 s
+// for it. Throttled per account; chatService skips it when the cached copy is fresh. The
+// context fields mirror the widget stream route (they decide the bundle and its cache key).
+const chatOpenPrewarmAt = new Map<string, number>();
+function warmChatContextOnOpen(
+  businessAccountId: string,
+  settings: any,
+  account: any,
+  symbols: Record<string, string> = WIDGET_CURRENCY_SYMBOLS,
+  defaultCurrency = 'USD',
+): void {
+  try {
+    if (!businessAccountId || !account || account.status === 'suspended') return;
+    const now = Date.now();
+    const last = chatOpenPrewarmAt.get(businessAccountId);
+    if (last && now - last < 15_000) return;
+    chatOpenPrewarmAt.delete(businessAccountId);
+    chatOpenPrewarmAt.set(businessAccountId, now);
+    if (chatOpenPrewarmAt.size > 5000) {
+      const oldest = chatOpenPrewarmAt.keys().next().value;
+      if (oldest !== undefined) chatOpenPrewarmAt.delete(oldest);
+    }
+    const currency = settings?.currency || defaultCurrency;
+    void chatService.prewarmContextBundle({
+      userId: 'prewarm',
+      businessAccountId,
+      personality: settings?.personality || 'friendly',
+      responseLength: settings?.responseLength || 'balanced',
+      companyDescription: account.description || '',
+      currency,
+      currencySymbol: symbols[currency] || "$",
+      customInstructions: settings?.customInstructions || undefined,
+      systemMode: account.systemMode || 'full',
+      k12EducationEnabled: account.k12EducationEnabled === 'true',
+      k12ContentOnlyMode: account.k12ContentOnlyMode === 'true',
+      k12VerbatimContentMode: account.k12VerbatimContentMode === 'true',
+      jobPortalEnabled: account.jobPortalEnabled === 'true',
+      demoOrdersEnabled: account.demoOrdersEnabled === 'true',
+      channel: 'widget',
+    });
+  } catch (err) {
+    console.error('[Chat Prewarm] Could not start (non-fatal):', err);
+  }
+}
+
+/** Short stable key for an intro-cache variant (language + the text / settings it depends on). */
+function introVariantKey(...parts: Array<string | null | undefined>): string {
+  return createHash("sha1").update(parts.map(p => p ?? '').join('\u0000')).digest('hex').slice(0, 20);
+}
+const INTRO_CACHE_TTL_MS = 60 * 60 * 1000;
+
 async function generateIntroMessage(businessAccountId: string): Promise<string> {
   try {
     const settings = await storage.getWidgetSettings(businessAccountId);
@@ -1356,13 +1426,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const personality = settings?.personality || 'friendly';
       const responseLength = settings?.responseLength || 'balanced';
       const currency = settings?.currency || 'USD';
-      const currencySymbols: Record<string, string> = {
-        USD: "$", EUR: "€", GBP: "£", JPY: "¥", CNY: "¥", INR: "₹", AUD: "A$",
-        CAD: "C$", CHF: "CHF", SEK: "kr", NZD: "NZ$", SGD: "S$", HKD: "HK$",
-        NOK: "kr", MXN: "$", BRL: "R$", ZAR: "R", KRW: "₩", TRY: "₺",
-        RUB: "₽", IDR: "Rp", THB: "฿", MYR: "RM"
-      };
-      const currencySymbol = currencySymbols[currency] || "$";
+      const currencySymbol = WIDGET_CURRENCY_SYMBOLS[currency] || "$";
 
       // Set up SSE headers immediately — client sees the connection open right away,
       // spinner appears before geolocation / language detection complete
@@ -2236,9 +2300,13 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         return res.status(400).json({ error: "businessAccountId required" });
       }
 
-      const settings = await storage.getWidgetSettings(businessAccountId as string);
-      const businessAccount = await storage.getBusinessAccount(businessAccountId as string);
-      
+      // SPEED: settings, account and journeys are independent reads — load them together.
+      const [settings, businessAccount, journeysForIntro] = await Promise.all([
+        storage.getWidgetSettings(businessAccountId as string),
+        storage.getBusinessAccount(businessAccountId as string),
+        storage.getAllJourneys(businessAccountId as string),
+      ]);
+
       if (!businessAccount) {
         return res.status(404).json({ error: "Business account not found" });
       }
@@ -2248,60 +2316,78 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         return res.status(403).json({ error: "This chatbot is currently unavailable" });
       }
 
+      // The chat is opening: warm the business context for the first message (fire-and-forget).
+      warmChatContextOnOpen(businessAccountId as string, settings, businessAccount);
+
+      // Generated / translated greetings are cached per account + language + the text or
+      // settings they come from (so an edit is picked up at once); 1 hour, per process.
+      const cachedIntro = <T,>(variant: string, make: () => Promise<T>): Promise<T> =>
+        businessContextCache.getOrFetch<T>(
+          BusinessContextCache.KEYS.INTRO_VARIANT(businessAccountId as string, variant),
+          make,
+          INTRO_CACHE_TTL_MS,
+        );
+
       // Handle Welcome Back greeting for returning visitors (after 30+ minutes)
       if (welcomeBack === 'true' && businessAccount.openaiApiKey) {
         try {
-          console.log('[Intro API] Generating welcome back message for returning visitor');
+          const intro = await cachedIntro(
+            introVariantKey('welcome_back', String(language || ''), businessAccount.description, businessAccount.name),
+            async () => {
+              console.log('[Intro API] Generating welcome back message for returning visitor');
           
-          const businessName = businessAccount.businessName || businessAccount.name || 'us';
-          const systemContext = businessAccount.description ? 
-            `You are representing: ${businessAccount.description}` : 
-            '';
+              const businessName = businessAccount.businessName || businessAccount.name || 'us';
+              const systemContext = businessAccount.description ? 
+                `You are representing: ${businessAccount.description}` : 
+                '';
           
-          const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
-          const completion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-              { 
-                role: 'system', 
-                content: `${systemContext}\n\nYou are a friendly AI assistant. Generate a warm, welcoming message for a returning visitor. Keep it brief (1-2 sentences). Don't use emojis. Make it feel personal and inviting.`
-              },
-              { 
-                role: 'user', 
-                content: `Generate a welcome back greeting for a visitor returning to ${businessName}. Ask what they'd like to know or how you can help today.`
-              }
-            ],
-            temperature: 0.7,
-            max_tokens: 100
-          });
-          
-          let intro = completion.choices[0]?.message?.content?.trim() || "Welcome back! How can I help you today?";
-          
-          // Translate if needed
-          if (language && language !== 'auto' && language !== 'en') {
-            const LANGUAGE_NAMES: Record<string, string> = {
-              'en': 'English', 'hi': 'Hindi', 'hinglish': 'Hinglish', 'ta': 'Tamil', 'te': 'Telugu',
-              'kn': 'Kannada', 'mr': 'Marathi', 'bn': 'Bengali', 'gu': 'Gujarati', 'ml': 'Malayalam',
-              'pa': 'Punjabi', 'or': 'Odia', 'as': 'Assamese', 'ur': 'Urdu', 'ne': 'Nepali',
-              'es': 'Spanish', 'fr': 'French', 'de': 'German', 'pt': 'Portuguese', 'it': 'Italian',
-              'ja': 'Japanese', 'ko': 'Korean', 'zh': 'Chinese', 'ar': 'Arabic', 'ru': 'Russian',
-              'th': 'Thai', 'vi': 'Vietnamese', 'id': 'Indonesian', 'ms': 'Malay', 'tr': 'Turkish'
-            };
-            const langName = LANGUAGE_NAMES[language as string];
-            if (langName) {
-              const translateCompletion = await openai.chat.completions.create({
+              const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
+              const completion = await openai.chat.completions.create({
                 model: 'gpt-4o-mini',
                 messages: [
-                  { role: 'system', content: `Translate the following text to ${langName}. Return ONLY the translated text, nothing else. Keep the tone and meaning intact.` },
-                  { role: 'user', content: intro }
+                  { 
+                    role: 'system', 
+                    content: `${systemContext}\n\nYou are a friendly AI assistant. Generate a warm, welcoming message for a returning visitor. Keep it brief (1-2 sentences). Don't use emojis. Make it feel personal and inviting.`
+                  },
+                  { 
+                    role: 'user', 
+                    content: `Generate a welcome back greeting for a visitor returning to ${businessName}. Ask what they'd like to know or how you can help today.`
+                  }
                 ],
-                temperature: 0.3,
-                max_tokens: 200
+                temperature: 0.7,
+                max_tokens: 100
               });
-              intro = translateCompletion.choices[0]?.message?.content?.trim() || intro;
-            }
-          }
           
+              let intro = completion.choices[0]?.message?.content?.trim() || "Welcome back! How can I help you today?";
+          
+              // Translate if needed
+              if (language && language !== 'auto' && language !== 'en') {
+                const LANGUAGE_NAMES: Record<string, string> = {
+                  'en': 'English', 'hi': 'Hindi', 'hinglish': 'Hinglish', 'ta': 'Tamil', 'te': 'Telugu',
+                  'kn': 'Kannada', 'mr': 'Marathi', 'bn': 'Bengali', 'gu': 'Gujarati', 'ml': 'Malayalam',
+                  'pa': 'Punjabi', 'or': 'Odia', 'as': 'Assamese', 'ur': 'Urdu', 'ne': 'Nepali',
+                  'es': 'Spanish', 'fr': 'French', 'de': 'German', 'pt': 'Portuguese', 'it': 'Italian',
+                  'ja': 'Japanese', 'ko': 'Korean', 'zh': 'Chinese', 'ar': 'Arabic', 'ru': 'Russian',
+                  'th': 'Thai', 'vi': 'Vietnamese', 'id': 'Indonesian', 'ms': 'Malay', 'tr': 'Turkish'
+                };
+                const langName = LANGUAGE_NAMES[language as string];
+                if (langName) {
+                  const translateCompletion = await openai.chat.completions.create({
+                    model: 'gpt-4o-mini',
+                    messages: [
+                      { role: 'system', content: `Translate the following text to ${langName}. Return ONLY the translated text, nothing else. Keep the tone and meaning intact.` },
+                      { role: 'user', content: intro }
+                    ],
+                    temperature: 0.3,
+                    max_tokens: 200
+                  });
+                  intro = translateCompletion.choices[0]?.message?.content?.trim() || intro;
+                }
+              }
+          
+              return intro;
+            },
+          );
           console.log('[Intro API] Welcome back message:', intro);
           return res.json({ intro, isWelcomeBack: true });
         } catch (error) {
@@ -2345,7 +2431,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       };
 
       // Check for startFromScratch journey first - if enabled, use first step as greeting
-      const journeys = await storage.getAllJourneys(businessAccountId as string);
+      const journeys = journeysForIntro;
       const startFromScratchJourney = journeys.find(j => 
         j.status === 'active' && j.startFromScratch === 'true'
       );
@@ -2360,7 +2446,8 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
           // Translate if needed
           let introText = firstStep.questionText;
           if (language && language !== 'auto' && language !== 'en') {
-            introText = await translateText(introText, language as string);
+            const source = firstStep.questionText;
+            introText = await cachedIntro(introVariantKey('journey', String(language), source), () => translateText(source, language as string));
           }
           
           const response: any = { 
@@ -2407,10 +2494,18 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       
       // Check welcome message type
       if (settings?.welcomeMessageType === 'custom' && settings?.welcomeMessage) {
-        const intro = language && language !== 'auto' 
-          ? await translateText(settings.welcomeMessage, language as string)
-          : settings.welcomeMessage;
+        const welcome = settings.welcomeMessage;
+        const intro = language && language !== 'auto'
+          ? await cachedIntro(introVariantKey('custom', String(language), welcome), () => translateText(welcome, language as string))
+          : welcome;
         return res.json({ intro });
+      }
+
+      // AI-generated greeting already stored for these settings (cleared whenever the
+      // personality / welcome type / instructions / products / description change): serve it
+      // instead of generating a new one on every page load (~3–4 s).
+      if (businessAccount.openaiApiKey && settings?.cachedIntro && settings.cachedIntro.trim()) {
+        return res.json({ intro: settings.cachedIntro });
       }
 
       // Generate AI intro if needed and API key is available
@@ -2444,8 +2539,8 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
 
       // Fallback to default message - translate if needed
       const defaultMsg = "Hi! How can I help you today?";
-      const intro = language && language !== 'auto' 
-        ? await translateText(defaultMsg, language as string)
+      const intro = language && language !== 'auto'
+        ? await cachedIntro(introVariantKey('default', String(language), defaultMsg), () => translateText(defaultMsg, language as string))
         : defaultMsg;
       res.json({ intro });
     } catch (error: any) {
@@ -9194,14 +9289,7 @@ If you cannot determine the category or the image doesn't match any category, re
       const customInstructions = widgetSettings?.customInstructions || '';
       
       // Currency symbol mapping
-      const currencySymbols: Record<string, string> = {
-        'INR': '₹', 'USD': '$', 'AED': 'د.إ', 'EUR': '€', 'GBP': '£',
-        'AUD': 'A$', 'CAD': 'C$', 'CHF': 'CHF', 'CNY': '¥', 'JPY': '¥',
-        'KRW': '₩', 'SGD': 'S$', 'HKD': 'HK$', 'NZD': 'NZ$', 'SEK': 'kr',
-        'NOK': 'kr', 'DKK': 'kr', 'PLN': 'zł', 'BRL': 'R$', 'MXN': '$',
-        'ZAR': 'R', 'TRY': '₺', 'RUB': '₽'
-      };
-      const currencySymbol = currencySymbols[currency] || '$';
+      const currencySymbol = HOME_CHAT_CURRENCY_SYMBOLS[currency] || '$';
       
       const businessAccount = await storage.getBusinessAccount(user.businessAccountId);
       const companyDescription = businessAccount?.description || '';
@@ -9512,14 +9600,7 @@ Return ONLY the refined instruction, nothing else.`
       const customInstructions = widgetSettings?.customInstructions || '';
       
       // Currency symbol mapping
-      const currencySymbols: Record<string, string> = {
-        'INR': '₹', 'USD': '$', 'AED': 'د.إ', 'EUR': '€', 'GBP': '£',
-        'AUD': 'A$', 'CAD': 'C$', 'CHF': 'CHF', 'CNY': '¥', 'JPY': '¥',
-        'KRW': '₩', 'SGD': 'S$', 'HKD': 'HK$', 'NZD': 'NZ$', 'SEK': 'kr',
-        'NOK': 'kr', 'DKK': 'kr', 'PLN': 'zł', 'BRL': 'R$', 'MXN': '$',
-        'ZAR': 'R', 'TRY': '₺', 'RUB': '₽'
-      };
-      const currencySymbol = currencySymbols[currency] || '$';
+      const currencySymbol = HOME_CHAT_CURRENCY_SYMBOLS[currency] || '$';
       
       const businessAccount = await storage.getBusinessAccount(user.businessAccountId);
       const companyDescription = businessAccount?.description || '';
@@ -21198,7 +21279,12 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
       }
 
       const businessAccountId = link.businessAccountId;
-      
+
+      // The public chat is opening: warm the business context for the first message.
+      Promise.all([storage.getWidgetSettings(businessAccountId), storage.getBusinessAccount(businessAccountId)])
+        .then(([s, a]) => warmChatContextOnOpen(businessAccountId, s, a))
+        .catch(() => undefined);
+
       // Check for active form journey
       const activeJourney = await storage.getActiveFormJourney(businessAccountId);
       
@@ -21623,13 +21709,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
       const personality = settings?.personality || 'friendly';
       const responseLength = settings?.responseLength || 'balanced';
       const currency = settings?.currency || 'USD';
-      const currencySymbols: Record<string, string> = {
-        USD: "$", EUR: "€", GBP: "£", JPY: "¥", CNY: "¥", INR: "₹", AUD: "A$",
-        CAD: "C$", CHF: "CHF", SEK: "kr", NZD: "NZ$", SGD: "S$", HKD: "HK$",
-        NOK: "kr", MXN: "$", BRL: "R$", ZAR: "R", KRW: "₩", TRY: "₺",
-        RUB: "₽", IDR: "Rp", THB: "฿", MYR: "RM"
-      };
-      const currencySymbol = currencySymbols[currency] || "$";
+      const currencySymbol = WIDGET_CURRENCY_SYMBOLS[currency] || "$";
 
       // Set up SSE headers
       res.setHeader('Content-Type', 'text/event-stream');
@@ -25148,6 +25228,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         status: 'pending',
         channels: parsedUrlChannels.channels,
       }).returning();
+      invalidateKnowledgePresence(businessAccountId);
 
       // Start processing in background
       urlTrainingService.processUrl(newUrl.id, url, businessAccountId).catch(err => {
@@ -27222,7 +27303,14 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
 
       const account = await storage.updateBusinessAccountDescription(businessAccountId, description);
-      res.json({ 
+      // The AI-generated widget greeting is written from the description: regenerate it.
+      try {
+        await storage.upsertWidgetSettings(businessAccountId, { cachedIntro: null });
+      } catch (err) {
+        console.error('[Cache] Failed to clear cached intro after description change:', err);
+      }
+      businessContextCache.invalidateIntro(businessAccountId);
+      res.json({  
         name: account.name,
         description: account.description || ""
       });
@@ -27761,6 +27849,8 @@ Be constructive and helpful. Return ONLY valid JSON.`;
 
       // Get business account to check if voice mode and visual search are enabled
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      // The widget is loading: warm the business context for the first message (fire-and-forget).
+      warmChatContextOnOpen(businessAccountId, settings, businessAccount);
       const voiceModeEnabled = businessAccount?.voiceModeEnabled === "true";
       const visualSearchEnabled = businessAccount?.visualSearchEnabled === "true";
 
@@ -27849,6 +27939,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
 
       // Get business account to check if voice mode and visual search are enabled
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      // The settings / Home test-chat page is loading: warm the business context for the
+      // first test message (fire-and-forget; same currency symbols as POST /api/chat/stream).
+      warmChatContextOnOpen(businessAccountId, settings, businessAccount, HOME_CHAT_CURRENCY_SYMBOLS, 'INR');
       const voiceModeEnabled = businessAccount?.voiceModeEnabled === "true";
       const visualSearchEnabled = businessAccount?.visualSearchEnabled === "true";
 
