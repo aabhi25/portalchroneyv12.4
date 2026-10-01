@@ -6,7 +6,8 @@
  * (history, business knowledge, cross-platform memory, lead-collection prompt) → AI → send →
  * lead capture + memory snapshot. `richMedia` platforms (Instagram) also get language
  * detection, the product-catalog tool and product image cards; Facebook keeps the plain
- * text reply it always had.
+ * text reply it always had. Lead timing (Smart Lead Training: start / custom / intent /
+ * keyword, phone digit rule) comes from leadCapture/channelLeadFields.ts.
  */
 import { db } from "../../db";
 import { businessAccounts, widgetSettings } from "@shared/schema";
@@ -14,7 +15,12 @@ import { eq, and, desc, sql } from "drizzle-orm";
 import { vectorSearchService } from "../vectorSearchService";
 import { faqEmbeddingService } from "../faqEmbeddingService";
 import { businessContextCache } from "../businessContextCache";
-import { buildPhoneValidationOverride } from "../leadTrainingPrompt";
+import { socialLeadContact } from "../socialLeadFields";
+import {
+  normalizeChannelLeadFields, analyzeLeadConversation, resolveNextLeadAsk, buildChannelLeadPrompt, describeLeadDecision,
+  extractContacts, phoneModeOf, currentConversation, ensureCurrentMessage, CONVERSATION_FETCH_LIMIT,
+  type ChatTurn, type KnownContact,
+} from "../leadCapture/channelLeadFields";
 import { storage } from "../../storage";
 import { llamaService, LlamaService } from "../../llamaService";
 import { resolveProfile } from "../customerProfileService";
@@ -67,43 +73,17 @@ interface ConversationMessage {
   timestamp: Date;
 }
 
-interface LeadField {
-  id: string;
-  enabled: boolean;
-  required: boolean;
-  priority: number;
-  captureStrategy: 'start' | 'end' | 'smart' | 'custom' | 'intent' | 'keyword';
-  customAskAfter?: number;
-  intentIntensity?: 'low' | 'medium' | 'high';
-  captureKeywords?: string[];
-  digitCount?: number;
-}
-
-interface LeadTrainingConfig {
-  fields: LeadField[];
-  captureStrategy: string;
-}
+/** widget_settings.leadTrainingConfig (Smart Lead Training); read by leadCapture/channelLeadFields. */
+type LeadTrainingConfig = { fields?: unknown[] } & Record<string, unknown>;
 
 interface CollectedContactInfo {
   mobile?: string;
   phone?: string;
   email?: string;
-  name?: string;
   whatsapp?: string;
 }
 
-function getFieldDisplayName(fieldId: string): string {
-  const fieldIdLower = fieldId.toLowerCase();
-  switch (fieldIdLower) {
-    case 'name': return 'full name';
-    case 'whatsapp': return 'WhatsApp number';
-    case 'mobile': return 'mobile number';
-    case 'phone': return 'phone number';
-    case 'email': return 'email address';
-    default: return fieldId;
-  }
-}
-
+/** Phone / email typed in the recent chat — used to find the customer's cross-platform profile. */
 function extractContactInfoFromConversation(conversationHistory: ConversationMessage[], currentUserMessage?: string): CollectedContactInfo {
   const collected: CollectedContactInfo = {};
   const phonePattern = /(\+?\d[\d\s\-\(\)]{7,}\d)/g;
@@ -132,59 +112,7 @@ function extractContactInfoFromConversation(conversationHistory: ConversationMes
     }
   }
 
-  let extractedName = extractNameFromConversation(allMessages);
-  if (extractedName) {
-    collected.name = extractedName;
-  }
-
   return collected;
-}
-
-function extractNameFromConversation(messages: ConversationMessage[]): string | null {
-  const REFUSAL_WORDS = [
-    'no', 'nop', 'nope', 'nah', 'na', 'none', 'nothing', 'never',
-    'why', 'what', 'when', 'where', 'who', 'how',
-    'yes', 'yeah', 'yep', 'yup', 'ok', 'okay', 'sure', 'fine',
-    'thanks', 'thank', 'ty', 'thx',
-    'hi', 'hello', 'hey', 'hola', 'greetings', 'good',
-    'bye', 'goodbye', 'later',
-  ];
-
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (msg.role !== 'user') continue;
-
-    const prevMsg = i > 0 ? messages[i - 1] : null;
-    if (!prevMsg || prevMsg.role !== 'assistant') continue;
-
-    const prevContent = prevMsg.content.toLowerCase();
-    const isNameRequest = /\b(name|who am i speaking|who is this|may i know your name|what should i call you|what's your name|whats your name)\b/i.test(prevContent);
-
-    if (isNameRequest) {
-      const userReply = msg.content.trim();
-      if (userReply.length < 2 || userReply.length > 60) continue;
-      if (REFUSAL_WORDS.includes(userReply.toLowerCase())) continue;
-      if (/^\d+$/.test(userReply)) continue;
-      if (/@/.test(userReply)) continue;
-
-      const namePatterns = [
-        /^(?:(?:my name is|i'm|i am|it's|its|this is|call me|they call me)\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
-        /^([A-Za-z]+(?:\s+[A-Za-z]+)?)$/,
-      ];
-
-      for (const pattern of namePatterns) {
-        const match = userReply.match(pattern);
-        if (match) {
-          const name = match[1] || match[0];
-          if (name.length >= 2 && !REFUSAL_WORDS.includes(name.toLowerCase())) {
-            return name.trim();
-          }
-        }
-      }
-    }
-  }
-
-  return null;
 }
 
 const PRODUCT_SELECTION_PROMPT = `PRODUCT SELECTION BY NUMBER:
@@ -374,10 +302,19 @@ export class SocialAutoReplyEngine {
         console.error(`${this.tag} Cross-platform context error (non-fatal):`, err);
       }
 
-      const leadCollectionPrompt = leadTrainingConfig
-        ? this.buildLeadCollectionPrompt(leadTrainingConfig, conversationHistory, userMessage, this.p.richMedia ? persistedExtractedData : undefined)
-        : '';
-      const phoneValidationOverride = leadTrainingConfig ? (buildPhoneValidationOverride(userMessage, leadTrainingConfig) || undefined) : undefined;
+      // Smart Lead Training: the whole current conversation (from stored messages, so counts
+      // survive restarts) + what the saved lead already has → at most one detail to ask for.
+      const leadConversation = leadTrainingConfig || settings.leadCaptureEnabled === "true"
+        ? await this.loadLeadConversation(businessAccountId, senderId, userMessage)
+        : [];
+      let leadCollectionPrompt = '';
+      if (leadTrainingConfig) {
+        try {
+          leadCollectionPrompt = this.buildLeadCollectionPrompt(leadTrainingConfig, leadConversation, await this.savedContact(businessAccountId, senderId));
+        } catch (err) {
+          console.error(`${this.tag} Lead timing error (non-fatal):`, err instanceof Error ? err.message : err);
+        }
+      }
 
       const combinedInstructions = [
         widgetCustomInstructions,
@@ -392,7 +329,6 @@ export class SocialAutoReplyEngine {
         businessAccount.name || "the business",
         businessAccount.description || undefined,
         leadCollectionPrompt,
-        phoneValidationOverride,
         detectedLang,
         crossPlatformContext || undefined,
         // Facebook: no businessAccountId → no product tool (and no per-account client tag).
@@ -436,7 +372,7 @@ export class SocialAutoReplyEngine {
 
       console.log(`${this.tag} Successfully sent reply to ${senderId}`);
 
-      this.tryAutoCaptureLead(businessAccountId, senderId, conversationHistory, userMessage, leadTrainingConfig, settings)
+      this.tryAutoCaptureLead(businessAccountId, senderId, leadConversation, leadTrainingConfig, settings)
         .catch(err => console.error(`${this.tag} Lead capture error:`, err));
 
       try {
@@ -595,171 +531,67 @@ export class SocialAutoReplyEngine {
     }
   }
 
-  private buildLeadCollectionPrompt(
-    leadTrainingConfig: LeadTrainingConfig | null,
-    conversationHistory: ConversationMessage[],
-    currentUserMessage: string,
-    persistedExtractedData?: Record<string, any>
-  ): string {
-    if (!leadTrainingConfig || !leadTrainingConfig.fields || !Array.isArray(leadTrainingConfig.fields)) {
-      return '';
+  /**
+   * The customer's current conversation rebuilt from stored messages (so message counts and
+   * "already asked" survive restarts): the last CONVERSATION_FETCH_LIMIT messages, cut at the
+   * last 24 h of silence, with the message being answered included.
+   */
+  private async loadLeadConversation(businessAccountId: string, senderId: string, userMessage: string): Promise<ChatTurn[]> {
+    const messages = this.p.tables.messages;
+    try {
+      const rows: { messageText: string | null; direction: string; createdAt: Date }[] = await db
+        .select({ messageText: messages.messageText, direction: messages.direction, createdAt: messages.createdAt })
+        .from(messages)
+        .where(and(eq(messages.businessAccountId, businessAccountId), eq(messages.senderId, senderId)))
+        .orderBy(desc(messages.createdAt))
+        .limit(CONVERSATION_FETCH_LIMIT);
+      const turns: ChatTurn[] = rows
+        .reverse()
+        .filter(r => r.messageText)
+        .map(r => ({ role: r.direction === "outgoing" ? "assistant" as const : "user" as const, content: r.messageText || "", at: r.createdAt }));
+      return currentConversation(ensureCurrentMessage(turns, userMessage));
+    } catch (err) {
+      console.error(`${this.tag} Could not load the conversation for lead timing:`, err instanceof Error ? err.message : err);
+      return ensureCurrentMessage([], userMessage);
     }
-
-    const allStartFields = leadTrainingConfig.fields
-      .filter(f => f.enabled && f.captureStrategy === 'start')
-      .sort((a, b) => a.priority - b.priority);
-
-    if (allStartFields.length === 0) {
-      return '';
-    }
-
-    const collected = extractContactInfoFromConversation(conversationHistory, currentUserMessage);
-
-    if (persistedExtractedData) {
-      if (persistedExtractedData.phone_number && !collected.phone) {
-        collected.phone = persistedExtractedData.phone_number;
-        collected.mobile = persistedExtractedData.phone_number;
-        collected.whatsapp = persistedExtractedData.phone_number;
-        console.log(`${this.tag} Phone already persisted in lead record`);
-      }
-      if (persistedExtractedData.email_address && !collected.email) {
-        collected.email = persistedExtractedData.email_address;
-        console.log(`${this.tag} Email already persisted in lead record`);
-      }
-      if (persistedExtractedData.customer_name && !collected.name) {
-        collected.name = persistedExtractedData.customer_name;
-        console.log(`${this.tag} Name already persisted in lead record`);
-      }
-    }
-
-    const hasAnyPhone = !!(collected.phone || collected.mobile || collected.whatsapp);
-
-    const missingFields: Array<{ id: string; priority: number; isRequired: boolean }> = [];
-    for (const field of allStartFields) {
-      const fieldId = field.id.toLowerCase();
-      if (fieldId === 'mobile' || fieldId === 'phone' || fieldId === 'whatsapp') {
-        if (!hasAnyPhone) {
-          missingFields.push({ id: field.id, priority: field.priority, isRequired: field.required });
-        }
-      } else if (fieldId === 'email') {
-        if (!collected.email) {
-          missingFields.push({ id: field.id, priority: field.priority, isRequired: field.required });
-        }
-      } else if (fieldId === 'name') {
-        if (!collected.name) {
-          missingFields.push({ id: field.id, priority: field.priority, isRequired: field.required });
-        }
-      }
-    }
-
-    if (missingFields.length === 0) {
-      console.log(`${this.tag} All lead fields already collected`);
-
-      const isJustContactInfo = /^\+?[\d\s().-]{7,20}$/.test(currentUserMessage.trim()) ||
-        /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(currentUserMessage.trim());
-
-      if (isJustContactInfo) {
-        console.log(`${this.tag} User message is just contact info — injecting post-collection guard`);
-        return `🎯 POST-LEAD-CAPTURE INSTRUCTION (CRITICAL):
-- The customer just provided their contact information (the message was: "${currentUserMessage}")
-- All required contact fields have been collected successfully
-- DO NOT proactively mention fees, discounts, EMI options, or any specific topic the customer did NOT ask about
-- DO NOT apply any conditional training instructions that trigger on keywords like "fee", "cost", "eligibility" — the customer did NOT ask about these topics
-- Simply thank them for sharing their contact details and ask how you can help them today
-- Keep it short and warm, for example: "Thank you for sharing your number! How can I assist you today?"
-- Wait for the customer to ask their actual question before providing any business-specific information`;
-      }
-
-      return '';
-    }
-
-    const missingFieldNames = missingFields.map(f => getFieldDisplayName(f.id));
-    const nextField = missingFields[0];
-    const nextFieldName = getFieldDisplayName(nextField.id);
-    const isNextFieldRequired = nextField.isRequired;
-
-    const digitConfig = this.getPhoneDigitConfig(leadTrainingConfig, nextField.id);
-    const phoneValidationNote = digitConfig
-      ? `\n- Phone numbers must be exactly ${digitConfig} digits. If the user provides a number that doesn't have ${digitConfig} digits, politely ask them to provide a valid ${digitConfig}-digit number.`
-      : '';
-
-    console.log(`${this.tag} Lead collection: missing fields = [${missingFieldNames.join(', ')}], next = ${nextFieldName} (${isNextFieldRequired ? 'required' : 'optional'})`);
-
-    if (isNextFieldRequired) {
-      const missingRequiredNames = missingFields.filter(f => f.isRequired).map(f => getFieldDisplayName(f.id));
-      return `
-🚨 RULE #0 - REQUIRED CONTACT COLLECTION (ABSOLUTE HIGHEST PRIORITY):
-- Required fields NOT YET collected: ${missingRequiredNames.join(', ')}
-- Next field to collect: ${nextFieldName}
-
-🔒 MANDATORY ENFORCEMENT - NO EXCEPTIONS ALLOWED:
-- YOU MUST COLLECT **ONLY** [${nextFieldName}] - DO NOT ASK FOR ANY OTHER FIELD
-- DO NOT ask for multiple fields at once (e.g., "name and email")
-- DO NOT say "How can I help you today?" until this field is collected
-- DO NOT answer other questions until this field is collected
-- DO NOT move on to different topics
-- DO NOT abandon this collection process for ANY reason
-- STAY COMPLETELY FOCUSED on collecting this ONE field first${phoneValidationNote}
-
-🚫 CRITICAL - DO NOT ASK FOR MULTIPLE FIELDS:
-❌ WRONG: "May I also have your name and email?"
-❌ WRONG: "Could you share your name and phone number?"
-✅ CORRECT: Ask for ONLY ${nextFieldName} using warm, varied phrasing
-
-HOW TO ASK NATURALLY:
-1. Ask for ONLY ${nextFieldName} - DO NOT mention any other field
-2. Be conversational and warm, not robotic
-3. After they provide it, the system will tell you what to ask for next
-
-IF USER ASKS "WHY" OR QUESTIONS THE REQUEST:
-- Your TONE should be warm and understanding (not pushy or aggressive)
-- BUT the COLLECTION IS STILL MANDATORY
-- Briefly explain why you need their ${nextFieldName} (to provide better assistance)
-- THEN immediately ask again for their ${nextFieldName}
-- DO NOT abandon the collection
-`;
-    }
-
-    return `
-📋 CONTACT COLLECTION - OPTIONAL FIELD REQUEST:
-- Field to ask for: ${nextFieldName} (optional)
-- Other missing fields: ${missingFieldNames.length > 1 ? missingFieldNames.slice(1).join(', ') : 'none'}
-
-HOW TO ASK:
-- After greeting the user, naturally ask for their ${nextFieldName}
-- Be warm and conversational: "By the way, could you share your ${nextFieldName.toLowerCase()}? It helps us serve you better!"
-- Ask for ONLY ${nextFieldName} — do NOT ask for multiple fields at once${phoneValidationNote}
-
-IF USER DECLINES OR SKIPS:
-- This field is OPTIONAL — if the user says "no", "skip", "later", or ignores the request, accept it gracefully
-- DO NOT insist, push, or ask again after they decline
-- Simply move on and help them with their query
-- Example: "No worries at all! How can I help you today?"
-
-IMPORTANT:
-- Ask for this field ONCE in the conversation, do not repeat the request
-- If the user provides their ${nextFieldName.toLowerCase()}, thank them briefly and continue
-- If they decline, move on immediately without mentioning it again
-`;
   }
 
-  private getPhoneDigitConfig(config: LeadTrainingConfig, fieldId: string): number | null {
-    const fieldIdLower = fieldId.toLowerCase();
-    if (fieldIdLower !== 'mobile' && fieldIdLower !== 'phone' && fieldIdLower !== 'whatsapp') {
-      return null;
+  /** Name / email / phone already saved on this customer's leads (DM capture or a completed flow). */
+  private async savedContact(businessAccountId: string, senderId: string): Promise<KnownContact> {
+    const leads = this.p.tables.leads;
+    const rows: { extractedData: Record<string, any> | null }[] = await db
+      .select({ extractedData: leads.extractedData })
+      .from(leads)
+      .where(and(eq(leads.businessAccountId, businessAccountId), eq(leads.senderId, senderId)))
+      .orderBy(desc(leads.createdAt))
+      .limit(5);
+    const known: KnownContact = {};
+    for (const row of rows) {
+      const c = socialLeadContact(row.extractedData);
+      known.name = known.name || c.name;
+      known.email = known.email || c.email;
+      known.phone = known.phone || c.phone;
     }
-    const field = config.fields.find(f => f.id.toLowerCase() === fieldIdLower);
-    if (field && (field as any).digitCount) {
-      return (field as any).digitCount;
-    }
-    return null;
+    return known;
+  }
+
+  /**
+   * Smart Lead Training for this reply: which ONE detail to ask for (all four timings, priority
+   * order, required vs optional, asked-before / declined, phone rule) — see leadCapture/channelLeadFields.
+   */
+  private buildLeadCollectionPrompt(leadTrainingConfig: LeadTrainingConfig, conversation: ChatTurn[], saved: KnownContact): string {
+    const fields = normalizeChannelLeadFields(leadTrainingConfig);
+    if (fields.length === 0) return '';
+    const state = analyzeLeadConversation(fields, conversation, saved);
+    const decision = resolveNextLeadAsk(fields, state);
+    console.log(`${this.tag} Lead timing: ${describeLeadDecision(decision, state)}`);
+    return buildChannelLeadPrompt(decision, state, fields, { channel: this.p.platform });
   }
 
   private async tryAutoCaptureLead(
     businessAccountId: string,
     senderId: string,
-    conversationHistory: ConversationMessage[],
-    currentUserMessage: string,
+    conversation: ChatTurn[],
     leadTrainingConfig: LeadTrainingConfig | null,
     settings: any
   ): Promise<void> {
@@ -769,7 +601,13 @@ IMPORTANT:
         return;
       }
 
-      const collected = extractContactInfoFromConversation(conversationHistory, currentUserMessage);
+      // Phone numbers are checked with the configured digit rule (phoneValidation); a number that
+      // fails it is left out, but the name / email are still saved.
+      const phoneMode = phoneModeOf(normalizeChannelLeadFields(leadTrainingConfig));
+      const collected = extractContacts(conversation, phoneMode);
+      if (collected.rejectedPhoneReason) {
+        console.log(`${this.leadTag} Phone number not saved: it fails the "${phoneMode}" digit rule (${collected.rejectedPhoneReason}); saving the other details`);
+      }
       const hasContactData = !!(collected.phone || collected.email || collected.name);
 
       if (!hasContactData) {
@@ -777,20 +615,6 @@ IMPORTANT:
       }
 
       console.log(`${this.leadTag} Contact info detected: name=${collected.name ? 'yes' : 'no'}, phone=${collected.phone ? 'yes' : 'no'}, email=${collected.email ? 'yes' : 'no'}`);
-
-      if (leadTrainingConfig?.fields) {
-        const phoneField = leadTrainingConfig.fields.find(
-          f => (f.id.toLowerCase() === 'mobile' || f.id.toLowerCase() === 'phone') && f.enabled
-        );
-        if (phoneField && collected.phone) {
-          const digitCount = (phoneField as any).digitCount || 10;
-          const digitsOnly = collected.phone.replace(/\D/g, '');
-          if (digitsOnly.length !== digitCount) {
-            console.log(`${this.leadTag} Phone doesn't match required ${digitCount} digits, skipping lead save`);
-            return;
-          }
-        }
-      }
 
       const existingLeads = await db
         .select()
@@ -1173,7 +997,6 @@ IMPORTANT:
     businessName: string = "the business",
     businessDescription?: string,
     leadCollectionPrompt?: string,
-    phoneValidationOverride?: string,
     detectedLanguage?: string,
     crossPlatformContext?: string,
     businessAccountId?: string
@@ -1290,20 +1113,11 @@ These rules are MANDATORY and override ALL other instructions.
         });
       }
 
-      // Inject lead training prompt as LAST system message (after conversation history)
-      // This position gets highest attention weight from GPT — matching phoneValidationOverride pattern
+      // Lead-capture instruction (incl. the "that number isn't valid" correction) after the
+      // conversation history: this position gets the most attention from the model.
       if (leadCollectionPrompt) {
         messages.push({ role: "system", content: leadCollectionPrompt });
         console.log(`${this.tag} Injected lead training as FINAL system message (${leadCollectionPrompt.length} chars)`);
-      }
-
-      // Phone validation gate — reject invalid numbers before AI responds
-      if (phoneValidationOverride) {
-        messages.push({
-          role: "system",
-          content: phoneValidationOverride
-        });
-        console.log(`${this.tag} Injected phone validation override`);
       }
 
       if (crossPlatformContext) {
