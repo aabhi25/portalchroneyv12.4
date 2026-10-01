@@ -218,20 +218,21 @@ async function main() {
       const [audit] = await db.select().from(schema.auditEvents).where(and(eq(schema.auditEvents.businessAccountId, A), eq(schema.auditEvents.action, "ai_usage.limit_set")));
       expect(audit.actorUserId === sup.id && (audit.metadata as any)?.newLimitUsd === 50 && (audit.metadata as any)?.previousLimitUsd === null, "audit has actor + before/after", audit.metadata);
 
+      // AI usage & spend is super-admin only: business users and group admins can't read it.
       r = await call("GET", `/api/usage/summary?month=2026-09`, cBiz);
-      const own: any = await r.json();
-      expect(r.status === 200 && own.businessAccountId === A && own.limit?.monthlyLimitUsd === 50, "business user reads own usage incl. limit", { s: r.status, id: own.businessAccountId });
+      expect(r.status === 403, "business user cannot read their own usage (super admin only)", r.status);
       r = await call("GET", `/api/usage/summary?businessAccountId=${OTHER}`, cBiz);
       expect(r.status === 403, "business user cannot read another account", r.status);
-      r = await call("GET", `/api/usage/summary?month=2026-13`, cBiz);
-      expect(r.status === 400, "bad month rejected", r.status);
       r = await call("GET", `/api/usage/summary?businessAccountId=${G1}`, cGrp);
-      expect(r.status === 200, "group admin reads an account in their group", r.status);
-      r = await call("GET", `/api/usage/summary?businessAccountId=${OTHER}`, cGrp);
-      expect(r.status === 403, "group admin cannot read an account outside their groups", r.status);
+      expect(r.status === 403, "group admin cannot read usage, even for an account in their group", r.status);
       r = await call("GET", `/api/group-admin/usage/accounts`, cGrp);
-      const ga: any = await r.json();
-      expect(r.status === 200 && ga.accounts.length === 1 && ga.accounts[0].id === G1, "group admin account list", ga);
+      const ga: any = await r.json().catch(() => null);
+      expect(!ga?.accounts, "group admin usage account list is gone", { status: r.status, ga });
+      r = await call("GET", `/api/usage/summary?businessAccountId=${A}&month=2026-13`, cSup);
+      expect(r.status === 400, "bad month rejected", r.status);
+      r = await call("GET", `/api/usage/summary?businessAccountId=${A}&month=2026-09`, cSup);
+      const own: any = await r.json();
+      expect(r.status === 200 && own.businessAccountId === A && own.limit?.monthlyLimitUsd === 50, "super admin reads an account's usage incl. limit", { s: r.status, id: own.businessAccountId });
       r = await call("GET", `/api/usage/summary?businessAccountId=${OTHER}`, cSup);
       expect(r.status === 200, "super admin reads any account", r.status);
       r = await call("GET", `/api/usage/summary`, cSup);
@@ -241,7 +242,18 @@ async function main() {
       expect(r.status === 200 && sum.accounts.some((x: any) => x.businessAccountId === A && x.limit?.monthlyLimitUsd === 50), "super admin all-accounts summary incl. limit", r.status);
       r = await call("GET", `/api/usage/limit-status`, cBiz);
       const ls: any = await r.json();
-      expect(r.status === 200 && ls.limit?.level === "ok" && ls.month === nowMonth, "limit-status for the banner", ls);
+      expect(r.status === 200 && ls.limit === null && ls.aiPaused === false && ls.spentUsd === undefined && ls.month === undefined,
+        "business user's banner data: no spend, no limit — only 'AI paused?' (false under a warn limit)", ls);
+      r = await call("GET", `/api/usage/limit-status`, cGrp);
+      expect(r.status === 200 && (await r.json()).limit === null, "group admin gets no banner data", r.status);
+
+      // Over a blocking limit: the business user learns only that AI replies are paused.
+      await budget.upsertLimit({ businessAccountId: A, monthlyLimitUsd: 0.01, warnAtPercent: 80, action: "block", updatedBy: null });
+      await addEvent(A, new Date().toISOString(), 1);
+      r = await call("GET", `/api/usage/limit-status`, cBiz);
+      const paused: any = await r.json();
+      expect(r.status === 200 && paused.aiPaused === true && paused.limit === null && paused.spentUsd === undefined,
+        "blocked account: business user sees aiPaused only", paused);
 
       r = await call("DELETE", `/api/super-admin/usage/limits/${A}`, cSup);
       expect(r.status === 200 && (await r.json()).removed === true && (await budget.getLimit(A)) === null, "super admin removes the limit");

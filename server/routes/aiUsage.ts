@@ -1,9 +1,6 @@
 import { Router, type Request, type Response } from "express";
-import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "../db";
-import { accountGroupAdmins, accountGroupMembers, businessAccounts } from "@shared/schema";
-import { requireAuth, requireRole, requireGroupAdmin } from "../auth";
+import { requireAuth, requireRole } from "../auth";
 import { storage } from "../storage";
 import { resolveAuthorizedLeadAccountId } from "../lib/leadAccess";
 import { recordAuditEventSafely } from "../services/auditService";
@@ -18,12 +15,11 @@ import {
 import { getAccountMonthUsage, getAllAccountsSummary } from "../services/aiUsageReportService";
 
 /**
- * AI usage & spend API.
- *  - GET  /api/usage/summary            one account's month (own/active account; group admin: an
- *                                       account in a group they administer with analytics access;
- *                                       super admin: any account, default the viewed-as account)
- *  - GET  /api/usage/limit-status       banner data for the active account
- *  - GET  /api/group-admin/usage/accounts  accounts a group admin may view usage for
+ * AI usage & spend API — super admins only (business users and group admins never see spend).
+ *  - GET  /api/usage/summary            one account's month (super admin: any account, default the
+ *                                       viewed-as account)
+ *  - GET  /api/usage/limit-status       banner data for the active account (super admin: full;
+ *                                       anyone else: only whether AI replies are paused)
  *  - GET  /api/super-admin/usage        all accounts for a month (super admin)
  *  - PUT/DELETE /api/super-admin/usage/limits/:businessAccountId  set/remove a monthly limit (super admin, audited)
  * Months are IST calendar months ("YYYY-MM"), default the current one.
@@ -40,65 +36,22 @@ function parseMonth(req: Request, res: Response): string | null {
   return raw;
 }
 
-/** Accounts (id, name) a group admin may see usage for: groups where they have analytics access. */
-async function groupAdminUsageAccounts(userId: string): Promise<Array<{ id: string; name: string }>> {
-  const groups = await db
-    .select({ groupId: accountGroupAdmins.groupId })
-    .from(accountGroupAdmins)
-    .where(and(eq(accountGroupAdmins.userId, userId), eq(accountGroupAdmins.canViewAnalytics, "true")));
-  if (groups.length === 0) return [];
-  const rows = await db
-    .selectDistinct({ id: businessAccounts.id, name: businessAccounts.name })
-    .from(accountGroupMembers)
-    .innerJoin(businessAccounts, eq(accountGroupMembers.businessAccountId, businessAccounts.id))
-    .where(inArray(accountGroupMembers.groupId, groups.map((g) => g.groupId)));
-  return rows.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/** The account whose usage this user may read, or null after sending the error response. */
-async function resolveUsageAccount(req: Request, res: Response, requested: unknown): Promise<string | null> {
-  const user = req.user!;
+/** Super admin: the account to read (requested, else the viewed-as one), or null after sending the error. */
+function resolveUsageAccount(req: Request, res: Response, requested: unknown): string | null {
   const requestedId = typeof requested === "string" && requested ? requested : null;
-
-  if (user.role === "super_admin") {
-    const id = requestedId || user.activeBusinessAccountId || null;
-    if (!id) {
-      res.status(400).json({ error: "businessAccountId required" });
-      return null;
-    }
-    return id;
-  }
-
-  if (user.role === "account_group_admin") {
-    if (!requestedId) {
-      res.status(400).json({ error: "businessAccountId required" });
-      return null;
-    }
-    const allowed = await groupAdminUsageAccounts(user.id);
-    if (!allowed.some((a) => a.id === requestedId)) {
-      res.status(403).json({ error: "Access denied to this account" });
-      return null;
-    }
-    return requestedId;
-  }
-
-  const own = await resolveAuthorizedLeadAccountId(user);
-  if (!own) {
-    res.status(403).json({ error: "No business account associated" });
+  const id = requestedId || req.user!.activeBusinessAccountId || null;
+  if (!id) {
+    res.status(400).json({ error: "businessAccountId required" });
     return null;
   }
-  if (requestedId && requestedId !== own) {
-    res.status(403).json({ error: "Access denied to this account" });
-    return null;
-  }
-  return own;
+  return id;
 }
 
-router.get("/api/usage/summary", requireAuth, async (req, res) => {
+router.get("/api/usage/summary", requireAuth, requireRole("super_admin"), async (req, res) => {
   try {
     const month = parseMonth(req, res);
     if (!month) return;
-    const accountId = await resolveUsageAccount(req, res, req.query.businessAccountId);
+    const accountId = resolveUsageAccount(req, res, req.query.businessAccountId);
     if (!accountId) return;
     const account = await storage.getBusinessAccount(accountId);
     if (!account) return res.status(404).json({ error: "Business account not found" });
@@ -113,26 +66,24 @@ router.get("/api/usage/summary", requireAuth, async (req, res) => {
 router.get("/api/usage/limit-status", requireAuth, async (req, res) => {
   try {
     const user = req.user!;
-    // Only for a concrete account view (business users, super admin viewing as an account).
     if (user.role === "account_group_admin" || (user.role === "super_admin" && !user.activeBusinessAccountId)) {
       return res.json({ limit: null });
     }
-    const accountId = await resolveUsageAccount(req, res, undefined);
+    if (user.role !== "super_admin") {
+      // Business users never see spend or the limit; only whether AI replies are paused for the month.
+      const own = await resolveAuthorizedLeadAccountId(user);
+      if (!own) return res.json({ limit: null, aiPaused: false });
+      const status = await getLimitStatus(own);
+      const aiPaused = status.limit?.level === "exceeded" && status.limit?.action === "block";
+      return res.json({ limit: null, aiPaused });
+    }
+    const accountId = resolveUsageAccount(req, res, undefined);
     if (!accountId) return;
     const status = await getLimitStatus(accountId);
     res.json({ ...status, businessAccountId: accountId, usdInrRate: usdInrRate() });
   } catch (error) {
     console.error("[AI Usage] limit-status error:", error);
     res.status(500).json({ error: "Failed to load limit status" });
-  }
-});
-
-router.get("/api/group-admin/usage/accounts", requireAuth, requireGroupAdmin, async (req, res) => {
-  try {
-    res.json({ accounts: await groupAdminUsageAccounts(req.user!.id) });
-  } catch (error) {
-    console.error("[AI Usage] group accounts error:", error);
-    res.status(500).json({ error: "Failed to load accounts" });
   }
 });
 

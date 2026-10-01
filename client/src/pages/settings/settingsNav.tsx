@@ -102,13 +102,6 @@ export function buildSettingsGroups(user: MeResponseDto | null): SettingsGroup[]
             path: SETTINGS_PATHS.account,
             render: () => <Settings section="account" embedded />,
           },
-          {
-            key: "usage",
-            label: "AI usage",
-            description: "AI usage and spend across your group's accounts",
-            icon: Gauge,
-            href: "/group-admin/usage",
-          },
         ],
       },
     ];
@@ -130,14 +123,15 @@ export function buildSettingsGroups(user: MeResponseDto | null): SettingsGroup[]
         path: SETTINGS_PATHS.account,
         render: () => <Settings section="account" embedded />,
       },
-      {
+      // AI spend is for super admins only (viewing as the account); business users never see it.
+      ...(a.isSuperAdminImpersonating ? [{
         key: "usage",
         label: "AI usage & limits",
         description: "AI usage and spend this month, by channel",
         icon: Gauge,
         path: SETTINGS_PATHS.usage,
         render: () => <UsageDashboard />,
-      },
+      }] : []),
     ],
   });
 

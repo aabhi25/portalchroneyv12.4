@@ -41,7 +41,6 @@ import SuperAdminSettings from "@/pages/SuperAdminSettings";
 import SuperAdminInsights from "@/pages/SuperAdminInsights";
 import SuperAdminCosts from "@/pages/SuperAdminCosts";
 import SuperAdminUsage from "@/pages/SuperAdminUsage";
-import GroupAdminUsage from "@/pages/GroupAdminUsage";
 import SuperAdminMIS from "@/pages/SuperAdminMIS";
 import SuperAdminDemo from "@/pages/SuperAdminDemo";
 import SuperAdminApiKeys from "@/pages/SuperAdminApiKeys";
@@ -210,8 +209,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
       <SidebarInset>
         {/* Show impersonation banner for SuperAdmins */}
         {user?.role === "super_admin" && <ImpersonationBanner />}
-        {/* Monthly AI limit warning for the account being used / viewed-as. */}
-        {(user?.role !== "account_group_admin" && (user?.role !== "super_admin" || isSuperAdminImpersonating)) && <UsageLimitBanner />}
+        {/* Monthly AI limit: full details for super admins viewing as an account; business users only learn when AI replies are paused. */}
+        {(user?.role !== "account_group_admin" && (user?.role !== "super_admin" || isSuperAdminImpersonating)) && <UsageLimitBanner showSpend={user?.role === "super_admin"} />}
         <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4 lg:hidden sticky top-0 z-10">
           <SidebarTrigger className="-ml-1" />
           <div className="flex items-center gap-2">
@@ -277,7 +276,6 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
 
                 <Route path="/group-admin/insights" component={GroupAdminInsights} />
                 <Route path="/group-admin/group-analytics" component={GroupAnalytics} />
-                <Route path="/group-admin/usage" component={GroupAdminUsage} />
                 <Route path={SETTINGS_PATHS.root}>{() => <SettingsHub user={user} />}</Route>
                 <Route path={`${SETTINGS_PATHS.root}/*`}>{() => <SettingsHub user={user} />}</Route>
               </>

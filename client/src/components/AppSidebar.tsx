@@ -744,7 +744,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
 
                 <NavItem icon={Lightbulb} label="Account Insights" onClick={() => setLocation("/group-admin/insights")} isActive={location === "/group-admin/insights"} testId="link-group-admin-insights" gradient="bg-gradient-to-br from-yellow-500 to-amber-600" />
                 <NavItem icon={TrendingUp} label="Group Analytics" onClick={() => setLocation("/group-admin/group-analytics")} isActive={location === "/group-admin/group-analytics"} testId="link-group-admin-group-analytics" gradient="bg-gradient-to-br from-purple-500 to-pink-600" />
-                <NavItem icon={Gauge} label="AI Usage" onClick={() => setLocation("/group-admin/usage")} isActive={location === "/group-admin/usage"} testId="link-group-admin-usage" gradient="bg-gradient-to-br from-teal-500 to-emerald-600" />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
