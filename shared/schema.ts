@@ -695,7 +695,11 @@ export const widgetSettings = pgTable("widget_settings", {
   voiceSelection: text("voice_selection").notNull().default("shimmer"), // OpenAI Realtime voices, including recommended 'marin' and 'cedar'
   voiceModeStyle: text("voice_mode_style").notNull().default("circular"), // 'circular' | 'morphing' | 'distorted' | 'angular' - Voice orb shape style
   chatMode: text("chat_mode").notNull().default("both"), // 'both' | 'chat-only' | 'voice-only' - Which modes are available in embedded widget
-  
+  // How a student takes turns in voice mode: 'hands_free' (automatic, default) |
+  // 'hold_to_talk' (press and hold the button while speaking — best in noisy homes) |
+  // 'student_choice' (hands-free by default, with a toggle the student can switch).
+  voiceInputMode: text("voice_input_mode").notNull().default("hands_free"),
+
   // AI Conversation Starters
   conversationStarters: text("conversation_starters"), // JSON array of 3-5 suggested questions to help users start conversations ["Question 1?", "Question 2?", ...]
   conversationStartersEnabled: text("conversation_starters_enabled").notNull().default("true"), // 'true' | 'false' - Show/hide conversation starters in chat interface

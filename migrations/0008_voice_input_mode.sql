@@ -1,0 +1,1 @@
+ALTER TABLE "widget_settings" ADD COLUMN IF NOT EXISTS "voice_input_mode" text DEFAULT 'hands_free' NOT NULL;

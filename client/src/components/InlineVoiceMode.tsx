@@ -1,7 +1,20 @@
-import { Mic, MicOff, X, Loader2 } from "lucide-react";
+import { Mic, MicOff, X, Loader2, Hand } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
+import {
+  AdaptiveSpeechDetector,
+  DIDNT_CATCH_THAT,
+  DUCK_GAIN,
+  LOCAL_DUCK_RELEASE_MS,
+  THINKING_WATCHDOG_MS,
+  frameRms,
+  readStoredInputMode,
+  resolveInputMode,
+  writeStoredInputMode,
+  type EffectiveVoiceInputMode,
+  type VoiceInputModeSetting,
+} from "@/lib/voiceTurnTaking";
 
 type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
@@ -55,6 +68,14 @@ interface InlineVoiceModeProps {
    * and any highlight should be removed.
    */
   onSpeakingProgress?: (messageId: string, charOffset: number, done: boolean) => void;
+  /**
+   * Speak-while-writing: the next finished sentence of a streaming answer.
+   * `displayDelta` is the Markdown the model wrote (append to the bubble);
+   * `spokenDelta` is what is being said for it (karaoke source text).
+   */
+  onAIMessageDelta?: (messageId: string, displayDelta: string, spokenDelta: string) => void;
+  /** Widget setting: hands-free (default), hold-to-talk, or the student's choice. */
+  voiceInputMode?: VoiceInputModeSetting | string;
 }
 
 export function InlineVoiceMode({
@@ -79,8 +100,20 @@ export function InlineVoiceMode({
   topscholarToken,
   topscholarCpId,
   onSpeakingProgress,
+  onAIMessageDelta,
+  voiceInputMode,
 }: InlineVoiceModeProps) {
   const [state, setState] = useState<VoiceState>('idle');
+  // Hands-free (server VAD) or hold-to-talk for this session.
+  const [inputMode, setInputModeState] = useState<EffectiveVoiceInputMode>(() =>
+    resolveInputMode(voiceInputMode, voiceInputMode === 'student_choice' ? readStoredInputMode() : null),
+  );
+  const inputModeRef = useRef<EffectiveVoiceInputMode>(inputMode);
+  const [isHolding, setIsHolding] = useState(false);
+  const isHoldingRef = useRef(false);
+  // Gentle one-line hint ("Sorry, I didn't catch that…"), auto-cleared.
+  const [hint, setHint] = useState<string | null>(null);
+  const hintTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
@@ -126,6 +159,16 @@ export function InlineVoiceMode({
   const vadIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pendingInterruptRef = useRef(false);
   const playbackAnalyserRef = useRef<AnalyserNode | null>(null);
+  // Playback volume control for "possible interruption" ducking. Sits between
+  // the sources and the analyser so the echo estimate sees the real output.
+  const duckGainRef = useRef<GainNode | null>(null);
+  // Ducked because the SERVER heard possible speech (released by 'unduck' or
+  // ended by 'response_cancelled'), or because our own detector did.
+  const serverDuckRef = useRef(false);
+  const localDuckRef = useRef(false);
+  const localDuckReleaseRef = useRef<NodeJS.Timeout | null>(null);
+  // Last time the server showed answer activity (delta, audio, ready, done).
+  const lastAnswerActivityRef = useRef<number>(0);
   // Timestamp (ms) when the current answer's audio started playing. Used by the
   // VAD as a short barge-in grace window so the AI's own opening words / echo
   // can't self-cancel the answer. 0 when no answer is playing.
@@ -320,7 +363,51 @@ export function InlineVoiceMode({
    * abandoned — playback runs ahead of what the student has heard, so audio
    * left in the pipeline would otherwise play on into the next answer.
    */
+  /** Apply the current duck state to the playback gain (smoothly). */
+  const applyPlaybackGain = () => {
+    const gain = duckGainRef.current;
+    const ctx = audioContextRef.current;
+    if (!gain || !ctx) return;
+    const target = serverDuckRef.current || localDuckRef.current ? DUCK_GAIN : 1;
+    try {
+      gain.gain.setTargetAtTime(target, ctx.currentTime, target < 1 ? 0.04 : 0.12);
+    } catch {
+      gain.gain.value = target;
+    }
+  };
+
+  const setLocalDuck = (on: boolean) => {
+    localDuckRef.current = on;
+    if (localDuckReleaseRef.current) {
+      clearTimeout(localDuckReleaseRef.current);
+      localDuckReleaseRef.current = null;
+    }
+    applyPlaybackGain();
+  };
+
+  const clearDucks = () => {
+    serverDuckRef.current = false;
+    setLocalDuck(false);
+  };
+
+  const showHint = (text: string) => {
+    setHint(text);
+    if (hintTimeoutRef.current) clearTimeout(hintTimeoutRef.current);
+    hintTimeoutRef.current = setTimeout(() => setHint(null), 4000);
+  };
+
+  /** Back to the resting state for the current mode (never stuck on "Thinking…"). */
+  const returnToListening = () => {
+    setCurrentTranscript('');
+    if (shouldAutoRestartRef.current && isOnlineRef.current && hasPermissionRef.current) {
+      setState('listening');
+    } else {
+      setState('idle');
+    }
+  };
+
   const flushQueuedAudio = () => {
+    clearDucks();
     activeSourcesRef.current.forEach((s) => { try { s.stop(); } catch {} });
     activeSourcesRef.current.clear();
     audioQueueRef.current = [];
@@ -516,6 +603,8 @@ export function InlineVoiceMode({
           }
         }
         shouldAutoRestartRef.current = true;
+        // Tell the server how this student takes turns (server VAD vs held turns).
+        safeSend(JSON.stringify({ type: 'set_input_mode', mode: inputModeRef.current }));
         if (hasPermissionRef.current) {
           try { await startRecording(); } catch (error) { setState('idle'); }
         } else {
@@ -529,17 +618,39 @@ export function InlineVoiceMode({
         break;
 
       case 'speech_started':
+        // Speech is never an interruption by itself any more: the server
+        // ducks ('duck') and confirms or rejects it from the transcript.
         noteListeningActivity();
-        // Respect the same barge-in grace window as the local VAD: a server VAD
-        // speech_started that lands in the opening of a new answer is almost
-        // always the AI's own audio / echo and must not self-cancel playback.
-        if (playbackStartedAtRef.current &&
-            Date.now() - playbackStartedAtRef.current < BARGE_IN_GRACE_MS) {
-          break;
+        break;
+
+      case 'duck':
+        // Possible interruption: lower the tutor's volume, keep playing.
+        serverDuckRef.current = true;
+        applyPlaybackGain();
+        break;
+
+      case 'unduck':
+        // Not a real interruption: back to full volume, answer continues.
+        serverDuckRef.current = false;
+        applyPlaybackGain();
+        break;
+
+      case 'turn_ignored':
+        // The server dropped that "turn" (noise, a backchannel, too short).
+        // It gets no reply, so never sit on "Thinking…" waiting for one.
+        serverDuckRef.current = false;
+        applyPlaybackGain();
+        if (!data.answerActive && stateRef.current !== 'speaking') {
+          returnToListening();
         }
-        if (stateRef.current === 'speaking' || isPlayingRef.current || audioQueueRef.current.length > 0) {
-          handleInterruption();
+        if (data.held && data.reason === 'too_short') {
+          showHint('Keep holding the button while you speak.');
+        } else if (data.reason === 'unclear' || (data.held && data.reason !== 'cancelled')) {
+          showHint(DIDNT_CATCH_THAT);
         }
+        break;
+
+      case 'input_mode':
         break;
 
       case 'transcript':
@@ -594,20 +705,35 @@ export function InlineVoiceMode({
         // handleInterruption. Drop what we have buffered for it; playback runs
         // ahead of the student's ears, so it would otherwise be heard on top of
         // whatever comes next.
+        // It is also how a CONFIRMED interruption arrives: stop this answer's
+        // audio and go back to listening (the new turn's 'thinking' follows).
         if (data.responseId) {
           const cancelledMessageId =
             responseIdToMessageIdRef.current.get(data.responseId) ||
             (currentResponseIdRef.current === data.responseId ? currentAIMessageIdRef.current : null);
           markResponseInterrupted(data.responseId);
-          if (currentResponseIdRef.current === data.responseId) {
+          const wasCurrent = currentResponseIdRef.current === data.responseId;
+          if (wasCurrent) {
             flushQueuedAudio();
             // The answer was abandoned server-side — freeze/clear its highlight.
             finishKaraoke();
             currentAIMessageIdRef.current = null;
             currentResponseIdRef.current = null;
+            aiDoneReceivedRef.current = false;
           }
-          if (cancelledMessageId) onAIMessageCancelled?.(cancelledMessageId);
+          if (cancelledMessageId) {
+            if (data.preserveDisplay) {
+              // A complete answer whose audio was stopped stays on screen.
+              onAIMessageDone?.(cancelledMessageId);
+            } else {
+              onAIMessageCancelled?.(cancelledMessageId);
+            }
+          }
           responseIdToMessageIdRef.current.delete(data.responseId);
+          pendingInterruptRef.current = false;
+          if (wasCurrent || stateRef.current === 'speaking' || stateRef.current === 'thinking') {
+            returnToListening();
+          }
         }
         break;
 
@@ -615,10 +741,65 @@ export function InlineVoiceMode({
         onTranscriptCorrection?.(data.original, data.corrected);
         break;
 
+      case 'answer_delta': {
+        // Speak-while-writing: one finished sentence of the answer. The
+        // bubble fills in sentence by sentence while its audio plays.
+        if (data.responseId && interruptedResponseIdsRef.current.has(data.responseId)) return;
+        if (pendingInterruptRef.current) return;
+        lastAnswerActivityRef.current = Date.now();
+        if (data.responseId) currentResponseIdRef.current = data.responseId;
+        const display = typeof data.display === 'string' ? data.display : '';
+        const speech = typeof data.speech === 'string' ? data.speech : '';
+        let messageId = data.responseId ? responseIdToMessageIdRef.current.get(data.responseId) : undefined;
+        if (!messageId || messageId !== currentAIMessageIdRef.current) {
+          messageId = 'voice-ai-' + Date.now().toString();
+          currentAIMessageIdRef.current = messageId;
+          awaitingUserTranscriptRef.current = true;
+          if (data.responseId) {
+            responseIdToMessageIdRef.current.set(data.responseId, messageId);
+            if (responseIdToMessageIdRef.current.size > 20) {
+              const oldest = responseIdToMessageIdRef.current.keys().next().value;
+              if (oldest) responseIdToMessageIdRef.current.delete(oldest);
+            }
+          }
+          // New bubble → fresh karaoke timeline keyed to it. Text runs about
+          // a sentence ahead of the audio, so cap the highlight at a typical
+          // speaking rate until all audio has arrived (textFinal).
+          finishKaraoke();
+          karaokeRef.current.messageId = messageId;
+          karaokeRef.current.textFinal = true;
+          onAIMessageStart?.(messageId);
+        }
+        if (onAIMessageDelta) {
+          onAIMessageDelta(messageId, display, speech);
+        } else {
+          onAIMessageChunk?.(messageId, display);
+        }
+        karaokeRef.current.text += speech;
+        setState('speaking');
+        if (!vadIntervalRef.current && mediaStreamRef.current && inputModeRef.current === 'hands_free') {
+          startVoiceActivityDetection();
+        }
+        break;
+      }
+
       case 'answer_ready': {
         if (data.responseId && interruptedResponseIdsRef.current.has(data.responseId)) return;
         if (pendingInterruptRef.current) return;
+        lastAnswerActivityRef.current = Date.now();
         if (data.responseId) currentResponseIdRef.current = data.responseId;
+        // Streamed answer: its bubble already exists — swap in the final
+        // canonical Markdown (same text, plus any post-processing).
+        const streamedMessageId = data.responseId ? responseIdToMessageIdRef.current.get(data.responseId) : undefined;
+        if (streamedMessageId && streamedMessageId === currentAIMessageIdRef.current) {
+          const finalMarkdown = typeof data.displayMarkdown === 'string' ? data.displayMarkdown : '';
+          if (finalMarkdown) onAIMessageReplace?.(streamedMessageId, finalMarkdown);
+          if (typeof data.speechText === 'string' && data.speechText.length >= karaokeRef.current.text.length) {
+            karaokeRef.current.text = data.speechText;
+          }
+          karaokeRef.current.textFinal = true;
+          break;
+        }
 
         setState('speaking');
         if (!vadIntervalRef.current && mediaStreamRef.current) {
@@ -731,6 +912,7 @@ export function InlineVoiceMode({
         break;
 
       case 'ai_done':
+        lastAnswerActivityRef.current = Date.now();
         if (pendingInterruptRef.current) return;
         // A deferred completion for an older response must not finalize the
         // bubble that belongs to a newer response.
@@ -927,11 +1109,16 @@ export function InlineVoiceMode({
       // pattern produced a few-ms gap at every chunk boundary because
       // onended runs after a JS-event-loop hop, which summed into a buzz.
       const ctx = audioContextRef.current;
+      lastAnswerActivityRef.current = Date.now();
       if (!playbackAnalyserRef.current) {
         playbackAnalyserRef.current = ctx.createAnalyser();
         playbackAnalyserRef.current.fftSize = 256;
         playbackAnalyserRef.current.smoothingTimeConstant = 0.8;
         playbackAnalyserRef.current.connect(ctx.destination);
+        // Duck control in front of the analyser (sources → gain → analyser).
+        duckGainRef.current = ctx.createGain();
+        duckGainRef.current.gain.value = serverDuckRef.current || localDuckRef.current ? DUCK_GAIN : 1;
+        duckGainRef.current.connect(playbackAnalyserRef.current);
         // Mark the start of this answer's playback so the VAD can apply a short
         // barge-in grace window (the opening syllables / their echo must not
         // self-cancel the answer).
@@ -940,7 +1127,7 @@ export function InlineVoiceMode({
       }
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(playbackAnalyserRef.current);
+      source.connect(duckGainRef.current || playbackAnalyserRef.current);
       const scheduleTime = Math.max(ctx.currentTime, nextPlaybackTimeRef.current);
       source.onended = () => {
         activeSourcesRef.current.delete(source);
@@ -952,6 +1139,10 @@ export function InlineVoiceMode({
           if (playbackAnalyserRef.current) {
             try { playbackAnalyserRef.current.disconnect(); } catch {}
             playbackAnalyserRef.current = null;
+          }
+          if (duckGainRef.current) {
+            try { duckGainRef.current.disconnect(); } catch {}
+            duckGainRef.current = null;
           }
           playbackStartedAtRef.current = 0;
           if (aiDoneReceivedRef.current) {
@@ -997,42 +1188,30 @@ export function InlineVoiceMode({
 
   const startVoiceActivityDetection = () => {
     if (!mediaSourceRef.current || !audioContextRef.current || vadIntervalRef.current) return;
+    // Hold-to-talk: the button is the only way to speak/interrupt.
+    if (inputModeRef.current === 'hold_to_talk') return;
     try {
       const analyser = audioContextRef.current.createAnalyser();
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.3;
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.2;
       mediaSourceRef.current.connect(analyser);
       vadAnalyserRef.current = analyser;
-      const dataArray = new Float32Array(analyser.frequencyBinCount);
-      let consecutiveSpeechFrames = 0;
-      // Base mic RMS to count a frame as speech when the AI is silent.
-      const baseSpeechThreshold = 0.02;
-      // Sustained frames of speech required to interrupt. Frames are 100ms, so
-      // 5 ≈ 500ms — long enough that brief echo blips can't trigger a barge-in,
-      // short enough that a genuine interruption still feels responsive.
-      const requiredFrames = 5;
-      // How strongly current AI playback raises the speech threshold. The mic
-      // picks up the AI's voice as echo, so during loud playback the user must
-      // be clearly louder than that echo to count as a real interruption.
-      const ECHO_REJECTION_FACTOR = 0.08;
+      const dataArray = new Float32Array(analyser.fftSize);
+      const FRAME_MS = 50;
+      // Adaptive noise floor: speech must beat max(0.015, floor × 3) — plus an
+      // echo allowance while the tutor plays — for 500 ms. This detector never
+      // cancels an answer: it only ducks the tutor locally as instant feedback.
+      // The server confirms a real interruption from the transcript.
+      const detector = new AdaptiveSpeechDetector({ confirmMs: 500 });
       let speechActivityLatched = false;
 
       vadIntervalRef.current = setInterval(() => {
         if (!vadAnalyserRef.current) return;
-        // Grace window: never interrupt within the opening of a new answer.
-        if (playbackStartedAtRef.current &&
-            Date.now() - playbackStartedAtRef.current < BARGE_IN_GRACE_MS) {
-          consecutiveSpeechFrames = 0;
-          return;
-        }
         vadAnalyserRef.current.getFloatTimeDomainData(dataArray);
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i] * dataArray[i];
-        const rms = Math.sqrt(sum / dataArray.length);
+        const rms = frameRms(dataArray);
 
-        // Estimate how loud the AI is currently playing (0..1) and raise the
-        // effective speech threshold accordingly, so the AI's own echo can't
-        // clear the bar while genuine speech (louder than the echo) still can.
+        // How loud the tutor is playing (0..1) — raises the bar so its own
+        // echo can't count as the student.
         let playbackLevel = 0;
         if (playbackAnalyserRef.current) {
           const pb = new Uint8Array(playbackAnalyserRef.current.frequencyBinCount);
@@ -1041,23 +1220,32 @@ export function InlineVoiceMode({
           for (let i = 0; i < pb.length; i++) pbSum += pb[i];
           playbackLevel = pbSum / pb.length / 255;
         }
-        const effectiveThreshold = baseSpeechThreshold + playbackLevel * ECHO_REJECTION_FACTOR;
+        const inGrace = playbackStartedAtRef.current > 0 &&
+          Date.now() - playbackStartedAtRef.current < BARGE_IN_GRACE_MS;
+        const result = detector.push(inGrace ? 0 : rms, FRAME_MS, playbackLevel);
 
-        if (rms > effectiveThreshold) {
-          consecutiveSpeechFrames++;
-          if (consecutiveSpeechFrames >= requiredFrames) {
-            if (stateRef.current === 'listening' && !speechActivityLatched) {
-              speechActivityLatched = true;
-              noteListeningActivity();
-            } else if (stateRef.current === 'speaking') {
-              handleInterruption();
-            }
+        if (result.justConfirmed) {
+          if (stateRef.current === 'listening' && !speechActivityLatched) {
+            speechActivityLatched = true;
+            noteListeningActivity();
+          } else if (stateRef.current === 'speaking') {
+            setLocalDuck(true);
           }
-        } else {
-          consecutiveSpeechFrames = 0;
-          speechActivityLatched = false;
         }
-      }, 100);
+        if (result.ended) {
+          speechActivityLatched = false;
+          if (localDuckRef.current && !localDuckReleaseRef.current) {
+            localDuckReleaseRef.current = setTimeout(() => {
+              localDuckReleaseRef.current = null;
+              localDuckRef.current = false;
+              applyPlaybackGain();
+            }, LOCAL_DUCK_RELEASE_MS);
+          }
+        } else if (result.speaking && localDuckReleaseRef.current) {
+          clearTimeout(localDuckReleaseRef.current);
+          localDuckReleaseRef.current = null;
+        }
+      }, FRAME_MS);
     } catch (error) {
       console.error('[InlineVoice] VAD setup failed:', error);
     }
@@ -1074,9 +1262,15 @@ export function InlineVoiceMode({
     }
   };
 
-  const handleInterruption = () => {
-    pendingInterruptRef.current = true;
+  /**
+   * INTENTIONAL interruption (the student tapped the voice button while the
+   * tutor was talking, or pressed hold-to-talk). Speech alone never calls
+   * this — the server confirms speech-based interruptions from the transcript.
+   */
+  const handleInterruption = (sendToServer = true) => {
+    pendingInterruptRef.current = sendToServer;
     aiDoneReceivedRef.current = false;
+    clearDucks();
     // Clear the karaoke highlight where the audio actually stopped.
     finishKaraoke();
     // Mark the active response as interrupted BEFORE we clear the bubble ref.
@@ -1102,8 +1296,12 @@ export function InlineVoiceMode({
       try { playbackAnalyserRef.current.disconnect(); } catch {}
       playbackAnalyserRef.current = null;
     }
+    if (duckGainRef.current) {
+      try { duckGainRef.current.disconnect(); } catch {}
+      duckGainRef.current = null;
+    }
     playbackStartedAtRef.current = 0;
-    safeSend(JSON.stringify({ type: 'interrupt' }));
+    if (sendToServer) safeSend(JSON.stringify({ type: 'interrupt' }));
     setState('listening');
   };
 
@@ -1185,6 +1383,8 @@ export function InlineVoiceMode({
         });
         audioWorkletNodeRef.current = workletNode;
         workletNode.port.onmessage = (event) => {
+          // Hold-to-talk: only audio captured while the button is held is sent.
+          if (inputModeRef.current === 'hold_to_talk' && !isHoldingRef.current) return;
           if (event.data.type === 'audio') {
             const queueSize = outboundAudioQueueRef.current.length;
             if (queueSize >= maxOutboundQueueSize * 0.8) {
@@ -1215,6 +1415,7 @@ export function InlineVoiceMode({
         const processor = audioContextRef.current.createScriptProcessor(bufferSize, 1, 1);
         scriptProcessorRef.current = processor;
         processor.onaudioprocess = (event) => {
+          if (inputModeRef.current === 'hold_to_talk' && !isHoldingRef.current) return;
           const inputData = event.inputBuffer.getChannelData(0);
           let resampledData: Float32Array = inputData;
           if (actualSampleRate !== 24000) {
@@ -1317,6 +1518,8 @@ export function InlineVoiceMode({
 
   const pauseTopScholarListening = () => {
     if (!topscholarToken || stateRef.current !== 'listening') return;
+    // Hold-to-talk never streams idle audio, so there is nothing to pause.
+    if (inputModeRef.current === 'hold_to_talk') return;
 
     clearListeningInactivityTimeout();
     shouldAutoRestartRef.current = false;
@@ -1359,7 +1562,7 @@ export function InlineVoiceMode({
   };
 
   useEffect(() => {
-    if (!topscholarToken || state !== 'listening') {
+    if (!topscholarToken || state !== 'listening' || inputMode === 'hold_to_talk') {
       clearListeningInactivityTimeout();
       return;
     }
@@ -1371,11 +1574,112 @@ export function InlineVoiceMode({
     scheduleListeningInactivityTimeout();
 
     return clearListeningInactivityTimeout;
-  }, [state, topscholarToken]);
+  }, [state, topscholarToken, inputMode]);
+
+  // ---- Hold to talk ---------------------------------------------------------
+  // True between pointer/Space down and up, even while the mic is starting.
+  const holdPressRef = useRef(false);
+
+  const startHold = async () => {
+    if (inputModeRef.current !== 'hold_to_talk' || isHoldingRef.current) return;
+    holdPressRef.current = true;
+    if (isConnecting) return;
+    if (!isOnlineRef.current) {
+      reconnectAttemptsRef.current = 0;
+      connectWebSocket();
+      return;
+    }
+    shouldAutoRestartRef.current = true;
+    if (!mediaStreamRef.current) {
+      try { await startRecording(); } catch { return; }
+      if (!mediaStreamRef.current) return;
+      // Released while the microphone was starting (e.g. permission prompt).
+      if (!holdPressRef.current) {
+        showHint('Microphone ready — hold the button while you speak.');
+        return;
+      }
+    }
+    // Pressing while the tutor talks is an intentional interruption: stop the
+    // audio here; the server cancels the answer when it sees ptt_start.
+    if (stateRef.current === 'speaking' || isPlayingRef.current || activeSourcesRef.current.size > 0) {
+      handleInterruption(false);
+    }
+    isHoldingRef.current = true;
+    setIsHolding(true);
+    setHint(null);
+    safeSend(JSON.stringify({ type: 'ptt_start' }));
+    setState('listening');
+  };
+
+  const endHold = () => {
+    holdPressRef.current = false;
+    if (!isHoldingRef.current) return;
+    setIsHolding(false);
+    // Keep forwarding for a moment so the last captured frames are sent before
+    // the commit, then commit the held audio as one turn.
+    setTimeout(() => {
+      isHoldingRef.current = false;
+      safeSend(JSON.stringify({ type: 'ptt_commit' }));
+      setState('thinking');
+    }, 150);
+  };
+
+  const switchInputMode = (mode: EffectiveVoiceInputMode) => {
+    if (mode === inputModeRef.current) return;
+    inputModeRef.current = mode;
+    setInputModeState(mode);
+    writeStoredInputMode(mode);
+    isHoldingRef.current = false;
+    setIsHolding(false);
+    safeSend(JSON.stringify({ type: 'set_input_mode', mode }));
+    if (mode === 'hold_to_talk') {
+      stopVoiceActivityDetection();
+    } else if (mediaStreamRef.current && stateRef.current === 'speaking') {
+      startVoiceActivityDetection();
+    }
+  };
+
+  // ---- Never stuck on "Thinking…" -------------------------------------------
+  const recoverFromStall = () => {
+    console.warn('[InlineVoice] Watchdog: no answer activity — returning to listening');
+    if (currentResponseIdRef.current) {
+      markResponseInterrupted(currentResponseIdRef.current);
+      // Let the server drop the stalled answer too.
+      safeSend(JSON.stringify({ type: 'interrupt', reason: 'watchdog' }));
+    }
+    flushQueuedAudio();
+    finishKaraoke();
+    if (currentAIMessageIdRef.current) onAIMessageDone?.(currentAIMessageIdRef.current);
+    currentAIMessageIdRef.current = null;
+    currentResponseIdRef.current = null;
+    aiDoneReceivedRef.current = false;
+    pendingInterruptRef.current = false;
+    showHint(DIDNT_CATCH_THAT);
+    returnToListening();
+  };
+
+  useEffect(() => {
+    if (state !== 'thinking' && state !== 'speaking') return;
+    const enteredAt = Date.now();
+    const timer = setInterval(() => {
+      const idleFor = Date.now() - Math.max(lastAnswerActivityRef.current, enteredAt);
+      if (idleFor < THINKING_WATCHDOG_MS) return;
+      const audioPending = isPlayingRef.current || activeSourcesRef.current.size > 0;
+      if (stateRef.current === 'thinking' || (stateRef.current === 'speaking' && !audioPending)) {
+        recoverFromStall();
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [state]);
 
   const cleanup = () => {
     shouldAutoRestartRef.current = false;
     finishKaraoke();
+    isHoldingRef.current = false;
+    if (hintTimeoutRef.current) { clearTimeout(hintTimeoutRef.current); hintTimeoutRef.current = null; }
+    if (localDuckReleaseRef.current) { clearTimeout(localDuckReleaseRef.current); localDuckReleaseRef.current = null; }
+    serverDuckRef.current = false;
+    localDuckRef.current = false;
     // Closing the control ends the session's history: the next open starts a
     // fresh attempt, where a failure is a genuine "never started".
     hadReadySessionRef.current = false;
@@ -1430,11 +1734,22 @@ export function InlineVoiceMode({
   const avatarSrc = avatarType === 'custom' ? (avatarUrl || '') :
     avatarType && avatarType !== 'none' ? `/avatars/avatar-${avatarType.replace('preset-', '')}.png` : '';
 
-  const stateLabel = state === 'listening' ? (currentTranscript || 'Listening...') :
+  const stateLabel = hint && (state === 'listening' || state === 'idle') ? hint :
+    state === 'listening' ? (currentTranscript || 'Listening...') :
     state === 'thinking' ? 'Thinking...' :
     state === 'speaking' ? 'Speaking...' :
      isConnecting ? 'Connecting...' :
      voiceError ? voiceError : topscholarToken ? 'Tap to speak' : 'Tap to start';
+
+  const holdMode = inputMode === 'hold_to_talk';
+  const holdLabel = isHolding ? 'Listening… release to send' :
+    isConnecting ? 'Connecting...' :
+    voiceError && state === 'idle' ? voiceError :
+    hint ? hint :
+    state === 'thinking' ? 'Thinking...' :
+    state === 'speaking' ? 'Hold to interrupt' :
+    'Hold to talk';
+  const showModeToggle = voiceInputMode === 'student_choice';
 
   return (
     <div className="flex items-center gap-3 px-3 py-2 min-h-[56px]">
@@ -1446,10 +1761,61 @@ export function InlineVoiceMode({
         <X className="w-4 h-4 text-gray-500" />
       </button>
 
+      {holdMode ? (
+        <button
+          type="button"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+            void startHold();
+          }}
+          onPointerUp={() => endHold()}
+          onPointerCancel={() => endHold()}
+          onPointerLeave={() => endHold()}
+          onKeyDown={(e) => {
+            if ((e.key === ' ' || e.code === 'Space') && !e.repeat) {
+              e.preventDefault();
+              void startHold();
+            }
+          }}
+          onKeyUp={(e) => {
+            if (e.key === ' ' || e.code === 'Space') {
+              e.preventDefault();
+              endHold();
+            }
+          }}
+          onContextMenu={(e) => e.preventDefault()}
+          className="flex-1 min-w-0 h-11 rounded-full flex items-center justify-center gap-2 text-white text-sm font-medium select-none transition-transform"
+          style={{
+            background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})`,
+            touchAction: 'none',
+            WebkitUserSelect: 'none',
+            transform: isHolding ? 'scale(0.97)' : undefined,
+            boxShadow: isHolding ? `0 0 0 4px ${chatColor}33` : undefined,
+          }}
+          aria-label="Hold to talk"
+          aria-pressed={isHolding}
+          data-testid="voice-hold-to-talk"
+        >
+          {state === 'thinking' && !isHolding ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : isHolding ? (
+            <Mic className="w-4 h-4" />
+          ) : (
+            <Hand className="w-4 h-4" />
+          )}
+          <span className="truncate">{holdLabel}</span>
+        </button>
+      ) : (
       <div className="flex-1 flex items-center gap-3 min-w-0">
         <button
           onClick={async () => {
             if (isConnecting) return;
+            // Tapping while the tutor talks is an intentional interruption.
+            if (state === 'speaking') {
+              handleInterruption();
+              return;
+            }
             if (state === 'idle') {
               shouldAutoRestartRef.current = true;
             }
@@ -1467,7 +1833,7 @@ export function InlineVoiceMode({
           }}
           className="relative flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center overflow-hidden transition-transform"
           style={{ background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})` }}
-          aria-label="Voice control"
+          aria-label={state === 'speaking' ? 'Stop speaking' : 'Voice control'}
         >
           <AnimatePresence mode="wait">
             {state === 'listening' && (
@@ -1551,7 +1917,21 @@ export function InlineVoiceMode({
           )}
         </div>
       </div>
+      )}
 
+      {showModeToggle && (
+        <button
+          type="button"
+          onClick={() => switchInputMode(holdMode ? 'hands_free' : 'hold_to_talk')}
+          className="flex-shrink-0 h-8 px-2 rounded-full flex items-center gap-1 text-[11px] font-medium text-gray-600 border border-gray-200 hover:bg-gray-100 transition-colors"
+          aria-label={holdMode ? 'Switch to hands-free voice' : 'Switch to hold to talk'}
+          title={holdMode ? 'Switch to hands-free' : 'Switch to hold to talk (best in noisy rooms)'}
+          data-testid="voice-input-mode-toggle"
+        >
+          {holdMode ? <Mic className="w-3.5 h-3.5" /> : <Hand className="w-3.5 h-3.5" />}
+          <span>{holdMode ? 'Hands-free' : 'Hold'}</span>
+        </button>
+      )}
     </div>
   );
 }

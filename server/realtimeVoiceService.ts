@@ -6,8 +6,13 @@ import { aiTools } from './aiTools';
 import { ToolExecutionService } from './services/toolExecutionService';
 import { journeyOrchestrator } from './services/journeyOrchestrator';
 import { journeyService } from './services/journeyService';
+import { Readable } from 'stream';
 import { isElevenLabsVoice, getElevenLabsVoiceId, synthesizeSpeechStreaming } from './services/elevenlabsService';
-import { createVoiceDisplayFallback, createVoiceSpeechText, formatVoiceTranscript, type VoiceDiagramCandidate } from './services/voiceFormatterService';
+import { createVoiceDisplayFallback, formatVoiceTranscript, type VoiceDiagramCandidate } from './services/voiceFormatterService';
+import { markdownToSpeech } from './services/voice/speechText';
+import { SentenceStreamSplitter, splitIntoSpeechSegments } from './services/voice/sentenceSplitter';
+import { SentenceTtsPipeline, type TtsProvider } from './services/voice/ttsPipeline';
+import { classifyVoiceTurn, endsWithQuestion, MIN_INTERRUPTION_SPEECH_MS, type TurnDropReason } from './services/voice/turnFilter';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { resolveCpIdsForScope } from './services/topscholar/scopeResolver';
 import { selectRelevantImages, type CurriculumMediaCandidate } from './services/topscholar/mediaMetadata';
@@ -36,14 +41,57 @@ import {
  */
 const REALTIME_MODEL = 'gpt-realtime-2.1-mini';
 const VOICE_INTENT_ROUTER_MODEL = 'gpt-4o-mini';
-const VOICE_INTENT_ROUTER_TIMEOUT_MS = 1800;
+// The curriculum lookup now runs in parallel with the router, so the router's
+// own wait is the only thing on the critical path — keep it short.
+const VOICE_INTENT_ROUTER_TIMEOUT_MS = 800;
+
+/**
+ * Confirmed-interruption timing (LiveKit-style "false interruption" handling).
+ * A speech_started while an answer is in flight only DUCKS playback; the
+ * answer is cancelled only when ≥ MIN_INTERRUPTION_SPEECH_MS of speech produces
+ * a substantive transcript. If nothing qualifying arrives this long after the
+ * speech stops, playback un-ducks and the answer simply continues.
+ */
+const FALSE_INTERRUPTION_TIMEOUT_MS = 2000;
+/** Un-duck even if speech_stopped never arrives (e.g. a TV left on). */
+const MAX_DUCK_MS = 8000;
+/** Hold-to-talk: give up waiting for a committed turn's transcript after this. */
+const MANUAL_TURN_TRANSCRIPT_TIMEOUT_MS = 10000;
+/** Hold-to-talk: shorter presses are treated as accidental taps. */
+const MIN_MANUAL_TURN_MS = 250;
+
+export type VoiceInputMode = 'hands_free' | 'hold_to_talk';
 
 type VoiceIntentRoute = 'academic_question' | 'normal_conversation' | 'voice_control' | 'uncertain';
 
 interface VoiceIntentDecision {
   route: VoiceIntentRoute;
   confidence: number;
-  source: 'deterministic' | 'classifier' | 'fallback';
+  source: 'deterministic' | 'classifier' | 'fallback' | 'heuristic';
+  /** Set when the router could not answer (timeout / request error). */
+  failure?: 'timeout' | 'error';
+}
+
+/** A chat stream event, as yielded by chatService.streamMessage. */
+export interface VoiceChatStreamEvent {
+  type: string;
+  data?: unknown;
+}
+
+/**
+ * External effects of a voice turn. Production uses chatService + the real TTS
+ * providers; the turn-handling tests substitute fakes (no network, no DB).
+ */
+export interface RealtimeVoiceDeps {
+  streamChat: (message: string, context: ChatContext) => AsyncIterable<VoiceChatStreamEvent>;
+  commitAssistantMessage: (context: ChatContext, content: string, stillCurrent: () => boolean) => Promise<string | null>;
+  rollbackAssistantMessage: (context: ChatContext, messageId: string, content: string) => Promise<void>;
+  /** Primary + fallback TTS for this conversation. */
+  createTtsProviders?: (conversation: { elevenlabsApiKey?: string; elevenlabsVoiceId?: string; openaiApiKey: string; selectedVoice?: string }) => { primary: TtsProvider | null; fallback: TtsProvider | null };
+  /** TopScholar intent router; defaults to the gpt-4o-mini classifier. */
+  classifyIntent?: (transcript: string) => Promise<VoiceIntentDecision>;
+  /** Speculative curriculum lookup; defaults to chatService.prefetchK12Topic. */
+  prefetchK12Topic?: (query: string, context: ChatContext) => { query: string; result: Promise<any | null> } | null;
 }
 
 const VOICE_STOP_COMMANDS = new Set([
@@ -252,6 +300,39 @@ interface VoiceConversation {
   // internal for speech and interruption handling; users only receive the
   // display-ready answer and its audio after this gate releases.
   holdSpeechResponseId?: string;
+  // --- Speak-while-writing (canonical turns) ---
+  // Ordered, pipelined sentence TTS for the canonical answer being spoken.
+  ttsPipeline?: SentenceTtsPipeline;
+  ttsPipelineResponseId?: string;
+  // PCM bytes sent for the current canonical answer, and — once ai_done is
+  // sent — when the client should have finished playing it. Safety net so a
+  // lost playback_complete can't leave the answer "active" forever.
+  answerAudioBytes?: number;
+  answerPlaybackEndsAt?: number;
+  // Recently spoken assistant text (echo detection) and the last full answer
+  // (did the tutor just ask a question?).
+  recentAssistantSpeech?: string;
+  lastAssistantText?: string;
+  // --- Turn taking ---
+  inputMode?: VoiceInputMode;
+  // VAD timings per input item (audio_start_ms / audio_end_ms), used to
+  // measure how long the student actually spoke.
+  speechTimings?: Map<string, { startMs?: number; endMs?: number }>;
+  // A speech_started that arrived while an answer was in flight: playback is
+  // ducked until the transcript confirms (or fails to confirm) an interruption.
+  bargeIn?: {
+    itemId?: string;
+    responseId?: string;
+    startedAt: number;
+    timer?: NodeJS.Timeout;
+  };
+  // Hold-to-talk turn in progress / awaiting its transcript.
+  manualTurn?: {
+    startedAt: number;
+    durationMs?: number;
+    awaitingTranscript: boolean;
+    timer?: NodeJS.Timeout;
+  };
 }
 
 export class RealtimeVoiceService {
@@ -272,6 +353,22 @@ export class RealtimeVoiceService {
   private readonly MAX_RECONNECT_ATTEMPTS = 5; // Maximum reconnection attempts
   private readonly BASE_RECONNECT_DELAY = 1000; // Base delay for exponential backoff (1 second)
   private readonly MAX_RECONNECT_DELAY = 30000; // Maximum reconnection delay (30 seconds)
+
+  private deps: RealtimeVoiceDeps = {
+    streamChat: (message, context) => chatService.streamMessage(message, context) as AsyncIterable<VoiceChatStreamEvent>,
+    commitAssistantMessage: (context, content, stillCurrent) =>
+      chatService.commitDeferredAssistantMessage(context, content, stillCurrent),
+    rollbackAssistantMessage: (context, messageId, content) =>
+      chatService.rollbackDeferredAssistantMessage(context, messageId, content),
+  };
+
+  /**
+   * Test seam: replace the external effects of a turn (chat stream,
+   * persistence, TTS providers, intent router, prefetch) with fakes.
+   */
+  setDepsForTesting(overrides: Partial<RealtimeVoiceDeps>): void {
+    this.deps = { ...this.deps, ...overrides };
+  }
 
   /**
    * Realtime can deliver terminal or delta events for an older response after a
@@ -790,6 +887,14 @@ export class RealtimeVoiceService {
       }
       // Drop any queued sentence TTS so the drainer stops.
       conversation.ttsQueue = [];
+      if (conversation.ttsPipeline) {
+        conversation.ttsPipeline.cancel();
+        conversation.ttsPipeline = undefined;
+      }
+      if (conversation.bargeIn?.timer) clearTimeout(conversation.bargeIn.timer);
+      conversation.bargeIn = undefined;
+      if (conversation.manualTurn?.timer) clearTimeout(conversation.manualTurn.timer);
+      conversation.manualTurn = undefined;
 
       // Close OpenAI WebSocket
       if (conversation.openaiWs) {
@@ -858,16 +963,23 @@ export class RealtimeVoiceService {
     notifyClient = true,
   ) {
     if (!responseId) return;
+    const alreadyCancelled = conversation.cancelledResponseIds.has(responseId);
     conversation.cancelledResponseIds.add(responseId);
     if (conversation.cancelledResponseIds.size > 20) {
       const first = conversation.cancelledResponseIds.values().next().value;
       if (first) conversation.cancelledResponseIds.delete(first);
     }
-    // A display-ready canonical answer is already complete and persisted. It
-    // remains visible when the student only stops its audio, while this marker
-    // still prevents late synthesis or stale events from reaching the client.
-    if (notifyClient && !this.hasDisplayedCanonicalAnswer(conversation, responseId)) {
-      this.sendToClient(conversation.clientWs, { type: 'response_cancelled', responseId });
+    // Always tell the client (once per response) so it stops that answer's
+    // audio and returns to listening. A display-ready canonical answer is
+    // already complete and persisted, so it stays on screen
+    // (preserveDisplay) when the student only stops its audio; a partial,
+    // still-streaming answer is removed, exactly as before.
+    if (notifyClient && !alreadyCancelled) {
+      this.sendToClient(conversation.clientWs, {
+        type: 'response_cancelled',
+        responseId,
+        preserveDisplay: this.hasDisplayedCanonicalAnswer(conversation, responseId),
+      });
     }
   }
 
@@ -925,6 +1037,17 @@ export class RealtimeVoiceService {
       }
     }
     let cancelled = false;
+    // Any pending "possible interruption" is resolved by this cancellation.
+    this.clearBargeIn(conversation);
+    // Speak-while-writing pipeline for the canonical answer: stop every
+    // in-flight sentence request and drop audio already buffered for it.
+    if (conversation.ttsPipeline) {
+      this.markResponseCancelled(conversation, conversation.ttsPipelineResponseId);
+      conversation.ttsPipeline.cancel();
+      conversation.ttsPipeline = undefined;
+      conversation.ttsPipelineResponseId = undefined;
+      cancelled = true;
+    }
     // ALWAYS abort any in-flight ElevenLabs synth on user interrupt — even
     // when OpenAI has already finished (`isProcessing === false`). The exact
     // bug this task fixes is the window where OpenAI's response.done has
@@ -1072,13 +1195,8 @@ export class RealtimeVoiceService {
                 noise_reduction: {
                   type: 'far_field'
                 },
-                turn_detection: {
-                  type: 'server_vad',
-                  threshold: 0.8,
-                  prefix_padding_ms: 300,
-                  silence_duration_ms: 800,
-                  create_response: false
-                }
+                // Hold-to-talk sessions have no VAD: the client commits each turn.
+                turn_detection: this.turnDetectionConfig(conversation)
               },
               output: {
                 format: { type: 'audio/pcm', rate: 24000 },
@@ -1127,6 +1245,22 @@ export class RealtimeVoiceService {
         }
       });
     });
+  }
+
+  /**
+   * Realtime turn detection for this connection: server VAD in hands-free
+   * mode (Realtime only transcribes — create_response stays false), none in
+   * hold-to-talk mode, where the client commits each held turn.
+   */
+  private turnDetectionConfig(conversation: VoiceConversation): Record<string, unknown> | null {
+    if (conversation.inputMode === 'hold_to_talk') return null;
+    return {
+      type: 'server_vad',
+      threshold: 0.8,
+      prefix_padding_ms: 300,
+      silence_duration_ms: 800,
+      create_response: false,
+    };
   }
 
   // Handle OpenAI disconnection with reconnection logic
@@ -1925,21 +2059,19 @@ export class RealtimeVoiceService {
         case 'input_audio_buffer.speech_started':
           console.log('[RealtimeVoice] User started speaking');
           this.touchActivity(conversation);
-          
-          // Cancel ongoing AI response if one is active (isProcessing check inside cancelResponse).
-          // We must NOT send response.cancel when no response is active — doing so
-          // causes OpenAI to return an error that corrupts the VAD state machine,
-          // preventing speech_stopped from ever firing and leaving the session stuck.
-          // respectGrace=true: ignore speech_started that lands in the first
-          // BARGE_IN_GRACE_MS of the answer's audio — that's the AI's own opening
-          // audio / mic echo, not a real interruption.
-          this.cancelResponse(conversation, true);
-          
+          this.recordSpeechTiming(conversation, event.item_id, { startMs: event.audio_start_ms });
+          // NEVER cancel on raw VAD: a cough, a sibling or the TV is "speech"
+          // to the detector. An in-flight answer is only ducked here; it is
+          // cancelled when the transcript confirms a real interruption
+          // (handleFinalTranscript), and un-ducked if it doesn't.
+          this.beginPossibleInterruption(conversation, event.item_id);
           this.sendToClient(conversation.clientWs, { type: 'speech_started' });
           break;
 
         case 'input_audio_buffer.speech_stopped':
           console.log('[RealtimeVoice] User stopped speaking');
+          this.recordSpeechTiming(conversation, event.item_id, { endMs: event.audio_end_ms });
+          this.armFalseInterruptionTimer(conversation, event.item_id);
           break;
 
         case 'input_audio_buffer.committed':
@@ -1951,239 +2083,36 @@ export class RealtimeVoiceService {
           });
           break;
 
-        case 'conversation.item.input_audio_transcription.completed':
+        case 'conversation.item.input_audio_transcription.failed': {
+          console.warn('[RealtimeVoice] Transcription failed:', event.error?.message || event.error);
+          this.takeSpeechTiming(conversation, event.item_id);
+          const held = this.takeManualTurn(conversation);
+          if (held || conversation.bargeIn) {
+            this.ignoreTurn(conversation, 'transcription_failed', '', held != null);
+          }
+          break;
+        }
+
+        case 'conversation.item.input_audio_transcription.completed': {
           // User's speech transcribed
           const userTranscript = String(event.transcript || '');
           console.log('[RealtimeVoice] User transcript:', userTranscript);
-          
-          // Save user transcript to conversation
-          const trimmedTranscript = userTranscript.trim();
-          conversation.currentUserTranscript = trimmedTranscript;
-          // Invalidate any in-flight K12 rewrite/retrieval for the PREVIOUS
-          // utterance immediately — before any await — so a stale turn can
-          // never inject its context or create a response after this point.
-          conversation.k12TurnSeq = (conversation.k12TurnSeq ?? 0) + 1;
-          const turnSeq = conversation.k12TurnSeq;
-          
-          // CRITICAL: Filter out very short/empty transcripts (likely background noise)
-          // Only process transcripts with at least 2 meaningful characters
-          if (trimmedTranscript.length < 2) {
-            console.log('[RealtimeVoice] Ignoring short/empty transcript (likely noise):', userTranscript);
-            break; // Skip processing this noise
-          }
-
-          let voiceIntentRoute: Exclude<VoiceIntentRoute, 'voice_control'> | undefined;
-          if (isTopscholarAccount(conversation.businessAccountId)) {
-            const deterministicControl = this.classifyStandaloneVoiceControl(trimmedTranscript);
-            if (deterministicControl) {
-              this.consumeVoiceControl(conversation, deterministicControl);
-              break;
-            }
-
-            // Keep the UI responsive while the small, bounded intent router
-            // decides whether this is a study question or normal conversation.
-            this.sendToClient(conversation.clientWs, { type: 'thinking' });
-            const decision = await this.classifyTopscholarVoiceIntent(conversation, trimmedTranscript);
-            if (conversation.k12TurnSeq !== turnSeq) {
-              console.log('[VoiceRouting] Discarded stale intent decision for superseded turn');
-              break;
-            }
-            if (decision.route === 'voice_control') {
-              this.consumeVoiceControl(conversation, decision);
-              break;
-            }
-            voiceIntentRoute = decision.route as Exclude<VoiceIntentRoute, 'voice_control'>;
-          }
-
-          this.sendToClient(conversation.clientWs, {
-            type: 'transcript',
-            text: userTranscript,
-            isFinal: true
+          const timing = this.takeSpeechTiming(conversation, event.item_id);
+          const manual = this.takeManualTurn(conversation);
+          const speechMs = manual
+            ? manual.durationMs ?? null
+            : timing && typeof timing.startMs === 'number' && typeof timing.endMs === 'number'
+              ? Math.max(0, timing.endMs - timing.startMs)
+              : null;
+          await this.handleFinalTranscript(conversation, {
+            transcript: userTranscript,
+            speechMs,
+            heldTurn: !!manual,
+            itemId: event.item_id,
+            logprobs: Array.isArray(event.logprobs) ? event.logprobs : null,
           });
-          
-          // GPT TRANSCRIPT CORRECTION: Run in background (non-blocking)
-          // Always detect the language of THIS specific transcript, not the previously detected language.
-          // This prevents English text from being "corrected" (translated) into Hindi when the user
-          // switches languages mid-conversation.
-          const thisTranscriptLang = this.detectLanguageFromText(trimmedTranscript);
-          if (thisTranscriptLang.language !== 'en') {
-            const correctionLang = conversation.selectedLanguage && conversation.selectedLanguage !== 'auto'
-              ? conversation.selectedLanguage
-              : thisTranscriptLang.language;
-            this.correctTranscriptScript(userTranscript, correctionLang, conversation).catch(() => {});
-          }
-          
-          // AUTO LANGUAGE DETECTION: Detect language from transcribed text and update session
-          if (!conversation.selectedLanguage || conversation.selectedLanguage === 'auto') {
-            const detected = this.detectLanguageFromText(trimmedTranscript);
-            if (detected.language !== conversation.detectedLanguage) {
-              conversation.detectedLanguage = detected.language;
-              console.log(`[RealtimeVoice] Language detected from transcript: ${detected.languageName} (${detected.language})`);
-              
-              // Rebuild instructions with detected language and send session.update
-              // Also update input_audio_transcription with language hint for correct script
-              const updatedInstructions = await this.buildSystemInstructions(conversation);
-              if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
-                conversation.openaiWs.send(JSON.stringify({
-                  type: 'session.update',
-                  session: {
-                    type: 'realtime',
-                    instructions: updatedInstructions,
-                    audio: {
-                      input: {
-                        transcription: {
-                          model: 'gpt-4o-mini-transcribe',
-                          language: this.toTranscriptionLangCode(detected.language)
-                        }
-                      }
-                    }
-                  }
-                }));
-                console.log(`[RealtimeVoice] Session updated with detected language: ${detected.languageName} (transcription + instructions)`);
-              }
-            }
-          }
-
-          // Voice uses Realtime for speech-to-text only. The shared text-chat
-          // pipeline authors and persists the completed canonical Markdown; TTS
-          // is derived from that exact answer after it is ready for display.
-          console.log('[RealtimeVoice] Canonical voice turn: generating ChatService Markdown before TTS');
-          await this.generateCanonicalVoiceAnswer(conversation, trimmedTranscript, voiceIntentRoute);
           break;
-          
-          // Check if a journey should be activated or is already active
-          // CRITICAL: Only process journey if explicitly triggered or already in progress for THIS conversation
-          let journeyResult: any = null;
-          if (conversation.conversationId && conversation.openaiWs?.readyState === WebSocket.OPEN) {
-            journeyResult = await journeyOrchestrator.processUserMessage(
-              conversation.conversationId,
-              conversation.userId,
-              conversation.businessAccountId,
-              userTranscript
-            );
-            
-            // CRITICAL: Only inject journey questions if:
-            // 1. Journey was just triggered by keyword (wasTriggeredByKeyword === true), OR
-            // 2. Journey is active for THIS specific conversation (not a stale journey from another session)
-            // This prevents false triggers from old journey sessions in different conversations
-            if (journeyResult.journeyResponse && !journeyResult.shouldContinueNormalFlow) {
-              const isJourneyForThisConversation = journeyService.isJourneyForConversation(
-                conversation.conversationId
-              );
-              
-              if (!journeyResult.wasTriggeredByKeyword && !isJourneyForThisConversation) {
-                console.log('[RealtimeVoice] Ignoring stale journey from different conversation - not injecting question');
-                // Fall through to normal OpenAI response (don't inject journey question)
-              } else {
-                console.log('[RealtimeVoice] Journey active for THIS conversation - forcing AI to ask journey question:', journeyResult.journeyResponse);
-              
-              // SMART INTERRUPTION: Cancel any ongoing response BEFORE injecting journey prompts
-              // This prevents the AI from continuing its previous response before the journey question
-              if (conversation.isProcessing) {
-                console.log('[RealtimeVoice] 🎯 Smart interruption: Cancelling active response before journey question');
-                this.cancelResponse(conversation);
-                conversation.isProcessing = false;
-                
-                // Add small delay to allow cancellation to complete
-                await new Promise(resolve => setTimeout(resolve, 100));
-              }
-              
-              // CRITICAL FIX BUG 4: Track pending journey step ID (will be added to Map when response.created arrives)
-              if (journeyResult.journeyStepId) {
-                conversation.pendingJourneyStepId = journeyResult.journeyStepId;
-                console.log('[RealtimeVoice] Set pending journey stepId:', journeyResult.journeyStepId, 'for next response.created event');
-              } else {
-                console.warn('[RealtimeVoice] Journey result missing stepId - cannot track properly!');
-              }
-              
-              // Create a strong system-level instruction that the AI MUST follow
-              // Use the SAME strong rephrasing instruction as text chat mode for consistency
-              const journeyInstruction = {
-                type: 'conversation.item.create',
-                item: {
-                  type: 'message',
-                  role: 'system',
-                  content: [
-                    {
-                      type: 'input_text',
-                      text: `═══════════════════════════════════════════════════════════════
-CRITICAL JOURNEY INSTRUCTION - HIGHEST PRIORITY - READ CAREFULLY
-═══════════════════════════════════════════════════════════════
-
-You are currently in a GUIDED CONVERSATION FLOW. This overrides your normal conversational behavior.
-
-YOUR ONLY TASK RIGHT NOW:
-Ask the user this question: "${journeyResult.journeyResponse}"
-
-STRICT REQUIREMENTS:
-1. ✓ Rephrase the question naturally to sound warm, friendly, and conversational
-2. ✓ Keep it concise - ONLY ask this one question
-3. ✗ Do NOT add any other information, explanations, or suggestions
-4. ✗ Do NOT call any tools or functions
-5. ✗ Do NOT provide product recommendations or capture leads
-
-Remember: You're in a structured flow. Just ask the question naturally, then wait for their answer.
-═══════════════════════════════════════════════════════════════`
-                    }
-                  ]
-                }
-              };
-              
-              conversation.openaiWs!.send(JSON.stringify(journeyInstruction));
-              
-              // Trigger response generation - AI will ask the journey question
-              const responseCreate = {
-                type: 'response.create',
-                response: {
-                  output_modalities: ['audio'],
-                  instructions: `You MUST rephrase this question naturally and conversationally: "${journeyResult.journeyResponse}". Make it sound warm and friendly, but keep the same intent. Do NOT add any extra information - ONLY ask the rephrased question.`
-                }
-              };
-              conversation.openaiWs!.send(JSON.stringify(responseCreate));
-              
-              console.log('[RealtimeVoice] Sent FORCED journey question to OpenAI');
-              
-              // Clear the keyword flag if this was triggered by keyword
-              if (journeyResult.wasTriggeredByKeyword) {
-                await journeyService.clearKeywordTriggerFlag(conversation.conversationId);
-              }
-              }
-            } else {
-              // No active journey - send normal response
-              // SMART INTERRUPTION: Check if there's already an active response
-              if (conversation.isProcessing) {
-                console.log('[RealtimeVoice] 🎯 Smart interruption: Cancelling active response before creating new one');
-                this.cancelResponse(conversation);
-                conversation.isProcessing = false;
-                
-                // Add small delay to allow cancellation to complete
-                await new Promise(resolve => setTimeout(resolve, 100));
-              }
-              
-              // No journey active - create normal response
-              console.log('[RealtimeVoice] Creating normal OpenAI response (no active journey)');
-              await this.sendNormalResponse(conversation);
-            }
-          } else {
-            // CRITICAL FIX: If journey check couldn't be performed (conversationId missing or WebSocket not ready),
-            // we still need to send a response! Otherwise AI will be silent.
-            // SMART INTERRUPTION: Check if there's already an active response
-            if (conversation.isProcessing) {
-              console.log('[RealtimeVoice] 🎯 Smart interruption: Cancelling active response before creating new one');
-              this.cancelResponse(conversation);
-              conversation.isProcessing = false;
-              
-              // Add small delay to allow cancellation to complete
-              await new Promise(resolve => setTimeout(resolve, 100));
-            }
-            
-            // Send normal response when journey check couldn't be performed
-            console.log('[RealtimeVoice] Creating normal OpenAI response (journey check skipped)');
-            if (conversation.openaiWs?.readyState === WebSocket.OPEN) {
-              await this.sendNormalResponse(conversation);
-            }
-          }
-          break;
+        }
 
         case 'response.created':
           // Realtime is intentionally transcription-only for normal voice
@@ -2194,64 +2123,6 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
           console.error('[RealtimeVoice] Rejected unexpected Realtime-authored response:', event.response?.id);
           if (conversation.openaiWs?.readyState === WebSocket.OPEN) {
             conversation.openaiWs.send(JSON.stringify({ type: 'response.cancel' }));
-          }
-          break;
-
-          console.log('[RealtimeVoice] Response created, id:', event.response?.id);
-          conversation.isProcessing = true;
-          conversation.currentAITranscript = '';
-          conversation.pendingTextOutput = '';
-          conversation.openaiAudioFallbackBuffer = [];
-          // Reset incremental-TTS state for the new answer.
-          conversation.textStreamMode = 'pending';
-          conversation.streamedTextCursor = 0;
-          conversation.k12TextFinalized = false;
-          conversation.ttsTranscriptCursor = 0;
-          // Track current response ID
-          conversation.currentResponseId = event.response?.id;
-          conversation.currentResponseKind = 'realtime';
-
-          // Every response follows the same show-then-speak gate. A response
-          // cannot expose raw streamed text or native audio before its complete
-          // display version is prepared at response.done.
-          conversation.holdSpeechResponseId = conversation.currentResponseId;
-          console.log('[RealtimeVoice] Show-then-speak hold bound to response:', conversation.currentResponseId);
-
-          // Bind (or discard) curriculum images to the response that will speak
-          // them. Images retrieved for a turn the student interrupted must not
-          // ride along on whatever they ask next.
-          if (conversation.pendingCurriculumMedia?.length) {
-            if (conversation.pendingCurriculumMediaResponseId == null) {
-              conversation.pendingCurriculumMediaResponseId = conversation.currentResponseId ?? null;
-            } else if (conversation.pendingCurriculumMediaResponseId !== conversation.currentResponseId) {
-              conversation.pendingCurriculumMedia = undefined;
-              conversation.pendingCurriculumMediaResponseId = undefined;
-            }
-          }
-
-          // Tell the client which OpenAI responseId is about to start, so it can
-          // map this to the local message bubble it creates on the first ai_chunk.
-          // Used by the formatted_transcript event to find the correct bubble.
-          if (conversation.currentResponseId) {
-            this.sendToClient(conversation.clientWs, {
-              type: 'voice_message_start',
-              responseId: conversation.currentResponseId
-            });
-          }
-          
-          // CRITICAL FIX BUG 4: If we have a pending journey step ID, add it to the Map keyed by stepId
-          const legacyResponseId = conversation.currentResponseId;
-          const legacyStepId = conversation.pendingJourneyStepId;
-          if (legacyStepId && legacyResponseId) {
-            // We need the original question text for logging - get it from journeyResult
-            const stepId = legacyStepId as string;
-            conversation.journeyResponseTracking.set(stepId, {
-              original: '', // Will be set in response.done when we have the full transcript
-              responseId: legacyResponseId as string,
-              timestamp: Date.now()
-            });
-            console.log('[RealtimeVoice] Tracked journey by STEP ID:', stepId, 'responseId:', legacyResponseId);
-            conversation.pendingJourneyStepId = undefined; // Clear pending
           }
           break;
 
@@ -2710,6 +2581,15 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
             console.log('[RealtimeVoice] ℹ️  Response already completed before cancellation (harmless)');
             break; // Don't send to client - this is not an actual error
           }
+          // Hold-to-talk: the student released before any audio reached the
+          // buffer. That is a non-turn, not an error.
+          if (event.error?.code === 'input_audio_buffer_commit_empty') {
+            const held = this.takeManualTurn(conversation);
+            console.log('[RealtimeVoice] Empty manual commit ignored');
+            void held;
+            this.ignoreTurn(conversation, 'too_short', '', true);
+            break;
+          }
           
           console.error('[RealtimeVoice] OpenAI error:', event.error);
           this.sendError(conversation.clientWs, event.error.message || 'Voice processing error');
@@ -2871,6 +2751,524 @@ Remember: You're in a structured flow. Just ask the question naturally, then wai
     return { route: 'voice_control', confidence: 1, source: 'deterministic' };
   }
 
+  // ---------------------------------------------------------------------------
+  // Turn taking: confirmed interruptions, noise filtering, hold-to-talk
+  // ---------------------------------------------------------------------------
+
+  private recordSpeechTiming(
+    conversation: VoiceConversation,
+    itemId: string | undefined,
+    patch: { startMs?: number; endMs?: number },
+  ): void {
+    if (!itemId) return;
+    if (!conversation.speechTimings) conversation.speechTimings = new Map();
+    const next = { ...(conversation.speechTimings.get(itemId) || {}) };
+    if (typeof patch.startMs === 'number') next.startMs = patch.startMs;
+    if (typeof patch.endMs === 'number') next.endMs = patch.endMs;
+    conversation.speechTimings.set(itemId, next);
+    if (conversation.speechTimings.size > 20) {
+      const oldest = conversation.speechTimings.keys().next().value;
+      if (oldest) conversation.speechTimings.delete(oldest);
+    }
+  }
+
+  private takeSpeechTiming(
+    conversation: VoiceConversation,
+    itemId: string | undefined,
+  ): { startMs?: number; endMs?: number } | null {
+    if (!itemId || !conversation.speechTimings) return null;
+    const timing = conversation.speechTimings.get(itemId) || null;
+    conversation.speechTimings.delete(itemId);
+    return timing;
+  }
+
+  /** The committed hold-to-talk turn this transcript belongs to, if any. */
+  private takeManualTurn(conversation: VoiceConversation): { startedAt: number; durationMs?: number } | null {
+    const manual = conversation.manualTurn;
+    if (!manual || !manual.awaitingTranscript) return null;
+    if (manual.timer) clearTimeout(manual.timer);
+    conversation.manualTurn = undefined;
+    return manual;
+  }
+
+  /**
+   * An answer is in flight: being generated, being synthesised, or still
+   * playing on the client (canonical ownership lasts until playback_complete).
+   */
+  private isAnswerActive(conversation: VoiceConversation): boolean {
+    const responseId = conversation.currentResponseId;
+    if (conversation.answerPlaybackEndsAt && Date.now() > conversation.answerPlaybackEndsAt) {
+      return false;
+    }
+    return (
+      conversation.currentResponseKind === 'canonical' &&
+      !!responseId &&
+      !conversation.cancelledResponseIds.has(responseId)
+    );
+  }
+
+  /**
+   * VAD heard something while an answer is in flight. Treat it as a POSSIBLE
+   * interruption: lower the answer's volume (client-side duck) and wait for
+   * the transcript. Nothing is cancelled here.
+   */
+  private beginPossibleInterruption(conversation: VoiceConversation, itemId?: string): void {
+    if (conversation.inputMode === 'hold_to_talk') return;
+    if (!this.isAnswerActive(conversation)) return;
+    if (
+      conversation.activeElevenLabsStartedAt &&
+      Date.now() - conversation.activeElevenLabsStartedAt < this.BARGE_IN_GRACE_MS
+    ) {
+      console.log('[VoiceTurn] speech_started inside the playback grace window — likely echo, not ducking');
+      return;
+    }
+    if (conversation.bargeIn) {
+      if (conversation.bargeIn.timer) clearTimeout(conversation.bargeIn.timer);
+      if (itemId) conversation.bargeIn.itemId = itemId;
+    } else {
+      conversation.bargeIn = {
+        itemId,
+        responseId: conversation.currentResponseId,
+        startedAt: Date.now(),
+      };
+      this.sendToClient(conversation.clientWs, { type: 'duck', responseId: conversation.currentResponseId });
+      console.log('[VoiceTurn] Possible interruption — ducking playback, responseId:', conversation.currentResponseId);
+    }
+    const bargeIn = conversation.bargeIn;
+    bargeIn.timer = setTimeout(() => {
+      if (conversation.bargeIn === bargeIn) this.resolveFalseInterruption(conversation, 'max_duck');
+    }, MAX_DUCK_MS);
+  }
+
+  /** Speech stopped: if no qualifying transcript follows soon, resume. */
+  private armFalseInterruptionTimer(conversation: VoiceConversation, _itemId?: string): void {
+    const bargeIn = conversation.bargeIn;
+    if (!bargeIn) return;
+    if (bargeIn.timer) clearTimeout(bargeIn.timer);
+    bargeIn.timer = setTimeout(() => {
+      if (conversation.bargeIn === bargeIn) this.resolveFalseInterruption(conversation, 'no_transcript');
+    }, FALSE_INTERRUPTION_TIMEOUT_MS);
+  }
+
+  private clearBargeIn(conversation: VoiceConversation): boolean {
+    const bargeIn = conversation.bargeIn;
+    if (!bargeIn) return false;
+    if (bargeIn.timer) clearTimeout(bargeIn.timer);
+    conversation.bargeIn = undefined;
+    return true;
+  }
+
+  /** It was not a real interruption: restore the volume and keep answering. */
+  private resolveFalseInterruption(conversation: VoiceConversation, reason: string): void {
+    const bargeIn = conversation.bargeIn;
+    if (!bargeIn || !this.clearBargeIn(conversation)) return;
+    console.log(`[VoiceTurn] False interruption (${reason}) — resuming answer`, bargeIn.responseId);
+    this.sendToClient(conversation.clientWs, { type: 'unduck', responseId: bargeIn.responseId, reason });
+  }
+
+  /**
+   * Terminal event for a turn that gets no reply. The client stays in (or
+   * returns to) listening; an in-flight answer, if any, carries on.
+   */
+  private ignoreTurn(conversation: VoiceConversation, reason: TurnDropReason | string, transcript: string, held: boolean): void {
+    if (conversation.bargeIn) this.resolveFalseInterruption(conversation, String(reason));
+    console.log(`[VoiceTurn] turn_ignored reason=${reason} held=${held} chars=${transcript.length}`);
+    this.sendToClient(conversation.clientWs, {
+      type: 'turn_ignored',
+      reason,
+      held,
+      answerActive: this.isAnswerActive(conversation),
+    });
+  }
+
+  /**
+   * A final transcript arrived. Decide whether it is a real turn (and, while an
+   * answer is in flight, a CONFIRMED interruption), then route and answer it.
+   */
+  private async handleFinalTranscript(
+    conversation: VoiceConversation,
+    input: {
+      transcript: string;
+      speechMs: number | null;
+      heldTurn: boolean;
+      itemId?: string;
+      logprobs?: Array<{ logprob?: number }> | null;
+    },
+  ): Promise<void> {
+    const userTranscript = input.transcript;
+    const trimmedTranscript = userTranscript.trim();
+    const topScholar = isTopscholarAccount(conversation.businessAccountId);
+    const aiActive = this.isAnswerActive(conversation);
+
+    // Urgent stop commands are an exact allowlist and bypass the length rules.
+    if (topScholar && trimmedTranscript) {
+      const control = this.classifyStandaloneVoiceControl(trimmedTranscript);
+      if (control) {
+        this.clearBargeIn(conversation);
+        this.consumeVoiceControl(conversation, control);
+        return;
+      }
+    }
+
+    const verdict = classifyVoiceTurn({
+      transcript: trimmedTranscript,
+      speechMs: input.speechMs,
+      aiActive,
+      heldTurn: input.heldTurn,
+      assistantAskedQuestion: endsWithQuestion(conversation.lastAssistantText),
+      recentAssistantSpeech: aiActive ? conversation.recentAssistantSpeech : undefined,
+      logprobs: input.logprobs,
+    });
+    if (!verdict.accept) {
+      console.log(
+        `[VoiceTurn] Ignoring transcript reason=${verdict.reason} words=${verdict.words} ` +
+        `speechMs=${input.speechMs ?? 'n/a'} aiActive=${aiActive} held=${input.heldTurn}`,
+      );
+      this.ignoreTurn(conversation, verdict.reason || 'empty', trimmedTranscript, input.heldTurn);
+      return;
+    }
+
+    if (aiActive) {
+      // Enough speech with real content: a CONFIRMED interruption. Stop the
+      // current answer, then answer the new turn.
+      console.log(
+        `[VoiceTurn] Confirmed interruption (speechMs=${input.speechMs ?? 'n/a'}, min=${MIN_INTERRUPTION_SPEECH_MS}) — cancelling`,
+        conversation.currentResponseId,
+      );
+      this.cancelResponse(conversation, false);
+    } else {
+      this.clearBargeIn(conversation);
+    }
+
+    // Only a real turn may supersede the previous one. (Bumping this before
+    // the noise filter let an empty noise transcript orphan an in-flight
+    // answer and leave the client on "Thinking…".)
+    conversation.currentUserTranscript = trimmedTranscript;
+    conversation.k12TurnSeq = (conversation.k12TurnSeq ?? 0) + 1;
+    const turnSeq = conversation.k12TurnSeq;
+
+    let voiceIntentRoute: Exclude<VoiceIntentRoute, 'voice_control'> | undefined;
+    let prefetchedK12Topic: { query: string; result: Promise<any | null> } | null = null;
+    if (topScholar) {
+      // Keep the UI responsive while the bounded router decides.
+      this.sendToClient(conversation.clientWs, { type: 'thinking' });
+      const routed = await this.routeTopscholarTurn(conversation, trimmedTranscript, verdict.words);
+      if (conversation.k12TurnSeq !== turnSeq) {
+        console.log('[VoiceRouting] Discarded stale intent decision for superseded turn');
+        return;
+      }
+      if (routed.kind === 'control') {
+        this.consumeVoiceControl(conversation, routed.decision);
+        return;
+      }
+      if (routed.kind === 'ignore') {
+        this.ignoreTurn(conversation, 'unclear', trimmedTranscript, input.heldTurn);
+        return;
+      }
+      voiceIntentRoute = routed.route;
+      prefetchedK12Topic = routed.prefetched;
+    }
+
+    this.sendToClient(conversation.clientWs, {
+      type: 'transcript',
+      text: userTranscript,
+      isFinal: true
+    });
+
+    // GPT TRANSCRIPT CORRECTION: Run in background (non-blocking)
+    // Always detect the language of THIS specific transcript, not the previously detected language.
+    // This prevents English text from being "corrected" (translated) into Hindi when the user
+    // switches languages mid-conversation.
+    const thisTranscriptLang = this.detectLanguageFromText(trimmedTranscript);
+    if (thisTranscriptLang.language !== 'en') {
+      const correctionLang = conversation.selectedLanguage && conversation.selectedLanguage !== 'auto'
+        ? conversation.selectedLanguage
+        : thisTranscriptLang.language;
+      this.correctTranscriptScript(userTranscript, correctionLang, conversation).catch(() => {});
+    }
+
+    // AUTO LANGUAGE DETECTION: only the transcription language hint matters —
+    // Realtime no longer authors answers, so its instructions are irrelevant
+    // and are no longer rebuilt (that awaited rebuild used to sit on the
+    // critical path of every language change).
+    if (!conversation.selectedLanguage || conversation.selectedLanguage === 'auto') {
+      if (thisTranscriptLang.language !== conversation.detectedLanguage) {
+        conversation.detectedLanguage = thisTranscriptLang.language;
+        console.log(`[RealtimeVoice] Language detected from transcript: ${thisTranscriptLang.languageName} (${thisTranscriptLang.language})`);
+        this.updateTranscriptionLanguage(conversation, thisTranscriptLang.language);
+      }
+    }
+
+    // Voice uses Realtime for speech-to-text only. The shared text-chat
+    // pipeline authors and persists the canonical Markdown; speech is derived
+    // from it sentence by sentence while it streams.
+    console.log('[RealtimeVoice] Canonical voice turn: streaming ChatService answer into TTS');
+    await this.generateCanonicalVoiceAnswer(conversation, trimmedTranscript, voiceIntentRoute, prefetchedK12Topic);
+  }
+
+  /**
+   * TopScholar routing. Confident small talk skips the router entirely; other
+   * turns run the router while the curriculum lookup starts speculatively, so
+   * retrieval no longer waits for classification. The prefetched result is
+   * handed to the chat pipeline and reused there (never recomputed).
+   */
+  private async routeTopscholarTurn(
+    conversation: VoiceConversation,
+    transcript: string,
+    words: number,
+  ): Promise<
+    | { kind: 'control'; decision: VoiceIntentDecision }
+    | { kind: 'ignore' }
+    | {
+      kind: 'route';
+      route: Exclude<VoiceIntentRoute, 'voice_control'>;
+      prefetched: { query: string; result: Promise<any | null> } | null;
+    }
+  > {
+    const heuristic = this.heuristicVoiceIntent(transcript);
+    if (heuristic) {
+      console.log(`[VoiceRouting] route=${heuristic.route} source=heuristic (router skipped)`);
+      return { kind: 'route', route: heuristic.route as Exclude<VoiceIntentRoute, 'voice_control'>, prefetched: null };
+    }
+
+    const prefetch = this.deps.prefetchK12Topic ??
+      ((q: string, c: ChatContext) => chatService.prefetchK12Topic(q, c));
+    const prefetched = this.shouldForceK12Fetch(transcript)
+      ? prefetch(transcript, this.buildVoiceChatContext(conversation))
+      : null;
+    const classify = this.deps.classifyIntent ??
+      ((t: string) => this.classifyTopscholarVoiceIntent(conversation, t));
+    const decision = await classify(transcript);
+    if (decision.route === 'voice_control') return { kind: 'control', decision };
+
+    let route = decision.route as Exclude<VoiceIntentRoute, 'voice_control'>;
+    if (route === 'uncertain' && decision.failure && prefetched && words >= 4) {
+      // The router timed out / failed (as opposed to being unsure): a
+      // substantive turn the retrieval heuristics already treat as a study
+      // question is answered as one, instead of asking the student to repeat.
+      console.log(`[VoiceRouting] router ${decision.failure} — using retrieval heuristic: academic_question`);
+      route = 'academic_question';
+    }
+    if (route === 'uncertain' && words <= 3) {
+      if (endsWithQuestion(conversation.lastAssistantText)) {
+        // A short reply to the tutor's own question ("5", "haan") continues
+        // the lesson; the chat history carries the question.
+        return { kind: 'route', route: 'normal_conversation', prefetched: null };
+      }
+      // Short and unclassifiable: most likely noise. No full pipeline run.
+      return { kind: 'ignore' };
+    }
+    return { kind: 'route', route, prefetched: route === 'academic_question' ? prefetched : null };
+  }
+
+  /** Deterministic route for turns the existing heuristics are sure about. */
+  private heuristicVoiceIntent(transcript: string): VoiceIntentDecision | null {
+    const msg = transcript.toLowerCase().replace(/[!.?,]+$/g, '').trim();
+    if (!msg) return null;
+    if (RealtimeVoiceService.SMALL_TALK.has(msg) || this.looksLikePresenceOrGreeting(msg)) {
+      return { route: 'normal_conversation', confidence: 1, source: 'heuristic' };
+    }
+    return null;
+  }
+
+  /** Non-blocking: point transcription at the detected language. */
+  private updateTranscriptionLanguage(conversation: VoiceConversation, language: string): void {
+    if (!conversation.openaiWs || conversation.openaiWs.readyState !== WebSocket.OPEN) return;
+    conversation.openaiWs.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        audio: {
+          input: {
+            transcription: {
+              model: 'gpt-4o-mini-transcribe',
+              language: this.toTranscriptionLangCode(language),
+            },
+          },
+        },
+      },
+    }));
+  }
+
+  /** Switch between hands-free (server VAD) and hold-to-talk (manual commits). */
+  private setInputMode(conversation: VoiceConversation, mode: VoiceInputMode): void {
+    const previous = conversation.inputMode || 'hands_free';
+    conversation.inputMode = mode;
+    if (mode === 'hold_to_talk') this.resolveFalseInterruption(conversation, 'input_mode');
+    if (previous !== mode && conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+      conversation.openaiWs.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          audio: { input: { turn_detection: this.turnDetectionConfig(conversation) } },
+        },
+      }));
+      conversation.openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+      console.log('[VoiceTurn] Input mode switched to', mode);
+    }
+    this.sendToClient(conversation.clientWs, { type: 'input_mode', mode });
+  }
+
+  /** Hold-to-talk: button pressed. Pressing while the tutor talks interrupts it (intentional). */
+  private startManualTurn(conversation: VoiceConversation): void {
+    if (conversation.inputMode !== 'hold_to_talk') this.setInputMode(conversation, 'hold_to_talk');
+    if (this.isAnswerActive(conversation) || this.isTtsProducing(conversation)) {
+      console.log('[VoiceTurn] Hold-to-talk press while answering — intentional interruption');
+      this.cancelResponse(conversation, false);
+    }
+    if (conversation.manualTurn?.timer) clearTimeout(conversation.manualTurn.timer);
+    conversation.manualTurn = { startedAt: Date.now(), awaitingTranscript: false };
+    if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+      conversation.openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+    }
+  }
+
+  /** Hold-to-talk: button released — commit the held audio as one turn. */
+  private commitManualTurn(conversation: VoiceConversation): void {
+    const manual = conversation.manualTurn;
+    if (!manual || manual.awaitingTranscript) return;
+    manual.durationMs = Date.now() - manual.startedAt;
+    const openaiWs = conversation.openaiWs;
+    if (manual.durationMs < MIN_MANUAL_TURN_MS || !openaiWs || openaiWs.readyState !== WebSocket.OPEN) {
+      conversation.manualTurn = undefined;
+      if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+        openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+      }
+      this.ignoreTurn(conversation, manual.durationMs < MIN_MANUAL_TURN_MS ? 'too_short' : 'unavailable', '', true);
+      return;
+    }
+    manual.awaitingTranscript = true;
+    manual.timer = setTimeout(() => {
+      if (conversation.manualTurn === manual) {
+        conversation.manualTurn = undefined;
+        this.ignoreTurn(conversation, 'no_transcript', '', true);
+      }
+    }, MANUAL_TURN_TRANSCRIPT_TIMEOUT_MS);
+    openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+    console.log(`[VoiceTurn] Manual turn committed (${manual.durationMs}ms held)`);
+  }
+
+  private cancelManualTurn(conversation: VoiceConversation): void {
+    const manual = conversation.manualTurn;
+    if (!manual || manual.awaitingTranscript) return;
+    conversation.manualTurn = undefined;
+    if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
+      conversation.openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+    }
+    this.sendToClient(conversation.clientWs, { type: 'turn_ignored', reason: 'cancelled', held: true, answerActive: false });
+  }
+
+  /** Primary/fallback TTS: ElevenLabs then OpenAI, or OpenAI alone. */
+  private createTtsProviders(conversation: VoiceConversation): { primary: TtsProvider | null; fallback: TtsProvider | null } {
+    if (this.deps.createTtsProviders) return this.deps.createTtsProviders(conversation);
+    const openaiProvider = this.createOpenAITtsProvider(conversation);
+    if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
+      const apiKey = conversation.elevenlabsApiKey;
+      const voiceId = conversation.elevenlabsVoiceId;
+      return {
+        primary: {
+          name: 'elevenlabs',
+          synthesize: (text, signal, onChunk) => synthesizeSpeechStreaming(
+            { apiKey, voiceId, text, outputFormat: 'pcm_24000', signal },
+            onChunk,
+          ),
+        },
+        fallback: openaiProvider,
+      };
+    }
+    return { primary: openaiProvider, fallback: null };
+  }
+
+  /** OpenAI TTS, streamed: PCM chunks are forwarded as they arrive. */
+  private createOpenAITtsProvider(conversation: VoiceConversation): TtsProvider {
+    const supportedVoices = new Set([
+      'alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'marin', 'cedar',
+      'nova', 'onyx', 'sage', 'shimmer', 'verse',
+    ]);
+    const voice = supportedVoices.has(conversation.selectedVoice || '') ? conversation.selectedVoice! : 'shimmer';
+    return {
+      name: 'openai',
+      synthesize: async (text, signal, onChunk) => {
+        const client = createOpenAI({ apiKey: conversation.openaiApiKey });
+        const response = await client.audio.speech.create({
+          model: 'gpt-4o-mini-tts',
+          voice: voice as any,
+          input: text.slice(0, 4000),
+          response_format: 'pcm',
+        }, { signal });
+        const body = (response as unknown as { body?: unknown }).body;
+        if (!body) {
+          const pcm = Buffer.from(await response.arrayBuffer());
+          if (pcm.length > 0) onChunk(pcm);
+          return;
+        }
+        const readable = Readable.fromWeb(body as import('stream/web').ReadableStream);
+        for await (const chunk of readable) {
+          if (signal.aborted) {
+            try { readable.destroy(); } catch {}
+            throw Object.assign(new Error('OpenAI TTS aborted'), { name: 'AbortError' });
+          }
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          if (buf.length > 0) onChunk(buf);
+        }
+      },
+    };
+  }
+
+  /** The ChatContext a voice turn is generated with (shared with text chat). */
+  private buildVoiceChatContext(
+    conversation: VoiceConversation,
+    voiceIntentRoute?: Exclude<VoiceIntentRoute, 'voice_control'>,
+    prefetchedK12Topic?: { query: string; result: Promise<any | null> } | null,
+  ): ChatContext {
+    const scope = conversation.topscholarScope;
+    const topScholar = isTopscholarAccount(conversation.businessAccountId);
+    return {
+      userId: conversation.userId,
+      businessAccountId: conversation.businessAccountId,
+      existingConversationId: conversation.conversationId,
+      personality: conversation.personality,
+      // Spoken answers are short by design; the voice style block carries the
+      // details (chatService adds it because voiceResponseStyle is set).
+      responseLength: 'concise',
+      companyDescription: conversation.companyDescription,
+      openaiApiKey: conversation.openaiApiKey,
+      currency: conversation.currency,
+      currencySymbol: conversation.currencySymbol,
+      customInstructions: conversation.customInstructions,
+      preferredLanguage: conversation.selectedLanguage || conversation.detectedLanguage,
+      visitorToken: conversation.userId,
+      isInternalTest: conversation.isInternalTest,
+      supportsCalendarUI: false,
+      channel: 'widget',
+      systemMode: conversation.systemMode,
+      k12EducationEnabled: conversation.k12EducationEnabled === true || topScholar,
+      k12ContentOnlyMode: conversation.k12ContentOnly === true,
+      voiceIntentRoute,
+      k12VerbatimContentMode: conversation.k12VerbatimContentMode === true,
+      jobPortalEnabled: conversation.jobPortalEnabled === true,
+      demoOrdersEnabled: conversation.demoOrdersEnabled === true,
+      skipLeadTraining: conversation.skipLeadTraining === true,
+      topscholarCpId: scope?.cpId ?? null,
+      topscholarStudentId: scope?.studentId ?? null,
+      studentName: scope?.studentName ?? null,
+      topscholarCpIds: conversation.topscholarCpIds,
+      topscholarDoubtId: conversation.topscholarDoubtId ?? null,
+      topscholarStudentPlanMappingId: scope?.studentPlanMappingId ?? null,
+      topscholarPlanId: scope?.planId ?? null,
+      topscholarDoubtSyncBaseUrl: scope?.doubtSyncBaseUrl ?? null,
+      studentBoard: scope?.board ?? null,
+      studentMedium: scope?.medium ?? null,
+      studentGrade: scope?.grade ?? null,
+      studentSubject: scope?.subject ?? null,
+      studentChapter: conversation.topscholarChapter ?? scope?.chapter ?? null,
+      topscholarSubjectScoping: topScholar,
+      deferAssistantPersistence: true,
+      voiceResponseStyle: true,
+      prefetchedK12Topic: prefetchedK12Topic ?? null,
+    };
+  }
+
   /**
    * Classify only non-obvious TopScholar voice turns. The caller has already
    * handled clear stop commands locally, so this model call never controls the
@@ -2951,7 +3349,12 @@ Never infer intent from a single contained word. For example, "What is stop moti
     } catch (error: any) {
       const reason = abortController.signal.aborted ? 'timeout' : (error?.name || 'request_failed');
       console.warn(`[VoiceRouting] route=uncertain source=fallback reason=${reason} duration_ms=${Date.now() - startedAt}`);
-      return { route: 'uncertain', confidence: 0, source: 'fallback' };
+      return {
+        route: 'uncertain',
+        confidence: 0,
+        source: 'fallback',
+        failure: abortController.signal.aborted ? 'timeout' : 'error',
+      };
     } finally {
       clearTimeout(timeout);
     }
@@ -2970,22 +3373,49 @@ Never infer intent from a single contained word. For example, "What is stop moti
   }
 
   /**
-   * Generate the voice turn through the same authoritative completed-answer
-   * pipeline used by text chat. Realtime remains the STT transport only.
+   * Generate the voice turn through the same authoritative answer pipeline
+   * used by text chat (Realtime remains the STT transport only) and SPEAK IT
+   * WHILE IT IS BEING WRITTEN:
+   *
+   *   chat deltas → sentence splitter → per sentence:
+   *     - `answer_delta` to the client (the display Markdown of that sentence
+   *       and its spoken form), so the bubble fills in as it is spoken;
+   *     - the spoken form (deterministic, speechText.ts) into the pipelined
+   *       TTS queue, so audio starts after the FIRST sentence.
+   *
+   * When the model finishes: the complete canonical Markdown is persisted and
+   * sent as `answer_ready` (final replacement of the streamed bubble), then
+   * `ai_done` once every sentence's audio has been sent.
+   *
+   * A confirmed interruption before `answer_ready` abandons the answer exactly
+   * as before: nothing is persisted and the client removes the partial bubble
+   * (response_cancelled, preserveDisplay=false). After `answer_ready` only the
+   * audio stops; the completed answer stays (preserveDisplay=true).
    */
   private async generateCanonicalVoiceAnswer(
     conversation: VoiceConversation,
     userTranscript: string,
     voiceIntentRoute?: Exclude<VoiceIntentRoute, 'voice_control'>,
+    prefetchedK12Topic?: { query: string; result: Promise<any | null> } | null,
   ): Promise<void> {
     const responseId = `voice_${conversation.conversationId}_${conversation.k12TurnSeq ?? Date.now()}`;
     const turnSeq = conversation.k12TurnSeq ?? 0;
     let persistedMessageId: string | null = null;
     let persistedContent = '';
 
+    // A previous answer still producing audio is superseded by this turn.
+    if (conversation.ttsPipeline) {
+      conversation.ttsPipeline.cancel();
+      conversation.ttsPipeline = undefined;
+    }
+
     conversation.currentResponseId = responseId;
     conversation.currentResponseKind = 'canonical';
     conversation.currentAITranscript = '';
+    conversation.canonicalDisplayReadyResponseId = undefined;
+    conversation.activeElevenLabsStartedAt = undefined;
+    conversation.answerAudioBytes = 0;
+    conversation.answerPlaybackEndsAt = undefined;
     conversation.isProcessing = true;
     this.sendToClient(conversation.clientWs, { type: 'thinking' });
     this.sendToClient(conversation.clientWs, { type: 'voice_message_start', responseId });
@@ -2996,94 +3426,108 @@ Never infer intent from a single contained word. For example, "What is stop moti
       conversation.currentResponseKind !== 'canonical' ||
       (conversation.k12TurnSeq ?? 0) !== turnSeq;
 
-    const scope = conversation.topscholarScope;
-    const topScholar = isTopscholarAccount(conversation.businessAccountId);
-    const chatContext: ChatContext = {
-      userId: conversation.userId,
-      businessAccountId: conversation.businessAccountId,
-      existingConversationId: conversation.conversationId,
-      personality: conversation.personality,
-      responseLength: conversation.responseLength,
-      companyDescription: conversation.companyDescription,
-      openaiApiKey: conversation.openaiApiKey,
-      currency: conversation.currency,
-      currencySymbol: conversation.currencySymbol,
-      customInstructions: conversation.customInstructions,
-      preferredLanguage: conversation.selectedLanguage || conversation.detectedLanguage,
-      visitorToken: conversation.userId,
-      isInternalTest: conversation.isInternalTest,
-      supportsCalendarUI: false,
-      channel: 'widget',
-      systemMode: conversation.systemMode,
-      k12EducationEnabled: conversation.k12EducationEnabled === true || topScholar,
-      k12ContentOnlyMode: conversation.k12ContentOnly === true,
-      voiceIntentRoute,
-      k12VerbatimContentMode: conversation.k12VerbatimContentMode === true,
-      jobPortalEnabled: conversation.jobPortalEnabled === true,
-      demoOrdersEnabled: conversation.demoOrdersEnabled === true,
-      skipLeadTraining: conversation.skipLeadTraining === true,
-      topscholarCpId: scope?.cpId ?? null,
-      topscholarStudentId: scope?.studentId ?? null,
-      studentName: scope?.studentName ?? null,
-      topscholarCpIds: conversation.topscholarCpIds,
-      topscholarDoubtId: conversation.topscholarDoubtId ?? null,
-      topscholarStudentPlanMappingId: scope?.studentPlanMappingId ?? null,
-      topscholarPlanId: scope?.planId ?? null,
-      topscholarDoubtSyncBaseUrl: scope?.doubtSyncBaseUrl ?? null,
-      studentBoard: scope?.board ?? null,
-      studentMedium: scope?.medium ?? null,
-      studentGrade: scope?.grade ?? null,
-      studentSubject: scope?.subject ?? null,
-      studentChapter: conversation.topscholarChapter ?? scope?.chapter ?? null,
-      topscholarSubjectScoping: topScholar,
-      deferAssistantPersistence: true,
+    const chatContext = this.buildVoiceChatContext(conversation, voiceIntentRoute, prefetchedK12Topic);
+
+    const { primary, fallback } = this.createTtsProviders(conversation);
+    const pipeline = new SentenceTtsPipeline({
+      primary,
+      fallback,
+      sendAudio: (pcm) => {
+        if (abandoned() || conversation.clientWs.readyState !== WebSocket.OPEN) return;
+        conversation.answerAudioBytes = (conversation.answerAudioBytes || 0) + pcm.length;
+        conversation.clientWs.send(pcm);
+      },
+      isCancelled: () => abandoned(),
+      onFirstAudio: () => {
+        conversation.activeElevenLabsStartedAt ||= Date.now();
+      },
+      onProviderFailure: (provider, error, text) => {
+        console.error(
+          `[RealtimeVoice] ${provider} TTS failed for a sentence (${text.length} chars)` +
+          `${fallback && provider !== fallback.name ? ' — falling back for the rest of the answer' : ''}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      },
+    });
+    conversation.ttsPipeline = pipeline;
+    conversation.ttsPipelineResponseId = responseId;
+
+    let spokenText = '';
+    let segmentCount = 0;
+    const emitSegment = (segment: string) => {
+      if (!segment || abandoned()) return;
+      const speech = markdownToSpeech(segment);
+      const speechDelta = speech ? (spokenText ? ' ' : '') + speech : '';
+      spokenText += speechDelta;
+      segmentCount++;
+      this.sendToClient(conversation.clientWs, {
+        type: 'answer_delta',
+        responseId,
+        display: segment,
+        speech: speechDelta,
+        index: segmentCount - 1,
+      });
+      if (speech) {
+        pipeline.enqueue(speech);
+        conversation.recentAssistantSpeech = `${conversation.recentAssistantSpeech || ''} ${speech}`.slice(-800);
+      }
+    };
+    const bail = () => {
+      if (conversation.ttsPipeline === pipeline) {
+        conversation.ttsPipeline = undefined;
+        conversation.ttsPipelineResponseId = undefined;
+      }
+      pipeline.cancel();
     };
 
     try {
+      const splitter = new SentenceStreamSplitter();
       let streamedMarkdown = '';
       let finalMarkdown = '';
-      for await (const event of chatService.streamMessage(userTranscript, chatContext)) {
-        if (abandoned()) return;
+      for await (const event of this.deps.streamChat(userTranscript, chatContext)) {
+        if (abandoned()) { bail(); return; }
         if (event.type === 'content' && typeof event.data === 'string') {
           streamedMarkdown += event.data;
+          for (const segment of splitter.push(event.data)) emitSegment(segment);
         } else if (event.type === 'final' && typeof event.data === 'string' && event.data.trim()) {
           finalMarkdown = event.data;
         }
       }
-      if (abandoned()) return;
+      if (abandoned()) { bail(); return; }
+      for (const segment of splitter.flush()) emitSegment(segment);
 
       const displayMarkdown = (finalMarkdown || streamedMarkdown).trim();
       if (!displayMarkdown) {
         throw new Error('Canonical chat pipeline returned an empty answer');
       }
-
-      const speechText = await createVoiceSpeechText(
-        displayMarkdown,
-        conversation.openaiApiKey,
-        conversation.businessAccountId,
-        conversation.conversationId,
-      );
-      if (abandoned()) return;
+      // The pipeline's final text can differ from what streamed (a fallback
+      // reply when the model produced nothing, post-processing). Speak what
+      // the student has not heard yet; the display is replaced by answer_ready.
+      if (finalMarkdown && finalMarkdown.trim() !== streamedMarkdown.trim()) {
+        if (!streamedMarkdown.trim()) {
+          for (const segment of splitIntoSpeechSegments(finalMarkdown)) emitSegment(segment);
+        } else if (finalMarkdown.startsWith(streamedMarkdown)) {
+          for (const segment of splitIntoSpeechSegments(finalMarkdown.slice(streamedMarkdown.length))) emitSegment(segment);
+        }
+      }
+      pipeline.close();
 
       persistedContent = displayMarkdown;
-      persistedMessageId = await chatService.commitDeferredAssistantMessage(
+      persistedMessageId = await this.deps.commitAssistantMessage(
         chatContext,
         displayMarkdown,
         () => !abandoned(),
       );
       if (!persistedMessageId) {
-        if (abandoned()) return;
+        if (abandoned()) { bail(); return; }
         throw new Error('Canonical assistant answer could not be persisted');
       }
       conversation.canonicalPersistedMessageId = persistedMessageId;
       conversation.canonicalPersistedResponseId = responseId;
       conversation.canonicalPersistedContent = displayMarkdown;
       if (abandoned()) {
-        await chatService.rollbackDeferredAssistantMessage(
-          chatContext,
-          persistedMessageId,
-          displayMarkdown,
-        );
+        bail();
+        await this.deps.rollbackAssistantMessage(chatContext, persistedMessageId, displayMarkdown);
         persistedMessageId = null;
         conversation.canonicalPersistedMessageId = undefined;
         conversation.canonicalPersistedResponseId = undefined;
@@ -3091,35 +3535,40 @@ Never infer intent from a single contained word. For example, "What is stop moti
         return;
       }
 
-      conversation.currentAITranscript = speechText;
-      // WebSocket frame ordering is the show-before-speak gate: this complete
-      // display contract is enqueued before either TTS provider can emit PCM.
+      conversation.currentAITranscript = spokenText;
+      conversation.lastAssistantText = displayMarkdown;
+      // The complete, persisted answer. From here an interruption only stops
+      // the audio; the answer stays on screen and in history.
       conversation.canonicalDisplayReadyResponseId = responseId;
       this.sendToClient(conversation.clientWs, {
         type: 'answer_ready',
         responseId,
         displayMarkdown,
-        speechText,
+        speechText: spokenText,
+        streamed: true,
       });
 
-      if (speechText) {
-        if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
-          await this.synthesizeWithElevenLabs(conversation, speechText);
-        } else {
-          await this.synthesizeWithOpenAI(conversation, speechText, responseId);
-        }
+      await pipeline.finished();
+      if (conversation.ttsPipeline === pipeline) {
+        conversation.ttsPipeline = undefined;
+        conversation.ttsPipelineResponseId = undefined;
       }
       if (abandoned()) return;
 
       conversation.isProcessing = false;
       // Keep response ownership and the rollback handle until the browser says
-      // its scheduled PCM has actually finished playing.
+      // its scheduled PCM has actually finished playing (playback_complete).
+      // PCM16 @ 24 kHz = 48 000 bytes/s; allow generous slack.
+      const audioMs = Math.round(((conversation.answerAudioBytes || 0) / 48000) * 1000);
+      const playbackStart = conversation.activeElevenLabsStartedAt || Date.now();
+      conversation.answerPlaybackEndsAt = Math.max(Date.now(), playbackStart + audioMs) + 5000;
       this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId });
     } catch (error) {
+      bail();
       if (abandoned()) return;
       if (persistedMessageId && persistedContent) {
         try {
-          await chatService.rollbackDeferredAssistantMessage(
+          await this.deps.rollbackAssistantMessage(
             chatContext,
             persistedMessageId,
             persistedContent,
@@ -3135,6 +3584,10 @@ Never infer intent from a single contained word. For example, "What is stop moti
       conversation.isProcessing = false;
       conversation.currentResponseKind = undefined;
       console.error('[RealtimeVoice] Canonical answer failed:', error);
+      // The partial bubble (if any) is withdrawn, then the error is reported.
+      if (segmentCount > 0) {
+        this.markResponseCancelled(conversation, responseId);
+      }
       this.sendError(conversation.clientWs, 'I could not complete that answer. Please try again.');
       this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId });
     }
@@ -3752,12 +4205,21 @@ Never infer intent from a single contained word. For example, "What is stop moti
   }
 
   private setupClientHandlers(conversationId: string, conversation: VoiceConversation) {
-    const { clientWs, openaiWs } = conversation;
+    const { clientWs } = conversation;
 
     clientWs.on('message', async (data: any, isBinary: boolean) => {
       this.touchActivity(conversation);
-      
+
       if (isBinary) {
+        // Read the live socket: an OpenAI reconnect replaces it.
+        const openaiWs = conversation.openaiWs;
+        // Hold-to-talk: only audio captured while the button is held counts.
+        if (
+          conversation.inputMode === 'hold_to_talk' &&
+          (!conversation.manualTurn || conversation.manualTurn.awaitingTranscript)
+        ) {
+          return;
+        }
         if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
           const buf = data instanceof Buffer ? data : Buffer.from(data);
           
@@ -3815,11 +4277,11 @@ Never infer intent from a single contained word. For example, "What is stop moti
 
     switch (message.type) {
       case 'interrupt':
-        // User interrupted AI - cancel current response using helper.
-        // respectGrace=true: a client interrupt that lands in the first
-        // BARGE_IN_GRACE_MS of the answer's audio is almost always the client
-        // VAD firing on the AI's own playback echo, not a real interruption.
-        console.log('[RealtimeVoice] User interrupted AI');
+        // An INTENTIONAL interruption (the student tapped the voice control /
+        // pressed hold-to-talk). Clients never send this from their own VAD
+        // any more — speech-based barge-in is confirmed server-side from the
+        // transcript (see handleFinalTranscript) — so it is honoured at once.
+        console.log('[RealtimeVoice] User interrupted AI (intentional)');
         const preservedDisplay = this.hasDisplayedCanonicalAnswer(
           conversation,
           conversation.currentResponseId,
@@ -3847,8 +4309,27 @@ Never infer intent from a single contained word. For example, "What is stop moti
           conversation.canonicalPersistedContent = undefined;
           conversation.canonicalDisplayReadyResponseId = undefined;
           conversation.activeElevenLabsStartedAt = undefined;
+          // Playback is over, so a pending "possible interruption" has nothing
+          // left to duck.
+          if (conversation.bargeIn?.responseId === message.responseId) this.clearBargeIn(conversation);
           console.log('[RealtimeVoice] Canonical playback completed:', message.responseId);
         }
+        break;
+
+      case 'set_input_mode':
+        this.setInputMode(conversation, message.mode === 'hold_to_talk' ? 'hold_to_talk' : 'hands_free');
+        break;
+
+      case 'ptt_start':
+        this.startManualTurn(conversation);
+        break;
+
+      case 'ptt_commit':
+        this.commitManualTurn(conversation);
+        break;
+
+      case 'ptt_cancel':
+        this.cancelManualTurn(conversation);
         break;
 
       case 'pong':
@@ -4178,6 +4659,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
   // synth (activeElevenLabsAbort is registered for its whole streaming life).
   private isTtsProducing(conversation: VoiceConversation): boolean {
     return !!(
+      (conversation.ttsPipeline && conversation.ttsPipeline.isActive) ||
       conversation.ttsDraining ||
       (conversation.ttsQueue && conversation.ttsQueue.length > 0) ||
       conversation.activeElevenLabsAbort ||
@@ -4289,102 +4771,6 @@ Never infer intent from a single contained word. For example, "What is stop moti
       if (conversation.activeElevenLabsAbort === abortController) {
         conversation.activeElevenLabsAbort = undefined;
         conversation.activeElevenLabsResponseId = undefined;
-      }
-    }
-  }
-
-  /**
-   * Speak a canonical answer with OpenAI's text-to-speech endpoint. Realtime is
-   * deliberately not asked to author or restate the answer: the exact
-   * speech-safe script is the TTS input.
-   */
-  private async synthesizeWithOpenAI(
-    conversation: VoiceConversation,
-    text: string,
-    responseId: string,
-  ): Promise<void> {
-    if (!text.trim()) return;
-
-    if (conversation.activeOpenAITtsAbort) {
-      try { conversation.activeOpenAITtsAbort.abort(); } catch {}
-    }
-    const abortController = new AbortController();
-    conversation.activeOpenAITtsAbort = abortController;
-    conversation.activeOpenAITtsResponseId = responseId;
-
-    const supportedVoices = new Set([
-      'alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'marin', 'cedar',
-      'nova', 'onyx', 'sage', 'shimmer', 'verse',
-    ]);
-    const voice = supportedVoices.has(conversation.selectedVoice || '')
-      ? conversation.selectedVoice!
-      : 'shimmer';
-
-    // The speech endpoint has an input-size limit. Preserve order and break at
-    // sentence/whitespace boundaries without changing the script.
-    const chunks: string[] = [];
-    let remaining = text.trim();
-    while (remaining.length > 3500) {
-      const window = remaining.slice(0, 3500);
-      const sentenceBreak = Math.max(
-        window.lastIndexOf('. '),
-        window.lastIndexOf('? '),
-        window.lastIndexOf('! '),
-        window.lastIndexOf('\n'),
-      );
-      const splitAt = sentenceBreak > 1000 ? sentenceBreak + 1 : window.lastIndexOf(' ');
-      const safeSplit = splitAt > 0 ? splitAt : 3500;
-      chunks.push(remaining.slice(0, safeSplit).trim());
-      remaining = remaining.slice(safeSplit).trim();
-    }
-    if (remaining) chunks.push(remaining);
-
-    try {
-      const client = createOpenAI({ apiKey: conversation.openaiApiKey });
-      for (const chunk of chunks) {
-        if (
-          abortController.signal.aborted ||
-          conversation.cancelledResponseIds.has(responseId) ||
-          conversation.currentResponseId !== responseId
-        ) return;
-
-        const audioResponse = await client.audio.speech.create({
-          model: 'gpt-4o-mini-tts',
-          voice: voice as any,
-          input: chunk,
-          response_format: 'pcm',
-        }, { signal: abortController.signal });
-        const pcm = Buffer.from(await audioResponse.arrayBuffer());
-
-        if (
-          abortController.signal.aborted ||
-          conversation.cancelledResponseIds.has(responseId) ||
-          conversation.currentResponseId !== responseId ||
-          conversation.clientWs.readyState !== WebSocket.OPEN
-        ) return;
-
-        conversation.activeElevenLabsStartedAt ||= Date.now();
-        const evenLength = pcm.length & ~1;
-        for (let offset = 0; offset < evenLength; offset += 32 * 1024) {
-          if (
-            abortController.signal.aborted ||
-            conversation.cancelledResponseIds.has(responseId) ||
-            conversation.currentResponseId !== responseId
-          ) return;
-          conversation.clientWs.send(pcm.subarray(offset, Math.min(offset + 32 * 1024, evenLength)));
-        }
-      }
-    } catch (error) {
-      const errName = (error as { name?: string })?.name;
-      if (errName === 'AbortError' || abortController.signal.aborted) return;
-      console.error('[RealtimeVoice] OpenAI TTS failed:', error instanceof Error ? error.message : String(error));
-    } finally {
-      if (conversation.activeOpenAITtsAbort === abortController) {
-        conversation.activeOpenAITtsAbort = undefined;
-        conversation.activeOpenAITtsResponseId = undefined;
-        if (conversation.currentResponseKind !== 'canonical') {
-          conversation.activeElevenLabsStartedAt = undefined;
-        }
       }
     }
   }

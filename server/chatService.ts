@@ -28,6 +28,7 @@ import { validatePhoneNumber } from '../shared/validation/phone';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { pushTextMessage, type DoubtSyncSender } from './services/topscholar/doubtSyncService';
 import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
+import { VOICE_RESPONSE_STYLE_BLOCK } from './services/voice/voiceStyle';
 import { resolveChatContextMode, type ChatContextMode } from './services/chatContext/config';
 import { buildBusinessProfile, type BusinessProfile } from './services/chatContext/businessProfile';
 import { buildRetrievalQuery, capHistoryForModel } from './services/chatContext/conversationWindow';
@@ -160,6 +161,19 @@ export interface ChatContext {
    * transport. Voice uses this so interruption can cancel before commit.
    */
   deferAssistantPersistence?: boolean;
+  /**
+   * Server-only (RealtimeVoiceService): this turn will be spoken aloud, so the
+   * model gets the compact spoken-style rules (2–3 short sentences, one step at
+   * a time, no lists/tables/headings). Never set from an HTTP request.
+   */
+  voiceResponseStyle?: boolean;
+  /**
+   * Server-only (RealtimeVoiceService): a curriculum lookup started
+   * speculatively, in parallel with the voice intent router. When the K12 fast
+   * path runs fetch_k12_topic with exactly this query, the in-flight result is
+   * reused instead of searching again. A null result means "run it normally".
+   */
+  prefetchedK12Topic?: { query: string; result: Promise<any | null> } | null;
 }
 
 // Track active conversation IDs for each user session
@@ -680,6 +694,41 @@ export class ChatService {
       console.error('[Chat] Error committing deferred assistant message:', error);
       throw error;
     }
+  }
+
+  /**
+   * Voice: start the curriculum lookup for a final transcript immediately, in
+   * parallel with the voice intent router. Uses the same query and retrieval
+   * scope the K12 fast path would use, so streamMessage can reuse the result
+   * (see ChatContext.prefetchedK12Topic). Never rejects: a failure resolves to
+   * null and the normal lookup runs instead. fetch_k12_topic is a read-only
+   * search, so a lookup whose result goes unused has no side effects.
+   */
+  prefetchK12Topic(query: string, context: ChatContext): { query: string; result: Promise<any | null> } | null {
+    const trimmed = (query || '').trim();
+    if (!trimmed || !this.isK12ContentOnly(context)) return null;
+    const result = ToolExecutionService.executeTool(
+      'fetch_k12_topic',
+      { query: trimmed },
+      {
+        businessAccountId: context.businessAccountId,
+        userId: context.userId,
+        conversationId: context.existingConversationId,
+        userMessage: trimmed,
+        selectedLanguage: context.preferredLanguage,
+        channel: context.channel,
+        skipLeadTraining: context.skipLeadTraining,
+        cpId: context.topscholarCpId,
+        cpIds: context.topscholarCpIds,
+        chapter: context.studentChapter,
+      },
+      trimmed,
+      false,
+    ).then((r) => (r && (r as any).success ? r : null)).catch((error) => {
+      console.warn('[Chat] Speculative K12 prefetch failed (normal lookup will run):', error?.message || error);
+      return null;
+    });
+    return { query: trimmed, result };
   }
 
   async rollbackDeferredAssistantMessage(
@@ -3903,6 +3952,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           leadBlocksAnswer: leadTurn?.plan.next?.mode === 'block',
           leadAsksNow: !!(leadTurn?.plan.next || leadTurn?.plan.intentOption || leadTurn?.plan.callbackConfirm),
           otpBlock: otpTurnBlock || undefined,
+          voiceStyleBlock: context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : undefined,
         } satisfies StreamTurnOptions
       )) {
         const delta = chunk.choices[0]?.delta;
@@ -4060,7 +4110,17 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           }
 
           console.log('[Chat Stream] Executing tool:', toolName, 'with params:', toolParams);
-          let result = await ToolExecutionService.executeTool(
+          // Voice: reuse the curriculum lookup that started in parallel with the
+          // intent router, when it searched for exactly this query.
+          const prefetchedTopic = toolName === 'fetch_k12_topic' &&
+            context.prefetchedK12Topic &&
+            context.prefetchedK12Topic.query === toolParams.query
+            ? await context.prefetchedK12Topic.result.catch(() => null)
+            : null;
+          if (prefetchedTopic) {
+            console.log('[Chat Stream] fetch_k12_topic: reusing speculative voice prefetch');
+          }
+          let result = prefetchedTopic ?? await ToolExecutionService.executeTool(
             toolName,
             toolParams,
             {
@@ -4353,7 +4413,9 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           context.businessAccountId,
           context.preferredLanguage,
           context.responseLength || 'balanced',
-          continuationBlock
+          context.voiceResponseStyle
+            ? [continuationBlock, VOICE_RESPONSE_STYLE_BLOCK].filter(Boolean).join('\n\n')
+            : continuationBlock
         )) {
           finalContent += token;
           streamedTokens = true;

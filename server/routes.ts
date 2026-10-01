@@ -27841,6 +27841,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         whatsappOrderEnabled, whatsappOrderNumber, whatsappOrderMessage,
         launcherMode, whatsappWidgetNumber, whatsappWidgetLabel, whatsappWidgetMessage, whatsappWidgetColor, whatsappWidgetPosition,
         whatsappHeaderEnabled,
+        voiceInputMode,
         addToCartEnabled,
         tryOnEnabled,
         responseLength,
@@ -27897,6 +27898,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         whatsappOrderEnabled: string; whatsappOrderNumber: string; whatsappOrderMessage: string;
         launcherMode: string; whatsappWidgetNumber: string; whatsappWidgetLabel: string; whatsappWidgetMessage: string; whatsappWidgetColor: string; whatsappWidgetPosition: string;
         whatsappHeaderEnabled: string;
+        voiceInputMode: string;
         addToCartEnabled: string;
         tryOnEnabled: string;
         responseLength: string;
@@ -28035,6 +28037,13 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       if (whatsappWidgetMessage !== undefined) updateData.whatsappWidgetMessage = whatsappWidgetMessage;
       if (whatsappWidgetColor !== undefined) updateData.whatsappWidgetColor = whatsappWidgetColor;
       if (whatsappHeaderEnabled !== undefined) updateData.whatsappHeaderEnabled = String(whatsappHeaderEnabled) === 'true' ? 'true' : 'false';
+      if (voiceInputMode !== undefined) {
+        const validVoiceInputModes = ['hands_free', 'hold_to_talk', 'student_choice'];
+        if (!validVoiceInputModes.includes(String(voiceInputMode))) {
+          return res.status(400).json({ error: "voiceInputMode must be 'hands_free', 'hold_to_talk' or 'student_choice'" });
+        }
+        updateData.voiceInputMode = String(voiceInputMode);
+      }
       if (whatsappWidgetPosition !== undefined) {
         const validPositions = ['bottom-right', 'bottom-left', 'top-right', 'top-left'];
         updateData.whatsappWidgetPosition = validPositions.includes(whatsappWidgetPosition) ? whatsappWidgetPosition : null;

@@ -94,6 +94,7 @@ interface WidgetSettings {
   voiceSelection: string;
   voiceModeStyle?: string;
   chatMode?: string;
+  voiceInputMode?: string;
   avatarType?: string;
   avatarUrl?: string;
   customAvatars?: Array<{url: string, uploadedAt: string}>;
@@ -584,6 +585,7 @@ export default function WidgetSettings() {
   const [whatsappWidgetColor, setWhatsappWidgetColor] = useState("#25D366");
   const [whatsappWidgetPosition, setWhatsappWidgetPosition] = useState("");
   const [whatsappHeaderEnabled, setWhatsappHeaderEnabled] = useState(false);
+  const [voiceInputMode, setVoiceInputMode] = useState("hands_free");
   const [newQuickBrowseLabel, setNewQuickBrowseLabel] = useState("");
   const [newQuickBrowseAction, setNewQuickBrowseAction] = useState("");
   
@@ -791,6 +793,7 @@ export default function WidgetSettings() {
       setWhatsappWidgetColor(settings.whatsappWidgetColor || "#25D366");
       setWhatsappWidgetPosition(settings.whatsappWidgetPosition || "");
       setWhatsappHeaderEnabled(settings.whatsappHeaderEnabled === "true");
+      setVoiceInputMode(settings.voiceInputMode || "hands_free");
       setAddToCartEnabled(settings.addToCartEnabled !== 'false');
       setTryOnEnabled(settings.tryOnEnabled === 'true');
     }
@@ -1084,6 +1087,7 @@ export default function WidgetSettings() {
       whatsappWidgetColor?: string;
       whatsappWidgetPosition?: string;
       whatsappHeaderEnabled?: string;
+      voiceInputMode?: string;
       addToCartEnabled?: string;
       tryOnEnabled?: string;
     }) => {
@@ -4255,6 +4259,53 @@ export default function WidgetSettings() {
                               )}
                             </Label>
                             <p className="text-sm text-gray-600 mt-1">{mode.desc}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </RadioGroup>
+                  </CardContent>
+                </Card>
+
+                {/* Voice input: how students take turns */}
+                <Card className="shadow-lg border border-gray-200 bg-white">
+                  <CardHeader className="border-b bg-gradient-to-r from-purple-50/50 to-pink-50/50">
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      ✋ Voice input
+                    </CardTitle>
+                    <CardDescription>How visitors take turns when talking. Hold to talk works best in noisy homes.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="pt-6">
+                    <RadioGroup
+                      value={voiceInputMode}
+                      onValueChange={(value) => {
+                        setVoiceInputMode(value);
+                        updateMutation.mutate({ voiceInputMode: value });
+                      }}
+                      className="space-y-3"
+                      data-testid="radio-voice-input-mode"
+                    >
+                      {[
+                        { id: "hands_free", label: "Hands-free", desc: "Just talk — the assistant listens and answers automatically." },
+                        { id: "hold_to_talk", label: "Hold to talk", desc: "Press and hold the button while speaking. Background noise and TV can't start a turn." },
+                        { id: "student_choice", label: "Let student choose", desc: "Hands-free by default, with a small switch in the voice panel." },
+                      ].map((option) => (
+                        <div
+                          key={option.id}
+                          className={`flex items-start space-x-3 rounded-xl border-2 p-3 transition-all cursor-pointer ${
+                            voiceInputMode === option.id
+                              ? "border-purple-500 bg-purple-50/50"
+                              : "border-gray-200 hover:border-purple-300 bg-white"
+                          }`}
+                          onClick={() => {
+                            if (voiceInputMode === option.id) return;
+                            setVoiceInputMode(option.id);
+                            updateMutation.mutate({ voiceInputMode: option.id });
+                          }}
+                        >
+                          <RadioGroupItem value={option.id} id={`voice-input-${option.id}`} className="mt-1 flex-shrink-0" />
+                          <div className="flex-1">
+                            <Label htmlFor={`voice-input-${option.id}`} className="font-semibold cursor-pointer">{option.label}</Label>
+                            <p className="text-sm text-gray-600 mt-0.5">{option.desc}</p>
                           </div>
                         </div>
                       ))}

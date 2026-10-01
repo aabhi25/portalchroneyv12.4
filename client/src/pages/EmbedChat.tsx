@@ -186,6 +186,8 @@ interface WidgetSettings {
   personality: string;
   currency: string;
   voiceModeEnabled?: boolean;
+  /** 'hands_free' (default) | 'hold_to_talk' | 'student_choice' */
+  voiceInputMode?: string;
   visualSearchEnabled?: boolean;
   voiceModeStyle?: string;
   chatMode?: string;
@@ -4060,6 +4062,8 @@ export default function EmbedChat() {
             avatarUrl={settings?.avatarUrl}
             topscholarToken={topscholarTokenRef.current || undefined}
             topscholarCpId={topscholarCpIdRef.current || undefined}
+            selectedLanguage={selectedLanguage}
+            voiceInputMode={settings?.voiceInputMode}
           />
         </Suspense>
         </div>
@@ -6148,6 +6152,7 @@ export default function EmbedChat() {
                 textConversationId={conversationIdRef.current || undefined}
                 topscholarToken={topscholarTokenRef.current || undefined}
                 topscholarCpId={topscholarCpIdRef.current || undefined}
+                voiceInputMode={settings?.voiceInputMode}
                 onUserMessage={(text) => {
                   const userMsg: ChatMessage = {
                     id: 'voice-user-' + Date.now(),
@@ -6187,6 +6192,24 @@ export default function EmbedChat() {
                   const updated = existing + text;
                   inlineVoiceAIMessagesRef.current.set(messageId, updated);
                   setMessages(prev => prev.map(m => m.id === messageId ? { ...m, content: updated } : m));
+                }}
+                onAIMessageDelta={(messageId, displayDelta, spokenDelta) => {
+                  // Speak-while-writing: append the next finished sentence.
+                  // The bubble renders the model's Markdown as it arrives; the
+                  // spoken text drives the block-level karaoke highlight.
+                  voiceSpokenTextRef.current.set(messageId, (voiceSpokenTextRef.current.get(messageId) || '') + spokenDelta);
+                  const updated = (inlineVoiceAIMessagesRef.current.get(messageId) || '') + displayDelta;
+                  inlineVoiceAIMessagesRef.current.set(messageId, updated);
+                  setMessages(prev => prev.map(m => m.id === messageId ? { ...m, content: updated } : m));
+                  if (!voiceFormattedIdsRef.current.has(messageId)) {
+                    voiceFormattedIdsRef.current.add(messageId);
+                    setVoiceFormattedIds(prev => {
+                      if (prev.has(messageId)) return prev;
+                      const next = new Set(prev);
+                      next.add(messageId);
+                      return next;
+                    });
+                  }
                 }}
                 onAIMessageReady={(messageId, displayMarkdown, spokenText) => {
                   // Canonical voice answer: insert the same Markdown produced by

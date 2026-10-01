@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { aiUsageLogger } from './aiUsageLogger';
 import { createOpenAI } from "../lib/openaiClient";
+import { markdownToSpeech } from "./voice/speechText";
 
 export type StemSubject = 'math' | 'physics' | 'chemistry' | 'biology' | 'cs' | 'other';
 
@@ -73,53 +74,26 @@ const FORMAT_TIMEOUT_MS = 8000;
 const SPEECH_TIMEOUT_MS = 8000;
 
 /**
- * Deterministic fallback for speaking the canonical Markdown answer. The
- * displayed/stored Markdown remains untouched; this representation exists only
- * for TTS and karaoke timing.
+ * Deterministic speech for the canonical Markdown answer: Markdown structure
+ * becomes plain sentences and maths is read in words (see
+ * services/voice/speechText.ts). The displayed/stored Markdown is untouched;
+ * this representation exists only for TTS and karaoke timing.
+ *
+ * This is now THE live voice path (sentence by sentence, while the answer
+ * streams); the model-based rewrite below is no longer called by voice mode.
  */
 export function createVoiceSpeechFallback(markdown: string): string {
-  let output = markdown
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/```[\s\S]*?```/g, block => block.replace(/```[^\n]*\n?/g, ''))
-    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
-    .replace(/^\s*[-*+]\s+/gm, '')
-    .replace(/^\s*\d+[.)]\s+/gm, '')
-    .replace(/[*_~`>]/g, '')
-    .replace(/\$\$?([\s\S]*?)\$\$?/g, '$1');
-
-  for (let i = 0; i < 4; i++) {
-    const next = output.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '$1 over $2');
-    if (next === output) break;
-    output = next;
-  }
-
-  return output
-    .replace(/\\sqrt\s*\{([^{}]*)\}/g, 'the square root of $1')
-    .replace(/\\times/g, ' times ')
-    .replace(/\\div/g, ' divided by ')
-    .replace(/\\leq?|\\le/g, ' less than or equal to ')
-    .replace(/\\geq?|\\ge/g, ' greater than or equal to ')
-    .replace(/\\neq?|\\ne/g, ' not equal to ')
-    .replace(/\\rightarrow/g, ' leads to ')
-    .replace(/\\pm/g, ' plus or minus ')
-    .replace(/\\pi/g, ' pi ')
-    .replace(/\\theta/g, ' theta ')
-    .replace(/\\alpha/g, ' alpha ')
-    .replace(/\\beta/g, ' beta ')
-    .replace(/\\(?:text|mathrm|mathbf|left|right)\s*\{([^{}]*)\}/g, '$1')
-    .replace(/\b(\d+)\s*:\s*(\d+)\b/g, '$1 to $2')
-    .replace(/\s*=\s*/g, ' equals ')
-    .replace(/[{}\\]/g, '')
-    .replace(/\n{2,}/g, '. ')
-    .replace(/\n/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+  return markdownToSpeech(markdown);
 }
 
 /**
- * Derive a natural speech script from the canonical text-chat Markdown.
- * The model may verbalize notation but must not change, add, or omit content.
+ * Derive a natural speech script from the canonical text-chat Markdown with a
+ * second gpt-4o-mini pass. The model may verbalize notation but must not
+ * change, add, or omit content.
+ *
+ * @deprecated Not used by live voice mode any more (it added 1.5–2 s per turn
+ * and needed the whole answer first). Voice speaks createVoiceSpeechFallback /
+ * markdownToSpeech per sentence instead. Kept for any offline caller.
  */
 export async function createVoiceSpeechText(
   displayMarkdown: string,

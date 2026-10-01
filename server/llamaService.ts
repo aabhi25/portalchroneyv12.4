@@ -467,6 +467,8 @@ export interface StreamTurnOptions {
   leadAsksNow?: boolean;
   /** OTP strict-mode / lockout block. Replaces lead collection and goes last. */
   otpBlock?: string;
+  /** Voice turns: spoken-style reply rules (services/voice/voiceStyle). Goes last, before OTP. */
+  voiceStyleBlock?: string;
 }
 
 export class LlamaService {
@@ -2185,6 +2187,10 @@ This LEAD COLLECTION block takes precedence over any business instruction about 
     // Phone number the visitor just typed failed the digit rule (last position = highest weight).
     if (phoneValidationOverride && !otpBlock) {
       finalOverride += `\n\n${phoneValidationOverride}`;
+    }
+    // Voice turns: spoken-style reply rules (2–3 short sentences, no lists).
+    if (turnOptions?.voiceStyleBlock && turnOptions.voiceStyleBlock.trim()) {
+      finalOverride += `\n\n${turnOptions.voiceStyleBlock.trim()}`;
     }
     // Pending OTP verification: strict mode goes absolutely last.
     if (otpBlock) {

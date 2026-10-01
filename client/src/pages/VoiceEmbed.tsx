@@ -9,6 +9,7 @@ interface WidgetSettings {
   avatarType?: string;
   avatarUrl?: string;
   voiceModeStyle?: string;
+  voiceInputMode?: string;
 }
 
 export default function VoiceEmbed() {
@@ -74,6 +75,7 @@ export default function VoiceEmbed() {
         voiceModeStyle={settings?.voiceModeStyle}
         avatarType={settings?.avatarType}
         avatarUrl={settings?.avatarUrl}
+        voiceInputMode={settings?.voiceInputMode}
       />
     </div>
   );

@@ -57,6 +57,13 @@
       "when": 1790859213739,
       "tag": "0007_widget_whatsapp_header_icon",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790865568317,
+      "tag": "0008_voice_input_mode",
+      "breakpoints": true
     }
   ]
 }

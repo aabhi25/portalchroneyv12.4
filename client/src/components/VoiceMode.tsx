@@ -3,6 +3,19 @@ import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
+import {
+  AdaptiveSpeechDetector,
+  DIDNT_CATCH_THAT,
+  DUCK_GAIN,
+  LOCAL_DUCK_RELEASE_MS,
+  THINKING_WATCHDOG_MS,
+  frameRms,
+  readStoredInputMode,
+  resolveInputMode,
+  writeStoredInputMode,
+  type EffectiveVoiceInputMode,
+  type VoiceInputModeSetting,
+} from "@/lib/voiceTurnTaking";
 
 type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
@@ -34,6 +47,10 @@ interface VoiceModeProps {
    */
   topscholarToken?: string;
   topscholarCpId?: string;
+  /** Language picked in the widget (sent to the server like the inline panel). */
+  selectedLanguage?: string;
+  /** Widget setting: hands-free (default), hold-to-talk, or the student's choice. */
+  voiceInputMode?: VoiceInputModeSetting | string;
 }
 
 const BARGE_IN_GRACE_MS = 700;
@@ -55,9 +72,27 @@ export function VoiceMode({
   headless = false,
   autoStart = false,
   topscholarToken,
-  topscholarCpId
+  topscholarCpId,
+  selectedLanguage,
+  voiceInputMode,
 }: VoiceModeProps) {
   const [state, setState] = useState<VoiceState>('idle');
+  const [inputMode, setInputModeState] = useState<EffectiveVoiceInputMode>(() =>
+    resolveInputMode(voiceInputMode, voiceInputMode === 'student_choice' ? readStoredInputMode() : null),
+  );
+  const inputModeRef = useRef<EffectiveVoiceInputMode>(inputMode);
+  const [isHolding, setIsHolding] = useState(false);
+  const isHoldingRef = useRef(false);
+  const holdPressRef = useRef(false);
+  const [hint, setHint] = useState<string | null>(null);
+  const hintTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Possible-interruption ducking (see InlineVoiceMode for the full story).
+  const duckGainRef = useRef<GainNode | null>(null);
+  const serverDuckRef = useRef(false);
+  const localDuckRef = useRef(false);
+  const localDuckReleaseRef = useRef<NodeJS.Timeout | null>(null);
+  const lastAnswerActivityRef = useRef<number>(0);
+  const interruptedResponseIdsRef = useRef<Set<string>>(new Set());
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [isOnline, setIsOnline] = useState(true); // Start as "Online" for customer-facing widget - only show "Offline" if connection actually fails
@@ -187,6 +222,7 @@ export function VoiceMode({
     // voice on that account and to refuse a doubt that is already closed.
     if (topscholarToken) wsUrl += `&token=${encodeURIComponent(topscholarToken)}`;
     if (topscholarCpId) wsUrl += `&cpId=${encodeURIComponent(topscholarCpId)}`;
+    if (selectedLanguage) wsUrl += `&language=${encodeURIComponent(selectedLanguage)}`;
 
     // CRITICAL FIX: Include conversationId for reconnection to reuse existing session
     if (conversationIdRef.current) {
@@ -299,8 +335,78 @@ export function VoiceMode({
     }, 60000);
   };
 
+  /** Apply the duck state to the playback gain (smoothly). */
+  const applyPlaybackGain = () => {
+    const gain = duckGainRef.current;
+    const ctx = audioContextRef.current;
+    if (!gain || !ctx) return;
+    const target = serverDuckRef.current || localDuckRef.current ? DUCK_GAIN : 1;
+    try {
+      gain.gain.setTargetAtTime(target, ctx.currentTime, target < 1 ? 0.04 : 0.12);
+    } catch {
+      gain.gain.value = target;
+    }
+  };
+
+  const clearDucks = () => {
+    serverDuckRef.current = false;
+    localDuckRef.current = false;
+    if (localDuckReleaseRef.current) {
+      clearTimeout(localDuckReleaseRef.current);
+      localDuckReleaseRef.current = null;
+    }
+    applyPlaybackGain();
+  };
+
+  const showHint = (text: string) => {
+    setHint(text);
+    if (hintTimeoutRef.current) clearTimeout(hintTimeoutRef.current);
+    hintTimeoutRef.current = setTimeout(() => setHint(null), 4000);
+  };
+
+  const markInterrupted = (responseId?: string | null) => {
+    if (!responseId) return;
+    interruptedResponseIdsRef.current.add(responseId);
+    if (interruptedResponseIdsRef.current.size > 20) {
+      const first = interruptedResponseIdsRef.current.values().next().value;
+      if (first) interruptedResponseIdsRef.current.delete(first);
+    }
+  };
+
+  /** Drop all scheduled/queued answer audio right now. */
+  const stopPlayback = () => {
+    clearDucks();
+    if (currentAudioSourceRef.current) {
+      try { currentAudioSourceRef.current.stop(); } catch {}
+      currentAudioSourceRef.current = null;
+    }
+    audioQueueRef.current = [];
+    audioChunkBufferRef.current = [];
+    isPlayingRef.current = false;
+    nextPlaybackTimeRef.current = 0;
+    playbackStartedAtRef.current = 0;
+    stopVolumeMonitoring();
+    if (playbackAnalyserRef.current) {
+      try { playbackAnalyserRef.current.disconnect(); } catch {}
+      playbackAnalyserRef.current = null;
+    }
+    if (duckGainRef.current) {
+      try { duckGainRef.current.disconnect(); } catch {}
+      duckGainRef.current = null;
+    }
+  };
+
+  /** Back to the resting state (never stuck on "Thinking…"). */
+  const returnToListening = () => {
+    setCurrentTranscript('');
+    if (shouldAutoRestartRef.current && isOnlineRef.current && hasPermissionRef.current) {
+      setState('listening');
+    } else {
+      setState('idle');
+    }
+  };
+
   const handleMessage = async (data: any) => {
-    console.log('[VoiceMode] Received message:', data.type);
 
     switch (data.type) {
       case 'ready':
@@ -340,6 +446,8 @@ export function VoiceMode({
         
         // Enable auto-restart for continuous conversation
         shouldAutoRestartRef.current = true;
+        // Tell the server how this student takes turns (server VAD vs held turns).
+        safeSend(JSON.stringify({ type: 'set_input_mode', mode: inputModeRef.current }));
         
         // Try auto-start, but if it fails (e.g., no user interaction yet), just stay idle
         // User can tap the orb to start manually
@@ -371,16 +479,60 @@ export function VoiceMode({
         break;
 
       case 'speech_started':
-        if (
-          playbackStartedAtRef.current &&
-          Date.now() - playbackStartedAtRef.current < BARGE_IN_GRACE_MS
-        ) {
-          break;
+        // Speech alone never interrupts: the server ducks ('duck') and then
+        // confirms (response_cancelled) or rejects ('unduck') it from the transcript.
+        break;
+
+      case 'duck':
+        serverDuckRef.current = true;
+        applyPlaybackGain();
+        break;
+
+      case 'unduck':
+        serverDuckRef.current = false;
+        applyPlaybackGain();
+        break;
+
+      case 'turn_ignored':
+        // No reply is coming for that noise/backchannel — never wait on it.
+        serverDuckRef.current = false;
+        applyPlaybackGain();
+        if (!data.answerActive && stateRef.current !== 'speaking') {
+          returnToListening();
         }
-        if (stateRef.current === 'speaking' || isPlayingRef.current || audioQueueRef.current.length > 0) {
-          handleInterruption();
+        if (data.held && data.reason === 'too_short') {
+          showHint('Keep holding while you speak.');
+        } else if (data.reason === 'unclear' || (data.held && data.reason !== 'cancelled')) {
+          showHint(DIDNT_CATCH_THAT);
         }
         break;
+
+      case 'input_mode':
+        break;
+
+      case 'answer_delta': {
+        // Speak-while-writing: the next sentence of a streaming answer.
+        if (data.responseId && interruptedResponseIdsRef.current.has(data.responseId)) return;
+        if (pendingInterruptRef.current) return;
+        lastAnswerActivityRef.current = Date.now();
+        const isNewResponse = data.responseId && data.responseId !== currentResponseIdRef.current;
+        if (data.responseId) currentResponseIdRef.current = data.responseId;
+        setState('speaking');
+        if (!vadIntervalRef.current && mediaStreamRef.current) {
+          startVoiceActivityDetection();
+        }
+        const display = typeof data.display === 'string' ? data.display : '';
+        if (!currentAIMessageIdRef.current || isNewResponse) {
+          const messageId = Date.now().toString();
+          currentAIMessageIdRef.current = messageId;
+          awaitingUserTranscriptRef.current = true;
+          setMessages(prev => [...prev, { id: messageId, role: 'assistant', text: display, timestamp: new Date() }]);
+        } else {
+          const id = currentAIMessageIdRef.current;
+          setMessages(prev => prev.map(msg => (msg.id === id ? { ...msg, text: msg.text + display } : msg)));
+        }
+        break;
+      }
 
       case 'transcript':
         // Clear interrupt flag when we get a new user transcript
@@ -444,6 +596,15 @@ export function VoiceMode({
 
       case 'answer_ready': {
         if (pendingInterruptRef.current) return;
+        if (data.responseId && interruptedResponseIdsRef.current.has(data.responseId)) return;
+        lastAnswerActivityRef.current = Date.now();
+        // Streamed answer: its message already exists — swap in the final text.
+        if (data.responseId && data.responseId === currentResponseIdRef.current && currentAIMessageIdRef.current) {
+          const id = currentAIMessageIdRef.current;
+          const finalText = typeof data.displayMarkdown === 'string' ? data.displayMarkdown : '';
+          if (finalText) setMessages(prev => prev.map(msg => (msg.id === id ? { ...msg, text: finalText, isFinal: true } : msg)));
+          break;
+        }
         if (data.responseId) {
           currentResponseIdRef.current = data.responseId;
         }
@@ -536,6 +697,7 @@ export function VoiceMode({
         break;
 
       case 'ai_done':
+        lastAnswerActivityRef.current = Date.now();
         // Ignore if we're pending an interrupt
         if (pendingInterruptRef.current) {
           console.log('[VoiceMode] Ignoring ai_done after interrupt');
@@ -622,14 +784,27 @@ export function VoiceMode({
 
       case 'response_cancelled':
         {
+          // Also how a CONFIRMED interruption arrives: stop this answer's
+          // audio and return to listening (the new turn's events follow).
+          markInterrupted(data.responseId);
+          const isCurrent = !data.responseId || data.responseId === currentResponseIdRef.current;
           const interruptedMessageId =
-            pendingInterruptedMessageIdRef.current || currentAIMessageIdRef.current;
-          if (interruptedMessageId) {
-          setMessages(prev => prev.filter(msg => msg.id !== interruptedMessageId));
+            pendingInterruptedMessageIdRef.current || (isCurrent ? currentAIMessageIdRef.current : null);
+          if (interruptedMessageId && !data.preserveDisplay) {
+            setMessages(prev => prev.filter(msg => msg.id !== interruptedMessageId));
+          }
+          if (isCurrent) {
+            stopPlayback();
+            stopVoiceActivityDetection();
+            pendingPlaybackCompleteResponseIdRef.current = null;
+            currentAIMessageIdRef.current = null;
+            currentResponseIdRef.current = null;
           }
           pendingInterruptedMessageIdRef.current = null;
-          currentAIMessageIdRef.current = null;
-          currentResponseIdRef.current = null;
+          pendingInterruptRef.current = false;
+          if (isCurrent || stateRef.current === 'speaking' || stateRef.current === 'thinking') {
+            returnToListening();
+          }
         }
         break;
 
@@ -734,6 +909,7 @@ export function VoiceMode({
       // The server will stop sending audio after response.cancel is processed
       // Dropping audio here causes gaps in playback for late-arriving chunks
       
+      lastAnswerActivityRef.current = Date.now();
       if (!audioContextRef.current) {
         // Create AudioContext - browser may use its preferred sample rate (often 48kHz)
         audioContextRef.current = new AudioContext({ sampleRate: 24000 });
@@ -814,88 +990,66 @@ export function VoiceMode({
   };
 
 
-  // Voice Activity Detection for interruption handling
+  // Voice activity detection while the tutor speaks. Same rules as the inline
+  // panel: adaptive noise floor, ≥500 ms of sustained speech, echo allowance.
+  // It never cancels the answer — it only ducks the tutor locally; the server
+  // confirms a real interruption from the transcript.
   const startVoiceActivityDetection = () => {
-    if (!mediaSourceRef.current || !audioContextRef.current) {
-      console.warn('[VoiceMode] Cannot start VAD - missing media source or audio context');
-      return;
-    }
-    
-    // Don't start if already running
-    if (vadIntervalRef.current) {
-      console.log('[VoiceMode] VAD already running');
-      return;
-    }
-    
+    if (!mediaSourceRef.current || !audioContextRef.current) return;
+    if (vadIntervalRef.current) return;
+    // Hold-to-talk: the orb is the only way to speak/interrupt.
+    if (inputModeRef.current === 'hold_to_talk') return;
+
     try {
-      // Create analyser for VAD
       const analyser = audioContextRef.current.createAnalyser();
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.3;
-      
-      // Connect existing media source to analyser (don't create a new source)
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.2;
       mediaSourceRef.current.connect(analyser);
       vadAnalyserRef.current = analyser;
-      
-      // Monitor audio levels to detect user speech
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      const VOICE_THRESHOLD = 30; // Lowered from 35 for faster interruption detection (ChatGPT-style)
-      const SPEECH_FRAMES_NEEDED = 1; // Interrupt immediately on first detection
-      let speechFrames = 0;
-      let silenceFrames = 0;
-      
+
+      const dataArray = new Float32Array(analyser.fftSize);
+      const FRAME_MS = 50;
+      const detector = new AdaptiveSpeechDetector({ confirmMs: 500 });
+
       vadIntervalRef.current = setInterval(() => {
-        // Use ref to check state (avoid closure issues)
         if (stateRef.current !== 'speaking') {
           stopVoiceActivityDetection();
           return;
         }
-        
-        analyser.getByteFrequencyData(dataArray);
-        
-        // Calculate average volume
-        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-        
-        // ENHANCED LOGGING: Always log to debug VAD (will remove after fixing)
-        console.log('[VoiceMode] 🎤 VAD check - level:', average.toFixed(1), 'state:', stateRef.current);
-        
-        if (average > VOICE_THRESHOLD) {
-          if (
-            playbackStartedAtRef.current &&
-            Date.now() - playbackStartedAtRef.current < BARGE_IN_GRACE_MS
-          ) {
-            speechFrames = 0;
-            return;
-          }
-          // Speech detected - increment counter and reset silence
-          speechFrames++;
-          silenceFrames = 0;
-          
-          // INSTANT INTERRUPTION: Interrupt immediately on first detection (ChatGPT-style)
-          if (speechFrames >= SPEECH_FRAMES_NEEDED) {
-            console.log('[VoiceMode] 🎯 User speech detected - interrupting AI NOW!');
-            
-            // CRITICAL: Set pending interrupt flag FIRST to block late audio chunks
-            pendingInterruptRef.current = true;
-            
-            // Stop VAD and trigger interruption
-            stopVoiceActivityDetection();
-            handleInterruption();
-            speechFrames = 0; // Reset to prevent multiple triggers
-          }
-        } else {
-          // Below threshold - increment silence counter
-          silenceFrames++;
-          
-          // Only reset speech counter after 2 silent frames (200ms)
-          // This prevents resetting on brief volume dips
-          if (silenceFrames >= 2) {
-            speechFrames = 0;
-          }
+        analyser.getFloatTimeDomainData(dataArray);
+        const rms = frameRms(dataArray);
+
+        let playbackLevel = 0;
+        if (playbackAnalyserRef.current) {
+          const pb = new Uint8Array(playbackAnalyserRef.current.frequencyBinCount);
+          playbackAnalyserRef.current.getByteFrequencyData(pb);
+          let pbSum = 0;
+          for (let i = 0; i < pb.length; i++) pbSum += pb[i];
+          playbackLevel = pbSum / pb.length / 255;
         }
-      }, 50); // Check every 50ms for instant interruption (ChatGPT-style)
-      
-      console.log('[VoiceMode] Voice activity detection started with threshold:', VOICE_THRESHOLD);
+        const inGrace = playbackStartedAtRef.current > 0 &&
+          Date.now() - playbackStartedAtRef.current < BARGE_IN_GRACE_MS;
+        const result = detector.push(inGrace ? 0 : rms, FRAME_MS, playbackLevel);
+
+        if (result.justConfirmed) {
+          localDuckRef.current = true;
+          if (localDuckReleaseRef.current) {
+            clearTimeout(localDuckReleaseRef.current);
+            localDuckReleaseRef.current = null;
+          }
+          applyPlaybackGain();
+        }
+        if (result.ended && localDuckRef.current && !localDuckReleaseRef.current) {
+          localDuckReleaseRef.current = setTimeout(() => {
+            localDuckReleaseRef.current = null;
+            localDuckRef.current = false;
+            applyPlaybackGain();
+          }, LOCAL_DUCK_RELEASE_MS);
+        } else if (result.speaking && localDuckReleaseRef.current) {
+          clearTimeout(localDuckReleaseRef.current);
+          localDuckReleaseRef.current = null;
+        }
+      }, FRAME_MS);
     } catch (error) {
       console.error('[VoiceMode] Failed to start VAD:', error);
     }
@@ -958,69 +1112,35 @@ export function VoiceMode({
     console.log('[VoiceMode] Volume monitoring stopped');
   };
 
-  const handleInterruption = () => {
-    console.log('[VoiceMode] User interrupted! Stopping AI response...');
-    
+  /**
+   * INTENTIONAL interruption (tapping the orb while the tutor talks, or
+   * pressing it in hold-to-talk). Speech alone never calls this.
+   */
+  const handleInterruption = (sendToServer = true) => {
     // Set pending interrupt flag to ignore late chunks
-    pendingInterruptRef.current = true;
+    pendingInterruptRef.current = sendToServer;
     pendingPlaybackCompleteResponseIdRef.current = null;
-    
+    markInterrupted(currentResponseIdRef.current);
+
     // Defer removing the interrupted AI message until the server confirms it
     // abandoned response ownership.
     if (currentAIMessageIdRef.current) {
       const interruptedMessageId = currentAIMessageIdRef.current;
       pendingInterruptedMessageIdRef.current = interruptedMessageId;
     }
-    
+
     // Reset buffered transcript to prepare for new user speech
     bufferedTranscriptRef.current = null;
-    
-    // Stop VAD to prevent multiple interruptions
+
     stopVoiceActivityDetection();
-    
-    // Stop volume monitoring
-    stopVolumeMonitoring();
-    
-    // Stop current audio playback
-    if (currentAudioSourceRef.current) {
-      try {
-        currentAudioSourceRef.current.stop();
-      } catch (e) {
-        // Already stopped
-      }
-      currentAudioSourceRef.current = null;
-    }
-    
-    // Clear audio queue
-    audioQueueRef.current = [];
-    audioChunkBufferRef.current = [];
-    isPlayingRef.current = false;
-    nextPlaybackTimeRef.current = 0;
+    stopPlayback();
     currentAIMessageIdRef.current = null;
     currentResponseIdRef.current = null;
-    playbackStartedAtRef.current = 0;
-    
-    // Clear playback analyser
-    if (playbackAnalyserRef.current) {
-      try {
-        playbackAnalyserRef.current.disconnect();
-      } catch (e) {
-        // Already disconnected
-      }
-      playbackAnalyserRef.current = null;
-    }
-    
-    // Send interrupt signal to server
-    safeSend(JSON.stringify({ type: 'interrupt' }));
-    
+
+    if (sendToServer) safeSend(JSON.stringify({ type: 'interrupt' }));
+
     // Transition to listening state
     setState('listening');
-    
-    toast({
-      title: "Listening",
-      description: "Go ahead, I'm listening!",
-      duration: 1000
-    });
   };
 
   const playNextAudioChunk = () => {
@@ -1056,6 +1176,10 @@ export function VoiceMode({
         }
         playbackAnalyserRef.current = null;
       }
+      if (duckGainRef.current) {
+        try { duckGainRef.current.disconnect(); } catch {}
+        duckGainRef.current = null;
+      }
       
       return;
     }
@@ -1078,8 +1202,13 @@ export function VoiceMode({
       startVolumeMonitoring();
     }
     
-    // Connect source -> analyser -> destination
-    source.connect(playbackAnalyserRef.current);
+    // Connect source -> duck gain -> analyser -> destination
+    if (!duckGainRef.current) {
+      duckGainRef.current = audioContextRef.current.createGain();
+      duckGainRef.current.gain.value = serverDuckRef.current || localDuckRef.current ? DUCK_GAIN : 1;
+      duckGainRef.current.connect(playbackAnalyserRef.current);
+    }
+    source.connect(duckGainRef.current);
     playbackAnalyserRef.current.connect(audioContextRef.current.destination);
     
     currentAudioSourceRef.current = source;
@@ -1199,6 +1328,8 @@ export function VoiceMode({
         audioWorkletNodeRef.current = workletNode;
 
         workletNode.port.onmessage = (event) => {
+          // Hold-to-talk: only audio captured while the orb is held is sent.
+          if (inputModeRef.current === 'hold_to_talk' && !isHoldingRef.current) return;
           if (event.data.type === 'audio') {
             // CRITICAL FIX BUG 2: Real backpressure with pause/resume - NEVER drop audio
             const queueSize = outboundAudioQueueRef.current.length;
@@ -1276,8 +1407,9 @@ export function VoiceMode({
         scriptProcessorRef.current = processor;
 
         processor.onaudioprocess = (event) => {
+          if (inputModeRef.current === 'hold_to_talk' && !isHoldingRef.current) return;
           const inputData = event.inputBuffer.getChannelData(0);
-          
+
           // Resample to 24kHz if needed with fractional position tracking
           let resampledData = inputData;
           if (actualSampleRate !== 24000) {
@@ -1468,11 +1600,97 @@ export function VoiceMode({
     });
   };
 
+  // ---- Hold to talk (the orb becomes a press-and-hold button) ---------------
+  const startHold = async () => {
+    if (inputModeRef.current !== 'hold_to_talk' || isHoldingRef.current) return;
+    holdPressRef.current = true;
+    if (isConnecting || !isOnlineRef.current) return;
+    shouldAutoRestartRef.current = true;
+    if (!mediaStreamRef.current) {
+      try { await startRecording(); } catch { return; }
+      if (!mediaStreamRef.current) return;
+      if (!holdPressRef.current) {
+        showHint('Microphone ready — hold while you speak.');
+        return;
+      }
+    }
+    // Pressing while the tutor talks interrupts it at once (the server
+    // cancels the answer on ptt_start).
+    if (stateRef.current === 'speaking' || isPlayingRef.current) {
+      handleInterruption(false);
+    }
+    isHoldingRef.current = true;
+    setIsHolding(true);
+    setHint(null);
+    safeSend(JSON.stringify({ type: 'ptt_start' }));
+    setState('listening');
+  };
+
+  const endHold = () => {
+    holdPressRef.current = false;
+    if (!isHoldingRef.current) return;
+    setIsHolding(false);
+    setTimeout(() => {
+      isHoldingRef.current = false;
+      safeSend(JSON.stringify({ type: 'ptt_commit' }));
+      setState('thinking');
+    }, 150);
+  };
+
+  const switchInputMode = (mode: EffectiveVoiceInputMode) => {
+    if (mode === inputModeRef.current) return;
+    inputModeRef.current = mode;
+    setInputModeState(mode);
+    writeStoredInputMode(mode);
+    isHoldingRef.current = false;
+    setIsHolding(false);
+    safeSend(JSON.stringify({ type: 'set_input_mode', mode }));
+    if (mode === 'hold_to_talk') stopVoiceActivityDetection();
+  };
+
+  // ---- Never stuck on "Thinking…" -------------------------------------------
+  const recoverFromStall = () => {
+    console.warn('[VoiceMode] Watchdog: no answer activity — returning to listening');
+    if (currentResponseIdRef.current) {
+      markInterrupted(currentResponseIdRef.current);
+      safeSend(JSON.stringify({ type: 'interrupt', reason: 'watchdog' }));
+    }
+    stopVoiceActivityDetection();
+    stopPlayback();
+    currentAIMessageIdRef.current = null;
+    currentResponseIdRef.current = null;
+    pendingInterruptRef.current = false;
+    pendingPlaybackCompleteResponseIdRef.current = null;
+    showHint(DIDNT_CATCH_THAT);
+    returnToListening();
+  };
+
+  useEffect(() => {
+    if (state !== 'thinking' && state !== 'speaking') return;
+    const enteredAt = Date.now();
+    const timer = setInterval(() => {
+      const idleFor = Date.now() - Math.max(lastAnswerActivityRef.current, enteredAt);
+      if (idleFor < THINKING_WATCHDOG_MS) return;
+      const audioPending = isPlayingRef.current || audioQueueRef.current.length > 0;
+      if (stateRef.current === 'thinking' || (stateRef.current === 'speaking' && !audioPending)) {
+        recoverFromStall();
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [state]);
+
   const cleanup = () => {
     console.log('[VoiceMode] Cleaning up resources...');
-    
+
     // Disable auto-restart when cleaning up
     shouldAutoRestartRef.current = false;
+    isHoldingRef.current = false;
+    holdPressRef.current = false;
+    if (hintTimeoutRef.current) { clearTimeout(hintTimeoutRef.current); hintTimeoutRef.current = null; }
+    if (localDuckReleaseRef.current) { clearTimeout(localDuckReleaseRef.current); localDuckReleaseRef.current = null; }
+    serverDuckRef.current = false;
+    localDuckRef.current = false;
+    duckGainRef.current = null;
     
     try {
       // Clear all timers and intervals
@@ -1823,7 +2041,9 @@ export function VoiceMode({
               className="rounded-full orb-pulse cursor-pointer relative flex items-center justify-center overflow-hidden"
               style={{
                 background: `linear-gradient(${state === 'speaking' ? '135deg' : '135deg'}, ${chatColor}, ${chatColorEnd})`,
-                ...getOrbStyle()
+                ...getOrbStyle(),
+                ...(inputMode === 'hold_to_talk' ? { touchAction: 'none' as const, userSelect: 'none' as const } : {}),
+                ...(isHolding ? { filter: 'brightness(1.08)' } : {})
               }}
               animate={{
                 scale: state === 'listening' 
@@ -1852,12 +2072,43 @@ export function VoiceMode({
                 }
               }}
               onClick={async () => {
+                if (inputMode === 'hold_to_talk') return; // press-and-hold handlers below
+                // Tapping the orb while the tutor talks is an intentional interruption.
+                if (state === 'speaking') {
+                  handleInterruption();
+                  return;
+                }
                 if (state === 'idle' && isOnline && !isConnecting) {
                   shouldAutoRestartRef.current = true;
                   setState('listening');
                   await startRecording();
                 }
               }}
+              onPointerDown={inputMode === 'hold_to_talk' ? (e) => {
+                e.preventDefault();
+                try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+                void startHold();
+              } : undefined}
+              onPointerUp={inputMode === 'hold_to_talk' ? () => endHold() : undefined}
+              onPointerCancel={inputMode === 'hold_to_talk' ? () => endHold() : undefined}
+              onPointerLeave={inputMode === 'hold_to_talk' ? () => endHold() : undefined}
+              onKeyDown={inputMode === 'hold_to_talk' ? (e) => {
+                if ((e.key === ' ' || e.code === 'Space') && !e.repeat) {
+                  e.preventDefault();
+                  void startHold();
+                }
+              } : undefined}
+              onKeyUp={inputMode === 'hold_to_talk' ? (e) => {
+                if (e.key === ' ' || e.code === 'Space') {
+                  e.preventDefault();
+                  endHold();
+                }
+              } : undefined}
+              onContextMenu={inputMode === 'hold_to_talk' ? (e) => e.preventDefault() : undefined}
+              tabIndex={0}
+              role="button"
+              aria-label={inputMode === 'hold_to_talk' ? 'Hold to talk' : 'Voice control'}
+              aria-pressed={inputMode === 'hold_to_talk' ? isHolding : undefined}
               data-testid="voice-orb"
             >
               {/* Avatar Display - centered inside orb */}
@@ -2025,8 +2276,36 @@ export function VoiceMode({
             </div>
             {/* End Animated Orb */}
 
+            {/* Hold-to-talk label, hint, and the student's mode toggle */}
+            {(inputMode === 'hold_to_talk' || hint) && !busyState && (
+              <div className="mt-8 text-center" data-testid="voice-hold-label">
+                <p className="text-gray-700 text-lg font-medium">
+                  {hint
+                    ? hint
+                    : isHolding
+                      ? 'Listening… release to send'
+                      : state === 'thinking'
+                        ? 'Thinking…'
+                        : state === 'speaking'
+                          ? 'Hold to interrupt'
+                          : 'Hold to talk'}
+                </p>
+              </div>
+            )}
+            {voiceInputMode === 'student_choice' && !busyState && (
+              <button
+                type="button"
+                onClick={() => switchInputMode(inputMode === 'hold_to_talk' ? 'hands_free' : 'hold_to_talk')}
+                className="mt-4 mx-auto flex items-center gap-2 px-4 py-2 rounded-full border border-gray-300 text-sm text-gray-700 bg-white/80 hover:bg-gray-100"
+                data-testid="voice-input-mode-toggle"
+              >
+                {inputMode === 'hold_to_talk' ? <Mic className="w-4 h-4" /> : <Hand className="w-4 h-4" />}
+                {inputMode === 'hold_to_talk' ? 'Switch to hands-free' : 'Switch to hold to talk'}
+              </button>
+            )}
+
             {/* "Tap to talk" label below orb when idle */}
-            {state === 'idle' && !busyState && (
+            {state === 'idle' && !busyState && inputMode !== 'hold_to_talk' && !hint && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
