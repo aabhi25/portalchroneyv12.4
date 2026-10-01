@@ -1627,6 +1627,70 @@ export const aiUsageLimits = pgTable("ai_usage_limits", {
 
 export type AiUsageLimit = typeof aiUsageLimits.$inferSelect;
 
+// ── Live AI avatar ────────────────────────────────────────────────────────────
+// Per-business avatar settings. Only super admins edit these (commercial add-on);
+// business users may read the status. OFF by default: no row = avatar disabled.
+// Platform-level provider API keys live in system_settings (encrypted), never here.
+export const avatarBusinessSettings = pgTable("avatar_business_settings", {
+  businessAccountId: varchar("business_account_id").primaryKey().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").notNull().default(false),
+  provider: varchar("provider", { length: 32 }).notNull().default("heygen_liveavatar"), // 'heygen_liveavatar' | 'anam' (| 'fake' in development only)
+  avatarId: text("avatar_id"), // HeyGen LiveAvatar avatar_id / Anam avatarId
+  providerOptions: jsonb("provider_options").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  displayName: varchar("display_name", { length: 80 }),
+  styleHint: varchar("style_hint", { length: 20 }).notNull().default("realistic"), // 'realistic' | 'stylised'
+  disclosureEnabled: boolean("disclosure_enabled").notNull().default(true),
+  disclosureText: text("disclosure_text"), // null = default "Hi, I'm {name}, an AI assistant…"
+  monthlyMinuteCap: integer("monthly_minute_cap").notNull().default(60),
+  maxConcurrentSessions: integer("max_concurrent_sessions").notNull().default(2),
+  maxSessionMinutes: integer("max_session_minutes").notNull().default(10),
+  idleTimeoutSeconds: integer("idle_timeout_seconds").notNull().default(60),
+  // This business's own provider API keys, one per provider:
+  //   { [provider]: { enc: <encryptionService ciphertext>, last4, updatedAt, updatedBy } }
+  // Raw keys are never returned by any API; only "set / not set" and a ••••last4 mask.
+  apiKeys: jsonb("api_keys").$type<Record<string, { enc: string; last4: string; updatedAt: string; updatedBy?: string | null }>>().notNull().default(sql`'{}'::jsonb`),
+  // Commercial choice: fall back to the PLATFORM key (we pay the provider) when
+  // the business has no key of its own. Off by default.
+  allowPlatformKey: boolean("allow_platform_key").notNull().default(false),
+  voiceNote: text("voice_note"),
+  commercialNotes: text("commercial_notes"),
+  parentalConsentConfirmed: boolean("parental_consent_confirmed").notNull().default(false),
+  parentalConsentConfirmedBy: varchar("parental_consent_confirmed_by"),
+  parentalConsentConfirmedAt: timestamp("parental_consent_confirmed_at"),
+  updatedBy: varchar("updated_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export type AvatarBusinessSettings = typeof avatarBusinessSettings.$inferSelect;
+
+// One row per avatar session (started only when a visitor taps the avatar button).
+// billed_seconds is OUR metering (per second); monthly totals are summed per IST month.
+export const avatarSessions = pgTable("avatar_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  // Identifier, not a FK: empty voice conversations are deleted on cleanup while
+  // the avatar usage row remains valid billing data.
+  conversationId: varchar("conversation_id"),
+  visitorId: varchar("visitor_id", { length: 255 }),
+  provider: varchar("provider", { length: 32 }).notNull(),
+  providerSessionId: text("provider_session_id"),
+  status: varchar("status", { length: 16 }).notNull().default("starting"), // 'starting' | 'active' | 'ended'
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  connectedAt: timestamp("connected_at"),
+  lastHeartbeatAt: timestamp("last_heartbeat_at"),
+  endedAt: timestamp("ended_at"),
+  billedSeconds: integer("billed_seconds").notNull().default(0),
+  endReason: varchar("end_reason", { length: 40 }),
+  costUsd: numeric("cost_usd", { precision: 10, scale: 6 }).notNull().default("0"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+}, (table) => ({
+  businessStartedIdx: index("avatar_sessions_business_started_idx").on(table.businessAccountId, table.startedAt),
+  openIdx: index("avatar_sessions_open_idx").on(table.businessAccountId).where(sql`${table.endedAt} is null`),
+}));
+
+export type AvatarSession = typeof avatarSessions.$inferSelect;
+
 // Behavioral Discount System Tables
 
 // Intent Scores - Calculated purchase intent scores

@@ -15,6 +15,7 @@ import {
   type EffectiveVoiceInputMode,
   type VoiceInputModeSetting,
 } from "@/lib/voiceTurnTaking";
+import type { AvatarClientAdapter } from "@/lib/liveAvatar/types";
 
 type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
@@ -24,6 +25,18 @@ type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
 // with the server-side BARGE_IN_GRACE_MS in realtimeVoiceService.ts.
 const BARGE_IN_GRACE_MS = 700;
 const TOPSCHOLAR_LISTENING_IDLE_TIMEOUT_MS = 10_000;
+// Avatar mode: the avatar renders (and speaks) a little after our audio clock;
+// wait this long after the silent clock drains before treating the answer as heard.
+const AVATAR_PLAYBACK_TAIL_MS = 600;
+
+/** A live avatar the voice session should drive (null/undefined = normal voice). */
+export interface InlineVoiceAvatar {
+  sessionId: string;
+  audioRoute: 'server' | 'client';
+  adapter: AvatarClientAdapter;
+  /** Speak the AI disclosure line when the avatar first attaches. */
+  speakIntro: boolean;
+}
 
 interface InlineVoiceModeProps {
   isActive: boolean;
@@ -76,6 +89,15 @@ interface InlineVoiceModeProps {
   onAIMessageDelta?: (messageId: string, displayDelta: string, spokenDelta: string) => void;
   /** Widget setting: hands-free (default), hold-to-talk, or the student's choice. */
   voiceInputMode?: VoiceInputModeSetting | string;
+  /**
+   * Live AI avatar (renderer only). When set and confirmed by the server, our
+   * local playback is muted: the visitor hears the avatar's own stream.
+   */
+  avatar?: InlineVoiceAvatar | null;
+  /** avatar_* messages from the voice socket (ended, events, attach failures). */
+  onAvatarServerMessage?: (message: any) => void;
+  /** Avatar mode: product cards for a spoken answer (same payload as text chat's `products`). */
+  onAIMessageProducts?: (messageId: string, productsJson: string) => void;
 }
 
 export function InlineVoiceMode({
@@ -102,7 +124,33 @@ export function InlineVoiceMode({
   onSpeakingProgress,
   onAIMessageDelta,
   voiceInputMode,
+  avatar,
+  onAvatarServerMessage,
+  onAIMessageProducts,
 }: InlineVoiceModeProps) {
+  // ---- Live AI avatar -------------------------------------------------------
+  const avatarRef = useRef<InlineVoiceAvatar | null>(avatar ?? null);
+  avatarRef.current = avatar ?? null;
+  // Session id the SERVER confirmed (avatar_attached). Until then audio plays locally.
+  const avatarAttachedRef = useRef<string | null>(null);
+  const avatarIntroSpokenRef = useRef<Set<string>>(new Set());
+  const silentSinkRef = useRef<GainNode | null>(null);
+  // Product cards can arrive (from the tool call) before the answer's bubble exists.
+  const pendingProductsRef = useRef<Map<string, string>>(new Map());
+  // Client-route avatar: tell the server (timing log) when each answer's audio starts feeding it.
+  const avatarSpeakReportedRef = useRef<string | null>(null);
+  const applyPendingProducts = (responseId: string | undefined, messageId: string) => {
+    if (!responseId) return;
+    const pending = pendingProductsRef.current.get(responseId);
+    if (!pending) return;
+    pendingProductsRef.current.delete(responseId);
+    // Defer one tick so the bubble created by onAIMessageStart/Ready exists first.
+    setTimeout(() => onAIMessageProducts?.(messageId, pending), 0);
+  };
+  const avatarActive = () => {
+    const a = avatarRef.current;
+    return !!a && avatarAttachedRef.current === a.sessionId;
+  };
   const [state, setState] = useState<VoiceState>('idle');
   // Hands-free (server VAD) or hold-to-talk for this session.
   const [inputMode, setInputModeState] = useState<EffectiveVoiceInputMode>(() =>
@@ -365,10 +413,12 @@ export function InlineVoiceMode({
    */
   /** Apply the current duck state to the playback gain (smoothly). */
   const applyPlaybackGain = () => {
+    const ducked = serverDuckRef.current || localDuckRef.current;
+    if (avatarRef.current) avatarRef.current.adapter.setVolume(ducked ? DUCK_GAIN : 1);
     const gain = duckGainRef.current;
     const ctx = audioContextRef.current;
     if (!gain || !ctx) return;
-    const target = serverDuckRef.current || localDuckRef.current ? DUCK_GAIN : 1;
+    const target = ducked ? DUCK_GAIN : 1;
     try {
       gain.gain.setTargetAtTime(target, ctx.currentTime, target < 1 ? 0.04 : 0.12);
     } catch {
@@ -407,6 +457,7 @@ export function InlineVoiceMode({
   };
 
   const flushQueuedAudio = () => {
+    if (avatarActive()) avatarRef.current?.adapter.interrupt();
     clearDucks();
     activeSourcesRef.current.forEach((s) => { try { s.stop(); } catch {} });
     activeSourcesRef.current.clear();
@@ -432,6 +483,19 @@ export function InlineVoiceMode({
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  // Attach a newly-live avatar to the running voice session, or detach it
+  // (fallback / end): audio plays locally again from the next chunk.
+  useEffect(() => {
+    if (avatar?.sessionId) {
+      if (hadReadySessionRef.current && avatarAttachedRef.current !== avatar.sessionId) sendAvatarAttach();
+      return;
+    }
+    if (avatarAttachedRef.current) {
+      avatarAttachedRef.current = null;
+      safeSend(JSON.stringify({ type: 'avatar_detach' }));
+    }
+  }, [avatar?.sessionId]);
 
   useEffect(() => {
     if (isActive && !audioContextRef.current) {
@@ -605,6 +669,7 @@ export function InlineVoiceMode({
         shouldAutoRestartRef.current = true;
         // Tell the server how this student takes turns (server VAD vs held turns).
         safeSend(JSON.stringify({ type: 'set_input_mode', mode: inputModeRef.current }));
+        if (avatarRef.current) sendAvatarAttach();
         if (hasPermissionRef.current) {
           try { await startRecording(); } catch (error) { setState('idle'); }
         } else {
@@ -741,6 +806,48 @@ export function InlineVoiceMode({
         onTranscriptCorrection?.(data.original, data.corrected);
         break;
 
+      case 'avatar_attached':
+        if (avatarRef.current && data.avatarSessionId === avatarRef.current.sessionId) {
+          avatarAttachedRef.current = data.avatarSessionId;
+        }
+        onAvatarServerMessage?.(data);
+        break;
+
+      case 'avatar_attach_failed':
+      case 'avatar_ended':
+        if (!data.avatarSessionId || data.avatarSessionId === avatarAttachedRef.current) avatarAttachedRef.current = null;
+        onAvatarServerMessage?.(data);
+        break;
+
+      case 'avatar_event':
+      case 'avatar_ending':
+        onAvatarServerMessage?.(data);
+        break;
+
+      case 'avatar_audio':
+        // Server-route avatar: the provider got this answer audio; keep a SILENT
+        // local clock of the same length (turn-taking, karaoke, captions).
+        if (avatarActive() && typeof data.bytes === 'number' && data.bytes > 1) {
+          await handleAudioChunk(new ArrayBuffer(Math.min(data.bytes, 4 * 1024 * 1024)), true);
+        }
+        break;
+
+      case 'products': {
+        if (!data.responseId || typeof data.data !== 'string') break;
+        if (interruptedResponseIdsRef.current.has(data.responseId)) break;
+        const productMessageId = responseIdToMessageIdRef.current.get(data.responseId);
+        if (productMessageId) {
+          onAIMessageProducts?.(productMessageId, data.data);
+        } else {
+          pendingProductsRef.current.set(data.responseId, data.data);
+          if (pendingProductsRef.current.size > 10) {
+            const oldest = pendingProductsRef.current.keys().next().value;
+            if (oldest) pendingProductsRef.current.delete(oldest);
+          }
+        }
+        break;
+      }
+
       case 'answer_delta': {
         // Speak-while-writing: one finished sentence of the answer. The
         // bubble fills in sentence by sentence while its audio plays.
@@ -769,6 +876,7 @@ export function InlineVoiceMode({
           karaokeRef.current.messageId = messageId;
           karaokeRef.current.textFinal = true;
           onAIMessageStart?.(messageId);
+          applyPendingProducts(data.responseId, messageId);
         }
         if (onAIMessageDelta) {
           onAIMessageDelta(messageId, display, speech);
@@ -833,6 +941,7 @@ export function InlineVoiceMode({
           onAIMessageStart?.(messageId);
           onAIMessageReplace?.(messageId, displayMarkdown);
         }
+        applyPendingProducts(data.responseId, messageId);
         break;
       }
 
@@ -924,8 +1033,12 @@ export function InlineVoiceMode({
         // PCM for this bubble has been sent: chars ÷ audio-seconds is now the
         // exact speaking rate and the preloaded-text rate cap can lift.
         karaokeRef.current.audioComplete = true;
+        if (avatarActive() && avatarRef.current?.audioRoute === 'client') avatarRef.current.adapter.endOfSpeech?.();
         if (isPlayingRef.current || audioQueueRef.current.length > 0) {
           aiDoneReceivedRef.current = true;
+        } else if (avatarActive()) {
+          aiDoneReceivedRef.current = true;
+          scheduleAvatarAiDone();
         } else {
           processAiDone();
         }
@@ -1066,7 +1179,34 @@ export function InlineVoiceMode({
     }
   };
 
-  const handleAudioChunk = async (arrayBuffer: ArrayBuffer) => {
+  /** Avatar mode: the answer has drained on our silent clock; give the avatar its render tail. */
+  const scheduleAvatarAiDone = () => {
+    setTimeout(() => {
+      if (aiDoneReceivedRef.current && activeSourcesRef.current.size === 0) processAiDone();
+    }, AVATAR_PLAYBACK_TAIL_MS);
+  };
+
+  const sendAvatarAttach = () => {
+    const a = avatarRef.current;
+    if (!a) return;
+    const speakIntro = a.speakIntro && !avatarIntroSpokenRef.current.has(a.sessionId);
+    if (safeSend(JSON.stringify({ type: 'avatar_attach', avatarSessionId: a.sessionId, speakIntro }))) {
+      avatarIntroSpokenRef.current.add(a.sessionId);
+    }
+  };
+
+  /** A muted output for avatar mode: sources still run (timing/onended) but are never heard. */
+  const getSilentSink = (ctx: AudioContext): GainNode => {
+    if (!silentSinkRef.current || silentSinkRef.current.context !== ctx) {
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      g.connect(ctx.destination);
+      silentSinkRef.current = g;
+    }
+    return silentSinkRef.current;
+  };
+
+  const handleAudioChunk = async (arrayBuffer: ArrayBuffer, silentOnly = false) => {
     try {
       // If user has already interrupted, drop incoming bytes — don't schedule
       // any further sources for an answer that was just barged-in.
@@ -1099,6 +1239,18 @@ export function InlineVoiceMode({
         bytes = bytes.slice(0, bytes.length - 1);
       }
       if (bytes.length === 0) return;
+
+      // Avatar mode (client route): the provider SDK gets the audio and plays it
+      // lip-synced; we keep only a silent copy for timing.
+      const avatarMode = avatarActive();
+      if (avatarMode && !silentOnly && avatarRef.current?.audioRoute === 'client') {
+        avatarRef.current.adapter.sendAudio?.(bytes);
+        const rid = currentResponseIdRef.current;
+        if (rid && avatarSpeakReportedRef.current !== rid) {
+          avatarSpeakReportedRef.current = rid;
+          safeSend(JSON.stringify({ type: 'avatar_event', event: 'speak_started', responseId: rid }));
+        }
+      }
 
       const pcm16Data = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
       const float32Data = new Float32Array(pcm16Data.length);
@@ -1137,7 +1289,8 @@ export function InlineVoiceMode({
       }
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(duckGainRef.current || playbackAnalyserRef.current);
+      // Avatar mode: never play our own copy — the visitor hears the avatar.
+      source.connect(avatarMode ? getSilentSink(ctx) : (duckGainRef.current || playbackAnalyserRef.current));
       const scheduleTime = Math.max(ctx.currentTime, nextPlaybackTimeRef.current);
       source.onended = () => {
         activeSourcesRef.current.delete(source);
@@ -1156,7 +1309,8 @@ export function InlineVoiceMode({
           }
           playbackStartedAtRef.current = 0;
           if (aiDoneReceivedRef.current) {
-            processAiDone();
+            if (avatarActive()) scheduleAvatarAiDone();
+            else processAiDone();
           }
         }
       };
@@ -1278,6 +1432,7 @@ export function InlineVoiceMode({
    * this — the server confirms speech-based interruptions from the transcript.
    */
   const handleInterruption = (sendToServer = true) => {
+    if (avatarActive()) avatarRef.current?.adapter.interrupt();
     pendingInterruptRef.current = sendToServer;
     aiDoneReceivedRef.current = false;
     clearDucks();
@@ -1690,6 +1845,8 @@ export function InlineVoiceMode({
     if (localDuckReleaseRef.current) { clearTimeout(localDuckReleaseRef.current); localDuckReleaseRef.current = null; }
     serverDuckRef.current = false;
     localDuckRef.current = false;
+    avatarAttachedRef.current = null;
+    silentSinkRef.current = null;
     // Closing the control ends the session's history: the next open starts a
     // fresh attempt, where a failure is a genuine "never started".
     hadReadySessionRef.current = false;

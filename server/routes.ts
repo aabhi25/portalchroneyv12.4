@@ -94,6 +94,9 @@ import whatsappHandoffRoutes from "./routes/whatsappHandoff";
 import { resolveAuthorizedLeadAccountId, maskLeadPhone } from "./lib/leadAccess";
 import dataRetentionRoutes from "./routes/dataRetention";
 import aiUsageRoutes from "./routes/aiUsage";
+import avatarRoutes from "./routes/avatar";
+import { avatarSessionManager } from "./services/avatar/sessionManager";
+import { getPublicAvatarConfig } from "./services/avatar/settingsService";
 import { aiBudgetService, AI_UNAVAILABLE_MESSAGE } from "./services/aiBudgetService";
 import { isAiBudgetExceededError } from "./lib/openaiClient";
 import whatsappDocumentsRoutes from "./routes/whatsappDocuments";
@@ -603,6 +606,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(whatsappHandoffRoutes);
   app.use(dataRetentionRoutes);
   app.use(aiUsageRoutes);
+  // Live AI avatar (super-admin settings, widget sessions). Close avatar sessions
+  // a previous process left open (billed to their last heartbeat).
+  app.use(avatarRoutes);
+  avatarSessionManager.recoverOrphans(new Date()).catch((err) => {
+    console.error('[Avatar] Failed to close orphaned avatar sessions:', err?.message || err);
+  });
   app.use(whatsappDocumentsRoutes);
   app.use(knowledgeChannelsRoutes);
   app.use(storeSheetRoutes);
@@ -27917,6 +27926,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         captchaMisconfigured: captchaGate.misconfigured,
         captchaProvider: captchaGate.provider,
         captchaSiteKey: captchaGate.siteKey,
+        // Live AI avatar button: null unless a super admin enabled it and it can
+        // actually start (key, consent, voice on). Never contains keys.
+        liveAvatar: chatMode !== 'chat-only' ? await getPublicAvatarConfig(businessAccountId, businessAccount ?? null) : null,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -34828,6 +34840,8 @@ Return ONLY a valid JSON object in this format:
   // finish while WebSocket connections are still open.
   onShutdown('voice-websockets', async () => {
     realtimeVoiceService.shutdown();
+    // Ends live avatar sessions (provider stop + billed seconds recorded).
+    await avatarSessionManager.shutdown().catch(() => undefined);
     const clients = Array.from(wss.clients);
     for (const ws of clients) {
       try { ws.close(1001, 'Server shutting down'); } catch {}

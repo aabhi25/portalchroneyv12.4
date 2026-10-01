@@ -1,9 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import { optionalAvatarSdks } from "./vite.optionalDeps";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [optionalAvatarSdks(), react()],
   base: '/embed/',
   resolve: {
     alias: {

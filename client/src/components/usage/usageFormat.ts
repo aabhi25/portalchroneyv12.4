@@ -1,4 +1,4 @@
-export type UsageChannel = "website" | "whatsapp" | "instagram" | "facebook" | "voice" | "training" | "other";
+export type UsageChannel = "website" | "whatsapp" | "instagram" | "facebook" | "voice" | "avatar" | "training" | "other";
 
 export const CHANNEL_COLORS: Record<UsageChannel, string> = {
   website: "#6366f1",
@@ -6,6 +6,7 @@ export const CHANNEL_COLORS: Record<UsageChannel, string> = {
   instagram: "#db2777",
   facebook: "#2563eb",
   voice: "#f59e0b",
+  avatar: "#c026d3",
   training: "#8b5cf6",
   other: "#94a3b8",
 };
@@ -16,6 +17,7 @@ export const CHANNEL_LABELS: Record<UsageChannel, string> = {
   instagram: "Instagram",
   facebook: "Facebook",
   voice: "Voice",
+  avatar: "Live avatar",
   training: "Documents & training",
   other: "Other",
 };

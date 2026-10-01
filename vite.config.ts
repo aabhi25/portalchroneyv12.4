@@ -1,10 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import { optionalAvatarSdks } from "./vite.optionalDeps";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
 export default defineConfig(async ({ command }) => ({
   plugins: [
+    optionalAvatarSdks(),
     react(),
     runtimeErrorOverlay(),
     // Replit dev-only plugins: load ONLY for the dev server (Vite command

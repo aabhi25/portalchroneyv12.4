@@ -1,4 +1,4 @@
-import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, GitCompare, Briefcase, Lock } from "lucide-react";
+import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, GitCompare, Briefcase, Lock, Video } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
@@ -25,6 +25,10 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { convertLatexDelimiters } from '@/lib/convertLatexDelimiters';
 import { CurriculumMarkdownImage } from '@/components/CurriculumMarkdownImage';
+import { LiveAvatarPanel } from '@/components/LiveAvatarPanel';
+import { useLiveAvatar } from '@/hooks/useLiveAvatar';
+import { captionAt } from '@/lib/liveAvatar/captions';
+import { isAvatarCallActive } from '@/lib/liveAvatar/stateMachine';
 
 // Lazy-loaded components for optional features (reduces initial bundle)
 const VoiceMode = lazy(() => import("@/components/VoiceMode").then(m => ({ default: m.VoiceMode })));
@@ -177,6 +181,8 @@ interface ChatMessage {
 interface WidgetSettings {
   id: string;
   businessAccountId: string;
+  /** Live AI avatar button (null unless a super admin enabled it and it can start). */
+  liveAvatar?: { enabled: boolean; displayName: string; styleHint: string } | null;
   chatColor: string;
   chatColorEnd: string;
   widgetHeaderText: string;
@@ -1225,6 +1231,14 @@ export default function EmbedChat() {
   // Track conversationId for persistence (stored in localStorage after first message)
   const conversationIdRef = useRef<string>('');
 
+  // Live AI avatar (opt-in add-on; starts only on the visitor's tap).
+  const liveAvatar = useLiveAvatar({
+    businessAccountId: businessAccountId || '',
+    userId: widgetUserIdRef.current,
+    getConversationId: () => conversationIdRef.current || null,
+  });
+  const avatarCallActive = isAvatarCallActive(liveAvatar.state.phase);
+
   // Tell the page's widget script which conversation this is, so its WhatsApp launcher can hand the
   // visitor over with the topic (the script runs on the site's own origin and can't see this chat).
   const postedConversationRef = useRef('');
@@ -1495,6 +1509,34 @@ export default function EmbedChat() {
     setIsMenuMode(false);
     setIsInlineVoiceActive(true);
   };
+  // Live AI avatar: only where voice can start, and only when the server says
+  // the add-on is on for this account (it never sends keys or provider details).
+  const avatarAvailable = voiceChatAvailable && !!settings?.liveAvatar?.enabled && !!businessAccountId;
+  const avatarDisplayName = settings?.liveAvatar?.displayName || 'our AI assistant';
+  const startAvatarCall = () => {
+    if (!avatarAvailable || activeFormStep || isFormJourneyComplete) return;
+    setIsMenuMode(false);
+    // Voice starts immediately (it is the brain); the video joins when ready.
+    setIsInlineVoiceActive(true);
+    void liveAvatar.start();
+  };
+  const closeInlineVoice = () => {
+    setIsInlineVoiceActive(false);
+    inlineVoiceAIMessagesRef.current.clear();
+    voiceSpokenTextRef.current.clear();
+    setVoiceHighlight(null);
+    voiceFormattedIdsRef.current.clear();
+    setVoiceFormattedIds(new Set());
+    setStreamingMessageId(null);
+  };
+  const endAvatarCall = (reason: 'visitor_closed' | 'switched_to_text') => {
+    liveAvatar.end(reason);
+    closeInlineVoice();
+    if (reason === 'switched_to_text') setTimeout(() => inputRef.current?.focus(), 50);
+  };
+  const avatarCaption = liveAvatar.state.phase === 'live' && voiceHighlight
+    ? captionAt(voiceSpokenTextRef.current.get(voiceHighlight.messageId) || '', voiceHighlight.offset)
+    : '';
 
   // In the ⋮ menu instead of the header when the header is too narrow (see titleBoxRef).
   const waHeaderInMenu = !!waHeaderUrl && !hideHeaderMenu && waHeaderFolded;
@@ -4419,6 +4461,8 @@ export default function EmbedChat() {
             conversationId={conversationIdRef.current || undefined}
             onSwitchToChat={() => setIsMenuMode(false)}
             onStartVoice={voiceChatAvailable ? startVoiceChat : undefined}
+            onStartAvatar={avatarAvailable ? startAvatarCall : undefined}
+            avatarLabel={avatarAvailable ? `Talk to ${avatarDisplayName}` : undefined}
             onSendMessage={(message, itemId) => {
               setIsMenuMode(false);
               if (sentChatMenuItemsRef.current.has(itemId)) {
@@ -5418,6 +5462,28 @@ export default function EmbedChat() {
         </div>
       )}
 
+      {/* Live AI avatar: video on top, transcript (with product cards) continues below. */}
+      {avatarAvailable && !isMenuMode && !anyPreChatGateActive && (
+        <LiveAvatarPanel
+          phase={liveAvatar.state.phase}
+          displayName={liveAvatar.session?.displayName || avatarDisplayName}
+          styleHint={settings?.liveAvatar?.styleHint}
+          videoRef={liveAvatar.videoRef}
+          caption={avatarCaption}
+          speaking={liveAvatar.state.speaking}
+          muted={liveAvatar.state.muted}
+          remainingSeconds={liveAvatar.remainingSeconds}
+          notice={liveAvatar.state.notice}
+          chatColor={chatColor}
+          chatColorEnd={chatColorEnd}
+          avatarImageUrl={settings?.avatarType && settings.avatarType !== 'none' ? (settings.avatarType === 'custom' ? settings.avatarUrl : `/avatars/avatar-${settings.avatarType.replace('preset-', '')}.png`) : undefined}
+          onToggleMute={() => liveAvatar.setMuted(!liveAvatar.state.muted)}
+          onEnd={() => endAvatarCall('visitor_closed')}
+          onSwitchToText={() => endAvatarCall('switched_to_text')}
+          onDismissNotice={() => liveAvatar.reset()}
+        />
+      )}
+
       {/* Chat Messages - Takes remaining space with scroll containment */}
       {/* Task #23: hide the transcript while the pre-chat gate is active —
           there should be nothing to read or scroll until verification. */}
@@ -5430,7 +5496,10 @@ export default function EmbedChat() {
           overscrollBehavior: 'contain',
           overscrollBehaviorX: 'contain',
           WebkitOverflowScrolling: 'touch',
-          paddingBottom: '350px', // Extra space so any message can scroll to top
+          // Extra space so any message can scroll to top. During an avatar call the
+          // video panel takes that room: a padding this tall would push the
+          // composer off small widgets (a flex item can't shrink below its padding).
+          paddingBottom: avatarCallActive ? '48px' : '350px',
           overflowAnchor: 'none' // Prevent browser auto-adjusting scroll position
         }}
       >
@@ -6166,7 +6235,26 @@ export default function EmbedChat() {
             <Suspense fallback={<LazyLoadingFallback />}>
               <InlineVoiceMode
                 isActive={isInlineVoiceActive}
+                avatar={liveAvatar.handle}
+                onAvatarServerMessage={liveAvatar.onServerMessage}
+                onAIMessageProducts={(messageId, productsJson) => {
+                  // Avatar mode: the same product cards text chat shows, under the avatar.
+                  try {
+                    const parsed = JSON.parse(productsJson);
+                    const items = Array.isArray(parsed) ? parsed : (parsed?.items || []);
+                    if (!items.length) return;
+                    setMessages(prev => prev.map(m => m.id === messageId ? {
+                      ...m,
+                      products: items,
+                      productPagination: Array.isArray(parsed) ? m.productPagination : parsed?.pagination,
+                      productSearchQuery: Array.isArray(parsed) ? m.productSearchQuery : parsed?.searchQuery,
+                    } : m));
+                  } catch (e) {
+                    console.warn('[EmbedChat] Bad avatar products payload', e);
+                  }
+                }}
                 onClose={() => {
+                  if (isAvatarCallActive(liveAvatar.state.phase)) liveAvatar.end('visitor_closed');
                   setIsInlineVoiceActive(false);
                   inlineVoiceAIMessagesRef.current.clear();
                   voiceSpokenTextRef.current.clear();
@@ -6382,7 +6470,7 @@ export default function EmbedChat() {
                 }}
                 readOnly={isLoading}
                 rows={2}
-                className="w-full px-3 sm:px-4 py-2 sm:py-3 pr-12 sm:pr-14 rounded-xl sm:rounded-2xl border border-gray-200 bg-white placeholder:text-gray-400 focus:outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-400 resize-none text-sm sm:text-base"
+                className={`w-full px-3 sm:px-4 py-2 sm:py-3 ${avatarAvailable ? 'pr-24 sm:pr-28' : 'pr-12 sm:pr-14'} rounded-xl sm:rounded-2xl border border-gray-200 bg-white placeholder:text-gray-400 focus:outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-400 resize-none text-sm sm:text-base`}
                 style={{ 
                   fontSize: isMobileDevice ? '16px' : '15px',
                   WebkitAppearance: 'none',
@@ -6392,6 +6480,19 @@ export default function EmbedChat() {
                   lineHeight: '1.4'
                 }}
               />
+              {avatarAvailable && !message.trim() && !isLoading && !avatarCallActive && (
+                <button
+                  type="button"
+                  onClick={startAvatarCall}
+                  className="absolute right-12 sm:right-14 top-1/2 -translate-y-1/2 h-8 w-8 sm:h-9 sm:w-9 rounded-full flex-shrink-0 flex items-center justify-center bg-white border border-gray-200 transition-all duration-200 hover:scale-105"
+                  style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.10)' }}
+                  aria-label={`Talk to ${avatarDisplayName} (AI video avatar)`}
+                  title={`Talk to ${avatarDisplayName} (AI avatar)`}
+                  data-testid="button-composer-avatar"
+                >
+                  <Video className="w-4 h-4" style={{ color: chatColor }} />
+                </button>
+              )}
               {voiceChatAvailable && !message.trim() && !isLoading ? (
                 <button
                   type="button"

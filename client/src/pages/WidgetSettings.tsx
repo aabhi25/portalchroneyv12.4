@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { LiveAvatarStatusCard } from "@/components/LiveAvatarStatusCard";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -4414,6 +4415,7 @@ export default function WidgetSettings() {
                     </RadioGroup>
                   </CardContent>
                 </Card>
+                <LiveAvatarStatusCard />
                   </div>
 
                   {/* Right Column */}

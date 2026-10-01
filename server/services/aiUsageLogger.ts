@@ -62,7 +62,7 @@ const DEFAULT_MODEL_PRICING: Record<string, ModelRates> = {
   },
 };
 
-export type UsageCategory = 'chat' | 'website_analysis' | 'document_analysis' | 'image_search' | 'voice_mode' | 'rag_embeddings';
+export type UsageCategory = 'chat' | 'website_analysis' | 'document_analysis' | 'image_search' | 'voice_mode' | 'rag_embeddings' | 'avatar';
 
 /**
  * Modality / cache breakdown of a usage event.
@@ -393,6 +393,36 @@ class AIUsageLogger {
       tokensOutput: tokens.tokensOutput,
       metadata,
     });
+  }
+
+  /**
+   * Live AI avatar rendering time (no tokens): priced per minute by the
+   * super-admin rate for the provider. Logged when a session ends so avatar
+   * spend appears in Usage & Limits and counts toward the monthly AI limit.
+   */
+  async logAvatarUsage(
+    businessAccountId: string,
+    provider: string,
+    seconds: number,
+    costUsd: number,
+    metadata?: Record<string, any>,
+  ): Promise<void> {
+    try {
+      const safeCost = Number.isFinite(costUsd) && costUsd > 0 ? costUsd : 0;
+      await db.insert(aiUsageEvents).values({
+        businessAccountId,
+        category: 'avatar',
+        model: `avatar:${provider}`,
+        tokensInput: '0',
+        tokensOutput: '0',
+        costUsd: safeCost.toFixed(6),
+        metadata: { ...(metadata || {}), feature: 'live_avatar', provider, seconds: Math.max(0, Math.round(seconds)) },
+      });
+      if (safeCost > 0) aiBudgetService.recordSpend(businessAccountId, safeCost);
+      console.log(`[AIUsageLogger] Logged usage: avatar | ${provider} | ${Math.round(seconds)}s | $${safeCost.toFixed(6)}`);
+    } catch (error) {
+      console.error('[AIUsageLogger] Error logging avatar usage:', error);
+    }
   }
 
   /**

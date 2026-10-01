@@ -41,7 +41,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { DataRetentionDialog } from "@/components/DataRetentionDialog";
-import { Plus, Timer, Building2, Pencil, Copy, Check, ShieldCheck, ShoppingBag, Calendar, Sparkles, MoreVertical, Eye, Mic, Camera, Search, Trash2, Gem, Power, LogIn, Headphones, Play, MessageCircle, MessageSquare, GraduationCap, Briefcase, PackageOpen, Megaphone } from "lucide-react";
+import { LiveAvatarSettingsDialog } from "@/components/LiveAvatarSettingsDialog";
+import { Plus, Timer, Building2, Pencil, Copy, Check, ShieldCheck, ShoppingBag, Calendar, Sparkles, MoreVertical, Eye, Mic, Camera, Search, Trash2, Gem, Power, LogIn, Headphones, Play, MessageCircle, MessageSquare, GraduationCap, Briefcase, PackageOpen, Megaphone, Video } from "lucide-react";
 import type { BusinessAccountDto, ProductTier, SystemMode } from "@shared/dto/businessAccount";
 import {
   Select,
@@ -54,6 +55,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 
 export default function SuperAdmin() {
   const [retentionAccount, setRetentionAccount] = useState<{ id: string; name: string } | null>(null);
+  const [avatarAccount, setAvatarAccount] = useState<{ id: string; name: string } | null>(null);
   const [newBusinessName, setNewBusinessName] = useState("");
   const [newBusinessWebsite, setNewBusinessWebsite] = useState("");
   const [newUsername, setNewUsername] = useState("");
@@ -1421,6 +1423,27 @@ export default function SuperAdmin() {
                       </div>
                     </div>
 
+                    {/* Live AI avatar (commercial add-on, configured per account) */}
+                    <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors" data-testid="card-module-live-avatar">
+                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-fuchsia-500 to-purple-600 flex items-center justify-center flex-shrink-0">
+                        <Video className="h-5 w-5 text-white" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="font-semibold text-gray-900 mb-1">Live AI avatar</h4>
+                        <p className="text-sm text-gray-600 mb-2">
+                          A lip-synced video avatar on top of voice mode (HeyGen LiveAvatar or Anam), with this account's provider, key, avatar and minute limits. Off by default.
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => selectedBusiness && setAvatarAccount({ id: selectedBusiness.id, name: selectedBusiness.name })}
+                          data-testid="button-configure-live-avatar"
+                        >
+                          Configure
+                        </Button>
+                      </div>
+                    </div>
+
                     {/* Visual Product Search Module */}
                     <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
                       <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center flex-shrink-0">
@@ -2164,6 +2187,10 @@ export default function SuperAdmin() {
                                   <Power className="h-4 w-4 mr-2" />
                                   {business.status === "active" ? "Disable Account" : "Enable Account"}
                                 </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setAvatarAccount({ id: business.id, name: business.name })}>
+                                  <Video className="h-4 w-4 mr-2" />
+                                  Live AI avatar
+                                </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setRetentionAccount({ id: business.id, name: business.name })}>
                                   <Timer className="h-4 w-4 mr-2" />
                                   Auto-delete (data retention)
@@ -2210,6 +2237,14 @@ export default function SuperAdmin() {
           )}
         </div>
       </div>
+      {avatarAccount && (
+        <LiveAvatarSettingsDialog
+          open={!!avatarAccount}
+          onOpenChange={(o) => { if (!o) setAvatarAccount(null); }}
+          businessAccountId={avatarAccount.id}
+          businessName={avatarAccount.name}
+        />
+      )}
       {retentionAccount && (
         <DataRetentionDialog
           open={!!retentionAccount}
