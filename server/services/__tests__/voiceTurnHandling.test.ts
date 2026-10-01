@@ -495,6 +495,55 @@ async function main() {
     expect(!/createVoiceSpeechText\s*\(/.test(src) && !/import[^;]*createVoiceSpeechText/.test(src), 'realtimeVoiceService does not import or call createVoiceSpeechText');
   }
 
+  // ---- 14. Silence: nudge once at 60 s, switch off at 120 s ------------------
+  {
+    const h = makeHarness();
+    const c = h.conversation;
+    const base = Date.now();
+    c.lastUserSpeechAt = base;
+    // Mic frames keep arriving (touchActivity) but nobody speaks: that must not count.
+    h.clientMessage({ type: 'pong' });
+    h.svc.checkIdle(h.conversationId, c, base + 59_000);
+    expect(!h.client.ofType('answer_delta').length, 'no nudge before 60 s of silence');
+    h.svc.checkIdle(h.conversationId, c, base + 61_000);
+    const nudge = h.client.ofType('answer_delta')[0];
+    expect(!!nudge && /still there/i.test(nudge.display), 'nudge "Are you still there?" after 60 s', nudge);
+    await waitFor(() => h.client.ofType('ai_done').length > 0, 2000, 'nudge ai_done');
+    expect(h.ttsCalls.some((t) => /still there/i.test(t.text)), 'nudge is spoken (TTS)');
+    expect(h.commits.length === 0 && h.streamCalls.length === 0, 'nudge uses no LLM and saves nothing to history');
+    h.svc.checkIdle(h.conversationId, c, base + 90_000);
+    expect(h.client.ofType('answer_delta').length === 1, 'nudge is only spoken once per silence');
+    expect(!h.client.ofType('session_closed').length, 'still open before 120 s');
+    h.svc.checkIdle(h.conversationId, c, base + 121_000);
+    const closed = h.client.ofType('session_closed')[0];
+    expect(closed?.reason === 'idle_timeout', 'voice switches off after 120 s of silence (session_closed idle_timeout)', closed);
+    expect(!h.svc.conversations.has(h.conversationId), 'conversation cleaned up');
+    h.done();
+  }
+  {
+    // Talking resets the clock; time spent answering doesn't count as silence.
+    const h = makeHarness();
+    const c = h.conversation;
+    const base = Date.now();
+    c.lastUserSpeechAt = base - 100_000;
+    await h.utter('What is gravity?', 1500);
+    expect(Date.now() - (c.lastUserSpeechAt || 0) < 5_000, 'an accepted turn restarts the silence clock');
+    const ignoredBefore = c.lastUserSpeechAt;
+    await h.utter('thank you', 300);
+    expect(c.lastUserSpeechAt === ignoredBefore, 'noise turns do not count as the student speaking');
+    c.isProcessing = true;
+    h.svc.checkIdle(h.conversationId, c, Date.now() + 200_000);
+    expect(!h.client.ofType('session_closed').length, 'never closed while an answer is being written');
+    c.isProcessing = false;
+    c.currentResponseId = undefined;
+    h.svc.checkIdle(h.conversationId, c, Date.now() + 30_000);
+    expect(!h.client.ofType('session_closed').length && !h.client.json.some((m) => m.type === 'answer_delta' && /still there/i.test(m.display)),
+      'silence counts from the end of the answer, not from the question');
+    h.clientMessage({ type: 'ptt_start' });
+    expect(Date.now() - (c.lastUserSpeechAt || 0) < 5_000, 'hold-to-talk press counts as activity');
+    h.done();
+  }
+
   out(`\n${passed} passed, ${failed} failed`);
   out(failed === 0 ? 'All voice turn-handling tests passed' : `${failed} test(s) FAILED`);
   process.exit(failed === 0 ? 0 : 1);

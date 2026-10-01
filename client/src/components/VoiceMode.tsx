@@ -872,7 +872,10 @@ export function VoiceMode({
         let notificationTitle = "Session Expired";
         let notificationDescription = "Your voice session has ended. Tap the orb to start a new conversation.";
         
-        if (data.reason === 'heartbeat_timeout') {
+        if (data.reason === 'idle_timeout') {
+          notificationTitle = "Voice turned off";
+          notificationDescription = "It was quiet for a while. Tap the orb to talk again.";
+        } else if (data.reason === 'heartbeat_timeout') {
           notificationTitle = "Session Timeout";
           notificationDescription = "Your session timed out due to inactivity. Tap the orb to start a new conversation.";
         } else if (data.reason === 'openai_connection_closed') {

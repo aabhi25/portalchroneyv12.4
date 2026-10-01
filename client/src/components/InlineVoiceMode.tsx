@@ -1039,6 +1039,16 @@ export function InlineVoiceMode({
         pcmLeftoverByteRef.current = null;
         setState('idle');
         stopRecording();
+        if (data.reason === 'idle_timeout') {
+          // The student went quiet: voice switched itself off. Back to the text chat.
+          toast({
+            title: "Voice turned off",
+            description: "It was quiet for a while. Tap the mic to talk again.",
+            duration: 6000,
+          });
+          handleClose();
+          break;
+        }
         toast({
           title: "Session Ended",
           description: "Tap the mic to start a new conversation.",

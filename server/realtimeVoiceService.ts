@@ -340,6 +340,13 @@ interface VoiceConversation {
   lastSpeechStoppedAt?: number;
   /** Per-turn stage timestamps, logged as one [VoiceTiming] line when the turn ends. */
   turnTiming?: VoiceTurnTiming;
+  /** Last time the student really spoke (accepted turn, stop command, hold-to-talk press, tap). */
+  lastUserSpeechAt?: number;
+  /** Last time a real answer was still being written or played (silence counts from after it). */
+  lastAnswerActivityAt?: number;
+  /** When the "Are you still there?" nudge was spoken for the current silence. */
+  idleNudgedAt?: number;
+  idleWatch?: NodeJS.Timeout;
   lastAssistantText?: string;
   // --- Turn taking ---
   inputMode?: VoiceInputMode;
@@ -369,6 +376,12 @@ export class RealtimeVoiceService {
   private conversations: Map<string, VoiceConversation> = new Map(); // Now keyed by conversationId
   private readonly HEARTBEAT_INTERVAL = 30000; // 30 seconds
   private readonly HEARTBEAT_TIMEOUT = 180000; // 180 seconds - extended to handle mobile backgrounding and long AI responses
+  // Silence handling. The heartbeat above can't catch a quiet student: the open mic streams
+  // audio frames (even silence) all the time, so the socket always looks active. These count
+  // silence from the student's last real speech instead.
+  private readonly VOICE_IDLE_NUDGE_MS = 60_000;   // ask "Are you still there?" once
+  private readonly VOICE_IDLE_CLOSE_MS = 120_000;  // then switch voice off
+  private readonly VOICE_IDLE_CHECK_MS = 5_000;
   // Barge-in grace window (ms). A barge-in (server VAD speech_started or a
   // client interrupt) that arrives within this window of the answer's audio
   // starting is ignored — it is almost always the AI's own opening audio /
@@ -727,6 +740,87 @@ export class RealtimeVoiceService {
     }
   }
 
+  /** The student really spoke (or pressed / tapped): restart the silence clock. */
+  private markUserActive(conversation: VoiceConversation): void {
+    conversation.lastUserSpeechAt = Date.now();
+    conversation.idleNudgedAt = undefined;
+  }
+
+  /**
+   * Switch voice off when the student goes quiet: after VOICE_IDLE_NUDGE_MS of silence the
+   * tutor asks once whether they're still there; after VOICE_IDLE_CLOSE_MS the session is
+   * closed (mic released, OpenAI and TopScholar usage sessions ended) with reason
+   * 'idle_timeout'. Time while a real answer is being written or played doesn't count.
+   */
+  private startIdleWatch(conversationId: string, conversation: VoiceConversation): void {
+    if (conversation.idleWatch) clearInterval(conversation.idleWatch);
+    conversation.lastUserSpeechAt ||= Date.now();
+    conversation.idleWatch = setInterval(() => {
+      if (this.conversations.get(conversationId) !== conversation) {
+        if (conversation.idleWatch) clearInterval(conversation.idleWatch);
+        conversation.idleWatch = undefined;
+        return;
+      }
+      this.checkIdle(conversationId, conversation);
+    }, this.VOICE_IDLE_CHECK_MS);
+    conversation.idleWatch.unref?.();
+  }
+
+  private checkIdle(conversationId: string, conversation: VoiceConversation, now: number = Date.now()): void {
+    const answering = conversation.isProcessing ||
+      (this.isAnswerActive(conversation) && !String(conversation.currentResponseId || '').startsWith('voice_nudge_')) ||
+      !!conversation.manualTurn;
+    if (answering) {
+      conversation.lastAnswerActivityAt = now;
+      return;
+    }
+    const quietSince = Math.max(conversation.lastUserSpeechAt || 0, conversation.lastAnswerActivityAt || 0);
+    if (!quietSince) return;
+    const quietFor = now - quietSince;
+    if (quietFor >= this.VOICE_IDLE_CLOSE_MS) {
+      console.log(`[RealtimeVoice] No speech for ${Math.round(quietFor / 1000)}s — switching voice off (${conversationId})`);
+      this.cleanupConversation(conversationId, 'idle_timeout');
+    } else if (quietFor >= this.VOICE_IDLE_NUDGE_MS && !conversation.idleNudgedAt) {
+      conversation.idleNudgedAt = now;
+      this.speakIdleNudge(conversation);
+    }
+  }
+
+  /** Spoken, on-screen "Are you still there?" — no LLM, no history row. */
+  private speakIdleNudge(conversation: VoiceConversation): void {
+    if (conversation.clientWs.readyState !== WebSocket.OPEN) return;
+    const lang = conversation.selectedLanguage && conversation.selectedLanguage !== 'auto'
+      ? conversation.selectedLanguage
+      : conversation.detectedLanguage;
+    const text = lang === 'hi'
+      ? 'क्या आप अभी भी यहाँ हैं? जब तैयार हों, कुछ भी बोलिए।'
+      : "Are you still there? Just say something when you're ready.";
+    const responseId = `voice_nudge_${Date.now()}`;
+    const startedAt = Date.now();
+    console.log('[RealtimeVoice] Idle nudge:', text);
+    this.sendToClient(conversation.clientWs, { type: 'voice_message_start', responseId });
+    this.sendToClient(conversation.clientWs, { type: 'answer_delta', responseId, display: text, speech: text, index: 0 });
+    const { primary, fallback } = this.createTtsProviders(conversation);
+    const pipeline = new SentenceTtsPipeline({
+      primary,
+      fallback,
+      sendAudio: (pcm) => {
+        if (conversation.clientWs.readyState === WebSocket.OPEN) conversation.clientWs.send(pcm);
+      },
+      // The student spoke (or the session moved on): stop the nudge.
+      isCancelled: () => conversation.clientWs.readyState !== WebSocket.OPEN || (conversation.lastUserSpeechAt || 0) > startedAt,
+      onProviderFailure: (provider, error) => {
+        console.warn(`[RealtimeVoice] Idle nudge TTS (${provider}) failed:`, error instanceof Error ? error.message : String(error));
+      },
+    });
+    pipeline.enqueue(markdownToSpeech(text));
+    pipeline.close();
+    this.sendToClient(conversation.clientWs, { type: 'answer_ready', responseId, displayMarkdown: text, speechText: text, streamed: true });
+    pipeline.finished().then(() => {
+      this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId });
+    }).catch(() => undefined);
+  }
+
   private touchActivity(conversation: VoiceConversation) {
     conversation.lastHeartbeat = Date.now();
   }
@@ -775,6 +869,8 @@ export class RealtimeVoiceService {
     if (conversation.heartbeatInterval) {
       clearInterval(conversation.heartbeatInterval);
     }
+
+    this.startIdleWatch(conversationId, conversation);
 
     // Send ping every 30 seconds
     conversation.heartbeatInterval = setInterval(() => {
@@ -891,6 +987,10 @@ export class RealtimeVoiceService {
       if (conversation.heartbeatInterval) {
         clearInterval(conversation.heartbeatInterval);
         conversation.heartbeatInterval = undefined;
+      }
+      if (conversation.idleWatch) {
+        clearInterval(conversation.idleWatch);
+        conversation.idleWatch = undefined;
       }
 
       // Clear reconnection timeout
@@ -2977,6 +3077,7 @@ export class RealtimeVoiceService {
     if (topScholar && trimmedTranscript) {
       const control = this.classifyStandaloneVoiceControl(trimmedTranscript);
       if (control) {
+        this.markUserActive(conversation);
         this.clearBargeIn(conversation);
         this.consumeVoiceControl(conversation, control);
         return;
@@ -3002,6 +3103,7 @@ export class RealtimeVoiceService {
       return;
     }
 
+    this.markUserActive(conversation);
     if (aiActive) {
       // Enough speech with real content: a CONFIRMED interruption. Stop the
       // current answer, then answer the new turn.
@@ -4377,6 +4479,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
         // any more — speech-based barge-in is confirmed server-side from the
         // transcript (see handleFinalTranscript) — so it is honoured at once.
         console.log('[RealtimeVoice] User interrupted AI (intentional)');
+        if (message.reason !== 'watchdog') this.markUserActive(conversation);
         const preservedDisplay = this.hasDisplayedCanonicalAnswer(
           conversation,
           conversation.currentResponseId,
@@ -4416,6 +4519,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
         break;
 
       case 'ptt_start':
+        this.markUserActive(conversation);
         this.startManualTurn(conversation);
         break;
 
