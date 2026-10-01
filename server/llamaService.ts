@@ -284,6 +284,94 @@ async function extractCollectedContactInfo(conversationHistory: ConversationMess
 }
 
 
+// Words that follow "I'm" / "my name is" in normal sentences but are not names.
+const NOT_A_NAME = new Set([
+  'interested', 'looking', 'searching', 'trying', 'planning', 'thinking', 'wondering', 'asking', 'calling',
+  'from', 'in', 'at', 'on', 'not', 'just', 'also', 'still', 'very', 'really', 'so', 'a', 'an', 'the',
+  'student', 'working', 'employed', 'unemployed', 'fine', 'good', 'great', 'okay', 'ok', 'busy', 'new',
+  'here', 'there', 'back', 'done', 'ready', 'confused', 'sorry', 'happy', 'sure', 'unable', 'able',
+]);
+const NAME_STOP_WORDS = new Set(['and', 'i', 'im', 'from', 'here', 'want', 'wanted', 'need', 'looking', 'interested', 'my', 'is', 'am', 'the', 'a', 'to', 'for', 'with']);
+
+/**
+ * High-precision "the visitor told us their name" check:
+ * "my name is Rahul (Sharma)", "name: Rahul", or a whole message like "I'm Rahul" / "hi, I am Rahul Sharma".
+ * Deliberately ignores "I am interested…", "I'm looking for…".
+ */
+export function nameStatedInChat(history: ConversationMessage[]): string | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role !== 'user') continue;
+    const text = m.content.trim();
+    let candidate: string | null = null;
+    const named = text.match(/\b(?:my name is|my name's|name is|name\s*:)\s*([A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,2})/i);
+    if (named) {
+      const words: string[] = [];
+      for (const w of named[1].split(/\s+/)) {
+        if (NAME_STOP_WORDS.has(w.toLowerCase())) break;
+        words.push(w);
+      }
+      candidate = words.join(' ') || null;
+    } else {
+      const whole = text.match(/^(?:(?:hi|hello|hey)[,!\s]+)?(?:i am|i'm|im)\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?)\s*[.!]?$/i);
+      if (whole) candidate = whole[1];
+    }
+    if (!candidate) continue;
+    const first = candidate.split(/\s+/)[0].toLowerCase();
+    if (NOT_A_NAME.has(first) || !isValidName(candidate)) continue;
+    return candidate.replace(/\b\w/g, c => c.toUpperCase());
+  }
+  return null;
+}
+
+// "May I have your name?", "what should I call you" — the visitor's next message is probably their name.
+function assistantJustAskedForName(history: ConversationMessage[]): boolean {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role !== 'assistant') continue;
+    return /\b(your|ur)\s+(full\s+)?name\b|\bwhat\s+should\s+i\s+call\s+you\b|\bwho\s+am\s+i\s+(speaking|chatting)\s+(with|to)\b/i.test(history[i].content);
+  }
+  return false;
+}
+
+/**
+ * Name / email the visitor already typed in this conversation but that isn't on the saved lead
+ * (the model didn't call capture_lead, or the row isn't there yet). Without this, every timing
+ * rule except "At Start" only looked at the saved lead and asked for the name again.
+ * Phone is deliberately not inferred here: it goes through capture_lead's validation / OTP.
+ * The LLM name check only runs right after the assistant asked for the name, so most turns
+ * cost no extra call.
+ */
+export async function contactInfoSaidInChat(
+  leadTrainingConfig: LeadTrainingConfig | null | undefined,
+  existingLead: { phone?: string | null; email?: string | null; name?: string | null } | null | undefined,
+  conversationHistory: ConversationMessage[],
+  userMessage: string,
+  businessAccountId?: string,
+): Promise<{ name?: string; email?: string } | null> {
+  const enabled = new Set((leadTrainingConfig?.fields || []).filter(f => f.enabled).map(f => f.id.toLowerCase()));
+  const needName = enabled.has('name') && !existingLead?.name?.trim();
+  const needEmail = enabled.has('email') && !existingLead?.email?.trim();
+  if (!needName && !needEmail) return null;
+
+  const history: ConversationMessage[] = userMessage ? [...conversationHistory, { role: 'user', content: userMessage } as ConversationMessage] : conversationHistory;
+  const found: { name?: string; email?: string } = {};
+  if (needEmail) {
+    for (const m of history) {
+      if (m.role !== 'user') continue;
+      const e = m.content.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/);
+      if (e) found.email = e[0];
+    }
+  }
+  if (needName) {
+    let name = nameStatedInChat(history) || extractNameFromAssistantEcho(history);
+    if (!name && assistantJustAskedForName(history.slice(0, -1))) {
+      name = await extractNameWithLLM(history, businessAccountId);
+    }
+    if (name) found.name = name;
+  }
+  return found.name || found.email ? found : null;
+}
+
 // Helper function to map field IDs to user-friendly display names
 function getFieldDisplayName(fieldId: string): string {
   const fieldIdLower = fieldId.toLowerCase();
@@ -1594,6 +1682,19 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
   ) {
     const { openai, model } = await this.resolveMasterConfig(apiKey);
 
+    // Count a name/email the visitor already gave in this chat as collected (not just what's saved),
+    // so no timing rule asks for it again; and tell the model to save it.
+    let knownContactNote = '';
+    if (leadTrainingConfig && !otpVerificationPending) {
+      const said = await contactInfoSaidInChat(leadTrainingConfig, existingLead, conversationHistory, userMessage, businessAccountId).catch(() => null);
+      if (said) {
+        existingLead = { ...(existingLead || {}), ...said };
+        const parts = [said.name ? `name: ${said.name}` : '', said.email ? `email: ${said.email}` : ''].filter(Boolean).join(', ');
+        knownContactNote = `\nℹ️ The visitor has ALREADY told you their ${parts} in this conversation. Do NOT ask for ${said.name && said.email ? 'these' : 'it'} again. If you haven't saved it yet, call capture_lead with it now.\n`;
+        console.log(`[Lead Capture] Using contact info already given in chat (${Object.keys(said).join(', ')}) — not saved on the lead yet`);
+      }
+    }
+
     // OPTIMIZATION: Fast-path for simple English-only greetings (reduces response time from 7s to ~1s)
     // Only triggers for English greetings when no custom instructions or language preferences are set
     const msgLower = userMessage.toLowerCase().trim();
@@ -2819,7 +2920,7 @@ ${leadCollectionMessage}
 ❌ DO NOT use FAQ/product information until contact info is collected.
 ✅ First: Ask for their contact info naturally
 ✅ Then: After they provide it, you may answer their question
-` : ''}${!skipLeadCollection && optionalStartPrompt ? optionalStartPrompt + '\n' : ''}${!skipLeadCollection && optionalSmartPrompt ? optionalSmartPrompt + '\n' : ''}${!skipLeadCollection && optionalIntentPrompt ? optionalIntentPrompt + '\n' : ''}${!skipLeadCollection && keywordLeadPrompt ? keywordLeadPrompt + '\n' : ''}${universalCallbackPrompt ? universalCallbackPrompt + '\n' : ''}${ragContextForOverride ? ragContextForOverride + '\n' : ''}${!skipLeadCollection ? leadAlreadyCollectedOverride : ''}${!leadCollectionMessage && !smartTimingLeadMessage && preFetchedFaqSection ? preFetchedFaqSection + '\n' : ''}
+` : ''}${!skipLeadCollection && optionalStartPrompt ? optionalStartPrompt + '\n' : ''}${!skipLeadCollection && optionalSmartPrompt ? optionalSmartPrompt + '\n' : ''}${!skipLeadCollection && optionalIntentPrompt ? optionalIntentPrompt + '\n' : ''}${!skipLeadCollection && keywordLeadPrompt ? keywordLeadPrompt + '\n' : ''}${universalCallbackPrompt ? universalCallbackPrompt + '\n' : ''}${ragContextForOverride ? ragContextForOverride + '\n' : ''}${!skipLeadCollection ? knownContactNote + leadAlreadyCollectedOverride : ''}${!leadCollectionMessage && !smartTimingLeadMessage && preFetchedFaqSection ? preFetchedFaqSection + '\n' : ''}
 ${skipLeadCollection ? '1. NATURAL RESPONSE: The user sent a dismissive or unclear message. Handle it naturally - acknowledge and offer to help when they\'re ready. Do NOT push for contact info.' : (leadCollectionMessage || smartTimingLeadMessage || intentLeadMessage || keywordLeadPrompt ? '1. LEAD COLLECTION: Collect required contact info FIRST before answering questions.' : (optionalStartPrompt || optionalSmartPrompt ? '1. OPTIONAL CONTACT: Answer the question first, then politely ask for contact info. Proceed if user declines.' : toolUsageInstruction))}
 
 ${languageSection}
