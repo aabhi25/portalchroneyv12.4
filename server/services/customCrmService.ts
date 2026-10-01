@@ -123,9 +123,16 @@ export function resolveFieldValue(
   return undefined;
 }
 
-function cleanNumericValue(value: unknown): string {
+export function cleanNumericValue(value: unknown): string {
   const str = typeof value === 'string' ? value : String(value ?? '');
-  const trimmed = str.trim();
+  // Drop currency markers customers type ("₹2,21,525", "Rs. 2,21,525/-", "INR 50000")
+  // so the LOS receives a plain number.
+  const trimmed = str
+    .trim()
+    .replace(/^(?:₹|rs\.?|inr)\s*/i, '')
+    .replace(/\s*(?:\/-|rs\.?|inr|rupees?|₹)\s*$/i, '')
+    .replace(/(\d)\s+(?=\d)/g, '$1')
+    .trim();
   const lakhMatch = trimmed.match(/^([\d,]*\.?\d+)\s*(?:lakh|lakhs|l)\b/i);
   if (lakhMatch) {
     const num = parseFloat(lakhMatch[1].replace(/,/g, ''));
