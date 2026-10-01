@@ -283,3 +283,5 @@ const plan = (config: any, opts: { n: number; msg?: string; known?: any; state?:
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error(`\n${failed} check(s) failed.`); process.exit(1); }
 console.log('All lead-capture resolver checks passed.');
+// Imported services open a DB pool / timers; nothing else to wait for.
+process.exit(0);

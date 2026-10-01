@@ -33,7 +33,7 @@
  * Swap seam: resolveNextLeadAsk(fields, state) → LeadAskDecision is self-contained, so it can later be
  * replaced by the shared website "next field to ask" resolver without touching the channel code.
  */
-import { validatePhoneNumber, type PhoneValidationMode, type PhoneValidationResult } from "@shared/validation/phone";
+import { describePhoneRule, validatePhoneNumber, type PhoneValidationMode, type PhoneValidationResult } from "@shared/validation/phone";
 
 export type LeadFieldId = "name" | "mobile" | "whatsapp" | "email";
 export type LeadFieldKind = "name" | "email" | "phone";
@@ -109,11 +109,15 @@ export function normalizeChannelLeadFields(config: unknown, opts: { excludeKinds
     const kind = FIELD_KIND[id];
     if (!kind || opts.excludeKinds?.includes(kind)) continue;
     const strategy = String(f.captureStrategy || "custom");
-    const timing: CaptureTiming = strategy === "start" ? "start"
+    const keywords: string[] = Array.isArray(f.captureKeywords) ? f.captureKeywords.map((k: unknown) => String(k).trim()).filter(Boolean) : [];
+    let timing: CaptureTiming = strategy === "start" ? "start"
       : strategy === "intent" ? "intent"
       : strategy === "keyword" || strategy === "end" ? "keyword"
       : "custom";
-    const n = Number(f.customAskAfter);
+    let n = Number(f.customAskAfter);
+    // A keyword field with no keywords (usually legacy "At End") would never be asked: same rule as
+    // the website (shared/leadTrainingConfig.ts) — treat it as Custom, asked from message #3.
+    if (timing === "keyword" && keywords.length === 0) { timing = "custom"; n = 3; }
     const priority = Number(f.priority);
     out.push({
       id,
@@ -123,7 +127,7 @@ export function normalizeChannelLeadFields(config: unknown, opts: { excludeKinds
       timing,
       askOnMessage: Number.isInteger(n) && n >= 1 ? Math.min(n, 50) : 2,
       intentLevel: f.intentIntensity === "low" || f.intentIntensity === "high" ? f.intentIntensity : "medium",
-      keywords: Array.isArray(f.captureKeywords) ? f.captureKeywords.map((k: unknown) => String(k).trim()).filter(Boolean) : [],
+      keywords,
       phoneValidation: phoneValidationOf(f),
     });
   }
@@ -562,12 +566,8 @@ export function sensitivityDescription(fieldName: string, level: string): string
 }
 
 function phoneRule(mode: PhoneValidationMode): string {
-  switch (mode) {
-    case "10": return "a 10-digit mobile number";
-    case "12": return "a 12-digit number including the country code";
-    case "8-12": return "a number with 8 to 12 digits";
-    default: return "a complete phone number";
-  }
+  // Same wording as the website prompt (+91 / 91 / 0 prefixes are accepted in 10-digit mode).
+  return describePhoneRule(mode);
 }
 
 function phoneProblemText(reason: PhoneValidationResult["reasonCode"] | null): string {

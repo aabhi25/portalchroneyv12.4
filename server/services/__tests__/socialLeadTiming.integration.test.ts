@@ -249,7 +249,7 @@ async function main() {
       const b = await business(config(on("mobile", { priority: 1, phoneValidation: "12" }), on("name", { priority: 2, captureStrategy: "custom", customAskAfter: 9 })));
       const S = `${p.name}-s5-${tag}`;
       const t1 = await dm(b, S, "my name is Anita Desai, anita@example.com, call me on 98123 45670");
-      expect(/NEXT DETAIL TO ASK FOR: mobile number \(correction\)/.test(t1.prompt) && /12-digit/.test(t1.prompt), L("phoneValidation '12': a 10-digit number gets one request for a correct number"), t1.prompt);
+      expect(/NEXT DETAIL TO ASK FOR: mobile number \(correction\)/.test(t1.prompt) && /exactly 12 digits including the country code/.test(t1.prompt), L("phoneValidation '12': a 10-digit number gets one request for a correct number"), t1.prompt);
       await waitUntil(async () => !!(await leadOf(S))?.customer_name);
       const lead1 = await leadOf(S);
       expect(lead1?.customer_name === "Anita Desai" && lead1?.email_address === "anita@example.com" && !lead1?.phone_number, L("invalid phone left out, name + email still saved"), lead1);
