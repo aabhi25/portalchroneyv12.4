@@ -367,19 +367,37 @@ export async function refreshSnapshot(
   }
 }
 
+/**
+ * Context from the customer's OTHER channels, for the current channel's AI.
+ *
+ * Only shared over VERIFIED links: the current identity (platform + platformUserId) and every
+ * other identity used must both be verified for the same phone (customer_identities.verified_phone:
+ * the WhatsApp number itself, a website → WhatsApp hand-off code, or an OTP-verified website phone).
+ * A phone or email someone merely typed links the profile but never shares another channel's
+ * conversation. Without currentPlatformUserId nothing is shared (fail closed).
+ */
 export async function composeCrossPlatformContext(
   businessAccountId: string,
   currentPlatform: string,
   profileId: string,
-  isFirstMessage: boolean = true
+  isFirstMessage: boolean = true,
+  currentPlatformUserId?: string | null,
 ): Promise<string> {
   try {
     const identities = await getIdentitiesForProfile(profileId, businessAccountId);
 
+    const current = currentPlatformUserId
+      ? identities.find((i) => i.platform === currentPlatform && i.platformUserId === currentPlatformUserId)
+      : undefined;
+    if (!current?.verified || !current.verifiedPhone) return "";
+
     const otherPlatformIdentities = identities.filter(
-      (i) => i.platform !== currentPlatform
+      (i) => i.platform !== currentPlatform && i.verified && i.verifiedPhone === current.verifiedPhone
     );
     if (otherPlatformIdentities.length === 0) return "";
+    // Linked by the customer's own website → WhatsApp hand-off: they know where they came from.
+    const linkedByHandoff = current.verifiedVia === "handoff_code"
+      || otherPlatformIdentities.some((i) => i.verifiedVia === "handoff_code");
 
     const sections: string[] = [];
     const platformNames: string[] = [];
@@ -449,7 +467,9 @@ export async function composeCrossPlatformContext(
 IMPORTANT INSTRUCTIONS:
 ${greetingRule}
 - Use their previous context (interests, preferences, past topics) to personalize the conversation naturally.
-- Do NOT proactively mention which platform they previously interacted on. Only reveal the platform name if the customer specifically asks how you know them.`;
+${linkedByHandoff
+  ? "- They moved between our website chat and WhatsApp themselves, so you may refer to the earlier conversation naturally."
+  : "- Do NOT proactively mention which platform they previously interacted on. Only reveal the platform name if the customer specifically asks how you know them."}`;
 
     const details = `\nPrevious interactions via ${platformNames.join(", ")}.\n\n${sections.join("\n\n")}`;
 

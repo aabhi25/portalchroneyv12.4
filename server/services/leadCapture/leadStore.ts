@@ -64,7 +64,21 @@ function contradicts(existing: Lead, values: LeadUpsert['values']): boolean {
   return false;
 }
 
-export function upsertConversationLead(input: LeadUpsert): Promise<LeadUpsertResult> {
+/** Longest the lead write waits for the customer-profile link (it continues in the background after). */
+const PROFILE_LINK_WAIT_MS = 1500;
+
+export async function upsertConversationLead(input: LeadUpsert): Promise<LeadUpsertResult> {
+  const result = await writeConversationLead(input);
+  // Same turn, not one turn later: link the customer profile as soon as the lead has a new phone /
+  // email (whatsappHandoffService.linkWebsiteLeadProfile never throws).
+  if (result.changed.includes('phone') || result.changed.includes('email')) {
+    const link = import('../whatsappHandoffService').then(m => m.linkWebsiteLeadProfile(result.lead)).catch(() => undefined);
+    await Promise.race([link, new Promise(r => setTimeout(r, PROFILE_LINK_WAIT_MS).unref?.())]);
+  }
+  return result;
+}
+
+function writeConversationLead(input: LeadUpsert): Promise<LeadUpsertResult> {
   const { businessAccountId, conversationId } = input;
   return runSerialized(`lead:${conversationId}`, () => db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`lead:${conversationId}`}))`);

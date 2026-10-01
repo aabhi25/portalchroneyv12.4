@@ -4389,6 +4389,12 @@ export const customerIdentities = pgTable("customer_identities", {
   platform: varchar("platform").notNull(),
   platformUserId: varchar("platform_user_id").notNull(),
   verified: boolean("verified").notNull().default(false),
+  // Phone this identity is PROVEN to belong to (last 10 digits, see normalizePhone) and how:
+  // 'whatsapp_sender' (the WhatsApp number itself), 'handoff_code' (website → WhatsApp ref code),
+  // 'otp' (website phone verified by OTP). Cross-channel memory is shared only between identities
+  // verified for the same phone (crossPlatformMemoryService).
+  verifiedPhone: varchar("verified_phone"),
+  verifiedVia: varchar("verified_via"),
   lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => [
@@ -4442,6 +4448,40 @@ export const customerMergeAudit = pgTable("customer_merge_audit", {
   index("idx_cma_business").on(table.businessAccountId),
   index("idx_cma_survivor").on(table.survivorProfileId),
 ]);
+
+/**
+ * Website → WhatsApp hand-off: one row per click on a WhatsApp button in the website chat / launcher
+ * (the click tracking), carrying a short ref code put in the pre-filled WhatsApp text. When the
+ * customer's WhatsApp message arrives with that code, the row is marked used (the conversion) and
+ * the WhatsApp number is linked to the website conversation it came from.
+ */
+export const whatsappHandoffs = pgTable("whatsapp_handoffs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  code: varchar("code", { length: 12 }).notNull(), // 6 chars, no 0/O/1/I
+  source: varchar("source", { length: 20 }).notNull(), // 'header' | 'launcher' | 'product' | 'menu'
+  conversationId: varchar("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+  visitorToken: text("visitor_token"),
+  websiteLeadId: varchar("website_lead_id").references(() => leads.id, { onDelete: "set null" }),
+  productId: varchar("product_id"),
+  topic: text("topic"),
+  targetNumber: varchar("target_number", { length: 20 }), // digits the wa.me link opens
+  connectedNumber: boolean("connected_number").notNull().default(false), // target is the WhatsApp AI number
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"), // first WhatsApp message carrying the code
+  lastUsedAt: timestamp("last_used_at"),
+  whatsappPhone: varchar("whatsapp_phone", { length: 20 }), // sender digits that used the code
+  rejectedCount: integer("rejected_count").notNull().default(0), // uses from another number (not linked)
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("whatsapp_handoffs_business_code_idx").on(table.businessAccountId, table.code),
+  index("whatsapp_handoffs_business_created_idx").on(table.businessAccountId, table.createdAt),
+  index("whatsapp_handoffs_business_phone_idx").on(table.businessAccountId, table.whatsappPhone),
+  index("whatsapp_handoffs_conversation_idx").on(table.conversationId),
+  index("whatsapp_handoffs_website_lead_idx").on(table.websiteLeadId),
+]);
+
+export type WhatsappHandoff = typeof whatsappHandoffs.$inferSelect;
 
 export const smartReplies = pgTable("smart_replies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

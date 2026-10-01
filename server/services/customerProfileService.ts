@@ -36,6 +36,30 @@ interface ResolveProfileInput {
   city?: string | null;
   platform: string;
   platformUserId: string;
+  /**
+   * The phone this identity is proven to own (verified link): set by callers for an OTP-verified
+   * website phone or a website → WhatsApp hand-off code. A WhatsApp identity is always verified
+   * for its own number (derived here). A phone the visitor merely typed is NOT a verification.
+   */
+  verifiedPhone?: string | null;
+  verifiedVia?: string | null;
+}
+
+export interface IdentityVerification {
+  phone: string; // normalizePhone() form
+  via: string;
+}
+
+/** WhatsApp: the sender number IS the identity, so the link to that phone is verified. */
+function verificationFor(input: ResolveProfileInput, normPhone: string | null): IdentityVerification | null {
+  if (input.verifiedPhone) {
+    const phone = normalizePhone(input.verifiedPhone);
+    if (phone) return { phone, via: input.verifiedVia || "verified" };
+  }
+  if (input.platform === "whatsapp" && normPhone && normalizePhone(input.platformUserId) === normPhone) {
+    return { phone: normPhone, via: "whatsapp_sender" };
+  }
+  return null;
 }
 
 export async function resolveProfile(
@@ -59,6 +83,7 @@ async function _resolveProfile(
   const { platform, platformUserId } = input;
   const normPhone = input.phone ? normalizePhone(input.phone) : null;
   const normEmail = input.email ? normalizeEmail(input.email) : null;
+  const verification = verificationFor(input, normPhone);
 
   const existingIdentity = await db
     .select()
@@ -107,7 +132,11 @@ async function _resolveProfile(
 
       await db
         .update(customerIdentities)
-        .set({ lastSeenAt: new Date() })
+        .set({
+          lastSeenAt: new Date(),
+          // Verification only ever upgrades an identity (never cleared by a later unverified turn).
+          ...(verification ? { verified: true, verifiedPhone: verification.phone, verifiedVia: verification.via } : {}),
+        })
         .where(eq(customerIdentities.id, identity.id));
 
       if (normPhone && !profile.normalizedPhone) {
@@ -167,7 +196,7 @@ async function _resolveProfile(
   if (normPhone) {
     const phoneMatch = await findProfileByPhone(businessAccountId, normPhone);
     if (phoneMatch) {
-      await upsertIdentity(phoneMatch.id, businessAccountId, platform, platformUserId);
+      await upsertIdentity(phoneMatch.id, businessAccountId, platform, platformUserId, verification);
       const emailUpdate: Record<string, any> = {
         lastActivePlatform: platform,
         lastActiveAt: new Date(),
@@ -178,7 +207,7 @@ async function _resolveProfile(
       if (normEmail && !phoneMatch.normalizedEmail) {
         const emailConflict = await findProfileByEmail(businessAccountId, normEmail);
         if (emailConflict && emailConflict.id !== phoneMatch.id) {
-          await upsertIdentity(phoneMatch.id, businessAccountId, platform, platformUserId);
+          await upsertIdentity(phoneMatch.id, businessAccountId, platform, platformUserId, verification);
           return await mergeProfiles(businessAccountId, phoneMatch.id, emailConflict.id, "phone_email_cross_match");
         }
         emailUpdate.normalizedEmail = normEmail;
@@ -204,7 +233,7 @@ async function _resolveProfile(
   if (normEmail) {
     const emailMatch = await findProfileByEmail(businessAccountId, normEmail);
     if (emailMatch) {
-      await upsertIdentity(emailMatch.id, businessAccountId, platform, platformUserId);
+      await upsertIdentity(emailMatch.id, businessAccountId, platform, platformUserId, verification);
       const phoneUpdate: Record<string, any> = {
         lastActivePlatform: platform,
         lastActiveAt: new Date(),
@@ -247,7 +276,7 @@ async function _resolveProfile(
     })
     .returning();
 
-  await upsertIdentity(newProfile.id, businessAccountId, platform, platformUserId);
+  await upsertIdentity(newProfile.id, businessAccountId, platform, platformUserId, verification);
 
   return newProfile;
 }
@@ -280,12 +309,16 @@ async function findProfileByEmail(businessAccountId: string, normalizedEmail: st
   return results[0] || null;
 }
 
-async function upsertIdentity(
+export async function upsertIdentity(
   profileId: string,
   businessAccountId: string,
   platform: string,
-  platformUserId: string
+  platformUserId: string,
+  verification?: IdentityVerification | null,
 ) {
+  const verifiedCols = verification
+    ? { verified: true, verifiedPhone: verification.phone, verifiedVia: verification.via }
+    : {};
   await db
     .insert(customerIdentities)
     .values({
@@ -294,12 +327,14 @@ async function upsertIdentity(
       platform,
       platformUserId,
       lastSeenAt: new Date(),
+      ...verifiedCols,
     })
     .onConflictDoUpdate({
       target: [customerIdentities.businessAccountId, customerIdentities.platform, customerIdentities.platformUserId],
       set: {
         profileId,
         lastSeenAt: new Date(),
+        ...verifiedCols,
       },
     });
 }

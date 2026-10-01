@@ -66,6 +66,7 @@ import {
   type SocialCrm,
   type UnifiedLeadRow,
   type UnifiedLeadsResponse,
+  ChannelTrail,
 } from "@/components/leads/UnifiedLeadParts";
 
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
@@ -182,6 +183,8 @@ export default function AdminLeads() {
     const trimmedSearch = searchQuery.trim();
     if (trimmedSearch) params.append('search', trimmedSearch);
     if (channelFilter !== 'all') params.append('channel', channelFilter);
+    // One row per person: a website visitor who continued on WhatsApp is listed once, with the trail.
+    params.append('groupByPerson', '1');
     params.append('page', currentPage.toString());
     params.append('limit', itemsPerPage.toString());
 
@@ -694,7 +697,7 @@ export default function AdminLeads() {
             <span className="text-xs text-gray-400 pl-12">{format(new Date(row.capturedAt), "MMM d, h:mm a")}</span>
           </div>
         </TableCell>
-        {hasOtherChannels && <TableCell className="px-4 py-3"><ChannelBadge channel={row.channel} /></TableCell>}
+        {hasOtherChannels && <TableCell className="px-4 py-3"><ChannelTrail row={row} /></TableCell>}
         <TableCell className="px-4 py-3">
           {row.phone ? <span className="text-sm text-green-600 font-mono">{row.phone}</span> : <span className="text-gray-400 text-sm">—</span>}
         </TableCell>
@@ -1152,7 +1155,7 @@ export default function AdminLeads() {
                           </div>
                         </TableCell>
                         {hasOtherChannels && (
-                          <TableCell className="px-4 py-3"><ChannelBadge channel="website" /></TableCell>
+                          <TableCell className="px-4 py-3"><ChannelTrail row={row} /></TableCell>
                         )}
                         <TableCell className="px-4 py-3">
                           {lead.phone ? (

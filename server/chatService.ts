@@ -22,7 +22,7 @@ import {
 } from './services/leadCapture';
 import { OtpService } from './services/otp';
 import { claimConversionFire } from './services/conversion';
-import { resolveProfile } from './services/customerProfileService';
+import { resolveWebsiteProfile } from './services/whatsappHandoffService';
 import { composeCrossPlatformContext, triggerSnapshotUpdate } from './services/crossPlatformMemoryService';
 import { validatePhoneNumber } from '../shared/validation/phone';
 import { isTopscholarAccount } from './services/topscholar/config';
@@ -2175,18 +2175,20 @@ Response:`;
 
       try {
         if (existingLead && (existingLead.phone || existingLead.email)) {
-          const platformUserId = context.visitorToken || conversationId;
-          const profile = await resolveProfile(context.businessAccountId, {
-            phone: existingLead.phone || null,
-            email: existingLead.email || null,
-            name: existingLead.name || null,
+          // Profile link (verified only for an OTP-verified phone); another channel's conversation
+          // is shared only over verified links (composeCrossPlatformContext).
+          const linked = await resolveWebsiteProfile({
+            businessAccountId: context.businessAccountId,
+            conversationId,
+            visitorToken: context.visitorToken || null,
+            lead: existingLead,
             city: context.visitorCity || null,
-            platform: "website",
-            platformUserId,
           });
+          const platformUserId = linked?.platformUserId || context.visitorToken || conversationId;
+          const profile = linked ? { id: linked.profileId } : null;
           if (profile) {
             const isFirstMsg = !history.some((m: any) => m.role === 'assistant');
-            const crossPlatformCtx = await composeCrossPlatformContext(context.businessAccountId, "website", profile.id, isFirstMsg);
+            const crossPlatformCtx = await composeCrossPlatformContext(context.businessAccountId, "website", profile.id, isFirstMsg, platformUserId);
             if (crossPlatformCtx) {
               systemContext += `\n\n${crossPlatformCtx}`;
               console.log(`[Chat] Cross-platform context injected (${crossPlatformCtx.length} chars, firstMsg: ${isFirstMsg})`);
@@ -3676,18 +3678,20 @@ Example: "Great! Is there anything else I can help you with?"
 
       try {
         if (existingLead && (existingLead.phone || existingLead.email)) {
-          const platformUserId = context.visitorToken || conversationId;
-          const profile = await resolveProfile(context.businessAccountId, {
-            phone: existingLead.phone || null,
-            email: existingLead.email || null,
-            name: existingLead.name || null,
+          // Profile link (verified only for an OTP-verified phone); another channel's conversation
+          // is shared only over verified links (composeCrossPlatformContext).
+          const linked = await resolveWebsiteProfile({
+            businessAccountId: context.businessAccountId,
+            conversationId,
+            visitorToken: context.visitorToken || null,
+            lead: existingLead,
             city: context.visitorCity || null,
-            platform: "website",
-            platformUserId,
           });
+          const platformUserId = linked?.platformUserId || context.visitorToken || conversationId;
+          const profile = linked ? { id: linked.profileId } : null;
           if (profile) {
             const isFirstMsg = !history.some((m: any) => m.role === 'assistant');
-            const crossPlatformCtx = await composeCrossPlatformContext(context.businessAccountId, "website", profile.id, isFirstMsg);
+            const crossPlatformCtx = await composeCrossPlatformContext(context.businessAccountId, "website", profile.id, isFirstMsg, platformUserId);
             if (crossPlatformCtx) {
               systemContext += `\n\n${crossPlatformCtx}`;
               console.log(`[Chat-Stream] Cross-platform context injected (${crossPlatformCtx.length} chars, firstMsg: ${isFirstMsg})`);

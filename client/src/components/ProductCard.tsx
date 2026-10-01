@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { openWhatsappHandoff } from "@/lib/whatsappHandoff";
 
 interface Product {
   id: string;
@@ -178,7 +179,8 @@ export function ProductCard({
     
     const cleanNumber = whatsappNumber.replace(/[^0-9]/g, '');
     const url = `https://wa.me/${cleanNumber}?text=${encodeURIComponent(message)}`;
-    window.open(url, '_blank');
+    // In the chat widget this becomes a hand-off link (ref code); elsewhere / on error: the plain link.
+    openWhatsappHandoff({ source: 'product', fallbackUrl: url, productId: product.id, productName: product.name, message });
   };
 
   const handleCompareToggle = (productId: string, e: React.MouseEvent) => {

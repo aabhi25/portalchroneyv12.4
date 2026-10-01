@@ -27,6 +27,7 @@ import {
 import { storage } from "../storage";
 import { resolveProfile } from "./customerProfileService";
 import { composeCrossPlatformContext, triggerSnapshotUpdate } from "./crossPlatformMemoryService";
+import { buildWhatsappHandoffContext, getHandoffKnownContact } from "./whatsappHandoffService";
 import { selectRelevantTools } from "../aiTools";
 import { ToolExecutionService } from "./toolExecutionService";
 import { isSessionActive, isSessionExpiredError, markSessionExpired, sendTemplateMessage } from "./whatsappSessionService";
@@ -213,14 +214,17 @@ export class WhatsappAutoReplyService {
 
       let crossPlatformContext = "";
       try {
+        // Website → WhatsApp hand-off (whatsappHandoffService): while fresh, the website conversation
+        // this number came from replaces the generic cross-platform summary.
+        crossPlatformContext = await buildWhatsappHandoffContext(businessAccountId, senderPhone).catch(() => "");
         const profile = await resolveProfile(businessAccountId, {
           phone: senderPhone,
           platform: "whatsapp",
           platformUserId: senderPhone,
         });
-        if (profile) {
+        if (profile && !crossPlatformContext) {
           const isFirstMsg = !conversationHistory.some(m => m.role === 'assistant');
-          crossPlatformContext = await composeCrossPlatformContext(businessAccountId, "whatsapp", profile.id, isFirstMsg);
+          crossPlatformContext = await composeCrossPlatformContext(businessAccountId, "whatsapp", profile.id, isFirstMsg, senderPhone);
           if (crossPlatformContext) {
             console.log(`[WhatsApp Auto-Reply] Cross-platform context loaded (${crossPlatformContext.length} chars, firstMsg: ${isFirstMsg})`);
           }
@@ -645,6 +649,12 @@ export class WhatsappAutoReplyService {
       const fromFlow = socialLeadContact(recentFlowData);
       known.name = known.name || fromFlow.name;
       known.email = known.email || fromFlow.email;
+    }
+    // Given on the website before a hand-off to WhatsApp (whatsappHandoffService): don't ask again.
+    if (!known.name || !known.email) {
+      const fromWebsite = await getHandoffKnownContact(businessAccountId, senderPhone);
+      known.name = known.name || fromWebsite.name;
+      known.email = known.email || fromWebsite.email;
     }
     return known;
   }

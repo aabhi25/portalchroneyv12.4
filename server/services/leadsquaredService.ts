@@ -489,15 +489,10 @@ export class LeadSquaredService {
         } catch { 
           if (errorText && errorText.length < 500) detailedError += ` — ${errorText}`;
         }
-        // The lead already exists in LeadSquared — treat as a successful sync.
+        // The lead already exists in LeadSquared — update it with these details (treated as synced).
         if (isDuplicateLeadError(exceptionType, detailedError)) {
-          console.log('[LeadSquared] Creating lead - Already exists, treating as synced:', detailedError);
-          return {
-            success: true,
-            alreadyExists: true,
-            message: 'Lead already exists in LeadSquared (treated as synced).',
-            syncPayload,
-          };
+          console.log('[LeadSquared] Creating lead - Already exists:', detailedError);
+          return this.updateExistingDuplicate(mappings, context, syncPayload);
         }
         return {
           success: false,
@@ -517,13 +512,8 @@ export class LeadSquaredService {
         };
       } else if (isDuplicateLeadError(data.ExceptionType, data.ExceptionMessage)) {
         // Some clusters return the duplicate signal as HTTP 200 with Status=Error.
-        console.log('[LeadSquared] Creating lead - Already exists, treating as synced:', data.ExceptionMessage);
-        return {
-          success: true,
-          alreadyExists: true,
-          message: 'Lead already exists in LeadSquared (treated as synced).',
-          syncPayload,
-        };
+        console.log('[LeadSquared] Creating lead - Already exists:', data.ExceptionMessage);
+        return this.updateExistingDuplicate(mappings, context, syncPayload);
       } else {
         console.error('[LeadSquared] Creating lead - Failed:', data.ExceptionMessage || 'Unknown error');
         return {
@@ -538,6 +528,57 @@ export class LeadSquaredService {
         message: error.message || 'Failed to push lead to LeadSquared',
       };
     }
+  }
+
+  /**
+   * Finds an existing LeadSquared lead by phone, then email (Lead.Capture refused a duplicate).
+   * Returns its ProspectID, or null when it can't be found / the lookup fails.
+   */
+  async findExistingLeadId(phone?: string | null, email?: string | null): Promise<string | null> {
+    const auth = `accessKey=${this.config.accessKey}&secretKey=${this.config.secretKey}`;
+    const lookups: string[] = [];
+    const phoneRaw = (phone || '').trim();
+    const phoneDigits = phoneRaw.replace(/\D/g, '');
+    if (phoneRaw) lookups.push(`${this.baseUrl}/v2/LeadManagement.svc/RetrieveLeadByPhoneNumber?${auth}&phone=${encodeURIComponent(phoneRaw)}`);
+    if (phoneDigits.length > 10) lookups.push(`${this.baseUrl}/v2/LeadManagement.svc/RetrieveLeadByPhoneNumber?${auth}&phone=${encodeURIComponent(phoneDigits.slice(-10))}`);
+    if (email?.trim()) lookups.push(`${this.baseUrl}/v2/LeadManagement.svc/Leads.GetByEmailaddress?${auth}&emailaddress=${encodeURIComponent(email.trim())}`);
+    for (const url of lookups) {
+      try {
+        const response = await fetchWithTimeout(url, { method: 'GET', headers: { 'Cache-Control': 'no-cache' } }, 15_000);
+        if (!response.ok) continue;
+        const data = await response.json().catch(() => null);
+        const first = Array.isArray(data) ? data[0] : null;
+        const id = first?.ProspectID || first?.ProspectId || first?.Id;
+        if (typeof id === 'string' && id) return id;
+      } catch (error: any) {
+        console.warn('[LeadSquared] Existing-lead lookup failed:', error?.message || error);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Lead.Capture said the lead already exists (same phone / email — e.g. the same person came in
+   * on another channel): find it and update it with this lead's details instead of dropping them.
+   * Falls back to the previous behaviour (treated as synced, nothing updated) when it can't be found.
+   */
+  private async updateExistingDuplicate(
+    mappings: LeadsquaredFieldMapping[],
+    context: LeadDataContext,
+    syncPayload: Record<string, string>,
+  ): Promise<{ success: boolean; leadId?: string; message: string; syncPayload?: Record<string, string>; alreadyExists?: boolean }> {
+    const existingId = await this.findExistingLeadId(context.lead.phone, context.lead.email);
+    if (!existingId) {
+      console.log('[LeadSquared] Duplicate lead not found by phone/email — treating as synced');
+      return { success: true, alreadyExists: true, message: 'Lead already exists in LeadSquared (treated as synced).', syncPayload };
+    }
+    const updated = await this.updateLeadWithMappings(existingId, mappings, context, ['name', 'email', 'phone', 'city', 'sourceUrl']);
+    if (updated.success) {
+      console.log('[LeadSquared] Duplicate lead updated with the new details:', existingId);
+      return { success: true, alreadyExists: true, leadId: existingId, message: 'Lead already existed in LeadSquared — updated it with the new details.', syncPayload: updated.syncPayload || syncPayload };
+    }
+    console.warn('[LeadSquared] Duplicate lead found but the update failed:', existingId, updated.message);
+    return { success: true, alreadyExists: true, leadId: existingId, message: `Lead already exists in LeadSquared (treated as synced; update failed: ${updated.message}).`, syncPayload };
   }
 
   // Update lead using dynamic mappings

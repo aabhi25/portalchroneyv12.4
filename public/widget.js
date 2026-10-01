@@ -2075,6 +2075,51 @@
       el.addEventListener('mouseenter', function() { el.style.transform = 'scale(1.05)'; });
       el.addEventListener('mouseleave', function() { el.style.transform = 'scale(1)'; });
 
+      // Website -> WhatsApp hand-off: ask for a link whose pre-filled text carries the topic and a
+      // ref code (the WhatsApp AI continues the chat). The tab is opened right away inside the click
+      // (popup blockers allow it) and pointed at the link; on any error or after 4s the plain link
+      // above is used, so the launcher always works.
+      const self = this;
+      el.addEventListener('click', function(e) {
+        if (!self.config.businessAccountId || typeof window.fetch !== 'function') return;
+        e.preventDefault();
+        var tab = null;
+        try { tab = window.open('', '_blank'); } catch (err) { tab = null; }
+        if (tab) { try { tab.opener = null; } catch (err) { /* ignore */ } }
+        var go = function(url) {
+          if (tab && !tab.closed) {
+            try { tab.location.href = url; return; } catch (err) { /* fall through */ }
+          }
+          window.open(url, '_blank', 'noopener,noreferrer');
+        };
+        var chat = self._chatConversation || {};
+        var done = false;
+        var timer = setTimeout(function() { if (!done) { done = true; go(waUrl); } }, 4000);
+        fetch(self.getBaseUrl() + '/api/chat/widget/whatsapp-handoff', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            businessAccountId: self.config.businessAccountId,
+            source: 'launcher',
+            conversationId: chat.conversationId || null,
+            visitorToken: chat.visitorToken || self.visitorToken || null
+          })
+        }).then(function(r) { return r.ok ? r.json() : null; })
+          .then(function(data) {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            var ok = data && typeof data.url === 'string' && /^https:\/\/(wa\.me|api\.whatsapp\.com)\//.test(data.url);
+            go(ok ? data.url : waUrl);
+          })
+          .catch(function() {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            go(waUrl);
+          });
+      });
+
       document.body.appendChild(el);
       console.log('[Hi Chroney] WhatsApp launcher rendered (' + (aiAlsoShown ? 'both' : 'whatsapp-only') + ' mode)');
     },
@@ -2799,6 +2844,15 @@
         
         if (event.data && event.data.type === 'OPEN_URL' && event.data.url) {
           window.open(event.data.url, '_blank', 'noopener,noreferrer');
+          return;
+        }
+
+        // The chat tells us its conversation so the WhatsApp launcher can hand the visitor over with the topic.
+        if (event.data && event.data.type === 'CHRONEY_CONVERSATION' && event.data.conversationId) {
+          HiChroneyWidget._chatConversation = {
+            conversationId: String(event.data.conversationId),
+            visitorToken: event.data.visitorToken ? String(event.data.visitorToken) : null
+          };
           return;
         }
 

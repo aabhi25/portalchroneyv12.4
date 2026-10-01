@@ -208,6 +208,92 @@ const CHAT_FONT_SIZE_PX: Record<string, string> = {
   large: "16px",
 };
 
+/**
+ * WhatsApp number for the website's WhatsApp buttons. When the business has a connected WhatsApp AI
+ * number and no other number is typed, that number is used (an empty field means "connected
+ * number" — the server fills it in). A different number gets a warning: replies there aren't
+ * automatic and the chat doesn't carry over.
+ */
+function WhatsappNumberField({
+  id,
+  label,
+  value,
+  onChange,
+  onSave,
+  connectedNumber,
+  testId,
+  emptyHint,
+  validHint,
+  emptyHintWarn = true,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  onSave: (v: string) => void;
+  connectedNumber: string | null;
+  testId: string;
+  emptyHint: string;
+  validHint: string;
+  emptyHintWarn?: boolean;
+}) {
+  const digits = value.replace(/[^\d]/g, "");
+  const isConnected = !!connectedNumber && (digits === "" || digits === connectedNumber);
+  const [custom, setCustom] = useState(false);
+  if (connectedNumber && isConnected && !custom) {
+    return (
+      <div>
+        <Label className="text-sm font-medium">{label}</Label>
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2" data-testid={`${testId}-connected`}>
+          <span className="text-sm text-green-800">Using your connected WhatsApp AI number +{connectedNumber}</span>
+          <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setCustom(true)} data-testid={`${testId}-use-different`}>
+            Use a different number
+          </Button>
+        </div>
+        <p className="text-xs text-gray-500 mt-1">Visitors continue on WhatsApp with the AI, which picks up what they were asking about.</p>
+      </div>
+    );
+  }
+  const different = !!connectedNumber && digits.length >= 8 && digits !== connectedNumber;
+  return (
+    <div>
+      <Label htmlFor={id} className="text-sm font-medium">{label}</Label>
+      <Input
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={() => onSave(value)}
+        placeholder="+1234567890 (with country code)"
+        className="mt-1"
+        data-testid={testId}
+      />
+      {different ? (
+        <p className="text-xs text-amber-700 mt-1" data-testid={`${testId}-warning`}>
+          This number isn't connected to your WhatsApp AI, so replies won't be automatic and the conversation won't carry over.
+        </p>
+      ) : connectedNumber ? (
+        <p className="text-xs text-gray-500 mt-1">Leave empty to use your connected WhatsApp AI number +{connectedNumber}.</p>
+      ) : digits.length < 8 ? (
+        <p className={`text-xs mt-1 ${emptyHintWarn ? "text-amber-700" : "text-gray-500"}`}>{emptyHint}</p>
+      ) : (
+        <p className="text-xs text-gray-500 mt-1">{validHint}</p>
+      )}
+      {connectedNumber && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-auto p-0 mt-1 text-xs text-purple-700 hover:bg-transparent hover:underline"
+          onClick={() => { onChange(""); onSave(""); setCustom(false); }}
+          data-testid={`${testId}-use-connected`}
+        >
+          Use my connected WhatsApp AI number instead
+        </Button>
+      )}
+    </div>
+  );
+}
+
 interface ElevenLabsVoice {
   voice_id: string;
   name: string;
@@ -627,6 +713,14 @@ export default function WidgetSettings() {
 
   const { data: settings, isLoading } = useQuery<WidgetSettings>({
     queryKey: ["/api/widget-settings"],
+  });
+  // Connected WhatsApp AI number (default for the WhatsApp buttons) and hand-off numbers.
+  const { data: waConnection } = useQuery<{ connectedNumber: string | null }>({
+    queryKey: ["/api/widget-settings/whatsapp-connection"],
+  });
+  const connectedWaNumber = waConnection?.connectedNumber || null;
+  const { data: waHandoffStats } = useQuery<{ clicks: number; continued: number; leads: number; days: number }>({
+    queryKey: ["/api/analytics/whatsapp-handoff?days=30"],
   });
 
   const { data: allProducts } = useQuery<Array<{id: string; name: string; imageUrl?: string; price?: string}>>({
@@ -2231,23 +2325,31 @@ export default function WidgetSettings() {
 
                     {(launcherMode !== "ai" || whatsappHeaderEnabled) && (
                       <div className="space-y-4 pt-1">
-                        <div>
-                          <Label htmlFor="whatsappWidgetNumber" className="text-sm font-medium">WhatsApp Number</Label>
-                          <Input
-                            id="whatsappWidgetNumber"
-                            value={whatsappWidgetNumber}
-                            onChange={(e) => setWhatsappWidgetNumber(e.target.value)}
-                            onBlur={() => updateMutation.mutate({ whatsappWidgetNumber: whatsappWidgetNumber })}
-                            placeholder="+1234567890 (with country code)"
-                            className="mt-1"
-                            data-testid="input-whatsapp-widget-number"
-                          />
-                          {whatsappWidgetNumber.replace(/[^\d]/g, "").length < 8 ? (
-                            <p className="text-xs text-amber-700 mt-1">Required. Until a valid number with country code is saved, no WhatsApp launcher or header icon is shown.</p>
-                          ) : (
-                            <p className="text-xs text-gray-500 mt-1">Used by the WhatsApp launcher and the chat header icon.</p>
-                          )}
-                        </div>
+                        <WhatsappNumberField
+                          id="whatsappWidgetNumber"
+                          label="WhatsApp Number"
+                          value={whatsappWidgetNumber}
+                          onChange={setWhatsappWidgetNumber}
+                          onSave={(v) => updateMutation.mutate({ whatsappWidgetNumber: v })}
+                          connectedNumber={connectedWaNumber}
+                          testId="input-whatsapp-widget-number"
+                          emptyHint="Required. Until a valid number with country code is saved, no WhatsApp launcher or header icon is shown."
+                          validHint="Used by the WhatsApp launcher and the chat header icon."
+                        />
+                        {waHandoffStats && waHandoffStats.clicks > 0 && (
+                          <div className="grid grid-cols-3 gap-2" data-testid="whatsapp-handoff-stats">
+                            {([
+                              ["WhatsApp clicks", waHandoffStats.clicks],
+                              ["Continued on WhatsApp", waHandoffStats.continued],
+                              ["Leads", waHandoffStats.leads],
+                            ] as const).map(([label, n]) => (
+                              <div key={label} className="rounded-lg border border-gray-200 p-2 text-center">
+                                <div className="text-lg font-semibold text-gray-900">{n}</div>
+                                <div className="text-[11px] text-gray-500">{label} (30 days)</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <div>
                           <Label htmlFor="whatsappWidgetMessage" className="text-sm font-medium">Pre-filled Message <span className="text-gray-400 font-normal">(optional)</span></Label>
                           <Textarea
@@ -4950,22 +5052,18 @@ export default function WidgetSettings() {
                   </CardHeader>
                   {whatsappOrderEnabled && (
                     <CardContent className="pt-0 space-y-4">
-                      <div>
-                        <Label htmlFor="whatsappNumber" className="text-sm font-medium">WhatsApp Number</Label>
-                        <Input
-                          id="whatsappNumber"
-                          value={whatsappOrderNumber}
-                          onChange={(e) => setWhatsappOrderNumber(e.target.value)}
-                          onBlur={() => {
-                            updateMutation.mutate({
-                              whatsappOrderNumber: whatsappOrderNumber
-                            });
-                          }}
-                          placeholder="+1234567890 (with country code)"
-                          className="mt-1"
-                        />
-                        <p className="text-xs text-gray-500 mt-1">Enter your WhatsApp business number with country code</p>
-                      </div>
+                      <WhatsappNumberField
+                        id="whatsappNumber"
+                        label="WhatsApp Number"
+                        value={whatsappOrderNumber}
+                        onChange={setWhatsappOrderNumber}
+                        onSave={(v) => updateMutation.mutate({ whatsappOrderNumber: v })}
+                        connectedNumber={connectedWaNumber}
+                        testId="input-whatsapp-order-number"
+                        emptyHint="Enter your WhatsApp business number with country code"
+                        validHint="Enter your WhatsApp business number with country code"
+                        emptyHintWarn={false}
+                      />
                       <div>
                         <Label htmlFor="whatsappMessage" className="text-sm font-medium">Order Message Template</Label>
                         <Textarea

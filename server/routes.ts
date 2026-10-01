@@ -89,6 +89,7 @@ import topscholarRoutes from "./routes/topscholar";
 import topscholarAnalyticsRoutes from "./routes/topscholarAnalytics";
 import verificationRoutes from "./routes/verification";
 import unifiedLeadsRoutes from "./routes/unifiedLeads";
+import whatsappHandoffRoutes from "./routes/whatsappHandoff";
 import { resolveAuthorizedLeadAccountId, maskLeadPhone } from "./lib/leadAccess";
 import dataRetentionRoutes from "./routes/dataRetention";
 import aiUsageRoutes from "./routes/aiUsage";
@@ -526,6 +527,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(jobPortalRoutes);
   app.use(verificationRoutes);
   app.use(unifiedLeadsRoutes);
+  app.use(whatsappHandoffRoutes);
   app.use(dataRetentionRoutes);
   app.use(aiUsageRoutes);
   app.use(whatsappDocumentsRoutes);
@@ -3396,6 +3398,10 @@ Return JSON:
           if (lead && (lead.phone || lead.email)) {
             syncConversationLeadIfReady({ leadId: lead.id, businessAccountId, conversationId, channel: 'widget', source: 'otp_verify' })
               .catch(err => console.error('[OTP→CRM] Post-verify sync error:', err));
+            // Customer profile: this website identity is now verified for the phone (cross-channel memory).
+            import('./services/whatsappHandoffService')
+              .then(({ linkWebsiteLeadProfile }) => linkWebsiteLeadProfile(lead))
+              .catch(() => undefined);
           }
         } catch (err) {
           console.error('[OTP→CRM] Failed to resolve partial lead:', err);
@@ -19829,6 +19835,33 @@ Important:
           return res.status(404).json({ error: "Lead not found" });
         }
 
+        // One person, one CRM lead: this visitor continued on WhatsApp (hand-off code) and that
+        // WhatsApp lead is already in this Custom CRM — don't create the person twice. `force` re-pushes.
+        if (req.body?.force !== true && lead.customCrmSyncStatus !== 'synced') {
+          try {
+            const { findWhatsappPhonesForWebsiteLead } = await import('./services/whatsappHandoffService');
+            const phones = await findWhatsappPhonesForWebsiteLead(businessAccountId, lead);
+            if (phones.length > 0) {
+              const [pushed] = await db.select({ id: whatsappLeads.id, crmLeadId: whatsappLeads.customCrmLeadId })
+                .from(whatsappLeads)
+                .where(and(eq(whatsappLeads.businessAccountId, businessAccountId), inArray(whatsappLeads.senderPhone, phones), eq(whatsappLeads.customCrmSyncStatus, 'synced')))
+                .limit(1);
+              if (pushed) {
+                console.log(`[Custom CRM] Website lead ${leadId} not pushed: same person already in the CRM from WhatsApp lead ${pushed.id}`);
+                return res.status(409).json({
+                  success: false,
+                  skipped: 'already_in_crm_from_whatsapp',
+                  error: 'This visitor continued on WhatsApp and is already in your CRM from that WhatsApp lead, so a second CRM lead was not created.',
+                  whatsappLeadId: pushed.id,
+                  crmLeadId: pushed.crmLeadId || null,
+                });
+              }
+            }
+          } catch (err) {
+            console.error('[Custom CRM] Cross-channel duplicate check failed (pushing as before):', err);
+          }
+        }
+
         const leadContext = {
           lead: {
             customerName: lead.name || null,
@@ -27710,6 +27743,20 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       // through this public endpoint. Strip it from the spread.
       const { captchaSecretKeyEnc: _captchaSecretKeyEnc, ...publicSettings } = settings as any;
 
+      // WhatsApp buttons: a number the business typed wins; when none is set, the connected
+      // WhatsApp AI number is used (so replies are automatic and the chat carries over).
+      try {
+        const usable = (v: unknown) => String(v || '').replace(/\D/g, '').length >= 8;
+        if (!usable(publicSettings.whatsappWidgetNumber) || !usable(publicSettings.whatsappOrderNumber)) {
+          const { getConnectedWhatsappNumber } = await import('./services/whatsappHandoffService');
+          const connected = await getConnectedWhatsappNumber(businessAccountId);
+          if (connected && !usable(publicSettings.whatsappWidgetNumber)) publicSettings.whatsappWidgetNumber = connected;
+          if (connected && !usable(publicSettings.whatsappOrderNumber)) publicSettings.whatsappOrderNumber = connected;
+        }
+      } catch (err) {
+        console.error('[Widget Settings] WhatsApp number fallback failed (non-fatal):', err);
+      }
+
       res.json({
         ...publicSettings,
         voiceModeEnabled,
@@ -31860,7 +31907,7 @@ Return ONLY a valid JSON object in this format:
         
         const { 
           customerNumber,   // sender phone
-          text,             // message text
+          text: rawText,    // message text
           contentType,      // text, image, document, interactive, etc.
           direction,        // "0" = inbound, "1" = outbound
           uuid,             // unique message ID from Meta
@@ -31871,6 +31918,8 @@ Return ONLY a valid JSON object in this format:
           integratedNumber, // your WhatsApp business number
           requestId,        // MSG91 request ID
         } = payload;
+        // Reassigned below when a website hand-off ref code is stripped from a text message.
+        let text: string = rawText;
 
         // direction=1 is an outbound delivery / read / failed receipt for a message WE sent.
         // Use it to update marketing-campaign recipient delivery state by msg91MessageId.
@@ -31990,6 +32039,19 @@ Return ONLY a valid JSON object in this format:
           const webhookStartTime = Date.now();
           if (isInboundLimited(businessId, senderPhone, text, settings, uuid)) {
             return res.json({ status: "received", note: "rate_limited" });
+          }
+          // Website → WhatsApp hand-off: strip "(Ref: XXXXXX)" before anything reads the text (campaign
+          // gate, flows, keyword replies, lead extraction, AI, stored log) and link this number to the
+          // website conversation that created the code. Never blocks the message on failure.
+          try {
+            const { processInboundHandoff } = await import("./services/whatsappHandoffService");
+            const handoff = await processInboundHandoff(businessId, senderPhone, text);
+            if (handoff.code) {
+              text = handoff.text;
+              console.log(`[MSG91 Webhook] Hand-off ref ${handoff.code} stripped (${handoff.reason})`);
+            }
+          } catch (err) {
+            console.error("[MSG91 Webhook] Hand-off code check failed (non-fatal):", err);
           }
           const { whatsappFlowService } = await import("./services/whatsappFlowService");
           const { whatsappAutoReplyService } = await import("./services/whatsappAutoReplyService");
@@ -33190,11 +33252,18 @@ Return ONLY a valid JSON object in this format:
         }
 
         if (messageType === "text" && text?.body) {
+          let legacyText: string = text.body;
+          try {
+            const { processInboundHandoff } = await import("./services/whatsappHandoffService");
+            legacyText = (await processInboundHandoff(businessId, senderPhone, legacyText)).text;
+          } catch (err) {
+            console.error("[MSG91 Webhook] Hand-off code check failed (non-fatal):", err);
+          }
           const lead = await whatsappService.processTextMessage(
             businessId,
             messageId,
             senderPhone,
-            text.body
+            legacyText
           );
           if (lead) {
             console.log("[MSG91 Webhook] Created lead:", lead.id);

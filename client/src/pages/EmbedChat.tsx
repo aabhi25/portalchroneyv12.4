@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { ProductCard } from "@/components/ProductCard";
+import { openWhatsappHandoff, setWhatsappHandoffContext } from "@/lib/whatsappHandoff";
 import { KaraokeText } from "@/components/KaraokeText";
 import { KaraokeMarkdown } from "@/components/KaraokeMarkdown";
 import { OrderStatusCard, normalizeOrder } from "@/components/OrderStatusCard";
@@ -983,6 +984,17 @@ export default function EmbedChat() {
     visitorSessionTokenRef.current = token;
   }, [businessAccountId]);
 
+  // WhatsApp buttons (header, ⋮ menu, product cards) ask for a hand-off link tied to this chat.
+  useEffect(() => {
+    if (!businessAccountId) return;
+    setWhatsappHandoffContext({
+      businessAccountId,
+      getConversationId: () => conversationIdRef.current || null,
+      getVisitorToken: () => visitorSessionTokenRef.current || null,
+    });
+    return () => setWhatsappHandoffContext(null);
+  }, [businessAccountId]);
+
   // Fetch widget settings for this business account
   const { data: settings, isLoading: isLoadingSettings } = useQuery<WidgetSettings>({
     queryKey: [`/api/widget-settings/public?businessAccountId=${businessAccountId}`],
@@ -1212,7 +1224,20 @@ export default function EmbedChat() {
   
   // Track conversationId for persistence (stored in localStorage after first message)
   const conversationIdRef = useRef<string>('');
-  
+
+  // Tell the page's widget script which conversation this is, so its WhatsApp launcher can hand the
+  // visitor over with the topic (the script runs on the site's own origin and can't see this chat).
+  const postedConversationRef = useRef('');
+  useEffect(() => {
+    if (window.parent === window) return;
+    const id = conversationIdRef.current;
+    if (!id || id.startsWith('temp_') || id === postedConversationRef.current) return;
+    postedConversationRef.current = id;
+    try {
+      window.parent.postMessage({ type: 'CHRONEY_CONVERSATION', conversationId: id, visitorToken: visitorSessionTokenRef.current || null }, '*');
+    } catch { /* ignore */ }
+  }, [messages.length]);
+
   // Initialize sessionId from localStorage and restore conversation history
   useEffect(() => {
     if (!businessAccountId) return;
@@ -4220,6 +4245,10 @@ export default function EmbedChat() {
             href={waHeaderUrl}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={(e) => {
+              e.preventDefault();
+              openWhatsappHandoff({ source: 'header', fallbackUrl: waHeaderUrl });
+            }}
             className="embed-chat-btn p-1 rounded-full hover:bg-white/20 transition-colors flex-shrink-0"
             aria-label="Chat on WhatsApp"
             title="Chat on WhatsApp"
@@ -4345,7 +4374,11 @@ export default function EmbedChat() {
                     href={waHeaderUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    onClick={() => setIsMenuOpen(false)}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setIsMenuOpen(false);
+                      openWhatsappHandoff({ source: 'menu', fallbackUrl: waHeaderUrl });
+                    }}
                     className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2 text-gray-700 transition-colors"
                     data-testid="link-menu-whatsapp"
                   >

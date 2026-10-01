@@ -27,6 +27,12 @@ export interface UnifiedLeadRow {
   capturedAt: string;
   crm: { leadsquared?: CrmSyncState; salesforce?: CrmSyncState; customCrm?: CrmSyncState };
   detail: Record<string, any>;
+  /** Same person on several channels (website → WhatsApp hand-off / verified phone). */
+  personId?: string | null;
+  /** Channels this person used, in order of first contact. */
+  channels?: LeadChannel[];
+  /** groupByPerson: the person's rows on other channels. */
+  linked?: UnifiedLeadRow[];
 }
 
 export interface UnifiedLeadsResponse {
@@ -34,6 +40,7 @@ export interface UnifiedLeadsResponse {
   total: number;
   countsByChannel: Record<LeadChannel, number>;
   channels: LeadChannel[];
+  groupedByPerson?: boolean;
 }
 
 export type CrmConfig = Record<SocialCrm, { configured: boolean; autoSync: boolean }>;
@@ -54,6 +61,22 @@ export function ChannelBadge({ channel }: { channel: LeadChannel }) {
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full ${meta.className}`} data-testid={`badge-channel-${channel}`}>
       <Icon className="h-3 w-3" />
       {meta.label}
+    </span>
+  );
+}
+
+/** The row's channel, or the person's channel trail (e.g. Website → WhatsApp) when linked. */
+export function ChannelTrail({ row }: { row: Pick<UnifiedLeadRow, "channel" | "channels"> }) {
+  const trail = row.channels && row.channels.length > 1 ? row.channels : null;
+  if (!trail) return <ChannelBadge channel={row.channel} />;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1" title="Same person on these channels, in the order they reached you" data-testid="channel-trail">
+      {trail.map((ch, i) => (
+        <span key={ch} className="inline-flex items-center gap-1">
+          {i > 0 && <span className="text-gray-400 text-xs">→</span>}
+          <ChannelBadge channel={ch} />
+        </span>
+      ))}
     </span>
   );
 }

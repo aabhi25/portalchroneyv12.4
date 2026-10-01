@@ -1438,7 +1438,7 @@ export interface WhatsappLeadSyncOptions {
 export interface WhatsappLeadSyncResult {
   success: boolean;
   /** Set when nothing was pushed. */
-  skipped?: 'already_synced' | 'in_progress' | 'not_eligible' | 'not_found' | 'not_configured' | 'draft';
+  skipped?: 'already_synced' | 'in_progress' | 'not_eligible' | 'not_found' | 'not_configured' | 'draft' | 'same_person_in_crm';
   /** The lead's custom_crm_sync_status after this call. */
   status: string | null;
   message: string;
@@ -1662,7 +1662,8 @@ export async function syncWhatsappLeadToCustomCrm(
 
   // Accounts that require PAN + email: a draft is never sent (the LOS would reject it).
   const { isQualificationRequired, refreshLeadQualification } = await import('./leadQualificationService');
-  if (await isQualificationRequired(lead.businessAccountId)) {
+  const qualificationRequired = await isQualificationRequired(lead.businessAccountId);
+  if (qualificationRequired) {
     const check = await refreshLeadQualification(leadId, { pushToCrm: false });
     if (check && !check.qualification.qualified && !lead.qualifiedAt) {
       const message = `Draft — waiting for a valid ${check.qualification.missing.join(' and ')} before this can be sent to the CRM`;
@@ -1675,6 +1676,24 @@ export async function syncWhatsappLeadToCustomCrm(
     const meta = ((lead.customCrmSyncPayload as any)?._crmSync || {}) as CrmSyncMeta;
     if (!(meta.created && meta.applicationId)) {
       return { success: false, skipped: 'not_eligible', status: lead.customCrmSyncStatus ?? null, message: 'No CRM application recorded for this lead to attach documents to' };
+    }
+  }
+
+  // One person, one CRM lead: this WhatsApp number came from a website chat (hand-off code) whose
+  // lead is already in this same Custom CRM, and the CRM has no update call — don't create the
+  // person twice. Never for PAN + email (LOS) accounts, whose WhatsApp application flow is
+  // unchanged, and never for a manual Sync (force).
+  if (!force && !options.documentsOnly && !qualificationRequired && lead.customCrmSyncStatus !== 'synced' && lead.senderPhone) {
+    try {
+      const { findWebsiteLeadForWhatsapp } = await import('./whatsappHandoffService');
+      const websiteLead = await findWebsiteLeadForWhatsapp(lead.businessAccountId, lead.senderPhone);
+      if (websiteLead?.customCrmSyncStatus === 'synced') {
+        const message = `Same person is already in the CRM from website lead ${websiteLead.id}${websiteLead.customCrmLeadId ? ` (CRM id ${websiteLead.customCrmLeadId})` : ''} — not created twice. Use Sync to push anyway.`;
+        console.log(`${tag} Lead ${leadId} not sent: ${message}`);
+        return { success: false, skipped: 'same_person_in_crm', status: lead.customCrmSyncStatus ?? null, message, crmLeadId: websiteLead.customCrmLeadId ?? null };
+      }
+    } catch (err) {
+      console.error(`${tag} Cross-channel duplicate check failed for ${leadId} (sending as before):`, err instanceof Error ? err.message : err);
     }
   }
 

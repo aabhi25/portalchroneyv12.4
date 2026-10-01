@@ -293,7 +293,7 @@ export class SocialAutoReplyEngine {
         });
         if (profile) {
           const isFirstMsg = !conversationHistory.some(m => m.role === 'assistant');
-          crossPlatformContext = await composeCrossPlatformContext(businessAccountId, this.p.platform, profile.id, isFirstMsg);
+          crossPlatformContext = await composeCrossPlatformContext(businessAccountId, this.p.platform, profile.id, isFirstMsg, senderId);
           if (crossPlatformContext) {
             console.log(`${this.tag} Cross-platform context loaded (${crossPlatformContext.length} chars, firstMsg: ${isFirstMsg})`);
           }
