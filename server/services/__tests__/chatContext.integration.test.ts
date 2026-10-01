@@ -202,7 +202,9 @@ async function main() {
     const t = await turn(A.accountId, `valve_${tag}`, 'What about kayaks?');
     const sys = String(t.main?.messages[0].content);
     expect(!sys.includes('BUSINESS KNOWLEDGE (always available)') && /FUNNEL STAGE: DISCOVERY \(Message 1\)/.test(sys), 'CHAT_CONTEXT_MODE=legacy → legacy first-call prompt');
-    expect(String(t.cont?.messages[0].content || '').includes('DETAILED WEBSITE CONTENT') && String(t.cont?.messages[0].content || '').startsWith('🟢 CONVERSATION STATUS'), 'legacy continuation: full page dump, status prepended', String(t.cont?.messages[0].content || '').slice(0, 80));
+    // The old per-turn "CONVERSATION STATUS / LEAD GATE ACTIVE — ask for their name first" prefix was
+    // removed (lead collection now comes only from the per-turn LEAD COLLECTION block).
+    expect(String(t.cont?.messages[0].content || '').includes('DETAILED WEBSITE CONTENT') && !String(t.cont?.messages[0].content || '').includes('CONVERSATION STATUS'), 'legacy continuation: full page dump, no status prefix', String(t.cont?.messages[0].content || '').slice(0, 80));
     expect(t.chats.some(c => c.purpose === 'main') && String(t.main?.messages[t.main.messages.length - 1].content).includes('TOOL USAGE (CRITICAL)'), 'legacy FAQ pre-fetch / tool-first instruction unchanged');
     delete process.env.CHAT_CONTEXT_MODE;
 

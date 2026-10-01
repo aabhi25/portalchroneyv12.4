@@ -1,3 +1,7 @@
+import { describePhoneRule, validatePhoneNumber } from '../../shared/validation/phone';
+import { looksLikePhoneAttempt } from './leadCapture/detectors';
+import { hasEnabledPhoneField, phoneModeFor } from './leadCapture/fields';
+
 export interface LeadTrainingField {
   id: string;
   enabled: boolean;
@@ -150,7 +154,9 @@ export function buildLeadTrainingPrompt(
   }
 
   if (hasCustomFields && customMandatoryFields.length > 0) {
-    const askAfter = customMandatoryFields[0].customAskAfter || 2;
+    // Each field uses its OWN customAskAfter; the block's threshold is the earliest of them and
+    // the per-field schedule is spelled out below.
+    const askAfter = Math.min(...customMandatoryFields.map((f: any) => f.customAskAfter || 2));
     const freeMessages = askAfter - 1;
     const customMandatoryNames = customMandatoryFields.map((f: any) => f.id);
     const customOptionalNames = customOptionalFields.map((f: any) => f.id);
@@ -159,7 +165,8 @@ export function buildLeadTrainingPrompt(
     prompt += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     prompt += `Fields with CUSTOM timing: ${fieldsByStrategy.custom.join(', ')}\n`;
     prompt += `Mandatory: ${customMandatoryNames.join(', ') || 'none'} | Optional: ${customOptionalNames.join(', ') || 'none'}\n`;
-    prompt += `Configured to ask on user's message #${askAfter}\n\n`;
+    prompt += `Configured to ask on user's message #${askAfter}\n`;
+    prompt += customMandatoryFields.map((f: any) => `  - ${f.id}: ask from user message #${f.customAskAfter || 2}\n`).join('') + `\n`;
 
     if (responseCount > 0) {
       prompt += `📊 CURRENT STATUS: You have already sent ${responseCount} response(s) to this user.\n`;
@@ -195,15 +202,12 @@ export function buildLeadTrainingPrompt(
   }
 
   if (hasCustomFields && customMandatoryFields.length === 0 && customOptionalFields.length > 0) {
-    const askAfter = customOptionalFields[0].customAskAfter || 2;
-    const freeMessages = askAfter - 1;
-    const customOptionalNames = customOptionalFields.map((f: any) => f.id);
-
     prompt += `\n🎯 CUSTOM TIMING (OPTIONAL FIELDS ONLY):\n`;
-    prompt += `Fields: ${customOptionalNames.join(', ')}\n`;
-    prompt += `- Respond normally for the first ${freeMessages} message(s)\n`;
-    prompt += `- On message #${askAfter}, you may ask for these fields but user can decline\n`;
-    prompt += `- If user declines, proceed with answering\n\n`;
+    customOptionalFields.forEach((f: any) => {
+      const askAfter = f.customAskAfter || 2;
+      prompt += `- ${f.id}: respond normally for the first ${askAfter - 1} message(s); from message #${askAfter} you may ask (user can decline)\n`;
+    });
+    prompt += `- If user declines, proceed with answering and don't ask for it again\n\n`;
   }
 
   if (fieldsByStrategy.start.length > 0) {
@@ -280,9 +284,8 @@ export function buildLeadTrainingPrompt(
   prompt += `   - "I'm Sarah" → Call capture_lead(name="Sarah") immediately\n`;
   prompt += `   - "john@email.com" → Call capture_lead(email="john@email.com") immediately\n`;
   if (!isWhatsApp) {
-    prompt += `   - "Call me at 555-1234" → Call capture_lead(phone="555-1234") immediately\n`;
     prompt += `   - "9876543210" → Call capture_lead(phone="9876543210") immediately\n`;
-    prompt += `   - "My WhatsApp is +91 98765 43210" → Call capture_lead(phone="+919876543210") immediately\n`;
+    prompt += `   - "My WhatsApp is +91 98765 43210" → Call capture_lead(phone="+91 98765 43210") immediately (pass the number exactly as typed — the system normalises it)\n`;
   }
   prompt += `\n`;
   prompt += `INSTANT PROGRESSIVE CAPTURE RULES:\n`;
@@ -316,30 +319,16 @@ export function buildLeadTrainingPrompt(
 
     if (mobileField) {
       const validation = mobileField.phoneValidation || '10';
-      let validationRule = '';
-      switch (validation) {
-        case '10': validationRule = 'exactly 10 digits (excluding country code)'; break;
-        case '12': validationRule = 'exactly 12 digits (may include country code)'; break;
-        case '8-12': validationRule = 'between 8 and 12 digits'; break;
-        case 'any': validationRule = 'any reasonable length (no strict validation)'; break;
-        default: validationRule = 'exactly 10 digits';
-      }
-      prompt += `Mobile Number: Must have ${validationRule}\n`;
+      const validationRule = describePhoneRule(validation);
+      prompt += `Mobile Number: Must be ${validationRule}\n`;
       prompt += `- If the number doesn't meet this requirement, politely ask the user to re-enter a valid number\n`;
       prompt += `- Example: "Could you please provide a valid ${validation === '10' ? '10-digit' : validation === '12' ? '12-digit' : ''} mobile number?"\n`;
     }
 
     if (whatsappField) {
       const validation = whatsappField.phoneValidation || '10';
-      let validationRule = '';
-      switch (validation) {
-        case '10': validationRule = 'exactly 10 digits (excluding country code)'; break;
-        case '12': validationRule = 'exactly 12 digits (may include country code)'; break;
-        case '8-12': validationRule = 'between 8 and 12 digits'; break;
-        case 'any': validationRule = 'any reasonable length (no strict validation)'; break;
-        default: validationRule = 'exactly 10 digits';
-      }
-      prompt += `WhatsApp Number: Must have ${validationRule}\n`;
+      const validationRule = describePhoneRule(validation);
+      prompt += `WhatsApp Number: Must be ${validationRule}\n`;
       prompt += `- If the number doesn't meet this requirement, politely ask the user to re-enter a valid number\n`;
     }
 
@@ -372,17 +361,12 @@ export function buildLeadTrainingPrompt(
     }
 
     if (requiredCustomFields.length > 0) {
-      const askAfter = requiredCustomFields[0].customAskAfter || 2;
-      const freeMessages = askAfter - 1;
       const customFieldNames = requiredCustomFields.map((f: any) => f.id);
-      prompt += `⏱️ "CUSTOM" TIMING FIELDS (${customFieldNames.join(', ')}):\n`;
-      if (freeMessages > 0) {
-        prompt += `- Respond normally for the first ${freeMessages} message(s) (ALL messages count — including greetings)\n`;
-      } else {
-        prompt += `- No free messages — collect these fields immediately\n`;
-      }
-      prompt += `- On user message #${askAfter}, you MUST collect these fields before answering further\n`;
-      prompt += `- BLOCK further assistance after message #${askAfter} until these fields are provided\n`;
+      prompt += `⏱️ "CUSTOM" TIMING FIELDS (${customFieldNames.join(', ')}) — ALL messages count, including greetings:\n`;
+      requiredCustomFields.forEach((f: any) => {
+        const askAfter = f.customAskAfter || 2;
+        prompt += `- ${f.id}: respond normally for the first ${askAfter - 1} message(s); from user message #${askAfter} collect it before answering further\n`;
+      });
       prompt += `- If user refuses, politely explain you need this info to continue helping them\n\n`;
     }
 
@@ -411,60 +395,42 @@ export function buildLeadTrainingPrompt(
   return prompt;
 }
 
-export function buildPhoneValidationOverride(userMessage: string, leadTrainingConfig: any): string | null {
-  if (!leadTrainingConfig?.fields || !Array.isArray(leadTrainingConfig.fields)) {
-    return null;
+export interface PhoneValidationContext {
+  /** false when the lead already has a phone — then nothing is checked. */
+  phoneMissing?: boolean;
+  /** The previous assistant message asked for the mobile / WhatsApp number. */
+  assistantAskedForPhone?: boolean;
+  lastAssistantMessage?: string;
+}
+
+/**
+ * A short note for the model when the visitor tried to give a phone number that fails the
+ * configured digit rule. Runs only when a phone field (mobile / WhatsApp) is enabled, the phone is
+ * still missing, and the message is actually a phone attempt (the assistant just asked for it, the
+ * digits follow "my number / mobile / phone / WhatsApp …", or the message is basically one 8-15
+ * digit number). Dates ("15-10-2026"), amounts ("1500000", "₹15,00,000", "15 lakh") and ids
+ * ("order 123456789") never trigger it. Returns null when there is nothing to say.
+ */
+export function buildPhoneValidationOverride(userMessage: string, leadTrainingConfig: any, ctx: PhoneValidationContext = {}): string | null {
+  if (!leadTrainingConfig?.fields || !Array.isArray(leadTrainingConfig.fields)) return null;
+  if (!hasEnabledPhoneField(leadTrainingConfig)) return null;
+  if (ctx.phoneMissing === false) return null;
+
+  const { attempt, candidates } = looksLikePhoneAttempt(userMessage, {
+    assistantAskedForPhone: ctx.assistantAskedForPhone,
+    lastAssistantMessage: ctx.lastAssistantMessage,
+  });
+  if (!attempt || candidates.length === 0) return null;
+
+  const mode = phoneModeFor(leadTrainingConfig);
+  let firstFailure: { digits: string; reason: string } | null = null;
+  for (const c of candidates) {
+    const r = validatePhoneNumber(c.raw, mode);
+    if (r.isValid) return null;
+    if (!firstFailure) firstFailure = { digits: c.digits, reason: r.reasonMessage };
   }
-
-  const phonePattern = /\+?[\d\s().-]{7,20}/g;
-  const phoneMatches = userMessage.match(phonePattern);
-
-  if (!phoneMatches || phoneMatches.length === 0) {
-    return null;
-  }
-
-  const mobileField = leadTrainingConfig.fields.find((f: any) => f.id === 'mobile' && f.enabled);
-  const whatsappField = leadTrainingConfig.fields.find((f: any) => f.id === 'whatsapp' && f.enabled);
-  const phoneValidation = mobileField?.phoneValidation || whatsappField?.phoneValidation || '10';
-
-  let foundValidPhone = false;
-  let rejectedDigits = '';
-  let rejectedDigitCount = 0;
-
-  for (const match of phoneMatches) {
-    const digitsOnly = match.replace(/[^\d]/g, '');
-    if (digitsOnly.length < 7) continue;
-
-    let isValid = false;
-    switch (phoneValidation) {
-      case '10': isValid = digitsOnly.length === 10; break;
-      case '12': isValid = digitsOnly.length === 12; break;
-      case '8-12': isValid = digitsOnly.length >= 8 && digitsOnly.length <= 12; break;
-      case 'any': isValid = digitsOnly.length >= 7 && digitsOnly.length <= 15; break;
-      default: isValid = digitsOnly.length === 10;
-    }
-
-    if (isValid) {
-      foundValidPhone = true;
-      break;
-    } else {
-      rejectedDigits = digitsOnly;
-      rejectedDigitCount = digitsOnly.length;
-    }
-  }
-
-  if (!foundValidPhone && rejectedDigits) {
-    let requiredFormat = '';
-    switch (phoneValidation) {
-      case '10': requiredFormat = 'exactly 10 digits'; break;
-      case '12': requiredFormat = 'exactly 12 digits'; break;
-      case '8-12': requiredFormat = 'between 8 and 12 digits'; break;
-      case 'any': requiredFormat = 'a valid length (7-15 digits)'; break;
-      default: requiredFormat = 'exactly 10 digits';
-    }
-    console.log(`[Phone Validation Gate] REJECTED: "${userMessage}" has ${rejectedDigitCount} digits, requires ${requiredFormat}`);
-    return `[PHONE VALIDATION FAILED: The user entered "${userMessage}" which contains "${rejectedDigits}" (${rejectedDigitCount} digits). This is INVALID — a valid number must have ${requiredFormat}. You MUST tell the user this number is not valid and ask them to provide a correct number with ${requiredFormat}. Do NOT accept it. Do NOT thank them. Respond naturally based on whatever field (mobile/WhatsApp/phone) you were asking about.]`;
-  }
-
-  return null;
+  if (!firstFailure) return null;
+  const rule = describePhoneRule(mode);
+  console.log(`[Phone Validation Gate] REJECTED a ${firstFailure.digits.length}-digit number (${firstFailure.reason}); requires ${rule}`);
+  return `[PHONE NUMBER NOT VALID: the number the visitor just typed (${firstFailure.digits.length} digits) is not valid — ${firstFailure.reason}. A valid number is ${rule}. Do NOT save or thank them for it; tell them briefly it doesn't look right and ask them to re-enter their number. Ask only for the number.]`;
 }

@@ -3,6 +3,7 @@ import { aiUsageLogger } from './services/aiUsageLogger';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
 import { withoutUsageTracking } from "./lib/requestContext";
+import { assistantAskedForNameIn, emailInMessage, isDecline, isValidLeadName, nameStatedInHistory } from './services/leadCapture/detectors';
 
 // Using GPT-4o-mini for customer-facing chat to ensure reliable:
 // - Language matching (English/Hindi/Hinglish)
@@ -32,108 +33,37 @@ interface LeadTrainingConfig {
   captureStrategy: string;
 }
 
-interface CollectedContactInfo {
-  mobile?: string;
-  phone?: string;
-  email?: string;
-  name?: string;
-  whatsapp?: string;
-}
+// Name validity / detection live in services/leadCapture/detectors (English + Hindi/Hinglish).
+const isValidName = (name: string): boolean => isValidLeadName(name);
 
-// Blacklist of refusal/acknowledgment words that should NOT be treated as names
-const REFUSAL_WORDS = [
-  'no', 'nop', 'nope', 'nah', 'na', 'none', 'nothing', 'never',
-  'why', 'what', 'when', 'where', 'who', 'how',
-  'yes', 'yeah', 'yep', 'yup', 'ok', 'okay', 'sure', 'fine',
-  'thanks', 'thank', 'ty', 'thx',
-  'hi', 'hello', 'hey', 'hola', 'greetings', 'good',
-  'bye', 'goodbye', 'later',
-  'maybe', 'perhaps', 'dunno', 'idk',
-  'stop', 'wait', 'hold',
-  'there', 'here', 'help', 'please', 'can', 'you', 'me',
-  'morning', 'afternoon', 'evening', 'night', 'day',
-  'team', 'everyone', 'all', 'guys', 'folks', 'people',
-  // Weekdays and time words
-  'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
-  'today', 'tomorrow', 'yesterday', 'tonight', 'now', 'soon', 'then',
-  // Common adverbs and transitions
-  'absolutely', 'definitely', 'certainly', 'indeed', 'however', 'meanwhile',
-  'otherwise', 'therefore', 'furthermore', 'moreover', 'additionally'
-];
-
-// Helper function to validate if a potential name is legitimate
-function isValidName(name: string): boolean {
-  if (!name || name.length < 2 || name.length > 50) return false;
-  
-  const nameLower = name.toLowerCase().trim();
-  const words = nameLower.split(/\s+/);
-  
-  // Reject if any word is in refusal list
-  if (words.some(word => REFUSAL_WORDS.includes(word))) {
-    return false;
-  }
-  
-  // Reject if it looks like a sentence (more than 3 words)
-  if (words.length > 3) return false;
-  
-  // Reject if it contains numbers
-  if (/\d/.test(name)) return false;
-  
-  return true;
-}
-
-// STAGE 1: Extract name using strict, high-precision regex patterns
-function extractNameWithStrictRegex(conversationHistory: ConversationMessage[]): string | null {
-  // Only the most explicit self-identification patterns
-  const strictPatterns = [
-    /(?:my name is|i am|i'm)\s+([a-z]+(?:\s+[a-z]+)*)/i,
-    /(?:call me|name:|name\s+is)\s+([a-z]+(?:\s+[a-z]+)*)/i,
-    /(?:^|hey|hi|hello)\s+(?:its|it's)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i, // "hey its Abhishek" - requires greeting + capitalized name
-  ];
-  
-  for (const message of conversationHistory) {
-    if (message.role === 'user') {
-      for (const pattern of strictPatterns) {
-        const match = message.content.match(pattern);
-        if (match && match[1] && isValidName(match[1])) {
-          console.log(`[Name Extraction Stage 1] Strict regex matched: "${match[1]}"`);
-          return match[1];
-        }
-      }
-    }
-  }
-  
-  return null;
-}
-
-// STAGE 2: Extract name from assistant's acknowledgements (echo detection)
+// Extract name from assistant's acknowledgements (echo detection)
 // CONSERVATIVE: Only catches obvious greeting patterns to avoid false positives
-// Ambiguous cases like "assist you, Abhishek!" are handled by Stage 3 LLM
+// Ambiguous cases like "assist you, Abhishek!" are handled by the LLM fallback
 function extractNameFromAssistantEcho(conversationHistory: ConversationMessage[]): string | null {
   // Check last 5 assistant messages (most recent first)
   const assistantMessages = conversationHistory
     .filter(m => m.role === 'assistant')
     .slice(-5)
     .reverse();
-  
+
   for (const message of assistantMessages) {
     const content = message.content;
-    
+
     // CONSERVATIVE PATTERN: Only direct greetings
     // Matches: "Hello Abhishek!", "Hi John!", "Hey Sarah 😊"
     // This is zero-risk - greetings are unambiguous name references
     const greetingPattern = /^(?:hello|hi|hey)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)[!.?😊🎉👍✨💪🙌,\s]/i;
     const match = content.match(greetingPattern);
     if (match && match[1] && isValidName(match[1])) {
-      console.log(`[Name Extraction Stage 2] Assistant greeting detected: "${match[1]}"`);
+      console.log(`[Name Extraction] Assistant greeting detected: "${match[1]}"`);
       return match[1];
     }
   }
-  
+
   return null;
 }
 
-// STAGE 3: Extract name using LLM fallback for ambiguous cases
+// LLM fallback for ambiguous replies — only called right after the assistant asked for the name.
 async function extractNameWithLLM(conversationHistory: ConversationMessage[], businessAccountId?: string): Promise<string | null> {
   try {
     // Get last 4 messages (including assistant context) to understand if user is responding to a name question
@@ -233,110 +163,29 @@ User: "can you help me" → Response: "NONE"`
   }
 }
 
-// Main hybrid extraction function - tries stages in order: strict regex → assistant echo → LLM fallback
-async function extractCollectedContactInfo(conversationHistory: ConversationMessage[], businessAccountId?: string): Promise<CollectedContactInfo> {
-  const collected: CollectedContactInfo = {};
-  
-  // Phone/mobile patterns
-  const phonePattern = /(\+?\d[\d\s\-\(\)]{7,}\d)/g;
-  // Email pattern
-  const emailPattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
-  
-  for (const message of conversationHistory) {
-    if (message.role === 'user') {
-      const content = message.content;
-      
-      // Check for phone/mobile
-      const phones = content.match(phonePattern);
-      if (phones && phones.length > 0) {
-        collected.mobile = phones[0];
-        collected.phone = phones[0];
-        collected.whatsapp = phones[0];
-      }
-      
-      // Check for email
-      const emails = content.match(emailPattern);
-      if (emails && emails.length > 0) {
-        collected.email = emails[0];
-      }
-    }
-  }
-  
-  // HYBRID NAME EXTRACTION PIPELINE
-  // Stage 1: Try strict regex first (fastest, no API calls)
-  let extractedName = extractNameWithStrictRegex(conversationHistory);
-  
-  // Stage 2: If strict regex failed, try assistant echo detection (free, no API calls)
-  if (!extractedName) {
-    extractedName = extractNameFromAssistantEcho(conversationHistory);
-  }
-  
-  // Stage 3: If both failed, use LLM fallback (costs tokens but handles ambiguous cases)
-  if (!extractedName) {
-    extractedName = await extractNameWithLLM(conversationHistory, businessAccountId);
-  }
-  
-  if (extractedName) {
-    collected.name = extractedName;
-  }
-  
-  return collected;
-}
-
-
-// Words that follow "I'm" / "my name is" in normal sentences but are not names.
-const NOT_A_NAME = new Set([
-  'interested', 'looking', 'searching', 'trying', 'planning', 'thinking', 'wondering', 'asking', 'calling',
-  'from', 'in', 'at', 'on', 'not', 'just', 'also', 'still', 'very', 'really', 'so', 'a', 'an', 'the',
-  'student', 'working', 'employed', 'unemployed', 'fine', 'good', 'great', 'okay', 'ok', 'busy', 'new',
-  'here', 'there', 'back', 'done', 'ready', 'confused', 'sorry', 'happy', 'sure', 'unable', 'able',
-]);
-const NAME_STOP_WORDS = new Set(['and', 'i', 'im', 'from', 'here', 'want', 'wanted', 'need', 'looking', 'interested', 'my', 'is', 'am', 'the', 'a', 'to', 'for', 'with']);
-
 /**
  * High-precision "the visitor told us their name" check:
- * "my name is Rahul (Sharma)", "name: Rahul", or a whole message like "I'm Rahul" / "hi, I am Rahul Sharma".
- * Deliberately ignores "I am interested…", "I'm looking for…".
+ * "my name is Rahul (Sharma)", "name: Rahul", a whole message like "I'm Rahul" / "hi, I am Rahul Sharma",
+ * and Hindi/Hinglish "mera naam Rahul hai", "main Rahul hoon", "मेरा नाम राहुल है".
+ * Deliberately ignores "I am interested…", "I'm looking for…", "I am a student", "call me back".
  */
 export function nameStatedInChat(history: ConversationMessage[]): string | null {
-  for (let i = history.length - 1; i >= 0; i--) {
-    const m = history[i];
-    if (m.role !== 'user') continue;
-    const text = m.content.trim();
-    let candidate: string | null = null;
-    const named = text.match(/\b(?:my name is|my name's|name is|name\s*:)\s*([A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,2})/i);
-    if (named) {
-      const words: string[] = [];
-      for (const w of named[1].split(/\s+/)) {
-        if (NAME_STOP_WORDS.has(w.toLowerCase())) break;
-        words.push(w);
-      }
-      candidate = words.join(' ') || null;
-    } else {
-      const whole = text.match(/^(?:(?:hi|hello|hey)[,!\s]+)?(?:i am|i'm|im)\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?)\s*[.!]?$/i);
-      if (whole) candidate = whole[1];
-    }
-    if (!candidate) continue;
-    const first = candidate.split(/\s+/)[0].toLowerCase();
-    if (NOT_A_NAME.has(first) || !isValidName(candidate)) continue;
-    return candidate.replace(/\b\w/g, c => c.toUpperCase());
-  }
-  return null;
+  return nameStatedInHistory(history);
 }
 
-// "May I have your name?", "what should I call you" — the visitor's next message is probably their name.
+// "May I have your name?", "what should I call you", "aapka naam?" — the visitor's next message is probably their name.
 function assistantJustAskedForName(history: ConversationMessage[]): boolean {
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].role !== 'assistant') continue;
-    return /\b(your|ur)\s+(full\s+)?name\b|\bwhat\s+should\s+i\s+call\s+you\b|\bwho\s+am\s+i\s+(speaking|chatting)\s+(with|to)\b/i.test(history[i].content);
+    return assistantAskedForNameIn(history[i].content);
   }
   return false;
 }
 
 /**
  * Name / email the visitor already typed in this conversation but that isn't on the saved lead
- * (the model didn't call capture_lead, or the row isn't there yet). Without this, every timing
- * rule except "At Start" only looked at the saved lead and asked for the name again.
+ * (the model didn't call capture_lead, or the row isn't there yet). The saved lead is merged FIRST:
+ * a field it already has is never re-extracted (so no LLM call once the name is known).
  * Phone is deliberately not inferred here: it goes through capture_lead's validation / OTP.
  * The LLM name check only runs right after the assistant asked for the name, so most turns
  * cost no extra call.
@@ -358,167 +207,24 @@ export async function contactInfoSaidInChat(
   if (needEmail) {
     for (const m of history) {
       if (m.role !== 'user') continue;
-      const e = m.content.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/);
-      if (e) found.email = e[0];
+      const e = emailInMessage(m.content);
+      if (e) found.email = e;
     }
   }
   if (needName) {
     let name = nameStatedInChat(history) || extractNameFromAssistantEcho(history);
     if (!name && assistantJustAskedForName(history.slice(0, -1))) {
-      name = await extractNameWithLLM(history, businessAccountId);
+      const reply = (history[history.length - 1]?.content || '').trim();
+      // A bare name after "May I have your name?" ("Rahul", "rahul sharma") needs no AI call.
+      if (new RegExp(String.raw`^[\p{L}\p{M}][\p{L}\p{M}.' -]{1,40}$`, 'u').test(reply) && reply.split(/\s+/).length <= 3 && isValidName(reply)) {
+        name = reply.replace(/\b[a-z]/g, c => c.toUpperCase());
+      } else if (reply && !isDecline(reply)) {
+        name = await extractNameWithLLM(history, businessAccountId);
+      }
     }
     if (name) found.name = name;
   }
   return found.name || found.email ? found : null;
-}
-
-// Helper function to map field IDs to user-friendly display names
-function getFieldDisplayName(fieldId: string): string {
-  const fieldIdLower = fieldId.toLowerCase();
-  switch (fieldIdLower) {
-    case 'name':
-      return 'full name';
-    case 'whatsapp':
-      return 'WhatsApp number';
-    case 'mobile':
-      return 'mobile number';
-    case 'phone':
-      return 'phone number';
-    case 'email':
-      return 'email address';
-    default:
-      return fieldId;
-  }
-}
-
-// Helper function to build missing required fields list for final override
-async function buildMissingRequiredFieldsMessage(
-  leadTrainingConfig: LeadTrainingConfig | null | undefined,
-  conversationHistory: ConversationMessage[],
-  currentUserMessage?: string,
-  existingLead?: { phone?: string | null; email?: string | null; name?: string | null } | null,
-  businessAccountId?: string
-): Promise<string> {
-  if (!leadTrainingConfig || !leadTrainingConfig.fields || !Array.isArray(leadTrainingConfig.fields)) {
-    return '';
-  }
-  
-  // Get required fields with "start" timing (must collect before answering)
-  const requiredStartFields = leadTrainingConfig.fields
-    .filter(f => f.enabled && f.required && f.captureStrategy === 'start')
-    .sort((a, b) => a.priority - b.priority);
-  
-  if (requiredStartFields.length === 0) {
-    return '';
-  }
-  
-  // Include current user message in the history for extraction
-  // This ensures we catch contact info from the message being processed
-  const historyWithCurrentMessage = currentUserMessage 
-    ? [...conversationHistory, { role: 'user' as const, content: currentUserMessage }]
-    : conversationHistory;
-  
-  // Extract what's already been collected from conversation (async pipeline)
-  const collected = await extractCollectedContactInfo(historyWithCurrentMessage, businessAccountId);
-  
-  // CRITICAL: Merge with existing lead from database
-  // This ensures we don't re-ask for info that was already captured via tool
-  if (existingLead) {
-    if (existingLead.phone && !collected.phone) {
-      collected.phone = existingLead.phone;
-      collected.mobile = existingLead.phone;
-      collected.whatsapp = existingLead.phone;
-    }
-    if (existingLead.email && !collected.email) {
-      collected.email = existingLead.email;
-    }
-    if (existingLead.name && !collected.name) {
-      collected.name = existingLead.name;
-    }
-  }
-  
-  // IMPORTANT: phone/mobile/whatsapp are all satisfied by any phone number
-  // If any phone-type field is collected, all phone-type fields are satisfied
-  const hasAnyPhone = !!(collected.phone || collected.mobile || collected.whatsapp);
-  
-  // Build list of missing required fields with their priorities
-  const missingFieldsWithPriority: Array<{id: string, priority: number}> = [];
-  for (const field of requiredStartFields) {
-    const fieldId = field.id.toLowerCase();
-    
-    // Check if this field has been collected
-    // phone, mobile, and whatsapp are all satisfied by the same phone number
-    if (fieldId === 'mobile' || fieldId === 'phone' || fieldId === 'whatsapp') {
-      if (!hasAnyPhone) {
-        missingFieldsWithPriority.push({id: field.id, priority: field.priority});
-      }
-    } else if (fieldId === 'email') {
-      if (!collected.email) {
-        missingFieldsWithPriority.push({id: field.id, priority: field.priority});
-      }
-    } else if (fieldId === 'name') {
-      if (!collected.name) {
-        missingFieldsWithPriority.push({id: field.id, priority: field.priority});
-      }
-    }
-  }
-  
-  if (missingFieldsWithPriority.length === 0) {
-    return '';
-  }
-  
-  // Map field IDs to friendly display names for the prompt
-  const missingFieldDisplayNames = missingFieldsWithPriority.map(f => getFieldDisplayName(f.id));
-  const nextFieldDisplayName = getFieldDisplayName(missingFieldsWithPriority[0].id);
-  
-  return `
-🚨 RULE #0 - REQUIRED CONTACT COLLECTION (ABSOLUTE HIGHEST PRIORITY):
-- Required fields NOT YET collected: ${missingFieldDisplayNames.join(', ')}
-- Next field to collect: ${nextFieldDisplayName}
-
-🔒 MANDATORY ENFORCEMENT - NO EXCEPTIONS ALLOWED:
-- YOU MUST COLLECT **ONLY** [${nextFieldDisplayName}] - DO NOT ASK FOR ANY OTHER FIELD
-- DO NOT ask for multiple fields at once (e.g., "name and email")
-- DO NOT say "How can I help you today?" until this field is collected
-- DO NOT answer other questions until this field is collected  
-- DO NOT move on to different topics
-- DO NOT abandon this collection process for ANY reason
-- STAY COMPLETELY FOCUSED on collecting this ONE field first
-
-🚫 CRITICAL - DO NOT ASK FOR MULTIPLE FIELDS:
-❌ WRONG: "May I also have your name and email?"
-❌ WRONG: "Could you share your name and phone number?"
-❌ WRONG: "Please provide your email and name"
-✅ CORRECT: Ask for ONLY ${nextFieldDisplayName} using warm, varied phrasing — never repeat the same sentence.
-
-HOW TO ASK NATURALLY:
-1. Ask for ONLY ${nextFieldDisplayName} - DO NOT mention any other field
-2. Be conversational and warm, not robotic
-3. After they provide it, the system will tell you what to ask for next
-
-IF USER ASKS "WHY" OR QUESTIONS THE REQUEST:
-🔴 CRITICAL - THIS IS STILL A MANDATORY COLLECTION - DO NOT ABANDON:
-- When user says "why", "why do you need this", "no", or questions the request
-- Your TONE should be warm and understanding (not pushy or aggressive)
-- BUT the COLLECTION IS STILL MANDATORY - you must NOT abandon it
-- PROCESS:
-  1. Briefly explain why you need their ${nextFieldDisplayName} (to provide better assistance)
-  2. Keep your explanation friendly and understanding in TONE
-  3. THEN immediately ask again for their ${nextFieldDisplayName}
-  4. DO NOT say "How can I help you today?" - STAY on collecting this field
-  5. DO NOT move to answering their original question
-  6. STAY LOCKED on this ONE field until collected
-
-EXAMPLE CORRECT BEHAVIOR:
-- User: "why"
-- You: [Briefly explain why you need their ${nextFieldDisplayName}, then ask again using warm, varied phrasing]
-- ✅ CORRECT: Explained + Asked again + Stayed on field
-
-EXAMPLE WRONG BEHAVIOR:
-- User: "why"
-- You: "Thanks for sharing! How can I help you today?"
-- ❌ WRONG: Abandoned collection after user questioned it
-`;
 }
 
 // Cache for parsed custom instructions (avoids re-parsing JSON on every request)
@@ -747,6 +453,22 @@ export interface StreamPromptOptions {
   cacheFriendly?: boolean;
 }
 
+/**
+ * Per-turn blocks computed by chatService for the website widget. They go in the FINAL rules
+ * (the last system message), which is the only part of the per-turn context the model reliably
+ * follows — the business context passed as `systemContext` is not part of the first streaming call.
+ */
+export interface StreamTurnOptions {
+  /** Lead-collection block from services/leadCapture — the ONLY contact-collection rules this turn. */
+  leadBlock?: string;
+  /** The lead block asks for a field BEFORE answering (mandatory field due now). */
+  leadBlocksAnswer?: boolean;
+  /** The lead block asks (or may ask) for something this turn. */
+  leadAsksNow?: boolean;
+  /** OTP strict-mode / lockout block. Replaces lead collection and goes last. */
+  otpBlock?: string;
+}
+
 export class LlamaService {
   // Cache master AI settings for 30s to avoid repeated DB queries (called 4-5x per message)
   private masterConfigCache: {
@@ -863,7 +585,9 @@ export class LlamaService {
     hasProducts: boolean = false,
     responseLength: string = 'balanced',
     phoneValidationOverride?: string,
-    forcedFirstToolName?: string
+    forcedFirstToolName?: string,
+    /** Per-turn blocks (lead collection / OTP strict mode) appended to the final rules. */
+    turnBlock?: string
   ) {
     const { storage } = await import('./storage');
     const masterSettings = await storage.getMasterAiSettings().catch(() => null);
@@ -1005,17 +729,8 @@ APPOINTMENT BOOKING FLOW
 ------------------------------
 LEAD CAPTURE FLOW
 ------------------------------
-- Capture contact info ONLY WHEN:
-  - User provides it voluntarily, OR
-  - Buying intent is detected.
-
-- Progressive enrichment is allowed.
-- Validation rules:
-  - Phone: 8–12 digits only.
-  - Email: must contain '@'.
-  - Name: only after you ask for it.
-
-- Contact info is REQUIRED before conversion actions, NOT before normal answers.
+- Save contact info with capture_lead whenever the user gives it (progressive enrichment is allowed).
+- WHEN to ask for contact details is decided only by the "LEAD COLLECTION (THIS TURN)" block in the final instructions (one detail at a time). Without that block, don't gate answers behind contact details.
 
 ------------------------------
 CONVERSATION BEST PRACTICES
@@ -1124,6 +839,10 @@ SCRIPT RULE (CRITICAL - check this before responding):
 - When user shares personal details, cross-reference your context and proactively suggest the best match.
 - Detect user emotion from their message tone and adapt accordingly.`;
 
+    if (turnBlock && turnBlock.trim()) {
+      finalOverride += `\n\n${turnBlock.trim()}`;
+    }
+
     // Append phone validation override to finalOverride if present (LAST POSITION = highest weight)
     if (phoneValidationOverride) {
       finalOverride += `\n\n${phoneValidationOverride}`;
@@ -1172,7 +891,8 @@ SCRIPT RULE (CRITICAL - check this before responding):
     apiKey?: string,
     businessAccountId?: string,
     preferredLanguage?: string,
-    responseLength: string = 'balanced'
+    responseLength: string = 'balanced',
+    extraFinalBlock?: string
   ): Promise<{ openai: any; model: string; messages: ConversationMessage[] }> {
     const { openai, model } = await this.resolveMasterConfig(apiKey);
 
@@ -1404,8 +1124,12 @@ ${this.getJourneyGuidance()}`;
     
     console.log(`[continueToolConversation] Lead capture completed: ${leadCaptureCompleted}, Original question: "${originalQuestion}", isRealQuestion: ${isRealQuestion}`);
     
+    // capture_lead results from the website chat carry their own precise "_instruction" (answer the
+    // ORIGINAL question / re-enter a rejected detail / ask the one next field) — don't contradict it.
+    const toolGaveInstruction = messages.some(msg =>
+      (msg as any).role === 'tool' && typeof msg.content === 'string' && msg.content.includes('"_instruction"'));
     let leadCaptureInstruction = '';
-    if (leadCaptureCompleted) {
+    if (leadCaptureCompleted && !toolGaveInstruction) {
       if (isRealQuestion && originalQuestion) {
         // User had a real question - answer it
         leadCaptureInstruction = `
@@ -1564,7 +1288,9 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
 - NEVER say "unfortunately", "sadly", "I'm sorry but we don't". Instead pivot to alternatives.
 - ALWAYS end with a qualifying question, recommendation, or soft CTA — never leave the conversation hanging.
 - When user shares personal details, cross-reference your context and proactively suggest the best match.
-- Detect user emotion from their message tone and adapt accordingly.`}`;
+- Detect user emotion from their message tone and adapt accordingly.`}${extraFinalBlock && extraFinalBlock.trim() ? `
+
+${extraFinalBlock.trim()}` : ''}`;
 
     messages.push({ role: 'system', content: finalOverride });
 
@@ -1578,10 +1304,11 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
     apiKey?: string,
     businessAccountId?: string,
     preferredLanguage?: string,
-    responseLength: string = 'balanced'
+    responseLength: string = 'balanced',
+    extraFinalBlock?: string
   ) {
     const { openai, model, messages: preparedMessages } = await this._prepareContinuationContext(
-      messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength
+      messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength, extraFinalBlock
     );
 
     // withoutUsageTracking: logged below via aiUsageLogger.logChatUsage
@@ -1617,10 +1344,11 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
     apiKey?: string,
     businessAccountId?: string,
     preferredLanguage?: string,
-    responseLength: string = 'balanced'
+    responseLength: string = 'balanced',
+    extraFinalBlock?: string
   ): AsyncGenerator<string> {
     const { openai, model, messages: preparedMessages } = await this._prepareContinuationContext(
-      messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength
+      messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength, extraFinalBlock
     );
 
     // withoutUsageTracking: logged below via aiUsageLogger.logChatUsage
@@ -1678,22 +1406,11 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
     suppressFaqInjection: boolean = false,
     otpVerificationPending: boolean = false,
     forcedFirstToolName?: string,
-    promptOptions?: StreamPromptOptions
+    promptOptions?: StreamPromptOptions,
+    turnOptions?: StreamTurnOptions
   ) {
     const { openai, model } = await this.resolveMasterConfig(apiKey);
-
-    // Count a name/email the visitor already gave in this chat as collected (not just what's saved),
-    // so no timing rule asks for it again; and tell the model to save it.
-    let knownContactNote = '';
-    if (leadTrainingConfig && !otpVerificationPending) {
-      const said = await contactInfoSaidInChat(leadTrainingConfig, existingLead, conversationHistory, userMessage, businessAccountId).catch(() => null);
-      if (said) {
-        existingLead = { ...(existingLead || {}), ...said };
-        const parts = [said.name ? `name: ${said.name}` : '', said.email ? `email: ${said.email}` : ''].filter(Boolean).join(', ');
-        knownContactNote = `\nℹ️ The visitor has ALREADY told you their ${parts} in this conversation. Do NOT ask for ${said.name && said.email ? 'these' : 'it'} again. If you haven't saved it yet, call capture_lead with it now.\n`;
-        console.log(`[Lead Capture] Using contact info already given in chat (${Object.keys(said).join(', ')}) — not saved on the lead yet`);
-      }
-    }
+    void leadTrainingConfig; void existingLead; // lead rules arrive pre-computed in turnOptions.leadBlock
 
     // OPTIMIZATION: Fast-path for simple English-only greetings (reduces response time from 7s to ~1s)
     // Only triggers for English greetings when no custom instructions or language preferences are set
@@ -1702,14 +1419,17 @@ ${isK12Mode ? `- You are an EDUCATIONAL TUTOR. Your goal is to help students und
     const isSimpleEnglishGreeting = simpleEnglishGreetings.includes(msgLower) || 
                              (msgLower.length <= 10 && /^(hi+|hey+|hello+|yo+)!*$/i.test(msgLower));
     
-    // Only use fast-path when: no conversation history, no lead capture, no custom instructions, no language preference
-    const hasRequiredLeadFields = leadTrainingConfig?.fields?.some(f => f.enabled && f.required && !existingLead?.[f.id as keyof typeof existingLead]);
+    // Only use fast-path when: no conversation history, nothing to ask for this turn, no OTP step,
+    // no custom instructions, no language preference
+    const leadAsksNow = !!(turnOptions?.leadAsksNow || turnOptions?.leadBlocksAnswer);
     const hasCustomInstructions = rawCustomInstructions && rawCustomInstructions.trim().length > 0;
     const hasLanguagePreference = preferredLanguage && preferredLanguage !== 'auto';
-    const useGreetingFastPath = isSimpleEnglishGreeting && 
-                                 conversationHistory.length === 0 && 
-                                 !hasRequiredLeadFields && 
-                                 !hasCustomInstructions && 
+    const useGreetingFastPath = isSimpleEnglishGreeting &&
+                                 conversationHistory.length === 0 &&
+                                 !leadAsksNow &&
+                                 !otpVerificationPending &&
+                                 !turnOptions?.otpBlock &&
+                                 !hasCustomInstructions &&
                                  !hasLanguagePreference;
     
     if (useGreetingFastPath) {
@@ -1948,30 +1668,13 @@ This rule OVERRIDES all FAQ lookup, product search, and content delivery rules b
 
 ───────────────────────────────────────────────────────────────────────────
 
-PRIORITY 3 — LEAD CAPTURE (REQUIRED CONTACT INFORMATION)
+PRIORITY 3 — LEAD CAPTURE (CONTACT INFORMATION)
 
-**BEFORE answering ANY user question, you MUST check if required contact fields have been collected.**
+**When — and whether — to ask for the visitor's name, phone or email is decided per message by the "LEAD COLLECTION (THIS TURN)" block in the FINAL RULES at the end.**
 
-The "SMART LEAD CAPTURE CONFIGURATION" section below specifies which fields are REQUIRED.
-
-**MANDATORY PROCESS FOR EVERY USER MESSAGE:**
-1. First, check conversation history - Have ALL required fields been collected already?
-2. If YES → Proceed to answer their question normally
-3. If NO → Do NOT answer their question yet. Instead:
-   - Politely redirect to collect the missing required fields first
-   - Ask for fields in priority order (priority 1 first, then 2, then 3, etc.)
-   - Only ask for ONE field at a time
-   - After collecting ALL required fields, THEN answer their original question
-
-**EXAMPLES:**
-- ❌ WRONG: User asks "tell me about MBA" → You answer immediately with MBA info
-- ✅ CORRECT: User asks "tell me about MBA" → Required fields missing → Warmly ask for their contact info first using varied, natural phrasing
-- ❌ WRONG: User asks "what are the fees?" → You answer "INR 3,15,000/-" without collecting required fields
-- ✅ CORRECT: User asks "what are the fees?" → Required fields missing → Warmly ask for their contact info first using varied, natural phrasing
-
-**EXCEPTION:** If lead capture timing is set to "end" for specific fields, you may answer first, then collect those fields at the end.
-
-**THIS RULE HAS ABSOLUTE PRIORITY OVER ANSWERING QUESTIONS - NO EXCEPTIONS**
+- Follow that block exactly. If it says a detail is due before answering, ask for that ONE detail first; if it says to answer first, answer and then ask; if it says nothing is due, just answer and do not ask for contact details.
+- Never ask for more than one contact detail in a message, and never ask again for anything listed there as already known or declined.
+- When there is no such block, do not gate answers behind contact details.
 
 ───────────────────────────────────────────────────────────────────────────
 
@@ -2170,10 +1873,9 @@ ${this.getJourneyGuidance()}`;
     // Add FINAL override to ensure language matching and product display rules
     console.log(`[Language Matching] User message: "${userMessage}"`);
 
-    // Build lead collection enforcement message if needed
-    // Include current user message so phone numbers in it are recognized
-    // Also pass existing lead from database to avoid re-asking for already captured info
-    const leadCollectionMessage = await buildMissingRequiredFieldsMessage(leadTrainingConfig, conversationHistory, userMessage, existingLead, businessAccountId);
+    // Lead collection rules for this turn come pre-computed (services/leadCapture resolver).
+    const leadBlock = (turnOptions?.otpBlock ? '' : (turnOptions?.leadBlock || '')).trim();
+    const leadBlocksAnswer = !!turnOptions?.leadBlocksAnswer && !!leadBlock;
 
     let languageInstruction: string;
     let effectiveLanguage: string;
@@ -2376,552 +2078,30 @@ SCRIPT RULE (CRITICAL - check this before responding):
         ? '1. BUSINESS KNOWLEDGE PRE-LOADED: The FAQs, website content and document excerpts relevant to this question are provided above (CRITICAL DOCUMENT KNOWLEDGE) together with the BUSINESS PROFILE. Answer directly from them - NO NEED to call get_faqs. Only call get_faqs if you need information that is not covered there. For products, use get_products tool.'
         : '1. TOOL USAGE (CRITICAL): For ANY question about the business, products, services, company info - ALWAYS call get_faqs or get_products tools FIRST to search the knowledge base. Never assume you don\'t have info without checking tools.';
 
-    // SMART TIMING: Check if we should activate the lead gate based on message count
-    // userMessageCount > 1 means this is the 2nd+ message and lead gate should be active
-    // Check ALL required SMART fields, not just name
-    const smartMandatoryFieldsList = leadTrainingConfig?.fields
-      ?.filter((f: any) => f.enabled && f.required && (!f.captureStrategy || f.captureStrategy === 'smart' || f.captureStrategy === 'custom'))
-      || [];
-    
-    // INTENT-BASED FIELDS: Fields that should be collected when user shows purchase/inquiry intent
-    const intentFieldsList = leadTrainingConfig?.fields
-      ?.filter((f: any) => f.enabled && f.captureStrategy === 'intent')
-      || [];
-    
-    // KEYWORD-BASED FIELDS: Fields that should be collected when user message contains specific keywords
-    // Also includes legacy 'end' strategy fields (migrated to 'keyword')
-    const keywordFieldsList = leadTrainingConfig?.fields
-      ?.filter((f: any) => f.enabled && (f.captureStrategy === 'keyword' || f.captureStrategy === 'end'))
-      || [];
-    
-    // Intent detection is now fully AI-driven — no regex keyword matching
-    // The AI prompt includes the configured sensitivity level and decides when to ask for contact info
-    
-    // REMOVED: Complex gibberish/dismissive detection
-    // Trust GPT-4o-mini to handle unclear messages naturally via Rule #7
-    // Only skip lead collection when it's clearly inappropriate (empty or whitespace-only)
+    // Empty / whitespace-only message: nothing to collect against.
     const skipLeadCollection = userMessage.trim().length === 0;
-    
-    // OPTIONAL START FIELDS: Fields that are Optional but have "At Start" timing
-    // These should prompt for contact info but NOT block answering questions
-    const optionalStartFieldsList = leadTrainingConfig?.fields
-      ?.filter((f: any) => f.enabled && !f.required && f.captureStrategy === 'start')
-      || [];
-    
-    // OPTIONAL CUSTOM FIELDS: Fields that are Optional but have "Custom" timing (legacy: "Smart")
-    // These should be asked after N messages based on customAskAfter config
-    const optionalSmartFieldsList = leadTrainingConfig?.fields
-      ?.filter((f: any) => f.enabled && !f.required && (f.captureStrategy === 'smart' || f.captureStrategy === 'custom'))
-      || [];
-    
-    // Check which mandatory fields are still missing from existingLead
-    const fieldIdToLeadKey: Record<string, keyof { name?: string | null; phone?: string | null; email?: string | null; whatsapp?: string | null }> = {
-      'name': 'name',
-      'phone': 'phone', 
-      'mobile': 'phone',
-      'email': 'email',
-      'whatsapp': 'phone'
-    };
-    
-    const missingSmartFields = smartMandatoryFieldsList.filter((f: any) => {
-      const leadKey = fieldIdToLeadKey[f.id] || f.id;
-      return !existingLead?.[leadKey as keyof typeof existingLead];
-    });
-    
-    // Check which optional start fields are still missing
-    const missingOptionalStartFields = optionalStartFieldsList.filter((f: any) => {
-      const leadKey = fieldIdToLeadKey[f.id] || f.id;
-      return !existingLead?.[leadKey as keyof typeof existingLead];
-    });
-    
-    // Check which optional smart fields are still missing
-    const missingOptionalSmartFields = optionalSmartFieldsList.filter((f: any) => {
-      const leadKey = fieldIdToLeadKey[f.id] || f.id;
-      return !existingLead?.[leadKey as keyof typeof existingLead];
-    });
-    
-    const hasSmartTimingFields = smartMandatoryFieldsList.length > 0;
-    const hasOptionalStartFields = optionalStartFieldsList.length > 0 && missingOptionalStartFields.length > 0;
-    const hasOptionalSmartFields = optionalSmartFieldsList.length > 0 && missingOptionalSmartFields.length > 0;
-    const smartCustomAskAfter = smartMandatoryFieldsList[0]?.customAskAfter || 2;
-    const smartTimingLeadGateActive = hasSmartTimingFields && userMessageCount >= smartCustomAskAfter && missingSmartFields.length > 0;
-    
-    // INTENT-BASED LEAD GATE: Check which intent fields are still missing
-    // Separate required vs optional intent fields
-    const requiredIntentFields = intentFieldsList.filter((f: any) => f.required);
-    const optionalIntentFields = intentFieldsList.filter((f: any) => !f.required);
-    
-    const missingRequiredIntentFields = requiredIntentFields.filter((f: any) => {
-      const leadKey = fieldIdToLeadKey[f.id] || f.id;
-      return !existingLead?.[leadKey as keyof typeof existingLead];
-    });
-    
-    const missingOptionalIntentFields = optionalIntentFields.filter((f: any) => {
-      const leadKey = fieldIdToLeadKey[f.id] || f.id;
-      return !existingLead?.[leadKey as keyof typeof existingLead];
-    });
-    
-    // AI-driven intent detection — no regex gating
-    // Always inject intent prompts when there are missing intent fields; AI decides based on sensitivity level
-    const hasRequiredIntentFields = requiredIntentFields.length > 0;
-    const hasMissingRequiredIntentFields = missingRequiredIntentFields.length > 0;
-    const hasOptionalIntentFields = missingOptionalIntentFields.length > 0;
-    
-    // No hard gate — AI will decide based on the sensitivity prompt
-    const intentLeadGateActive = false;
-    
-    // KEYWORD-BASED LEAD GATE: Check which keyword fields are still missing and if keywords match
-    const requiredKeywordFields = keywordFieldsList.filter((f: any) => f.required);
-    const optionalKeywordFields = keywordFieldsList.filter((f: any) => !f.required);
-    
-    const missingRequiredKeywordFields = requiredKeywordFields.filter((f: any) => {
-      const leadKey = fieldIdToLeadKey[f.id] || f.id;
-      return !existingLead?.[leadKey as keyof typeof existingLead];
-    });
-    
-    const missingOptionalKeywordFields = optionalKeywordFields.filter((f: any) => {
-      const leadKey = fieldIdToLeadKey[f.id] || f.id;
-      return !existingLead?.[leadKey as keyof typeof existingLead];
-    });
-    
-    // Check if user message contains any configured keywords (case-insensitive)
-    const userMessageLower = userMessage.toLowerCase();
-    const keywordMatchedFields = [...missingRequiredKeywordFields, ...missingOptionalKeywordFields].filter((f: any) => {
-      const keywords = f.captureKeywords || [];
-      return keywords.some((kw: string) => userMessageLower.includes(kw.toLowerCase()));
-    });
-    
-    const hasKeywordMatch = keywordMatchedFields.length > 0;
-    console.log(`[Keyword Timing] Keyword fields: ${keywordFieldsList.map((f: any) => `${f.id}(${(f.captureKeywords || []).join('|')})`).join(',')}, Matched: ${keywordMatchedFields.map((f: any) => f.id).join(',')}, hasMatch: ${hasKeywordMatch}`);
-    
-    console.log(`[Intent AI-Driven] Required intent fields: ${requiredIntentFields.map((f: any) => `${f.id}(${f.intentIntensity || 'medium'})`).join(',')}, Missing required: ${missingRequiredIntentFields.map((f: any) => f.id).join(',')}, Missing optional: ${missingOptionalIntentFields.map((f: any) => f.id).join(',')}`);
-    
-    // DEBUG: Log Smart timing evaluation
-    console.log(`[Smart Timing Debug] userMessageCount: ${userMessageCount}`);
-    console.log(`[Smart Timing Debug] smartMandatoryFieldsList: ${JSON.stringify(smartMandatoryFieldsList.map((f: any) => ({ id: f.id, strategy: f.captureStrategy })))}`);
-    console.log(`[Smart Timing Debug] optionalStartFieldsList: ${JSON.stringify(optionalStartFieldsList.map((f: any) => ({ id: f.id, strategy: f.captureStrategy })))}`);
-    console.log(`[Smart Timing Debug] missingSmartFields: ${JSON.stringify(missingSmartFields.map((f: any) => f.id))}`);
-    console.log(`[Smart Timing Debug] missingOptionalStartFields: ${JSON.stringify(missingOptionalStartFields.map((f: any) => f.id))}`);
-    console.log(`[Smart Timing Debug] optionalSmartFieldsList: ${JSON.stringify(optionalSmartFieldsList.map((f: any) => ({ id: f.id, strategy: f.captureStrategy })))}`);
-    console.log(`[Smart Timing Debug] missingOptionalSmartFields: ${JSON.stringify(missingOptionalSmartFields.map((f: any) => f.id))}`);
-    console.log(`[Smart Timing Debug] hasSmartTimingFields: ${hasSmartTimingFields}, hasOptionalStartFields: ${hasOptionalStartFields}, hasOptionalSmartFields: ${hasOptionalSmartFields}, smartTimingLeadGateActive: ${smartTimingLeadGateActive}`);
-    console.log(`[Intent Timing Debug] intentFieldsList: ${JSON.stringify(intentFieldsList.map((f: any) => ({ id: f.id, required: f.required, intensity: f.intentIntensity || 'medium' })))}`);
-    console.log(`[Intent Timing Debug] AI-driven (no regex). missingRequiredIntentFields: ${JSON.stringify(missingRequiredIntentFields.map((f: any) => f.id))}`);
-    console.log(`[Intent Timing Debug] missingOptionalIntentFields: ${JSON.stringify(missingOptionalIntentFields.map((f: any) => f.id))}`);
-    console.log(`[Intent Timing Debug] intentLeadGateActive: ${intentLeadGateActive}, hasOptionalIntentFields: ${hasOptionalIntentFields}`);
-    
-    // CHECK IF LEAD IS ALREADY FULLY COLLECTED - build override to prevent repeated asks
-    // This is critical to override custom business instructions that might say "always ask for contact info"
-    let leadAlreadyCollectedOverride = '';
-    
-    // Get ALL required fields (both start and smart timing)
-    const allRequiredFields = leadTrainingConfig?.fields
-      ?.filter((f: any) => f.enabled && f.required)
-      || [];
-    
-    // Check if ALL required fields are already collected in existingLead
-    const allRequiredFieldsCollected = allRequiredFields.length > 0 && allRequiredFields.every((f: any) => {
-      const leadKey = fieldIdToLeadKey[f.id] || f.id;
-      return !!existingLead?.[leadKey as keyof typeof existingLead];
-    });
-    
-    // Task #23: when an unverified OTP challenge is pending for this
-    // conversation, do NOT emit the "all collected — do not ask again"
-    // override. Even if name/email/phone are already on the lead row, the
-    // phone is not yet verified and the AI must remain in OTP-focused mode
-    // (the verify_phone_otp / resend_phone_otp tool path). Suppressing this
-    // override is what stops the AI from silently skipping verification when
-    // the lead-collected gate would otherwise fire first.
-    if (allRequiredFieldsCollected && allRequiredFields.length > 0 && !otpVerificationPending) {
-      console.log('[Lead Override] All required contact fields already collected - adding override to prevent repeated asks');
-      leadAlreadyCollectedOverride = `
-🟢 CONTACT INFO ALREADY COLLECTED - DO NOT ASK AGAIN 🟢
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ This visitor's contact information has ALREADY been saved.
-⛔ DO NOT ask for name, phone number, email, or mobile number.
-⛔ DO NOT mention "sharing contact details" or "follow-ups".
-⛔ IGNORE any business instructions that say to collect contact info.
-✅ Simply answer their questions naturally and helpfully.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-    }
-    
-    // Build SMART timing lead gate message if needed
-    // This message is placed at the VERY END of the final override for maximum weight
-    let smartTimingLeadMessage = '';
-    if (smartTimingLeadGateActive) {
-      const smartMandatoryFields = missingSmartFields
-        ?.map((f: any) => f.id)
-        ?.join(', ') || 'name';
-      
-      // Build example prompt based on the first missing field
-      const firstMissingField = missingSmartFields[0]?.id || 'name';
-      const fieldPromptExamples: Record<string, string> = {
-        'name': 'May I know your name first?',
-        'phone': 'May I have your phone number first?',
-        'mobile': 'May I have your mobile number first?',
-        'email': 'May I have your email address first?',
-        'whatsapp': 'May I have your WhatsApp number first?'
-      };
-      const examplePrompt = fieldPromptExamples[firstMissingField] || `May I have your ${firstMissingField} first?`;
-      
-      console.log(`[Smart Timing] LEAD GATE ACTIVE - Building override message for field: ${firstMissingField}`);
-      
-      // Lead gate message - blocks answering business questions until field is collected
-      // But allows natural responses to greetings/small talk
-      smartTimingLeadMessage = `
-🚨 MANDATORY LEAD COLLECTION — READ THIS FIRST 🚨
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-This is message #${userMessageCount}. You MUST collect their ${firstMissingField} before answering any questions.
+    // Final rules (the LAST system message — what the model weighs most). Lead collection comes
+    // from ONE block computed per turn (services/leadCapture), placed after the business's custom
+    // instructions so "already have / declined" facts beat e.g. "always ask for the phone number".
+    // A pending OTP step replaces lead collection entirely and goes at the very end.
+    const otpBlock = (turnOptions?.otpBlock || '').trim();
+    const leadSection = !skipLeadCollection && !otpBlock ? leadBlock : '';
+    const firstRule = skipLeadCollection
+      ? '1. NATURAL RESPONSE: The user sent a dismissive or unclear message. Handle it naturally - acknowledge and offer to help when they\'re ready. Do NOT push for contact info.'
+      : otpBlock
+        ? '1. VERIFICATION STEP: follow the OTP VERIFICATION block at the very end — nothing else in this reply.'
+        : leadBlocksAnswer
+          ? '1. CONTACT DETAIL FIRST: the LEAD COLLECTION block at the end names the ONE detail to ask for before answering — ask for it and do not answer the question in this reply.'
+          : toolUsageInstruction;
 
-🚫 RULES:
-→ Do NOT answer ANY question (business or casual) until you have their ${firstMissingField}.
-→ First, warmly ask for their ${firstMissingField} in your own words.
-→ Vary your phrasing each time — do NOT repeat the same sentence or transition phrase.
-→ Ask for their ${firstMissingField} in a warm, natural way. Use creative, varied phrasing — never copy the same sentence twice across conversations.
-
-After they provide their ${firstMissingField}, answer their question fully.
-
-🔒 IF USER REFUSES (says "no", "I don't want to", etc.):
-This field is MANDATORY. Do NOT give up.
-- Politely explain why you need it and re-ask using a different approach.
-- NEVER answer the business question until this field is collected.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-    }
-    
-    // AI-DRIVEN INTENT PROMPT: Replaces regex keyword matching entirely
-    // AI uses the configured sensitivity level to decide when to ask for contact info
-    let intentLeadMessage = '';
-    let optionalIntentPrompt = '';
-    
-    const fieldTextMap: Record<string, string> = {
-      'name': 'name',
-      'phone': 'phone number',
-      'mobile': 'mobile number',
-      'email': 'email address',
-      'whatsapp': 'WhatsApp number'
-    };
-    
-    const getSensitivityDescription = (fieldName: string, level: string) => {
-      const descriptions: Record<string, string> = {
-        'low': `LOW sensitivity — Ask for ${fieldName} when user shows ANY interest signal. This includes:
-   - Browsing or exploring (asking about any product, service, course, program, category)
-   - General inquiries about features, availability, eligibility, options
-   - Asking about any specific item by name (e.g., "MBA", "iPhone 15", "yoga class")
-   - Showing curiosity about what you offer
-   Basically, if the user is asking about ANYTHING related to the business beyond small talk, that qualifies as intent.`,
-        'medium': `MEDIUM sensitivity — Ask for ${fieldName} when user shows evaluating/comparison intent. This includes:
-   - Asking about pricing, costs, fees, rates, charges
-   - Comparing options ("which is better", "difference between")
-   - Asking about discounts, offers, deals, promotions
-   - Inquiring about availability of specific items
-   - Requesting detailed information to make a decision
-   Do NOT ask on general browsing or casual questions.`,
-        'high': `HIGH sensitivity — Ask for ${fieldName} ONLY when user shows strong purchase/action intent. This includes:
-   - Explicitly wanting to buy, order, purchase, or book
-   - Wanting to apply, enroll, register, or sign up
-   - Requesting to schedule an appointment or reserve a slot
-   - Saying "I want to...", "I'd like to...", "How do I sign up for..."
-   Do NOT ask on general inquiries, browsing, or even pricing questions.`
-      };
-      return descriptions[level] || descriptions['medium'];
-    };
-    
-    // REQUIRED INTENT FIELDS — AI must collect before answering when intent threshold is met
-    if (hasMissingRequiredIntentFields) {
-      const requiredFieldDetails = missingRequiredIntentFields.map((f: any) => {
-        const name = fieldTextMap[f.id] || f.id;
-        const intensity = f.intentIntensity || 'medium';
-        return { id: f.id, name, intensity };
-      });
-      
-      const firstField = requiredFieldDetails[0];
-      console.log(`[Intent Timing] AI-driven intent detection for REQUIRED fields: ${requiredFieldDetails.map(f => `${f.id}(${f.intensity})`).join(', ')}`);
-      
-      intentLeadMessage = `
-🎯 MANDATORY INTENT-BASED LEAD CAPTURE (AI-DRIVEN):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ REQUIRED fields to collect: ${requiredFieldDetails.map(f => f.id).join(', ')}
-
-${requiredFieldDetails.map(f => getSensitivityDescription(f.name, f.intensity)).join('\n\n')}
-
-🚨 WHEN INTENT IS DETECTED (based on sensitivity above):
-You MUST collect ${firstField.name} BEFORE answering their question.
-
-YOUR RESPONSE PATTERN:
-1. Acknowledge their interest warmly
-2. Ask for ${firstField.name} before providing the answer
-3. Use varied, natural phrasing — never repeat the same transition phrase across conversations.
-
-After they provide their ${firstField.name}, answer their question.
-
-🔒 IF USER REFUSES OR SAYS "NO" (THIS IS MANDATORY — DO NOT SKIP):
-This field is REQUIRED. You CANNOT give up or move on without collecting it.
-- Do NOT accept "no" or refusal. Do NOT say "no problem" and continue.
-- Politely explain WHY you need it (e.g., "I need your ${firstField.name} so our team can reach out with the details you're looking for").
-- Re-ask using a different, softer approach each time.
-- You may briefly acknowledge their hesitation, then pivot with a reassuring, varied response explaining confidentiality and re-asking naturally.
-- Keep trying with each subsequent message until they provide it.
-- NEVER answer their business question until this field is collected.
-
-📞 CALLBACK/CONTACT REQUESTS (always trigger regardless of sensitivity):
-If user says "call me", "contact me", etc. → ALWAYS ask for ${firstField.name}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-    }
-    
-    // OPTIONAL INTENT FIELDS — AI should try to collect but not block the conversation
-    if (hasOptionalIntentFields) {
-      const optionalFieldDetails = missingOptionalIntentFields.map((f: any) => {
-        const name = fieldTextMap[f.id] || f.id;
-        const intensity = f.intentIntensity || 'medium';
-        return { id: f.id, name, intensity };
-      });
-      
-      const firstField = optionalFieldDetails[0];
-      console.log(`[Intent Timing] AI-driven intent detection for OPTIONAL fields: ${optionalFieldDetails.map(f => `${f.id}(${f.intensity})`).join(', ')}`);
-      
-      optionalIntentPrompt = `
-📱 OPTIONAL INTENT-BASED CONTACT COLLECTION (AI-DRIVEN):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Fields to collect when intent is detected: ${optionalFieldDetails.map(f => f.id).join(', ')}
-
-${optionalFieldDetails.map(f => getSensitivityDescription(f.name, f.intensity)).join('\n\n')}
-
-📋 HOW TO ASK:
-When the user's message meets the intent threshold above:
-1. Answer their question naturally
-2. At the end of your response, smoothly ask for ${firstField.name}
-3. Use varied, natural phrasing each time — do NOT repeat the same transition phrase. Vary your approach creatively.
-
-📞 CALLBACK/CONTACT REQUESTS (always trigger regardless of sensitivity):
-If user says "call me", "contact me", "have someone call me", etc.:
-- ALWAYS ask for ${firstField.name} to arrange a callback
-- NEVER say "I can't make calls"
-
-This is OPTIONAL — if user declines or ignores, accept gracefully and continue helping.
-❌ Do NOT keep asking repeatedly if the user has already declined.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-    }
-    
-    // KEYWORD-BASED LEAD CAPTURE: When user message matches configured keywords, ask for contact info
-    let keywordLeadPrompt = '';
-    if (hasKeywordMatch && !skipLeadCollection) {
-      const matchedRequired = keywordMatchedFields.filter((f: any) => f.required);
-      const matchedOptional = keywordMatchedFields.filter((f: any) => !f.required);
-      
-      const fieldTextMap2: Record<string, string> = {
-        'name': 'name',
-        'phone': 'phone number',
-        'mobile': 'mobile number',
-        'email': 'email address',
-        'whatsapp': 'WhatsApp number'
-      };
-      
-      if (matchedRequired.length > 0) {
-        const firstField = matchedRequired[0];
-        const fieldName = fieldTextMap2[firstField.id] || firstField.id;
-        const matchedKeywords = (firstField.captureKeywords || []).filter((kw: string) => userMessageLower.includes(kw.toLowerCase()));
-        
-        keywordLeadPrompt += `
-🔑 KEYWORD-TRIGGERED LEAD CAPTURE (MANDATORY):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ The user's message matched keyword(s): "${matchedKeywords.join('", "')}"
-
-You MUST collect ${fieldName} BEFORE answering their question.
-1. Acknowledge their interest warmly
-2. Ask for ${fieldName} before providing the answer
-3. Use varied, natural phrasing — never repeat the same transition phrase across conversations.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-      }
-      
-      if (matchedOptional.length > 0) {
-        const firstField = matchedOptional[0];
-        const fieldName = fieldTextMap2[firstField.id] || firstField.id;
-        const matchedKeywords = (firstField.captureKeywords || []).filter((kw: string) => userMessageLower.includes(kw.toLowerCase()));
-        
-        keywordLeadPrompt += `
-🔑 KEYWORD-TRIGGERED CONTACT COLLECTION (OPTIONAL):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-The user's message matched keyword(s): "${matchedKeywords.join('", "')}"
-
-1. Answer their question naturally
-2. At the end of your response, smoothly ask for ${fieldName}
-3. Use varied, natural phrasing — do NOT repeat the same transition phrase. Vary your approach creatively.
-
-This is OPTIONAL — if user declines, accept gracefully and continue.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-      }
-    }
-    
-    // OPTIONAL START FIELDS: Soft prompt that asks for contact info but allows answering
-    // This is for Optional fields with "At Start" timing - user can skip but we should ask
-    // IMPORTANT: Only show optional prompt if there are NO mandatory/required fields blocking
-    let optionalStartPrompt = '';
-    const hasNoMandatoryBlockingFields = !leadCollectionMessage && !smartTimingLeadGateActive && !intentLeadGateActive && missingSmartFields.length === 0;
-    if (hasOptionalStartFields && userMessageCount === 1 && hasNoMandatoryBlockingFields) {
-      const firstOptionalField = missingOptionalStartFields[0]?.id || 'mobile';
-      const optionalFieldPrompts: Record<string, string> = {
-        'name': 'your name',
-        'phone': 'your phone number',
-        'mobile': 'your mobile number',
-        'email': 'your email address',
-        'whatsapp': 'your WhatsApp number'
-      };
-      const optionalFieldText = optionalFieldPrompts[firstOptionalField] || firstOptionalField;
-      
-      console.log(`[Optional Start] Soft prompt for optional field: ${firstOptionalField}`);
-      
-      // Soft prompt - ANSWER FIRST, then ask for contact info
-      optionalStartPrompt = `
-📱 ANSWER + CONTACT COLLECTION (ANSWER FIRST):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-IMPORTANT: You MUST answer the user's question FIRST, then ask for ${optionalFieldText}.
-
-RESPONSE STRUCTURE:
-1. FIRST: Provide a helpful, substantive answer to their question
-2. THEN: At the END of your response, naturally ask for ${optionalFieldText}
-
-EXAMPLE FORMAT:
-"[Answer their question with relevant information from FAQs/context]
-
-[Naturally transition to asking for ${optionalFieldText} — use varied, creative phrasing each time, never repeat the same transition phrase]"
-
-❌ Do NOT ask for contact info BEFORE answering their question
-❌ Do NOT skip answering just to collect contact info
-✅ Always provide value FIRST, then ask for contact
-✅ Keep the contact request natural and at the END of your response
-
-REMEMBER: User experience comes first - answer their question, then softly request contact.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-    }
-
-    // OPTIONAL CUSTOM FIELDS: Soft prompt that asks for contact info after configured N messages
-    let optionalSmartPrompt = '';
-    const optionalCustomAskAfter = optionalSmartFieldsList[0]?.customAskAfter || 2;
-    if (hasOptionalSmartFields && userMessageCount >= optionalCustomAskAfter && hasNoMandatoryBlockingFields && !optionalStartPrompt) {
-      const firstOptionalSmartField = missingOptionalSmartFields[0]?.id || 'mobile';
-      const optionalSmartFieldPrompts: Record<string, string> = {
-        'name': 'your name',
-        'phone': 'your phone number',
-        'mobile': 'your mobile number',
-        'email': 'your email address',
-        'whatsapp': 'your WhatsApp number'
-      };
-      const optionalSmartFieldText = optionalSmartFieldPrompts[firstOptionalSmartField] || firstOptionalSmartField;
-      
-      console.log(`[Optional Smart] Soft prompt for optional smart field: ${firstOptionalSmartField}`);
-      
-      optionalSmartPrompt = `
-📱 ANSWER + CONTACT COLLECTION (SMART TIMING - ANSWER FIRST):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-IMPORTANT: You MUST answer the user's question FIRST, then ask for ${optionalSmartFieldText}.
-
-RESPONSE STRUCTURE:
-1. FIRST: Provide a helpful, substantive answer to their question
-2. THEN: At the END of your response, naturally ask for ${optionalSmartFieldText}
-
-EXAMPLE FORMAT:
-"[Answer their question with relevant information]
-
-[Naturally transition to asking for ${optionalSmartFieldText} — use varied, creative phrasing each time, never repeat the same transition phrase]"
-
-❌ Do NOT ask for contact info BEFORE answering their question
-✅ Always provide value FIRST, then ask for contact
-✅ Keep the contact request natural and at the END
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-    }
-
-    // UNIVERSAL CALLBACK INTENT DETECTION (works regardless of lead strategy)
-    // Detects "call me", "ring me", "have someone call", "callback" etc.
-    let universalCallbackPrompt = '';
-    const callbackPhrases = [
-      /\bcall\s*me\b/i,
-      /\bcallback\b/i,
-      /\bcall\s*back\b/i,
-      /\bring\s*me\b/i,
-      /\bcontact\s*me\b/i,
-      /\breach\s*(out\s*(to\s*)?)?me\b/i,
-      /\bhave\s+(someone|somebody|your\s+team|your\s+people)\s+call\b/i,
-      /\bget\s+(in\s+)?touch\b/i,
-      /\bgive\s*(me\s+)?a\s+call\b/i,
-      /\bspeak\s+to\s+(someone|somebody|a\s+person)\b/i,
-      /\btalk\s+to\s+(someone|somebody|a\s+person)\b/i,
-      /\bwant\s+a\s+call\b/i,
-      /\bneed\s+a\s+call\b/i,
-      /\bask\s+(your\s+)?(team|people)\s+to\s+call\b/i
-    ];
-    
-    // TopScholar is a student tutoring surface with a signed launch identity,
-    // not a lead funnel. Do not turn an academic conversation into a callback
-    // or phone-collection prompt there.
-    const hasCallbackIntent =
-      !isTopscholarAccount(businessAccountId || '') &&
-      callbackPhrases.some(pattern => pattern.test(userMessage));
-    
-    if (hasCallbackIntent) {
-      const phoneAlreadyCaptured = !!(existingLead?.phone);
-      
-      if (phoneAlreadyCaptured) {
-        console.log('[Callback Intent] Phone already captured - will confirm team will connect');
-        universalCallbackPrompt = `
-📞 CALLBACK REQUEST DETECTED - PHONE ALREADY ON FILE:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-The user is requesting a callback. Their phone number is already saved.
-
-RESPOND WITH: "Absolutely! Our team will connect with you shortly. Is there anything specific you'd like me to note for when they call?"
-
-✅ Confirm that someone will reach out
-✅ Offer to note any specific topics/questions
-❌ Do NOT ask for their phone number again
-❌ Do NOT say "I can't make calls"
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-      } else {
-        console.log('[Callback Intent] Phone not captured - will ask for phone number');
-        universalCallbackPrompt = `
-📞 CALLBACK REQUEST DETECTED - COLLECT PHONE NUMBER:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-The user is requesting a callback. We need their phone number to arrange this.
-
-Ask for their phone number to arrange the callback. Use warm, natural phrasing — vary your approach creatively each time, never repeat the same sentence.
-
-✅ ALWAYS ask for phone number to arrange callback
-✅ Be warm and helpful
-❌ NEVER say "I can't call you" or "I'm just a chatbot"
-❌ NEVER deflect - always offer to arrange a callback
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-      }
-    }
-
-    // OPTIMIZED: Condensed final override - LEAD COLLECTION HAS HIGHEST PRIORITY
-    // Smart timing lead gate message is placed at the VERY END for maximum GPT weight
-    // GPT weights the END of messages more heavily, so critical instructions go last
-    // Skip lead collection for gibberish/dismissive inputs to let GPT handle naturally
-    
     let finalOverride = `🔒 FINAL RULES (HIGHEST PRIORITY):
 ${promptOptions?.cacheFriendly ? `\n${this.getFunnelStageBlock(userMessageCount)}\n` : ''}${starterQAContext ? `
 🎯 GUIDANCE Q&A (ABSOLUTE PRIORITY #0 - OVERRIDE EVERYTHING):
 ${starterQAContext}
 ` : ''}
-${!skipLeadCollection && leadCollectionMessage ? `
-🚨 MANDATORY LEAD COLLECTION (PRIORITY #1 - DO NOT SKIP):
-${leadCollectionMessage}
-
-⚠️ CRITICAL: You MUST ask for the required contact information BEFORE answering ANY question.
-❌ DO NOT use FAQ/product information until contact info is collected.
-✅ First: Ask for their contact info naturally
-✅ Then: After they provide it, you may answer their question
-` : ''}${!skipLeadCollection && optionalStartPrompt ? optionalStartPrompt + '\n' : ''}${!skipLeadCollection && optionalSmartPrompt ? optionalSmartPrompt + '\n' : ''}${!skipLeadCollection && optionalIntentPrompt ? optionalIntentPrompt + '\n' : ''}${!skipLeadCollection && keywordLeadPrompt ? keywordLeadPrompt + '\n' : ''}${universalCallbackPrompt ? universalCallbackPrompt + '\n' : ''}${ragContextForOverride ? ragContextForOverride + '\n' : ''}${!skipLeadCollection ? knownContactNote + leadAlreadyCollectedOverride : ''}${!leadCollectionMessage && !smartTimingLeadMessage && preFetchedFaqSection ? preFetchedFaqSection + '\n' : ''}
-${skipLeadCollection ? '1. NATURAL RESPONSE: The user sent a dismissive or unclear message. Handle it naturally - acknowledge and offer to help when they\'re ready. Do NOT push for contact info.' : (leadCollectionMessage || smartTimingLeadMessage || intentLeadMessage || keywordLeadPrompt ? '1. LEAD COLLECTION: Collect required contact info FIRST before answering questions.' : (optionalStartPrompt || optionalSmartPrompt ? '1. OPTIONAL CONTACT: Answer the question first, then politely ask for contact info. Proceed if user declines.' : toolUsageInstruction))}
+${ragContextForOverride ? ragContextForOverride + '\n' : ''}${!leadBlocksAnswer && !otpBlock && preFetchedFaqSection ? preFetchedFaqSection + '\n' : ''}
+${firstRule}
 
 ${languageSection}
 
@@ -2960,16 +2140,9 @@ ${appointmentTriggerRules.map((rule, i) => `   ${i + 1}. Keywords: [${rule.keywo
    - Vary your language - never use the exact same phrase twice
    - Match the user's energy - if they're brief, be concise
    - For gibberish/random typing (like "asdfgh", "qwerty", "ghkjhk"): Just ask them to rephrase - do NOT ask for contact info
-   - For dismissive responses ("nothing", "no", "nevermind", "no thanks"): Acknowledge gracefully and offer to help when ready - do NOT push for contact info UNLESS a MANDATORY/REQUIRED contact field is still pending (in that case, politely re-ask using a different approach)
+   - For dismissive responses ("nothing", "no", "nevermind", "no thanks"): Acknowledge gracefully and offer to help when ready
    - For unclear/incomplete messages: Ask what they need naturally
-   - ⚠️ IMPORTANT: Lead collection only applies to REAL questions/requests. Skip it for gibberish or confusion. Exception: if a MANDATORY contact field is still pending, you must keep asking for it even after dismissive replies like "no".
-${!skipLeadCollection && smartTimingLeadMessage ? `
-
-${smartTimingLeadMessage}` : ''}${!skipLeadCollection && intentLeadMessage ? `
-
-${intentLeadMessage}` : ''}${!skipLeadCollection && keywordLeadPrompt ? `
-
-${keywordLeadPrompt}` : ''}
+   - ⚠️ Contact details: ask ONLY what the LEAD COLLECTION block at the end says (it already accounts for timing, priority and refusals). No such block → don't ask for contact details.
 
 🚨🚨🚨 FINAL RULES (ABSOLUTE PRIORITY - READ THIS LAST):
 
@@ -3002,13 +2175,20 @@ ${languageInstruction ? `🌐 ${languageInstruction}\n` : ''}🚨 ${responseLeng
 - When user shares personal details (marks, budget, needs), cross-reference your context and proactively suggest the best match.
 - Detect user emotion from their message tone and adapt: empathize with frustrated users, match excited users' energy, reassure hesitant users.
 ${extractedCustomInstructions ? `
-⚡ BUSINESS CUSTOM INSTRUCTIONS (ABSOLUTE HIGHEST PRIORITY - OVERRIDE EVERYTHING ABOVE):
+⚡ BUSINESS CUSTOM INSTRUCTIONS (HIGHEST PRIORITY for tone, style, format and content — they override the rules above, EXCEPT when to ask for contact details, which only the LEAD COLLECTION block below decides):
 ${extractedCustomInstructions}
-These instructions from the business owner MUST be followed. They override ALL other rules above including response length, tone, style, and format.` : ''}`;
+These instructions from the business owner MUST be followed. They override the other rules above including response length, tone, style, and format.` : ''}${leadSection ? `
 
-    // Append phone validation override to finalOverride if present (LAST POSITION = highest weight)
-    if (phoneValidationOverride) {
+${leadSection}${extractedCustomInstructions ? `
+This LEAD COLLECTION block takes precedence over any business instruction about collecting contact details (e.g. "always ask for the phone number"): never ask again for anything listed as already known or declined.` : ''}` : ''}`;
+
+    // Phone number the visitor just typed failed the digit rule (last position = highest weight).
+    if (phoneValidationOverride && !otpBlock) {
       finalOverride += `\n\n${phoneValidationOverride}`;
+    }
+    // Pending OTP verification: strict mode goes absolutely last.
+    if (otpBlock) {
+      finalOverride += `\n\n${otpBlock}\nThis verification step overrides everything above, including the business instructions and the sales-agent rules: no small talk, no answers to other questions, no requests for other contact details.`;
     }
 
     // Log override length instead of full content (reduces console spam)

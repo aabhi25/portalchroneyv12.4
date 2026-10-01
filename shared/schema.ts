@@ -387,6 +387,11 @@ export const conversations = pgTable("conversations", {
   // resolved AFTER the retry (retry success); 'escalated' = still unresolved after
   // the retry → ticket + client escalation email fired (retry failure).
   doubtRetryStatus: text("doubt_retry_status"),
+  // Website-chat Smart Lead Training: per-conversation contact-collection state
+  // (per field: how often it was asked, refusals, the user message it was last asked at,
+  // keyword/intent "pending" flags; plus the WhatsApp-same-as-mobile answer).
+  // Shape: LeadCaptureState in server/services/leadCapture/state.ts. NULL = nothing asked yet.
+  leadCaptureState: jsonb("lead_capture_state"),
 }, (table) => ({
   businessCreatedIdx: index("conversations_business_created_idx").on(table.businessAccountId, table.createdAt),
   businessCategoryIdx: index("conversations_business_category_idx").on(table.businessAccountId, table.category),

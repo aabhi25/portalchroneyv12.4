@@ -9,7 +9,11 @@ import { updateLeadWithTopics } from './topicExtractionService';
 import { extractUtmCampaign, extractUtmSource, extractUtmMedium } from './leadsquaredService';
 import { productTextEmbeddingService } from './productTextEmbeddingService';
 import { productQueryParserService } from './productQueryParserService';
-import { validatePhoneNumber } from '../../shared/validation/phone';
+import { describePhoneRule, validatePhoneNumber } from '../../shared/validation/phone';
+import {
+  applyWhatsappCapture, getConversationLead, isValidEmail, isValidLeadName, phoneModeFor, planForConversation,
+  syncConversationLeadIfReady, updateLeadCaptureState, upsertConversationLead, type LeadPlan,
+} from './leadCapture';
 import { createOpenAI } from "../lib/openaiClient";
 
 const IST_TIMEZONE = 'Asia/Kolkata';
@@ -17,7 +21,7 @@ const IST_TIMEZONE = 'Asia/Kolkata';
 // Auto-sync lead to LeadSquared CRM (async, non-blocking)
 // changedFields: optional array of database field names that changed (for updates)
 export async function syncLeadToLeadSquared(
-  lead: { id: string; name?: string | null; email?: string | null; phone?: string | null; leadsquaredLeadId?: string | null; sourceUrl?: string | null },
+  lead: { id: string; name?: string | null; email?: string | null; phone?: string | null; leadsquaredLeadId?: string | null; sourceUrl?: string | null; whatsapp?: string | null },
   businessAccountId: string,
   isUpdate: boolean = false,
   changedFields?: string[]
@@ -116,7 +120,8 @@ export async function syncLeadToLeadSquared(
         name: fullLead?.name || lead.name || null,
         email: fullLead?.email || lead.email || null,
         phone: fullLead?.phone || lead.phone || null,
-        whatsapp: fullLead?.whatsapp || null,
+        // leads has no whatsapp column: website chat passes it from the conversation's lead state.
+        whatsapp: (fullLead as any)?.whatsapp || lead.whatsapp || null,
         createdAt: fullLead?.createdAt || null,
         sourceUrl: sourceUrl,
         captchaStatus,
@@ -1011,506 +1016,207 @@ Return JSON:
     };
   }
 
-  private static async handleCaptureLead(params: any, context: ToolExecutionContext, userMessage?: string, appointmentsEnabled: boolean = true) {
-    const { name, email, phone, message } = params;
+  private static async handleCaptureLead(params: any, context: ToolExecutionContext, userMessage?: string, _appointmentsEnabled: boolean = true) {
+    const str = (v: any) => (typeof v === 'string' ? v.trim().replace(/\s+/g, ' ') : '');
+    const rawName = str(params?.name);
+    const rawEmail = str(params?.email);
+    const rawPhone = str(params?.phone);
+    const rawWhatsapp = str(params?.whatsapp);
+    const waSame: boolean | undefined = typeof params?.whatsapp_same_as_phone === 'boolean' ? params.whatsapp_same_as_phone : undefined;
+    const message: string | undefined = str(params?.message) || undefined;
 
-    // Load Smart Lead Training configuration to enforce required fields and phone validation
-    let requiredFields: string[] = [];
-    let phoneValidation: '10' | '12' | '8-12' | 'any' = '10'; // Default to 10 digits
-    let otpEnabledForPhone = false;
-    try {
-      const widgetSettings = await storage.getWidgetSettings(context.businessAccountId);
-      if (widgetSettings?.leadTrainingConfig) {
-        const leadConfig = widgetSettings.leadTrainingConfig as any;
-        if (leadConfig.fields && Array.isArray(leadConfig.fields)) {
-          const mobileFieldForOtp = leadConfig.fields.find((f: any) => f.id === 'mobile' && f.enabled);
-          otpEnabledForPhone = !!(mobileFieldForOtp && mobileFieldForOtp.otpEnabled === true);
-          // Supported field IDs that can be captured by this tool
-          const supportedFieldIds = ['name', 'email', 'phone', 'mobile', 'whatsapp'];
-          
-          requiredFields = leadConfig.fields
-            .filter((f: any) => f && f.enabled === true && f.required === true)
-            .map((f: any) => f.id)
-            .filter((id: string) => supportedFieldIds.includes(id)); // Sanitize: only keep supported fields
-          
-          const rawRequiredFields = leadConfig.fields
-            .filter((f: any) => f && f.enabled === true && f.required === true)
-            .map((f: any) => f.id);
-          
-          const unsupportedFields = rawRequiredFields.filter((id: string) => !supportedFieldIds.includes(id));
-          if (unsupportedFields.length > 0) {
-            console.warn(`[Lead Validation] Ignoring unsupported required fields: ${unsupportedFields.join(', ')}`);
-          }
-          
-          console.log(`[Lead Validation] Required fields from config: ${requiredFields.join(', ')}`);
-          
-          // Get phone validation setting from mobile or whatsapp field
-          const mobileField = leadConfig.fields.find((f: any) => f.id === 'mobile' && f.enabled);
-          const whatsappField = leadConfig.fields.find((f: any) => f.id === 'whatsapp' && f.enabled);
-          if (mobileField?.phoneValidation) {
-            phoneValidation = mobileField.phoneValidation;
-          } else if (whatsappField?.phoneValidation) {
-            phoneValidation = whatsappField.phoneValidation;
-          }
-          console.log(`[Lead Validation] Phone validation setting: ${phoneValidation}`);
-        }
-      }
-    } catch (error) {
-      console.error('[Lead Validation] Error loading leadTrainingConfig:', error);
+    const widgetSettings = await storage.getWidgetSettings(context.businessAccountId).catch(() => undefined);
+    const leadConfig = (widgetSettings?.leadTrainingConfig as any) || null;
+    const phoneMode = phoneModeFor(leadConfig);
+    const mobileFieldCfg = Array.isArray(leadConfig?.fields) ? leadConfig.fields.find((f: any) => f?.id === 'mobile' && f.enabled) : null;
+    const otpEnabledForPhone = !!(mobileFieldCfg && mobileFieldCfg.otpEnabled === true);
+
+    // ── Validate every detail on its own: valid ones are saved, invalid ones are reported. ──
+    const values: { name?: string; email?: string; phone?: string } = {};
+    const rejected: Array<{ field: 'name' | 'email' | 'phone' | 'whatsapp'; reason: string }> = [];
+    let phoneRejectionReason: string | undefined;
+    if (rawName) {
+      if (isValidLeadName(rawName)) values.name = rawName;
+      else rejected.push({ field: 'name', reason: 'that does not look like a person\'s name' });
     }
-    
-    // ─── OTP FINALIZATION GATE (Task #14, fail-closed on unverified phone) ──
-    // We must suppress CRM sync whenever the lead will end up carrying an
-    // unverified phone — regardless of whether the current OTP challenge is
-    // pending, locked, expired, OR was invalidated by a prior send_failed.
-    // The check is conversation+phone scoped: any challenge with verifiedAt
-    // set for that exact phone unlocks sync; otherwise sync is blocked.
-    // Computed once here and consulted at every sync site below.
-    const otpGateApplies = otpEnabledForPhone && context.channel === 'widget' && !!context.conversationId;
-    const evaluateOtpBlock = async (phoneOnLead?: string | null): Promise<boolean> => {
-      if (!otpGateApplies || !phoneOnLead || !phoneOnLead.trim()) return false;
-      try {
-        const { normalizePhone } = await import('./otp');
-        const normalized = normalizePhone(phoneOnLead);
-        if (!normalized) return false;
-        const verified = await storage.hasVerifiedOtpForConversationPhone(
-          context.businessAccountId,
-          context.conversationId!,
-          normalized,
-        );
-        if (!verified) {
-          console.log(`[OTP-Gate] capture_lead: CRM sync blocked — lead phone ${normalized.slice(-4)} not OTP-verified for this conversation`);
-        }
-        return !verified;
-      } catch (err) {
-        console.error('[OTP-Gate] capture_lead verification lookup failed (fail-closed):', err);
-        // Fail-closed: if we can't confirm verification, block sync rather than risk leaking unverified phone.
-        return true;
+    if (rawEmail) {
+      if (isValidEmail(rawEmail)) values.email = rawEmail;
+      else rejected.push({ field: 'email', reason: 'that is not a valid email address' });
+    }
+    if (rawPhone) {
+      const r = validatePhoneNumber(rawPhone, phoneMode);
+      if (r.isValid) values.phone = r.normalized;
+      else {
+        rejected.push({ field: 'phone', reason: `${r.reasonMessage} — a valid number is ${describePhoneRule(phoneMode)}` });
+        phoneRejectionReason = r.reasonCode;
       }
-    };
+    }
+    let waNumber: string | null = null;
+    if (rawWhatsapp) {
+      const r = validatePhoneNumber(rawWhatsapp, phoneMode);
+      if (r.isValid) waNumber = r.normalized;
+      else rejected.push({ field: 'whatsapp', reason: `${r.reasonMessage} — a valid number is ${describePhoneRule(phoneMode)}` });
+    }
+    if (rejected.length) console.log(`[Lead Validation] capture_lead rejected: ${rejected.map(r => `${r.field} (${r.reason})`).join('; ')}`);
 
-    if (phone && phone.trim()) {
-      const phoneValidationResult = validatePhoneNumber(phone, phoneValidation);
-      
-      if (!phoneValidationResult.isValid) {
-        console.log(`[Lead Validation] Phone number rejected: ${phone} - ${phoneValidationResult.reasonCode}: ${phoneValidationResult.reasonMessage}`);
+    const labelOf = (f: string) => f === 'phone' ? 'mobile number' : f === 'whatsapp' ? 'WhatsApp number' : f === 'email' ? 'email address' : 'name';
+    const rejectedText = rejected.map(r => `${labelOf(r.field)} (${r.reason})`).join('; ');
+    const nothingToSave = !values.name && !values.email && !values.phone && !waNumber && waSame === undefined;
+    if (nothingToSave) {
+      if (rejected.length) {
         return {
           success: false,
-          error: 'Invalid phone number',
-          message: phoneValidationResult.reasonMessage,
+          error: 'invalid_contact_details',
           validationError: true,
-          phoneRejectionReason: phoneValidationResult.reasonCode
+          ...(phoneRejectionReason ? { phoneRejectionReason } : {}),
+          data: { saved: [], rejected, nextField: null },
+          message: `Not saved: ${rejectedText}. Tell the visitor briefly and ask them to re-enter only their ${labelOf(rejected[0].field)}.`,
         };
       }
-      console.log(`[Lead Validation] Phone number accepted: ${phone} (${phoneValidationResult.digits.length} digits)`);
+      return {
+        success: false,
+        error: 'No contact information provided',
+        data: { saved: [], rejected: [], nextField: null },
+        message: 'No contact details were given, so nothing was saved.',
+      };
     }
 
-    // ─── OTP GATING (widget-only, v1) ──────────────────────────────────────────
-    // If mobile.otpEnabled is true and the caller is the widget channel AND a valid
-    // phone has been provided AND no verified challenge yet exists for this
-    // conversation+phone — issue an OTP challenge, persist the partial lead WITHOUT
-    // syncing to CRM, and return an `otp_required` marker so the AI strict-mode prompt
-    // takes over.
-    // Spec parity: explicit observability when OTP is configured on the mobile
-    // field but the caller is not the widget channel (v1 scope is widget-only).
-    if (otpEnabledForPhone && phone && phone.trim() && context.channel && context.channel !== 'widget') {
+    // ── No conversation (legacy callers): plain create, gated CRM sync. ──
+    if (!context.conversationId) {
+      const lead = await storage.createLead({
+        businessAccountId: context.businessAccountId,
+        name: values.name || null,
+        email: values.email || null,
+        phone: values.phone || waNumber || null,
+        message: message || 'Via Chat',
+        city: context.visitorCity || null,
+        conversationId: null,
+      });
+      syncConversationLeadIfReady({ leadId: lead.id, businessAccountId: context.businessAccountId, conversationId: null, channel: context.channel, source: 'capture_lead' }).catch(() => undefined);
+      return {
+        success: true,
+        data: { leadId: lead.id, saved: Object.keys(values), rejected, nextField: null },
+        message: `Saved: ${Object.keys(values).map(labelOf).join(', ')}.${rejected.length ? ` Not saved: ${rejectedText}.` : ''}`,
+      };
+    }
+    const conversationId = context.conversationId;
+
+    // ── WhatsApp details live in the conversation's lead state (leads has no whatsapp column). ──
+    const existingBefore = await getConversationLead(conversationId, context.businessAccountId);
+    const phoneOnLead = values.phone || existingBefore?.phone || null;
+    if (waNumber && !phoneOnLead) values.phone = waNumber; // their WhatsApp number is also a mobile number
+    if (waNumber || waSame !== undefined) {
+      const sameAsMobile = waNumber
+        ? (phoneOnLead ? waNumber.replace(/\D/g, '').slice(-10) === String(phoneOnLead).replace(/\D/g, '').slice(-10) : true)
+        : waSame;
+      await updateLeadCaptureState(conversationId, s => applyWhatsappCapture(s, { number: waNumber && sameAsMobile === false ? waNumber : null, sameAsMobile }));
+    }
+
+    // ── OTP gating (widget only): an unverified phone is saved, a code is sent, CRM waits. ──
+    if (otpEnabledForPhone && context.channel && context.channel !== 'widget' && values.phone) {
       console.log(`[OTP] Skipped: channel not widget (channel=${context.channel}, business=${context.businessAccountId}, source=capture_lead)`);
     }
-    const shouldGateWithOtp =
-      otpEnabledForPhone &&
-      context.channel === 'widget' &&
-      !!context.conversationId &&
-      !!(phone && phone.trim());
-
-    if (shouldGateWithOtp) {
+    if (otpEnabledForPhone && context.channel === 'widget' && values.phone) {
       const { OtpService, normalizePhone } = await import('./otp');
-      const normalized = normalizePhone(phone);
-      // Use (conversation+phone) verification lookup so that a previously
-      // verified challenge for THIS phone is honored even if a newer challenge
-      // (e.g. for a different/corrected number) exists in the conversation.
+      const normalized = normalizePhone(values.phone);
       const alreadyVerified = normalized
-        ? await storage.hasVerifiedOtpForConversationPhone(
-            context.businessAccountId,
-            context.conversationId!,
-            normalized,
-          )
+        ? await storage.hasVerifiedOtpForConversationPhone(context.businessAccountId, conversationId, normalized)
         : false;
       if (!alreadyVerified) {
-        const issue = await OtpService.issueChallenge(
-          context.businessAccountId,
-          context.conversationId!,
-          phone
-        );
-
-        // Save / update partial lead WITHOUT CRM sync
+        const issue = await OtpService.issueChallenge(context.businessAccountId, conversationId, values.phone);
         try {
-          const existingLead = await storage.getLeadByConversation(
-            context.conversationId!,
-            context.businessAccountId
-          );
-          if (existingLead) {
-            const updates: any = {};
-            if (name && name.trim() && name.trim() !== existingLead.name) updates.name = name.trim();
-            if (email && email.trim() && email.trim() !== existingLead.email) updates.email = email.trim();
-            if (phone && phone.trim() && phone.trim() !== existingLead.phone) updates.phone = phone.trim();
-            if (Object.keys(updates).length > 0) {
-              await storage.updateLead(existingLead.id, context.businessAccountId, updates);
-              console.log(`[OTP] Partial lead ${existingLead.id} updated (no CRM sync until verified)`);
-            }
-          } else if ((name && name.trim()) || (email && email.trim()) || (phone && phone.trim())) {
-            const partial = await storage.createLead({
-              businessAccountId: context.businessAccountId,
-              name: name || null,
-              email: email || null,
-              phone: phone || null,
-              message: message || 'Via Chat (pending OTP)',
-              city: context.visitorCity || null,
-              conversationId: context.conversationId!,
-            });
-            console.log(`[OTP] Created partial lead ${partial.id} (no CRM sync until verified)`);
-          }
+          const up = await upsertConversationLead({
+            businessAccountId: context.businessAccountId,
+            conversationId,
+            values: { ...values, message, city: context.visitorCity || null },
+            createMessage: 'Via Chat (pending OTP)',
+          });
+          console.log(`[OTP] Partial lead ${up.lead.id} ${up.created ? 'created' : 'updated'} (no CRM sync until verified)`);
         } catch (err) {
           console.error('[OTP] Failed to save partial lead while gating:', err);
         }
-
         if (!issue.ok) {
           if (issue.reason === 'locked') {
-            return {
-              success: false,
-              error: 'otp_locked',
-              otp_state: issue.snapshot,
-              message: `Verification is temporarily locked for this conversation. Please try again later.`,
-            };
+            return { success: false, error: 'otp_locked', otp_state: issue.snapshot, message: `Verification is temporarily locked for this conversation. Please try again later.` };
           }
           if (issue.reason === 'send_failed') {
-            return {
-              success: false,
-              error: 'otp_send_failed',
-              otp_state: issue.snapshot,
-              message: `I couldn't send the verification code right now. Please try again in a moment.`,
-            };
+            return { success: false, error: 'otp_send_failed', otp_state: issue.snapshot, message: `I couldn't send the verification code right now. Please try again in a moment.` };
           }
-          return {
-            success: false,
-            error: 'invalid_phone',
-            message: 'The mobile number looks invalid. Please share a valid mobile number.',
-          };
+          return { success: false, error: 'invalid_phone', message: 'The mobile number looks invalid. Please share a valid mobile number.' };
         }
-
         return {
           success: true,
-          data: { otp_required: true, saved: true, partialLead: true },
+          data: { otp_required: true, saved: true, partialLead: true, rejected },
           otp_state: issue.snapshot,
           message: `I've sent a 6-digit verification code to ${issue.snapshot.phone_masked || 'your mobile'}. Please enter it to verify your number — the code expires in 5 minutes.`,
         };
       }
     }
-    // ────────────────────────────────────────────────────────────────────────────
 
-    // Check if a lead already exists for this conversation
-    let lead;
-    let isUpdate = false;
-    
-    if (context.conversationId) {
-      const existingLead = await storage.getLeadByConversation(context.conversationId, context.businessAccountId);
-      
-      if (existingLead) {
-        // Update existing lead with new information (merge fields) - progressive enrichment
-        const updatedData: any = {};
-        
-        // Only update fields if new values are provided AND different from existing
-        // This prevents redundant updates and duplicate LeadSquared syncs
-        if (name && name.trim() && name.trim() !== existingLead.name) {
-          updatedData.name = name.trim();
-        }
-        if (email && email.trim() && email.trim() !== existingLead.email) {
-          updatedData.email = email.trim();
-        }
-        if (phone && phone.trim() && phone.trim() !== existingLead.phone) {
-          updatedData.phone = phone.trim();
-        }
-        if (message && message !== existingLead.message) {
-          updatedData.message = message;
-        }
-        
-        // Check if there's actually new data to update
-        if (Object.keys(updatedData).length === 0) {
-          // No new data provided - return existing lead without DB write
-          lead = existingLead;
-          isUpdate = false; // Not really an update, just returning existing
-          console.log(`[Lead Skip] No new data to update for lead ${existingLead.id}`);
-        } else {
-          lead = await storage.updateLead(existingLead.id, context.businessAccountId, updatedData);
-          isUpdate = true;
-          console.log(`[Lead Update] Updated existing lead ${existingLead.id} for conversation ${context.conversationId} with fields: ${Object.keys(updatedData).join(', ')}`);
-          
-          // CRITICAL: After updating, check if ALL required fields are now complete
-          // Build field map from the UPDATED lead data (not just new params)
-          const updatedFieldMap: Record<string, string | null> = {
-            name: lead.name || null,
-            email: lead.email || null,
-            phone: lead.phone || null,
-            mobile: lead.phone || null,  // phone satisfies mobile
-            whatsapp: lead.phone || null // phone satisfies whatsapp
-          };
-          
-          // Check if any required fields are still missing
-          const missingFields = requiredFields.filter(fieldId => {
-            const fieldValue = updatedFieldMap[fieldId];
-            return !fieldValue || fieldValue.trim() === '';
-          });
-          
-          if (missingFields.length > 0) {
-            // Still have missing required fields - continue enrichment
-            const fieldNames = missingFields.map(f => {
-              if (f === 'mobile') return 'phone number';
-              if (f === 'whatsapp') return 'WhatsApp number';
-              return f;
-            });
-            
-            console.log(`[Lead Update - Progressive] Lead ${lead.id} updated but still missing required fields: ${missingFields.join(', ')}`);
-            
-            // Auto-sync to LeadSquared (async, non-blocking) - only send changed fields
-            // IMPORTANT: Only sync if we have at least phone OR email (LeadSquared rejects name-only leads)
-            if (await evaluateOtpBlock(lead.phone)) {
-              // CRM sync suppressed — unverified phone (logged by evaluateOtpBlock)
-            } else if (lead.phone || lead.email) {
-              syncLeadToLeadSquared({
-                id: lead.id,
-                name: lead.name,
-                email: lead.email,
-                phone: lead.phone,
-                leadsquaredLeadId: lead.leadsquaredLeadId
-              }, context.businessAccountId, true, Object.keys(updatedData)).catch(err => console.error('[LeadSquared-Tool] Background sync error:', err));
-            } else {
-              console.log('[LeadSquared-Tool] Skipping sync - no phone or email yet (name-only leads not supported)');
-            }
-            
-            // Update conversation title before continuing
-            if (context.conversationId) {
-              let newTitle = 'Anonymous';
-              if (lead.name && lead.name.trim()) {
-                newTitle = lead.name.trim();
-              } else if (lead.phone && lead.phone.trim()) {
-                newTitle = lead.phone.trim();
-              } else if (lead.email && lead.email.trim()) {
-                newTitle = lead.email.trim();
-              }
-              try {
-                await storage.updateConversationTitle(context.conversationId, context.businessAccountId, newTitle);
-              } catch (error) {
-                console.error('[Lead Update] Error updating conversation title:', error);
-              }
-            }
-            
-            return {
-              success: true,
-              data: { leadId: lead.id, saved: true, partialLead: true, missingFields },
-              message: `Thanks! May I also have your ${fieldNames.join(' and ')}?`
-            };
-          } else {
-            // All required fields are now complete after update - sync the complete lead
-            console.log(`[Lead Update - Complete] Lead ${lead.id} now has all required fields, syncing to LeadSquared`);
-            
-            // Auto-sync to LeadSquared (async, non-blocking) - only send changed fields
-            // IMPORTANT: Only sync if we have at least phone OR email (LeadSquared rejects name-only leads)
-            if (await evaluateOtpBlock(lead.phone)) {
-              // CRM sync suppressed — unverified phone
-            } else if (lead.phone || lead.email) {
-              syncLeadToLeadSquared({
-                id: lead.id,
-                name: lead.name,
-                email: lead.email,
-                phone: lead.phone,
-                leadsquaredLeadId: lead.leadsquaredLeadId,
-                sourceUrl: lead.sourceUrl
-              }, context.businessAccountId, true, Object.keys(updatedData)).catch(err => console.error('[LeadSquared-Tool] Background sync error:', err));
-            } else {
-              console.log('[LeadSquared-Tool] Skipping sync - no phone or email yet (name-only leads not supported)');
-            }
-          }
-          // Continue to title update and final return (with allRequiredFieldsCollected flag)
-        }
-      } else {
-        // Creating NEW lead - INSTANT PROGRESSIVE CAPTURE: Save partial leads immediately
-        // Build field mapping from provided params
-        // Note: phone parameter satisfies phone/mobile/whatsapp (all are phone numbers)
-        const providedPhone = phone ? phone.trim() : null;
-        const fieldMap: Record<string, string | null> = {
-          name: name ? name.trim() : null,
-          email: email ? email.trim() : null,
-          phone: providedPhone,
-          mobile: providedPhone, // phone satisfies mobile requirement
-          whatsapp: providedPhone // phone satisfies whatsapp requirement
-        };
+    // ── Save (one row per conversation; serialized with auto-capture). ──
+    const up = await upsertConversationLead({
+      businessAccountId: context.businessAccountId,
+      conversationId,
+      values: { ...values, message, city: context.visitorCity || null },
+    });
+    const lead = up.lead;
+    console.log(`[Lead ${up.created ? 'Create' : 'Update'}] lead ${lead.id} conversation ${conversationId}: ${up.changed.join(', ') || 'no changes'}${up.reusedFromConversationId ? ` (returning visitor, lead moved from ${up.reusedFromConversationId})` : ''}`);
 
-        // First check: At least ONE field must be provided (prevent blank leads)
-        const hasAnyData = (name && name.trim()) || (email && email.trim()) || (phone && phone.trim());
-        if (!hasAnyData) {
-          console.log(`[Lead Validation] Cannot create lead - no contact information provided`);
-          return {
-            success: false,
-            error: 'No contact information provided',
-            message: 'To save your information, I need at least your name, email, or phone number. Could you please share that with me?'
-          };
-        }
-
-        // INSTANT PROGRESSIVE CAPTURE: Create the lead IMMEDIATELY with whatever data we have
-        // Even if required fields are missing, we save the partial lead to prevent data loss
-        lead = await storage.createLead({
-          businessAccountId: context.businessAccountId,
-          name: name || null,
-          email: email || null,
-          phone: phone || null,
-          message: message || 'Via Chat',
-          city: context.visitorCity || null,
-          conversationId: context.conversationId
-        });
-        console.log(`[Lead Create - Progressive] Created partial lead ${lead.id} for conversation ${context.conversationId} with: ${[name && 'name', email && 'email', phone && 'phone'].filter(Boolean).join(', ')} city: ${context.visitorCity || 'unknown'}`);
-        
-        // Auto-sync to LeadSquared (async, non-blocking)
-        // IMPORTANT: Only sync if we have at least phone OR email (LeadSquared rejects name-only leads)
-        if (await evaluateOtpBlock(phone)) {
-          // CRM sync suppressed — unverified phone on new lead
-        } else if (phone || email) {
-          syncLeadToLeadSquared({
-            id: lead.id,
-            name: name || null,
-            email: email || null,
-            phone: phone || null
-          }, context.businessAccountId, false).catch(err => console.error('[LeadSquared-Tool] Background sync error:', err));
-        } else {
-          console.log('[LeadSquared-Tool] Skipping new lead sync - no phone or email yet (name-only leads not supported)');
-        }
-
-        // After creating the lead, check if required fields are still missing
-        const missingFields = requiredFields.filter(fieldId => {
-          const fieldValue = fieldMap[fieldId];
-          return !fieldValue || fieldValue.trim() === '';
-        });
-
-        if (missingFields.length > 0) {
-          // Lead is SAVED, but continue asking for required fields to enrich it
-          const fieldNames = missingFields.map(f => {
-            if (f === 'mobile') return 'phone number';
-            if (f === 'whatsapp') return 'WhatsApp number';
-            return f;
-          });
-          
-          console.log(`[Lead Progressive] Lead ${lead.id} saved but missing required fields: ${missingFields.join(', ')}, will continue enrichment`);
-          return {
-            success: true,
-            data: { leadId: lead.id, saved: true, partialLead: true, missingFields },
-            message: `Thanks! May I also have your ${fieldNames.join(' and ')}?`
-          };
-        }
-      }
-    } else {
-      // No conversation ID - INSTANT PROGRESSIVE CAPTURE: Save partial leads immediately
-      // First check: At least ONE field must be provided (prevent blank leads)
-      const hasAnyData = (name && name.trim()) || (email && email.trim()) || (phone && phone.trim());
-      if (!hasAnyData) {
-        console.log(`[Lead Validation] Cannot create lead - no contact information provided`);
-        return {
-          success: false,
-          error: 'No contact information provided',
-          message: 'To save your information, I need at least your name, email, or phone number. Could you please share that with me?'
-        };
-      }
-
-      // Build field mapping from provided params
-      // Note: phone parameter satisfies phone/mobile/whatsapp (all are phone numbers)
-      const providedPhone = phone ? phone.trim() : null;
-      const fieldMap: Record<string, string | null> = {
-        name: name ? name.trim() : null,
-        email: email ? email.trim() : null,
-        phone: providedPhone,
-        mobile: providedPhone, // phone satisfies mobile requirement
-        whatsapp: providedPhone // phone satisfies whatsapp requirement
-      };
-
-      // INSTANT PROGRESSIVE CAPTURE: Create the lead IMMEDIATELY with whatever data we have
-      // Even if required fields are missing, we save the partial lead to prevent data loss
-      lead = await storage.createLead({
-        businessAccountId: context.businessAccountId,
-        name: name || null,
-        email: email || null,
-        phone: phone || null,
-        message: message || 'Via Chat',
-        city: context.visitorCity || null,
-        conversationId: null
-      });
-      console.log(`[Lead Create - Progressive] Created partial lead ${lead.id} without conversation with: ${[name && 'name', email && 'email', phone && 'phone'].filter(Boolean).join(', ')} city: ${context.visitorCity || 'unknown'}`);
-      
-      // Auto-sync to LeadSquared (async, non-blocking)
-      // IMPORTANT: Only sync if we have at least phone OR email (LeadSquared rejects name-only leads)
-      if (phone || email) {
-        syncLeadToLeadSquared({
-          id: lead.id,
-          name: name || null,
-          email: email || null,
-          phone: phone || null
-        }, context.businessAccountId, false).catch(err => console.error('[LeadSquared-Tool] Background sync error:', err));
-      } else {
-        console.log('[LeadSquared-Tool] Skipping new lead sync - no phone or email yet (name-only leads not supported)');
-      }
-
-      // After creating the lead, check if required fields are still missing
-      const missingFields = requiredFields.filter(fieldId => {
-        const fieldValue = fieldMap[fieldId];
-        return !fieldValue || fieldValue.trim() === '';
-      });
-
-      if (missingFields.length > 0) {
-        // Lead is SAVED, but continue asking for required fields to enrich it
-        const fieldNames = missingFields.map(f => {
-          if (f === 'mobile') return 'phone number';
-          if (f === 'whatsapp') return 'WhatsApp number';
-          return f;
-        });
-        
-        console.log(`[Lead Progressive] Lead ${lead.id} saved but missing required fields: ${missingFields.join(', ')}, will continue enrichment`);
-        return {
-          success: true,
-          data: { leadId: lead.id, saved: true, partialLead: true, missingFields },
-          message: `Thanks! May I also have your ${fieldNames.join(' and ')}?`
-        };
-      }
+    let newTitle = '';
+    if (lead.name && lead.name.trim()) newTitle = lead.name.trim();
+    else if (lead.phone && lead.phone.trim()) newTitle = lead.phone.trim();
+    else if (lead.email && lead.email.trim()) newTitle = lead.email.trim();
+    if (newTitle) {
+      try { await storage.updateConversationTitle(conversationId, context.businessAccountId, newTitle); }
+      catch (error) { console.error('[Lead Capture] Error updating conversation title:', error); }
     }
 
-    // Update conversation title based on priority: name > phone > email
-    if (context.conversationId) {
-      let newTitle = 'Anonymous';
-      
-      // Use updated lead data for title
-      if (lead.name && lead.name.trim()) {
-        newTitle = lead.name.trim();
-      } else if (lead.phone && lead.phone.trim()) {
-        newTitle = lead.phone.trim();
-      } else if (lead.email && lead.email.trim()) {
-        newTitle = lead.email.trim();
-      }
-      
-      try {
-        await storage.updateConversationTitle(context.conversationId, context.businessAccountId, newTitle);
-        console.log(`[Lead Capture] Updated conversation ${context.conversationId} title to: ${newTitle}`);
-      } catch (error) {
-        console.error('[Lead Capture] Error updating conversation title:', error);
-      }
+    // CRM: only once every mandatory field is in (and verification passed); later changes update.
+    if (up.created || up.changed.length > 0 || up.reusedFromConversationId || waNumber || waSame !== undefined) {
+      syncConversationLeadIfReady({
+        leadId: lead.id, businessAccountId: context.businessAccountId, conversationId,
+        changedFields: up.changed, channel: context.channel, source: 'capture_lead',
+      }).catch(() => undefined);
     }
 
-    // Extract topics of interest from conversation asynchronously (don't block lead capture)
-    if (context.conversationId && lead) {
-      updateLeadWithTopics(lead.id, context.businessAccountId, context.conversationId)
+    // What may be asked next (at most ONE field, per timing/priority/refusals).
+    let plan: LeadPlan | null = null;
+    try {
+      plan = await planForConversation({
+        conversationId,
+        config: leadConfig,
+        known: { name: lead.name, email: lead.email, phone: lead.phone },
+        userMessage: userMessage || context.userMessage || '',
+      });
+    } catch (err) {
+      console.error('[Lead Capture] next-field planning failed (non-fatal):', err);
+    }
+    const allRequiredFieldsCollected = !!plan?.allMandatoryCollected && rejected.length === 0;
+    if (allRequiredFieldsCollected) {
+      updateLeadWithTopics(lead.id, context.businessAccountId, conversationId)
         .catch(err => console.error('[Lead Capture] Topic extraction failed:', err));
     }
+    const nextField = plan?.next ? { field: plan.next.id, label: plan.next.label, mode: plan.next.mode } : null;
+    const savedFields = Object.keys(values);
+    const parts: string[] = [];
+    if (savedFields.length) parts.push(`Saved: ${savedFields.map(labelOf).join(', ')}.`);
+    if (waNumber || waSame !== undefined) parts.push('WhatsApp details noted.');
+    if (rejected.length) parts.push(`Not saved: ${rejectedText}. Ask the visitor to re-enter only their ${labelOf(rejected[0].field)}.`);
+    else if (nextField) parts.push(`Next detail allowed now: ${nextField.label} (${nextField.mode === 'block' ? 'ask before answering' : 'optional — only after answering'}). Ask for nothing else.`);
+    else parts.push('No other contact detail is due now — do not ask for more.');
 
-    // All required fields collected - tell AI to answer the original question now
-    // Include a message to guide the AI to respond helpfully
     return {
       success: true,
-      data: { leadId: lead.id, saved: true, allRequiredFieldsCollected: true },
-      message: "Thank you! I've saved your contact information. Now let me help you with your question."
+      data: {
+        leadId: lead.id,
+        saved: savedFields,
+        rejected,
+        nextField,
+        partialLead: !plan?.allMandatoryCollected,
+        ...(allRequiredFieldsCollected ? { allRequiredFieldsCollected: true } : {}),
+      },
+      ...(phoneRejectionReason ? { phoneRejectionReason } : {}),
+      message: parts.join(' '),
     };
   }
 
@@ -1523,15 +1229,15 @@ Return JSON:
     const result = await OtpService.verify(context.businessAccountId, context.conversationId, code);
 
     if (result.verified) {
-      // Promote the partial lead — trigger CRM sync now that the number is verified.
+      // Promote the partial lead — CRM sync now that the number is verified (still waits for
+      // any other mandatory lead-training field).
       try {
-        const lead = await storage.getLeadByConversation(context.conversationId, context.businessAccountId);
+        const lead = await getConversationLead(context.conversationId, context.businessAccountId);
         if (lead && (lead.phone || lead.email)) {
-          syncLeadToLeadSquared(
-            { id: lead.id, name: lead.name, email: lead.email, phone: lead.phone, leadsquaredLeadId: lead.leadsquaredLeadId, sourceUrl: lead.sourceUrl },
-            context.businessAccountId,
-            !!lead.leadsquaredLeadId,
-          ).catch(err => console.error('[OTP→CRM] Post-verify sync error:', err));
+          syncConversationLeadIfReady({
+            leadId: lead.id, businessAccountId: context.businessAccountId, conversationId: context.conversationId,
+            channel: context.channel || 'widget', source: 'otp_verified',
+          }).catch(err => console.error('[OTP→CRM] Post-verify sync error:', err));
         }
       } catch (err) {
         console.error('[OTP→CRM] Failed to resolve partial lead:', err);
@@ -1944,22 +1650,19 @@ Return JSON:
       }
     }
 
-    // Check if a lead already exists for this conversation (from auto-capture)
-    let lead = context.conversationId 
-      ? await storage.getLeadByConversation(context.conversationId, context.businessAccountId)
-      : undefined;
-    
     const appointmentMessage = notes || `Booked appointment for ${format(appointmentDateTime, 'MMMM d, yyyy')} at ${appointment_time}`;
-    
-    if (lead) {
-      // Update existing lead with appointment info and any missing fields
-      await storage.updateLead(lead.id, context.businessAccountId, {
-        name: patient_name,
-        phone: patient_phone,
-        email: patient_email || lead.email,
-        message: appointmentMessage,
+
+    // One lead per conversation: update the conversation's lead (serialized with auto-capture /
+    // capture_lead so a booking never creates a second row).
+    let lead: any;
+    if (context.conversationId) {
+      const up = await upsertConversationLead({
+        businessAccountId: context.businessAccountId,
+        conversationId: context.conversationId,
+        values: { name: patient_name, phone: patient_phone, email: patient_email || null, message: appointmentMessage, city: context.visitorCity || null },
+        policy: { email: 'fill' },
       });
-      lead = { ...lead, name: patient_name, phone: patient_phone, email: patient_email || lead.email };
+      lead = up.lead;
     } else {
       // Create new lead if none exists
       lead = await storage.createLead({
@@ -1973,13 +1676,15 @@ Return JSON:
       });
     }
     
-    // Auto-sync to LeadSquared (async, non-blocking)
+    // Auto-sync to LeadSquared (async, non-blocking). A booking always goes to the CRM; an
+    // already-synced lead is updated instead of creating a second CRM lead.
     syncLeadToLeadSquared({
       id: lead.id,
       name: patient_name,
-      email: patient_email || null,
-      phone: patient_phone
-    }, context.businessAccountId, false).catch(err => console.error('[LeadSquared-Tool] Background sync error:', err));
+      email: lead.email || patient_email || null,
+      phone: patient_phone,
+      leadsquaredLeadId: lead.leadsquaredLeadId || null,
+    }, context.businessAccountId, !!lead.leadsquaredLeadId).catch(err => console.error('[LeadSquared-Tool] Background sync error:', err));
 
     // Then create the appointment linked to the lead
     const appointment = await storage.createAppointment({
