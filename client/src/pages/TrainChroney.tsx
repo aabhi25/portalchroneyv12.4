@@ -1,4 +1,23 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useReducer, useMemo } from "react";
+import {
+  createDefaultLeadTrainingConfig,
+  normalizeLeadTrainingConfig,
+  getLeadConfigWarnings,
+  moveLeadField,
+  DEFAULT_CUSTOM_ASK_AFTER,
+  type LeadTrainingConfig,
+  type LeadCaptureStrategy,
+  type IntentIntensity,
+} from "@shared/leadTrainingConfig";
+import {
+  autosaveReducer,
+  initialAutosaveState,
+  hasUnsavedChanges,
+  shouldAdoptServerData,
+  shouldScheduleSave,
+  autosaveLabel,
+} from "@/lib/leadConfigAutosave";
+import { LeadTimingSettings, LeadWarningList } from "@/components/LeadTimingSettings";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -132,28 +151,23 @@ export default function TrainChroney() {
   // Phone validation options type
   type PhoneValidation = 'any' | '10' | '12' | '8-12';
   
-  // Smart Lead Training state
-  const [leadConfig, setLeadConfig] = useState<{
-    fields: Array<{ id: string; enabled: boolean; required: boolean; priority: number; captureStrategy: 'custom' | 'start' | 'keyword' | 'intent'; customAskAfter?: number; intentIntensity?: 'low' | 'medium' | 'high'; captureKeywords?: string[]; phoneValidation?: PhoneValidation; otpEnabled?: boolean; otpRequiredForCounting?: boolean; otpDemoMode?: boolean; captchaEnabled?: boolean; captchaProvider?: 'recaptcha_v2'; captchaSiteKey?: string; sendUnverifiedLeadsToCrm?: boolean }>;
-    captureStrategy: 'custom' | 'start' | 'keyword' | 'intent';
-    // Conversion tracking (Google Ads): https "thank-you" page fired in the
-    // visitor's browser when a mobile number is captured. Empty = disabled.
-    conversionUrl?: string;
-    conversionBadgeEnabled?: boolean;
-  }>({
-    fields: [
-      { id: 'name', enabled: true, required: true, priority: 1, captureStrategy: 'start' },
-      { id: 'mobile', enabled: false, required: false, priority: 2, captureStrategy: 'start', phoneValidation: '10' },
-      { id: 'whatsapp', enabled: false, required: false, priority: 3, captureStrategy: 'start', phoneValidation: '10' },
-      { id: 'email', enabled: false, required: false, priority: 4, captureStrategy: 'start' }
-    ],
-    captureStrategy: 'start'
-  });
-  const [leadConfigIsDirty, setLeadConfigIsDirty] = useState(false);
-  const [leadConfigSaveStatus, setLeadConfigSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
-  
-  const [keywordInputTexts, setKeywordInputTexts] = useState<Record<string, string>>({});
-  
+  // Smart Lead Training state. Starts from the SAME defaults the server returns
+  // when nothing is saved (shared/leadTrainingConfig.ts) so the screen never
+  // flashes different values before the fetch lands.
+  const [leadConfig, setLeadConfig] = useState<LeadTrainingConfig>(createDefaultLeadTrainingConfig);
+  // Extra info the GET returns next to the config (see /api/training/lead-config).
+  const [leadConfigMeta, setLeadConfigMeta] = useState<{
+    source?: 'stored' | 'default';
+    notes?: string[];
+    warning?: { message: string; issues: string[]; repairs: string[] };
+  } | null>(null);
+  // Auto-save bookkeeping (version counter) — see client/src/lib/leadConfigAutosave.ts.
+  const [leadAutosave, dispatchLeadAutosave] = useReducer(autosaveReducer, initialAutosaveState);
+  const markLeadConfigEdited = () => dispatchLeadAutosave({ type: 'edit' });
+  // Remember "Mandatory" across a turn-off/turn-on in this session (a turned-off
+  // field can't be mandatory, so the saved config can't hold it).
+  const requiredBeforeDisableRef = useRef<Record<string, boolean>>({});
+
   // Track which fields are expanded/collapsed (independent of enabled state)
   const [expandedFields, setExpandedFields] = useState<Set<string>>(new Set(['name'])); // Default: name field expanded
   
@@ -231,7 +245,13 @@ export default function TrainChroney() {
   // minimize diff surface for the existing toggle/tooltip logic.
   const smsConfigured = !!otpSettings?.effectivelyConfigured;
   const whatsappConfigured = !!otpSettings?.whatsappEffectivelyConfigured;
-  const msg91Configured = smsConfigured || whatsappConfigured;
+  // "Can a code actually be sent?" — the runtime only uses channels that match
+  // the admin's channel preference (availableChannels), so mirror that here.
+  // undefined while the OTP settings are still loading (never blocks then).
+  const otpChannelReady: boolean | undefined = otpSettings
+    ? (Array.isArray(otpSettings.availableChannels) ? otpSettings.availableChannels.length > 0 : (smsConfigured || whatsappConfigured))
+    : undefined;
+  const msg91Configured = otpChannelReady ?? (smsConfigured || whatsappConfigured);
 
   // Per-business CAPTCHA (reCAPTCHA v2) secret-key status. The site key lives in
   // the lead config (public, safe to expose); the secret key is write-only and
@@ -286,89 +306,138 @@ export default function TrainChroney() {
     enabled: !!settings?.id, // Only fetch when we have business account context
   });
 
-  // Reset dirty flag when business account changes (for multi-tenancy)
+  // Start over when the business account changes (multi-tenancy).
   useEffect(() => {
-    setLeadConfigIsDirty(false);
+    dispatchLeadAutosave({ type: 'reset' });
   }, [settings?.id]);
 
-  // Update lead config state when fetched data changes (only when not dirty)
+  // Adopt the server copy only when there are no local edits waiting and no
+  // save in flight — so edits made while a save is running are never wiped.
   useEffect(() => {
-    if (fetchedLeadConfig && Array.isArray((fetchedLeadConfig as any).fields) && !leadConfigIsDirty) {
-      // Normalize legacy configs: ensure all fields have captureStrategy (default to 'start')
-      const normalizedConfig = {
-        ...fetchedLeadConfig as any,
-        captureStrategy: ((fetchedLeadConfig as any).captureStrategy === 'smart' ? 'custom' : (fetchedLeadConfig as any).captureStrategy) || 'start',
-        fields: ((fetchedLeadConfig as any).fields || []).map((field: any) => ({
-          ...field,
-          captureStrategy: field.captureStrategy === 'smart' ? 'custom' : field.captureStrategy === 'end' ? 'keyword' : (field.captureStrategy || 'start'),
-          customAskAfter: field.customAskAfter ?? (field.captureStrategy === 'smart' || field.captureStrategy === 'custom' ? 2 : undefined),
-          intentIntensity: field.intentIntensity ?? (field.captureStrategy === 'intent' ? 'medium' : undefined),
-          captureKeywords: field.captureKeywords ?? (field.captureStrategy === 'keyword' || field.captureStrategy === 'end' ? [] : undefined),
-          // Add phoneValidation for mobile/whatsapp fields (default to '10' digits)
-          phoneValidation: (field.id === 'mobile' || field.id === 'whatsapp') 
-            ? (field.phoneValidation || '10') 
-            : field.phoneValidation
-        }))
-      };
-      setLeadConfig(normalizedConfig as typeof leadConfig);
-    }
-  }, [fetchedLeadConfig, leadConfigIsDirty]);
+    if (!fetchedLeadConfig || !Array.isArray((fetchedLeadConfig as any).fields)) return;
+    if (!shouldAdoptServerData(leadAutosave)) return;
+    const { _meta, ...rest } = fetchedLeadConfig as any;
+    // Server already normalises (sorted by priority, priorities 1..4, legacy
+    // timings migrated); running the same shared normaliser again is a no-op
+    // safety net so the list renders in priority order on load.
+    setLeadConfig(normalizeLeadTrainingConfig(rest).config);
+    setLeadConfigMeta(_meta ?? null);
+  }, [fetchedLeadConfig, leadAutosave.version, leadAutosave.savedVersion, leadAutosave.inFlightVersion]);
 
-  // Save lead config mutation
+  // Save lead config mutation. `version` is the edit counter the request
+  // carries, so a late success only marks THAT version as saved.
   const saveLeadConfigMutation = useMutation({
-    mutationFn: async (config: typeof leadConfig) => {
+    mutationFn: async ({ config }: { config: LeadTrainingConfig; version: number }) => {
+      const { _meta, ...body } = config as any;
       const response = await fetch("/api/training/lead-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(config),
+        body: JSON.stringify(body),
       });
-      if (!response.ok) throw new Error("Failed to save lead config");
+      if (!response.ok) {
+        // Surface the server's validation details (zod) instead of a generic error.
+        let message = `Couldn't save lead settings (HTTP ${response.status}).`;
+        try {
+          const json = await response.json();
+          const details: string[] = Array.isArray(json?.details)
+            ? json.details.map((d: any) => (typeof d === 'string' ? d : d?.message)).filter(Boolean)
+            : [];
+          message = details.length ? details.join(' ') : (json?.error || message);
+        } catch { /* non-JSON error body */ }
+        throw new Error(message);
+      }
       return response.json();
     },
-    onSuccess: (savedConfig) => {
-      // Update the query cache with the saved config (includes businessAccountId in key)
-      queryClient.setQueryData(["lead-config", settings?.id], savedConfig);
-      // Reset dirty flag since changes are now persisted
-      setLeadConfigIsDirty(false);
-      setLeadConfigSaveStatus("saved");
-      setTimeout(() => setLeadConfigSaveStatus("idle"), 2000);
-      toast({
-        title: "Saved",
-        description: "Lead capture settings updated successfully",
-      });
+    onMutate: ({ version }) => {
+      dispatchLeadAutosave({ type: 'saveStarted', version });
     },
-    onError: (error: any) => {
+    onSuccess: (savedConfig, { version }) => {
+      queryClient.setQueryData(["lead-config", settings?.id], savedConfig);
+      dispatchLeadAutosave({ type: 'saveSucceeded', version });
+    },
+    onError: (error: any, { version }) => {
+      dispatchLeadAutosave({ type: 'saveFailed', version, error: error?.message || 'Save failed' });
       toast({
-        title: "Error",
-        description: error.message,
+        title: "Lead settings not saved",
+        description: error?.message,
         variant: "destructive",
       });
-      setLeadConfigSaveStatus("idle");
     },
   });
 
-  // Auto-save lead config when changes are made (debounced)
-  useEffect(() => {
-    if (!leadConfigIsDirty) return;
-    // Don't auto-save an invalid conversion URL — the server would reject the
-    // whole config. Wait until it's empty or a valid https URL.
-    const convUrl = (leadConfig.conversionUrl || '').trim();
-    if (convUrl) {
-      try {
-        if (new URL(convUrl).protocol !== 'https:') return;
-      } catch {
-        return;
-      }
-    }
+  // Warnings for odd/invalid combinations (shared with the group editor).
+  const leadWarnings = useMemo(
+    () => getLeadConfigWarnings(leadConfig, { otpChannelReady }),
+    [leadConfig, otpChannelReady],
+  );
 
+  // True only when a non-empty URL fails the https/URL check (used to surface an
+  // inline error and to block the auto-save of an invalid value).
+  const conversionUrlInvalid = (() => {
+    const v = (leadConfig.conversionUrl || '').trim();
+    if (!v) return false;
+    try {
+      return new URL(v).protocol !== 'https:';
+    } catch {
+      return true;
+    }
+  })();
+
+  // Anything that would make the server reject the config pauses auto-save
+  // (the status line says why) instead of firing a request that must fail.
+  const leadSaveBlockedReason: string | null = leadWarnings.some((w) => w.level === 'block')
+    ? 'fix the issue highlighted below'
+    : conversionUrlInvalid
+      ? 'enter a valid https conversion URL'
+      : null;
+
+  // Auto-save (debounced). Re-runs when a save finishes, so edits made while it
+  // was in flight are saved next.
+  useEffect(() => {
+    if (!shouldScheduleSave(leadAutosave, !!leadSaveBlockedReason)) return;
+    const version = leadAutosave.version;
+    const config = leadConfig;
     const timeoutId = setTimeout(() => {
-      setLeadConfigSaveStatus("saving");
-      saveLeadConfigMutation.mutate(leadConfig);
+      saveLeadConfigMutation.mutate({ config, version });
     }, 800); // 800ms debounce
-    
     return () => clearTimeout(timeoutId);
-  }, [leadConfig, leadConfigIsDirty]);
+  }, [leadConfig, leadAutosave.version, leadAutosave.inFlightVersion, leadAutosave.status, leadSaveBlockedReason]);
+
+  const retryLeadConfigSave = () => {
+    saveLeadConfigMutation.mutate({ config: leadConfig, version: leadAutosave.version });
+  };
+
+  // Warn before leaving with unsaved lead settings: browser close/reload, and
+  // in-app links (best effort — clicks on same-origin <a> elements).
+  const leadConfigUnsaved = hasUnsavedChanges(leadAutosave) || leadAutosave.inFlightVersion !== null;
+  useEffect(() => {
+    if (!leadConfigUnsaved) return;
+    const message = 'Your lead training changes are not saved yet. Leave this page anyway?';
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = message;
+      return message;
+    };
+    const onClickCapture = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const anchor = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!anchor || anchor.target === '_blank') return;
+      let url: URL;
+      try { url = new URL(anchor.href, window.location.href); } catch { return; }
+      if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return;
+      if (!window.confirm(message)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    document.addEventListener('click', onClickCapture, true);
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      document.removeEventListener('click', onClickCapture, true);
+    };
+  }, [leadConfigUnsaved]);
 
   useEffect(() => {
     if (settings?.customInstructions) {
@@ -830,32 +899,28 @@ export default function TrainChroney() {
 
   // Lead Config Handlers
   const handleFieldToggle = (fieldId: string) => {
-    setLeadConfigIsDirty(true);
-    
-    setLeadConfig(prev => {
-      return {
-        ...prev,
-        fields: prev.fields.map(f => {
-          if (f.id === fieldId) {
-            // When disabling a field, also set required to false
-            // When enabling a field, set default captureStrategy to 'start'
-            return { 
-              ...f, 
-              enabled: !f.enabled, 
-              required: f.enabled ? false : f.required,
-              captureStrategy: !f.enabled ? 'start' : f.captureStrategy,
-              customAskAfter: !f.enabled ? undefined : f.customAskAfter,
-              intentIntensity: !f.enabled ? undefined : f.intentIntensity
-            };
-          }
-          return f;
-        })
-      };
-    });
+    markLeadConfigEdited();
+    const current = leadConfig.fields.find(f => f.id === fieldId);
+    // Turning off: remember Mandatory so turning back on restores it.
+    if (current?.enabled) requiredBeforeDisableRef.current[fieldId] = !!current.required;
+    const restoreRequired = !!requiredBeforeDisableRef.current[fieldId];
+
+    setLeadConfig(prev => ({
+      ...prev,
+      fields: prev.fields.map(f => {
+        if (f.id !== fieldId) return f;
+        // Only the on/off state changes. Timing and its details (ask-after,
+        // sensitivity, keywords) are kept, so re-enabling a field brings back
+        // exactly what it had. A turned-off field can't be mandatory.
+        return f.enabled
+          ? { ...f, enabled: false, required: false }
+          : { ...f, enabled: true, required: restoreRequired };
+      }),
+    }));
   };
 
   const handleRequiredToggle = (fieldId: string) => {
-    setLeadConfigIsDirty(true);
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
       fields: prev.fields.map(f => {
@@ -868,7 +933,7 @@ export default function TrainChroney() {
   };
 
   const handlePhoneValidationChange = (fieldId: string, validation: PhoneValidation) => {
-    setLeadConfigIsDirty(true);
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
       fields: prev.fields.map(f => {
@@ -881,7 +946,7 @@ export default function TrainChroney() {
   };
 
   const handleOtpEnabledToggle = (fieldId: string) => {
-    setLeadConfigIsDirty(true);
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
       fields: prev.fields.map(f => {
@@ -905,7 +970,7 @@ export default function TrainChroney() {
   // Visible only when mobile + captureStrategy=start + otpEnabled — the admin
   // UI enforces the same gate that the server uses to set awaitingVerification.
   const handleOtpRequiredForCountingToggle = (fieldId: string) => {
-    setLeadConfigIsDirty(true);
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
       fields: prev.fields.map(f => {
@@ -921,7 +986,7 @@ export default function TrainChroney() {
   // Enabling it also selects OTP as the verification method (and clears CAPTCHA);
   // disabling it turns OTP back off unless a real provider is configured.
   const handleOtpDemoModeToggle = (fieldId: string) => {
-    setLeadConfigIsDirty(true);
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
       fields: prev.fields.map(f => {
@@ -938,32 +1003,20 @@ export default function TrainChroney() {
   // Conversion tracking (Google Ads): set the https "thank-you" page URL fired in
   // the visitor's browser when a mobile number is captured. Empty = disabled.
   const handleConversionUrlChange = (value: string) => {
-    setLeadConfigIsDirty(true);
+    markLeadConfigEdited();
     setLeadConfig(prev => ({ ...prev, conversionUrl: value }));
   };
 
   const handleConversionBadgeToggle = () => {
-    setLeadConfigIsDirty(true);
+    markLeadConfigEdited();
     setLeadConfig(prev => ({ ...prev, conversionBadgeEnabled: !prev.conversionBadgeEnabled }));
   };
-
-  // True only when a non-empty URL fails the https/URL check (used to surface an
-  // inline error and to block the auto-save of an invalid value).
-  const conversionUrlInvalid = (() => {
-    const v = (leadConfig.conversionUrl || '').trim();
-    if (!v) return false;
-    try {
-      return new URL(v).protocol !== 'https:';
-    } catch {
-      return true;
-    }
-  })();
 
   // Verification method picker (None / OTP / CAPTCHA). OTP and CAPTCHA are
   // mutually exclusive — the server enforces this too, but we keep the UI
   // internally consistent so the saved config never has both flags set.
   const handleVerificationMethodChange = (fieldId: string, method: 'none' | 'otp' | 'captcha') => {
-    setLeadConfigIsDirty(true);
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
       fields: prev.fields.map(f => {
@@ -988,7 +1041,7 @@ export default function TrainChroney() {
   };
 
   const handleCaptchaSiteKeyChange = (fieldId: string, siteKey: string) => {
-    setLeadConfigIsDirty(true);
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
       fields: prev.fields.map(f =>
@@ -998,7 +1051,7 @@ export default function TrainChroney() {
   };
 
   const handleSendUnverifiedToggle = (fieldId: string) => {
-    setLeadConfigIsDirty(true);
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
       fields: prev.fields.map(f =>
@@ -1017,44 +1070,38 @@ export default function TrainChroney() {
     }
   };
 
-  const handleStrategyChange = (fieldId: string, strategy: 'custom' | 'start' | 'keyword' | 'intent') => {
-    setLeadConfigIsDirty(true);
+  const handleStrategyChange = (fieldId: string, strategy: LeadCaptureStrategy) => {
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
       fields: prev.fields.map(f => {
-        if (f.id === fieldId) {
-          return { 
-            ...f, 
-            captureStrategy: strategy,
-            customAskAfter: strategy === 'custom' ? (f.customAskAfter || 2) : undefined,
-            intentIntensity: strategy === 'intent' ? (f.intentIntensity || 'medium') : undefined,
-            captureKeywords: strategy === 'keyword' ? (f.captureKeywords || []) : undefined
-          };
-        }
-        return f;
+        if (f.id !== fieldId) return f;
+        // Fill the chosen timing's detail if it has none yet; keep the other
+        // timings' details so switching back restores them.
+        return {
+          ...f,
+          captureStrategy: strategy,
+          customAskAfter: strategy === 'custom' ? (f.customAskAfter ?? DEFAULT_CUSTOM_ASK_AFTER) : f.customAskAfter,
+          intentIntensity: strategy === 'intent' ? (f.intentIntensity ?? 'medium') : f.intentIntensity,
+          captureKeywords: strategy === 'keyword' ? (f.captureKeywords ?? []) : f.captureKeywords,
+        };
       })
     }));
   };
 
-  const handleKeywordsInputChange = (fieldId: string, text: string) => {
-    setKeywordInputTexts(prev => ({ ...prev, [fieldId]: text }));
-  };
-
-  const handleKeywordsBlur = (fieldId: string) => {
-    const text = keywordInputTexts[fieldId];
-    if (text === undefined) return;
-    const keywords = text.split(',').map(k => k.trim()).filter(k => k.length > 0);
-    setLeadConfigIsDirty(true);
+  // Keywords commit on Enter, comma or leaving the box (LeadKeywordInput).
+  const handleKeywordsChange = (fieldId: string, keywords: string[]) => {
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
-      fields: prev.fields.map(f => 
+      fields: prev.fields.map(f =>
         f.id === fieldId ? { ...f, captureKeywords: keywords } : f
       )
     }));
   };
 
-  const handleIntentIntensityChange = (fieldId: string, intensity: 'low' | 'medium' | 'high') => {
-    setLeadConfigIsDirty(true);
+  const handleIntentIntensityChange = (fieldId: string, intensity: IntentIntensity) => {
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
       fields: prev.fields.map(f => {
@@ -1067,7 +1114,7 @@ export default function TrainChroney() {
   };
 
   const handleCustomAskAfterChange = (fieldId: string, value: number) => {
-    setLeadConfigIsDirty(true);
+    markLeadConfigEdited();
     setLeadConfig(prev => ({
       ...prev,
       fields: prev.fields.map(f => {
@@ -1079,55 +1126,15 @@ export default function TrainChroney() {
     }));
   };
 
-  const handleSaveLeadConfig = () => {
-    setLeadConfigSaveStatus("saving");
-    saveLeadConfigMutation.mutate(leadConfig);
-  };
-
+  // Reorder: swap with the neighbour and renumber priorities 1..4 (shared helper).
   const handleMoveFieldUp = (fieldId: string) => {
-    setLeadConfigIsDirty(true);
-    setLeadConfig(prev => {
-      const sortedFields = [...prev.fields].sort((a, b) => a.priority - b.priority);
-      const currentIndex = sortedFields.findIndex(f => f.id === fieldId);
-      
-      if (currentIndex <= 0) return prev;
-      
-      // Swap the field with the one above it
-      const temp = sortedFields[currentIndex - 1];
-      sortedFields[currentIndex - 1] = sortedFields[currentIndex];
-      sortedFields[currentIndex] = temp;
-      
-      // Reassign priorities sequentially (1, 2, 3, 4) to maintain uniqueness
-      const reorderedFields = sortedFields.map((field, idx) => ({
-        ...field,
-        priority: idx + 1
-      }));
-      
-      return { ...prev, fields: reorderedFields };
-    });
+    markLeadConfigEdited();
+    setLeadConfig(prev => ({ ...prev, fields: moveLeadField(prev.fields, fieldId, -1) }));
   };
 
   const handleMoveFieldDown = (fieldId: string) => {
-    setLeadConfigIsDirty(true);
-    setLeadConfig(prev => {
-      const sortedFields = [...prev.fields].sort((a, b) => a.priority - b.priority);
-      const currentIndex = sortedFields.findIndex(f => f.id === fieldId);
-      
-      if (currentIndex >= sortedFields.length - 1) return prev;
-      
-      // Swap the field with the one below it
-      const temp = sortedFields[currentIndex + 1];
-      sortedFields[currentIndex + 1] = sortedFields[currentIndex];
-      sortedFields[currentIndex] = temp;
-      
-      // Reassign priorities sequentially (1, 2, 3, 4) to maintain uniqueness
-      const reorderedFields = sortedFields.map((field, idx) => ({
-        ...field,
-        priority: idx + 1
-      }));
-      
-      return { ...prev, fields: reorderedFields };
-    });
+    markLeadConfigEdited();
+    setLeadConfig(prev => ({ ...prev, fields: moveLeadField(prev.fields, fieldId, 1) }));
   };
 
   const getFieldIcon = (fieldId: string) => {
@@ -1786,19 +1793,81 @@ export default function TrainChroney() {
               {/* Smart Lead Training Card */}
               <Card className="shadow-sm bg-gradient-to-br from-green-50/50 via-emerald-50/30 to-teal-50/50 dark:from-green-950/20 dark:via-emerald-950/10 dark:to-teal-950/20 border-green-200 dark:border-green-900/30">
               <CardHeader>
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-600 to-emerald-600 flex items-center justify-center shadow-lg">
+                <div className="flex flex-wrap items-center gap-3 mb-2">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-600 to-emerald-600 flex items-center justify-center shadow-lg shrink-0">
                     <UserCheck className="w-5 h-5 text-white" />
                   </div>
-                  <div>
+                  <div className="flex-1 min-w-[12rem]">
                     <CardTitle className="text-xl">Smart Lead Training</CardTitle>
                     <CardDescription className="mt-1">
                       Configure which contact information Chroney should collect
                     </CardDescription>
                   </div>
+                  {/* Auto-save status: Saving… / Saved / Not saved — retry */}
+                  {(() => {
+                    const label = autosaveLabel(leadAutosave, leadSaveBlockedReason);
+                    if (!label) return null;
+                    const failed = hasUnsavedChanges(leadAutosave) && leadAutosave.inFlightVersion === null && (leadAutosave.status === 'error' || !!leadSaveBlockedReason);
+                    return (
+                      <div className="flex items-center gap-2 text-xs" data-testid="lead-autosave-status" aria-live="polite">
+                        {leadAutosave.inFlightVersion !== null || (!failed && hasUnsavedChanges(leadAutosave)) ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-green-600" />
+                        ) : failed ? (
+                          <AlertCircle className="w-3.5 h-3.5 text-red-600" />
+                        ) : (
+                          <Check className="w-3.5 h-3.5 text-green-600" />
+                        )}
+                        <span className={failed ? 'text-red-700 dark:text-red-300' : 'text-muted-foreground'}>{label}</span>
+                        {failed && leadAutosave.status === 'error' && !leadSaveBlockedReason && (
+                          <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={retryLeadConfigSave} data-testid="button-lead-retry-save">
+                            Retry
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
+                {/* Stored config failed validation: shown as the chat uses it, with a warning. */}
+                {leadConfigMeta?.warning && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200" data-testid="lead-config-stored-warning">
+                    <p className="font-medium flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5" />{leadConfigMeta.warning.message}</p>
+                    {[...leadConfigMeta.warning.issues, ...leadConfigMeta.warning.repairs].length > 0 && (
+                      <ul className="mt-1 list-disc pl-5 space-y-0.5">
+                        {[...leadConfigMeta.warning.issues, ...leadConfigMeta.warning.repairs].map((t, i) => <li key={i}>{t}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                )}
+                {/* Legacy values migrated for display (e.g. old "At End" timing). */}
+                {!!leadConfigMeta?.notes?.length && (
+                  <LeadWarningList warnings={leadConfigMeta.notes.map((n) => ({ level: 'warn' as const, message: n, code: 'legacy-note' }))} />
+                )}
+                {/* Nothing saved yet: these are defaults the chat is not using. */}
+                {leadConfigMeta?.source === 'default' && !hasUnsavedChanges(leadAutosave) && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-blue-200 bg-blue-50 dark:border-blue-900/50 dark:bg-blue-950/20 px-3 py-2 text-xs text-blue-900 dark:text-blue-200" data-testid="lead-config-defaults-info">
+                    <span>Lead capture isn't set up yet — these are the suggested defaults. Chroney starts using them once you save or change a setting.</span>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { markLeadConfigEdited(); setLeadConfig((prev) => ({ ...prev })); }} data-testid="button-lead-save-defaults">
+                      Save these settings
+                    </Button>
+                  </div>
+                )}
+
+                {/* Same fields drive WhatsApp and Instagram/Facebook DMs. */}
+                <p className="text-xs text-muted-foreground flex items-start gap-1.5" data-testid="lead-config-channels-info">
+                  <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    These fields also drive WhatsApp AI replies when "Use Lead Training" is on in{" "}
+                    <Link href={SETTINGS_PATHS.whatsappFlowSettings} className="underline hover:text-foreground">WhatsApp flow settings</Link>{" "}
+                    (Mobile and WhatsApp are skipped there — WhatsApp already has the number), and Instagram/Facebook DM replies use them too.
+                    Mobile verification (OTP/CAPTCHA) runs on the website widget only.
+                  </span>
+                </p>
+
+                {/* Account-wide warnings (no fields on, Mobile + WhatsApp both on). */}
+                <LeadWarningList warnings={leadWarnings.filter((w) => !w.fieldId)} />
+
                 {/* Contact Fields List with Integrated Timing Settings */}
                 <div className="space-y-3">
                   {[...leadConfig.fields].sort((a, b) => a.priority - b.priority).map((field, index, sortedArray) => (
@@ -1810,112 +1879,132 @@ export default function TrainChroney() {
                           : 'bg-gray-50/50 dark:bg-gray-900/50 border-gray-200 dark:border-gray-800'
                       }`}
                     >
-                      {/* Main Field Row */}
-                      <div className="flex items-center gap-3 p-3">
-                        {/* Drag Handle / Priority Arrows */}
-                        <div className="flex flex-col gap-0.5">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleMoveFieldUp(field.id)}
-                            disabled={index === 0}
-                            className="h-5 w-5 p-0 hover:bg-green-50 dark:hover:bg-green-950/20 disabled:opacity-30"
-                            title="Move up"
-                          >
-                            <ChevronUp className="w-3 h-3" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleMoveFieldDown(field.id)}
-                            disabled={index === sortedArray.length - 1}
-                            className="h-5 w-5 p-0 hover:bg-green-50 dark:hover:bg-green-950/20 disabled:opacity-30"
-                            title="Move down"
-                          >
-                            <ChevronDown className="w-3 h-3" />
-                          </Button>
-                        </div>
-
-                        {/* Checkbox */}
-                        <input
-                          type="checkbox"
-                          id={`field-check-${field.id}`}
-                          checked={field.enabled}
-                          onChange={() => handleFieldToggle(field.id)}
-                          className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500 cursor-pointer"
-                        />
-
-                        {/* Icon */}
-                        <div className={`transition-all duration-200 ${field.enabled ? 'text-green-600' : 'text-gray-400'}`}>
-                          {getFieldIcon(field.id)}
-                        </div>
-
-                        {/* Field Label */}
-                        <Label
-                          htmlFor={`field-check-${field.id}`}
-                          className={`flex-1 text-sm font-medium cursor-pointer transition-all duration-200 ${
-                            field.enabled ? 'text-foreground' : 'text-muted-foreground'
-                          }`}
-                        >
-                          {getFieldLabel(field.id)}
-                        </Label>
-
-                        {/* Required/Optional Toggle Buttons - Only show when enabled */}
-                        {field.enabled && (
-                          <div className="flex items-center gap-1 p-0.5 bg-gray-100 dark:bg-gray-800 rounded-lg">
-                            <button
-                              onClick={() => {
-                                if (!field.required) handleRequiredToggle(field.id);
-                              }}
-                              className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
-                                field.required
-                                  ? 'bg-purple-600 text-white shadow-sm'
-                                  : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-                              }`}
+                      {/* Main Field Row — on narrow screens the controls
+                          (Mandatory/Optional, digit check) wrap onto their own
+                          line under the label instead of squeezing it. */}
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 p-3" data-testid={`lead-field-row-${field.id}`}>
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          {/* Priority Arrows */}
+                          <div className="flex flex-col gap-0.5 shrink-0">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleMoveFieldUp(field.id)}
+                              disabled={index === 0}
+                              className="h-5 w-5 p-0 hover:bg-green-50 dark:hover:bg-green-950/20 disabled:opacity-30"
+                              title="Move up"
+                              data-testid={`button-move-up-${field.id}`}
                             >
-                              {field.required && <Check className="w-3 h-3" />}
-                              Mandatory
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (field.required) handleRequiredToggle(field.id);
-                              }}
-                              className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
-                                !field.required
-                                  ? 'bg-gray-600 text-white shadow-sm dark:bg-gray-500'
-                                  : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-                              }`}
+                              <ChevronUp className="w-3 h-3" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleMoveFieldDown(field.id)}
+                              disabled={index === sortedArray.length - 1}
+                              className="h-5 w-5 p-0 hover:bg-green-50 dark:hover:bg-green-950/20 disabled:opacity-30"
+                              title="Move down"
+                              data-testid={`button-move-down-${field.id}`}
                             >
-                              {!field.required && <Check className="w-3 h-3" />}
-                              Optional
-                            </button>
+                              <ChevronDown className="w-3 h-3" />
+                            </Button>
                           </div>
-                        )}
-                        
-                        {/* Phone Validation Dropdown - Only show for mobile/whatsapp when enabled */}
-                        {field.enabled && (field.id === 'mobile' || field.id === 'whatsapp') && (
-                          <Select
-                            value={field.phoneValidation || '10'}
-                            onValueChange={(value) => handlePhoneValidationChange(field.id, value as PhoneValidation)}
+
+                          {/* Checkbox */}
+                          <input
+                            type="checkbox"
+                            id={`field-check-${field.id}`}
+                            data-testid={`checkbox-field-${field.id}`}
+                            checked={field.enabled}
+                            onChange={() => handleFieldToggle(field.id)}
+                            className="w-4 h-4 shrink-0 rounded border-gray-300 text-green-600 focus:ring-green-500 cursor-pointer"
+                          />
+
+                          {/* Icon */}
+                          <div className={`shrink-0 transition-all duration-200 ${field.enabled ? 'text-green-600' : 'text-gray-400'}`}>
+                            {getFieldIcon(field.id)}
+                          </div>
+
+                          {/* Field Label */}
+                          <Label
+                            htmlFor={`field-check-${field.id}`}
+                            className={`flex-1 min-w-0 truncate text-sm font-medium cursor-pointer transition-all duration-200 ${
+                              field.enabled ? 'text-foreground' : 'text-muted-foreground'
+                            }`}
                           >
-                            <SelectTrigger className="h-7 w-[100px] text-xs">
-                              <SelectValue placeholder="Validation" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="10">10 digits</SelectItem>
-                              <SelectItem value="12">12 digits</SelectItem>
-                              <SelectItem value="8-12">8-12 digits</SelectItem>
-                              <SelectItem value="any">Any length</SelectItem>
-                            </SelectContent>
-                          </Select>
+                            {getFieldLabel(field.id)}
+                          </Label>
+                        </div>
+
+                        {field.enabled && (
+                          <div className="flex flex-wrap items-center gap-2 basis-full sm:basis-auto pl-8 sm:pl-0">
+                            {/* Required/Optional Toggle Buttons */}
+                            <div className="flex items-center gap-1 p-0.5 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                              <button
+                                onClick={() => {
+                                  if (!field.required) handleRequiredToggle(field.id);
+                                }}
+                                data-testid={`button-mandatory-${field.id}`}
+                                className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
+                                  field.required
+                                    ? 'bg-purple-600 text-white shadow-sm'
+                                    : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+                                }`}
+                              >
+                                {field.required && <Check className="w-3 h-3" />}
+                                Mandatory
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (field.required) handleRequiredToggle(field.id);
+                                }}
+                                data-testid={`button-optional-${field.id}`}
+                                className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
+                                  !field.required
+                                    ? 'bg-gray-600 text-white shadow-sm dark:bg-gray-500'
+                                    : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+                                }`}
+                              >
+                                {!field.required && <Check className="w-3 h-3" />}
+                                Optional
+                              </button>
+                            </div>
+
+                            {/* Phone Validation Dropdown - mobile/whatsapp only */}
+                            {(field.id === 'mobile' || field.id === 'whatsapp') && (
+                              <Select
+                                value={field.phoneValidation || '10'}
+                                onValueChange={(value) => handlePhoneValidationChange(field.id, value as PhoneValidation)}
+                              >
+                                <SelectTrigger className="h-7 w-[100px] text-xs">
+                                  <SelectValue placeholder="Validation" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="10">10 digits</SelectItem>
+                                  <SelectItem value="12">12 digits</SelectItem>
+                                  <SelectItem value="8-12">8-12 digits</SelectItem>
+                                  <SelectItem value="any">Any length</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            )}
+                          </div>
                         )}
                       </div>
 
+                      {/* Field-specific warnings (e.g. Keyword timing with no keywords). */}
+                      {field.enabled && (
+                        <LeadWarningList
+                          className="mx-3 mb-2"
+                          warnings={leadWarnings.filter((w) => w.fieldId === field.id && w.code !== 'otp_no_channel')}
+                        />
+                      )}
+
                       {/* Verification block — mobile field only. Admins pick the
-                          gate method: None, OTP (SMS/WhatsApp), or CAPTCHA
-                          (reCAPTCHA v2). OTP and CAPTCHA are mutually exclusive.
-                          The picker only applies when the field is collected "At
-                          Start"; the gate runs before any chat begins. */}
+                          method: None, OTP (SMS/WhatsApp), or CAPTCHA (reCAPTCHA
+                          v2); mutually exclusive. Website widget only. With "At
+                          Start" it is a pre-chat gate; with any other timing it
+                          runs when the number is captured mid-chat (see
+                          server/services/otp/index.ts + chatService autoDetect). */}
                       {field.enabled && field.id === 'mobile' && (() => {
                         const verificationMethod: 'none' | 'otp' | 'captcha' =
                           field.captchaEnabled ? 'captcha' : field.otpEnabled ? 'otp' : 'none';
@@ -1943,8 +2032,13 @@ export default function TrainChroney() {
                           {/* Method picker */}
                           <div className="px-3 py-2.5 border-b border-purple-200/40 dark:border-purple-900/30">
                             <Label className="text-xs font-medium">Verification method</Label>
-                            <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug mb-2">
-                              Require visitors to verify before chatting. Applied only when this field is collected "At Start".
+                            <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug mb-2" data-testid="text-verification-help">
+                              Checks the mobile number on the website chat (not on WhatsApp, Instagram or Facebook).
+                              {" "}With <strong>At Start</strong>, visitors verify before the chat begins.
+                              {" "}With any other timing, the check runs when the visitor shares their number mid-chat:
+                              {" "}<strong>OTP</strong> sends a 6-digit code and the lead goes to your CRM only once it's verified;
+                              {" "}<strong>CAPTCHA</strong> shows an "I'm not a robot" check before the chat continues.
+                              {" "}"Only count verified leads" needs OTP with At Start.
                             </p>
                             <RadioGroup
                               value={verificationMethod}
@@ -1964,9 +2058,28 @@ export default function TrainChroney() {
                                 <Label htmlFor={`verif-captcha-${field.id}`} className="text-xs cursor-pointer">CAPTCHA (reCAPTCHA v2)</Label>
                               </div>
                             </RadioGroup>
-                            {!msg91Configured && !field.otpDemoMode && (
+                            {verificationMethod === 'otp' && otpChannelReady === false && !field.otpDemoMode ? (
+                              // OTP chosen but nothing can send a code: saving is
+                              // paused (and the server refuses it) until fixed.
+                              <div className="mt-2 rounded-md border border-red-300 bg-red-50 dark:border-red-900/60 dark:bg-red-950/20 px-2.5 py-2" data-testid={`otp-no-channel-${field.id}`}>
+                                <p className="text-[11px] text-red-800 dark:text-red-200 leading-snug">
+                                  <strong>OTP can't work yet:</strong> no SMS or WhatsApp sender is set up for your OTP channel preference, so visitors would never get a code and their phone leads would stay unverified. This isn't saved until you fix it.
+                                </p>
+                                <div className="mt-1.5 flex flex-wrap gap-2">
+                                  <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => handleVerificationMethodChange(field.id, 'none')} data-testid={`button-otp-switch-none-${field.id}`}>
+                                    Switch to None
+                                  </Button>
+                                  <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => handleOtpDemoModeToggle(field.id)} data-testid={`button-otp-use-demo-${field.id}`}>
+                                    Use Sample OTP
+                                  </Button>
+                                  <Link href={SETTINGS_PATHS.otp} className="text-[11px] inline-flex items-center gap-1 text-red-800 dark:text-red-200 underline">
+                                    Set up a sender
+                                  </Link>
+                                </div>
+                              </div>
+                            ) : !msg91Configured && !field.otpDemoMode && (
                               <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-2">
-                                Configure at least one OTP delivery channel (SMS or WhatsApp) to enable real OTP — or turn on Sample OTP below to demo the flow without any setup.
+                                Configure at least one OTP delivery channel (SMS or WhatsApp, matching your channel preference) to enable real OTP — or turn on Sample OTP below to demo the flow without any setup.
                               </p>
                             )}
                             {/* Demo / Sample OTP toggle — switch OTP on for client
@@ -2143,96 +2256,16 @@ export default function TrainChroney() {
                         );
                       })()}
 
-                      {/* Timing Settings - Inside the card when enabled */}
+                      {/* Timing Settings - Inside the card when enabled (shared with the group editor) */}
                       {field.enabled && (
                         <div className="px-3 pb-3 pt-0">
-                          <div className="p-3 rounded-md bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50">
-                            <div className="flex items-center gap-2 mb-2">
-                              <Route className="w-3.5 h-3.5 text-muted-foreground" />
-                              <span className="text-xs font-medium text-muted-foreground">When to collect</span>
-                            </div>
-                            <RadioGroup
-                              value={field.captureStrategy}
-                              onValueChange={(value) => handleStrategyChange(field.id, value as 'custom' | 'start' | 'keyword' | 'intent')}
-                              className="flex flex-wrap gap-3"
-                            >
-                              <div className="flex items-center space-x-1.5">
-                                <RadioGroupItem value="start" id={`timing-start-${field.id}`} className="h-3.5 w-3.5" />
-                                <Label htmlFor={`timing-start-${field.id}`} className="text-xs cursor-pointer">At Start</Label>
-                              </div>
-                              <div className="flex items-center space-x-1.5">
-                                <RadioGroupItem value="custom" id={`timing-custom-${field.id}`} className="h-3.5 w-3.5" />
-                                <Label htmlFor={`timing-custom-${field.id}`} className="text-xs cursor-pointer">Custom</Label>
-                              </div>
-                              <div className="flex items-center space-x-1.5">
-                                <RadioGroupItem value="intent" id={`timing-intent-${field.id}`} className="h-3.5 w-3.5" />
-                                <Label htmlFor={`timing-intent-${field.id}`} className="text-xs cursor-pointer">Intent</Label>
-                              </div>
-                              <div className="flex items-center space-x-1.5">
-                                <RadioGroupItem value="keyword" id={`timing-keyword-${field.id}`} className="h-3.5 w-3.5" />
-                                <Label htmlFor={`timing-keyword-${field.id}`} className="text-xs cursor-pointer">Keyword</Label>
-                              </div>
-                            </RadioGroup>
-                            {field.captureStrategy === 'start' && (
-                              <p className="text-xs text-blue-600 dark:text-blue-400 mt-2 italic">
-                                AI will ask immediately at the start of the conversation
-                              </p>
-                            )}
-                            {field.captureStrategy === 'custom' && (
-                              <div className="mt-2 flex items-center gap-2">
-                                <p className="text-xs text-blue-600 dark:text-blue-400 italic">
-                                  AI will ask after response #
-                                </p>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  max={20}
-                                  value={field.customAskAfter || 2}
-                                  onChange={(e) => handleCustomAskAfterChange(field.id, parseInt(e.target.value) || 2)}
-                                  className="w-14 h-6 text-xs text-center border rounded bg-background px-1"
-                                />
-                              </div>
-                            )}
-                            {field.captureStrategy === 'intent' && (
-                              <div className="mt-2 space-y-2">
-                                <div className="flex items-center gap-2">
-                                  <p className="text-xs text-blue-600 dark:text-blue-400 italic">Sensitivity:</p>
-                                  <select
-                                    value={field.intentIntensity || 'medium'}
-                                    onChange={(e) => handleIntentIntensityChange(field.id, e.target.value as 'low' | 'medium' | 'high')}
-                                    className="h-6 text-xs border rounded bg-background px-1"
-                                  >
-                                    <option value="low">Low — Any browsing signal</option>
-                                    <option value="medium">Medium — Pricing / comparing</option>
-                                    <option value="high">High — Only purchase / action</option>
-                                  </select>
-                                </div>
-                                <p className="text-xs text-muted-foreground italic">
-                                  {field.intentIntensity === 'low' && 'Triggers on any interest signal — courses, availability, delivery, etc.'}
-                                  {(field.intentIntensity === 'medium' || !field.intentIntensity) && 'Triggers when user asks about pricing, discounts, or comparisons'}
-                                  {field.intentIntensity === 'high' && 'Triggers only on strong action words — buy, book, enroll, apply, etc.'}
-                                </p>
-                              </div>
-                            )}
-                            {field.captureStrategy === 'keyword' && (
-                              <div className="mt-2 space-y-2">
-                                <p className="text-xs text-blue-600 dark:text-blue-400 italic">
-                                  Enter keywords (comma-separated):
-                                </p>
-                                <input
-                                  type="text"
-                                  placeholder="e.g. pricing, demo, enroll, buy"
-                                  value={keywordInputTexts[field.id] !== undefined ? keywordInputTexts[field.id] : (field.captureKeywords || []).join(', ')}
-                                  onChange={(e) => handleKeywordsInputChange(field.id, e.target.value)}
-                                  onBlur={() => handleKeywordsBlur(field.id)}
-                                  className="w-full h-7 text-xs border rounded bg-background px-2"
-                                />
-                                <p className="text-xs text-muted-foreground italic">
-                                  AI will ask for contact info when user's message contains any of these keywords
-                                </p>
-                              </div>
-                            )}
-                          </div>
+                          <LeadTimingSettings
+                            field={field}
+                            onStrategyChange={(s) => handleStrategyChange(field.id, s)}
+                            onAskAfterChange={(n) => handleCustomAskAfterChange(field.id, n)}
+                            onIntensityChange={(lvl) => handleIntentIntensityChange(field.id, lvl)}
+                            onKeywordsChange={(kws) => handleKeywordsChange(field.id, kws)}
+                          />
                         </div>
                       )}
                     </div>
@@ -2294,22 +2327,17 @@ export default function TrainChroney() {
                   </div>
                 </div>
 
-                {/* Auto-save Status Indicator */}
-                {leadConfigSaveStatus !== "idle" && (
-                  <div className="flex justify-end pt-2">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      {leadConfigSaveStatus === "saving" ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin text-green-600" />
-                          <span>Saving changes...</span>
-                        </>
-                      ) : leadConfigSaveStatus === "saved" ? (
-                        <>
-                          <Check className="w-4 h-4 text-green-600" />
-                          <span className="text-green-600">Changes saved</span>
-                        </>
-                      ) : null}
-                    </div>
+                {/* Auto-save status (repeated at the bottom, next to the last settings) */}
+                {autosaveLabel(leadAutosave, leadSaveBlockedReason) && (
+                  <div className="flex flex-wrap justify-end items-center gap-2 pt-2 text-xs" aria-live="polite">
+                    <span className={leadAutosave.status === 'error' || leadSaveBlockedReason ? (hasUnsavedChanges(leadAutosave) ? 'text-red-700 dark:text-red-300' : 'text-muted-foreground') : 'text-muted-foreground'}>
+                      {autosaveLabel(leadAutosave, leadSaveBlockedReason)}
+                    </span>
+                    {leadAutosave.status === 'error' && hasUnsavedChanges(leadAutosave) && leadAutosave.inFlightVersion === null && !leadSaveBlockedReason && (
+                      <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={retryLeadConfigSave}>
+                        Retry
+                      </Button>
+                    )}
                   </div>
                 )}
               </CardContent>

@@ -35,15 +35,20 @@ export class BusinessContextCache {
     this.invalidate(BusinessContextCache.KEYS.BUSINESS_CONTEXT_RETRIEVAL(businessAccountId));
   }
 
-  // Invalidation patterns for business account updates
+  // Invalidation patterns for business account updates. Drops everything cached
+  // for one account (widget settings, FAQs, every prompt-context variant, intro,
+  // WhatsApp context). Used after training / lead-config changes and group
+  // publish. Per-process only: other app instances keep their copy until TTL.
   invalidateBusinessCache(businessAccountId: string) {
+    const id = businessAccountId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const patterns = [
-      new RegExp(`^widget:${businessAccountId}$`),
-      new RegExp(`^faqs:${businessAccountId}$`),
+      new RegExp(`^widget:${id}$`),
+      new RegExp(`^faqs:${id}$`),
       // Catches `context:<id>` and the `:k12co` / `:rv` variants.
-      new RegExp(`^context:${businessAccountId}(:k12co|:rv)?$`),
-      new RegExp(`^intro:${businessAccountId}$`),
-      new RegExp(`^wa-context:${businessAccountId}$`),
+      new RegExp(`^context:${id}(:k12co|:rv)?$`),
+      new RegExp(`^intro:${id}$`),
+      // WhatsApp context keys carry a knowledge-toggle suffix (`:w1d0` etc.).
+      new RegExp(`^wa-context:${id}(:.*)?$`),
     ];
     for (const pattern of patterns) {
       this.invalidatePattern(pattern);

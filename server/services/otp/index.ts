@@ -162,6 +162,14 @@ export async function getAvailableChannels(businessAccountId: string): Promise<{
   if (await isDemoModeEnabled(businessAccountId)) {
     return { channels: ['sms'], preference: 'sms' };
   }
+  return getConfiguredChannels(businessAccountId);
+}
+
+/**
+ * Real (non-demo) delivery channels configured for this business, filtered by
+ * the admin's channel preference, preferred-first.
+ */
+async function getConfiguredChannels(businessAccountId: string): Promise<{ channels: OtpChannel[]; preference: OtpChannelPreference }> {
   const [pref, smsOk, waOk] = await Promise.all([
     getChannelPreference(businessAccountId),
     (async () => {
@@ -183,6 +191,74 @@ export async function getAvailableChannels(businessAccountId: string): Promise<{
     if (waOk) channels.push('whatsapp');
   }
   return { channels, preference: pref };
+}
+
+/**
+ * Is OTP verification EFFECTIVELY on for the mobile field?
+ *
+ * The admin's `otpEnabled` flag alone is not enough: if no SMS/WhatsApp sender
+ * is configured (after the channel preference) and Sample/Demo OTP is off, no
+ * code can ever be delivered. Treating OTP as on in that state leaves every
+ * phone lead "unverified" forever — and CRM sync fails closed for unverified
+ * phones, so those leads silently never reach the CRM. The runtime therefore
+ * treats "OTP on, no channel, demo off" as OTP OFF.
+ *
+ * Pure truth table (exported for tests):
+ *   mobile off or otpEnabled off      → off        (reason 'off')
+ *   otpDemoMode on                    → on         (reason 'demo')
+ *   ≥1 configured channel             → on         (reason 'channel')
+ *   otherwise                         → off        (reason 'no_channel')
+ */
+export function computeOtpEffectivelyEnabled(input: {
+  mobileEnabled: boolean;
+  otpEnabled: boolean;
+  demoMode: boolean;
+  channelCount: number;
+}): { enabled: boolean; reason: 'off' | 'demo' | 'channel' | 'no_channel' } {
+  if (!input.mobileEnabled || !input.otpEnabled) return { enabled: false, reason: 'off' };
+  if (input.demoMode) return { enabled: true, reason: 'demo' };
+  if (input.channelCount > 0) return { enabled: true, reason: 'channel' };
+  return { enabled: false, reason: 'no_channel' };
+}
+
+const warnedOtpNoChannel = new Set<string>();
+
+/**
+ * Runtime check used before gating a lead behind OTP. Pass the lead training
+ * config you already loaded to skip a settings read. Logs a warning once per
+ * account (until it is fixed) when OTP is on but nothing can send a code.
+ * On an unexpected lookup error it falls back to the admin's flag (previous
+ * behaviour) rather than guessing.
+ */
+export async function isOtpEffectivelyEnabled(businessAccountId: string, leadTrainingConfig?: unknown): Promise<boolean> {
+  let configuredFlag = false;
+  try {
+    let cfg: any = leadTrainingConfig;
+    if (cfg === undefined) {
+      const ws = await storage.getWidgetSettings(businessAccountId);
+      cfg = ws?.leadTrainingConfig;
+    }
+    const mobileField = Array.isArray(cfg?.fields) ? cfg.fields.find((f: any) => f?.id === 'mobile') : undefined;
+    const mobileEnabled = mobileField?.enabled === true;
+    const otpEnabled = mobileField?.otpEnabled === true;
+    configuredFlag = mobileEnabled && otpEnabled;
+    const demoMode = mobileField?.otpDemoMode === true;
+    if (!configuredFlag) return false;
+    const channelCount = demoMode ? 0 : (await getConfiguredChannels(businessAccountId)).channels.length;
+    const result = computeOtpEffectivelyEnabled({ mobileEnabled, otpEnabled, demoMode, channelCount });
+    if (result.reason === 'no_channel') {
+      if (!warnedOtpNoChannel.has(businessAccountId)) {
+        warnedOtpNoChannel.add(businessAccountId);
+        console.warn(`[OTP] OTP is ON for business ${businessAccountId} but no SMS/WhatsApp sender is configured and Sample OTP is off — treating OTP as OFF so phone leads are not blocked. Fix it in Train Chroney → Smart Lead Training or OTP settings.`);
+      }
+    } else {
+      warnedOtpNoChannel.delete(businessAccountId);
+    }
+    return result.enabled;
+  } catch (err) {
+    console.error(`[OTP] isOtpEffectivelyEnabled lookup failed for ${businessAccountId}; using the configured flag (${configuredFlag}):`, err);
+    return configuredFlag;
+  }
 }
 
 /**
@@ -597,6 +673,14 @@ export class OtpService {
     const phoneE164 = normalizePhone(phoneRaw);
     if (!phoneE164 || phoneE164.length < 7) return { ok: false, reason: 'invalid_phone' };
 
+    // OTP switched on but nothing can deliver a code (no channel, Sample OTP
+    // off) → OTP is effectively OFF: don't create a challenge that can never be
+    // answered, and don't fall back to an unconfigured SMS provider. Checked
+    // before taking the advisory-lock transaction (no connection held).
+    if (!(await isOtpEffectivelyEnabled(businessAccountId))) {
+      return { ok: false, reason: 'channel_unavailable' };
+    }
+
     // Task #23 (race-safety): serialize the entire find-or-create + send path
     // for the same (business, phone) so concurrent callers (e.g. /otp/start +
     // autoDetect typing the same number, or two rapid double-clicks) cannot
@@ -632,8 +716,10 @@ export class OtpService {
         return { ok: false, reason: 'channel_unavailable' };
       }
       deliveryChannel = opts.deliveryChannel;
+    } else if (channels[0]) {
+      deliveryChannel = channels[0];
     } else {
-      deliveryChannel = channels[0] || 'sms';
+      return { ok: false, reason: 'channel_unavailable' };
     }
     // Lockout check — STRICTLY per (conversationId, phoneE164) per Task #14 spec.
     // We do NOT block the conversation when the latest record was for a DIFFERENT

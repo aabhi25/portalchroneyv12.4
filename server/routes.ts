@@ -133,81 +133,16 @@ function escapeHtml(text: string): string {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Validation schema for lead training configuration
-const leadConfigFieldSchema = z.object({
-  id: z.enum(['name', 'mobile', 'whatsapp', 'email']),
-  enabled: z.boolean(),
-  required: z.boolean(),
-  priority: z.number().int().min(1).max(4),
-  captureStrategy: z.enum(['smart', 'custom', 'start', 'end', 'keyword', 'intent']), // Per-field timing strategy ('smart'→'custom', 'end'→'keyword' are legacy aliases)
-  customAskAfter: z.number().int().min(1).max(20).optional(), // For 'custom' strategy: ask after Nth response
-  intentIntensity: z.enum(['low', 'medium', 'high']).optional(), // For 'intent' strategy: sensitivity threshold
-  captureKeywords: z.array(z.string()).optional(), // For 'keyword' strategy: list of trigger keywords
-  phoneValidation: z.enum(['10', '12', '8-12', 'any']).optional(), // Phone number digit validation for mobile/whatsapp
-  otpEnabled: z.boolean().optional().default(false), // Opt-in OTP verification for mobile field (widget only, v1)
-  otpRequiredForCounting: z.boolean().optional().default(false), // Task #18: when ON + captureStrategy='start' + otpEnabled, unverified conversations are hard-deleted so analytics never count them.
-  otpDemoMode: z.boolean().optional().default(false), // Demo/sample OTP: switch OTP ON with NO real provider — a fixed sample code (111111) is accepted, no SMS/WhatsApp is sent. For client demos only; intentionally insecure.
-  captchaEnabled: z.boolean().optional().default(false), // Opt-in CAPTCHA (reCAPTCHA v2) verification for mobile field (widget only). Mutually exclusive with otpEnabled.
-  captchaProvider: z.enum(['recaptcha_v2']).optional(), // CAPTCHA provider; only Google reCAPTCHA v2 supported in v1.
-  captchaSiteKey: z.string().optional(), // Public reCAPTCHA v2 site key (safe to expose to the widget). Secret key is stored encrypted on widget_settings.
-  sendUnverifiedLeadsToCrm: z.boolean().optional().default(false), // When ON, leads whose CAPTCHA failed (captcha_status='unverified') are still synced to the CRM. Default OFF.
-}).refine(
-  (field) => !(!field.enabled && field.required),
-  { message: "Field cannot be required while disabled" }
-).refine(
-  (field) => !(field.otpEnabled === true && field.captchaEnabled === true),
-  { message: "OTP and CAPTCHA verification are mutually exclusive for the mobile field" }
-).transform((field) => ({
-  ...field,
-  captureStrategy: field.captureStrategy === 'end' ? 'keyword' as const : field.captureStrategy,
-  captureKeywords: (field.captureStrategy === 'end' || field.captureStrategy === 'keyword') ? (field.captureKeywords || []) : field.captureKeywords,
-  // Always emit a concrete boolean so legacy configs without otpEnabled
-  // produce a stable API contract for the admin UI.
-  otpEnabled: field.otpEnabled ?? false,
-  otpRequiredForCounting: field.otpRequiredForCounting ?? false,
-  otpDemoMode: field.otpDemoMode ?? false,
-  // Always emit concrete booleans so legacy configs without the CAPTCHA fields
-  // produce a stable API contract for the admin UI.
-  captchaEnabled: field.captchaEnabled ?? false,
-  sendUnverifiedLeadsToCrm: field.sendUnverifiedLeadsToCrm ?? false,
-}));
-
-const leadTrainingConfigSchema = z.object({
-  fields: z.array(leadConfigFieldSchema).min(1).length(4),
-  captureStrategy: z.enum(['smart', 'custom', 'start', 'end', 'keyword', 'intent']),
-  // Conversion tracking (Google Ads): admin-supplied https "thank-you"/conversion
-  // page URL. Empty string = disabled. Loaded ONLY in the visitor's browser via a
-  // hidden iframe (never fetched server-side — that would not carry the visitor's
-  // Google cookies/gclid and would risk SSRF).
-  conversionUrl: z
-    .string()
-    .trim()
-    .max(2048)
-    .optional()
-    .nullable()
-    .refine(
-      (v) => {
-        if (!v) return true;
-        try {
-          return new URL(v).protocol === 'https:';
-        } catch {
-          return false;
-        }
-      },
-      { message: 'Conversion URL must be a valid https URL' },
-    ),
-  // When true, show a small "Thank-you page fired" badge to the visitor (off to
-  // the side, not inside the chat bubble) the moment the conversion iframe fires.
-  conversionBadgeEnabled: z.boolean().optional(),
-}).refine(
-  (config) => {
-    const enabledFields = config.fields.filter(f => f.enabled);
-    const priorities = enabledFields.map(f => f.priority);
-    const uniquePriorities = new Set(priorities);
-    return uniquePriorities.size === priorities.length;
-  },
-  { message: "Enabled fields must have unique priorities" }
-);
+// Lead training configuration: schema, defaults, legacy-timing migration,
+// priority ordering and group-publish merge live in ONE shared module so the
+// account screen, the group editor, these handlers and publish agree.
+import {
+  leadTrainingConfigSchema,
+  normalizeLeadTrainingConfig,
+  repairLeadTrainingConfig,
+  describeLeadConfigIssues,
+  projectGroupOwnedLeadConfig,
+} from "@shared/leadTrainingConfig";
 
 // Validation schema for website analysis content update
 // All fields are optional and nullable to support legacy data with missing/null values
@@ -13239,13 +13174,26 @@ Return ONLY the refined instruction, nothing else.`
       // Get member count for sync status display
       const members = await storage.getGroupMembers(groupId);
       const memberCount = members.length;
-      
+
+      // Lead training is returned in the current shape: legacy timings migrated
+      // ('smart' → Custom after 2; 'end' → Keyword if it has keywords, else
+      // Custom after 3 — the same rule the chat runtime applies), fields sorted
+      // by priority. Notes tell the editor what was migrated.
+      let leadTrainingConfigNotes: string[] = [];
+      let leadTrainingConfig = training?.leadTrainingConfig ?? null;
+      if (leadTrainingConfig) {
+        const normalized = normalizeLeadTrainingConfig(leadTrainingConfig, { defaults: 'group' });
+        leadTrainingConfig = projectGroupOwnedLeadConfig(normalized.config) as any;
+        leadTrainingConfigNotes = normalized.notes;
+      }
+
       res.json({
         groupId,
         groupName: group.name,
         // The UDS key is write-only from the UI; only report whether one is saved.
-        training: training ? { ...training, leadsquaredUdsKey: undefined, hasUdsKey: !!training.leadsquaredUdsKey } : null,
+        training: training ? { ...training, leadTrainingConfig, leadTrainingConfigNotes, leadsquaredUdsKey: undefined, hasUdsKey: !!training.leadsquaredUdsKey } : null,
         memberCount,
+        members: members.map((m) => ({ businessAccountId: m.businessAccountId, name: m.businessAccount?.name || m.businessAccountId })),
       });
     } catch (error: any) {
       console.error('[Group Training] Error fetching training:', error);
@@ -13282,7 +13230,20 @@ Return ONLY the refined instruction, nothing else.`
       // Build the update data - include LeadSquared fields if provided
       const updateData: any = {};
       if (customInstructions !== undefined) updateData.customInstructions = customInstructions;
-      if (leadTrainingConfig !== undefined) updateData.leadTrainingConfig = leadTrainingConfig;
+      if (leadTrainingConfig === null) {
+        updateData.leadTrainingConfig = null;
+      } else if (leadTrainingConfig !== undefined) {
+        // Same validation as the account screen. The group stores only the keys
+        // it owns (GROUP_OWNED_* in shared/leadTrainingConfig.ts); per-account
+        // settings such as OTP/CAPTCHA are never part of a group config.
+        const { _meta: _ignoredMeta, ...lcBody } = (typeof leadTrainingConfig === 'object' ? leadTrainingConfig : {}) as any;
+        const lcParse = leadTrainingConfigSchema.safeParse(lcBody);
+        if (!lcParse.success) {
+          const details = describeLeadConfigIssues(lcParse.error.issues, lcBody);
+          return res.status(400).json({ error: `Invalid lead training configuration: ${details.join(' ')}`, details });
+        }
+        updateData.leadTrainingConfig = projectGroupOwnedLeadConfig(normalizeLeadTrainingConfig(lcParse.data, { defaults: 'group' }).config);
+      }
       if (fallbackTemplate !== undefined) updateData.fallbackTemplate = fallbackTemplate;
       if (leadsquaredEnabled !== undefined) updateData.leadsquaredEnabled = leadsquaredEnabled;
       if (leadsquaredHost !== undefined) updateData.leadsquaredHost = leadsquaredHost;
@@ -13397,35 +13358,40 @@ Return ONLY the refined instruction, nothing else.`
     }
   });
 
-  // SuperAdmin: Publish group training to all member accounts
+  // SuperAdmin: Publish group training to all member accounts.
+  // Body: { module?, memberIds? } — memberIds limits the run to those members
+  // (used by "Retry failed"). Each member is updated independently; the response
+  // lists per-member results so the editor can show "X of Y updated, N failed".
   app.post("/api/super-admin/account-groups/:groupId/training/publish", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const { groupId } = req.params;
       const user = req.user as User;
-      
+
       // Verify group exists
       const group = await storage.getAccountGroup(groupId);
       if (!group) {
         return res.status(404).json({ error: "Account group not found" });
       }
-      
-      // Get member count for confirmation
-      const members = await storage.getGroupMembers(groupId);
-      
-      const { module } = req.body || {};
+
+      const { module, memberIds } = req.body || {};
       const validModules = ['instructions', 'leadTraining', 'leadsquared', 'menuBuilder'];
       const publishModule = validModules.includes(module) ? module : undefined;
-      
-      console.log(`[Group Training] Publishing module: ${publishModule || 'ALL'} for group ${groupId}`);
-      
-      const result = await storage.publishGroupTrainingToMembers(groupId, user.id, publishModule);
-      
-      if (!result.success) {
-        return res.status(400).json({ 
-          error: "Failed to publish training. Make sure the group has a training configuration and member accounts." 
+      const onlyMemberIds = Array.isArray(memberIds)
+        ? memberIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+        : undefined;
+
+      console.log(`[Group Training] Publishing module: ${publishModule || 'ALL'} for group ${groupId}${onlyMemberIds ? ` (retry for ${onlyMemberIds.length} member(s))` : ''}`);
+
+      const result = await storage.publishGroupTrainingToMembers(groupId, user.id, publishModule, onlyMemberIds ? { memberIds: onlyMemberIds } : undefined);
+
+      if (result.attemptedCount === 0) {
+        return res.status(400).json({
+          error: onlyMemberIds
+            ? "None of the selected accounts are members of this group any more."
+            : "Failed to publish training. Make sure the group has a training configuration and member accounts."
         });
       }
-      
+
       const moduleLabels: Record<string, string> = {
         instructions: 'Instructions',
         leadTraining: 'Lead Training',
@@ -13433,12 +13399,21 @@ Return ONLY the refined instruction, nothing else.`
         menuBuilder: 'Menu Builder',
       };
       const moduleLabel = publishModule ? moduleLabels[publishModule] || publishModule : 'Training';
-      
+      const failedNames = result.failedMembers.map((m) => m.name).join(', ');
+      const message = result.failedMembers.length === 0
+        ? `${moduleLabel} published to ${result.affectedCount} of ${result.attemptedCount} member accounts`
+        : `${moduleLabel}: ${result.affectedCount} of ${result.attemptedCount} accounts updated, ${result.failedMembers.length} failed (${failedNames})`;
+
       res.json({
-        success: true,
-        message: `${moduleLabel} published to ${result.affectedCount} of ${members.length} member accounts`,
+        success: result.failedMembers.length === 0,
+        partial: result.failedMembers.length > 0 && result.affectedCount > 0,
+        message,
         affectedCount: result.affectedCount,
-        totalMembers: members.length,
+        attemptedCount: result.attemptedCount,
+        totalMembers: result.totalMembers,
+        failedMembers: result.failedMembers,
+        results: result.results,
+        fullyPublished: result.fullyPublished,
       });
     } catch (error: any) {
       console.error('[Group Training] Error publishing training:', error);
@@ -28944,6 +28919,14 @@ Be constructive and helpful. Return ONLY valid JSON.`;
   });
 
   // Lead Training Config endpoints
+  //
+  // GET returns the STORED config, normalised (all four fields, sorted by
+  // priority, priorities 1..4, legacy timings migrated) plus `_meta`:
+  //   source  'stored' | 'default' (nothing saved yet — the chat isn't using these defaults)
+  //   notes   legacy values that were migrated for display
+  //   warning set when the stored config fails validation: the config is still
+  //           returned (best-effort repaired) so the screen shows what the chat
+  //           actually uses, instead of silently swapping in defaults.
   app.get("/api/training/lead-config", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
       const businessAccountId = req.user?.businessAccountId;
@@ -28956,63 +28939,27 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(404).json({ error: "Settings not found" });
       }
 
-      // Default config with priority ordering (name=1, mobile=2, whatsapp=3, email=4)
-      const defaultConfig = {
-        fields: [
-          { id: 'name' as const, enabled: true, required: true, priority: 1, captureStrategy: 'custom' as const, customAskAfter: 2 },
-          { id: 'mobile' as const, enabled: false, required: false, priority: 2, captureStrategy: 'custom' as const, customAskAfter: 2 },
-          { id: 'whatsapp' as const, enabled: false, required: false, priority: 3, captureStrategy: 'custom' as const, customAskAfter: 2 },
-          { id: 'email' as const, enabled: false, required: false, priority: 4, captureStrategy: 'custom' as const, customAskAfter: 2 }
-        ],
-        captureStrategy: 'custom' as const
+      const normalized = normalizeLeadTrainingConfig(settings.leadTrainingConfig);
+      const meta: { source: 'stored' | 'default'; notes: string[]; warning?: { message: string; issues: string[]; repairs: string[] } } = {
+        source: normalized.usedDefaults ? 'default' : 'stored',
+        notes: normalized.notes,
       };
 
-      // Get stored config or use defaults
-      let storedConfig = settings.leadTrainingConfig || defaultConfig;
-      
-      // Normalize legacy configs by adding missing priority and captureStrategy fields
-      if (storedConfig && storedConfig.fields) {
-        const defaultPriorities: Record<string, number> = { name: 1, mobile: 2, whatsapp: 3, email: 4 };
-        
-        // Ensure all 4 fields exist with priorities and per-field captureStrategy
-        const normalizedFields = ['name', 'mobile', 'whatsapp', 'email'].map((id) => {
-          const existingField = storedConfig.fields?.find((f: any) => f.id === id);
-          if (existingField) {
-            // Field exists - ensure it has priority and captureStrategy
-            const strategy = existingField.captureStrategy === 'smart' ? 'custom' : (existingField.captureStrategy || 'custom');
-            return {
-              ...existingField,
-              priority: existingField.priority ?? defaultPriorities[id],
-              captureStrategy: strategy,
-              customAskAfter: existingField.customAskAfter ?? (strategy === 'custom' ? 2 : undefined),
-              intentIntensity: existingField.intentIntensity ?? (strategy === 'intent' ? 'medium' : undefined)
-            };
-          } else {
-            return { 
-              id, 
-              enabled: false, 
-              required: false,
-              priority: defaultPriorities[id],
-              captureStrategy: 'custom' as const,
-              customAskAfter: 2
-            };
-          }
-        });
-        
-        storedConfig = {
-          ...storedConfig,
-          fields: normalizedFields
-        };
-      }
-      
-      // Validate and sanitize the normalized config
-      const parseResult = leadTrainingConfigSchema.safeParse(storedConfig);
-      if (!parseResult.success) {
-        console.warn('[Lead Config] Invalid stored config, returning defaults:', parseResult.error);
-        return res.json(defaultConfig);
+      const parseResult = leadTrainingConfigSchema.safeParse(normalized.config);
+      if (parseResult.success) {
+        return res.json({ ...parseResult.data, _meta: meta });
       }
 
-      res.json(parseResult.data);
+      const issues = describeLeadConfigIssues(parseResult.error.issues, normalized.config);
+      const repaired = repairLeadTrainingConfig(normalized.config);
+      const reparsed = leadTrainingConfigSchema.safeParse(repaired.config);
+      console.warn(`[Lead Config] Stored config for ${businessAccountId} is invalid; returning it repaired for display:`, issues);
+      meta.warning = {
+        message: "Your saved lead settings have a problem. They're shown below as the chat uses them (with obvious fixes applied); review them — your next change saves a valid version.",
+        issues,
+        repairs: repaired.repairs,
+      };
+      res.json({ ...(reparsed.success ? reparsed.data : repaired.config), _meta: meta });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -29025,26 +28972,43 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(400).json({ error: "Business account not found" });
       }
 
-      // Validate payload with Zod schema
-      const parseResult = leadTrainingConfigSchema.safeParse(req.body);
+      // Validate payload with Zod schema (also rejects duplicate field ids and
+      // enabled Keyword fields with no keywords; migrates legacy timings).
+      const { _meta: _ignoredMeta, ...body } = (req.body && typeof req.body === 'object') ? req.body : ({} as any);
+      const parseResult = leadTrainingConfigSchema.safeParse(body);
       if (!parseResult.success) {
-        return res.status(400).json({ 
-          error: "Invalid lead training configuration", 
-          details: parseResult.error.errors 
+        const details = describeLeadConfigIssues(parseResult.error.issues, body);
+        return res.status(400).json({
+          error: `Invalid lead training configuration: ${details.join(' ')}`,
+          details,
         });
       }
 
-      const leadConfig = parseResult.data;
+      // Fields stored sorted by priority with priorities 1..4.
+      const leadConfig = normalizeLeadTrainingConfig(parseResult.data).config;
 
-      // Update widget settings with lead config
+      // OTP selected with no way to send a code (no SMS/WhatsApp sender for the
+      // admin's channel preference, Sample OTP off) would leave phone leads
+      // unverifiable — refuse to save that state.
+      const mobile = leadConfig.fields.find((f) => f.id === 'mobile');
+      if (mobile?.enabled && mobile.otpEnabled && !mobile.otpDemoMode) {
+        const { OtpService } = await import('./services/otp');
+        const status = await OtpService.getChannelStatus(businessAccountId);
+        if (status.availableChannels.length === 0) {
+          const msg = "Mobile: OTP is selected but no SMS or WhatsApp sender is set up, so no code could be sent. Set up a sender in OTP settings, turn on Sample OTP, or switch verification to None.";
+          return res.status(400).json({ error: msg, details: [msg], code: 'otp_no_channel' });
+        }
+      }
+
       await storage.upsertWidgetSettings(businessAccountId, {
         leadTrainingConfig: leadConfig as any
       });
 
-      // Invalidate business context cache to force reload with new lead training rules
-      businessContextCache.invalidateBusinessContext(businessAccountId);
+      // Drop cached prompts/settings (website context variants, widget settings,
+      // WhatsApp context) so the new lead rules apply on the next message.
+      businessContextCache.invalidateBusinessCache(businessAccountId);
 
-      res.json(leadConfig);
+      res.json({ ...leadConfig, _meta: { source: 'stored', notes: [] } });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

@@ -53,6 +53,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DetailsBuilder, parseDetailsConfig, stringifyDetailsConfig } from "@/components/DetailsBuilder";
+import { LeadTimingSettings, LeadWarningList } from "@/components/LeadTimingSettings";
+import {
+  createDefaultGroupLeadTrainingConfig,
+  normalizeLeadTrainingConfig,
+  getLeadConfigWarnings,
+  moveLeadField,
+  DEFAULT_CUSTOM_ASK_AFTER,
+  GROUP_OWNED_SETTINGS_SUMMARY,
+  ACCOUNT_ONLY_SETTINGS_SUMMARY,
+  type LeadTrainingConfig,
+  type LeadCaptureStrategy,
+  type IntentIntensity,
+} from "@shared/leadTrainingConfig";
 
 const renderFormattedText = (text: string) => {
   const parts: React.ReactNode[] = [];
@@ -100,11 +113,14 @@ interface GroupTrainingResponse {
   groupId: string;
   groupName: string;
   memberCount: number;
+  members?: Array<{ businessAccountId: string; name: string }>;
   training: {
     id: string;
     groupId: string;
     customInstructions: string | null;
     leadTrainingConfig: LeadTrainingConfig | null;
+    /** Legacy values the server migrated for display (e.g. old "At End"). */
+    leadTrainingConfigNotes?: string[];
     fallbackTemplate: string | null;
     lastPublishedAt: string | null;
     lastPublishedBy: string | null;
@@ -113,21 +129,19 @@ interface GroupTrainingResponse {
   } | null;
 }
 
+/** Response of POST .../training/publish (per-member results). */
+interface GroupPublishResponse {
+  success: boolean;
+  partial?: boolean;
+  message: string;
+  affectedCount: number;
+  attemptedCount: number;
+  totalMembers: number;
+  failedMembers: Array<{ businessAccountId: string; name: string; error?: string }>;
+  fullyPublished?: boolean;
+}
+
 type PhoneValidation = 'any' | '10' | '12' | '8-12';
-
-interface LeadField {
-  id: string;
-  enabled: boolean;
-  required: boolean;
-  priority: number;
-  captureStrategy: 'smart' | 'start' | 'end' | 'intent';
-  phoneValidation?: PhoneValidation;
-}
-
-interface LeadTrainingConfig {
-  fields: LeadField[];
-  captureStrategy: 'smart' | 'start' | 'end' | 'intent';
-}
 
 interface Instruction {
   id: string;
@@ -248,15 +262,9 @@ const LSQ_DYNAMIC_SOURCE_OPTIONS = [
   { value: 'business.website', label: 'Business Website URL' },
 ];
 
-const DEFAULT_LEAD_CONFIG: LeadTrainingConfig = {
-  fields: [
-    { id: 'name', enabled: false, required: false, priority: 1, captureStrategy: 'start' },
-    { id: 'mobile', enabled: false, required: false, priority: 2, captureStrategy: 'start', phoneValidation: '10' },
-    { id: 'whatsapp', enabled: false, required: false, priority: 3, captureStrategy: 'start', phoneValidation: '10' },
-    { id: 'email', enabled: false, required: false, priority: 4, captureStrategy: 'start' }
-  ],
-  captureStrategy: 'start'
-};
+// Group default: every field off, same timing defaults as the account screen
+// (shared/leadTrainingConfig.ts).
+const DEFAULT_LEAD_CONFIG: LeadTrainingConfig = createDefaultGroupLeadTrainingConfig();
 
 const getFieldIcon = (fieldId: string) => {
   switch (fieldId) {
@@ -303,7 +311,11 @@ export default function GroupTrainingEditor() {
   
   const [leadConfigEnabled, setLeadConfigEnabled] = useState(false);
   const [leadTrainingConfig, setLeadTrainingConfig] = useState<LeadTrainingConfig>(DEFAULT_LEAD_CONFIG);
-  
+  const [leadConfigNotes, setLeadConfigNotes] = useState<string[]>([]);
+  // Last publish outcome (per member) — drives "X of Y updated, N failed" + Retry.
+  const [lastPublishResult, setLastPublishResult] = useState<(GroupPublishResponse & { module?: string }) | null>(null);
+  const leadRequiredBeforeDisableRef = useRef<Record<string, boolean>>({});
+
   const [hasChanges, setHasChanges] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("instructions");
@@ -459,12 +471,17 @@ export default function GroupTrainingEditor() {
       }
       
       if (groupTraining.training.leadTrainingConfig) {
-        const config = groupTraining.training.leadTrainingConfig as LeadTrainingConfig;
+        // Server already migrates legacy timings ('end' with no keywords →
+        // Custom after 3, 'smart' → Custom after 2) and sorts by priority; the
+        // shared normaliser is a no-op safety net here.
+        const { config, notes } = normalizeLeadTrainingConfig(groupTraining.training.leadTrainingConfig, { defaults: 'group' });
         const hasEnabledField = config.fields.some(f => f.enabled);
         setLeadConfigEnabled(hasEnabledField);
         setLeadTrainingConfig(config);
+        setLeadConfigNotes(groupTraining.training.leadTrainingConfigNotes?.length ? groupTraining.training.leadTrainingConfigNotes : notes);
       } else {
         setLeadConfigEnabled(false);
+        setLeadConfigNotes([]);
       }
     }
   }, [groupTraining]);
@@ -1011,10 +1028,17 @@ export default function GroupTrainingEditor() {
 
   const hasFallbackInstruction = instructions.some(instr => instr.type === 'fallback');
   
+  // "Lead collection disabled" for the group = every field off. Timing settings
+  // are kept so turning collection back on restores them.
   const createDisabledLeadConfig = (): LeadTrainingConfig => ({
-    captureStrategy: 'smart',
-    fields: DEFAULT_LEAD_CONFIG.fields.map(f => ({ ...f, enabled: false })),
+    ...leadTrainingConfig,
+    fields: leadTrainingConfig.fields.map(f => ({ ...f, enabled: false, required: false })),
   });
+
+  const effectiveGroupLeadConfig = leadConfigEnabled ? leadTrainingConfig : createDisabledLeadConfig();
+  // Same warnings as the account screen (OTP warnings don't apply: groups don't own OTP).
+  const groupLeadWarnings = leadConfigEnabled ? getLeadConfigWarnings(leadTrainingConfig) : [];
+  const groupLeadBlocked = groupLeadWarnings.some(w => w.level === 'block');
   
   const applyFormatting = (type: 'bold' | 'italic', isEdit: boolean = false) => {
     const textarea = isEdit ? editTextareaRef.current : textareaRef.current;
@@ -1171,29 +1195,65 @@ export default function GroupTrainingEditor() {
   };
   
   const handleFieldToggle = (fieldId: string) => {
+    const current = leadTrainingConfig.fields.find(f => f.id === fieldId);
+    if (current?.enabled) leadRequiredBeforeDisableRef.current[fieldId] = !!current.required;
+    const restoreRequired = !!leadRequiredBeforeDisableRef.current[fieldId];
+    // Only on/off changes; timing + its details are kept for re-enabling.
     setLeadTrainingConfig(prev => ({
       ...prev,
-      fields: prev.fields.map(f => f.id === fieldId ? { ...f, enabled: !f.enabled } : f)
+      fields: prev.fields.map(f => f.id !== fieldId ? f : (
+        f.enabled ? { ...f, enabled: false, required: false } : { ...f, enabled: true, required: restoreRequired }
+      ))
     }));
     setHasChanges(true);
   };
-  
+
   const handleRequiredToggle = (fieldId: string) => {
     setLeadTrainingConfig(prev => ({
       ...prev,
-      fields: prev.fields.map(f => f.id === fieldId ? { ...f, required: !f.required } : f)
+      fields: prev.fields.map(f => f.id === fieldId && f.enabled ? { ...f, required: !f.required } : f)
     }));
     setHasChanges(true);
   };
-  
-  const handleStrategyChange = (fieldId: string, strategy: 'smart' | 'start' | 'end' | 'intent') => {
+
+  const handleStrategyChange = (fieldId: string, strategy: LeadCaptureStrategy) => {
     setLeadTrainingConfig(prev => ({
       ...prev,
-      fields: prev.fields.map(f => f.id === fieldId ? { ...f, captureStrategy: strategy } : f)
+      fields: prev.fields.map(f => f.id !== fieldId ? f : {
+        ...f,
+        captureStrategy: strategy,
+        customAskAfter: strategy === 'custom' ? (f.customAskAfter ?? DEFAULT_CUSTOM_ASK_AFTER) : f.customAskAfter,
+        intentIntensity: strategy === 'intent' ? (f.intentIntensity ?? 'medium') : f.intentIntensity,
+        captureKeywords: strategy === 'keyword' ? (f.captureKeywords ?? []) : f.captureKeywords,
+      })
     }));
     setHasChanges(true);
   };
-  
+
+  const handleCustomAskAfterChange = (fieldId: string, value: number) => {
+    setLeadTrainingConfig(prev => ({
+      ...prev,
+      fields: prev.fields.map(f => f.id === fieldId ? { ...f, customAskAfter: Math.max(1, Math.min(20, value)) } : f)
+    }));
+    setHasChanges(true);
+  };
+
+  const handleIntentIntensityChange = (fieldId: string, intensity: IntentIntensity) => {
+    setLeadTrainingConfig(prev => ({
+      ...prev,
+      fields: prev.fields.map(f => f.id === fieldId ? { ...f, intentIntensity: intensity } : f)
+    }));
+    setHasChanges(true);
+  };
+
+  const handleKeywordsChange = (fieldId: string, keywords: string[]) => {
+    setLeadTrainingConfig(prev => ({
+      ...prev,
+      fields: prev.fields.map(f => f.id === fieldId ? { ...f, captureKeywords: keywords } : f)
+    }));
+    setHasChanges(true);
+  };
+
   const handlePhoneValidationChange = (fieldId: string, validation: PhoneValidation) => {
     setLeadTrainingConfig(prev => ({
       ...prev,
@@ -1201,50 +1261,22 @@ export default function GroupTrainingEditor() {
     }));
     setHasChanges(true);
   };
-  
+
+  // Reorder and renumber priorities 1..4 (shared helper, same as the account screen).
   const handleMoveFieldUp = (fieldId: string) => {
-    const sortedFields = [...leadTrainingConfig.fields].sort((a, b) => a.priority - b.priority);
-    const index = sortedFields.findIndex(f => f.id === fieldId);
-    if (index <= 0) return;
-    
-    const currentPriority = sortedFields[index].priority;
-    const abovePriority = sortedFields[index - 1].priority;
-    
-    setLeadTrainingConfig(prev => ({
-      ...prev,
-      fields: prev.fields.map(f => {
-        if (f.id === fieldId) return { ...f, priority: abovePriority };
-        if (f.id === sortedFields[index - 1].id) return { ...f, priority: currentPriority };
-        return f;
-      })
-    }));
+    setLeadTrainingConfig(prev => ({ ...prev, fields: moveLeadField(prev.fields, fieldId, -1) }));
     setHasChanges(true);
   };
-  
+
   const handleMoveFieldDown = (fieldId: string) => {
-    const sortedFields = [...leadTrainingConfig.fields].sort((a, b) => a.priority - b.priority);
-    const index = sortedFields.findIndex(f => f.id === fieldId);
-    if (index >= sortedFields.length - 1) return;
-    
-    const currentPriority = sortedFields[index].priority;
-    const belowPriority = sortedFields[index + 1].priority;
-    
-    setLeadTrainingConfig(prev => ({
-      ...prev,
-      fields: prev.fields.map(f => {
-        if (f.id === fieldId) return { ...f, priority: belowPriority };
-        if (f.id === sortedFields[index + 1].id) return { ...f, priority: currentPriority };
-        return f;
-      })
-    }));
+    setLeadTrainingConfig(prev => ({ ...prev, fields: moveLeadField(prev.fields, fieldId, 1) }));
     setHasChanges(true);
   };
-  
+
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const leadConfig = leadConfigEnabled ? leadTrainingConfig : createDisabledLeadConfig();
       const customInstructionsJson = instructions.length > 0 ? JSON.stringify(instructions) : null;
-      
+
       const menuConfig = {
         enabled: menuEnabled ? "true" : "false",
         welcomeMessage: menuWelcomeMessage || null,
@@ -1260,10 +1292,12 @@ export default function GroupTrainingEditor() {
         persistentCtaValue: menuPersistentCtaValue || null,
         leadFormFields: stringifyLeadFormFields(menuLeadFormFields),
       };
-      
+
+      // A lead config the server would reject (e.g. Keyword timing with no
+      // keywords) is left out so the rest of the draft still saves.
       return await apiRequest("PUT", `/api/super-admin/account-groups/${groupId}/training`, {
         customInstructions: customInstructionsJson,
-        leadTrainingConfig: leadConfig,
+        ...(groupLeadBlocked ? {} : { leadTrainingConfig: effectiveGroupLeadConfig }),
         fallbackTemplate: null,
         menuConfig,
         menuItems,
@@ -1271,12 +1305,15 @@ export default function GroupTrainingEditor() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/super-admin/account-groups/${groupId}/training`] });
-      setHasChanges(false);
+      setHasChanges(groupLeadBlocked);
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 2000);
       toast({
-        title: "Draft Saved",
-        description: "Group training configuration has been saved as a draft.",
+        title: groupLeadBlocked ? "Draft saved — except Lead Training" : "Draft Saved",
+        description: groupLeadBlocked
+          ? "Lead Training wasn't saved: fix the issue shown on the Lead Training tab."
+          : "Group training configuration has been saved as a draft.",
+        variant: groupLeadBlocked ? "destructive" : undefined,
       });
     },
     onError: (error: Error) => {
@@ -1288,7 +1325,7 @@ export default function GroupTrainingEditor() {
       });
     },
   });
-  
+
   const moduleLabels: Record<string, string> = {
     instructions: 'Instructions',
     leadTraining: 'Lead Training',
@@ -1296,11 +1333,14 @@ export default function GroupTrainingEditor() {
     menuBuilder: 'Menu Builder',
   };
 
+  // `memberIds` limits the run to those members ("Retry failed").
   const publishMutation = useMutation({
-    mutationFn: async (moduleToPublish?: string) => {
-      const leadConfig = leadConfigEnabled ? leadTrainingConfig : createDisabledLeadConfig();
+    mutationFn: async ({ module: moduleToPublish, memberIds }: { module?: string; memberIds?: string[] }) => {
+      if ((!moduleToPublish || moduleToPublish === 'leadTraining') && groupLeadBlocked) {
+        throw new Error("Lead Training has an issue to fix first (see the Lead Training tab).");
+      }
       const customInstructionsJson = instructions.length > 0 ? JSON.stringify(instructions) : null;
-      
+
       const menuConfig = {
         enabled: menuEnabled ? "true" : "false",
         welcomeMessage: menuWelcomeMessage || null,
@@ -1316,11 +1356,11 @@ export default function GroupTrainingEditor() {
         persistentCtaValue: menuPersistentCtaValue || null,
         leadFormFields: stringifyLeadFormFields(menuLeadFormFields),
       };
-      
+
       if (hasChanges) {
         await apiRequest("PUT", `/api/super-admin/account-groups/${groupId}/training`, {
           customInstructions: customInstructionsJson,
-          leadTrainingConfig: leadConfig,
+          ...(groupLeadBlocked ? {} : { leadTrainingConfig: effectiveGroupLeadConfig }),
           fallbackTemplate: null,
           menuConfig,
           menuItems,
@@ -1332,19 +1372,32 @@ export default function GroupTrainingEditor() {
         await apiRequest("PUT", `/api/super-admin/account-groups/${groupId}/training`, buildLsqPayload());
         setLsqSecretKeyChanged(false);
       }
-      const publishResult = await apiRequest("POST", `/api/super-admin/account-groups/${groupId}/training/publish`, { module: moduleToPublish });
-      
+      const publishResult = await apiRequest<GroupPublishResponse>("POST", `/api/super-admin/account-groups/${groupId}/training/publish`, {
+        module: moduleToPublish,
+        ...(memberIds && memberIds.length ? { memberIds } : {}),
+      });
+
       if (moduleToPublish === 'leadsquared' && lsqEnabled && (lsqHost || (lsqConnectionType === 'uds' && lsqUdsUrl))) {
         await apiRequest("POST", `/api/super-admin/account-groups/${groupId}/leadsquared/apply`);
       }
-      
+
       return publishResult;
     },
-    onSuccess: (data: any, moduleToPublish?: string) => {
+    onSuccess: (data: GroupPublishResponse, { module: moduleToPublish }) => {
       queryClient.invalidateQueries({ queryKey: [`/api/super-admin/account-groups/${groupId}/training`] });
       setHasChanges(false);
       setPublishDialogOpen(null);
+      setLastPublishResult({ ...data, module: moduleToPublish });
       const moduleName = moduleToPublish ? moduleLabels[moduleToPublish] || moduleToPublish : 'Training';
+      const failedCount = data.failedMembers?.length || 0;
+      if (failedCount > 0) {
+        toast({
+          title: `${moduleName}: ${data.affectedCount} of ${data.attemptedCount} updated, ${failedCount} failed`,
+          description: `Failed: ${data.failedMembers.map((m) => m.name).join(', ')}. Use "Retry failed" to try them again.`,
+          variant: "destructive",
+        });
+        return;
+      }
       const lsqNote = (moduleToPublish === 'leadsquared' && lsqEnabled && (lsqHost || (lsqConnectionType === 'uds' && lsqUdsUrl))) ? ' LeadSquared settings also applied.' : '';
       toast({
         title: `${moduleName} Published`,
@@ -1359,7 +1412,7 @@ export default function GroupTrainingEditor() {
       });
     },
   });
-  
+
   const handleSave = () => {
     setSaveStatus("saving");
     saveMutation.mutate();
@@ -1432,7 +1485,39 @@ export default function GroupTrainingEditor() {
             Last published: {new Date(groupTraining.training.lastPublishedAt).toLocaleString()}
           </div>
         )}
-        
+
+        {/* Partial publish: some members failed. "Last published" above is NOT
+            updated in that case; retry only the failed accounts. */}
+        {lastPublishResult && lastPublishResult.failedMembers?.length > 0 && (
+          <div className="mb-4 p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 rounded-lg text-sm text-red-800 dark:text-red-200" data-testid="group-publish-partial">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="flex items-center gap-2 font-medium">
+                <AlertTriangle className="w-4 h-4" />
+                {(lastPublishResult.module ? moduleLabels[lastPublishResult.module] || lastPublishResult.module : 'Training')}:{" "}
+                {lastPublishResult.affectedCount} of {lastPublishResult.attemptedCount} accounts updated, {lastPublishResult.failedMembers.length} failed
+              </span>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={publishMutation.isPending}
+                  onClick={() => publishMutation.mutate({ module: lastPublishResult.module, memberIds: lastPublishResult.failedMembers.map((m) => m.businessAccountId) })}
+                  data-testid="button-retry-failed-publish"
+                >
+                  {publishMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1.5" />}
+                  Retry failed ({lastPublishResult.failedMembers.length})
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setLastPublishResult(null)}>Dismiss</Button>
+              </div>
+            </div>
+            <ul className="mt-2 list-disc pl-6 space-y-0.5 text-xs">
+              {lastPublishResult.failedMembers.map((m) => (
+                <li key={m.businessAccountId}><strong>{m.name}</strong>{m.error ? ` — ${m.error}` : ''}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* Header */}
         <div className="flex items-center gap-4 mb-6">
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center shadow-lg">
@@ -1939,7 +2024,7 @@ export default function GroupTrainingEditor() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-lg border">
+                <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-white dark:bg-gray-900 rounded-lg border">
                   <div>
                     <Label className="font-medium">Enable Lead Collection</Label>
                     <p className="text-sm text-muted-foreground">Allow AI to collect visitor contact information</p>
@@ -1962,11 +2047,27 @@ export default function GroupTrainingEditor() {
                     )}
                   </Button>
                 </div>
-                
+
+                {/* What a publish overwrites vs keeps per account. */}
+                <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    Publishing sets these fields, their order and timing on every member account. Each account keeps its own
+                    mobile verification (OTP / CAPTCHA / Sample OTP) and conversion-tracking settings.
+                    {!leadConfigEnabled && " With collection disabled, publishing turns every lead field off on all member accounts."}
+                  </span>
+                </p>
+
+                {/* Legacy timings migrated on load (e.g. old "At End"). */}
+                {leadConfigNotes.length > 0 && (
+                  <LeadWarningList warnings={leadConfigNotes.map((n) => ({ level: 'warn' as const, message: n, code: 'legacy-note' }))} />
+                )}
+
                 {leadConfigEnabled && (
                   <div className="space-y-3">
+                    <LeadWarningList warnings={groupLeadWarnings.filter((w) => !w.fieldId)} />
                     {[...leadTrainingConfig.fields].sort((a, b) => a.priority - b.priority).map((field, index, sortedArray) => (
-                      <div 
+                      <div
                         key={field.id}
                         className={`rounded-lg border transition-all duration-200 ${
                           field.enabled
@@ -1974,153 +2075,126 @@ export default function GroupTrainingEditor() {
                             : 'bg-gray-50/50 dark:bg-gray-900/50 border-gray-200 dark:border-gray-800'
                         }`}
                       >
-                        <div className="flex items-center gap-3 p-3">
-                          <div className="flex flex-col gap-0.5">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => handleMoveFieldUp(field.id)}
-                              disabled={index === 0}
-                              className="h-5 w-5 p-0 hover:bg-green-50 dark:hover:bg-green-950/20 disabled:opacity-30"
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 p-3">
+                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <div className="flex flex-col gap-0.5 shrink-0">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleMoveFieldUp(field.id)}
+                                disabled={index === 0}
+                                className="h-5 w-5 p-0 hover:bg-green-50 dark:hover:bg-green-950/20 disabled:opacity-30"
+                                title="Move up"
+                                data-testid={`group-button-move-up-${field.id}`}
+                              >
+                                <ChevronUp className="w-3 h-3" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleMoveFieldDown(field.id)}
+                                disabled={index === sortedArray.length - 1}
+                                className="h-5 w-5 p-0 hover:bg-green-50 dark:hover:bg-green-950/20 disabled:opacity-30"
+                                title="Move down"
+                                data-testid={`group-button-move-down-${field.id}`}
+                              >
+                                <ChevronDown className="w-3 h-3" />
+                              </Button>
+                            </div>
+
+                            <input
+                              type="checkbox"
+                              id={`field-check-${field.id}`}
+                              data-testid={`group-checkbox-field-${field.id}`}
+                              checked={field.enabled}
+                              onChange={() => handleFieldToggle(field.id)}
+                              className="w-4 h-4 shrink-0 rounded border-gray-300 text-green-600 focus:ring-green-500 cursor-pointer"
+                            />
+
+                            <div className={`shrink-0 transition-all duration-200 ${field.enabled ? 'text-green-600' : 'text-gray-400'}`}>
+                              {getFieldIcon(field.id)}
+                            </div>
+
+                            <Label
+                              htmlFor={`field-check-${field.id}`}
+                              className={`flex-1 min-w-0 truncate text-sm font-medium cursor-pointer transition-all duration-200 ${
+                                field.enabled ? 'text-foreground' : 'text-muted-foreground'
+                              }`}
                             >
-                              <ChevronUp className="w-3 h-3" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => handleMoveFieldDown(field.id)}
-                              disabled={index === sortedArray.length - 1}
-                              className="h-5 w-5 p-0 hover:bg-green-50 dark:hover:bg-green-950/20 disabled:opacity-30"
-                            >
-                              <ChevronDown className="w-3 h-3" />
-                            </Button>
+                              {getFieldLabel(field.id)}
+                            </Label>
                           </div>
-
-                          <input
-                            type="checkbox"
-                            id={`field-check-${field.id}`}
-                            checked={field.enabled}
-                            onChange={() => handleFieldToggle(field.id)}
-                            className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500 cursor-pointer"
-                          />
-
-                          <div className={`transition-all duration-200 ${field.enabled ? 'text-green-600' : 'text-gray-400'}`}>
-                            {getFieldIcon(field.id)}
-                          </div>
-
-                          <Label
-                            htmlFor={`field-check-${field.id}`}
-                            className={`flex-1 text-sm font-medium cursor-pointer transition-all duration-200 ${
-                              field.enabled ? 'text-foreground' : 'text-muted-foreground'
-                            }`}
-                          >
-                            {getFieldLabel(field.id)}
-                          </Label>
 
                           {field.enabled && (
-                            <div className="flex items-center gap-1 p-0.5 bg-gray-100 dark:bg-gray-800 rounded-lg">
-                              <button
-                                onClick={() => {
-                                  if (!field.required) handleRequiredToggle(field.id);
-                                }}
-                                className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
-                                  field.required
-                                    ? 'bg-purple-600 text-white shadow-sm'
-                                    : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-                                }`}
-                              >
-                                {field.required && <Check className="w-3 h-3" />}
-                                Mandatory
-                              </button>
-                              <button
-                                onClick={() => {
-                                  if (field.required) handleRequiredToggle(field.id);
-                                }}
-                                className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
-                                  !field.required
-                                    ? 'bg-gray-600 text-white shadow-sm dark:bg-gray-500'
-                                    : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-                                }`}
-                              >
-                                {!field.required && <Check className="w-3 h-3" />}
-                                Optional
-                              </button>
+                            <div className="flex flex-wrap items-center gap-2 basis-full sm:basis-auto pl-8 sm:pl-0">
+                              <div className="flex items-center gap-1 p-0.5 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                                <button
+                                  onClick={() => {
+                                    if (!field.required) handleRequiredToggle(field.id);
+                                  }}
+                                  className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
+                                    field.required
+                                      ? 'bg-purple-600 text-white shadow-sm'
+                                      : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+                                  }`}
+                                >
+                                  {field.required && <Check className="w-3 h-3" />}
+                                  Mandatory
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    if (field.required) handleRequiredToggle(field.id);
+                                  }}
+                                  className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md transition-all duration-200 ${
+                                    !field.required
+                                      ? 'bg-gray-600 text-white shadow-sm dark:bg-gray-500'
+                                      : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+                                  }`}
+                                >
+                                  {!field.required && <Check className="w-3 h-3" />}
+                                  Optional
+                                </button>
+                              </div>
+
+                              {(field.id === 'mobile' || field.id === 'whatsapp') && (
+                                <Select
+                                  value={field.phoneValidation || '10'}
+                                  onValueChange={(value) => handlePhoneValidationChange(field.id, value as PhoneValidation)}
+                                >
+                                  <SelectTrigger className="h-7 w-[100px] text-xs">
+                                    <SelectValue placeholder="Validation" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="10">10 digits</SelectItem>
+                                    <SelectItem value="12">12 digits</SelectItem>
+                                    <SelectItem value="8-12">8-12 digits</SelectItem>
+                                    <SelectItem value="any">Any length</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              )}
                             </div>
-                          )}
-                          
-                          {field.enabled && (field.id === 'mobile' || field.id === 'whatsapp') && (
-                            <Select
-                              value={field.phoneValidation || '10'}
-                              onValueChange={(value) => handlePhoneValidationChange(field.id, value as PhoneValidation)}
-                            >
-                              <SelectTrigger className="h-7 w-[100px] text-xs">
-                                <SelectValue placeholder="Validation" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="10">10 digits</SelectItem>
-                                <SelectItem value="12">12 digits</SelectItem>
-                                <SelectItem value="8-12">8-12 digits</SelectItem>
-                                <SelectItem value="any">Any length</SelectItem>
-                              </SelectContent>
-                            </Select>
                           )}
                         </div>
 
                         {field.enabled && (
+                          <LeadWarningList className="mx-3 mb-2" warnings={groupLeadWarnings.filter((w) => w.fieldId === field.id)} />
+                        )}
+
+                        {field.enabled && (
                           <div className="px-3 pb-3 pt-0">
-                            <div className="p-3 rounded-md bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50">
-                              <div className="flex items-center gap-2 mb-2">
-                                <Route className="w-3.5 h-3.5 text-muted-foreground" />
-                                <span className="text-xs font-medium text-muted-foreground">When to collect</span>
-                              </div>
-                              <RadioGroup
-                                value={field.captureStrategy}
-                                onValueChange={(value) => handleStrategyChange(field.id, value as 'smart' | 'start' | 'end' | 'intent')}
-                                className="flex flex-wrap gap-3"
-                              >
-                                <div className="flex items-center space-x-1.5">
-                                  <RadioGroupItem value="start" id={`timing-start-${field.id}`} className="h-3.5 w-3.5" />
-                                  <Label htmlFor={`timing-start-${field.id}`} className="text-xs cursor-pointer">At Start</Label>
-                                </div>
-                                <div className="flex items-center space-x-1.5">
-                                  <RadioGroupItem value="smart" id={`timing-smart-${field.id}`} className="h-3.5 w-3.5" />
-                                  <Label htmlFor={`timing-smart-${field.id}`} className="text-xs cursor-pointer">Smart</Label>
-                                </div>
-                                <div className="flex items-center space-x-1.5">
-                                  <RadioGroupItem value="intent" id={`timing-intent-${field.id}`} className="h-3.5 w-3.5" />
-                                  <Label htmlFor={`timing-intent-${field.id}`} className="text-xs cursor-pointer">Intent</Label>
-                                </div>
-                                <div className="flex items-center space-x-1.5">
-                                  <RadioGroupItem value="end" id={`timing-end-${field.id}`} className="h-3.5 w-3.5" />
-                                  <Label htmlFor={`timing-end-${field.id}`} className="text-xs cursor-pointer">At End</Label>
-                                </div>
-                              </RadioGroup>
-                              {field.captureStrategy === 'start' && (
-                                <p className="text-xs text-blue-600 dark:text-blue-400 mt-2 italic">
-                                  AI will ask immediately at the start of the conversation
-                                </p>
-                              )}
-                              {field.captureStrategy === 'smart' && (
-                                <p className="text-xs text-blue-600 dark:text-blue-400 mt-2 italic">
-                                  AI will ask in the 2nd response (after answering the first question)
-                                </p>
-                              )}
-                              {field.captureStrategy === 'intent' && (
-                                <p className="text-xs text-blue-600 dark:text-blue-400 mt-2 italic">
-                                  AI will ask when user shows interest (e.g., asking about price, availability)
-                                </p>
-                              )}
-                              {field.captureStrategy === 'end' && (
-                                <p className="text-xs text-blue-600 dark:text-blue-400 mt-2 italic">
-                                  AI will ask at the end of the conversation
-                                </p>
-                              )}
-                            </div>
+                            {/* Same timing options + inputs as the account screen. */}
+                            <LeadTimingSettings
+                              field={field}
+                              onStrategyChange={(s) => handleStrategyChange(field.id, s)}
+                              onAskAfterChange={(n) => handleCustomAskAfterChange(field.id, n)}
+                              onIntensityChange={(lvl) => handleIntentIntensityChange(field.id, lvl)}
+                              onKeywordsChange={(kws) => handleKeywordsChange(field.id, kws)}
+                            />
                           </div>
                         )}
                       </div>
                     ))}
-                    
+
                     <p className="text-xs text-muted-foreground flex items-center gap-1.5">
                       <ChevronUp className="w-3 h-3" />
                       <ChevronDown className="w-3 h-3" />
@@ -2130,11 +2204,15 @@ export default function GroupTrainingEditor() {
                 )}
               </CardContent>
             </Card>
-            <div className="flex justify-end pt-4">
+            <div className="flex flex-wrap items-center justify-end gap-3 pt-4">
+              {groupLeadBlocked && (
+                <span className="text-xs text-red-700 dark:text-red-300">Fix the highlighted issue before publishing.</span>
+              )}
               <Button
                 onClick={() => setPublishDialogOpen('leadTraining')}
-                disabled={publishMutation.isPending}
+                disabled={publishMutation.isPending || groupLeadBlocked}
                 className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+                data-testid="button-publish-lead-training"
               >
                 {publishMutation.isPending ? (
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -2145,7 +2223,7 @@ export default function GroupTrainingEditor() {
               </Button>
             </div>
           </TabsContent>
-          
+
           <TabsContent value="leadsquared" className="space-y-6">
             {/* LeadSquared Credentials Card */}
             <Card className="shadow-sm">
@@ -4353,28 +4431,57 @@ export default function GroupTrainingEditor() {
 
       {/* Publish Confirmation Dialog */}
       <AlertDialog open={!!publishDialogOpen} onOpenChange={(open) => !open && setPublishDialogOpen(null)}>
-        <AlertDialogContent>
+        <AlertDialogContent className="max-h-[90vh] overflow-y-auto">
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-amber-500" />
               Publish {publishDialogOpen === 'instructions' ? 'Instructions' : publishDialogOpen === 'leadTraining' ? 'Lead Training' : publishDialogOpen === 'leadsquared' ? 'LeadSquared' : publishDialogOpen === 'menuBuilder' ? 'Menu Builder' : 'Training'}
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
-              <div className="space-y-3 text-sm text-muted-foreground">
-                <span className="block">
-                  This will <strong>overwrite</strong> the {publishDialogOpen === 'instructions' ? 'Instructions' : publishDialogOpen === 'leadTraining' ? 'Lead Training' : publishDialogOpen === 'leadsquared' ? 'LeadSquared' : publishDialogOpen === 'menuBuilder' ? 'Menu Builder' : 'training'} settings for all member accounts in this group.
-                </span>
-                <span className="block text-destructive font-medium">
-                  Any custom settings on individual accounts will be replaced. This action cannot be undone.
-                </span>
-              </div>
+              {publishDialogOpen === 'leadTraining' ? (
+                // Lead training is merged, not copied: list exactly what changes.
+                <div className="space-y-3 text-sm text-muted-foreground" data-testid="publish-lead-training-summary">
+                  <span className="block">
+                    This updates Lead Training on all {groupTraining?.memberCount ?? 0} member accounts
+                    {groupTraining?.members?.length ? ` (${groupTraining.members.map((m) => m.name).join(', ')})` : ''}.
+                  </span>
+                  {!leadConfigEnabled && (
+                    <span className="block text-destructive font-medium">
+                      Lead collection is disabled for this group, so every lead field will be turned off on all member accounts.
+                    </span>
+                  )}
+                  <div>
+                    <span className="block font-medium text-foreground">Overwritten on every account:</span>
+                    <ul className="list-disc pl-5 mt-1 space-y-0.5">
+                      {GROUP_OWNED_SETTINGS_SUMMARY.map((s) => <li key={s}>{s}</li>)}
+                    </ul>
+                  </div>
+                  <div>
+                    <span className="block font-medium text-foreground">Kept as each account has it:</span>
+                    <ul className="list-disc pl-5 mt-1 space-y-0.5">
+                      {ACCOUNT_ONLY_SETTINGS_SUMMARY.map((s) => <li key={s}>{s}</li>)}
+                    </ul>
+                  </div>
+                  <span className="block">Accounts start using the new settings on their next chat message.</span>
+                </div>
+              ) : (
+                <div className="space-y-3 text-sm text-muted-foreground">
+                  <span className="block">
+                    This will <strong>overwrite</strong> the {publishDialogOpen === 'instructions' ? 'Instructions' : publishDialogOpen === 'leadsquared' ? 'LeadSquared' : publishDialogOpen === 'menuBuilder' ? 'Menu Builder' : 'training'} settings for all member accounts in this group.
+                  </span>
+                  <span className="block text-destructive font-medium">
+                    Any custom settings on individual accounts will be replaced. This action cannot be undone.
+                  </span>
+                </div>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => { publishMutation.mutate(publishDialogOpen || undefined); }}
+              onClick={() => { publishMutation.mutate({ module: publishDialogOpen || undefined }); }}
               className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+              data-testid="button-confirm-publish"
             >
               {publishMutation.isPending ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />

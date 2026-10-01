@@ -193,6 +193,29 @@ import {
 import { db } from "./db";
 import { eq, desc, asc, count, inArray, sql, and, or, gte, lte, ilike, isNull } from "drizzle-orm";
 import { isTopscholarAccount } from "./services/topscholar/config";
+import { mergeGroupLeadConfigIntoAccount } from "@shared/leadTrainingConfig";
+import { businessContextCache } from "./services/businessContextCache";
+
+/** Per-member outcome of a group publish (see publishGroupTrainingToMembers). */
+export interface GroupPublishMemberResult {
+  businessAccountId: string;
+  name: string;
+  ok: boolean;
+  error?: string;
+}
+export interface GroupPublishResult {
+  /** False only when there was nothing to publish (no group training / no members). */
+  success: boolean;
+  /** Members updated successfully in this run. */
+  affectedCount: number;
+  /** Members this run tried to update (all members, or the memberIds subset). */
+  attemptedCount: number;
+  totalMembers: number;
+  failedMembers: GroupPublishMemberResult[];
+  results: GroupPublishMemberResult[];
+  /** True when every attempted member succeeded (lastPublishedAt was stamped). */
+  fullyPublished: boolean;
+}
 import { closeDoubt } from "./services/topscholar/doubtSyncService";
 
 /** Filters shared by the group-admin Leads / Conversations lists. */
@@ -569,7 +592,7 @@ export interface IStorage {
   // Group Training methods
   getAccountGroupTraining(groupId: string): Promise<AccountGroupTraining | undefined>;
   upsertAccountGroupTraining(groupId: string, data: Partial<InsertAccountGroupTraining>): Promise<AccountGroupTraining>;
-  publishGroupTrainingToMembers(groupId: string, publishedBy: string, module?: 'instructions' | 'leadTraining' | 'leadsquared' | 'menuBuilder'): Promise<{ success: boolean; affectedCount: number }>;
+  publishGroupTrainingToMembers(groupId: string, publishedBy: string, module?: 'instructions' | 'leadTraining' | 'leadsquared' | 'menuBuilder', opts?: { memberIds?: string[] }): Promise<GroupPublishResult>;
 
   // Group Journey methods
   createGroupJourney(journey: InsertAccountGroupJourney & { groupId: string }): Promise<AccountGroupJourney>;
@@ -4882,28 +4905,61 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  async publishGroupTrainingToMembers(groupId: string, publishedBy: string, module?: 'instructions' | 'leadTraining' | 'leadsquared' | 'menuBuilder'): Promise<{ success: boolean; affectedCount: number }> {
+  /**
+   * Push the group's saved training to member accounts.
+   *
+   * Lead training is MERGED, not copied: the group overwrites only the keys it
+   * owns (GROUP_OWNED_FIELD_KEYS / GROUP_OWNED_TOP_LEVEL_KEYS in
+   * shared/leadTrainingConfig.ts — which fields, mandatory/optional, order,
+   * timing + its details, phone digit check). Account-only settings (OTP /
+   * CAPTCHA / Sample OTP, site key, conversion page…) and any keys the group
+   * editor doesn't know about are kept per account.
+   *
+   * Each member is updated independently and its result recorded. The group's
+   * lastPublishedAt (and the LSQ / menu "applied" stamps) are only set when
+   * every attempted member succeeded, so a partial failure never shows as
+   * "published". `opts.memberIds` limits the run to those members (retry).
+   *
+   * After a member is updated its cached widget settings / prompt contexts are
+   * dropped so the bot uses the new training on the next message. NOTE: the
+   * cache is per process — with several app instances, the others still serve
+   * their cached copy until it expires (5 min TTL).
+   */
+  async publishGroupTrainingToMembers(
+    groupId: string,
+    publishedBy: string,
+    module?: 'instructions' | 'leadTraining' | 'leadsquared' | 'menuBuilder',
+    opts?: { memberIds?: string[] },
+  ): Promise<GroupPublishResult> {
+    const empty = (totalMembers: number): GroupPublishResult => ({
+      success: false, affectedCount: 0, attemptedCount: 0, totalMembers, failedMembers: [], results: [], fullyPublished: false,
+    });
     const groupTraining = await this.getAccountGroupTraining(groupId);
     if (!groupTraining) {
-      return { success: false, affectedCount: 0 };
+      return empty(0);
     }
-    
-    const members = await this.getGroupMembers(groupId);
+
+    const allMembers = await this.getGroupMembers(groupId);
+    const members = opts?.memberIds
+      ? allMembers.filter((m) => opts.memberIds!.includes(m.businessAccountId))
+      : allMembers;
     if (members.length === 0) {
-      return { success: false, affectedCount: 0 };
+      return empty(allMembers.length);
     }
-    
-    let affectedCount = 0;
+
     const publishAll = !module;
-    
+    const results: GroupPublishMemberResult[] = [];
+
     const groupLsqMappings = (publishAll || module === 'leadsquared')
       ? await this.getGroupLeadsquaredFieldMappings(groupId)
       : [];
-    
+
     for (const member of members) {
+      const name = member.businessAccount?.name || member.businessAccountId;
       try {
+        let touched = false;
         const updateData: Partial<InsertWidgetSettings> = {};
-        
+
         if (publishAll || module === 'instructions') {
           if (groupTraining.customInstructions !== undefined) {
             updateData.customInstructions = groupTraining.customInstructions;
@@ -4912,13 +4968,19 @@ export class DatabaseStorage implements IStorage {
             updateData.fallbackTemplate = groupTraining.fallbackTemplate;
           }
         }
-        
+
         if (publishAll || module === 'leadTraining') {
-          if (groupTraining.leadTrainingConfig !== undefined) {
-            updateData.leadTrainingConfig = groupTraining.leadTrainingConfig;
+          // A group without a lead config has nothing to push (previously a
+          // null here wiped every member's lead settings).
+          if (groupTraining.leadTrainingConfig) {
+            const memberSettings = await this.getWidgetSettings(member.businessAccountId);
+            updateData.leadTrainingConfig = mergeGroupLeadConfigIntoAccount(
+              memberSettings?.leadTrainingConfig,
+              groupTraining.leadTrainingConfig,
+            ) as any;
           }
         }
-        
+
         if (publishAll || module === 'leadsquared') {
           updateData.leadsquaredEnabled = groupTraining.leadsquaredEnabled ?? "false";
           updateData.leadsquaredRegion = "other";
@@ -4929,10 +4991,10 @@ export class DatabaseStorage implements IStorage {
           updateData.leadsquaredUdsWebhookUrl = groupTraining.leadsquaredUdsWebhookUrl ?? null;
           updateData.leadsquaredUdsKey = groupTraining.leadsquaredUdsKey ?? null;
         }
-        
+
         if (Object.keys(updateData).length > 0) {
           await this.upsertWidgetSettings(member.businessAccountId, updateData);
-          affectedCount++;
+          touched = true;
         }
 
         if (publishAll || module === 'leadsquared') {
@@ -4950,37 +5012,65 @@ export class DatabaseStorage implements IStorage {
               sortOrder: mapping.sortOrder,
             });
           }
+          touched = true;
         }
-        
+
         if (publishAll || module === 'menuBuilder') {
           if (groupTraining.menuConfig !== undefined || groupTraining.menuItems !== undefined) {
             await this.publishGroupMenuToMember(member.businessAccountId, groupTraining.menuConfig, groupTraining.menuItems);
-            if (!Object.keys(updateData).length) affectedCount++;
+            touched = true;
           }
         }
-      } catch (error) {
+
+        if (touched) {
+          // Drop cached widget settings + prompt contexts (website, K12, retrieval,
+          // WhatsApp) so the new training is used on the next message, not after TTL.
+          businessContextCache.invalidateBusinessCache(member.businessAccountId);
+        }
+        results.push({ businessAccountId: member.businessAccountId, name, ok: true });
+      } catch (error: any) {
         console.error(`[Group Training] Failed to update account ${member.businessAccountId}:`, error);
+        const message = String(error?.message || error || 'Unknown error').slice(0, 300);
+        results.push({ businessAccountId: member.businessAccountId, name, ok: false, error: message });
       }
     }
-    
-    const updateSet: any = { lastPublishedAt: new Date(), lastPublishedBy: publishedBy, updatedAt: new Date() };
-    if (publishAll || module === 'menuBuilder') {
-      if (groupTraining.menuConfig !== undefined || groupTraining.menuItems !== undefined) {
-        updateSet.menuLastAppliedAt = new Date();
+
+    const failedMembers = results.filter((r) => !r.ok);
+    const affectedCount = results.length - failedMembers.length;
+    const fullyPublished = failedMembers.length === 0;
+    if (!fullyPublished) {
+      console.warn(`[Group Training] Publish for group ${groupId} (${module || 'ALL'}): ${affectedCount}/${results.length} updated, failed: ${failedMembers.map((f) => f.businessAccountId).join(', ')}`);
+    }
+
+    // Only stamp "published" when every attempted member got the update.
+    if (fullyPublished) {
+      const updateSet: any = { lastPublishedAt: new Date(), lastPublishedBy: publishedBy, updatedAt: new Date() };
+      if (publishAll || module === 'menuBuilder') {
+        if (groupTraining.menuConfig !== undefined || groupTraining.menuItems !== undefined) {
+          updateSet.menuLastAppliedAt = new Date();
+        }
       }
+      if (publishAll || module === 'leadsquared') {
+        updateSet.leadsquaredLastAppliedAt = new Date();
+      }
+
+      await db
+        .update(accountGroupTraining)
+        .set(updateSet)
+        .where(eq(accountGroupTraining.groupId, groupId));
     }
-    if (publishAll || module === 'leadsquared') {
-      updateSet.leadsquaredLastAppliedAt = new Date();
-    }
-    
-    await db
-      .update(accountGroupTraining)
-      .set(updateSet)
-      .where(eq(accountGroupTraining.groupId, groupId));
-    
-    return { success: true, affectedCount };
+
+    return {
+      success: true,
+      affectedCount,
+      attemptedCount: results.length,
+      totalMembers: allMembers.length,
+      failedMembers,
+      results,
+      fullyPublished,
+    };
   }
-  
+
   async publishGroupMenuToMember(businessAccountId: string, menuConfig: any, menuItems: any): Promise<void> {
     // Update or create the menu config for this account
     if (menuConfig) {
