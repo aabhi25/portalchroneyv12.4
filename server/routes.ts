@@ -3538,27 +3538,9 @@ Return JSON:
         return res.json({ ok: true, gate: false });
       }
 
-      // Phone validation mirrors autoDetectAndCaptureLead so the same number
-      // typed in chat would have been accepted. Reject junk before we burn an
-      // SMS and a rate-limit slot.
-      const cleanedDigits = phone.replace(/\D/g, '');
-      let lengthOk = false;
-      switch (gate.phoneValidation) {
-        case '10': lengthOk = cleanedDigits.length === 10; break;
-        case '12': lengthOk = cleanedDigits.length === 12; break;
-        case '8-12': lengthOk = cleanedDigits.length >= 8 && cleanedDigits.length <= 12; break;
-        case 'any': lengthOk = cleanedDigits.length >= 7 && cleanedDigits.length <= 15; break;
-        default: lengthOk = cleanedDigits.length === 10;
-      }
-      if (!lengthOk) {
-        return res.status(400).json({
-          ok: false,
-          error: 'invalid_phone',
-          reason: 'invalid_phone',
-          message: 'Please enter a valid phone number.',
-        });
-      }
-      const junkCheck = validatePhoneNumber(cleanedDigits, gate.phoneValidation);
+      // Same rule as a number typed in chat (+91 / 91 / 0 prefixes and formatting accepted).
+      // Reject junk before we burn an SMS and a rate-limit slot.
+      const junkCheck = validatePhoneNumber(phone, gate.phoneValidation);
       if (!junkCheck.isValid) {
         return res.status(400).json({
           ok: false,
@@ -3568,7 +3550,7 @@ Return JSON:
         });
       }
 
-      const phoneE164 = normalizePhone(phone);
+      const phoneE164 = normalizePhone(junkCheck.normalized);
 
       // Race-safe: serialize concurrent /otp/start calls for the same
       // (business, visitor) so a double-click doesn't create two pending
@@ -3925,26 +3907,13 @@ Return JSON:
         });
       }
 
-      // Phone validation mirrors /otp/start so the same number typed in chat
-      // would have been accepted. Reject junk before we create a lead.
-      const cleanedDigits = phone.replace(/\D/g, '');
-      let lengthOk = false;
-      switch (gate.phoneValidation) {
-        case '10': lengthOk = cleanedDigits.length === 10; break;
-        case '12': lengthOk = cleanedDigits.length === 12; break;
-        case '8-12': lengthOk = cleanedDigits.length >= 8 && cleanedDigits.length <= 12; break;
-        case 'any': lengthOk = cleanedDigits.length >= 7 && cleanedDigits.length <= 15; break;
-        default: lengthOk = cleanedDigits.length === 10;
-      }
-      if (!lengthOk) {
-        return res.status(400).json({ ok: false, reason: 'invalid_phone', message: 'Please enter a valid phone number.' });
-      }
-      const junkCheck = validatePhoneNumber(cleanedDigits, gate.phoneValidation);
+      // Same rule as /otp/start and a number typed in chat. Reject junk before we create a lead.
+      const junkCheck = validatePhoneNumber(phone, gate.phoneValidation);
       if (!junkCheck.isValid) {
         return res.status(400).json({ ok: false, reason: 'invalid_phone', message: junkCheck.reasonMessage || 'That phone number doesn\'t look right.' });
       }
 
-      const phoneE164 = normalizePhone(phone);
+      const phoneE164 = normalizePhone(junkCheck.normalized);
 
       // Race-safe: serialize concurrent verify calls for the same (business,
       // visitor) so a double-submit doesn't create two pending conversations.

@@ -1029,7 +1029,9 @@ Return JSON:
     const leadConfig = (widgetSettings?.leadTrainingConfig as any) || null;
     const phoneMode = phoneModeFor(leadConfig);
     const mobileFieldCfg = Array.isArray(leadConfig?.fields) ? leadConfig.fields.find((f: any) => f?.id === 'mobile' && f.enabled) : null;
-    const otpEnabledForPhone = !!(mobileFieldCfg && mobileFieldCfg.otpEnabled === true);
+    // OTP that can't be delivered (no sender, Sample OTP off) is treated as off, so leads aren't blocked.
+    const otpEnabledForPhone = !!(mobileFieldCfg && mobileFieldCfg.otpEnabled === true)
+      && await (await import('./otp')).isOtpEffectivelyEnabled(context.businessAccountId, leadConfig);
 
     // ── Validate every detail on its own: valid ones are saved, invalid ones are reported. ──
     const values: { name?: string; email?: string; phone?: string } = {};

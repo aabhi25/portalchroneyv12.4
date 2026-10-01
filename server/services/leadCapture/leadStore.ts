@@ -110,6 +110,8 @@ export function upsertConversationLead(input: LeadUpsert): Promise<LeadUpsertRes
         const policy = input.policy?.[f] ?? 'replace';
         const empty = !current || (f === 'name' && current === 'Anonymous');
         if (incoming === current) continue;
+        // Same number in another format (the pre-chat OTP gate stores +91…, chat stores 10 digits).
+        if (f === 'phone' && current && digits(incoming) === digits(current) && digits(incoming).length >= 8) continue;
         if (policy === 'fill' && !empty) continue;
         updates[f] = incoming;
         changed.push(f);

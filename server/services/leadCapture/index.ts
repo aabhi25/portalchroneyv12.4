@@ -16,7 +16,7 @@ export * from './detectors';
 export * from './resolver';
 export * from './state';
 export { upsertConversationLead, getConversationLead, runSerialized, RETURNING_VISITOR_DAYS } from './leadStore';
-export { syncConversationLeadIfReady, evaluateCrmGate, whatsappForCrm } from './crmGate';
+export { syncConversationLeadIfReady, evaluateCrmGate, whatsappForCrm, sendHeldBackLeads, HELD_BACK_IDLE_MINUTES } from './crmGate';
 export { loadRecentHistory, countUserMessages, HISTORY_RELOAD_LIMIT } from './history';
 
 export interface LeadTurn {

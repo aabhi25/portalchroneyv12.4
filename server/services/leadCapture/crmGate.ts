@@ -10,7 +10,9 @@
  *    goes through LeadSquared's update path with only the changed fields.
  *  - Syncs for one conversation run one at a time (in-process queue), so a create and an update
  *    can't race into two CRM leads.
- * A lead held back here is never marked 'pending', so the retry worker never pushes it either.
+ * A lead held back only because a mandatory field is still missing is not lost: once the chat has
+ * been quiet for HELD_BACK_IDLE_MINUTES, sendHeldBackLeads (run by the LeadSquared retry worker)
+ * sends it with what it has — verification (OTP/CAPTCHA) still applies.
  */
 import { storage } from '../../storage';
 import { normalizeLeadFields } from './fields';
@@ -29,6 +31,8 @@ export interface CrmGateInput {
   channel?: string | null;
   /** For logs. */
   source: string;
+  /** Send even though a mandatory field is missing (the visitor left without giving it). */
+  ignoreMandatory?: boolean;
 }
 
 /** WhatsApp number for CRM mapping (no whatsapp column on leads): from the conversation's lead state. */
@@ -55,7 +59,7 @@ export async function evaluateCrmGate(input: CrmGateInput): Promise<{ ok: boolea
   const conversationId = input.conversationId || lead.conversationId || null;
   const state = conversationId ? await loadLeadCaptureState(conversationId) : null;
   const required = fields.filter(f => f.required);
-  if (required.length > 0) {
+  if (required.length > 0 && !input.ignoreMandatory) {
     const have = collectedFields(fields, { name: lead.name, email: lead.email, phone: lead.phone }, state || { v: 1, fields: {}, lastAsk: null, processedUserMsg: 0 });
     const missing = required.filter(f => !have.has(f.id)).map(f => f.id);
     if (missing.length) return { ok: false, result: 'skipped:mandatory_missing', missing };
@@ -64,7 +68,9 @@ export async function evaluateCrmGate(input: CrmGateInput): Promise<{ ok: boolea
   const rawFields: any[] = Array.isArray(config?.fields) ? config.fields : [];
   const mobile = rawFields.find(f => f?.id === 'mobile' && f.enabled);
   const onWidget = input.channel === 'widget';
-  if (onWidget && mobile?.otpEnabled === true && lead.phone && conversationId) {
+  const otpEffective = onWidget && mobile?.otpEnabled === true
+    && await (await import('../otp')).isOtpEffectivelyEnabled(input.businessAccountId, config);
+  if (otpEffective && lead.phone && conversationId) {
     const { normalizePhone } = await import('../otp');
     const e164 = normalizePhone(lead.phone);
     const verified = e164 ? await storage.hasVerifiedOtpForConversationPhone(input.businessAccountId, conversationId, e164) : false;
@@ -107,4 +113,69 @@ export function syncConversationLeadIfReady(input: CrmGateInput): Promise<CrmGat
       return 'error';
     }
   });
+}
+
+/** A chat must be quiet this long before a lead missing a mandatory field is sent anyway. */
+export const HELD_BACK_IDLE_MINUTES = 30;
+/** Only leads created this recently are considered (older ones were handled by the previous rules). */
+const HELD_BACK_LOOKBACK_DAYS = 3;
+
+/**
+ * Website-chat leads that were held back because a mandatory field was never given (the visitor
+ * refused or left) are sent once the chat has been quiet for HELD_BACK_IDLE_MINUTES, so a phone or
+ * email is never lost. Only conversations handled by the per-conversation lead rules (they carry
+ * lead_capture_state) qualify, so older leads are never swept. Never throws.
+ */
+export async function sendHeldBackLeads(limit = 50): Promise<number> {
+  const { db } = await import('../../db');
+  const { sql } = await import('drizzle-orm');
+  try {
+    // Cut-offs computed here, like the other LeadSquared sweeps (timestamps are stored as UTC).
+    const idleBefore = new Date(Date.now() - HELD_BACK_IDLE_MINUTES * 60_000).toISOString();
+    const createdAfter = new Date(Date.now() - HELD_BACK_LOOKBACK_DAYS * 24 * 60 * 60_000).toISOString();
+    const res = await db.execute(sql`
+      SELECT l.id, l.business_account_id, l.conversation_id
+      FROM leads l
+      JOIN conversations c ON c.id = l.conversation_id
+      JOIN widget_settings ws ON ws.business_account_id = l.business_account_id AND ws.leadsquared_enabled = 'true'
+      WHERE (l.leadsquared_sync_status IS NULL OR l.leadsquared_sync_status = '')
+        AND l.leadsquared_lead_id IS NULL
+        AND (COALESCE(l.phone, '') <> '' OR COALESCE(l.email, '') <> '')
+        AND c.lead_capture_state IS NOT NULL
+        -- tried once already and nothing changed since (e.g. still waiting for OTP): skip
+        AND (c.lead_capture_state->>'crmSweptAt' IS NULL OR (c.lead_capture_state->>'crmSweptAt')::timestamp < l.updated_at)
+        AND l.created_at > ${createdAfter}::timestamp
+        AND l.updated_at < ${idleBefore}::timestamp
+        AND NOT EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.conversation_id = l.conversation_id AND m.created_at > ${idleBefore}::timestamp
+        )
+      ORDER BY l.created_at ASC
+      LIMIT ${limit}
+    `);
+    let sent = 0;
+    for (const row of res.rows as Array<{ id: string; business_account_id: string; conversation_id: string }>) {
+      const result = await syncConversationLeadIfReady({
+        leadId: row.id,
+        businessAccountId: row.business_account_id,
+        conversationId: row.conversation_id,
+        channel: 'widget',
+        source: 'held_back_sweep',
+        ignoreMandatory: true,
+      });
+      if (result === 'synced') sent++;
+      else {
+        // Still blocked (verification pending, LeadSquared off…): don't pick it again until the lead changes.
+        await db.execute(sql`
+          UPDATE conversations
+          SET lead_capture_state = jsonb_set(COALESCE(lead_capture_state, '{}'::jsonb), '{crmSweptAt}', to_jsonb(${new Date().toISOString()}::text))
+          WHERE id = ${row.conversation_id}
+        `).catch(() => undefined);
+      }
+    }
+    return sent;
+  } catch (err) {
+    console.error('[CRM Gate] Held-back lead sweep failed:', err);
+    return 0;
+  }
 }

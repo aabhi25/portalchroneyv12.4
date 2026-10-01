@@ -1642,7 +1642,10 @@ Response:`;
 
       const fields: any[] = Array.isArray(leadConfig?.fields) ? leadConfig.fields : [];
       const mobileField = fields.find((f: any) => f?.id === 'mobile' && f.enabled);
-      const otpGateActive = !!(mobileField && mobileField.otpEnabled === true) && channel === 'widget';
+      // OTP that can't be delivered (no sender, Sample OTP off) is treated as off, so leads aren't blocked.
+      const otpEffective = !!(mobileField && mobileField.otpEnabled === true) && channel === 'widget'
+        && await (await import('./services/otp')).isOtpEffectivelyEnabled(businessAccountId, leadConfig);
+      const otpGateActive = otpEffective;
       const captchaGateActive = !!(mobileField && mobileField.captchaEnabled === true && mobileField.otpEnabled !== true) && channel === 'widget';
       if (mobileField?.otpEnabled === true && channel && channel !== 'widget') {
         console.log(`[OTP] Skipped: channel not widget (channel=${channel}, business=${businessAccountId})`);

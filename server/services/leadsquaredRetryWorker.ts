@@ -150,6 +150,13 @@ export class LeadsquaredRetryWorker {
     }
   }
 
+  /** Website-chat leads held back for a missing mandatory field, sent once the visitor has left. */
+  async processHeldBackWebsiteLeads() {
+    const { sendHeldBackLeads } = await import('./leadCapture/crmGate');
+    const sent = await sendHeldBackLeads();
+    if (sent > 0) console.log(`[LSQ Retry] Sent ${sent} website lead(s) held back for a missing mandatory field`);
+  }
+
   async processRetries() {
     if (this.isProcessing) return;
     this.isProcessing = true;
@@ -175,6 +182,7 @@ export class LeadsquaredRetryWorker {
 
       if (retryableLeads.length === 0) {
         await this.processSocialRetries();
+        await this.processHeldBackWebsiteLeads();
         return;
       }
 
@@ -272,6 +280,7 @@ export class LeadsquaredRetryWorker {
         }
       }
       await this.processSocialRetries();
+      await this.processHeldBackWebsiteLeads();
     } catch (error) {
       console.error('[LSQ Retry] Worker error:', error);
       reportError(error, { source: 'worker:leadsquared-retry' });

@@ -1601,7 +1601,7 @@ export class DatabaseStorage implements IStorage {
       FROM conversations
       WHERE business_account_id = ${businessAccountId}
         AND visitor_token = ${visitorToken}
-        AND ${byCreatedAt ? sql`created_at` : sql`updated_at`} >= ${cutoff}
+        AND ${byCreatedAt ? sql`created_at` : sql`updated_at`} >= ${cutoff.toISOString()}::timestamp
         AND closed_at IS NULL
         -- Task #18: never reuse an OTP-pending conversation; a new visit must
         -- start a fresh conversation so the prior pending one ages out and is
@@ -2172,7 +2172,9 @@ export class DatabaseStorage implements IStorage {
     const [lead] = await db
       .select()
       .from(leads)
-      .where(and(eq(leads.conversationId, conversationId), eq(leads.businessAccountId, businessAccountId)));
+      .where(and(eq(leads.conversationId, conversationId), eq(leads.businessAccountId, businessAccountId)))
+      .orderBy(asc(leads.createdAt))
+      .limit(1); // older data can have duplicate rows; always read the one the chat updates (oldest)
     return lead || undefined;
   }
 
