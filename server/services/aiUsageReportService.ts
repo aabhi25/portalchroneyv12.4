@@ -11,6 +11,7 @@
  *
  * Channel is derived from the event's category and its metadata feature/route
  * labels (set automatically by openaiClient / requestContext):
+ *   avatar category (Live AI avatar rendering minutes)     → avatar
  *   voice_mode category, or "voice|realtime"               → voice
  *   "whatsapp|msg91"                                       → whatsapp
  *   "instagram"                                            → instagram
@@ -37,7 +38,7 @@ import {
   type LimitLevel,
 } from "./aiBudgetService";
 
-export const USAGE_CHANNELS = ["website", "whatsapp", "instagram", "facebook", "voice", "training", "other"] as const;
+export const USAGE_CHANNELS = ["website", "whatsapp", "instagram", "facebook", "voice", "avatar", "training", "other"] as const;
 export type UsageChannel = typeof USAGE_CHANNELS[number];
 
 export const CHANNEL_LABELS: Record<UsageChannel, string> = {
@@ -46,6 +47,7 @@ export const CHANNEL_LABELS: Record<UsageChannel, string> = {
   instagram: "Instagram",
   facebook: "Facebook",
   voice: "Voice",
+  avatar: "Live avatar",
   training: "Documents & training",
   other: "Other",
 };
@@ -61,6 +63,7 @@ interface ChannelRule {
 }
 
 const CHANNEL_RULES: ChannelRule[] = [
+  { channel: "avatar", categories: ["avatar"] },
   { channel: "voice", categories: ["voice_mode"] },
   { channel: "whatsapp", pattern: "whatsapp|msg91" },
   { channel: "instagram", pattern: "instagram" },
@@ -188,15 +191,32 @@ export interface AccountMonthUsage {
     percentUsed: number;
     level: LimitLevel;
   };
+  /** Live AI avatar rendering time this month (our per-second metering). */
+  avatar: { seconds: number; minutes: number; sessions: number; costUsd: number };
+}
+
+/** Avatar seconds/sessions/cost for one account and IST month (ended sessions). */
+export async function queryAvatarMonth(businessAccountId: string, month: string): Promise<{ seconds: number; minutes: number; sessions: number; costUsd: number }> {
+  const { start, end } = istMonthRange(month);
+  const result: any = await db.execute(sql`
+    SELECT coalesce(sum(billed_seconds), 0)::int AS seconds, count(*)::int AS sessions, coalesce(sum(cost_usd), 0)::float8 AS cost
+    FROM avatar_sessions
+    WHERE business_account_id = ${businessAccountId}
+      AND started_at >= ${pgUtc(start)}::timestamp AND started_at < ${pgUtc(end)}::timestamp
+  `);
+  const r: any = (result.rows ?? result)[0] || {};
+  const seconds = Number(r.seconds) || 0;
+  return { seconds, minutes: Math.round((seconds / 60) * 10) / 10, sessions: Number(r.sessions) || 0, costUsd: Number(r.cost) || 0 };
 }
 
 export async function getAccountMonthUsage(businessAccountId: string, month: string, now = Date.now()): Promise<AccountMonthUsage> {
   const rate = usdInrRate();
   const prevMonth = shiftMonthKey(month, -1);
-  const [rows, prevRows, limitRow] = await Promise.all([
+  const [rows, prevRows, limitRow, avatar] = await Promise.all([
     queryDayChannel(businessAccountId, month),
     queryDayChannel(businessAccountId, prevMonth),
     getLimit(businessAccountId),
+    queryAvatarMonth(businessAccountId, month),
   ]);
 
   const currentMonth = istMonthKey(now);
@@ -256,6 +276,7 @@ export async function getAccountMonthUsage(businessAccountId: string, month: str
     changePercent,
     projectedCostUsd: isCurrentMonth && daysElapsed > 0 ? (totals.costUsd / daysElapsed) * dim : null,
     limit,
+    avatar,
   };
 }
 
@@ -271,6 +292,9 @@ export interface AccountSummaryRow {
   /** % change vs the whole previous month (null when that was 0). */
   trendPercent: number | null;
   limit: null | { monthlyLimitUsd: number; warnAtPercent: number; action: LimitAction; percentUsed: number; level: LimitLevel };
+  /** Live AI avatar minutes this month (0 for accounts without the add-on). */
+  avatarMinutes: number;
+  avatarSessions: number;
 }
 
 /** Every business account's spend for an IST month (+ previous month for the trend) and its limit. */
@@ -281,7 +305,8 @@ export async function getAllAccountsSummary(month: string): Promise<{ month: str
   const result: any = await db.execute(sql`
     SELECT ba.id, ba.name, ba.status,
       c.cost, c.tokens, c.calls, p.cost AS prev_cost,
-      l.monthly_limit_usd, l.warn_at_percent, l.action
+      l.monthly_limit_usd, l.warn_at_percent, l.action,
+      av.seconds AS avatar_seconds, av.sessions AS avatar_sessions
     FROM business_accounts ba
     CROSS JOIN LATERAL (
       SELECT coalesce(sum(e.cost_usd), 0)::float8 AS cost,
@@ -297,6 +322,12 @@ export async function getAllAccountsSummary(month: string): Promise<{ month: str
       WHERE e.business_account_id = ba.id
         AND e.occurred_at >= ${pgUtc(prev.start)}::timestamp AND e.occurred_at < ${pgUtc(prev.end)}::timestamp
     ) p
+    CROSS JOIN LATERAL (
+      SELECT coalesce(sum(s.billed_seconds), 0)::int AS seconds, count(*)::int AS sessions
+      FROM avatar_sessions s
+      WHERE s.business_account_id = ba.id
+        AND s.started_at >= ${pgUtc(cur.start)}::timestamp AND s.started_at < ${pgUtc(cur.end)}::timestamp
+    ) av
     LEFT JOIN ai_usage_limits l ON l.business_account_id = ba.id
     ORDER BY c.cost DESC, ba.name ASC
   `);
@@ -324,6 +355,8 @@ export async function getAllAccountsSummary(month: string): Promise<{ month: str
         previousCostUsd,
         trendPercent: previousCostUsd > 0 ? ((costUsd - previousCostUsd) / previousCostUsd) * 100 : null,
         limit,
+        avatarMinutes: Math.round(((Number(r.avatar_seconds) || 0) / 60) * 10) / 10,
+        avatarSessions: Number(r.avatar_sessions) || 0,
       };
     }),
   };

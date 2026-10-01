@@ -27,6 +27,8 @@ import {
   endTopscholarVoiceSession,
   startTopscholarVoiceSession,
 } from './services/topscholar/voiceUsageService';
+import { avatarSessionManager, type VoiceBinding } from './services/avatar/sessionManager';
+import type { AudioRoute, AvatarEndReason } from './services/avatar/types';
 
 /**
  * OpenAI Realtime model backing voice mode.
@@ -94,6 +96,25 @@ export interface RealtimeVoiceDeps {
   classifyIntent?: (transcript: string) => Promise<VoiceIntentDecision>;
   /** Speculative curriculum lookup; defaults to chatService.prefetchK12Topic. */
   prefetchK12Topic?: (query: string, context: ChatContext) => { query: string; result: Promise<any | null> } | null;
+  /** Live AI avatar session bridge; defaults to avatarSessionManager. */
+  avatar?: AvatarVoiceBridge;
+}
+
+/**
+ * What the voice pipeline needs from a Live AI avatar session (see
+ * services/avatar/sessionManager.ts). The avatar is a RENDERER: this pipeline
+ * stays the brain; in avatar mode our TTS PCM is forwarded to the provider
+ * ('server' route) or fed to the provider's browser SDK ('client' route).
+ */
+export interface AvatarVoiceBridge {
+  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: string; disclosure: string | null; displayName: string } | null;
+  unbindVoice(sessionId: string, conversationId?: string): void;
+  sendAudio(sessionId: string, pcm: Buffer): boolean;
+  endOfSpeech(sessionId: string): void;
+  interrupt(sessionId: string): void;
+  touch(sessionId: string): void;
+  answerFinished(sessionId: string): void;
+  endSession(sessionId: string, reason: AvatarEndReason): Promise<void>;
 }
 
 const VOICE_STOP_COMMANDS = new Set([
@@ -160,6 +181,9 @@ interface VoiceTurnTiming {
   sentences?: number;
   chars?: number;
   logged?: boolean;
+  /** Avatar mode: provider name, and when the avatar started speaking this answer. */
+  avatar?: string;
+  avatarSpeakAt?: number;
 }
 
 interface VoiceConversation {
@@ -370,6 +394,19 @@ interface VoiceConversation {
     awaitingTranscript: boolean;
     timer?: NodeJS.Timeout;
   };
+  /**
+   * Live AI avatar attached to this voice session (visitor tapped "Talk to ...").
+   * 'server' route: answer PCM goes to the avatar provider, not the browser
+   * (the browser hears the avatar's own stream). 'client' route: PCM still goes
+   * to the browser, which feeds the provider SDK instead of playing it.
+   */
+  avatar?: {
+    sessionId: string;
+    audioRoute: AudioRoute;
+    provider: string;
+    attachedAt: number;
+    lastInterruptAt?: number;
+  };
 }
 
 export class RealtimeVoiceService {
@@ -403,6 +440,7 @@ export class RealtimeVoiceService {
       chatService.commitDeferredAssistantMessage(context, content, stillCurrent),
     rollbackAssistantMessage: (context, messageId, content) =>
       chatService.rollbackDeferredAssistantMessage(context, messageId, content),
+    avatar: avatarSessionManager,
   };
 
   /**
@@ -747,6 +785,116 @@ export class RealtimeVoiceService {
   private markUserActive(conversation: VoiceConversation): void {
     conversation.lastUserSpeechAt = Date.now();
     conversation.idleNudgedAt = undefined;
+    if (conversation.avatar) this.deps.avatar?.touch(conversation.avatar.sessionId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Live AI avatar (renderer only - this pipeline stays the brain)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Deliver one chunk of answer PCM (16-bit, 24 kHz). Server-route avatar: the
+   * provider gets it and the browser only gets a tiny {avatar_audio, bytes}
+   * marker (it keeps a silent playback clock for turn-taking and karaoke). If
+   * the avatar can't take it, it plays locally as before. No avatar: unchanged.
+   */
+  private sendAnswerAudio(conversation: VoiceConversation, pcm: Buffer): void {
+    const avatar = conversation.avatar;
+    if (avatar && avatar.audioRoute === 'server') {
+      if (this.deps.avatar?.sendAudio(avatar.sessionId, pcm)) {
+        this.sendToClient(conversation.clientWs, { type: 'avatar_audio', bytes: pcm.length });
+        return;
+      }
+    } else if (avatar) {
+      this.deps.avatar?.touch(avatar.sessionId);
+    }
+    if (conversation.clientWs.readyState === WebSocket.OPEN) conversation.clientWs.send(pcm);
+  }
+
+  /** ai_done for a response; in server-route avatar mode also closes the avatar's utterance. */
+  private sendAiDone(conversation: VoiceConversation, responseId: string | undefined): void {
+    const avatar = conversation.avatar;
+    if (avatar && avatar.audioRoute === 'server') this.deps.avatar?.endOfSpeech(avatar.sessionId);
+    this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId });
+  }
+
+  /** A confirmed interruption / cancellation: stop the avatar's speech too (server route). */
+  private interruptAvatar(conversation: VoiceConversation): void {
+    const avatar = conversation.avatar;
+    if (!avatar || avatar.audioRoute !== 'server') return;
+    const now = Date.now();
+    if (avatar.lastInterruptAt && now - avatar.lastInterruptAt < 150) return;
+    avatar.lastInterruptAt = now;
+    this.deps.avatar?.interrupt(avatar.sessionId);
+  }
+
+  private detachAvatar(conversation: VoiceConversation, notifyReason?: AvatarEndReason | string): void {
+    const avatar = conversation.avatar;
+    if (!avatar) return;
+    conversation.avatar = undefined;
+    this.deps.avatar?.unbindVoice(avatar.sessionId, conversation.conversationId);
+    if (notifyReason) {
+      this.sendToClient(conversation.clientWs, { type: 'avatar_ended', avatarSessionId: avatar.sessionId, reason: notifyReason });
+    }
+    console.log(`[RealtimeVoice] Avatar detached (${notifyReason || 'client'}) - voice continues with local playback`, conversation.conversationId);
+  }
+
+  private attachAvatar(conversation: VoiceConversation, message: any): void {
+    const sessionId = typeof message.avatarSessionId === 'string' ? message.avatarSessionId.slice(0, 64) : '';
+    const bridge = this.deps.avatar;
+    if (!sessionId || !bridge) {
+      this.sendToClient(conversation.clientWs, { type: 'avatar_attach_failed', reason: 'invalid' });
+      return;
+    }
+    if (conversation.avatar && conversation.avatar.sessionId !== sessionId) this.detachAvatar(conversation);
+    const attached = bridge.bindVoice(sessionId, { businessAccountId: conversation.businessAccountId, visitorId: conversation.userId }, {
+      conversationId: conversation.conversationId,
+      notify: (msg) => {
+        if (msg.type === 'avatar_event' && msg.event === 'speak_started') {
+          const t = conversation.turnTiming;
+          if (t && !t.avatarSpeakAt && t.avatar) t.avatarSpeakAt = Date.now();
+        }
+        this.sendToClient(conversation.clientWs, msg);
+      },
+      isAnswerActive: () => conversation.isProcessing || this.isAnswerActive(conversation),
+      onEnded: (reason) => {
+        if (conversation.avatar?.sessionId === sessionId) this.detachAvatar(conversation, reason);
+      },
+    });
+    if (!attached) {
+      this.sendToClient(conversation.clientWs, { type: 'avatar_attach_failed', avatarSessionId: sessionId, reason: 'not_found' });
+      return;
+    }
+    conversation.avatar = { sessionId, audioRoute: attached.audioRoute, provider: attached.provider, attachedAt: Date.now() };
+    this.sendToClient(conversation.clientWs, { type: 'avatar_attached', avatarSessionId: sessionId, audioRoute: attached.audioRoute });
+    console.log(`[RealtimeVoice] Avatar attached: ${attached.provider} route=${attached.audioRoute}`, conversation.conversationId);
+    if (message.speakIntro !== false && attached.disclosure && !conversation.isProcessing && !this.isAnswerActive(conversation)) {
+      this.speakAvatarIntro(conversation, attached.disclosure);
+    }
+  }
+
+  /** The AI disclosure line, spoken by the avatar and shown in the chat (not saved to history). */
+  private speakAvatarIntro(conversation: VoiceConversation, text: string): void {
+    if (conversation.clientWs.readyState !== WebSocket.OPEN) return;
+    const responseId = `voice_avatar_intro_${Date.now()}`;
+    const startedAt = Date.now();
+    this.sendToClient(conversation.clientWs, { type: 'voice_message_start', responseId });
+    this.sendToClient(conversation.clientWs, { type: 'answer_delta', responseId, display: text, speech: text, index: 0 });
+    const { primary, fallback } = this.createTtsProviders(conversation);
+    const pipeline = new SentenceTtsPipeline({
+      primary,
+      fallback,
+      sendAudio: (pcm) => this.sendAnswerAudio(conversation, pcm),
+      // The visitor spoke first: drop the rest of the intro.
+      isCancelled: () => conversation.clientWs.readyState !== WebSocket.OPEN || (conversation.lastUserSpeechAt || 0) > startedAt,
+      onProviderFailure: (provider, error) => {
+        console.warn(`[RealtimeVoice] Avatar intro TTS (${provider}) failed:`, error instanceof Error ? error.message : String(error));
+      },
+    });
+    pipeline.enqueue(markdownToSpeech(text));
+    pipeline.close();
+    this.sendToClient(conversation.clientWs, { type: 'answer_ready', responseId, displayMarkdown: text, speechText: text, streamed: true });
+    pipeline.finished().then(() => this.sendAiDone(conversation, responseId)).catch(() => undefined);
   }
 
   /**
@@ -808,7 +956,7 @@ export class RealtimeVoiceService {
       primary,
       fallback,
       sendAudio: (pcm) => {
-        if (conversation.clientWs.readyState === WebSocket.OPEN) conversation.clientWs.send(pcm);
+        if (conversation.clientWs.readyState === WebSocket.OPEN) this.sendAnswerAudio(conversation, pcm);
       },
       // The student spoke (or the session moved on): stop the nudge.
       isCancelled: () => conversation.clientWs.readyState !== WebSocket.OPEN || (conversation.lastUserSpeechAt || 0) > startedAt,
@@ -820,7 +968,7 @@ export class RealtimeVoiceService {
     pipeline.close();
     this.sendToClient(conversation.clientWs, { type: 'answer_ready', responseId, displayMarkdown: text, speechText: text, streamed: true });
     pipeline.finished().then(() => {
-      this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId });
+      this.sendAiDone(conversation, responseId);
     }).catch(() => undefined);
   }
 
@@ -967,6 +1115,13 @@ export class RealtimeVoiceService {
 
     console.log('[RealtimeVoice] Cleaning up conversation:', conversationId, 'reason:', reason);
     conversation.voiceUsageClosed = true;
+    // The voice socket is the avatar's audio source: end the avatar session too.
+    if (conversation.avatar) {
+      const avatarSessionId = conversation.avatar.sessionId;
+      this.detachAvatar(conversation);
+      void this.deps.avatar?.endSession(avatarSessionId, reason === 'server_shutdown' ? 'server_shutdown' : reason === 'idle_timeout' ? 'idle_timeout' : 'voice_closed')
+        .catch((err) => console.warn('[RealtimeVoice] Failed to end avatar session:', err?.message || err));
+    }
     this.closeTopscholarVoiceUsageSession(conversation, reason);
 
     try {
@@ -1106,6 +1261,7 @@ export class RealtimeVoiceService {
     // (preserveDisplay) when the student only stops its audio; a partial,
     // still-streaming answer is removed, exactly as before.
     if (notifyClient && !alreadyCancelled) {
+      this.interruptAvatar(conversation);
       this.sendToClient(conversation.clientWs, {
         type: 'response_cancelled',
         responseId,
@@ -1269,7 +1425,8 @@ export class RealtimeVoiceService {
   }
 
   private async connectToOpenAI(conversationId: string, conversation: VoiceConversation) {
-    const url = `wss://api.openai.com/v1/realtime?model=${REALTIME_MODEL}`;
+    // OPENAI_REALTIME_URL: local/dev override (e.g. a fake Realtime server); unset in production.
+    const url = `${process.env.OPENAI_REALTIME_URL || 'wss://api.openai.com/v1/realtime'}?model=${REALTIME_MODEL}`;
 
     console.log(`[RealtimeVoice] Connecting to OpenAI Realtime API (${REALTIME_MODEL})...`);
 
@@ -2423,7 +2580,7 @@ export class RealtimeVoiceService {
           }
           
           if (conversation.clientWs.readyState === WebSocket.OPEN) {
-            conversation.clientWs.send(audioBuffer);
+            this.sendAnswerAudio(conversation, audioBuffer);
           }
           break;
 
@@ -2697,7 +2854,7 @@ export class RealtimeVoiceService {
             conversation.pendingAiDoneResponseId = doneResponseId || 'unknown';
             console.log('[RealtimeVoice] Deferring ai_done until ElevenLabs TTS producers finish');
           } else {
-            this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId: doneResponseId });
+            this.sendAiDone(conversation, doneResponseId);
           }
           break;
         }
@@ -3029,6 +3186,7 @@ export class RealtimeVoiceService {
       );
       if (t.sentences != null) parts.push(`${t.sentences} sentences/${t.chars} chars`);
       if (extra.audioMs != null) parts.push(`audio ${(extra.audioMs / 1000).toFixed(1)}s${extra.tts ? ` tts=${extra.tts}` : ''}`);
+      if (t.avatar) parts.push(`avatar=${t.avatar} AVATAR SPEAK ${rel(t.avatarSpeakAt)}`);
     }
     parts.push(JSON.stringify(t.text.length > 60 ? `${t.text.slice(0, 60)}…` : t.text));
     console.log(parts.join(' | '));
@@ -3598,6 +3756,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
 
     // A previous answer still producing audio is superseded by this turn.
     if (conversation.ttsPipeline) {
+      if (conversation.ttsPipeline.isActive) this.interruptAvatar(conversation);
       conversation.ttsPipeline.cancel();
       conversation.ttsPipeline = undefined;
     }
@@ -3629,12 +3788,13 @@ Never infer intent from a single contained word. For example, "What is stop moti
       sendAudio: (pcm) => {
         if (abandoned() || conversation.clientWs.readyState !== WebSocket.OPEN) return;
         conversation.answerAudioBytes = (conversation.answerAudioBytes || 0) + pcm.length;
-        conversation.clientWs.send(pcm);
+        this.sendAnswerAudio(conversation, pcm);
       },
       isCancelled: () => abandoned(),
       onFirstAudio: () => {
         conversation.activeElevenLabsStartedAt ||= Date.now();
         if (timing && !timing.firstAudioAt) timing.firstAudioAt = Date.now();
+        if (timing && conversation.avatar) timing.avatar = conversation.avatar.provider;
       },
       onProviderFailure: (provider, error, text) => {
         console.error(
@@ -3688,6 +3848,10 @@ Never infer intent from a single contained word. For example, "What is stop moti
           for (const segment of splitter.push(event.data)) emitSegment(segment);
         } else if (event.type === 'final' && typeof event.data === 'string' && event.data.trim()) {
           finalMarkdown = event.data;
+        } else if (event.type === 'products' && conversation.avatar && typeof event.data === 'string') {
+          // Avatar mode: product cards from the same tool results as text chat
+          // are shown under the avatar (the avatar never reads prices or links).
+          this.sendToClient(conversation.clientWs, { type: 'products', responseId, data: event.data });
         }
       }
       if (abandoned()) { bail(); return; }
@@ -3761,7 +3925,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       const playbackStart = conversation.activeElevenLabsStartedAt || Date.now();
       conversation.answerPlaybackEndsAt = Math.max(Date.now(), playbackStart + audioMs) + 5000;
       if (timing) this.logVoiceTiming(timing, 'answered', { audioMs, tts: pipeline.providerUsed() });
-      this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId });
+      this.sendAiDone(conversation, responseId);
     } catch (error) {
       bail();
       if (abandoned()) return;
@@ -3789,7 +3953,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
         this.markResponseCancelled(conversation, responseId);
       }
       this.sendError(conversation.clientWs, 'I could not complete that answer. Please try again.');
-      this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId });
+      this.sendAiDone(conversation, responseId);
     }
   }
 
@@ -4515,10 +4679,29 @@ Never infer intent from a single contained word. For example, "What is stop moti
           if (conversation.bargeIn?.responseId === message.responseId) this.clearBargeIn(conversation);
           console.log('[RealtimeVoice] Canonical playback completed:', message.responseId);
         }
+        if (conversation.avatar) this.deps.avatar?.answerFinished(conversation.avatar.sessionId);
         break;
 
       case 'set_input_mode':
         this.setInputMode(conversation, message.mode === 'hold_to_talk' ? 'hold_to_talk' : 'hands_free');
+        break;
+
+      case 'avatar_attach':
+        this.attachAvatar(conversation, message);
+        break;
+
+      case 'avatar_detach':
+        // The browser fell back to plain voice (provider failed / visitor closed
+        // the panel). Audio plays locally again from the next chunk on.
+        this.detachAvatar(conversation);
+        break;
+
+      case 'avatar_event':
+        // Client-route providers report when the avatar started speaking.
+        if (conversation.avatar && message.event === 'speak_started') {
+          const t = conversation.turnTiming;
+          if (t && t.avatar && !t.avatarSpeakAt) t.avatarSpeakAt = Date.now();
+        }
         break;
 
       case 'ptt_start':
@@ -4851,7 +5034,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
     }
 
     for (const chunk of audioChunks) {
-      conversation.clientWs.send(chunk);
+      this.sendAnswerAudio(conversation, chunk);
     }
     console.log('[RealtimeVoice] Released buffered OpenAI audio chunks:', audioChunks.length, 'responseId:', responseId);
   }
@@ -4877,7 +5060,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
     if (!pendingId || this.isTtsProducing(conversation)) return;
     conversation.pendingAiDoneResponseId = undefined;
     if (pendingId !== 'unknown' && conversation.cancelledResponseIds.has(pendingId)) return;
-    this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId: pendingId });
+    this.sendAiDone(conversation, pendingId);
     console.log('[RealtimeVoice] Sent deferred ai_done (responseId:', pendingId, ')');
   }
 
@@ -4957,7 +5140,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
           const merged = leftover ? Buffer.concat([leftover, chunk]) : chunk;
           const evenLen = merged.length & ~1;
           if (evenLen > 0) {
-            conversation.clientWs.send(merged.subarray(0, evenLen));
+            this.sendAnswerAudio(conversation, merged.subarray(0, evenLen));
           }
           leftover = evenLen < merged.length ? Buffer.from(merged.subarray(evenLen)) : null;
         }
@@ -5036,7 +5219,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
           const evenLen = merged.length & ~1; // round down to multiple of 2
           if (evenLen > 0) {
             const aligned = merged.subarray(0, evenLen);
-            conversation.clientWs.send(aligned);
+            this.sendAnswerAudio(conversation, aligned);
             totalBytesOut += aligned.length;
           }
           leftover = evenLen < merged.length ? Buffer.from(merged.subarray(evenLen)) : null;
@@ -5064,7 +5247,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       if (fallbackChunks.length > 0) {
         for (const chunk of fallbackChunks) {
           if (conversation.clientWs.readyState === WebSocket.OPEN) {
-            conversation.clientWs.send(chunk);
+            this.sendAnswerAudio(conversation, chunk);
           }
         }
         console.log('[RealtimeVoice] Sent OpenAI fallback audio, chunks:', fallbackChunks.length);

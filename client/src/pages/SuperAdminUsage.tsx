@@ -34,6 +34,9 @@ interface AccountRow {
   previousCostUsd: number;
   trendPercent: number | null;
   limit: UsageLimit | null;
+  /** Live AI avatar minutes this month (its cost is already inside costUsd). */
+  avatarMinutes?: number;
+  avatarSessions?: number;
 }
 
 interface SummaryResponse {
@@ -150,7 +153,7 @@ export default function SuperAdminUsage() {
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = (data?.accounts ?? []).filter((r) =>
-      (showIdle || r.costUsd > 0 || r.previousCostUsd > 0 || r.limit) && (!q || r.name.toLowerCase().includes(q)));
+      (showIdle || r.costUsd > 0 || r.previousCostUsd > 0 || r.limit || (r.avatarMinutes ?? 0) > 0) && (!q || r.name.toLowerCase().includes(q)));
     return list.sort((a, b) => {
       const va = sortValue(a, sortKey), vb = sortValue(b, sortKey);
       const cmp = va < vb ? -1 : va > vb ? 1 : 0;
@@ -229,6 +232,7 @@ export default function SuperAdminUsage() {
                       {header("name", "Account")}
                       {header("costUsd", "Spend", "text-right")}
                       {header("tokens", "Tokens", "text-right")}
+                      <TableHead className="text-right">Avatar min</TableHead>
                       {header("limit", "Limit", "text-right")}
                       {header("percent", "% used", "min-w-[160px]")}
                       {header("trend", "Trend", "text-right")}
@@ -237,7 +241,7 @@ export default function SuperAdminUsage() {
                   </TableHeader>
                   <TableBody>
                     {rows.length === 0 && (
-                      <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No accounts with AI usage this month.</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">No accounts with AI usage this month.</TableCell></TableRow>
                     )}
                     {rows.map((r) => (
                       <TableRow key={r.businessAccountId} data-testid={`row-usage-${r.businessAccountId}`}>
@@ -250,6 +254,14 @@ export default function SuperAdminUsage() {
                           <div className="text-xs text-muted-foreground">{formatInr(r.costUsd, rate)}</div>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{formatTokens(r.tokens)}</TableCell>
+                        <TableCell className="text-right tabular-nums" data-testid={`text-avatar-minutes-${r.businessAccountId}`}>
+                          {r.avatarMinutes ? (
+                            <>
+                              <div>{r.avatarMinutes.toLocaleString()}</div>
+                              <div className="text-xs text-muted-foreground">{r.avatarSessions} calls</div>
+                            </>
+                          ) : <span className="text-muted-foreground">—</span>}
+                        </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {r.limit ? (
                             <>

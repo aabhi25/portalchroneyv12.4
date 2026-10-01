@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Search, Phone, MessageCircle, MessageSquare, ExternalLink, FileText, Folder, BookOpen, GraduationCap, Briefcase, ShoppingBag, Star, Heart, HelpCircle, Loader2, Mic } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search, Phone, MessageCircle, MessageSquare, ExternalLink, FileText, Folder, BookOpen, GraduationCap, Briefcase, ShoppingBag, Star, Heart, HelpCircle, Loader2, Mic, Video } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChatDetailsView, parseDetailsConfig } from "./ChatDetailsView";
 import { validatePhoneNumber } from "@shared/validation/phone";
@@ -72,6 +72,9 @@ interface ChatMenuNavigationProps {
   onSwitchToChat: () => void;
   /** When voice mode is available: open the chat and start talking in one tap. */
   onStartVoice?: () => void;
+  /** Live AI avatar (only when the account has the add-on on). */
+  onStartAvatar?: () => void;
+  avatarLabel?: string;
   onSendMessage: (message: string, itemId: string) => void;
   onStartJourney?: (journeyId: string) => void;
   onCallPhone?: (phone: string) => void;
@@ -122,6 +125,8 @@ export function ChatMenuNavigation({
   selectedLanguage,
   onSwitchToChat,
   onStartVoice,
+  onStartAvatar,
+  avatarLabel,
   onSendMessage,
   onStartJourney,
   onCallPhone,
@@ -894,6 +899,19 @@ export function ChatMenuNavigation({
           >
             <MessageCircle className="w-4 h-4 flex-shrink-0" />
             <span className="truncate">{t("Chat with us instead") || "Chat with us instead"}</span>
+          </button>
+        )}
+        {onStartAvatar && (
+          <button
+            onClick={onStartAvatar}
+            className={`flex-shrink-0 w-10 h-10 flex items-center justify-center transition-colors ${
+              config?.chatInsteadStyle === "chatbox" ? "rounded-xl border border-gray-200 hover:bg-gray-50" : "rounded-lg hover:bg-gray-50"
+            }`}
+            aria-label={`${avatarLabel || "Talk to our AI assistant"} (AI video avatar)`}
+            title={`${avatarLabel || "Talk to our AI assistant"} (AI avatar)`}
+            data-testid="button-menu-avatar"
+          >
+            <Video className="w-4 h-4" style={{ color: chatColor }} />
           </button>
         )}
         {onStartVoice && (

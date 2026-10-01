@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Settings2, Lock, AlertCircle, Sparkles, Database, Download, Brain, CheckCircle2, XCircle, Loader2, RefreshCw, Cloud, Trash2, Calendar, HardDrive, ChevronRight, ArrowDownToLine, Upload, Copy, Check, ExternalLink } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import { LiveAvatarPlatformCard } from "@/components/LiveAvatarPlatformCard";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import {
   AlertDialog,
@@ -674,6 +675,9 @@ export default function SuperAdminSettings() {
               Manage your Super Admin account settings
             </p>
           </div>
+
+          {/* Live AI avatar: platform provider keys + cost rates */}
+          <LiveAvatarPlatformCard />
 
           {/* Change Password Card */}
           <Card>
