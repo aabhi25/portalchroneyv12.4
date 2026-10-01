@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Search, Phone, MessageCircle, MessageSquare, ExternalLink, FileText, Folder, BookOpen, GraduationCap, Briefcase, ShoppingBag, Star, Heart, HelpCircle, Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search, Phone, MessageCircle, MessageSquare, ExternalLink, FileText, Folder, BookOpen, GraduationCap, Briefcase, ShoppingBag, Star, Heart, HelpCircle, Loader2, Mic } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChatDetailsView, parseDetailsConfig } from "./ChatDetailsView";
 import { validatePhoneNumber } from "@shared/validation/phone";
@@ -70,6 +70,8 @@ interface ChatMenuNavigationProps {
   pageUrl?: string;
   conversationId?: string;
   onSwitchToChat: () => void;
+  /** When voice mode is available: open the chat and start talking in one tap. */
+  onStartVoice?: () => void;
   onSendMessage: (message: string, itemId: string) => void;
   onStartJourney?: (journeyId: string) => void;
   onCallPhone?: (phone: string) => void;
@@ -119,6 +121,7 @@ export function ChatMenuNavigation({
   avatarUrl,
   selectedLanguage,
   onSwitchToChat,
+  onStartVoice,
   onSendMessage,
   onStartJourney,
   onCallPhone,
@@ -203,6 +206,7 @@ export function ChatMenuNavigation({
       
       // Add static UI text
       textsToTranslate.push("Chat with us instead");
+      textsToTranslate.push("Talk to us");
       textsToTranslate.push("Get in Touch");
       textsToTranslate.push("Thank You!");
       textsToTranslate.push("We'll get back to you soon.");
@@ -869,27 +873,40 @@ export function ChatMenuNavigation({
         </div>
       )}
 
-      <div className="px-3 pb-3 pt-1 border-t border-gray-100">
+      <div className="px-3 pb-3 pt-1 border-t border-gray-100 flex items-center gap-2">
         {config?.chatInsteadStyle === "chatbox" ? (
           <button
             onClick={onSwitchToChat}
-            className="w-full py-2.5 px-4 rounded-xl text-white font-medium text-sm flex items-center justify-center gap-2 transition-transform active:scale-98"
+            className="flex-1 min-w-0 py-2.5 px-4 rounded-xl text-white font-medium text-sm flex items-center justify-center gap-2 transition-transform active:scale-98"
             style={{
               background: chatColorEnd
                 ? `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})`
                 : chatColor,
             }}
           >
-            <MessageCircle className="w-4 h-4" />
-            {t("Chat with us instead") || "Chat with us instead"}
+            <MessageCircle className="w-4 h-4 flex-shrink-0" />
+            <span className="truncate">{t("Chat with us instead") || "Chat with us instead"}</span>
           </button>
         ) : (
           <button
             onClick={onSwitchToChat}
-            className="w-full py-2.5 px-4 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+            className="flex-1 min-w-0 py-2.5 px-4 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
           >
-            <MessageCircle className="w-4 h-4" />
-            {t("Chat with us instead") || "Chat with us instead"}
+            <MessageCircle className="w-4 h-4 flex-shrink-0" />
+            <span className="truncate">{t("Chat with us instead") || "Chat with us instead"}</span>
+          </button>
+        )}
+        {onStartVoice && (
+          <button
+            onClick={onStartVoice}
+            className={`flex-shrink-0 w-10 h-10 flex items-center justify-center transition-colors ${
+              config?.chatInsteadStyle === "chatbox" ? "rounded-xl border border-gray-200 hover:bg-gray-50" : "rounded-lg hover:bg-gray-50"
+            }`}
+            aria-label={t("Talk to us") || "Talk to us"}
+            title={t("Talk to us") || "Talk to us"}
+            data-testid="button-menu-voice"
+          >
+            <Mic className="w-4 h-4" style={{ color: chatColor }} />
           </button>
         )}
       </div>

@@ -1460,6 +1460,15 @@ export default function EmbedChat() {
       })()
     : ['auto', 'en', 'hi', 'kn', 'ta', 'mr'];
 
+  // Voice conversation from the chat window: started from the mic next to the text box (or the
+  // menu's mic), so it's only offered where it can actually start.
+  const voiceChatAvailable = !!settings?.voiceModeEnabled && (settings?.chatMode === 'both' || !settings?.chatMode) && !doubtLock;
+  const startVoiceChat = () => {
+    if (!voiceChatAvailable || activeFormStep || isFormJourneyComplete) return;
+    setIsMenuMode(false);
+    setIsInlineVoiceActive(true);
+  };
+
   // In the ⋮ menu instead of the header when the header is too narrow (see titleBoxRef).
   const waHeaderInMenu = !!waHeaderUrl && !hideHeaderMenu && waHeaderFolded;
   
@@ -4269,7 +4278,7 @@ export default function EmbedChat() {
           </div>
         )}
         {/* Voice mode button - only show if enabled and mode allows it */}
-        {settings?.voiceModeEnabled && (settings?.chatMode === 'both' || settings?.chatMode === 'voice-only' || !settings?.chatMode) && (
+        {settings?.voiceModeEnabled && settings?.chatMode === 'voice-only' && (
           <button
             onClick={() => {
               if (isInlineVoiceActive) {
@@ -4372,6 +4381,7 @@ export default function EmbedChat() {
             pageUrl={parentPageUrl || undefined}
             conversationId={conversationIdRef.current || undefined}
             onSwitchToChat={() => setIsMenuMode(false)}
+            onStartVoice={voiceChatAvailable ? startVoiceChat : undefined}
             onSendMessage={(message, itemId) => {
               setIsMenuMode(false);
               if (sentChatMenuItemsRef.current.has(itemId)) {
@@ -6326,6 +6336,23 @@ export default function EmbedChat() {
                   lineHeight: '1.4'
                 }}
               />
+              {voiceChatAvailable && !message.trim() && !isLoading ? (
+                <button
+                  type="button"
+                  onClick={startVoiceChat}
+                  className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 h-8 w-8 sm:h-9 sm:w-9 rounded-full flex-shrink-0 flex items-center justify-center transition-all duration-200 hover:scale-105"
+                  style={{
+                    background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})`,
+                    border: 'none',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+                  }}
+                  aria-label="Talk to us"
+                  title="Talk to us"
+                  data-testid="button-composer-voice"
+                >
+                  <Mic className="w-4 h-4 text-white" />
+                </button>
+              ) : (
               <button
                 type="submit"
                 disabled={isLoading || !message.trim()}
@@ -6344,6 +6371,7 @@ export default function EmbedChat() {
                   <Send className={`w-4 h-4 ${message.trim() ? 'text-white' : 'text-gray-400'}`} />
                 )}
               </button>
+              )}
             </div>
           </form>
           
