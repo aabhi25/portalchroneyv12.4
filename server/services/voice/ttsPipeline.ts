@@ -75,6 +75,12 @@ export class SentenceTtsPipeline {
     this.finishedPromise = new Promise<void>((resolve) => { this.finishedResolve = resolve; });
   }
 
+  /** Which providers spoke this answer, e.g. "elevenlabs" or "elevenlabs+openai" (diagnostics). */
+  providerUsed(): string {
+    const used = Array.from(new Set(this.providerLog.filter(p => p.ok).map(p => p.provider)));
+    return used.join('+') || 'none';
+  }
+
   /** Queue the next sentence (already converted to speech text). */
   enqueue(text: string): void {
     const t = (text || '').trim();

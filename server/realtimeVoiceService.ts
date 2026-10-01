@@ -136,6 +136,30 @@ export interface TopscholarVoiceScope {
   doubtSyncBaseUrl?: string | null;
 }
 
+/** Stage timestamps of one voice turn (ms since epoch); see logVoiceTiming. */
+/** Speech-to-text hints for Indian students (see transcriptionConfig). */
+const AUTO_TRANSCRIPTION_PROMPT =
+  'An Indian school student talking to a tutor in English, Hindi or a mix of both (Hinglish). ' +
+  'Write Hindi in Devanagari script and English words in English. Never use Urdu or Arabic script.';
+const HINDI_TRANSCRIPTION_PROMPT =
+  'An Indian school student speaking Hindi, often mixed with English words. Write Hindi in Devanagari script and English words in English.';
+
+interface VoiceTurnTiming {
+  seq: number;
+  stoppedAt?: number;
+  transcriptAt: number;
+  speechMs: number | null;
+  text: string;
+  routedAt?: number;
+  firstTokenAt?: number;
+  firstSentenceAt?: number;
+  firstAudioAt?: number;
+  readyAt?: number;
+  sentences?: number;
+  chars?: number;
+  logged?: boolean;
+}
+
 interface VoiceConversation {
   clientWs: WebSocket; // WebSocket to client (browser)
   openaiWs: WebSocket | null; // WebSocket to OpenAI Realtime API
@@ -312,6 +336,10 @@ interface VoiceConversation {
   // Recently spoken assistant text (echo detection) and the last full answer
   // (did the tutor just ask a question?).
   recentAssistantSpeech?: string;
+  /** Wall-clock time of the last VAD speech_stopped (start of the reply-latency clock). */
+  lastSpeechStoppedAt?: number;
+  /** Per-turn stage timestamps, logged as one [VoiceTiming] line when the turn ends. */
+  turnTiming?: VoiceTurnTiming;
   lastAssistantText?: string;
   // --- Turn taking ---
   inputMode?: VoiceInputMode;
@@ -1175,6 +1203,11 @@ export class RealtimeVoiceService {
         const openaiVoice = (useElevenLabs || isElevenLabsVoice(selectedVoice)) ? 'shimmer' : selectedVoice;
         if (useElevenLabs) {
           console.log('[RealtimeVoice] ElevenLabs TTS active - voice:', selectedVoice, 'voiceId:', conversation.elevenlabsVoiceId);
+          // Open the HTTPS connection now (kept alive by fetch) so the first answer doesn't
+          // also pay DNS + TLS setup (~1-2 s from India on the first turn).
+          fetch('https://api.elevenlabs.io/v1/models', { headers: { 'xi-api-key': conversation.elevenlabsApiKey! } })
+            .then(r => r.arrayBuffer())
+            .catch(() => undefined);
         }
 
         const sessionConfig = {
@@ -1186,12 +1219,7 @@ export class RealtimeVoiceService {
             audio: {
               input: {
                 format: { type: 'audio/pcm', rate: 24000 },
-                transcription: {
-                  model: 'gpt-4o-mini-transcribe',
-                  ...(conversation.selectedLanguage && conversation.selectedLanguage !== 'auto'
-                    ? { language: this.toTranscriptionLangCode(conversation.selectedLanguage) }
-                    : {})
-                },
+                transcription: this.transcriptionConfig(conversation.selectedLanguage),
                 noise_reduction: {
                   type: 'far_field'
                 },
@@ -2070,6 +2098,7 @@ export class RealtimeVoiceService {
 
         case 'input_audio_buffer.speech_stopped':
           console.log('[RealtimeVoice] User stopped speaking');
+          conversation.lastSpeechStoppedAt = Date.now();
           this.recordSpeechTiming(conversation, event.item_id, { endMs: event.audio_end_ms });
           this.armFalseInterruptionTimer(conversation, event.item_id);
           break;
@@ -2870,6 +2899,38 @@ export class RealtimeVoiceService {
    * Terminal event for a turn that gets no reply. The client stays in (or
    * returns to) listening; an in-flight answer, if any, carries on.
    */
+  /**
+   * One line per voice turn with the time of each stage, measured from the moment
+   * the student stopped speaking (VAD speech_stopped; for hold-to-talk turns, from
+   * the transcript). Example:
+   *   [VoiceTiming] #3 answered | stop→text 640ms | route +310 | first token +1180 |
+   *   first sentence +1650 | FIRST AUDIO +1890 | full text +3400 | audio 8.2s tts=elevenlabs | "what is photo…"
+   */
+  private logVoiceTiming(t: VoiceTurnTiming, outcome: string, extra: { audioMs?: number; tts?: string } = {}): void {
+    if (t.logged) return;
+    t.logged = true;
+    const base = t.stoppedAt ?? t.transcriptAt;
+    const rel = (at?: number) => (at ? `+${at - base}` : '—');
+    const parts = [
+      `[VoiceTiming] #${t.seq} ${outcome}`,
+      `stop→text ${t.stoppedAt ? `${t.transcriptAt - t.stoppedAt}ms` : 'n/a'}`,
+      `speech ${t.speechMs ?? 'n/a'}ms`,
+    ];
+    if (t.routedAt) parts.push(`route ${rel(t.routedAt)}`);
+    if (outcome === 'answered' || outcome === 'failed') {
+      parts.push(
+        `first token ${rel(t.firstTokenAt)}`,
+        `first sentence ${rel(t.firstSentenceAt)}`,
+        `FIRST AUDIO ${rel(t.firstAudioAt)}`,
+        `full text ${rel(t.readyAt)}`,
+      );
+      if (t.sentences != null) parts.push(`${t.sentences} sentences/${t.chars} chars`);
+      if (extra.audioMs != null) parts.push(`audio ${(extra.audioMs / 1000).toFixed(1)}s${extra.tts ? ` tts=${extra.tts}` : ''}`);
+    }
+    parts.push(JSON.stringify(t.text.length > 60 ? `${t.text.slice(0, 60)}…` : t.text));
+    console.log(parts.join(' | '));
+  }
+
   private ignoreTurn(conversation: VoiceConversation, reason: TurnDropReason | string, transcript: string, held: boolean): void {
     if (conversation.bargeIn) this.resolveFalseInterruption(conversation, String(reason));
     console.log(`[VoiceTurn] turn_ignored reason=${reason} held=${held} chars=${transcript.length}`);
@@ -2899,6 +2960,18 @@ export class RealtimeVoiceService {
     const trimmedTranscript = userTranscript.trim();
     const topScholar = isTopscholarAccount(conversation.businessAccountId);
     const aiActive = this.isAnswerActive(conversation);
+    const now = Date.now();
+    const stoppedAt = conversation.lastSpeechStoppedAt && now - conversation.lastSpeechStoppedAt < 30_000
+      ? conversation.lastSpeechStoppedAt
+      : undefined;
+    conversation.lastSpeechStoppedAt = undefined;
+    const timing: VoiceTurnTiming = {
+      seq: (conversation.k12TurnSeq ?? 0) + 1,
+      stoppedAt: input.heldTurn ? undefined : stoppedAt,
+      transcriptAt: now,
+      speechMs: input.speechMs,
+      text: trimmedTranscript,
+    };
 
     // Urgent stop commands are an exact allowlist and bypass the length rules.
     if (topScholar && trimmedTranscript) {
@@ -2924,6 +2997,7 @@ export class RealtimeVoiceService {
         `[VoiceTurn] Ignoring transcript reason=${verdict.reason} words=${verdict.words} ` +
         `speechMs=${input.speechMs ?? 'n/a'} aiActive=${aiActive} held=${input.heldTurn}`,
       );
+      this.logVoiceTiming(timing, `ignored:${verdict.reason || 'empty'}`);
       this.ignoreTurn(conversation, verdict.reason || 'empty', trimmedTranscript, input.heldTurn);
       return;
     }
@@ -2946,6 +3020,8 @@ export class RealtimeVoiceService {
     conversation.currentUserTranscript = trimmedTranscript;
     conversation.k12TurnSeq = (conversation.k12TurnSeq ?? 0) + 1;
     const turnSeq = conversation.k12TurnSeq;
+    timing.seq = turnSeq;
+    conversation.turnTiming = timing;
 
     let voiceIntentRoute: Exclude<VoiceIntentRoute, 'voice_control'> | undefined;
     let prefetchedK12Topic: { query: string; result: Promise<any | null> } | null = null;
@@ -2962,9 +3038,11 @@ export class RealtimeVoiceService {
         return;
       }
       if (routed.kind === 'ignore') {
+        this.logVoiceTiming(timing, 'ignored:unclear');
         this.ignoreTurn(conversation, 'unclear', trimmedTranscript, input.heldTurn);
         return;
       }
+      timing.routedAt = Date.now();
       voiceIntentRoute = routed.route;
       prefetchedK12Topic = routed.prefetched;
     }
@@ -2995,7 +3073,7 @@ export class RealtimeVoiceService {
       if (thisTranscriptLang.language !== conversation.detectedLanguage) {
         conversation.detectedLanguage = thisTranscriptLang.language;
         console.log(`[RealtimeVoice] Language detected from transcript: ${thisTranscriptLang.languageName} (${thisTranscriptLang.language})`);
-        this.updateTranscriptionLanguage(conversation, thisTranscriptLang.language);
+        // Not pinned: the transcriber stays on auto (see transcriptionConfig).
       }
     }
 
@@ -3078,16 +3156,26 @@ export class RealtimeVoiceService {
       type: 'session.update',
       session: {
         type: 'realtime',
-        audio: {
-          input: {
-            transcription: {
-              model: 'gpt-4o-mini-transcribe',
-              language: this.toTranscriptionLangCode(language),
-            },
-          },
-        },
+        audio: { input: { transcription: this.transcriptionConfig(language) } },
       },
     }));
+  }
+
+  /**
+   * Speech-to-text settings. A chosen language pins the transcriber to it. In "auto" no
+   * language is pinned (pinning the last detected one garbled the next Hindi sentence after
+   * an English one) and a prompt keeps Indian students' Hindi/Hinglish in Devanagari or
+   * English letters instead of Urdu script.
+   */
+  private transcriptionConfig(language?: string | null): Record<string, unknown> {
+    const config: Record<string, unknown> = { model: 'gpt-4o-mini-transcribe' };
+    if (language && language !== 'auto') {
+      config.language = this.toTranscriptionLangCode(language);
+      if (config.language === 'hi') config.prompt = HINDI_TRANSCRIPTION_PROMPT;
+    } else {
+      config.prompt = AUTO_TRANSCRIPTION_PROMPT;
+    }
+    return config;
   }
 
   /** Switch between hands-free (server VAD) and hold-to-talk (manual commits). */
@@ -3427,6 +3515,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       (conversation.k12TurnSeq ?? 0) !== turnSeq;
 
     const chatContext = this.buildVoiceChatContext(conversation, voiceIntentRoute, prefetchedK12Topic);
+    const timing = conversation.turnTiming && conversation.turnTiming.seq === turnSeq ? conversation.turnTiming : undefined;
 
     const { primary, fallback } = this.createTtsProviders(conversation);
     const pipeline = new SentenceTtsPipeline({
@@ -3440,6 +3529,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       isCancelled: () => abandoned(),
       onFirstAudio: () => {
         conversation.activeElevenLabsStartedAt ||= Date.now();
+        if (timing && !timing.firstAudioAt) timing.firstAudioAt = Date.now();
       },
       onProviderFailure: (provider, error, text) => {
         console.error(
@@ -3460,6 +3550,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       const speechDelta = speech ? (spokenText ? ' ' : '') + speech : '';
       spokenText += speechDelta;
       segmentCount++;
+      if (timing && !timing.firstSentenceAt) timing.firstSentenceAt = Date.now();
       this.sendToClient(conversation.clientWs, {
         type: 'answer_delta',
         responseId,
@@ -3487,6 +3578,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       for await (const event of this.deps.streamChat(userTranscript, chatContext)) {
         if (abandoned()) { bail(); return; }
         if (event.type === 'content' && typeof event.data === 'string') {
+          if (timing && !timing.firstTokenAt && event.data.trim()) timing.firstTokenAt = Date.now();
           streamedMarkdown += event.data;
           for (const segment of splitter.push(event.data)) emitSegment(segment);
         } else if (event.type === 'final' && typeof event.data === 'string' && event.data.trim()) {
@@ -3540,6 +3632,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       // The complete, persisted answer. From here an interruption only stops
       // the audio; the answer stays on screen and in history.
       conversation.canonicalDisplayReadyResponseId = responseId;
+      if (timing) { timing.readyAt = Date.now(); timing.sentences = segmentCount; timing.chars = displayMarkdown.length; }
       this.sendToClient(conversation.clientWs, {
         type: 'answer_ready',
         responseId,
@@ -3562,6 +3655,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       const audioMs = Math.round(((conversation.answerAudioBytes || 0) / 48000) * 1000);
       const playbackStart = conversation.activeElevenLabsStartedAt || Date.now();
       conversation.answerPlaybackEndsAt = Math.max(Date.now(), playbackStart + audioMs) + 5000;
+      if (timing) this.logVoiceTiming(timing, 'answered', { audioMs, tts: pipeline.providerUsed() });
       this.sendToClient(conversation.clientWs, { type: 'ai_done', responseId });
     } catch (error) {
       bail();
@@ -3584,6 +3678,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       conversation.isProcessing = false;
       conversation.currentResponseKind = undefined;
       console.error('[RealtimeVoice] Canonical answer failed:', error);
+      if (timing) this.logVoiceTiming(timing, 'failed');
       // The partial bubble (if any) is withdrawn, then the error is reported.
       if (segmentCount > 0) {
         this.markResponseCancelled(conversation, responseId);

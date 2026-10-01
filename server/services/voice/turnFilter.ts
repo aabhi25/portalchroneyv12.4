@@ -34,6 +34,7 @@
 
 export type TurnDropReason =
   | 'empty'
+  | 'foreign_script'
   | 'noise_phrase'
   | 'filler'
   | 'low_confidence'
@@ -124,7 +125,7 @@ export function normalizeTranscript(text: string): string {
     .toLowerCase()
     .replace(/[’']/g, '')
     .replace(/[\[\]()]/g, ' ')
-    .replace(/[^a-z0-9ऀ-ॿ\s]/g, ' ')
+    .replace(/[^a-z0-9ऀ-ॿ\u0600-\u06FF\s]/g, ' ')
     .replace(/[।॥]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -174,7 +175,11 @@ export function classifyVoiceTurn(input: TurnFilterInput): TurnFilterResult {
   const speechMs = typeof input.speechMs === 'number' && Number.isFinite(input.speechMs) ? input.speechMs : null;
   const drop = (reason: TurnDropReason): TurnFilterResult => ({ accept: false, reason, words });
 
-  if (!normalized || !/[a-z0-9ऀ-ॿ]/.test(normalized)) return drop('empty');
+  if (!normalized || !/[a-z0-9ऀ-ॿ\u0600-\u06FF]/.test(normalized)) {
+    // Only letters of an unrelated script (e.g. Japanese, Chinese, Korean, Cyrillic): a
+    // transcription hallucination on noise, not a student speaking.
+    return drop(new RegExp('\\p{L}', 'u').test(String(input.transcript || '')) ? 'foreign_script' : 'empty');
+  }
   if (STRONG_NOISE.has(normalized)) return drop('noise_phrase');
   if (!input.heldTurn && WEAK_NOISE.has(normalized)) return drop('noise_phrase');
   if (FILLERS.has(normalized) || normalized.split(' ').every((w) => FILLERS.has(w))) return drop('filler');

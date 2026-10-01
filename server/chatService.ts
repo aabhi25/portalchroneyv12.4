@@ -3595,6 +3595,12 @@ Response:`;
       let hasToolCalls = false;
       const toolCalls: any[] = [];
       let bufferedContent: string[] = []; // Buffer content to conditionally stream
+      // Voice turns stream the first answer live (as text chat buffers it whole to decide
+      // tool calls / deflection first): voice speaks sentence by sentence, so buffering here
+      // delayed the first audio by the whole generation. Not when the answer might be
+      // replaced afterwards (phone-validation rewrite, a configured fallback template).
+      let liveStreamed = false;
+      let livePending = '';
 
       // Build enriched system context with company info and all FAQs
       // This includes PDF summaries and key points - should answer most questions
@@ -3978,6 +3984,18 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         if (delta.content) {
           fullResponse += delta.content;
           bufferedContent.push(delta.content);
+          if (context.voiceResponseStyle && !hasToolCalls && !phoneValidationFailed
+            && !(this.fallbackInstructionsCache.get(context.businessAccountId)?.length)) {
+            // Hold back anything that could be the start of a [[FALLBACK]] marker.
+            livePending = this.stripFallbackMarker(livePending + delta.content);
+            const cut = livePending.lastIndexOf('[');
+            const ready = cut >= 0 && livePending.length - cut < 12 ? livePending.slice(0, cut) : livePending;
+            livePending = livePending.slice(ready.length);
+            if (ready) {
+              liveStreamed = true;
+              yield { type: 'content' as const, data: ready };
+            }
+          }
         }
       }
       } // end else (non-short-circuit streaming path)
@@ -4030,8 +4048,13 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       // If NO tool calls detected, stream the buffered content now
       let contentAlreadyYielded = false;
       if (!hasToolCalls) {
-        for (const content of bufferedContent) {
-          yield { type: 'content', data: content };
+        if (liveStreamed) {
+          const rest = this.stripFallbackMarker(livePending);
+          if (rest) yield { type: 'content', data: rest };
+        } else {
+          for (const content of bufferedContent) {
+            yield { type: 'content', data: content };
+          }
         }
         contentAlreadyYielded = true;
       }
