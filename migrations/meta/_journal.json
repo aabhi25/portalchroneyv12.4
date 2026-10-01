@@ -43,6 +43,13 @@
       "when": 1790708088089,
       "tag": "0005_knowledge_vector_hnsw_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790851245365,
+      "tag": "0006_conversation_lead_capture_state",
+      "breakpoints": true
     }
   ]
 }

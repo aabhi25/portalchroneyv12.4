@@ -238,7 +238,13 @@ export async function selectRelevantTools(
   systemMode?: string,
   k12EducationEnabled?: boolean,
   jobPortalEnabled?: boolean,
-  demoOrdersEnabled?: boolean
+  demoOrdersEnabled?: boolean,
+  /**
+   * Website chat: an enabled lead-training field is still missing, so the visitor's next message
+   * may be a bare name / number / email ("Rahul", "mera naam Rahul hai") — keep capture_lead
+   * available even when no English contact pattern is detected. Ignored in appointment context.
+   */
+  offerCaptureLead: boolean = false
 ): Promise<typeof aiTools> {
   const lowerMessage = userMessage.toLowerCase().trim();
   
@@ -350,11 +356,12 @@ export async function selectRelevantTools(
   // Name phrases: "my name is John", "I'm John Smith", "call me John"
   // Exclude common non-name phrases: "this is great", "it's fine", "I'm good", "I'm fine"
   const commonNonNames = /\b(good|fine|great|okay|ok|awesome|cool|nice|here|there|it|that|this|what|how|why|so|very|really|just|well|all|done|ready|interested|looking|sure|confused|happy|sad|busy|free|available)\b/i;
-  const nameIntroPattern = /\b(my name is|i m |i am |call me )\s*([a-z]+)/i;
+  const nameIntroPattern = /\b(my name is|i m |i am |mera naam|naam hai|main [a-z]+ (?:hoon|hu|hun))\s*([a-z]+)?/i;
   const nameMatch = cleanedMessage.match(nameIntroPattern);
   // Only count as name if the captured word is NOT a common non-name word
-  const hasNamePhrase = nameMatch && nameMatch[2] && !commonNonNames.test(nameMatch[2]);
-  const looksLikeContactInfo = hasPhoneNumber || hasEmail || hasNamePhrase;
+  const hasNamePhrase = !!nameMatch && (/^(mera naam|naam hai|main )/i.test(nameMatch[1]) || (!!nameMatch[2] && !commonNonNames.test(nameMatch[2])));
+  const hasDevanagariName = new RegExp(String.raw`मेरा\s+नाम|मैं\s+\S+\s+(?:हूँ|हूं)`, 'u').test(userMessage);
+  const looksLikeContactInfo = hasPhoneNumber || hasEmail || hasNamePhrase || hasDevanagariName;
   
   // NUMBER REPLY DETECTION: Check if user replied with a number after products were shown
   const isNumberReply = /^\d{1,2}$/.test(cleanedMessage) || /^(option|number|item|choice)\s*\d{1,2}$/i.test(cleanedMessage);
@@ -369,7 +376,8 @@ export async function selectRelevantTools(
     return [getToolByName('get_products')]; // get_products only
   }
 
-  // Only apply CHAT mode if NOT contact info
+  // Only apply CHAT mode if NOT contact info. A bare name typed after the bot asked for it
+  // ("Rahul") is not a greeting either, so CHAT mode only triggers on real greetings below.
   if (!looksLikeContactInfo) {
     const isSimpleGreeting = /^(hi|hey|hello|yo|sup|hiya|howdy|hola|namaste|greetings)[\s!?.]*$/i.test(cleanedMessage);
     const isTimeGreeting = /^(good\s*(morning|afternoon|evening|night|day))[\s!?.]*$/i.test(cleanedMessage);
@@ -513,9 +521,9 @@ export async function selectRelevantTools(
   // Include capture_lead ONLY when message might contain contact info
   // This prevents AI from calling capture_lead for casual chat/greetings
   // The looksLikeContactInfo variable is already computed earlier in this function
-  if (!isAppointmentContext && looksLikeContactInfo) {
+  if (!isAppointmentContext && (looksLikeContactInfo || offerCaptureLead)) {
     selectedTools.push(getToolByName('capture_lead')); // capture_lead
-    console.log(`[Smart Tools] Contact info detected - including capture_lead tool`);
+    console.log(`[Smart Tools] ${looksLikeContactInfo ? 'Contact info detected' : 'Lead fields still missing'} - including capture_lead tool`);
   } else if (!isAppointmentContext && !looksLikeContactInfo) {
     console.log(`[Smart Tools] No contact info detected - NOT including capture_lead tool`);
   }
@@ -626,7 +634,7 @@ export const aiTools = [
     type: 'function',
     function: {
       name: 'capture_lead',
-      description: 'CRITICAL - INSTANT PROGRESSIVE CAPTURE: Call this tool IMMEDIATELY when you receive ANY contact information (name, email, or phone), even if partial. Do NOT wait to collect all required fields - the system will save partial leads to prevent data loss. WHEN TO CALL IMMEDIATELY: (1) User provides just their phone number (e.g., "9876543210") → Call NOW with phone parameter (2) User provides just their name (e.g., "John Smith") → Call NOW with name parameter (3) User provides just their email → Call NOW with email parameter (4) User provides any combination → Call NOW with all provided fields. PROGRESSIVE ENRICHMENT: After calling this tool with partial data, the system will tell you which required fields are still missing. Continue the conversation naturally to collect missing fields, then call this tool again to update the lead. The same lead will be enriched with new information. WHEN NOT TO CALL: (1) For appointment bookings - use book_appointment tool instead (which auto-creates leads). IMPORTANT: Even if required fields are missing, ALWAYS call this tool when you receive contact info. The system supports partial leads and will guide you on what else to collect. This prevents losing valuable leads if users abandon the conversation.',
+      description: 'CRITICAL - INSTANT PROGRESSIVE CAPTURE: Call this tool IMMEDIATELY when you receive ANY contact information (name, email, or phone), even if partial. Do NOT wait to collect all required fields - the system will save partial leads to prevent data loss. WHEN TO CALL IMMEDIATELY: (1) User provides just their phone number (e.g., "9876543210") → Call NOW with phone parameter (2) User provides just their name (e.g., "John Smith") → Call NOW with name parameter (3) User provides just their email → Call NOW with email parameter (4) User provides any combination → Call NOW with all provided fields. RESULT: the tool returns which details were saved, which were rejected (with the reason — ask the user to re-enter only that one), and at most ONE next detail you may ask for now (or none). Never ask for more than one detail at a time; call this tool again when the user gives more — the same lead is updated. WHEN NOT TO CALL: (1) For appointment bookings - use book_appointment tool instead (which auto-creates leads). IMPORTANT: Even if required fields are missing, ALWAYS call this tool when you receive contact info. The system supports partial leads. This prevents losing valuable leads if users abandon the conversation.',
       parameters: {
         type: 'object',
         properties: {
@@ -640,7 +648,15 @@ export const aiTools = [
           },
           phone: {
             type: 'string',
-            description: 'Customer phone number (can be mobile or WhatsApp) - include if provided by user'
+            description: 'Customer mobile number exactly as the user typed it (e.g. "+91 98765 43210") - include if provided by user'
+          },
+          whatsapp: {
+            type: 'string',
+            description: 'Customer WhatsApp number, only when the user gives a WhatsApp number that differs from their mobile number'
+          },
+          whatsapp_same_as_phone: {
+            type: 'boolean',
+            description: 'true when the user confirms their mobile number is also their WhatsApp number; false when they say it is not'
           },
           message: {
             type: 'string',

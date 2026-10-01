@@ -858,14 +858,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Widget API routes (no authentication required for public widgets)
   app.post("/api/chat/widget", async (req, res) => {
     try {
-      const { message, businessAccountId } = req.body;
+      const { message, businessAccountId, sessionId, sessionToken } = req.body;
       
       if (!message || !businessAccountId) {
         return res.status(400).json({ error: "Message and businessAccountId required" });
       }
 
-      // Use a generic widget user ID based on business account
-      const widgetUserId = `widget_${businessAccountId}`;
+      // Chat memory/conversation is keyed by the visitor's session — never by the business alone
+      // (that made every visitor of a business share one history). Without a session id a fresh
+      // one is issued and returned so the caller can continue the same conversation.
+      const effectiveSessionId: string = typeof sessionId === 'string' && sessionId.trim()
+        ? sessionId.trim()
+        : (typeof sessionToken === 'string' && sessionToken.trim() ? `v_${sessionToken.trim()}` : `anon_${randomUUID()}`);
+      const widgetUserId = `widget_session_${effectiveSessionId}`;
       
       // Get widget settings and business account info
       const settings = await storage.getWidgetSettings(businessAccountId);
@@ -911,16 +916,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         jobPortalEnabled: businessAccount.jobPortalEnabled === 'true',
         demoOrdersEnabled: businessAccount.demoOrdersEnabled === 'true',
         channel: 'widget',
+        visitorToken: typeof sessionToken === 'string' && sessionToken.trim() ? sessionToken.trim() : undefined,
       });
 
       // Return both response text and products if available.
       // Forward OTP state metadata (Task #14) so the widget can switch composer
       // into digits-only / locked modes on subsequent renders.
       if (typeof result === 'string') {
-        res.json({ response: result });
+        res.json({ response: result, sessionId: effectiveSessionId });
       } else if (result && typeof result === 'object') {
         const r = result as any;
         res.json({ 
+          sessionId: effectiveSessionId,
           response: r.response,
           products: r.products || undefined,
           ...(r.awaiting_otp !== undefined ? { awaiting_otp: r.awaiting_otp } : {}),
@@ -928,7 +935,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ...(r.otp_state ? { otp_state: r.otp_state } : {}),
         });
       } else {
-        res.json({ response: String(result) });
+        res.json({ response: String(result), sessionId: effectiveSessionId });
       }
     } catch (error: any) {
       if (isAiBudgetExceededError(error)) {
@@ -1307,8 +1314,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Message and businessAccountId required" });
       }
 
-      // Use unique session ID for each widget visit (resets on page refresh)
-      const widgetUserId = sessionId ? `widget_session_${sessionId}` : `widget_${businessAccountId}`;
+      // Use unique session ID for each widget visit (resets on page refresh). Never fall back to a
+      // per-business key (visitors would share one chat history): use the visitor token, else a
+      // one-off id for this request.
+      const widgetUserId = sessionId
+        ? `widget_session_${sessionId}`
+        : (typeof sessionToken === 'string' && sessionToken.trim() ? `widget_session_v_${sessionToken.trim()}` : `widget_session_anon_${randomUUID()}`);
       
       // Fetch widget settings, business account, and API key in parallel
       const [settings, businessAccount, openaiApiKey] = await Promise.all([
@@ -3374,19 +3385,17 @@ Return JSON:
       }
 
       const { OtpService } = await import('./services/otp');
-      const { syncLeadToLeadSquared } = await import('./services/toolExecutionService');
+      const { syncConversationLeadIfReady } = await import('./services/leadCapture');
       const result = await OtpService.verify(businessAccountId, conversationId, cleaned);
 
       if (result.verified) {
-        // Promote partial lead → CRM sync (mirrors tool handler behavior).
+        // Promote partial lead → CRM sync (mirrors tool handler behavior); still waits for any
+        // other mandatory lead-training field before creating the CRM lead.
         try {
           const lead = await storage.getLeadByConversation(conversationId, businessAccountId);
           if (lead && (lead.phone || lead.email)) {
-            syncLeadToLeadSquared(
-              { id: lead.id, name: lead.name, email: lead.email, phone: lead.phone, leadsquaredLeadId: lead.leadsquaredLeadId, sourceUrl: lead.sourceUrl },
-              businessAccountId,
-              !!lead.leadsquaredLeadId,
-            ).catch(err => console.error('[OTP→CRM] Post-verify sync error:', err));
+            syncConversationLeadIfReady({ leadId: lead.id, businessAccountId, conversationId, channel: 'widget', source: 'otp_verify' })
+              .catch(err => console.error('[OTP→CRM] Post-verify sync error:', err));
           }
         } catch (err) {
           console.error('[OTP→CRM] Failed to resolve partial lead:', err);
@@ -3855,12 +3864,10 @@ Return JSON:
           try {
             const lead = await storage.getLeadByConversation(midChatConversationId, businessAccountId);
             if (lead) {
-              const { syncLeadToLeadSquared } = await import('./services/toolExecutionService');
-              syncLeadToLeadSquared(
-                { id: lead.id, name: lead.name, email: lead.email, phone: lead.phone, leadsquaredLeadId: lead.leadsquaredLeadId, sourceUrl: lead.sourceUrl },
-                businessAccountId,
-                !!lead.leadsquaredLeadId,
-              ).catch(err => console.error('[CAPTCHA Verify mid-chat] CRM sync failed:', err));
+              // Same gate as chat: waits for every mandatory lead-training field.
+              const { syncConversationLeadIfReady } = await import('./services/leadCapture');
+              syncConversationLeadIfReady({ leadId: lead.id, businessAccountId, conversationId: midChatConversationId, channel: 'widget', source: 'captcha_verify' })
+                .catch(err => console.error('[CAPTCHA Verify mid-chat] CRM sync failed:', err));
             }
           } catch (syncErr) {
             console.error('[CAPTCHA Verify mid-chat] CRM sync setup failed:', syncErr);
@@ -4073,13 +4080,10 @@ Return JSON:
         try {
           const lead = await storage.getLead(partialLeadId, businessAccountId);
           if (lead) {
-            const { syncLeadToLeadSquared } = await import('./services/toolExecutionService');
-            // Non-blocking: don't make the visitor wait on the CRM round-trip.
-            syncLeadToLeadSquared(
-              { id: lead.id, name: lead.name, email: lead.email, phone: lead.phone, leadsquaredLeadId: lead.leadsquaredLeadId, sourceUrl: lead.sourceUrl },
-              businessAccountId,
-              !!lead.leadsquaredLeadId,
-            ).catch(err => console.error('[CAPTCHA Verify] CRM sync failed:', err));
+            // Non-blocking; same gate as chat: waits for every mandatory lead-training field.
+            const { syncConversationLeadIfReady } = await import('./services/leadCapture');
+            syncConversationLeadIfReady({ leadId: lead.id, businessAccountId, conversationId: conversationId || lead.conversationId, channel: 'widget', source: 'captcha_prechat_verify' })
+              .catch(err => console.error('[CAPTCHA Verify] CRM sync failed:', err));
           }
         } catch (syncErr) {
           console.error('[CAPTCHA Verify] CRM sync setup failed:', syncErr);

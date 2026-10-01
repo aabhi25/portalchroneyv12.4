@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { llamaService, LlamaService, type StreamPromptOptions } from './llamaService';
+import { llamaService, LlamaService, contactInfoSaidInChat, type StreamPromptOptions, type StreamTurnOptions } from './llamaService';
 import { aiTools, selectRelevantTools, classifyOrderLookupIntent, classifyReturnExchangeIntent } from './aiTools';
 import { ToolExecutionService } from './services/toolExecutionService';
 import { conversationMemory } from './conversationMemory';
@@ -14,7 +14,12 @@ import { checkDiscountEligibility } from './services/nudgeOrchestrationService';
 import { isGibberishAI } from './services/spamDetectionService';
 import { categorizeAndSaveConversation } from './services/conversationCategorizationService';
 import { summarizeAndSaveConversation } from './services/conversationSummarizationService';
-import { buildLeadTrainingPrompt, buildPhoneValidationOverride, buildOtpGatingOverride } from './services/leadTrainingPrompt';
+import { buildOtpGatingOverride } from './services/leadTrainingPrompt';
+import {
+  assistantAskedForNameIn, countUserMessages, emailInMessage, extractPhoneCandidates, finalizeLeadTurn, getConversationLead,
+  isDecline, isValidLeadName, loadLeadCaptureState, loadRecentHistory, nameInMessage, normalizeLeadFields, phoneModeFor,
+  prepareLeadTurn, replanLeadTurn, syncConversationLeadIfReady, upsertConversationLead, type LeadTurn,
+} from './services/leadCapture';
 import { OtpService } from './services/otp';
 import { claimConversionFire } from './services/conversion';
 import { resolveProfile } from './services/customerProfileService';
@@ -1422,9 +1427,179 @@ Response:`;
     return claimConversionFire(conversationId, businessAccountId);
   }
 
+  // ─── Chat memory ↔ database ───────────────────────────────────────────────────
+
+  /**
+   * Make sure the in-memory history belongs to `conversationId`: reload (last 30 messages) when the
+   * cache is empty for an existing conversation (idle expiry / restart / other instance) or holds a
+   * different conversation. Never keyed by business alone.
+   */
+  private async ensureHistoryLoaded(userId: string, conversationId: string): Promise<void> {
+    if (!conversationId || conversationId.startsWith('temp_')) return;
+    const bound = conversationMemory.getBoundConversationId(userId);
+    const cached = conversationMemory.getConversationHistory(userId);
+    if (bound === conversationId && cached.length > 0) return;
+    if (!bound && cached.length > 0) { conversationMemory.bindConversation(userId, conversationId); return; }
+    try {
+      const [rows, total] = await Promise.all([loadRecentHistory(conversationId), countUserMessages(conversationId)]);
+      conversationMemory.replaceHistory(userId, conversationId, rows, total);
+      if (rows.length) console.log(`[Chat Memory] Reloaded ${rows.length} message(s) of conversation ${conversationId} from the database`);
+    } catch (err) {
+      console.error('[Chat Memory] Reload failed (continuing with memory):', err);
+      conversationMemory.bindConversation(userId, conversationId);
+    }
+  }
+
+  /** The conversation this session would resume, without creating one (used before the spam check). */
+  private async peekExistingConversationId(context: ChatContext): Promise<string | undefined> {
+    if (context.existingConversationId) return context.existingConversationId;
+    if (context.topscholarSubjectScoping) return undefined; // resolved by getOrCreateConversation's own rules
+    const studentId = context.topscholarStudentId || null;
+    const cached = activeConversations.get(`${context.userId}_${context.businessAccountId}${studentId ? `_${studentId}` : ''}`);
+    if (cached) return cached;
+    if (!context.visitorToken) return undefined;
+    const reusable = await storage.findReusableConversation(context.businessAccountId, context.visitorToken, 30, studentId).catch(() => undefined);
+    return reusable?.id;
+  }
+
+  /**
+   * After the visitor's message is stored: the visitor-message number from the DB (survives restarts,
+   * idle expiry and multiple instances). Reloads the memory if it is behind the database.
+   */
+  private async countTurnFromDb(userId: string, conversationId: string): Promise<{ n: number; reloaded: boolean }> {
+    const known = conversationMemory.getKnownUserMessageCount(userId);
+    if (!conversationId || conversationId.startsWith('temp_')) return { n: Math.max(known, 1), reloaded: false };
+    let n: number;
+    try { n = await countUserMessages(conversationId); } catch { return { n: Math.max(known, 1), reloaded: false }; }
+    if (n > known) {
+      const rows = await loadRecentHistory(conversationId).catch(() => null);
+      if (rows) {
+        conversationMemory.replaceHistory(userId, conversationId, rows, n);
+        console.log(`[Chat Memory] Memory was behind the database (${known} vs ${n} visitor messages) — reloaded`);
+        return { n, reloaded: true };
+      }
+    }
+    return { n: Math.max(n, known, 1), reloaded: false };
+  }
+
+  /** History before the current visitor message (memory after storing it, minus that message). */
+  private historyBeforeCurrent(userId: string, userMessage: string): ChatMessage[] {
+    const all = conversationMemory.getConversationHistory(userId);
+    const last = all[all.length - 1];
+    return last && last.role === 'user' && last.content === userMessage ? all.slice(0, -1) : all;
+  }
+
+  // ─── Lead collection per turn ─────────────────────────────────────────────────
+
+  /** An enabled lead-training field is still missing → keep capture_lead offered to the model. */
+  private leadFieldsMissing(config: any, lead: any): boolean {
+    const fields = normalizeLeadFields(config);
+    if (fields.length === 0) return false;
+    const ids = new Set(fields.map(f => f.id));
+    return fields.some(f => {
+      if (f.id === 'name') return !(lead?.name && lead.name !== 'Anonymous');
+      if (f.id === 'email') return !lead?.email;
+      if (f.id === 'whatsapp' && ids.has('mobile')) return true; // may still need "is it on WhatsApp?"
+      return !lead?.phone;
+    });
+  }
+
+  /**
+   * Known contact details (saved lead first, then name/email stated in chat — those are saved right
+   * away) and the resolver's plan for this turn. Returns null when lead training is off.
+   */
+  private async prepareLeadTurnFor(args: {
+    context: ChatContext;
+    conversationId: string;
+    leadTrainingConfig: any;
+    existingLead: any;
+    history: ChatMessage[];
+    userMessage: string;
+    n: number;
+    otpPending: boolean;
+  }): Promise<{ turn: LeadTurn | null; lead: any }> {
+    const { context, conversationId, leadTrainingConfig, history, userMessage } = args;
+    let lead = args.existingLead;
+    if (!leadTrainingConfig || context.skipLeadTraining || conversationId.startsWith('temp_')) return { turn: null, lead };
+    const realName = (v?: string | null) => (v && v.trim() && v.trim() !== 'Anonymous' ? v.trim() : null);
+    try {
+      const said = await contactInfoSaidInChat(
+        leadTrainingConfig,
+        lead ? { name: realName(lead.name), email: lead.email, phone: lead.phone } : null,
+        history as any,
+        userMessage,
+        context.businessAccountId,
+      ).catch(() => null);
+      if (said && (said.name || said.email)) {
+        // Stated in the chat but not saved yet: save it now (never overwrite a saved value).
+        const up = await upsertConversationLead({
+          businessAccountId: context.businessAccountId,
+          conversationId,
+          values: { name: said.name || null, email: said.email || null, city: context.visitorCity || null, sourceUrl: context.pageUrl || null },
+          policy: { name: 'fill', email: 'fill' },
+        });
+        lead = up.lead;
+        if (up.changed.length) {
+          console.log(`[Lead Capture] Saved ${up.changed.join(', ')} the visitor already gave in chat`);
+          syncConversationLeadIfReady({ leadId: up.lead.id, businessAccountId: context.businessAccountId, conversationId, changedFields: up.changed, channel: context.channel, source: 'said_in_chat' }).catch(() => undefined);
+        }
+      }
+      const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content;
+      const turn = await prepareLeadTurn({
+        conversationId,
+        config: leadTrainingConfig,
+        known: { name: realName(lead?.name), email: lead?.email || null, phone: lead?.phone || null },
+        userMessage,
+        n: args.n,
+        lastAssistantMessage: lastAssistant,
+        otpPending: args.otpPending,
+        allowCallback: !isTopscholarAccount(context.businessAccountId),
+      });
+      return { turn, lead };
+    } catch (err) {
+      console.error('[Lead Plan] Failed to prepare lead turn (continuing without lead rules):', err);
+      return { turn: null, lead };
+    }
+  }
+
+  /** Persist what this reply asked for (refusal caps, no back-to-back asks). Never throws. */
+  private async finishLeadTurn(turn: LeadTurn | null, conversationId: string, businessAccountId: string, reply: string): Promise<void> {
+    if (!turn || !reply) return;
+    try {
+      const fresh = await getConversationLead(conversationId, businessAccountId);
+      const realName = fresh?.name && fresh.name !== 'Anonymous' ? fresh.name : (turn.known.name || null);
+      await finalizeLeadTurn(turn, reply, { name: realName, email: fresh?.email || turn.known.email || null, phone: fresh?.phone || turn.known.phone || null });
+    } catch (err) {
+      console.error('[Lead Plan] finishLeadTurn failed (non-fatal):', err);
+    }
+  }
+
+  /** capture_lead result → one clear instruction for the follow-up reply. */
+  private captureLeadInstruction(result: any, originalQuestion: string | null): string | null {
+    const d = result?.data;
+    if (!d || d.otp_required) return null;
+    const labelOf = (f: string) => f === 'phone' ? 'mobile number' : f === 'whatsapp' ? 'WhatsApp number' : f === 'email' ? 'email address' : 'name';
+    const rejected = Array.isArray(d.rejected) ? d.rejected : [];
+    if (rejected.length) {
+      return `The visitor's ${labelOf(rejected[0].field)} was NOT saved (${rejected[0].reason}). Tell them briefly and ask them to re-enter only their ${labelOf(rejected[0].field)}. Do not thank them for it.`;
+    }
+    const next = d.nextField as { label: string; mode: string } | null;
+    const saved = Array.isArray(d.saved) && d.saved.length > 0;
+    if (!saved && !next) return null;
+    if (next?.mode === 'block') {
+      return `Saved. Thank them briefly, then ask for their ${next.label} only — before answering their question (one detail, nothing else).`;
+    }
+    const tail = next ? ` Then, at the very end, you may ask once for their ${next.label} (optional).` : ' Do not ask for any other contact detail.';
+    if (originalQuestion) {
+      return `Contact info saved. Briefly thank them and answer their original question: "${originalQuestion}".${tail}`;
+    }
+    return `Contact info saved. Thank them briefly.${tail}`;
+  }
+
   // INSTANT PROGRESSIVE LEAD CAPTURE: Backend auto-detection
-  // Deterministically captures phone/email from messages to ensure zero data loss
-  // Works alongside AI tool calls as a safety net
+  // Deterministically captures phone/email/name from the visitor's message (zero data loss),
+  // alongside the model's capture_lead calls. Writes go through the serialized per-conversation
+  // upsert, so auto-capture and capture_lead in the same turn never create two lead rows.
   private async autoDetectAndCaptureLead(
     userMessage: string,
     conversationId: string,
@@ -1435,511 +1610,91 @@ Response:`;
     pageUrl?: string,
     channel?: 'widget' | 'whatsapp' | 'instagram' | 'facebook' | 'other'
   ): Promise<void> {
+    void visitorSessionId;
     try {
-      // Get widget settings to check phone validation config
+      if (!conversationId || conversationId.startsWith('temp_')) return;
+      // 1) Detect first (no DB): phone candidates, email, name.
+      const phoneCandidates = extractPhoneCandidates(userMessage);
+      const detectedEmail = emailInMessage(userMessage);
+      let detectedName = nameInMessage(userMessage);
+      if (!detectedName && lastAIMessage && assistantAskedForNameIn(lastAIMessage)) {
+        // A bare name right after the bot asked for it ("Rahul", "rahul sharma", "राहुल").
+        const t = userMessage.trim().replace(/[.!]+$/, '');
+        if (t.split(/\s+/).length <= 3 && new RegExp(String.raw`^[\p{L}\p{M}][\p{L}\p{M}' -]{0,40}$`, 'u').test(t) && isValidLeadName(t) && !isDecline(t)) {
+          detectedName = t.replace(/\b[a-z]/g, c => c.toUpperCase());
+          console.log('[Auto Lead Capture] Context-aware standalone name detected:', detectedName);
+        }
+      }
+      if (phoneCandidates.length === 0 && !detectedEmail && !detectedName) return;
+
+      // 2) Validate the phone against the configured digit rule (+91 / 91 / 0 prefixes accepted).
       const widgetSettings = await storage.getWidgetSettings(businessAccountId);
       const leadConfig = widgetSettings?.leadTrainingConfig as any;
-      
-      // Get phone validation setting (check mobile field first, then whatsapp)
-      let phoneValidation: '10' | '12' | '8-12' | 'any' = '10'; // Default to 10 digits
-      let otpEnabledForMobile = false;
-      let captchaEnabledForMobile = false;
-      let sendUnverifiedLeadsToCrm = false;
-      if (leadConfig?.fields && Array.isArray(leadConfig.fields)) {
-        const mobileField = leadConfig.fields.find((f: any) => f.id === 'mobile' && f.enabled);
-        const whatsappField = leadConfig.fields.find((f: any) => f.id === 'whatsapp' && f.enabled);
-        if (mobileField?.phoneValidation) {
-          phoneValidation = mobileField.phoneValidation;
-        } else if (whatsappField?.phoneValidation) {
-          phoneValidation = whatsappField.phoneValidation;
-        }
-        otpEnabledForMobile = !!(mobileField && mobileField.otpEnabled === true);
-        // CAPTCHA is the mutually-exclusive alternative to OTP (OTP wins if both
-        // are somehow set). When CAPTCHA is the chosen method we lock the
-        // conversation after a phone is captured mid-chat so the widget renders
-        // the reCAPTCHA checkbox (strategy-agnostic: custom/intent/keyword).
-        captchaEnabledForMobile = !!(mobileField && mobileField.captchaEnabled === true && mobileField.otpEnabled !== true);
-        sendUnverifiedLeadsToCrm = !!(mobileField && mobileField.sendUnverifiedLeadsToCrm === true);
+      const phoneMode = phoneModeFor(leadConfig);
+      let detectedPhone: string | null = null;
+      for (const c of phoneCandidates) {
+        const r = validatePhoneNumber(c.raw, phoneMode);
+        if (r.isValid) { detectedPhone = r.normalized; break; }
+        console.log(`[Auto Lead Capture] Phone candidate rejected (${r.reasonCode}): ${c.digits.length} digits`);
       }
+      if (!detectedPhone && !detectedEmail && !detectedName) return;
+      console.log('[Auto Lead Capture] Detected contact info:', { phone: !!detectedPhone, email: !!detectedEmail, name: detectedName });
 
-      // OTP GATE: when OTP verification is enabled for mobile AND we're on the widget channel,
-      // suppress CRM sync ONLY for writes that touch the mobile number. Email-only captures,
-      // name-only captures, and post-verification updates must still sync normally — only an
-      // unverified phone is gated by the OTP flow (Task #14 spec).
-      const otpGateActive = otpEnabledForMobile && channel === 'widget';
-      // Spec parity: explicit observability when OTP is configured but the
-      // channel is not the widget (v1 scope is widget-only). Helps verify
-      // non-widget channels intentionally fall through to today's behavior.
-      if (otpEnabledForMobile && channel && channel !== 'widget') {
+      const fields: any[] = Array.isArray(leadConfig?.fields) ? leadConfig.fields : [];
+      const mobileField = fields.find((f: any) => f?.id === 'mobile' && f.enabled);
+      const otpGateActive = !!(mobileField && mobileField.otpEnabled === true) && channel === 'widget';
+      const captchaGateActive = !!(mobileField && mobileField.captchaEnabled === true && mobileField.otpEnabled !== true) && channel === 'widget';
+      if (mobileField?.otpEnabled === true && channel && channel !== 'widget') {
         console.log(`[OTP] Skipped: channel not widget (channel=${channel}, business=${businessAccountId})`);
       }
 
-      // CRITICAL (Task #14, fail-closed): suppress CRM sync whenever the lead
-      // will end up carrying an unverified phone — regardless of whether the
-      // current OTP challenge is pending, locked, expired, or invalidated by
-      // a prior send_failed. Verification is conversation+phone scoped.
-      const checkPhoneUnverified = async (rawPhone?: string | null): Promise<boolean> => {
-        if (!otpGateActive || !conversationId || !rawPhone || !rawPhone.trim()) return false;
-        try {
-          const { normalizePhone } = await import('./services/otp');
-          const normalized = normalizePhone(rawPhone);
-          if (!normalized) return false;
-          const verified = await storage.hasVerifiedOtpForConversationPhone(businessAccountId, conversationId, normalized);
-          if (!verified) {
-            console.log(`[OTP-Gate] Auto-detect: CRM sync blocked — lead phone …${normalized.slice(-4)} not OTP-verified for this conversation`);
-          }
-          return !verified;
-        } catch (err) {
-          console.error('[OTP-Gate] Auto-detect verification lookup failed (fail-closed):', err);
-          return true;
-        }
-      };
-
-      // CAPTCHA GATE: when CAPTCHA (not OTP) is the chosen mobile verification
-      // method AND we're on the widget channel, a phone captured mid-chat must
-      // lock the conversation pending the reCAPTCHA checkbox. Widget-only, same
-      // scope as the OTP gate.
-      const captchaGateActive = captchaEnabledForMobile && channel === 'widget';
-
-      // CRM suppression for the CAPTCHA gate: don't sync a lead whose phone was
-      // just captured until the conversation is captcha-verified — UNLESS the
-      // admin opted in to sending unverified leads. Conversation-scoped; fails
-      // closed on lookup error.
-      const checkCaptchaUnverified = async (): Promise<boolean> => {
-        if (!captchaGateActive || !conversationId) return false;
-        if (sendUnverifiedLeadsToCrm) return false; // admin opted in to sync unverified leads
-        try {
-          const status = await storage.getConversationCaptchaStatus(conversationId, businessAccountId);
-          if (status !== 'verified') {
-            console.log('[CAPTCHA-Gate] Auto-detect: CRM sync blocked — conversation not captcha-verified');
-          }
-          return status !== 'verified';
-        } catch (err) {
-          console.error('[CAPTCHA-Gate] Auto-detect captcha status lookup failed (fail-closed):', err);
-          return true;
-        }
-      };
-
-      // Enhanced phone number detection: finds phone numbers WITHIN messages
-      // Matches patterns like: "9876543210", "+91-9876543210", "call me at 987 654 3210", "My phone is 9999999999"
-      // First, try to find phone-like patterns in the message (8-20 chars with digits, spaces, dashes, parens)
-      const phonePattern = /\+?[\d\s().-]{8,20}/g;
-      const phoneMatches = userMessage.match(phonePattern);
-      
-      let detectedPhone: string | null = null;
-      
-      if (phoneMatches && phoneMatches.length > 0) {
-        // Clean each match and validate based on phoneValidation setting
-        for (const match of phoneMatches) {
-          const cleaned = match.replace(/[^\d+]/g, ''); // Keep only digits and +
-          // Get only the digits (without +) for counting
-          const digitsOnly = cleaned.replace(/\+/g, '');
-          
-          // Validate based on phoneValidation setting
-          let isValid = false;
-          switch (phoneValidation) {
-            case '10':
-              isValid = digitsOnly.length === 10;
-              break;
-            case '12':
-              isValid = digitsOnly.length === 12;
-              break;
-            case '8-12':
-              isValid = digitsOnly.length >= 8 && digitsOnly.length <= 12;
-              break;
-            case 'any':
-              isValid = digitsOnly.length >= 7 && digitsOnly.length <= 15;
-              break;
-            default:
-              isValid = digitsOnly.length === 10;
-          }
-          
-          if (isValid) {
-            const junkCheck = validatePhoneNumber(digitsOnly, phoneValidation as any);
-            if (!junkCheck.isValid) {
-              console.log(`[Auto Lead Capture] Junk phone rejected: ${digitsOnly} - ${junkCheck.reasonMessage}`);
-              continue;
-            }
-            detectedPhone = cleaned;
-            break; // Take first valid phone number
-          }
-        }
-      }
-      
-      console.log('[Auto Lead Capture] Checking message:', userMessage, '| Phone match:', !!detectedPhone, detectedPhone || '', '| Validation:', phoneValidation);
-      
-      // Email pattern
-      const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
-      const emailMatch = userMessage.match(emailPattern);
-      
-      // Enhanced name detection - handles both explicit and standalone names
-      // Pattern 1: "My name is [name]" - explicit name introduction
-      // Pattern 2: Standalone short alphabetic responses (likely names in conversational context)
-      let detectedName: string | null = null;
-      
-      // First try explicit "my name is" pattern
-      const myNameIsPattern = /\bmy name is\s+(.+)/i;
-      const myNameMatch = userMessage.match(myNameIsPattern);
-      
-      if (myNameMatch && myNameMatch[1]) {
-        // Extract all words after "my name is"
-        const afterNameIs = myNameMatch[1].trim();
-        
-        // Split on ANY non-letter character (space, comma, punctuation, etc.)
-        const tokens = afterNameIs.split(/[^a-z'-]+/i).filter(t => t.length > 0);
-        
-        if (tokens.length > 0) {
-          // Take only first 1-2 tokens that look like names
-          const firstToken = tokens[0];
-          const secondToken = tokens.length > 1 ? tokens[1] : null;
-          
-          // Basic validation: not a common non-name word
-          const nonNameWords = ['i', 'am', 'interested', 'looking', 'need', 'want', 'have', 'yes', 'no', 'ok', 'okay', 'sure', 'hello', 'hi', 'hey', 'thanks', 'thank'];
-          
-          if (!nonNameWords.includes(firstToken.toLowerCase())) {
-            // Accept first token
-            let nameParts = [firstToken];
-            
-            // Accept second token if it exists and also looks like a name
-            if (secondToken && !nonNameWords.includes(secondToken.toLowerCase()) && secondToken.length >= 2) {
-              nameParts.push(secondToken);
-            }
-            
-            // Capitalize and join
-            detectedName = nameParts.map(w => 
-              w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
-            ).join(' ');
-          }
-        }
-      }
-      
-      // If not found via "my name is", try CONTEXT-AWARE standalone name detection
-      // Only detect standalone names if AI recently asked for the user's name
-      // This prevents false positives like "cool", "awesome", "thanks" from being detected as names
-      if (!detectedName && lastAIMessage) {
-        // Check if the last AI message was asking for the user's PERSONAL name
-        // Be very specific to avoid matching "company name", "product name", etc.
-        const nameRequestPatterns = [
-          /\bwhat'?s your name\b/i,
-          /\byour name\?/i, // "And your name?" or "Your name please?"
-          /\bmay i (have|know|get) your name\b/i,
-          /\bcould you (tell|give|share) me your name\b/i,
-          /\bcan i (have|know|get) your name\b/i,
-          /\bplease (provide|share|give|tell) (me )?your name\b/i,
-          /\bmay i please have your name\b/i,
-          /\bwhat should i call you\b/i,
-          /\bhow should i address you\b/i
-        ];
-        
-        const aiAskedForName = nameRequestPatterns.some(pattern => pattern.test(lastAIMessage));
-        
-        // Only proceed with standalone name detection if AI asked for name
-        if (aiAskedForName) {
-          const trimmed = userMessage.trim();
-          // Must be short (1-3 words max), only alphabetic chars + spaces/hyphens/apostrophes
-          const standaloneNamePattern = /^[a-z][a-z'\-\s]{0,40}$/i;
-          
-          if (standaloneNamePattern.test(trimmed)) {
-            const words = trimmed.split(/\s+/).filter(w => w.length > 0);
-            
-            // Only accept 1-3 words (not 4+, too risky for false positives)
-            if (words.length >= 1 && words.length <= 3) {
-              // Comprehensive list of common non-name words to filter out
-              const nonNameWords = [
-                // Pronouns & common words
-                'i', 'me', 'my', 'you', 'your', 'he', 'she', 'it', 'we', 'they', 'them',
-                // Verbs (including 2-char ones)
-                'am', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did',
-                'want', 'need', 'like', 'love', 'hate', 'know', 'think', 'see', 'look', 'get', 'got', 'go',
-                // Common responses (including 2-char ones)
-                'yes', 'no', 'ok', 'okay', 'sure', 'maybe', 'yep', 'nope', 'yeah', 'nah',
-                // Greetings & pleasantries
-                'hello', 'hi', 'hey', 'thanks', 'thank', 'please', 'sorry', 'bye', 'goodbye',
-                // Articles & prepositions
-                'the', 'a', 'an', 'this', 'that', 'these', 'those', 'of', 'to', 'for', 'in', 'on', 'at',
-                // Adjectives & casual words
-                'good', 'bad', 'great', 'nice', 'fine', 'interested', 'looking', 'here', 'there',
-                'cool', 'awesome', 'wow', 'yo', 'dude', 'bro',
-                // Additional 2-char common words to block
-                'or', 'so', 'up', 'us', 'if', 'as', 'by'
-              ];
-              
-              // Each word must be:
-              // 1. At least 2 characters (allows short names like "Li", "Jo", "Ng")
-              // 2. Not in the comprehensive stop-word list
-              const validWords = words.filter(w => 
-                w.length >= 2 && 
-                !nonNameWords.includes(w.toLowerCase())
-              );
-              
-              // Only accept if ALL words passed the filter AND we have 1-2 valid words
-              if (validWords.length >= 1 && validWords.length <= 2 && validWords.length === words.length) {
-                // Capitalize and join
-                detectedName = validWords.map(w => 
-                  w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
-                ).join(' ');
-                
-                console.log('[Auto Lead Capture] Context-aware standalone name detected:', detectedName);
-              }
-            }
-          }
-        }
-      }
-      
-      // Check if we detected any contact info (detectedPhone already set above)
-      const detectedEmail = emailMatch ? emailMatch[0] : null;
-      
-      if (!detectedPhone && !detectedEmail && !detectedName) {
-        return; // No contact info detected
-      }
-      
-      console.log('[Auto Lead Capture] Detected contact info:', {
-        phone: detectedPhone,
-        email: detectedEmail,
-        name: detectedName
+      // 3) Save (serialized per conversation, one row per conversation, returning-visitor reuse).
+      const up = await upsertConversationLead({
+        businessAccountId,
+        conversationId,
+        values: { name: detectedName, email: detectedEmail, phone: detectedPhone, city: visitorCity || null, sourceUrl: pageUrl || null },
+        policy: { name: 'fill' },
       });
-      
-      // Load Smart Lead Training configuration to enforce required fields
-      let requiredFields: string[] = [];
-      try {
-        const widgetSettings = await storage.getWidgetSettings(businessAccountId);
-        if (widgetSettings?.leadTrainingConfig) {
-          const leadConfig = widgetSettings.leadTrainingConfig as any;
-          if (leadConfig.fields && Array.isArray(leadConfig.fields)) {
-            // Supported field IDs that can be auto-detected
-            const supportedFieldIds = ['name', 'email', 'phone', 'mobile', 'whatsapp'];
-            
-            requiredFields = leadConfig.fields
-              .filter((f: any) => f && f.enabled === true && f.required === true)
-              .map((f: any) => f.id)
-              .filter((id: string) => supportedFieldIds.includes(id)); // Sanitize: only keep supported fields
-            
-            const rawRequiredFields = leadConfig.fields
-              .filter((f: any) => f && f.enabled === true && f.required === true)
-              .map((f: any) => f.id);
-            
-            const unsupportedFields = rawRequiredFields.filter((id: string) => !supportedFieldIds.includes(id));
-            if (unsupportedFields.length > 0) {
-              console.warn(`[Auto Lead Capture] Ignoring unsupported required fields: ${unsupportedFields.join(', ')}`);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('[Auto Lead Capture] Error loading leadTrainingConfig:', error);
+      const lead = up.lead;
+      if (up.changed.length === 0 && !up.created && !up.reusedFromConversationId) return;
+      console.log(`[Auto Lead Capture] ${up.created ? 'Created' : 'Updated'} lead ${lead.id}: ${up.changed.join(', ')}`);
+
+      const newTitle = lead.name || lead.phone || lead.email;
+      if (newTitle && newTitle !== 'Anonymous') {
+        await storage.updateConversationTitle(conversationId, businessAccountId, newTitle).catch(() => undefined);
       }
 
-      // Check if a lead already exists for this conversation
-      const existingLead = await storage.getLeadByConversation(conversationId, businessAccountId);
-      
-      if (existingLead) {
-        // Update existing lead with new info (progressive enrichment allowed)
-        const updateData: any = {};
-        if (detectedPhone && (!existingLead.phone || existingLead.phone !== detectedPhone)) {
-          updateData.phone = detectedPhone;
-        }
-        if (detectedEmail && (!existingLead.email || existingLead.email !== detectedEmail)) {
-          updateData.email = detectedEmail;
-        }
-        if (detectedName && (!existingLead.name || existingLead.name === 'Anonymous')) {
-          updateData.name = detectedName;
-        }
-        
-        if (Object.keys(updateData).length > 0) {
-          await storage.updateLead(existingLead.id, businessAccountId, updateData);
-          console.log(`[Auto Lead Capture] Updated lead ${existingLead.id} with:`, updateData);
-          
-          // Update conversation title
-          const newTitle = updateData.name || detectedName || existingLead.name || detectedPhone || existingLead.phone || detectedEmail || 'Anonymous';
-          if (newTitle !== 'Anonymous') {
-            await storage.updateConversationTitle(conversationId, businessAccountId, newTitle);
-          }
-
-          // Task #23: existing-lead branch — when the OTP gate is active and a
-          // phone was just added/changed on an EXISTING lead, issue the OTP
-          // challenge here for the same reason as the new-lead branch below.
-          // issueChallenge is idempotent: if there's already an unverified
-          // challenge for this (conversation, phone), it's reused.
-          if (otpGateActive && updateData.phone) {
-            try {
-              const { OtpService } = await import('./services/otp');
-              // Task #23: skip re-issuance if this (conversation, phone) is
-              // already verified. Without this guard, a visitor who already
-              // verified earlier and later mentions their phone again would
-              // get re-challenged and the chat would re-lock unexpectedly.
-              const alreadyVerified = await OtpService.hasVerifiedChallenge(
-                businessAccountId, conversationId, updateData.phone,
-              );
-              if (alreadyVerified) {
-                console.log(`[OTP-Gate] Auto-detect (existing lead) skipping issueChallenge — phone already verified for conversation ${conversationId}`);
-              } else {
-                const issued = await OtpService.issueChallenge(businessAccountId, conversationId, updateData.phone, {
-                  leadId: existingLead.id,
-                  channelOrigin: 'widget',
-                });
-                if (issued.ok) {
-                  console.log(`[OTP-Gate] Auto-detect (existing lead) issued OTP challenge for conversation ${conversationId}, phone …${updateData.phone.slice(-4)}`);
-                } else {
-                  console.warn(`[OTP-Gate] Auto-detect (existing lead) issueChallenge failed: ${issued.reason}`);
-                }
-              }
-            } catch (err) {
-              console.error('[OTP-Gate] Auto-detect (existing lead) issueChallenge error:', err);
-            }
-          }
-
-          // CAPTCHA gate (existing-lead branch): when CAPTCHA is the chosen
-          // method and a phone was just added/changed mid-chat, lock the
-          // conversation so the widget renders the reCAPTCHA checkbox. No-op once
-          // already captcha-verified (markConversationAwaitingCaptchaIfUnverified
-          // checks the status).
-          if (captchaGateActive && updateData.phone) {
-            try {
-              await storage.markConversationAwaitingCaptchaIfUnverified(conversationId, businessAccountId);
-              console.log(`[CAPTCHA-Gate] Auto-detect (existing lead) locked conversation ${conversationId} pending CAPTCHA`);
-            } catch (err) {
-              console.error('[CAPTCHA-Gate] Auto-detect (existing lead) markAwaiting error:', err);
-            }
-          }
-          
-          // Sync update to LeadSquared (async, non-blocking) - only send changed fields
-          // IMPORTANT: Only sync if we have at least phone OR email (LeadSquared rejects name-only leads)
-          const hasPhoneOrEmail = (updateData.phone || existingLead.phone) || (updateData.email || existingLead.email);
-          // Suppress whenever the resulting lead will carry an unverified phone
-          // (fail-closed). The "resulting phone" is updateData.phone if present,
-          // else the lead's existing phone — that's what would be synced.
-          const effectivePhone = updateData.phone || existingLead.phone;
-          const suppressThisSync = (await checkPhoneUnverified(effectivePhone)) || (await checkCaptchaUnverified());
-          if (suppressThisSync) {
-            console.log('[Verify-Gate] CRM sync suppressed for existing lead (phone change awaiting OTP/CAPTCHA verification)');
-          } else if (hasPhoneOrEmail) {
-            this.syncLeadToLeadSquared({
-              id: existingLead.id,
-              name: updateData.name || existingLead.name,
-              email: updateData.email || existingLead.email,
-              phone: updateData.phone || existingLead.phone,
-              leadsquaredLeadId: existingLead.leadsquaredLeadId
-            }, businessAccountId, true, Object.keys(updateData)).catch(err => console.error('[LeadSquared] Background sync error:', err));
+      const phoneChanged = up.changed.includes('phone') && !!lead.phone;
+      // OTP gate: a phone typed mid-chat gets its challenge here (idempotent per conversation+phone).
+      if (otpGateActive && phoneChanged) {
+        try {
+          const { OtpService } = await import('./services/otp');
+          const alreadyVerified = await OtpService.hasVerifiedChallenge(businessAccountId, conversationId, lead.phone!);
+          if (alreadyVerified) {
+            console.log(`[OTP-Gate] Auto-detect skipping issueChallenge — phone already verified for conversation ${conversationId}`);
           } else {
-            console.log('[LeadSquared] Skipping sync - no phone or email yet (name-only leads not supported)');
+            const issued = await OtpService.issueChallenge(businessAccountId, conversationId, lead.phone!, { leadId: lead.id, channelOrigin: 'widget' });
+            if (issued.ok) console.log(`[OTP-Gate] Auto-detect issued OTP challenge for conversation ${conversationId}, phone …${lead.phone!.slice(-4)}`);
+            else console.warn(`[OTP-Gate] Auto-detect issueChallenge failed: ${issued.reason}`);
           }
-        }
-      } else {
-        // Creating NEW lead - enforce Smart Lead Training required field validation
-        // Build field mapping from detected contact info
-        // Note: detectedPhone satisfies phone/mobile/whatsapp (all are phone numbers)
-        const fieldMap: Record<string, string | null> = {
-          name: detectedName,
-          email: detectedEmail,
-          phone: detectedPhone,
-          mobile: detectedPhone, // phone satisfies mobile requirement
-          whatsapp: detectedPhone // phone satisfies whatsapp requirement
-        };
-
-        // INSTANT PROGRESSIVE CAPTURE: Create lead immediately with whatever we have
-        // Don't block on missing required fields - save partial data to prevent loss
-        if (detectedPhone || detectedEmail || detectedName) {
-          console.log(`[Auto Lead Capture - Progressive] Creating partial lead with: ${[detectedName && 'name', detectedPhone && 'phone', detectedEmail && 'email'].filter(Boolean).join(', ')}`);
-          
-          // Check which required fields are still missing (for logging only)
-          const missingFields = requiredFields.filter(fieldId => {
-            const fieldValue = fieldMap[fieldId];
-            return !fieldValue || fieldValue.trim() === '';
-          });
-          
-          if (missingFields.length > 0) {
-            console.log(`[Auto Lead Capture - Progressive] Partial lead - missing required fields: ${missingFields.join(', ')} (will be collected later)`);
-          }
-          
-          let sourceUrl: string | null = pageUrl || null;
-          
-          // Create the partial lead immediately
-          const newLead = await storage.createLead({
-            businessAccountId,
-            name: detectedName || null,
-            email: detectedEmail || null,
-            phone: detectedPhone || null,
-            city: visitorCity || null,
-            sourceUrl,
-            message: 'Via Chat',
-            conversationId
-          });
-          console.log(`[Auto Lead Capture] Created new lead ${newLead.id} with:`, {
-            name: detectedName,
-            phone: detectedPhone,
-            email: detectedEmail
-          });
-          
-          // Update conversation title
-          const newTitle = detectedName || detectedPhone || detectedEmail || 'Anonymous';
-          if (newTitle !== 'Anonymous') {
-            await storage.updateConversationTitle(conversationId, businessAccountId, newTitle);
-          }
-          
-          // Task #23: When the OTP gate is active and we just captured a phone
-          // via auto-detect (visitor typed it mid-chat instead of via the pre-chat
-          // modal), issue the OTP challenge HERE. Without this the buildLeadOverride
-          // in llamaService would see "all required fields collected" and instruct
-          // the AI to stop asking — meaning capture_lead never fires and the OTP
-          // is never sent. issueChallenge is idempotent so re-issuing for an
-          // already-pending phone is a no-op.
-          if (otpGateActive && detectedPhone) {
-            try {
-              const { OtpService } = await import('./services/otp');
-              // Task #23: skip re-issuance if this (conversation, phone) is
-              // already verified — see existing-lead branch for rationale.
-              const alreadyVerified = await OtpService.hasVerifiedChallenge(
-                businessAccountId, conversationId, detectedPhone,
-              );
-              if (alreadyVerified) {
-                console.log(`[OTP-Gate] Auto-detect skipping issueChallenge — phone already verified for conversation ${conversationId}`);
-              } else {
-                const issued = await OtpService.issueChallenge(businessAccountId, conversationId, detectedPhone, {
-                  leadId: newLead.id,
-                  channelOrigin: 'widget',
-                });
-                if (issued.ok) {
-                  console.log(`[OTP-Gate] Auto-detect issued OTP challenge for conversation ${conversationId}, phone …${detectedPhone.slice(-4)}`);
-                } else {
-                  console.warn(`[OTP-Gate] Auto-detect issueChallenge failed: ${issued.reason}`);
-                }
-              }
-            } catch (err) {
-              console.error('[OTP-Gate] Auto-detect issueChallenge error:', err);
-            }
-          }
-
-          // CAPTCHA gate (new-lead branch): when CAPTCHA is the chosen method and
-          // we just captured a phone mid-chat, lock the conversation so the
-          // widget renders the reCAPTCHA checkbox. Mirrors the OTP issue above —
-          // without this the "all required fields collected" lead-override would
-          // tell the AI to stop asking and the visitor would never be gated.
-          if (captchaGateActive && detectedPhone) {
-            try {
-              await storage.markConversationAwaitingCaptchaIfUnverified(conversationId, businessAccountId);
-              console.log(`[CAPTCHA-Gate] Auto-detect locked conversation ${conversationId} pending CAPTCHA (new lead)`);
-            } catch (err) {
-              console.error('[CAPTCHA-Gate] Auto-detect markAwaiting (new lead) error:', err);
-            }
-          }
-
-          // Sync new lead to LeadSquared (async, non-blocking)
-          // IMPORTANT: Only sync if we have at least phone OR email (LeadSquared rejects name-only leads)
-          // Suppress when this NEW lead will carry an unverified phone (fail-closed).
-          const suppressThisNewSync = (await checkPhoneUnverified(detectedPhone)) || (await checkCaptchaUnverified());
-          if (suppressThisNewSync) {
-            console.log('[Verify-Gate] CRM sync suppressed for new lead (phone awaiting OTP/CAPTCHA verification)');
-          } else if (detectedPhone || detectedEmail) {
-            this.syncLeadToLeadSquared({
-              id: newLead.id,
-              name: detectedName,
-              email: detectedEmail,
-              phone: detectedPhone
-            }, businessAccountId, false).catch(err => console.error('[LeadSquared] Background sync error:', err));
-          } else {
-            console.log('[LeadSquared] Skipping new lead sync - no phone or email yet (name-only leads not supported)');
-          }
+        } catch (err) {
+          console.error('[OTP-Gate] Auto-detect issueChallenge error:', err);
         }
       }
+      // CAPTCHA gate: lock the conversation so the widget renders the reCAPTCHA checkbox.
+      if (captchaGateActive && phoneChanged) {
+        try {
+          await storage.markConversationAwaitingCaptchaIfUnverified(conversationId, businessAccountId);
+          console.log(`[CAPTCHA-Gate] Auto-detect locked conversation ${conversationId} pending CAPTCHA`);
+        } catch (err) {
+          console.error('[CAPTCHA-Gate] Auto-detect markAwaiting error:', err);
+        }
+      }
+
+      // CRM: only when every mandatory field is in and verification passed; updates afterwards.
+      syncConversationLeadIfReady({
+        leadId: lead.id, businessAccountId, conversationId, changedFields: up.changed, channel, source: 'auto_capture',
+      }).catch(() => undefined);
     } catch (error) {
       console.error('[Auto Lead Capture] Error:', error);
     }
@@ -2127,8 +1882,16 @@ Response:`;
         console.log('[TopScholar] Lead capture and verification flow disabled for tutoring conversation');
       }
 
-      // Get conversation history to check if this is a new conversation
-      const existingHistory = conversationMemory.getConversationHistory(context.userId);
+      // Get conversation history to check if this is a new conversation (reloaded from the DB
+      // first when the memory cache is empty for a conversation this session would resume).
+      let existingHistory = conversationMemory.getConversationHistory(context.userId);
+      if (existingHistory.length === 0) {
+        const priorConversationId = await this.peekExistingConversationId(context).catch(() => undefined);
+        if (priorConversationId) {
+          await this.ensureHistoryLoaded(context.userId, priorConversationId);
+          existingHistory = conversationMemory.getConversationHistory(context.userId);
+        }
+      }
       const isFirstMessage = existingHistory.length === 0;
       
       // SPAM DETECTION: Check first message - if spam, use simplified path (no DB, no journeys, just AI response)
@@ -2153,9 +1916,10 @@ Response:`;
       
       // Get or create conversation (normal flow)
       const conversationId = await this.getOrCreateConversation(context);
-      
+      await this.ensureHistoryLoaded(context.userId, conversationId);
+
       // Get conversation history to check if AI recently asked for name
-      const history = conversationMemory.getConversationHistory(context.userId);
+      let history = conversationMemory.getConversationHistory(context.userId);
       const lastAIMessage = history.length > 0 && history[history.length - 1].role === 'assistant' 
         ? history[history.length - 1].content 
         : undefined;
@@ -2208,6 +1972,10 @@ Response:`;
       // Store user message in memory and database
       conversationMemory.storeMessage(context.userId, 'user', userMessage);
       await this.storeMessageInDB(conversationId, 'user', userMessage, undefined, context.imageUrl);
+      // Visitor message number from the DB (custom timing); reload memory if it is behind.
+      const turnCount = await this.countTurnFromDb(context.userId, conversationId);
+      if (turnCount.reloaded) history = this.historyBeforeCurrent(context.userId, userMessage);
+      const userMessageCount = Math.max(turnCount.n, history.filter(m => m.role === 'user').length + 1);
 
       if (userMessage.startsWith('[JOB_APPLY]')) {
         const applyMatch = userMessage.match(/\|jobId:([^|]+)\|applicantId:([^|]+)/);
@@ -2386,25 +2154,16 @@ Response:`;
       // Check if business has products - only include product tool if products exist
       const hasProducts = products.length > 0;
 
-      // PHONE VALIDATION GATE (non-streaming path) — uses shared utility
-      let phoneValidationFailedNS = false;
-      let phoneValidationContextNS = '';
       const leadTrainingConfigNonStream = context.skipLeadTraining
         ? null
         : widgetSettings?.leadTrainingConfig as any;
-      if (leadTrainingConfigNonStream) {
-        const validationOverrideNS = buildPhoneValidationOverride(userMessage, leadTrainingConfigNonStream);
-        if (validationOverrideNS) {
-          phoneValidationFailedNS = true;
-          phoneValidationContextNS = validationOverrideNS;
-        }
-      }
 
       // AI-GUIDED JOURNEYS: Check if journey is active and include journey tools
       // This allows AI to intelligently manage journeys while staying conversational
       // Pass conversation history to detect ongoing appointment context
       // Pass API key for AI-based product intent classification fallback
-      let relevantTools = await selectRelevantTools(userMessage, appointmentsEnabled, isJourneyActive, hasProducts, history, context.openaiApiKey || undefined, context.systemMode, context.k12EducationEnabled, context.jobPortalEnabled, context.demoOrdersEnabled);
+      const offerCaptureLeadNS = !context.skipLeadTraining && this.leadFieldsMissing(leadTrainingConfigNonStream, existingLead);
+      let relevantTools = await selectRelevantTools(userMessage, appointmentsEnabled, isJourneyActive, hasProducts, history, context.openaiApiKey || undefined, context.systemMode, context.k12EducationEnabled, context.jobPortalEnabled, context.demoOrdersEnabled, offerCaptureLeadNS);
       if (context.skipLeadTraining) {
         relevantTools = relevantTools.filter((tool: any) => tool.function.name !== 'capture_lead');
       }
@@ -2417,12 +2176,14 @@ Response:`;
       // behaves identically to /api/chat/widget/stream when a challenge is
       // pending or locked. Without this, the non-stream fallback would let the
       // model call unrelated tools or skip the gating override entirely.
+      let otpBlockNS = '';
       if (context.channel === 'widget' && !context.skipLeadTraining) {
         try {
           const otpStateNS = await OtpService.getLatestStateForConversation(context.businessAccountId, conversationId);
           if (otpStateNS.locked) {
             relevantTools = [];
-            systemContext += buildOtpGatingOverride(otpStateNS);
+            otpBlockNS = buildOtpGatingOverride(otpStateNS);
+            systemContext += otpBlockNS;
           } else if (otpStateNS.awaiting_otp) {
             const fromAll = (await import('./aiTools')).aiTools;
             relevantTools = fromAll.filter((t: any) =>
@@ -2430,12 +2191,24 @@ Response:`;
               t.function.name === 'resend_phone_otp' ||
               t.function.name === 'capture_lead'
             );
-            systemContext += buildOtpGatingOverride(otpStateNS);
+            otpBlockNS = buildOtpGatingOverride(otpStateNS);
+            systemContext += otpBlockNS;
           }
         } catch (err) {
           console.error('[OTP] Non-stream gating failed (continuing without restriction):', err);
         }
       }
+
+      // Lead collection plan for this turn — its block (or the OTP block) goes in the final rules.
+      const preparedNS = await this.prepareLeadTurnFor({
+        context, conversationId, leadTrainingConfig: leadTrainingConfigNonStream, existingLead, history, userMessage,
+        n: userMessageCount, otpPending: !!otpBlockNS,
+      });
+      const leadTurnNS = preparedNS.turn;
+      const phoneValidationContextNS = leadTurnNS?.phoneOverride || '';
+      const turnBlockNS = otpBlockNS
+        ? `${otpBlockNS}\nThis verification step overrides everything above: no small talk, no answers to other questions, no requests for other contact details.`
+        : (leadTurnNS?.block || '');
 
       // Get AI response with tool awareness
       // Phone validation: pass as last-position system message override (highest GPT attention weight)
@@ -2449,12 +2222,13 @@ Response:`;
         context.businessAccountId,
         hasProducts,
         context.responseLength || 'balanced',
-        phoneValidationFailedNS ? phoneValidationContextNS : undefined,
+        phoneValidationContextNS && !otpBlockNS ? phoneValidationContextNS : undefined,
         // Top Scholar content-only K12: force the first model turn to call
         // fetch_k12_topic so academic answers are always grounded in curriculum
         // content. gpt-4o-mini ignores the prompt-only "you MUST call the tool"
         // rule and will otherwise answer from general knowledge.
-        this.shouldForceK12Fetch(context) ? 'fetch_k12_topic' : undefined
+        this.shouldForceK12Fetch(context) ? 'fetch_k12_topic' : undefined,
+        turnBlockNS
       );
 
       // Log tool calls for debugging
@@ -2468,7 +2242,7 @@ Response:`;
 
       // Handle tool calls if any
       if (aiResponse.tool_calls && aiResponse.tool_calls.length > 0) {
-        const result = await this.handleToolCalls(aiResponse, context, userMessage, relevantTools, appointmentsEnabled, false, systemContext);
+        const result = await this.handleToolCalls(aiResponse, context, userMessage, relevantTools, appointmentsEnabled, false, systemContext, turnBlockNS, leadTurnNS);
         
         // DEFLECTION GATE: Check if response is a deflection and route to fallback template
         if (this.isDeflectionResponse(result.response) || result.response.includes('[[FALLBACK]]')) {
@@ -2491,9 +2265,11 @@ Response:`;
           // Update stored message with the rephrased fallback
           conversationMemory.storeMessage(context.userId, 'assistant', rephrased);
           await this.storeMessageInDB(conversationId, 'assistant', rephrased);
+          await this.finishLeadTurn(leadTurnNS, conversationId, context.businessAccountId, rephrased);
           return rephrased;
         }
-        
+
+        await this.finishLeadTurn(leadTurnNS, conversationId, context.businessAccountId, result.response);
         // Return just the response text
         return result.response;
       }
@@ -2616,7 +2392,8 @@ Response:`;
       
       conversationMemory.storeMessage(context.userId, 'assistant', responseContent);
       await this.storeMessageInDB(conversationId, 'assistant', responseContent);
-      
+      await this.finishLeadTurn(leadTurnNS, conversationId, context.businessAccountId, responseContent);
+
       // Monitor post-resolution feedback (if customer responds after AI auto-resolved ticket)
       await feedbackMonitoringService.monitorPostResolutionFeedback(
         context.businessAccountId,
@@ -2729,8 +2506,10 @@ Response:`;
     relevantTools: any[],
     appointmentsEnabled: boolean,
     skipDBStore: boolean = false,
-    systemContext?: string
-  ): Promise<{ response: string; products?: any[]; pagination?: any; searchQuery?: string; appointmentSlots?: { slots: Record<string, string[]>; durationMinutes: number }; nextFormStep?: { stepId: string; questionText: string; questionType: string; isRequired: boolean; options?: string[]; placeholder?: string }; jobs?: any[]; applicantId?: string }> {
+    systemContext?: string,
+    continuationBlock?: string,
+    leadTurn?: LeadTurn | null
+  ): Promise<{ response: string;products?: any[]; pagination?: any; searchQuery?: string; appointmentSlots?: { slots: Record<string, string[]>; durationMinutes: number }; nextFormStep?: { stepId: string; questionText: string; questionType: string; isRequired: boolean; options?: string[]; placeholder?: string }; jobs?: any[]; applicantId?: string }> {
     // Get conversationId first so we can pass it to tools
     const conversationId = await this.getOrCreateConversation(context);
     
@@ -2928,6 +2707,11 @@ Response:`;
         }
       }
 
+      if (toolName === 'capture_lead') {
+        const instruction = this.captureLeadInstruction(result, this.extractLastSubstantiveQuestion(updatedHistory as any, userMessage) || null);
+        if (instruction) toolResultContent = JSON.stringify({ ...result, _instruction: instruction });
+      }
+
       // Add tool result to messages
       messages.push({
         role: 'tool' as const,
@@ -2960,6 +2744,25 @@ Response:`;
     const hasK12ToolResult = executedToolNames.some((n: string) => n === 'fetch_k12_topic' || n === 'fetch_k12_questions');
     const continuationTools = hasK12ToolResult ? [] : relevantTools;
 
+    // Lead rules for the follow-up reply (re-planned when capture_lead changed what we know).
+    let finalBlock = continuationBlock || '';
+    const executedNames = aiResponse.tool_calls.map((tc: any) => tc.function.name);
+    if (leadTurn && executedNames.includes('capture_lead') && !messages.some((m: any) => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('"otp_required":true'))) {
+      try {
+        const fresh = await getConversationLead(conversationId, context.businessAccountId);
+        const stored = await loadLeadCaptureState(conversationId);
+        const cfg = (await storage.getWidgetSettings(context.businessAccountId))?.leadTrainingConfig;
+        finalBlock = replanLeadTurn(
+          leadTurn,
+          { name: fresh?.name && fresh.name !== 'Anonymous' ? fresh.name : leadTurn.known.name, email: fresh?.email || leadTurn.known.email, phone: fresh?.phone || leadTurn.known.phone },
+          cfg,
+          { ...leadTurn.state, whatsapp: stored.whatsapp || leadTurn.state.whatsapp },
+        ).block;
+      } catch (err) {
+        console.error('[Lead Plan] re-plan after capture_lead failed (non-fatal):', err);
+      }
+    }
+
     // Get final response from AI with tool results (using same relevant tools)
     const finalResponse = await llamaService.continueToolConversation(
       messagesForContinuation,
@@ -2968,7 +2771,8 @@ Response:`;
       context.openaiApiKey || undefined,
       context.businessAccountId,
       context.preferredLanguage,
-      context.responseLength || 'balanced'
+      context.responseLength || 'balanced',
+      finalBlock
     );
 
     const responseContent = finalResponse.content || 'I processed your request.';
@@ -3248,10 +3052,19 @@ Response:`;
         console.log('[TopScholar] Lead capture and verification flow disabled for tutoring conversation');
       }
 
-      // Get conversation history to check if this is a new conversation
-      const existingHistory = conversationMemory.getConversationHistory(context.userId);
+      // Get conversation history to check if this is a new conversation. The memory is a cache:
+      // after an idle gap / restart / on another instance it is reloaded from the database first,
+      // so a resumed conversation is never mistaken for a brand-new one.
+      let existingHistory = conversationMemory.getConversationHistory(context.userId);
+      if (existingHistory.length === 0) {
+        const priorConversationId = await this.peekExistingConversationId(context).catch(() => undefined);
+        if (priorConversationId) {
+          await this.ensureHistoryLoaded(context.userId, priorConversationId);
+          existingHistory = conversationMemory.getConversationHistory(context.userId);
+        }
+      }
       const isFirstMessage = existingHistory.length === 0;
-      
+
       // SPAM DETECTION: Check first message - if spam, use simplified path (no DB, no journeys, just AI response)
       // Skip spam check for resume uploads, job applications, and K12 image uploads — they must go through the full AI flow
       if (isFirstMessage && context.openaiApiKey && !userMessage.startsWith('[RESUME_UPLOAD]') && !userMessage.startsWith('[JOB_APPLY]') && !userMessage.startsWith('[IMAGE_UPLOAD]') && !context.resumeText && !context.imageText) {
@@ -3279,7 +3092,9 @@ Response:`;
       
       // Get or create conversation (normal flow)
       const conversationId = await this.getOrCreateConversation(context);
-      
+      // Memory must hold THIS conversation's history (reload from the DB when needed).
+      await this.ensureHistoryLoaded(context.userId, conversationId);
+
       // Yield conversationId first so client can store it for persistence
       yield { type: 'conversation_id' as const, data: conversationId };
 
@@ -3505,18 +3320,17 @@ Response:`;
       // ─────────────────────────────────────────────────────────────────────────
       
       // Get conversation history to check if AI recently asked for name
-      const history = conversationMemory.getConversationHistory(context.userId);
-      const lastAIMessage = history.length > 0 && history[history.length - 1].role === 'assistant' 
-        ? history[history.length - 1].content 
+      let history = conversationMemory.getConversationHistory(context.userId);
+      const lastAIMessage = history.length > 0 && history[history.length - 1].role === 'assistant'
+        ? history[history.length - 1].content
         : undefined;
-      
-      // Auto-detect and capture contact information from user message
-      // Skip for very short messages (likely not containing contact info)
-      // Skip lead capture entirely for guidance chatbot
-      if (userMessage.length > 2 && !context.skipLeadTraining && !autoDetectAwaited) {
-        // Run async to avoid blocking response. Skipped when we already awaited
-        // it above for a phone-hit (Task #23) to avoid double-processing.
-        this.autoDetectAndCaptureLead(userMessage, conversationId, context.businessAccountId, lastAIMessage, context.visitorCity, context.visitorSessionId, context.pageUrl, context.channel).catch(err => {
+
+      // Auto-detect and capture contact information from user message (skipped for guidance /
+      // tutoring surfaces). Awaited: it is pure regex when nothing is detected, and the lead row
+      // must be up to date before this turn's lead plan is computed. Skipped when it already ran
+      // above for a phone-hit (Task #23).
+      if (userMessage.length > 1 && !context.skipLeadTraining && !autoDetectAwaited) {
+        await this.autoDetectAndCaptureLead(userMessage, conversationId, context.businessAccountId, lastAIMessage, context.visitorCity, context.visitorSessionId, context.pageUrl, context.channel).catch(err => {
           console.error('[Chat] Error in auto lead capture:', err);
         });
       }
@@ -3742,40 +3556,12 @@ Response:`;
         systemContext = retrievalMode ? `${systemContext}\n\n${block}` : block + systemContext;
       };
 
-      // SMART TIMING: Count user messages for lead gate activation
-      // Note: history was captured BEFORE the current message was stored, so add 1
-      const userMessageCount = history.filter(m => m.role === 'user').length + 1;
-      const isFirstUserMessage = userMessageCount <= 1;
-      
-      // DEBUG: Log the message count for troubleshooting
-      console.log(`[Smart Timing] History length: ${history.length}, User messages in history: ${history.filter(m => m.role === 'user').length}, Total count (incl current): ${userMessageCount}, isFirst: ${isFirstUserMessage}`);
-      
-      // CRITICAL: Inject dynamic message count status at the BEGINNING of context
-      // LLMs pay more attention to content at the start - this ensures the lead gate is noticed
-      let smartTimingPrefix = '';
-      if (context.skipLeadTraining) {
-        // Lead collection disabled for this surface (guidance chat / TopScholar
-        // tutoring where the student is already identified) — never gate answers
-        // behind asking for a name.
-        smartTimingPrefix = '';
-      } else if (isFirstUserMessage) {
-        smartTimingPrefix = `🟢 CONVERSATION STATUS: This is the user's FIRST message (message #1). Answer freely - no lead collection required yet.\n\n`;
-      } else {
-        smartTimingPrefix = `🔴 URGENT - LEAD GATE ACTIVE 🔴\n`;
-        smartTimingPrefix += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-        smartTimingPrefix += `This is user message #${userMessageCount}. YOU MUST ASK FOR THEIR NAME FIRST!\n`;
-        smartTimingPrefix += `\n`;
-        smartTimingPrefix += `⛔ DO NOT answer their question yet!\n`;
-        smartTimingPrefix += `⛔ STOP and ask: "I'd love to help! May I know your name first?"\n`;
-        smartTimingPrefix += `⛔ Only answer AFTER they provide their name.\n`;
-        smartTimingPrefix += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-      }
-      
-      // PREPEND the status to systemContext (not append) so it's at the top
-      // (appended in retrieval mode — see addTurnBlock)
-      addTurnBlock(smartTimingPrefix);
-      
-      console.log(`[Smart Timing] Injected status at START: isFirst=${isFirstUserMessage}, count=${userMessageCount}`);
+      // Visitor message number, counted in the database (custom "ask on message #N" timing must
+      // survive idle expiry, restarts and multiple instances). Reloads memory if it is behind.
+      const turnCount = await this.countTurnFromDb(context.userId, conversationId);
+      if (turnCount.reloaded) history = this.historyBeforeCurrent(context.userId, userMessage);
+      const userMessageCount = Math.max(turnCount.n, history.filter(m => m.role === 'user').length + 1);
+      console.log(`[Lead Timing] Visitor message #${userMessageCount} (db=${turnCount.n}, history=${history.length})`);
 
       // HANDOFF-AWARE GUARDRAIL: Detect if conversation is in "handoff complete" state
       // If the last assistant message was a handoff confirmation and user sends simple acknowledgement,
@@ -3870,10 +3656,11 @@ Example: "Great! Is there anything else I can help you with?"
       // Pass API key for AI-based product intent classification fallback
       //
       // Run selectRelevantTools and both intent checks in parallel to reduce latency.
+      const offerCaptureLead = !context.skipLeadTraining && this.leadFieldsMissing(widgetSettings?.leadTrainingConfig, existingLead);
       const [selectedTools, orderLookupIntent, returnExchangeIntent] = await Promise.all([
         skipToolsForHandoff
           ? Promise.resolve([] as typeof import('./aiTools').aiTools)
-          : selectRelevantTools(context.resumeText ? `[RESUME_UPLOAD] Please analyze my resume and find matching jobs` : userMessage, appointmentsEnabled, isJourneyActive, hasProducts, history, context.openaiApiKey || undefined, context.systemMode, context.k12EducationEnabled, context.jobPortalEnabled, context.demoOrdersEnabled),
+          : selectRelevantTools(context.resumeText ? `[RESUME_UPLOAD] Please analyze my resume and find matching jobs` : userMessage, appointmentsEnabled, isJourneyActive, hasProducts, history, context.openaiApiKey || undefined, context.systemMode, context.k12EducationEnabled, context.jobPortalEnabled, context.demoOrdersEnabled, offerCaptureLead),
         context.demoOrdersEnabled
           ? classifyOrderLookupIntent(userMessage, history, context.openaiApiKey || undefined)
           : Promise.resolve(false),
@@ -3893,16 +3680,19 @@ Example: "Great! Is there anything else I can help you with?"
       // Skip lead training entirely for guidance chatbot
       const leadTrainingConfig = context.skipLeadTraining ? null : (widgetSettings?.leadTrainingConfig as any);
       
-      // PHONE VALIDATION GATE — uses shared utility
-      let phoneValidationFailed = false;
-      let phoneValidationContext = '';
-      if (!context.skipLeadTraining && leadTrainingConfig) {
-        const validationOverride = buildPhoneValidationOverride(userMessage, leadTrainingConfig);
-        if (validationOverride) {
-          phoneValidationFailed = true;
-          phoneValidationContext = validationOverride;
-        }
-      }
+      // LEAD COLLECTION PLAN for this turn (services/leadCapture): the ONE field to ask now (if any),
+      // whether it blocks answering, refusal caps, phone-number check. Its block is the only lead
+      // instruction the model gets. Pending OTP replaces it with the OTP strict-mode block.
+      const otpPendingForLead = otpState.awaiting_otp === true || otpState.locked === true;
+      const prepared = await this.prepareLeadTurnFor({
+        context, conversationId, leadTrainingConfig, existingLead, history, userMessage,
+        n: userMessageCount, otpPending: otpPendingForLead,
+      });
+      let leadTurn: LeadTurn | null = prepared.turn;
+      const leadForTurn = prepared.lead;
+      const phoneValidationFailed = !!leadTurn?.phoneOverride;
+      const phoneValidationContext = leadTurn?.phoneOverride || '';
+      let otpTurnBlock = '';
 
       // Extract enabled appointment trigger rules
       const appointmentTriggerRules = !context.skipLeadTraining && widgetSettings?.appointmentSuggestRules
@@ -3965,7 +3755,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       // already instructs the model what to do. When locked, strip all tools.
       if (otpState.locked) {
         streamTools = [] as typeof streamTools;
-        systemContext += buildOtpGatingOverride(otpState);
+        otpTurnBlock = buildOtpGatingOverride(otpState);
+        systemContext += otpTurnBlock;
       } else if (otpState.awaiting_otp) {
         // Per Task #14 spec: when awaiting OTP, the allowed tool surface is
         // { verify_phone_otp, resend_phone_otp, capture_lead }. capture_lead is
@@ -3977,7 +3768,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           t.function.name === 'resend_phone_otp' ||
           t.function.name === 'capture_lead'
         );
-        systemContext += buildOtpGatingOverride(otpState);
+        otpTurnBlock = buildOtpGatingOverride(otpState);
+        systemContext += otpTurnBlock;
       }
 
       // SHORT-CIRCUIT: when lookup cards will be shown, bypass the full AI streaming pipeline.
@@ -4079,7 +3871,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         context.personality || 'friendly',
         context.openaiApiKey || undefined,
         leadTrainingConfig,
-        existingLead,
+        leadForTurn,
         context.preferredLanguage,
         context.businessAccountId,
         context.customInstructions,
@@ -4102,7 +3894,13 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         // Top Scholar content-only K12: force fetch_k12_topic on the first
         // streaming turn so academic answers are always curriculum-grounded.
         this.shouldForceK12Fetch(context) ? 'fetch_k12_topic' : undefined,
-        retrievalMode ? await this.buildFirstCallPromptOptions(context, history, knowledge.itemCount > 0 && !(serverSideLookupOptions || serverSideReturnExchange)) : undefined
+        retrievalMode ? await this.buildFirstCallPromptOptions(context, history, knowledge.itemCount > 0 && !(serverSideLookupOptions || serverSideReturnExchange)) : undefined,
+        {
+          leadBlock: leadTurn?.block || undefined,
+          leadBlocksAnswer: leadTurn?.plan.next?.mode === 'block',
+          leadAsksNow: !!(leadTurn?.plan.next || leadTurn?.plan.intentOption || leadTurn?.plan.callbackConfirm),
+          otpBlock: otpTurnBlock || undefined,
+        } satisfies StreamTurnOptions
       )) {
         const delta = chunk.choices[0]?.delta;
         
@@ -4258,23 +4056,6 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
             }
           }
 
-          let phoneRejected = false;
-          let phoneRejectionMessage = '';
-          if (toolName === 'capture_lead' && toolParams.phone && toolParams.phone.trim().length > 0 && leadTrainingConfig?.fields) {
-            const mobileField = leadTrainingConfig.fields.find((f: any) => f.id === 'mobile' && f.enabled);
-            const whatsappField = leadTrainingConfig.fields.find((f: any) => f.id === 'whatsapp' && f.enabled);
-            const phoneValidation = mobileField?.phoneValidation || whatsappField?.phoneValidation || '10';
-            
-            const phoneValidationResult = validatePhoneNumber(toolParams.phone, phoneValidation as any);
-            
-            if (!phoneValidationResult.isValid) {
-              console.log(`[Chat Stream] capture_lead PRE-VALIDATION REJECTED: phone "${toolParams.phone}" - ${phoneValidationResult.reasonMessage}`);
-              phoneRejected = true;
-              phoneRejectionMessage = `INVALID PHONE NUMBER: ${phoneValidationResult.reasonMessage}. DO NOT save this number. Politely tell the user their number appears to be invalid and ask them to provide a valid phone/WhatsApp number.`;
-              toolParams.phone = '';
-            }
-          }
-
           console.log('[Chat Stream] Executing tool:', toolName, 'with params:', toolParams);
           let result = await ToolExecutionService.executeTool(
             toolName,
@@ -4390,12 +4171,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           // Use OR to preserve true if any capture_lead call had real data (handles multiple calls)
           let captureLeadOriginalQuestion: string | null = null;
           if (toolName === 'capture_lead') {
-            // If phone was rejected by pre-validation, override result with rejection message
-            if (phoneRejected) {
-              result = { success: false, error: phoneRejectionMessage };
-            }
-
-            const hasName = toolParams.name && toolParams.name.trim().length > 0;
+            const hasName= toolParams.name && toolParams.name.trim().length > 0;
             const hasPhone = toolParams.phone && toolParams.phone.trim().length > 0;
             const hasEmail = toolParams.email && toolParams.email.trim().length > 0;
             const thisCallHadRealData = hasName || hasPhone || hasEmail;
@@ -4447,13 +4223,14 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                 omitVideos: isTopscholarAccount(context.businessAccountId),
               })
             : JSON.stringify(result);
-          if (toolName === 'capture_lead' && captureLeadOriginalQuestion) {
-            const enhancedResult = {
-              ...result,
-              _instruction: `Contact info saved successfully. Now briefly thank them and IMMEDIATELY answer their original question: "${captureLeadOriginalQuestion}". Do NOT just say "How can I help?" - answer their question about ${captureLeadOriginalQuestion}.`
-            };
-            toolResultContent = JSON.stringify(enhancedResult);
-            console.log('[Chat Stream] Enhanced capture_lead result with original question:', captureLeadOriginalQuestion);
+          if (toolName === 'capture_lead') {
+            // Structured result → ONE instruction: re-enter a rejected detail, ask the single next
+            // field, or (nothing rejected/blocking) answer the original question.
+            const instruction = this.captureLeadInstruction(result, captureLeadOriginalQuestion);
+            if (instruction) {
+              toolResultContent = JSON.stringify({ ...result, _instruction: instruction });
+              console.log('[Chat Stream] capture_lead instruction:', instruction.slice(0, 120));
+            }
           }
           
           // For list_available_slots with slots, tell AI that a visual calendar UI will show the options
@@ -4534,8 +4311,33 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         // synthesizing an answer from the K12 content already in the messages.
         const hasK12ToolResult = toolNames.some(n => n === 'fetch_k12_topic' || n === 'fetch_k12_questions');
         const continuationTools = hasK12ToolResult ? [] : relevantTools;
-        
-        // Stream the continuation response token-by-token so the widget can
+
+        // Lead rules for the follow-up reply: re-planned when capture_lead changed what we know;
+        // replaced by the OTP strict block when a code was just sent.
+        let continuationBlock = otpTurnBlock || leadTurn?.block || '';
+        const otpJustRequired = messages.find(m => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('"otp_required":true'));
+        if (otpJustRequired) {
+          try {
+            const snap = await OtpService.getLatestStateForConversation(context.businessAccountId, conversationId);
+            continuationBlock = buildOtpGatingOverride(snap);
+          } catch { /* keep previous block */ }
+        } else if (leadTurn && toolNames.includes('capture_lead')) {
+          try {
+            const fresh = await getConversationLead(conversationId, context.businessAccountId);
+            const stored = await loadLeadCaptureState(conversationId);
+            leadTurn = replanLeadTurn(
+              leadTurn,
+              { name: fresh?.name && fresh.name !== 'Anonymous' ? fresh.name : leadTurn.known.name, email: fresh?.email || leadTurn.known.email, phone: fresh?.phone || leadTurn.known.phone },
+              leadTrainingConfig,
+              { ...leadTurn.state, whatsapp: stored.whatsapp || leadTurn.state.whatsapp },
+            );
+            continuationBlock = leadTurn.block;
+          } catch (err) {
+            console.error('[Lead Plan] re-plan after capture_lead failed (non-fatal):', err);
+          }
+        }
+
+        // Stream the continuation response token-by-tokenso the widget can
         // display the answer in real time (instead of waiting for the entire
         // tool-call → second-LLM cycle to finish before showing anything).
         let finalContent = '';
@@ -4547,7 +4349,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           context.openaiApiKey || undefined,
           context.businessAccountId,
           context.preferredLanguage,
-          context.responseLength || 'balanced'
+          context.responseLength || 'balanced',
+          continuationBlock
         )) {
           finalContent += token;
           streamedTokens = true;
@@ -4820,6 +4623,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           await this.storeMessageInDB(conversationId, 'assistant', finalContent,
             productIds && productIds.length > 0 ? { productIds } : undefined);
         }
+        await this.finishLeadTurn(leadTurn, conversationId, context.businessAccountId, finalContent);
         yield { type: 'final', data: finalContent };
       } else {
         // No tool calls, store the response
@@ -4830,7 +4634,10 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         const isRefusal = /^(no|nope|nah|not now|skip|later|no thanks|maybe later|not interested|i m good|i m okay|no need|pass)$/i.test(lowerUserMessage) || 
                          (lowerUserMessage.length < 20 && /\b(no|nope|skip|later|not now)\b/i.test(lowerUserMessage));
         
-        if (isRefusal) {
+        // A refusal while a MANDATORY field is still blocking (below the refusal cap) is handled by
+        // the model's re-ask; re-answering the pending question here would bypass the field.
+        const mandatoryStillBlocking = leadTurn?.plan.next?.mode === 'block';
+        if (isRefusal && !mandatoryStillBlocking) {
           // Check conversation history for pending question
           const history = conversationMemory.getConversationHistory(context.userId);
           const pendingQuestion = this.extractLastSubstantiveQuestion(history, userMessage);
@@ -4943,6 +4750,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                   await this.storeMessageInDB(conversationId, 'assistant', finalAnswer,
                     refusalProductIds && refusalProductIds.length > 0 ? { productIds: refusalProductIds } : undefined);
                 }
+                await this.finishLeadTurn(leadTurn, conversationId, context.businessAccountId, finalAnswer);
                 yield { type: 'final', data: finalAnswer };
                 
                 // Skip the normal flow since we handled it
@@ -4978,6 +4786,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                 conversationMemory.storeMessage(context.userId, 'assistant', finalAnswer);
                 await this.storeMessageInDB(conversationId, 'assistant', finalAnswer);
               }
+              await this.finishLeadTurn(leadTurn, conversationId, context.businessAccountId, finalAnswer);
               yield { type: 'final', data: finalAnswer };
               
               // Skip the normal flow since we handled it
@@ -5030,8 +4839,9 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           conversationMemory.storeMessage(context.userId, 'assistant', finalResponse);
           await this.storeMessageInDB(conversationId, 'assistant', finalResponse);
         }
+        await this.finishLeadTurn(leadTurn, conversationId, context.businessAccountId, finalResponse);
 
-        // If content was never streamed to the frontend (e.g. Gemini signaled tool calls but
+        // If content was never streamed to the frontend(e.g. Gemini signaled tool calls but
         // sent no arguments, so buffered content was discarded), send the finalResponse now.
         if (!contentAlreadyYielded && finalResponse && finalResponse.trim()) {
           console.log('[Chat Stream] Yielding finalResponse that was not yet sent to frontend (Gemini empty tool-call guard)');
@@ -5320,17 +5130,9 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         enrichedContext += `When users ask for brochure/catalog/download, provide the EXACT URL above as a clickable markdown link like [${brochureLinks[0].label}](${brochureLinks[0].url})\n\n`;
       }
 
-      // Add lead training configuration (from Train Chroney page) — uses shared utility
-      try {
-        if (widgetSettings?.leadTrainingConfig && !k12ContentOnly) {
-          const leadPrompt = buildLeadTrainingPrompt(widgetSettings.leadTrainingConfig);
-          if (leadPrompt) {
-            enrichedContext += leadPrompt;
-          }
-        }
-      } catch (error) {
-        console.error('[Chat Context] Error loading lead training config:', error);
-      }
+      // Lead training (Train Chroney) is NOT part of this cached context any more: each turn gets
+      // one "LEAD COLLECTION (THIS TURN)" block from services/leadCapture in the final rules, so
+      // static and per-turn lead instructions can't contradict each other.
 
       // Add appointment suggest trigger rules
       try {
