@@ -95,6 +95,9 @@ import aiUsageRoutes from "./routes/aiUsage";
 import { aiBudgetService, AI_UNAVAILABLE_MESSAGE } from "./services/aiBudgetService";
 import { isAiBudgetExceededError } from "./lib/openaiClient";
 import whatsappDocumentsRoutes from "./routes/whatsappDocuments";
+import knowledgeChannelsRoutes, { invalidateKnowledgeCaches } from "./routes/knowledgeChannels";
+import { parseChannelsInput, isKnowledgeChannel } from "@shared/knowledgeChannels";
+import { sanitizeCustomInstructionsChannels } from "./services/chatContext/customInstructions";
 import storeSheetRoutes from "./routes/storeSheet";
 import { inboundMessageLimiter, unsupportedMessageNotice } from "./services/inboundMessageLimiter";
 import { createMetaWebhookSignatureGuard, describeMetaWebhookSignature, timingSafeEqualStrings } from "./services/metaWebhookSignature";
@@ -529,6 +532,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(dataRetentionRoutes);
   app.use(aiUsageRoutes);
   app.use(whatsappDocumentsRoutes);
+  app.use(knowledgeChannelsRoutes);
   app.use(storeSheetRoutes);
   
   // Widget routes (must be before authentication routes)
@@ -13202,7 +13206,7 @@ Return ONLY the refined instruction, nothing else.`
       
       // Build the update data - include LeadSquared fields if provided
       const updateData: any = {};
-      if (customInstructions !== undefined) updateData.customInstructions = customInstructions;
+      if (customInstructions !== undefined) updateData.customInstructions = sanitizeCustomInstructionsChannels(customInstructions);
       if (leadTrainingConfig === null) {
         updateData.leadTrainingConfig = null;
       } else if (leadTrainingConfig !== undefined) {
@@ -24581,11 +24585,19 @@ Strict Requirements:
         return res.status(400).json({ error: "Business account not found" });
       }
       
+      // Channel tags: a subset of website / whatsapp / instagram / facebook; none / all = every channel.
+      const faqBody: Record<string, any> = { ...req.body };
+      if ('channels' in faqBody) {
+        const parsedChannels = parseChannelsInput(faqBody.channels);
+        if (!parsedChannels.ok) return res.status(400).json({ error: parsedChannels.error });
+        faqBody.channels = parsedChannels.channels;
+      }
       const validatedData = insertFaqSchema.parse({
-        ...req.body,
+        ...faqBody,
         businessAccountId
       });
       const faq = await storage.createFaq(validatedData);
+      if (faq.channels) invalidateKnowledgeCaches(businessAccountId);
       res.json(faq);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -24601,7 +24613,9 @@ Strict Requirements:
       const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 20, 1), 100);
       const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
       const search = (req.query.search as string) || undefined;
-      const result = await storage.getFaqsPaginated(businessAccountId, limit, offset, search);
+      // ?channel=whatsapp → FAQs used on WhatsApp (untagged + WhatsApp-tagged). Unknown values are ignored.
+      const channel = isKnowledgeChannel(req.query.channel) ? req.query.channel : undefined;
+      const result = await storage.getFaqsPaginated(businessAccountId, limit, offset, search, channel);
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -24630,7 +24644,19 @@ Strict Requirements:
       if (!businessAccountId) {
         return res.status(400).json({ error: "Business account not found" });
       }
-      const faq = await storage.updateFaq(req.params.id, businessAccountId, req.body);
+      // Allow-list: only the editable FAQ fields (channels validated).
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const faqUpdate: Record<string, any> = {};
+      for (const key of ['question', 'answer', 'category'] as const) {
+        if (body[key] !== undefined) faqUpdate[key] = body[key];
+      }
+      if ('channels' in body) {
+        const parsedChannels = parseChannelsInput(body.channels);
+        if (!parsedChannels.ok) return res.status(400).json({ error: parsedChannels.error });
+        faqUpdate.channels = parsedChannels.channels;
+      }
+      const faq = await storage.updateFaq(req.params.id, businessAccountId, faqUpdate);
+      if ('channels' in faqUpdate) invalidateKnowledgeCaches(businessAccountId);
       res.json(faq);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -24776,10 +24802,15 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       // Add businessAccountId to each FAQ and insert
       const createdFaqs = [];
       for (const faq of faqs) {
-        const faqData = {
+        const faqData: Record<string, any> = {
           ...faq,
           businessAccountId
         };
+        if (faq && typeof faq === 'object' && 'channels' in faq) {
+          const parsedChannels = parseChannelsInput(faq.channels);
+          if (!parsedChannels.ok) continue; // Skip invalid FAQs
+          faqData.channels = parsedChannels.channels;
+        }
         
         const result = insertFaqSchema.safeParse(faqData);
         if (!result.success) {
@@ -24841,6 +24872,12 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(400).json({ error: "PDF file is required" });
       }
 
+      // Optional channel tags (multipart field: JSON list or comma-separated).
+      const parsedDocChannels = parseChannelsInput(req.body?.channels);
+      if (!parsedDocChannels.ok) {
+        return res.status(400).json({ error: parsedDocChannels.error });
+      }
+
       let storageKey: string;
       let storageType: 'r2' | 'local' = 'local';
 
@@ -24889,6 +24926,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         storageKey: storageKey,
         uploadStatus: 'pending',
         uploadedBy: userId,
+        channels: parsedDocChannels.channels,
       });
 
       const document = await storage.createTrainingDocument(documentData);
@@ -25063,13 +25101,19 @@ Be constructive and helpful. Return ONLY valid JSON.`;
 
       const { urlTrainingService } = await import('./services/urlTrainingService');
 
+      const parsedUrlChannels = parseChannelsInput(req.body?.channels);
+      if (!parsedUrlChannels.ok) {
+        return res.status(400).json({ error: parsedUrlChannels.error });
+      }
+
       // Create the trained URL record
       const [newUrl] = await db.insert(trainedUrls).values({
         businessAccountId,
         url,
         description: description || null,
         addedBy: userId,
-        status: 'pending'
+        status: 'pending',
+        channels: parsedUrlChannels.channels,
       }).returning();
 
       // Start processing in background
@@ -27924,7 +27968,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       // which arrives as a boolean). Normalize either form to the stored string.
       if (poweredByEnabled !== undefined) updateData.poweredByEnabled = String(poweredByEnabled) === "false" ? "false" : "true";
       if (currency !== undefined) updateData.currency = currency;
-      if (customInstructions !== undefined) updateData.customInstructions = customInstructions;
+      if (customInstructions !== undefined) updateData.customInstructions = sanitizeCustomInstructionsChannels(customInstructions);
       
       // Widget size and position settings
       if (widgetWidth !== undefined) updateData.widgetWidth = widgetWidth;
@@ -33327,9 +33371,15 @@ Return ONLY a valid JSON object in this format:
       const { toWhatsappSettingsDto } = await import("./services/whatsapp/settingsDto");
       const formattedSettings = toWhatsappSettingsDto(settings);
 
+      // What "Same as website" means for the WhatsApp answer-style pickers.
+      const websiteWidget = await storage.getWidgetSettings(businessAccountId).catch(() => undefined);
       res.json({
         settings: formattedSettings,
         webhookUrl,
+        websiteAnswerStyle: {
+          personality: websiteWidget?.personality || "friendly",
+          responseLength: (websiteWidget as any)?.responseLength || "balanced",
+        },
       });
     } catch (error: any) {
       console.error("Error fetching WhatsApp settings:", error);
@@ -33447,7 +33497,6 @@ Return ONLY a valid JSON object in this format:
       if (body.phoneNumberLength !== undefined) updateData.phoneNumberLength = Math.max(1, Math.min(20, parseInt(body.phoneNumberLength) || 10));
       if (body.updateLeadEnabled !== undefined) updateData.updateLeadEnabled = body.updateLeadEnabled === false ? "false" : "true";
       if (body.requirePanEmailForLead !== undefined) updateData.requirePanEmailForLead = body.requirePanEmailForLead === true ? "true" : "false";
-      if (body.useMasterTraining !== undefined) updateData.useMasterTraining = body.useMasterTraining === false ? "false" : "true";
       if (body.useLeadTraining !== undefined) updateData.useLeadTraining = body.useLeadTraining === false ? "false" : "true";
       if (body.whitelistEnabled !== undefined) {
         // Turning this gate on with an empty list silently discards EVERY inbound WhatsApp
@@ -33483,9 +33532,11 @@ Return ONLY a valid JSON object in this format:
       if (body.docConfirmationMode !== undefined) updateData.docConfirmationMode = ["per_document", "after_all_documents"].includes(body.docConfirmationMode) ? body.docConfirmationMode : "per_document";
       if (body.docConfirmationHeader !== undefined) updateData.docConfirmationHeader = body.docConfirmationHeader || null;
       if (body.docConfirmationFooter !== undefined) updateData.docConfirmationFooter = body.docConfirmationFooter || null;
-      if (body.useCaseMode !== undefined) {
-        const validModes = ["lead_capture", "direct_sales", "customer_support"];
-        updateData.useCaseMode = validModes.includes(body.useCaseMode) ? body.useCaseMode : "lead_capture";
+      // Phase 2: WhatsApp answer style, WhatsApp-only instructions mode (kept in sync with
+      // useMasterTraining), and use case mode (saving it marks the choice as explicit).
+      {
+        const { phase2SettingsUpdate } = await import("./services/whatsapp/aiReplySettings");
+        Object.assign(updateData, phase2SettingsUpdate(body));
       }
       // AI Setup — response mode (nullable for legacy accounts)
       if (body.aiResponseMode !== undefined) {

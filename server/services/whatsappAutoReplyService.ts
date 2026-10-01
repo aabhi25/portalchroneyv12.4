@@ -27,14 +27,162 @@ import {
 import { storage } from "../storage";
 import { resolveProfile } from "./customerProfileService";
 import { composeCrossPlatformContext, triggerSnapshotUpdate } from "./crossPlatformMemoryService";
-import { selectRelevantTools } from "../aiTools";
+import { selectRelevantTools, getToolByName } from "../aiTools";
 import { ToolExecutionService } from "./toolExecutionService";
 import { isSessionActive, isSessionExpiredError, markSessionExpired, sendTemplateMessage } from "./whatsappSessionService";
+import { resolveChatContextMode } from "./chatContext/config";
+import { buildBusinessProfile, type KnowledgePassage } from "./chatContext/businessProfile";
+import { buildRetrievalQuery, capHistoryForModel } from "./chatContext/conversationWindow";
+import { retrieveKnowledge, formatKnowledgeBlock, type KnowledgeItem } from "./chatContext/knowledgeRetrieval";
+import { ensurePassageVectors } from "./chatContext/passageVectors";
+import { buildCustomInstructionsBlock, selectInstructionsForMessage } from "./chatContext/customInstructions";
+import { estimateTokens } from "./chatContext/tokens";
+import { embeddingService } from "./embeddingService";
+import { appliesToChannel } from "@shared/knowledgeChannels";
+import { effectiveUseCaseMode, resolveAnswerStyle, websiteInstructionsApply } from "./whatsapp/aiReplySettings";
+import {
+  WHATSAPP_EXTRA_TOOL_NAMES, formatSlotsForWhatsapp, formatOrdersForWhatsapp, toWhatsAppText,
+  whatsappAppointmentTools, resolveWhatsappModel, processWhatsappFallbackTemplate, WHATSAPP_HISTORY_LIMITS, isModelUnavailableError,
+} from "./whatsapp/aiReplyHelpers";
+
+/** Which context builder produced the knowledge part of the prompt (logged; read by tests). */
+export interface WhatsappContextStats {
+  mode: "retrieval" | "legacy";
+  contextChars: number;
+  profileTokens?: number;
+  knowledgeTokens?: number;
+  knowledgeItems?: number;
+  corpusTokens?: number;
+  fellBack?: boolean;
+}
+
+/** Phase 2 inputs to generateAIResponse (all optional: absent = previous behaviour). */
+interface WhatsappBrainOptions {
+  model?: string;
+  answerStyle?: { personality: string; responseLength: string; personalityFromWhatsapp: boolean };
+  /** Train Chroney instructions formatted for WhatsApp (persona mode: the secondary block). */
+  websiteInstructions?: string;
+  /** Conditional instructions whose keywords appear in this message. */
+  turnInstructions?: string;
+  /** Business-written fallback reply (Train Chroney 'fallback' instruction), placeholders resolved. */
+  fallbackReply?: string;
+  appointmentsEnabled?: boolean;
+  ordersEnabled?: boolean;
+  senderPhone?: string;
+}
 
 interface ConversationMessage {
-  role: "user" | "assistant";
+  /** 'system' only for the "earlier in this conversation" note of a long chat. */
+  role: "user" | "assistant" | "system";
   content: string;
   timestamp: Date;
+}
+
+/** Personality / response length for the WhatsApp prompt, worded like the website's. */
+function answerStyleBlock(
+  style: WhatsappBrainOptions["answerStyle"] | undefined,
+  opts: { includePersonality: boolean },
+): string {
+  if (!style) return "";
+  let block = `ANSWER STYLE:\n`;
+  if (opts.includePersonality) {
+    block += `Personality (${style.personality}):\n${llamaService.getPersonalityTraits(style.personality)}\n`;
+  }
+  block += `${llamaService.getResponseLengthInstruction(style.responseLength)}\n`;
+  block += `- On WhatsApp keep each reply chat-sized: short paragraphs, no tables, no headings.\n\n`;
+  return block;
+}
+
+/** Added to the system prompt when appointment booking / order tracking is on for this reply. */
+function whatsappToolGuide(appointments: boolean, orders: boolean): string {
+  let s = `\nTOOLS ON WHATSAPP:\n`;
+  if (appointments) {
+    s += `- Appointments: when the customer wants to book, call list_available_slots and show the open slots as a short numbered list ("1. Mon 6 Oct, 10:00 AM"). When they pick one (a number or a time), call book_appointment with that slot's date and time. Ask only for their name if you don't have it — never for their phone number (we already have it). Only confirm a booking after book_appointment succeeded.\n`;
+  }
+  if (orders) {
+    s += `- Orders: to check an order, ask for the order ID (or use the phone number they give) and call track_order. For a return or exchange, collect the order ID, the reason and refund-or-exchange one at a time, then call initiate_return.\n`;
+  }
+  return s;
+}
+
+/** Final formatting rule after appointment / order tool results. */
+function whatsappToolResultFormat(used: Set<string>): string {
+  const rules = [
+    "WHATSAPP FORMAT: plain WhatsApp text only — no tables, no markdown headings, no HTML, no links unless given in the tool result. Use *bold* sparingly.",
+  ];
+  if (used.has("list_available_slots")) {
+    rules.push(`Show the slots exactly as the numbered list in the tool result, one per line like "1. Mon 6 Oct, 10:00 AM" — never show the [book with …] part. Ask the customer to reply with the number of the slot they want. Never invent slots.`);
+  }
+  if (used.has("book_appointment")) {
+    rules.push("Confirm the booking only if the tool said it was booked; otherwise explain briefly and offer other slots.");
+  }
+  if (used.has("track_order")) {
+    rules.push("Give the order status in 1-3 short lines (status, courier / tracking number, expected delivery when known).");
+  }
+  return rules.join("\n");
+}
+
+/** Widget settings the WhatsApp reply inherits (answer style) or checks (appointment booking). */
+interface WhatsappWidgetStyle {
+  personality: string | null;
+  responseLength: string | null;
+  appointmentBookingEnabled: string | null;
+}
+
+function widgetStyleOf(w: any): WhatsappWidgetStyle {
+  return {
+    personality: w?.personality ?? null,
+    responseLength: w?.responseLength ?? null,
+    appointmentBookingEnabled: w?.appointmentBookingEnabled ?? null,
+  };
+}
+
+interface WhatsappBusinessContext {
+  context: string;
+  widgetCustomInstructions: string | null;
+  leadTrainingConfig: any | null;
+  widget: WhatsappWidgetStyle | null;
+  stats: WhatsappContextStats;
+}
+
+/**
+ * Retrieved knowledge in the WhatsApp prompt's existing shape: FAQ matches under the
+ * "🔒 MATCHED FAQs" heading its rules refer to, everything else as the website's knowledge block.
+ */
+function formatWhatsappKnowledge(items: KnowledgeItem[]): string {
+  const faqItems = items.filter(i => i.source === "faq");
+  const other = items.filter(i => i.source !== "faq");
+  let out = "";
+  if (other.length > 0) out += formatKnowledgeBlock(other);
+  if (faqItems.length > 0) {
+    out += `\n🔒 MATCHED FAQs — HIGHEST PRIORITY KNOWLEDGE (USE THIS INFORMATION):\n`;
+    out += `The following FAQ answers were matched to the customer's query with high confidence.\n`;
+    out += `You MUST use the information from these FAQs to answer the customer's question.\n`;
+    out += `SUMMARIZE naturally in your own words — do NOT copy/paste verbatim. Adapt the answer to fit what the customer actually asked.\n`;
+    out += `These contain OFFICIAL business-verified facts — use ONLY facts from these answers, do NOT add your own knowledge.\n\n`;
+    for (const item of faqItems) {
+      const m = /^Q: ([\s\S]*?)\nA: ([\s\S]*)$/.exec(item.text);
+      out += `━━━ FAQ MATCH ━━━\n`;
+      out += m ? `Q: ${m[1]}\n✅ OFFICIAL ANSWER: ${m[2]}\n` : `${item.text}\n`;
+      out += `━━━━━━━━━━━━━━━━━\n\n`;
+    }
+  }
+  return out;
+}
+
+/** The customer is choosing one of the slots we just listed ("2", "option 3", "10:30", "4 pm"). */
+function looksLikeSlotPick(userMessage: string, history: Array<{ role: string; content: string }>): boolean {
+  const msg = userMessage.trim().toLowerCase();
+  const isPick = /^(option|number|slot|no\.?)?\s*\d{1,2}[.)]?$/.test(msg) || /^\d{1,2}(:\d{2})?\s*(am|pm)?$/.test(msg);
+  if (!isPick) return false;
+  const lastAssistant = [...history].reverse().find(m => m.role === "assistant");
+  return !!lastAssistant && /\b1\.\s.*\d{1,2}:\d{2}\s*(am|pm)/i.test(lastAssistant.content);
+}
+
+/** Conditional Train Chroney instructions triggered by this message (keywords), for the final note. */
+function matchedConditionalInstructions(raw: string | null, userMessage: string): string {
+  const { matchedConditional } = selectInstructionsForMessage(raw, userMessage, "whatsapp");
+  return matchedConditional.map(i => `- ${i.text}`).join("\n");
 }
 
 /**
@@ -66,6 +214,8 @@ const CAPTURE_LEAD_TOOL = {
 
 export class WhatsappAutoReplyService {
   private senderLocks: Map<string, Promise<any>> = new Map();
+  /** Context stats of the latest reply (logging / tests). */
+  lastContextStats: WhatsappContextStats | null = null;
 
   // Sent when the AI can't produce an answer, so the customer isn't left in silence.
   private readonly AI_FAILURE_REPLY = "Sorry, I'm having trouble answering right now. Please try again in a few minutes.";
@@ -201,14 +351,19 @@ export class WhatsappAutoReplyService {
         productCatalog: settings.useProductCatalogKnowledge !== "false",
       };
       let t = Date.now();
-      const [conversationHistory, { context: businessContext, widgetCustomInstructions, leadTrainingConfig }, detectedLang] = await Promise.all([
-        this.getConversationHistory(businessAccountId, senderPhone),
-        this.buildBusinessContext(businessAccountId, userMessage, knowledgeToggles),
+      // History feeds both the model and the retrieval query (follow-ups), so the context
+      // builder gets the same promise instead of waiting for it up front.
+      const historyPromise = this.getConversationHistory(businessAccountId, senderPhone, userMessage);
+      const [conversationHistory, { context: businessContext, widgetCustomInstructions, leadTrainingConfig, widget: widgetStyle, stats: contextStats }, detectedLang, replyModel] = await Promise.all([
+        historyPromise,
+        this.buildBusinessContext(businessAccountId, userMessage, knowledgeToggles, historyPromise),
         quickLang !== null
           ? Promise.resolve(quickLang)
-          : llamaService.detectLanguage(userMessage, apiKey).catch(() => 'en')
+          : llamaService.detectLanguage(userMessage, apiKey).catch(() => 'en'),
+        resolveWhatsappModel(),
       ]);
       timings.parallelFetch = Date.now() - t;
+      this.lastContextStats = contextStats;
       console.log(`[WhatsApp Auto-Reply] Language detected for "${userMessage.substring(0, 30)}": ${detectedLang}`);
 
       let crossPlatformContext = "";
@@ -297,15 +452,27 @@ export class WhatsappAutoReplyService {
         console.error("[WhatsApp Auto-Reply] Flow context fetch error (non-fatal):", err);
       }
 
+      // Train Chroney instructions, parsed exactly like the website (always-on / conditional /
+      // fallback; WhatsApp-tagged or untagged only). Off when "Use Train Chroney instructions" is
+      // off or the WhatsApp-only instructions are set to replace them.
+      const applyWebsiteInstructions = websiteInstructionsApply(settings);
+      const instructionsBlock = applyWebsiteInstructions
+        ? buildCustomInstructionsBlock(widgetCustomInstructions, "whatsapp")
+        : null;
+      const websiteInstructionsText = instructionsBlock?.body || "";
       const combinedInstructions = [
-        settings.useMasterTraining !== "false" ? widgetCustomInstructions : null,
+        websiteInstructionsText || null,
         settings.customPrompt
       ].filter(Boolean).join('\n\n');
+      const turnInstructions = instructionsBlock && !instructionsBlock.isLegacyText
+        ? matchedConditionalInstructions(widgetCustomInstructions, userMessage)
+        : "";
+      const fallbackTemplate = instructionsBlock?.fallback?.[0];
 
       const effectiveLeadTraining = settings.useLeadTraining !== "false" ? leadTrainingConfig : null;
 
-      if (settings.useMasterTraining === "false") {
-        console.log(`[WhatsApp Auto-Reply] Master training disabled — skipping custom instructions`);
+      if (!applyWebsiteInstructions) {
+        console.log(`[WhatsApp Auto-Reply] Master training disabled (instructions mode: ${settings.instructionsMode || "add"}) — skipping custom instructions`);
       }
       if (settings.useLeadTraining === "false") {
         console.log(`[WhatsApp Auto-Reply] Lead training disabled — skipping lead training config`);
@@ -320,9 +487,30 @@ export class WhatsappAutoReplyService {
         }
       }
 
+      // Appointment booking / order tracking: same switches as the website, never inside a
+      // guided flow / journey session (the flow owns the conversation then).
+      const wantsAppointments = businessAccount.appointmentsEnabled === "true" && widgetStyle?.appointmentBookingEnabled === "true";
+      const wantsOrders = businessAccount.demoOrdersEnabled === "true";
+      let flowSessionActive = false;
+      if (wantsAppointments || wantsOrders) {
+        flowSessionActive = await this.hasActiveFlowSession(businessAccountId, senderPhone).catch(() => true);
+        if (flowSessionActive) console.log(`[WhatsApp Auto-Reply] Guided flow in progress — appointment / order tools off for this reply`);
+      }
+
       t = Date.now();
       const personaPrompt = settings.customPrompt || undefined;
-      const useCaseMode = (settings as any).useCaseMode || "lead_capture";
+      // 'lead_capture' (colleague) framing only when chosen on purpose — see whatsapp/aiReplySettings.
+      const useCaseMode = effectiveUseCaseMode(settings as any);
+      const brain: WhatsappBrainOptions = {
+        model: replyModel,
+        answerStyle: resolveAnswerStyle(settings as any, widgetStyle),
+        websiteInstructions: websiteInstructionsText || undefined,
+        turnInstructions: turnInstructions || undefined,
+        fallbackReply: fallbackTemplate ? processWhatsappFallbackTemplate(fallbackTemplate) : undefined,
+        appointmentsEnabled: wantsAppointments && !flowSessionActive,
+        ordersEnabled: wantsOrders && !flowSessionActive,
+        senderPhone,
+      };
       const aiResult = await this.generateAIResponse(
         apiKey,
         userMessage,
@@ -338,7 +526,8 @@ export class WhatsappAutoReplyService {
         flowContext || undefined,
         personaPrompt,
         useCaseMode,
-        knowledgeToggles.productCatalog
+        knowledgeToggles.productCatalog,
+        brain
       );
       timings.aiGeneration = Date.now() - t;
       
@@ -520,10 +709,38 @@ export class WhatsappAutoReplyService {
     }
   }
 
+  /**
+   * The conversation before the current message, for the model: messages of the last 48 h
+   * (WhatsApp session logic, unchanged), then the website chat's window — up to ~20 messages /
+   * ~3000 tokens, older ones folded into one short "earlier in this conversation" note.
+   * The webhook stores the incoming message before replying; that copy is dropped here because
+   * the current message is sent to the model separately.
+   */
   private async getConversationHistory(
-    businessAccountId: string, 
-    senderPhone: string
+    businessAccountId: string,
+    senderPhone: string,
+    currentMessage?: string
   ): Promise<ConversationMessage[]> {
+    const rows = await this.loadRecentHistory(businessAccountId, senderPhone);
+    const last = rows[rows.length - 1];
+    if (currentMessage !== undefined && last?.role === "user" && last.content.trim() === currentMessage.trim()) {
+      rows.pop();
+    }
+    const window = capHistoryForModel(rows, { maxMessages: WHATSAPP_HISTORY_LIMITS.maxMessages, maxTokens: WHATSAPP_HISTORY_LIMITS.maxTokens });
+    if (window.droppedCount > 0) {
+      console.log(`[WhatsApp Auto-Reply] History: kept ${window.messages.length - 1} recent message(s), ${window.droppedCount} older folded into a note`);
+    }
+    return window.messages.map(m => ({
+      role: m.role,
+      content: m.content,
+      timestamp: (m as any).timestamp || new Date(),
+    }));
+  }
+
+  private async loadRecentHistory(
+    businessAccountId: string,
+    senderPhone: string
+  ): Promise<Array<ConversationMessage & { role: "user" | "assistant" }>> {
     const cutoffDate = new Date(Date.now() - 48 * 60 * 60 * 1000);
     const recentMessages = await db
       .select({
@@ -540,8 +757,8 @@ export class WhatsappAutoReplyService {
         )
       )
       .orderBy(desc(whatsappLeads.receivedAt))
-      .limit(10);
-    
+      .limit(WHATSAPP_HISTORY_LIMITS.fetch);
+
     return recentMessages
       .reverse()
       .filter(msg => msg.rawMessage)
@@ -692,14 +909,152 @@ export class WhatsappAutoReplyService {
     return { saved: true, message: `Saved the customer's ${what}. Thank them briefly and continue.` };
   }
 
+  /**
+   * Business knowledge for one reply. Default: the website chat's retrieval (compact business
+   * profile + the FAQs / document / URL / page excerpts relevant to this message, honouring the
+   * per-source toggles and WhatsApp channel tags). The previous "everything in the prompt" builder
+   * is kept as the fallback when retrieval fails, and for accounts switched to legacy with the
+   * chat-context kill switch (CHAT_CONTEXT_MODE / chat_context_* settings) or
+   * WHATSAPP_CONTEXT_MODE=legacy.
+   */
   private async buildBusinessContext(
     businessAccountId: string,
     userMessage: string,
+    knowledgeToggles?: { faq: boolean; document: boolean; website: boolean; productCatalog: boolean },
+    historyPromise?: Promise<ConversationMessage[]>
+  ): Promise<WhatsappBusinessContext> {
+    let mode: "retrieval" | "legacy" = "retrieval";
+    try {
+      if ((process.env.WHATSAPP_CONTEXT_MODE || "").trim().toLowerCase() === "legacy") mode = "legacy";
+      else mode = await resolveChatContextMode(businessAccountId);
+    } catch {
+      mode = "retrieval";
+    }
+    if (mode === "retrieval") {
+      try {
+        return await this.buildRetrievalBusinessContext(businessAccountId, userMessage, knowledgeToggles, historyPromise);
+      } catch (err) {
+        console.error(`[WhatsApp Auto-Reply] Retrieval context failed — using the full context instead:`, err instanceof Error ? err.message : err);
+        const legacy = await this.buildLegacyBusinessContext(businessAccountId, userMessage, knowledgeToggles);
+        return { ...legacy, stats: { ...legacy.stats, fellBack: true } };
+      }
+    }
+    return this.buildLegacyBusinessContext(businessAccountId, userMessage, knowledgeToggles);
+  }
+
+  /** Retrieval mode (see buildBusinessContext). */
+  private async buildRetrievalBusinessContext(
+    businessAccountId: string,
+    userMessage: string,
+    knowledgeToggles?: { faq: boolean; document: boolean; website: boolean; productCatalog: boolean },
+    historyPromise?: Promise<ConversationMessage[]>
+  ): Promise<WhatsappBusinessContext> {
+    const useFaq = knowledgeToggles ? knowledgeToggles.faq : true;
+    const useDocument = knowledgeToggles ? knowledgeToggles.document : true;
+    const useWebsite = knowledgeToggles ? knowledgeToggles.website : true;
+    const started = Date.now();
+
+    // CACHED (5 min, same cache as the website): business overview + compact profile + passages.
+    const cacheKey = `${BusinessContextCache.KEYS.WA_BUSINESS_CONTEXT(businessAccountId)}:rv:w${useWebsite ? 1 : 0}d${useDocument ? 1 : 0}`;
+    const cached = await businessContextCache.getOrFetch(cacheKey, async () => {
+      const [accountResult, widgetResult, websiteResult, pagesResult, docsResult] = await Promise.allSettled([
+        db.query.businessAccounts.findFirst({ where: eq(businessAccounts.id, businessAccountId) }),
+        db.select().from(widgetSettings).where(eq(widgetSettings.businessAccountId, businessAccountId)).limit(1),
+        useWebsite
+          ? (async () => (await import("../websiteAnalysisService")).websiteAnalysisService.getAnalyzedContent(businessAccountId))()
+          : Promise.resolve(null),
+        useWebsite ? storage.getAnalyzedPages(businessAccountId) : Promise.resolve([]),
+        useDocument ? storage.getTrainingDocuments(businessAccountId) : Promise.resolve([]),
+      ]);
+      const account = accountResult.status === "fulfilled" ? accountResult.value : null;
+      const widget = widgetResult.status === "fulfilled" ? widgetResult.value[0] : undefined;
+      const website = websiteResult.status === "fulfilled" ? websiteResult.value : null;
+      if (pagesResult.status === "rejected" || docsResult.status === "rejected") {
+        // Don't build (and cache) a profile that silently lost a source: use the full context.
+        throw new Error("could not load website pages / training documents");
+      }
+      const pages = pagesResult.value;
+      const docs = docsResult.value;
+      // The business description stays whole (as before on WhatsApp); the rest is the website's
+      // compact profile, built from WhatsApp-tagged / untagged pages and documents only.
+      const profile = buildBusinessProfile({
+        companyDescription: null,
+        website: website as any,
+        pages,
+        docs,
+      }, { channel: "whatsapp" });
+      const overview = account?.description ? `BUSINESS OVERVIEW:\n${account.description}\n\n` : "";
+      return {
+        staticText: overview + profile.text,
+        passages: profile.passages as KnowledgePassage[],
+        customInstructions: widget?.customInstructions || null,
+        profileTokens: profile.tokens,
+        corpusTokens: profile.corpusTokens,
+        hasOpenAiKey: !!account?.openaiApiKey,
+      };
+    });
+
+    if (cached.passages.length > 0 && cached.hasOpenAiKey) {
+      // Background, once per content version (shared with the website: same passage text).
+      ensurePassageVectors(businessAccountId, cached.passages, texts => embeddingService.generateBatchEmbeddings(texts, businessAccountId)).catch(() => {});
+    }
+
+    // DYNAMIC: knowledge for this message + fresh widget settings (lead training, style, booking).
+    const msg = (userMessage || "").trim();
+    const isGreeting = msg.length < 2 || /^(hi+|hey+|hello+|yo|sup|wassup|bye|goodbye|see you|cya|thanks?|thank you|thx|ty)[\s!.]*$/i.test(msg);
+    const [knowledge, freshWidgetArr] = await Promise.all([
+      (async () => {
+        if (isGreeting || (!useFaq && !useDocument && !useWebsite)) return null;
+        const history = historyPromise ? await historyPromise.catch(() => [] as ConversationMessage[]) : [];
+        const query = buildRetrievalQuery(msg, history.filter(h => h.role !== "system").map(h => ({ role: h.role, content: h.content })));
+        return retrieveKnowledge({
+          businessAccountId,
+          query,
+          passages: cached.passages,
+          embedQuery: (text) => embeddingService.generateEmbedding(text, businessAccountId),
+          channel: "whatsapp",
+          // Same per-source switches as before: trained URLs were part of document search on WhatsApp.
+          sources: { faq: useFaq, document: useDocument, url: useDocument, page: useWebsite, doc_summary: useDocument },
+        });
+      })(),
+      db.select().from(widgetSettings).where(eq(widgetSettings.businessAccountId, businessAccountId)).limit(1),
+    ]);
+
+    let context = cached.staticText;
+    let knowledgeTokens = 0;
+    if (knowledge && knowledge.items.length > 0) {
+      const block = formatWhatsappKnowledge(knowledge.items);
+      context += block;
+      knowledgeTokens = estimateTokens(block);
+    }
+    const freshWidget = freshWidgetArr[0];
+    console.log(`[WhatsApp Auto-Reply] Context (retrieval): profile ${cached.profileTokens} tokens (corpus ${cached.corpusTokens}), ${knowledge?.items.length ?? 0} knowledge item(s) [${knowledge?.items.map(i => i.source).join(", ") || "none"}] ${knowledgeTokens} tokens, ${context.length} chars total in ${Date.now() - started}ms${knowledge && !knowledge.usedVectors ? " (keyword matching only)" : ""}`);
+    return {
+      context,
+      widgetCustomInstructions: freshWidget ? (freshWidget.customInstructions ?? null) : cached.customInstructions,
+      leadTrainingConfig: freshWidget?.leadTrainingConfig || null,
+      widget: freshWidget ? widgetStyleOf(freshWidget) : null,
+      stats: {
+        mode: "retrieval",
+        contextChars: context.length,
+        profileTokens: cached.profileTokens,
+        knowledgeTokens,
+        knowledgeItems: knowledge?.items.length ?? 0,
+        corpusTokens: cached.corpusTokens,
+      },
+    };
+  }
+
+  /** The previous builder: description, website analysis, every page and document summary, then FAQ / document search. */
+  private async buildLegacyBusinessContext(
+    businessAccountId: string,
+    userMessage: string,
     knowledgeToggles?: { faq: boolean; document: boolean; website: boolean; productCatalog: boolean }
-  ): Promise<{ context: string; widgetCustomInstructions: string | null; leadTrainingConfig: any | null }> {
+  ): Promise<WhatsappBusinessContext> {
     let context = "";
     let widgetCustomInstructions: string | null = null;
     let leadTrainingConfig: any | null = null;
+    let widget: WhatsappWidgetStyle | null = null;
 
     // Default all knowledge sources ON when not specified (legacy behavior).
     const useFaq = knowledgeToggles ? knowledgeToggles.faq : true;
@@ -746,8 +1101,9 @@ export class WhatsappAutoReplyService {
         const businessAccount = businessAccountResult.status === 'fulfilled' ? businessAccountResult.value : null;
         const widgetSettingArr = widgetSettingResult.status === 'fulfilled' ? widgetSettingResult.value : [];
         const websiteContent = websiteContentResult.status === 'fulfilled' ? websiteContentResult.value : null;
-        const analyzedPages = analyzedPagesResult.status === 'fulfilled' ? analyzedPagesResult.value : [];
-        const trainingDocs = trainingDocsResult.status === 'fulfilled' ? trainingDocsResult.value : [];
+        // Channel tags: pages / documents limited to other channels are left out on WhatsApp.
+        const analyzedPages = (analyzedPagesResult.status === 'fulfilled' ? analyzedPagesResult.value : []).filter(p => appliesToChannel(p.channels, "whatsapp"));
+        const trainingDocs = (trainingDocsResult.status === 'fulfilled' ? trainingDocsResult.value : []).filter(d => appliesToChannel(d.channels, "whatsapp"));
         
         if (businessAccount?.description) {
           staticContext += `BUSINESS OVERVIEW:\n${businessAccount.description}\n\n`;
@@ -875,8 +1231,8 @@ export class WhatsappAutoReplyService {
         return [];
       };
       const [searchResults, relevantFaqs, freshWidgetSettingArr] = await Promise.all([
-        useDocument ? vectorSearchService.search(userMessage, businessAccountId, 5, 0.50).catch(searchFailed("Document")) : Promise.resolve([]),
-        useFaq ? faqEmbeddingService.searchFAQs(userMessage, businessAccountId, 5, 0.50).catch(searchFailed("FAQ")) : Promise.resolve([]),
+        useDocument ? vectorSearchService.search(userMessage, businessAccountId, 5, 0.50, "whatsapp").catch(searchFailed("Document")) : Promise.resolve([]),
+        useFaq ? faqEmbeddingService.searchFAQs(userMessage, businessAccountId, 5, 0.50, "whatsapp").catch(searchFailed("FAQ")) : Promise.resolve([]),
         db.select().from(widgetSettings).where(eq(widgetSettings.businessAccountId, businessAccountId)).limit(1)
       ]);
 
@@ -909,6 +1265,7 @@ export class WhatsappAutoReplyService {
       }
 
       const freshWidgetSetting = freshWidgetSettingArr[0];
+      if (freshWidgetSetting) widget = widgetStyleOf(freshWidgetSetting);
       if (freshWidgetSetting?.leadTrainingConfig) {
         leadTrainingConfig = freshWidgetSetting.leadTrainingConfig;
         console.log(`[WhatsApp Auto-Reply] Loaded fresh leadTrainingConfig for lead collection`);
@@ -930,7 +1287,7 @@ export class WhatsappAutoReplyService {
       console.log(`[WhatsApp Auto-Reply] WARNING: No context built - AI will have no training data!`);
     }
     console.log(`[WhatsApp Auto-Reply] =====================================`);
-    return { context, widgetCustomInstructions, leadTrainingConfig };
+    return { context, widgetCustomInstructions, leadTrainingConfig, widget, stats: { mode: "legacy", contextChars: context.length } };
   }
 
   private async generateAIResponse(
@@ -948,7 +1305,8 @@ export class WhatsappAutoReplyService {
     flowContext?: string,
     personaPrompt?: string,
     useCaseMode?: string,
-    useProductCatalog: boolean = true
+    useProductCatalog: boolean = true,
+    opts: WhatsappBrainOptions = {}
   ): Promise<{ text: string; productImages?: string[]; productCards?: { name: string; description?: string; price?: number; imageUrl?: string }[]; isProductSelection?: boolean; hasMoreProducts?: boolean } | null> {
     try {
       // Bounded so a hung request can't leave the customer without any answer.
@@ -979,9 +1337,12 @@ export class WhatsappAutoReplyService {
         // explicit factual asks (pricing/policy/hours/specs) whose answer is not in KB/FAQs/docs.
         // If customPrompt also contains widget/master training (combinedInstructions), include it
         // as secondary CUSTOM BUSINESS INSTRUCTIONS below the persona block.
-        const extraCustomInstructions = (customPrompt && customPrompt.trim() !== personaPrompt!.trim())
-          ? customPrompt
-          : '';
+        // Train Chroney instructions only (the persona is already the PRIMARY DIRECTIVE above).
+        const extraCustomInstructions = opts.websiteInstructions !== undefined
+          ? opts.websiteInstructions
+          : (customPrompt && customPrompt.trim() !== personaPrompt!.trim())
+            ? customPrompt
+            : '';
         // Use Case Mode anchor — frames WHO the persona is talking to and the high-level goal of the conversation.
         // Persona body itself is unchanged; this is only a framing line above it.
         const mode = (useCaseMode || "lead_capture").toLowerCase();
@@ -1056,6 +1417,9 @@ If the conversation history contains a "[Products shown: ...]" message and the u
         if (extraCustomInstructions) {
           systemPrompt += `SECONDARY CUSTOM BUSINESS INSTRUCTIONS (subordinate to the PRIMARY DIRECTIVE above):\n${extraCustomInstructions}\n\n`;
         }
+
+        // Answer style: the persona sets the tone; a WhatsApp personality only when one was picked for WhatsApp.
+        systemPrompt += answerStyleBlock(opts.answerStyle, { includePersonality: !!opts.answerStyle?.personalityFromWhatsapp });
 
         // Add customer profile data collected during a recent flow session
         if (flowContext) {
@@ -1142,6 +1506,9 @@ FAQ PRIORITY RULE:
           systemPrompt += `NO BUSINESS CONTEXT AVAILABLE:\nYou have no training data or knowledge base to draw from for this business. For any questions beyond basic greetings, you MUST use [[FALLBACK]] and redirect positively.\n\n`;
         }
 
+        // Answer style (website personality / response length unless WhatsApp has its own).
+        systemPrompt += answerStyleBlock(opts.answerStyle, { includePersonality: true });
+
         // COMMUNICATION GUIDELINES - Added at END for maximum AI compliance (recency bias)
         systemPrompt += `
 
@@ -1194,12 +1561,23 @@ These rules are MANDATORY and override ALL other instructions.
         { role: "system", content: systemPrompt }
       ];
       
-      // Include last 6 messages of conversation history
-      for (const msg of conversationHistory.slice(-6)) {
+      if (opts.fallbackReply) {
+        messages[0].content += `\nBUSINESS FALLBACK REPLY: when you must use [[FALLBACK]], the words after the marker should follow this reply written by the business (same meaning, the customer's language; never ask for their phone number): "${opts.fallbackReply}"\n`;
+      }
+      if (opts.appointmentsEnabled || opts.ordersEnabled) {
+        messages[0].content += whatsappToolGuide(!!opts.appointmentsEnabled, !!opts.ordersEnabled);
+      }
+
+      // Conversation history: the website's window (~20 messages / ~3000 tokens, see getConversationHistory).
+      for (const msg of conversationHistory) {
         messages.push({
           role: msg.role,
           content: msg.content
         });
+      }
+
+      if (opts.turnInstructions) {
+        messages.push({ role: "system", content: `INSTRUCTIONS FOR THIS MESSAGE (from the business — the customer mentioned their keywords):\n${opts.turnInstructions}` });
       }
 
       // Lead-capture instruction after the conversation history (most attention from the model).
@@ -1241,26 +1619,49 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
       console.log(`[WhatsApp Auto-Reply] Total messages in context: ${messages.length}`);
 
       let tools: any[] | undefined;
-      if (businessAccountId && useProductCatalog) {
+      const extraToolsOn = !!(businessAccountId && (opts.appointmentsEnabled || opts.ordersEnabled));
+      if (businessAccountId && (useProductCatalog || extraToolsOn)) {
         try {
-          const allProducts = await storage.getAllProducts(businessAccountId);
-          const hasProducts = allProducts.length > 0;
-          if (hasProducts) {
+          const hasProducts = useProductCatalog ? (await storage.getAllProducts(businessAccountId)).length > 0 : false;
+          if (hasProducts || extraToolsOn) {
             const historyForTools = conversationHistory.slice(-6).map(m => ({ role: m.role, content: m.content }));
+            // Same selection as the website. Without appointment / order features this is exactly
+            // the previous call (appointments off, products on).
             const selectedTools = await selectRelevantTools(
               userMessage,
+              !!opts.appointmentsEnabled,
               false,
-              false,
-              true,
+              hasProducts,
               historyForTools,
-              apiKey
+              apiKey,
+              undefined,
+              false,
+              false,
+              !!opts.ordersEnabled
             );
-            const productTool = selectedTools.find((t: any) => t.function?.name === 'get_products');
+            const productTool = hasProducts ? selectedTools.find((t: any) => t.function?.name === 'get_products') : undefined;
             if (productTool) {
               const whatsappProductTool = JSON.parse(JSON.stringify(productTool));
               whatsappProductTool.function.description = 'Search and retrieve products from the catalog when the user asks about products, items, or wants to browse. Returns product details including name, price, and description. Product images will be sent as separate image messages automatically. Keep to 3-5 products max.';
               tools = [whatsappProductTool];
               console.log(`[WhatsApp Auto-Reply] Product tool included for this message`);
+            }
+            // Only tools this account has switched on (and never inside a guided flow — the caller decides).
+            const extraSelected = selectedTools.filter((t: any) => {
+              const name = t.function?.name;
+              if (!WHATSAPP_EXTRA_TOOL_NAMES.has(name)) return false;
+              if (name === 'list_available_slots' || name === 'book_appointment') return !!opts.appointmentsEnabled;
+              return !!opts.ordersEnabled;
+            });
+            // A bare "2" / "10:30" right after we listed slots picks a slot (the website selector
+            // may read a bare number as a product pick), so keep booking available.
+            if (opts.appointmentsEnabled && !extraSelected.some((t: any) => t.function?.name === 'book_appointment') && looksLikeSlotPick(userMessage, conversationHistory)) {
+              extraSelected.push(getToolByName('list_available_slots'), getToolByName('book_appointment'));
+            }
+            const extra = whatsappAppointmentTools(extraSelected);
+            if (extra.length > 0) {
+              tools = [...(tools || []), ...extra];
+              console.log(`[WhatsApp Auto-Reply] Tools included: ${extra.map((t: any) => t.function.name).join(", ")}`);
             }
           }
         } catch (err) {
@@ -1271,8 +1672,10 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
         tools = [...(tools || []), CAPTURE_LEAD_TOOL];
       }
 
+      // Same model as the website (Master AI Settings), short WhatsApp-sized replies.
+      let replyModel = opts.model || "gpt-4o-mini";
       const requestParams: any = {
-        model: "gpt-4o-mini",
+        model: replyModel,
         messages,
         temperature: 0.3,
         max_tokens: 500,
@@ -1282,7 +1685,17 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
         requestParams.tool_choice = "auto";
       }
 
-      let response = await openai.chat.completions.create(requestParams);
+      let response: any;
+      try {
+        response = await openai.chat.completions.create(requestParams);
+      } catch (err) {
+        if (replyModel === "gpt-4o-mini" || !isModelUnavailableError(err)) throw err;
+        console.warn(`[WhatsApp Auto-Reply] Model ${replyModel} not available for this key — retrying with gpt-4o-mini`);
+        replyModel = "gpt-4o-mini";
+        requestParams.model = replyModel;
+        response = await openai.chat.completions.create(requestParams);
+      }
+      console.log(`[WhatsApp Auto-Reply] Model: ${replyModel}`);
       let assistantMessage = response.choices[0]?.message;
 
       if (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0 && businessAccountId) {
@@ -1298,6 +1711,8 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
         let hasMoreProducts = false;
 
         let usedProductTool = false;
+        // Appointment / order tools used in this reply (WhatsApp-safe formatting afterwards).
+        const usedExtraTools = new Set<string>();
         let leadSaved = false;
         for (const toolCall of assistantMessage.tool_calls) {
           try {
@@ -1372,6 +1787,11 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
                   content: "Product search temporarily unavailable.",
                 });
               }
+            } else if (WHATSAPP_EXTRA_TOOL_NAMES.has(fnName) && (tools || []).some((t: any) => t.function?.name === fnName)) {
+              // Appointment booking / order tracking — the website's handlers, results as WhatsApp text.
+              usedExtraTools.add(fnName);
+              const content = await this.runWhatsappExtraTool(fnName, fnArgs, businessAccountId, userMessage, opts.senderPhone);
+              toolMessages.push({ role: "tool", tool_call_id: toolCall.id, content });
             } else {
               toolMessages.push({
                 role: "tool",
@@ -1413,17 +1833,21 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
             content: `WHATSAPP FORMAT: Do NOT list individual product names or descriptions — those details will be sent separately as image captions. Instead, write a brief, friendly intro message (e.g., "Here are some wardrobe designs for you!") that naturally references what the user asked for. End with "Reply with a number to know more!" Keep it to 2-3 short sentences max. Do NOT include image URLs or links.`
           });
         }
+        if (usedExtraTools.size > 0) {
+          toolMessages.push({ role: "system", content: whatsappToolResultFormat(usedExtraTools) });
+        }
 
         try {
           const followUpResponse = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
+            model: replyModel,
             messages: toolMessages,
             temperature: 0.3,
             max_tokens: isNumberSelection ? 800 : 500,
           });
 
-          const text = followUpResponse.choices[0]?.message?.content;
-          if (!text) return null;
+          const rawText = followUpResponse.choices[0]?.message?.content;
+          if (!rawText) return null;
+          const text = usedExtraTools.size > 0 ? toWhatsAppText(rawText) : rawText;
           return { 
             text, 
             productImages: collectedProductImages.length > 0 ? collectedProductImages : undefined,
@@ -1446,6 +1870,51 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
       console.error(`[WhatsApp Auto-Reply] OpenAI error:`, error);
       return null;
     }
+  }
+
+  /**
+   * Run one appointment / order tool with the website's handler (ToolExecutionService) and turn
+   * the result into plain text for the model. The customer's WhatsApp number is the booking phone
+   * unless they gave another one.
+   */
+  private async runWhatsappExtraTool(
+    fnName: string,
+    fnArgs: Record<string, any>,
+    businessAccountId: string,
+    userMessage: string,
+    senderPhone?: string,
+  ): Promise<string> {
+    const ctx = { businessAccountId, userId: "whatsapp-agent", userMessage, channel: "whatsapp" as const };
+    try {
+      if (fnName === "list_available_slots") {
+        const result = await ToolExecutionService.executeTool(fnName, fnArgs, ctx, userMessage, true);
+        return formatSlotsForWhatsapp(result).text;
+      }
+      if (fnName === "book_appointment") {
+        const args = { ...fnArgs };
+        if (!args.patient_phone && senderPhone) args.patient_phone = senderPhone;
+        const result = await ToolExecutionService.executeTool(fnName, args, ctx, userMessage, true);
+        console.log(`[WhatsApp Auto-Reply] book_appointment: ${result.success ? "booked" : `not booked (${result.error || "see message"})`}`);
+        return result.message || result.error || (result.success ? "Booked." : "Could not book this slot.");
+      }
+      if (fnName === "track_order") {
+        let result = await ToolExecutionService.executeTool(fnName, fnArgs, ctx, userMessage, true);
+        // WhatsApp numbers carry the country code; orders are often stored without it (or vice versa).
+        if (result.success && result.data?.found === false && fnArgs.phone) {
+          const digits = String(fnArgs.phone).replace(/\D/g, "");
+          const alt = digits.length === 12 && digits.startsWith("91") ? digits.slice(2) : digits.length === 10 ? `91${digits}` : null;
+          if (alt) result = await ToolExecutionService.executeTool(fnName, { ...fnArgs, phone: alt }, ctx, userMessage, true);
+        }
+        return formatOrdersForWhatsapp(result);
+      }
+      if (fnName === "initiate_return") {
+        const result = await ToolExecutionService.executeTool(fnName, fnArgs, ctx, userMessage, true);
+        return result.message || result.error || "Could not register the return request.";
+      }
+    } catch (err) {
+      console.error(`[WhatsApp Auto-Reply] ${fnName} failed:`, err instanceof Error ? err.message : err);
+    }
+    return "This is not available right now. Apologise briefly and offer to connect them with the team.";
   }
 
   private isDeflectionResponse(response: string): boolean {

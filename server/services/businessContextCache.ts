@@ -49,6 +49,8 @@ export class BusinessContextCache {
       new RegExp(`^intro:${id}$`),
       // WhatsApp context keys carry a knowledge-toggle suffix (`:w1d0` etc.).
       new RegExp(`^wa-context:${id}(:.*)?$`),
+      // Instagram / Facebook DM context (per platform suffix).
+      new RegExp(`^ig_business_context_${id}(:.*)?$`),
     ];
     for (const pattern of patterns) {
       this.invalidatePattern(pattern);

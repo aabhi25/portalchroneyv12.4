@@ -53,6 +53,8 @@ import { Link } from "wouter";
 import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { Switch } from "@/components/ui/switch";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
+import { ChannelPicker, ChannelBadge, ChannelFilterSelect, matchesChannelFilter, type ChannelFilterValue } from "@/components/ChannelPicker";
+import { sanitizeChannels, type KnowledgeChannel } from "@shared/knowledgeChannels";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
@@ -120,6 +122,15 @@ interface Instruction {
   text: string;
   type: 'always' | 'conditional' | 'fallback';
   keywords?: string[];
+  /** Channels this instruction applies on. Missing / null = all channels. */
+  channels?: string[] | null;
+}
+
+/** Copy of `instr` with its channel tag set; "all channels" removes the field entirely. */
+function withChannels(instr: Instruction, channels: readonly string[] | null | undefined): Instruction {
+  const clean = sanitizeChannels(channels as unknown);
+  const { channels: _old, ...rest } = instr;
+  return clean ? { ...rest, channels: clean } : rest;
 }
 
 export default function TrainChroney() {
@@ -139,6 +150,9 @@ export default function TrainChroney() {
   const [newInstructionType, setNewInstructionType] = useState<'always' | 'conditional' | 'fallback'>('always');
   const [newKeywords, setNewKeywords] = useState<string[]>([]);
   const [keywordInput, setKeywordInput] = useState("");
+  const [newChannels, setNewChannels] = useState<KnowledgeChannel[] | null>(null);
+  const [editChannels, setEditChannels] = useState<KnowledgeChannel[] | null>(null);
+  const [instructionChannelFilter, setInstructionChannelFilter] = useState<ChannelFilterValue>("all");
   const [isRefining, setIsRefining] = useState(false);
   const [originalInstruction, setOriginalInstruction] = useState("");
   const [refinedInstruction, setRefinedInstruction] = useState("");
@@ -579,12 +593,12 @@ export default function TrainChroney() {
       return;
     }
     
-    const newInstr: Instruction = {
+    const newInstr: Instruction = withChannels({
       id: Date.now().toString(),
       text: newInstruction.trim(),
       type: newInstructionType,
       keywords: newInstructionType === 'conditional' ? newKeywords : undefined,
-    };
+    }, newChannels);
     
     const updatedInstructions = [...instructions, newInstr];
     setInstructions(updatedInstructions);
@@ -592,6 +606,7 @@ export default function TrainChroney() {
     setNewInstructionType('always');
     setNewKeywords([]);
     setKeywordInput("");
+    setNewChannels(null);
     setUserHasInteracted(true);
     
     saveImmediately(updatedInstructions);
@@ -624,6 +639,7 @@ export default function TrainChroney() {
   const handleStartEdit = (instruction: Instruction) => {
     setEditingId(instruction.id);
     setEditText(instruction.text);
+    setEditChannels(sanitizeChannels(instruction.channels as unknown));
     setEditDialogOpen(true);
   };
 
@@ -631,6 +647,7 @@ export default function TrainChroney() {
     setEditDialogOpen(false);
     setEditingId(null);
     setEditText("");
+    setEditChannels(null);
   };
 
   const handleSaveEdit = () => {
@@ -638,7 +655,7 @@ export default function TrainChroney() {
     
     const updatedInstructions = instructions.map(instr => 
       instr.id === editingId 
-        ? { ...instr, text: editText.trim() }
+        ? withChannels({ ...instr, text: editText.trim() }, editChannels)
         : instr
     );
     setInstructions(updatedInstructions);
@@ -646,6 +663,7 @@ export default function TrainChroney() {
     setEditDialogOpen(false);
     setEditingId(null);
     setEditText("");
+    setEditChannels(null);
     setUserHasInteracted(true);
     
     saveImmediately(updatedInstructions);
@@ -744,16 +762,17 @@ export default function TrainChroney() {
       });
     } else {
       // Add new instruction
-      const newInstr: Instruction = {
+      const newInstr: Instruction = withChannels({
         id: Date.now().toString(),
         text: refinedInstruction.trim(),
         type: newInstructionType,
         keywords: newInstructionType === 'conditional' ? newKeywords : undefined,
-      };
+      }, newChannels);
       updatedInstructions = [...instructions, newInstr];
       setNewInstruction("");
       setNewInstructionType('always');
       setNewKeywords([]);
+      setNewChannels(null);
       toast({
         title: "Instruction Added",
         description: "Your refined instruction has been added successfully!",
@@ -1573,6 +1592,8 @@ export default function TrainChroney() {
                           />
                         </div>
                       </div>
+
+                      <ChannelPicker value={newChannels} onChange={setNewChannels} />
                       
                       <div className="flex gap-2 justify-end">
                         <Button 
@@ -1628,10 +1649,21 @@ export default function TrainChroney() {
                 </Card>
               ) : (
                 <div className="space-y-3">
-                  <h2 className="text-sm font-medium text-muted-foreground mb-3">
-                    Active Instructions ({instructions.length})
-                  </h2>
-                  {instructions.map((instruction, index) => (
+                  <div className="flex items-center justify-between gap-4 mb-3">
+                    <h2 className="text-sm font-medium text-muted-foreground">
+                      Active Instructions ({instructions.length})
+                    </h2>
+                    <ChannelFilterSelect value={instructionChannelFilter} onChange={setInstructionChannelFilter} />
+                  </div>
+                  {!instructions.some(instr => matchesChannelFilter(instr.channels, instructionChannelFilter)) && (
+                    <div className="text-center py-6 text-sm text-muted-foreground">
+                      <p className="mb-3">No instructions are used on this channel</p>
+                      <Button variant="outline" size="sm" onClick={() => setInstructionChannelFilter("all")}>
+                        Show all channels
+                      </Button>
+                    </div>
+                  )}
+                  {instructions.map((instruction, index) => !matchesChannelFilter(instruction.channels, instructionChannelFilter) ? null : (
                     <Card 
                       key={instruction.id}
                       className={`group hover:shadow-md transition-all duration-200 ${
@@ -1670,6 +1702,7 @@ export default function TrainChroney() {
                                   <><Check className="w-3 h-3" /> Always Active</>
                                 )}
                               </span>
+                              <ChannelBadge channels={instruction.channels} />
                             </div>
                             <p className="text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">
                               {renderFormattedText(instruction.text)}
@@ -2428,6 +2461,7 @@ export default function TrainChroney() {
                 className="min-h-[120px] rounded-t-none border-t-0 resize-none overflow-hidden"
                 rows={5}
               />
+              <ChannelPicker value={editChannels} onChange={setEditChannels} />
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={handleCancelEdit}>

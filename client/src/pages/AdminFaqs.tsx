@@ -37,6 +37,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
+import { ChannelPicker, ChannelBadge, ChannelFilterSelect, type ChannelFilterValue } from "@/components/ChannelPicker";
+import { describeChannels, sanitizeChannels, type KnowledgeChannel } from "@shared/knowledgeChannels";
 
 interface FaqQualityAnalysis {
   score: number;
@@ -61,15 +63,22 @@ export default function AdminFaqs() {
   const [editingFaq, setEditingFaq] = useState<Faq | null>(null);
   const [viewingFaq, setViewingFaq] = useState<Faq | null>(null);
   const [faqToDelete, setFaqToDelete] = useState<string | null>(null);
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    question: string;
+    answer: string;
+    category: string;
+    channels: KnowledgeChannel[] | null;
+  }>({
     question: "",
     answer: "",
     category: "",
+    channels: null,
   });
   const [qualityAnalysis, setQualityAnalysis] = useState<FaqQualityAnalysis | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [channelFilter, setChannelFilter] = useState<ChannelFilterValue>("all");
 
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -85,10 +94,11 @@ export default function AdminFaqs() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ["/api/faqs", debouncedSearch],
+    queryKey: ["/api/faqs", debouncedSearch, channelFilter],
     queryFn: async ({ pageParam = 0 }) => {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(pageParam) });
       if (debouncedSearch) params.set("search", debouncedSearch);
+      if (channelFilter !== "all") params.set("channel", channelFilter);
       const res = await fetch(`/api/faqs?${params}`, {
         credentials: "include",
       });
@@ -196,6 +206,7 @@ export default function AdminFaqs() {
       question: "",
       answer: "",
       category: "",
+      channels: null,
     });
     setEditingFaq(null);
     setQualityAnalysis(null);
@@ -237,6 +248,7 @@ export default function AdminFaqs() {
       question: faq.question,
       answer: faq.answer,
       category: faq.category || "",
+      channels: sanitizeChannels(faq.channels),
     });
     setQualityAnalysis(null);
     setIsDialogOpen(true);
@@ -332,7 +344,8 @@ export default function AdminFaqs() {
           </Button>
         </div>
 
-        <div className="relative mb-4">
+        <div className="flex items-center gap-2 mb-4">
+        <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
           <Input
             placeholder="Search FAQs by question or answer..."
@@ -349,6 +362,8 @@ export default function AdminFaqs() {
             </button>
           )}
         </div>
+          <ChannelFilterSelect value={channelFilter} onChange={setChannelFilter} />
+        </div>
 
         <Card>
           <CardContent className="pt-6">
@@ -360,6 +375,14 @@ export default function AdminFaqs() {
                     <p className="text-gray-500 mb-2">No FAQs found matching "{debouncedSearch}"</p>
                     <Button variant="outline" onClick={() => setSearchInput("")}>
                       Clear search
+                    </Button>
+                  </>
+                ) : channelFilter !== "all" ? (
+                  <>
+                    <Search className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+                    <p className="text-gray-500 mb-2">No FAQs are used on this channel</p>
+                    <Button variant="outline" onClick={() => setChannelFilter("all")}>
+                      Show all channels
                     </Button>
                   </>
                 ) : (
@@ -393,6 +416,7 @@ export default function AdminFaqs() {
                       >
                         <TableCell className="font-medium">
                           <div className="max-w-md break-words whitespace-normal">{faq.question}</div>
+                          <ChannelBadge channels={faq.channels} className="mt-1" />
                         </TableCell>
                         <TableCell>
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 whitespace-nowrap">
@@ -493,6 +517,10 @@ export default function AdminFaqs() {
                     onChange={(e) => handleFormChange('category', e.target.value)}
                   />
                 </div>
+                <ChannelPicker
+                  value={formData.channels}
+                  onChange={(channels) => setFormData((prev) => ({ ...prev, channels }))}
+                />
               </div>
 
               {/* Right Column - Quality Analysis Panel */}
@@ -705,6 +733,10 @@ export default function AdminFaqs() {
                       {viewingFaq.category || "General"}
                     </span>
                   </p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium text-gray-500">Channels</Label>
+                  <p className="mt-1 text-gray-900 text-sm">{describeChannels(viewingFaq.channels)}</p>
                 </div>
                 <div>
                   <Label className="text-sm font-medium text-gray-500">Created</Label>

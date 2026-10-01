@@ -13,6 +13,8 @@ import { db } from "../../db";
 import { businessAccounts, widgetSettings } from "@shared/schema";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { vectorSearchService } from "../vectorSearchService";
+import { appliesToChannel } from "@shared/knowledgeChannels";
+import { filterCustomInstructionsForChannel } from "../chatContext/customInstructions";
 import { faqEmbeddingService } from "../faqEmbeddingService";
 import { businessContextCache } from "../businessContextCache";
 import { socialLeadContact } from "../socialLeadFields";
@@ -756,7 +758,9 @@ export class SocialAutoReplyEngine {
     console.log(`${this.tag} Building comprehensive business context for: ${businessAccountId}`);
 
     try {
-      const cacheKey = `ig_business_context_${businessAccountId}`;
+      // Per platform: channel-tagged pages / documents / instructions differ between Instagram and Facebook.
+      const channel = this.p.platform;
+      const cacheKey = `ig_business_context_${businessAccountId}:${channel}`;
       const cachedStaticContext = await businessContextCache.getOrFetch(cacheKey, async () => {
         let staticContext = "";
         let cachedCustomInstructions: string | null = null;
@@ -786,8 +790,8 @@ export class SocialAutoReplyEngine {
         const businessAccount = businessAccountResult.status === 'fulfilled' ? businessAccountResult.value : null;
         const widgetSettingArr = widgetSettingResult.status === 'fulfilled' ? widgetSettingResult.value : [];
         const websiteContent = websiteContentResult.status === 'fulfilled' ? websiteContentResult.value : null;
-        const analyzedPages = analyzedPagesResult.status === 'fulfilled' ? analyzedPagesResult.value : [];
-        const trainingDocs = trainingDocsResult.status === 'fulfilled' ? trainingDocsResult.value : [];
+        const analyzedPages = (analyzedPagesResult.status === 'fulfilled' ? analyzedPagesResult.value : []).filter(p => appliesToChannel(p.channels, channel));
+        const trainingDocs = (trainingDocsResult.status === 'fulfilled' ? trainingDocsResult.value : []).filter(d => appliesToChannel(d.channels, channel));
 
         if (businessAccount?.description) {
           staticContext += `BUSINESS OVERVIEW:\n${businessAccount.description}\n\n`;
@@ -795,8 +799,10 @@ export class SocialAutoReplyEngine {
         }
 
         const widgetSetting = widgetSettingArr[0];
-        if (widgetSetting?.customInstructions) {
-          cachedCustomInstructions = widgetSetting.customInstructions;
+        // Unchanged for untagged instructions; instructions tagged for other channels are dropped.
+        const channelInstructions = filterCustomInstructionsForChannel(widgetSetting?.customInstructions, channel);
+        if (channelInstructions) {
+          cachedCustomInstructions = channelInstructions;
           console.log(`${this.tag} [CACHE MISS] Found widget custom instructions (${cachedCustomInstructions.length} chars)`);
         }
 
@@ -922,7 +928,8 @@ export class SocialAutoReplyEngine {
         userMessage,
         businessAccountId,
         5,
-        0.50
+        0.50,
+        this.p.platform
       );
 
       if (searchResults.length > 0) {
@@ -945,7 +952,8 @@ export class SocialAutoReplyEngine {
         userMessage,
         businessAccountId,
         5,
-        0.50
+        0.50,
+        this.p.platform
       );
 
       if (relevantFaqs.length > 0) {

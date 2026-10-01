@@ -15,6 +15,7 @@ import {
   syncConversationLeadIfReady, updateLeadCaptureState, upsertConversationLead, type LeadPlan,
 } from './leadCapture';
 import { createOpenAI } from "../lib/openaiClient";
+import { appliesToChannel, type KnowledgeChannel } from '../../shared/knowledgeChannels';
 
 const IST_TIMEZONE = 'Asia/Kolkata';
 
@@ -904,8 +905,12 @@ Return JSON:
   }
 
   private static async handleGetFaqs(params: any, context: ToolExecutionContext) {
-    // Get FAQs filtered by business account at database level
-    const businessFaqs = await storage.getAllFaqs(context.businessAccountId);
+    // Get FAQs filtered by business account at database level, then by channel tag: website
+    // surfaces (widget / voice / other) see website + untagged FAQs, social / WhatsApp their own.
+    const faqChannel: KnowledgeChannel = context.channel === 'whatsapp' || context.channel === 'instagram' || context.channel === 'facebook'
+      ? context.channel
+      : 'website';
+    const businessFaqs = (await storage.getAllFaqs(context.businessAccountId)).filter(f => appliesToChannel(f.channels, faqChannel));
 
     // Apply search if provided - use keyword-based matching with relevance scoring
     let filteredFaqs = businessFaqs;

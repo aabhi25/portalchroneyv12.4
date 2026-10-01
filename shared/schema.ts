@@ -557,6 +557,8 @@ export const faqs = pgTable("faqs", {
   answer: text("answer").notNull(),
   category: text("category"),
   embedding: vector1536("embedding"), // Vector embedding for semantic search using OpenAI (1536 dimensions)
+  // Channels this FAQ is used on (shared/knowledgeChannels.ts). NULL / empty = every channel.
+  channels: text("channels").array(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
@@ -856,6 +858,8 @@ export const analyzedPages = pgTable("analyzed_pages", {
   businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
   pageUrl: text("page_url").notNull(),
   extractedContent: text("extracted_content"),
+  // Channels this page is used on (shared/knowledgeChannels.ts). NULL / empty = every channel.
+  channels: text("channels").array(),
   analyzedAt: timestamp("analyzed_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
@@ -878,6 +882,8 @@ export const trainingDocuments = pgTable("training_documents", {
   embeddingStatus: text("embedding_status").default("not_started"), // 'not_started' | 'processing' | 'completed' | 'failed'
   embeddedChunkCount: numeric("embedded_chunk_count", { precision: 10, scale: 0 }).default("0"), // Number of chunks embedded
   embeddedAt: timestamp("embedded_at"), // When embedding completed
+  // Channels this document is used on (shared/knowledgeChannels.ts). NULL / empty = every channel.
+  channels: text("channels").array(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
@@ -918,6 +924,8 @@ export const trainedUrls = pgTable("trained_urls", {
   crawledAt: timestamp("crawled_at"),
   processedAt: timestamp("processed_at"),
   embeddedAt: timestamp("embedded_at"),
+  // Channels this URL's content is used on (shared/knowledgeChannels.ts). NULL / empty = every channel.
+  channels: text("channels").array(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
@@ -2766,7 +2774,12 @@ export const whatsappSettings = pgTable("whatsapp_settings", {
   // Use Case Mode (Phase 1) — root context signal for persona builder + flow exit-intent classifier.
   // Values: 'lead_capture' (internal staff submitting leads on behalf of customers — default for existing accounts),
   //         'direct_sales' (AI sells directly to prospects), 'customer_support' (AI helps existing customers).
-  useCaseMode: text("use_case_mode").notNull().default("lead_capture"),
+  // New rows default to 'direct_sales' (since 0010). The persona's 'lead_capture' (colleague) framing
+  // is only used when useCaseModeExplicit = 'true' — see services/whatsapp/aiReplySettings.ts.
+  useCaseMode: text("use_case_mode").notNull().default("direct_sales"),
+  // 'true' once the business saved a use case mode (or the 0010 migration found evidence it uses
+  // lead_capture on purpose: flows, flow-only lead mode, a staff-style persona).
+  useCaseModeExplicit: text("use_case_mode_explicit").notNull().default("false"),
   // AI Setup (declutter) — response mode chooses how inbound messages are handled.
   // Values: 'smart_ai' (AI handles everything, flows bypassed), 'guided_flows' (scripted flows only,
   //         AI replies only on explicit flow handoff), 'both' (flows first, AI handles the rest).
@@ -2777,6 +2790,12 @@ export const whatsappSettings = pgTable("whatsapp_settings", {
   useDocumentKnowledge: text("use_document_knowledge").notNull().default("true"), // 'true' | 'false'
   useWebsiteKnowledge: text("use_website_knowledge").notNull().default("true"), // 'true' | 'false'
   useProductCatalogKnowledge: text("use_product_catalog_knowledge").notNull().default("true"), // 'true' | 'false'
+  // WhatsApp answer style. NULL = inherit the website widget's personality / response length.
+  personality: text("personality"), // 'friendly' | 'professional' | 'funny' | 'polite' | 'casual'
+  responseLength: text("response_length"), // 'concise' | 'balanced' | 'detailed'
+  // WhatsApp-only instructions (customPrompt): 'add' = on top of the Train Chroney instructions,
+  // 'replace' = instead of them (website instructions not applied on WhatsApp).
+  instructionsMode: text("instructions_mode").notNull().default("add"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

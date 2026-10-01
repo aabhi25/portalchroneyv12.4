@@ -34,6 +34,8 @@ import { buildBusinessProfile, type BusinessProfile } from './services/chatConte
 import { buildRetrievalQuery, capHistoryForModel } from './services/chatContext/conversationWindow';
 import { retrieveKnowledge } from './services/chatContext/knowledgeRetrieval';
 import { ensurePassageVectors } from './services/chatContext/passageVectors';
+import { buildCustomInstructionsBlock } from './services/chatContext/customInstructions';
+import { appliesToChannel } from '@shared/knowledgeChannels';
 import { embeddingService } from './services/embeddingService';
 
 /** Cached business-context block; `profile` is set in retrieval mode only. */
@@ -991,11 +993,12 @@ export class ChatService {
       }
       
       // Gather business context from multiple sources
-      const [businessAccount, allFaqs] = await Promise.all([
+      const [businessAccount, allFaqsUnfiltered] = await Promise.all([
         storage.getBusinessAccount(businessAccountId),
         storage.getAllFaqs(businessAccountId)
       ]);
-      
+      const allFaqs = allFaqsUnfiltered.filter(f => appliesToChannel(f.channels, 'website'));
+
       // Get business description and name
       const businessDescription = businessAccount?.description?.trim() || '';
       const businessName = businessAccount?.name?.trim() || '';
@@ -5156,10 +5159,11 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       // Extract results from Promise.allSettled
       const widgetSettings = widgetSettingsResult.status === 'fulfilled' ? widgetSettingsResult.value : null;
       const products = productsResult.status === 'fulfilled' ? productsResult.value : [];
-      const businessFaqs = faqsResult.status === 'fulfilled' ? faqsResult.value : [];
+      // Channel tags: items limited to other channels (WhatsApp-only etc.) never reach the website.
+      const businessFaqs = (faqsResult.status === 'fulfilled' ? faqsResult.value : []).filter(f => appliesToChannel(f.channels, 'website'));
       const websiteContent = websiteContentResult.status === 'fulfilled' ? websiteContentResult.value : null;
-      const analyzedPages = analyzedPagesResult.status === 'fulfilled' ? analyzedPagesResult.value : [];
-      const trainingDocs = trainingDocsResult.status === 'fulfilled' ? trainingDocsResult.value : [];
+      const analyzedPages = (analyzedPagesResult.status === 'fulfilled' ? analyzedPagesResult.value : []).filter(p => appliesToChannel(p.channels, 'website'));
+      const trainingDocs = (trainingDocsResult.status === 'fulfilled' ? trainingDocsResult.value : []).filter(d => appliesToChannel(d.channels, 'website'));
 
       const parallelLoadTime = Date.now() - parallelLoadStart;
       console.log(`[Context Build] Parallel data loading completed in ${parallelLoadTime}ms`);
@@ -5451,56 +5455,20 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
     
     // IMPORTANT: customInstructions are NOT cached because they are passed dynamically 
     // with each request and must always be fresh (user may update them at any time)
-    let customInstructionsContext = '';
-    let fallbackInstructions: string[] = [];
-    
-    if (context.customInstructions && context.customInstructions.trim()) {
-      try {
-        // Try to parse as JSON array (new format)
-        const instructions = JSON.parse(context.customInstructions);
-        if (Array.isArray(instructions) && instructions.length > 0) {
-          // Separate instructions by type
-          const alwaysActiveInstructions = instructions.filter((instr: any) => instr.type === 'always' || !instr.type);
-          const conditionalInstructions = instructions.filter((instr: any) => instr.type === 'conditional');
-          fallbackInstructions = instructions
-            .filter((instr: any) => instr.type === 'fallback')
-            .map((instr: any) => instr.text);
-          
-          // Build always-active instructions context
-          if (alwaysActiveInstructions.length > 0) {
-            const formattedAlwaysActive = alwaysActiveInstructions
-              .map((instr: any, index: number) => `${index + 1}. ${instr.text}`)
-              .join('\n');
-            customInstructionsContext = `CUSTOM BUSINESS INSTRUCTIONS:\nFollow these specific instructions for this business:\n${formattedAlwaysActive}\n\n`;
-          }
-          
-          // Add conditional instructions with their trigger keywords
-          if (conditionalInstructions.length > 0) {
-            const formattedConditional = conditionalInstructions
-              .map((instr: any) => {
-                const keywords = instr.keywords?.join(', ') || '';
-                return `- When user mentions [${keywords}]: ${instr.text}`;
-              })
-              .join('\n');
-            customInstructionsContext += `CONDITIONAL INSTRUCTIONS (apply when keywords are mentioned):\n${formattedConditional}\n\n`;
-          }
-          
-          // Store fallback instructions in context for later use
-          if (fallbackInstructions.length > 0) {
-            // Fallback instructions are NOT added to regular context
-            // They will be applied only when AI cannot answer
-            console.log(`[Context Build] Found ${fallbackInstructions.length} fallback instruction(s) for unknown questions`);
-          }
-          
-          console.log(`[Context Build] Loaded ${alwaysActiveInstructions.length} always-active, ${conditionalInstructions.length} conditional, ${fallbackInstructions.length} fallback instructions (FRESH, not cached)`);
-        }
-      } catch {
-        // Fallback to plain text format (legacy)
-        customInstructionsContext = `CUSTOM BUSINESS INSTRUCTIONS:\nFollow these specific instructions for this business:\n${context.customInstructions}\n\n`;
-        console.log(`[Context Build] Loaded legacy custom instructions (FRESH, not cached)`);
+    // Parsed by the shared helper (services/chatContext/customInstructions.ts) so WhatsApp and
+    // Instagram / Facebook read the same instructions the same way. Website-tagged or untagged only.
+    const instructionsBlock = buildCustomInstructionsBlock(context.customInstructions, 'website');
+    const customInstructionsContext = instructionsBlock.contextBlock;
+    const fallbackInstructions: string[] = instructionsBlock.fallback;
+    if (instructionsBlock.isLegacyText) {
+      console.log(`[Context Build] Loaded legacy custom instructions (FRESH, not cached)`);
+    } else if (instructionsBlock.alwaysCount || instructionsBlock.conditionalCount || fallbackInstructions.length) {
+      if (fallbackInstructions.length > 0) {
+        console.log(`[Context Build] Found ${fallbackInstructions.length} fallback instruction(s) for unknown questions`);
       }
+      console.log(`[Context Build] Loaded ${instructionsBlock.alwaysCount} always-active, ${instructionsBlock.conditionalCount} conditional, ${fallbackInstructions.length} fallback instructions (FRESH, not cached)`);
     }
-    
+
     // Store or clear fallback instructions for use when deflection is detected
     // IMPORTANT: Always update the cache to prevent stale fallback instructions from being applied
     if (fallbackInstructions.length > 0) {
@@ -5889,6 +5857,7 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
         query,
         passages: bundle.profile?.passages || [],
         embedQuery: context.openaiApiKey ? (text) => embeddingService.generateEmbedding(text, accountId) : undefined,
+        channel: 'website',
       });
       console.log(`[Knowledge] ${result.items.length} item(s) (${result.items.map(i => i.source).join(', ') || 'none'}), ${result.tokens} tokens, from ${result.candidates} candidates in ${Date.now() - started}ms${query.isFollowUp ? ' (follow-up query)' : ''}`);
       return { text: result.text, itemCount: result.items.length };
@@ -5978,7 +5947,8 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
         userMessage,
         businessAccountId,
         5, // Top 5 chunks
-        0.50 // 50% similarity threshold (lowered from 70% for better recall)
+        0.50, // 50% similarity threshold (lowered from 70% for better recall)
+        'website'
       );
 
       console.log(`[RAG] Search completed - found ${relevantChunks.length} chunks`);

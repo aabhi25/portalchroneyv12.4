@@ -36,6 +36,9 @@ import {
 } from "@/components/ui/accordion";
 import { format } from "date-fns";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
+import { ChannelPicker, ChannelBadge, ChannelFilterSelect, matchesChannelFilter, type ChannelFilterValue } from "@/components/ChannelPicker";
+import { type KnowledgeChannel } from "@shared/knowledgeChannels";
+import { apiRequest } from "@/lib/queryClient";
 
 interface TrainingDocument {
   id: string;
@@ -51,6 +54,7 @@ interface TrainingDocument {
   errorMessage?: string | null;
   uploadedBy: string;
   processedAt?: string | null;
+  channels?: string[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -67,6 +71,8 @@ export default function ScanDocs() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
+  const [uploadChannels, setUploadChannels] = useState<KnowledgeChannel[] | null>(null);
+  const [channelFilter, setChannelFilter] = useState<ChannelFilterValue>("all");
 
   const { data: documents = [], isLoading } = useQuery<TrainingDocument[]>({
     queryKey: ["/api/training-documents"],
@@ -75,6 +81,28 @@ export default function ScanDocs() {
       const docs = query.state.data || [];
       const hasProcessing = docs.some((d: TrainingDocument) => d.uploadStatus === 'processing' || d.uploadStatus === 'pending');
       return hasProcessing ? 2000 : false;
+    },
+  });
+
+  const visibleDocuments = documents.filter(d => matchesChannelFilter(d.channels, channelFilter));
+
+  const channelsMutation = useMutation({
+    mutationFn: async ({ id, channels }: { id: string; channels: KnowledgeChannel[] | null }) => {
+      return await apiRequest("PATCH", `/api/training-documents/${id}`, { channels });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/training-documents"] });
+      toast({
+        title: "Channels Updated",
+        description: "The document's channels were saved.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update channels",
+        variant: "destructive",
+      });
     },
   });
 
@@ -147,6 +175,9 @@ export default function ScanDocs() {
 
         const formData = new FormData();
         formData.append("file", file);
+        if (uploadChannels && uploadChannels.length > 0) {
+          formData.append("channels", JSON.stringify(uploadChannels));
+        }
 
         const xhr = new XMLHttpRequest();
 
@@ -455,6 +486,14 @@ export default function ScanDocs() {
                     <Progress value={uploadProgress} className="h-2" />
                   </div>
                 )}
+
+                <div className="mt-6 max-w-md">
+                  <ChannelPicker
+                    value={uploadChannels}
+                    onChange={setUploadChannels}
+                    disabled={isUploading}
+                  />
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
@@ -462,10 +501,17 @@ export default function ScanDocs() {
           <TabsContent value="documents" className="space-y-6 mt-6">
             <Card className="border-gray-200/60 bg-white/80 backdrop-blur-sm shadow-md">
               <CardHeader className="border-b bg-gradient-to-r from-purple-50/50 to-pink-50/50">
-                <CardTitle className="text-lg">Uploaded Documents</CardTitle>
-                <CardDescription>
-                  View and manage your training documents ({documents.length} total)
-                </CardDescription>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-lg">Uploaded Documents</CardTitle>
+                    <CardDescription>
+                      View and manage your training documents ({documents.length} total)
+                    </CardDescription>
+                  </div>
+                  {documents.length > 0 && (
+                    <ChannelFilterSelect value={channelFilter} onChange={setChannelFilter} />
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="pt-6">
                 {documents.length === 0 ? (
@@ -483,9 +529,16 @@ export default function ScanDocs() {
                       Go to Upload
                     </Button>
                   </div>
+                ) : visibleDocuments.length === 0 ? (
+                  <div className="text-center py-12">
+                    <p className="text-gray-600 mb-4">No documents are used on this channel</p>
+                    <Button variant="outline" onClick={() => setChannelFilter("all")}>
+                      Show all channels
+                    </Button>
+                  </div>
                 ) : (
                   <Accordion type="single" collapsible className="space-y-3">
-                    {documents.map((doc) => (
+                    {visibleDocuments.map((doc) => (
                       <AccordionItem
                         key={doc.id}
                         value={doc.id}
@@ -507,6 +560,7 @@ export default function ScanDocs() {
                               </div>
                             </div>
                             <div className="flex items-center gap-2 flex-shrink-0">
+                              <ChannelBadge channels={doc.channels} />
                               {getStatusBadge(doc.uploadStatus)}
                             </div>
                           </div>
@@ -575,7 +629,13 @@ export default function ScanDocs() {
                               </div>
                             )}
 
-                            <div className="flex justify-end pt-2">
+                            <div className="flex justify-end items-center gap-2 pt-2">
+                              <ChannelPicker
+                                compact
+                                value={doc.channels ?? null}
+                                disabled={channelsMutation.isPending}
+                                onChange={(channels) => channelsMutation.mutate({ id: doc.id, channels })}
+                              />
                               <Button
                                 variant="destructive"
                                 size="sm"

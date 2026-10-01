@@ -14,6 +14,7 @@ import { storage } from "../../storage";
 import { createOpenAI, OPENAI_TIMEOUTS } from "../../lib/openaiClient";
 import { commentReplyLimiter } from "../commentReplyLimiter";
 import type { SocialPlatformId } from "./types";
+import { appliesToChannel } from "@shared/knowledgeChannels";
 
 export interface SocialCommentData {
   commentId: string;
@@ -319,6 +320,7 @@ export class SocialCommentReplyEngine<S extends CommentSettingsLike> {
 
         if (trainingDocs && trainingDocs.length > 0) {
           const docSummaries = trainingDocs
+            .filter(doc => appliesToChannel(doc.channels, this.p.platform))
             .slice(0, 5)
             .filter(doc => doc.summary)
             .map(doc => `- ${doc.originalFilename}: ${(doc.summary || "").substring(0, 500)}`)
@@ -332,7 +334,7 @@ export class SocialCommentReplyEngine<S extends CommentSettingsLike> {
       context = cachedContext || "";
 
       try {
-        const searchResults = await vectorSearchService.search(commentText, businessAccountId, 3, 0.5);
+        const searchResults = await vectorSearchService.search(commentText, businessAccountId, 3, 0.5, this.p.platform);
         if (searchResults && searchResults.length > 0) {
           context += "\nRELEVANT INFORMATION:\n";
           for (const result of searchResults) {
@@ -342,7 +344,7 @@ export class SocialCommentReplyEngine<S extends CommentSettingsLike> {
       } catch {}
 
       try {
-        const faqResults = await faqEmbeddingService.searchFAQs(commentText, businessAccountId, 3);
+        const faqResults = await faqEmbeddingService.searchFAQs(commentText, businessAccountId, 3, 0.5, this.p.platform);
         if (faqResults && faqResults.length > 0) {
           context += "\nRELEVANT FAQs:\n";
           for (const faq of faqResults) {

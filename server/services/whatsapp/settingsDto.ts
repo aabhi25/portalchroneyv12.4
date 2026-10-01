@@ -14,6 +14,8 @@
  * booleans carry. The webhook secret is still obtainable for MSG91 setup, but only from the
  * dedicated on-demand endpoint, which logs who asked for it.
  */
+import { effectiveUseCaseMode, instructionsModeOf, websiteInstructionsApply } from "./aiReplySettings";
+
 export function toWhatsappSettingsDto(settings: any) {
   const { msg91AuthKey, webhookSecret, ...safeSettings } = settings as any;
 
@@ -41,10 +43,17 @@ export function toWhatsappSettingsDto(settings: any) {
     updateLeadEnabled: settings.updateLeadEnabled !== "false",
     requirePanEmailForLead: settings.requirePanEmailForLead === "true",
     whitelistEnabled: settings.whitelistEnabled === "true",
-    useCaseMode: settings.useCaseMode || "lead_capture",
+    // The mode the AI actually uses (old 'lead_capture' defaults that were never chosen read as 'direct_sales').
+    useCaseMode: effectiveUseCaseMode(settings),
+    useCaseModeExplicit: settings.useCaseModeExplicit === "true",
+    // WhatsApp-only instructions: 'add' to or 'replace' the Train Chroney instructions.
+    instructionsMode: instructionsModeOf(settings),
+    // WhatsApp answer style; null = same as the website widget.
+    personality: settings.personality ?? null,
+    responseLength: settings.responseLength ?? null,
     // AI Setup fields
     aiResponseMode: settings.aiResponseMode ?? null,
-    useMasterTraining: settings.useMasterTraining !== "false",
+    useMasterTraining: websiteInstructionsApply(settings),
     useLeadTraining: settings.useLeadTraining !== "false",
     useFaqKnowledge: settings.useFaqKnowledge !== "false",
     useDocumentKnowledge: settings.useDocumentKnowledge !== "false",

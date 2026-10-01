@@ -1,5 +1,7 @@
 // Reference: javascript_database blueprint - updated for chat application
 import { stripProtectedFields } from './lib/safeUpdate';
+import { channelCondition } from './services/chatContext/channelSql';
+import type { KnowledgeChannel } from '@shared/knowledgeChannels';
 import { 
   users, 
   conversations, 
@@ -324,7 +326,7 @@ export interface IStorage {
   createFaq(faq: InsertFaq): Promise<Faq>;
   getFaq(id: string, businessAccountId: string): Promise<Faq | undefined>;
   getAllFaqs(businessAccountId: string): Promise<Faq[]>;
-  getFaqsPaginated(businessAccountId: string, limit: number, offset: number): Promise<{ faqs: Faq[]; total: number; hasMore: boolean }>;
+  getFaqsPaginated(businessAccountId: string, limit: number, offset: number, search?: string, channel?: KnowledgeChannel): Promise<{ faqs: Faq[]; total: number; hasMore: boolean }>;
   updateFaq(id: string, businessAccountId: string, faq: Partial<InsertFaq>): Promise<Faq>;
   deleteFaq(id: string, businessAccountId: string): Promise<void>;
 
@@ -2117,8 +2119,11 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(faqs.createdAt));
   }
 
-  async getFaqsPaginated(businessAccountId: string, limit: number, offset: number, search?: string): Promise<{ faqs: Faq[]; total: number; hasMore: boolean }> {
+  async getFaqsPaginated(businessAccountId: string, limit: number, offset: number, search?: string, channel?: KnowledgeChannel): Promise<{ faqs: Faq[]; total: number; hasMore: boolean }> {
     const conditions = [eq(faqs.businessAccountId, businessAccountId)];
+    // FAQs used on this channel: untagged (every channel) + tagged with it.
+    const onChannel = channelCondition(faqs.channels, channel);
+    if (onChannel) conditions.push(onChannel);
     if (search && search.trim()) {
       const term = `%${search.trim()}%`;
       conditions.push(or(ilike(faqs.question, term), ilike(faqs.answer, term))!);
@@ -2812,9 +2817,20 @@ export class DatabaseStorage implements IStorage {
 
   // Analyzed Pages methods
   async createAnalyzedPage(analyzedPage: InsertAnalyzedPage): Promise<AnalyzedPage> {
+    // A re-scan inserts the page again: keep the channel tags the business gave this page URL.
+    let values = analyzedPage;
+    if (analyzedPage.channels === undefined) {
+      const [previous] = await db
+        .select({ channels: analyzedPages.channels })
+        .from(analyzedPages)
+        .where(and(eq(analyzedPages.businessAccountId, analyzedPage.businessAccountId), eq(analyzedPages.pageUrl, analyzedPage.pageUrl)))
+        .orderBy(desc(analyzedPages.analyzedAt))
+        .limit(1);
+      if (previous?.channels && previous.channels.length > 0) values = { ...analyzedPage, channels: previous.channels };
+    }
     const [created] = await db
       .insert(analyzedPages)
-      .values(analyzedPage)
+      .values(values)
       .returning();
     return created;
   }
