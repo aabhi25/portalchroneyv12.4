@@ -423,7 +423,7 @@ export function createHeygenLiveAvatarProvider(options: HeygenLiveAvatarOptions 
       try {
         const body = JSON.parse(res.text || "{}");
         const data = body?.data ?? body;
-        const credits = data?.credits ?? data?.remaining_credits ?? data?.balance;
+        const credits = data?.credits_left ?? data?.credits ?? data?.remaining_credits ?? data?.balance;
         if (credits !== undefined && credits !== null) detail = `credits: ${String(credits).slice(0, 20)}`;
       } catch { /* status is what matters */ }
       return { detail };

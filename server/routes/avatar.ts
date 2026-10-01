@@ -105,7 +105,13 @@ async function runKeyTest(provider: AvatarProviderId, apiKey: string): Promise<{
     return { ok: true, detail: result.detail };
   } catch (error) {
     if (error instanceof AvatarProviderError) {
-      const message = error.code === "auth" ? "The provider rejected this key" : `Could not verify the key (${error.code})`;
+      const message = error.code === "auth"
+        ? provider === "heygen_liveavatar"
+          ? "LiveAvatar rejected this key. Use the API key from app.liveavatar.com/developers (a HeyGen key from app.heygen.com will not work)."
+          : provider === "anam"
+            ? "Anam rejected this key. Use the API key from lab.anam.ai (API keys page)."
+            : "The provider rejected this key"
+        : `Could not verify the key (${error.code})`;
       return { ok: false, code: error.code, error: message };
     }
     return { ok: false, code: "unknown", error: "Could not verify the key" };
