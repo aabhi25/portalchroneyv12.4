@@ -50,6 +50,13 @@ const TYPING_MESSAGES = [
   "Almost there...",
 ];
 
+/** WhatsApp glyph, drawn in currentColor so it matches the other header icons. */
+const WhatsAppGlyph = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+    <path d="M17.47 14.38c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.94 1.16-.17.2-.35.22-.64.08-.3-.15-1.26-.47-2.39-1.48-.88-.79-1.48-1.76-1.65-2.06-.17-.3-.02-.46.13-.6.13-.14.3-.35.45-.52.15-.18.2-.3.3-.5.1-.2.05-.37-.03-.52-.07-.15-.67-1.61-.91-2.2-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.07 2.88 1.21 3.07c.15.2 2.1 3.2 5.08 4.49.71.31 1.26.49 1.7.63.71.22 1.36.19 1.87.12.57-.09 1.76-.72 2-1.42.25-.69.25-1.29.18-1.41-.08-.12-.28-.2-.57-.35zM12.05 21.8h-.01a9.87 9.87 0 0 1-5.03-1.38l-.36-.21-3.74.98 1-3.65-.24-.37a9.86 9.86 0 0 1-1.51-5.26c0-5.45 4.44-9.88 9.89-9.88 2.64 0 5.12 1.03 6.99 2.9a9.83 9.83 0 0 1 2.89 6.99c0 5.45-4.44 9.88-9.88 9.88zm8.41-18.3A11.82 11.82 0 0 0 12.05 0C5.5 0 .16 5.34.16 11.89c0 2.1.55 4.14 1.59 5.95L.06 24l6.3-1.65a11.88 11.88 0 0 0 5.68 1.45h.01c6.55 0 11.89-5.34 11.89-11.9 0-3.17-1.24-6.16-3.48-8.4z"/>
+  </svg>
+);
+
 const TypingIndicator = () => {
   const [messageIndex, setMessageIndex] = useState(0);
   const [isVisible, setIsVisible] = useState(true);
@@ -205,6 +212,9 @@ interface WidgetSettings {
   whatsappOrderEnabled?: string;
   whatsappOrderNumber?: string;
   whatsappOrderMessage?: string;
+  whatsappHeaderEnabled?: string;
+  whatsappWidgetNumber?: string;
+  whatsappWidgetMessage?: string;
   addToCartEnabled?: string;
   chatFontSize?: string;
   footerLabelEnabled?: string;
@@ -548,6 +558,37 @@ export default function EmbedChat() {
   const [parentPageUrl, setParentPageUrl] = useState<string | null>(null);
   const [isUserAtBottom, setIsUserAtBottom] = useState(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  // The header WhatsApp icon folds into the ⋮ menu when it would squeeze the chat title:
+  // measured on the title box, so it adapts to the widget size, the title and the other buttons.
+  const [waHeaderFolded, setWaHeaderFolded] = useState(false);
+  const waFoldedRef = useRef(false);
+  const titleObserverCleanupRef = useRef<(() => void) | null>(null);
+  const titleBoxRef = useCallback((el: HTMLDivElement | null) => {
+    titleObserverCleanupRef.current?.();
+    titleObserverCleanupRef.current = null;
+    if (!el) return;
+    const measure = () => {
+      const heading = el.querySelector('h2');
+      if (!heading) return;
+      // Room the title would have with the icon in the header (icon 24px + 8px gap).
+      const roomWithIcon = el.clientWidth - (waFoldedRef.current ? 32 : 0);
+      // The title's natural width, capped so a very long title doesn't hide the icon everywhere.
+      const titleNeeds = Math.max(72, Math.min(heading.scrollWidth, 140));
+      const fold = roomWithIcon < titleNeeds;
+      if (fold !== waFoldedRef.current) {
+        waFoldedRef.current = fold;
+        setWaHeaderFolded(fold);
+      }
+    };
+    // The widget iframe resizes the window; ResizeObserver also catches title / button changes.
+    window.addEventListener('resize', measure);
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    const heading = el.querySelector('h2');
+    if (heading) ro?.observe(heading);
+    titleObserverCleanupRef.current = () => { window.removeEventListener('resize', measure); ro?.disconnect(); };
+    measure();
+  }, []);
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
   const [conversationsList, setConversationsList] = useState<Array<{id: string; title: string; updatedAt: string; messageCount: number}>>([]);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
@@ -1401,6 +1442,12 @@ export default function EmbedChat() {
   const userMessages = messages.filter(m => m.role === 'user');
   const shouldShowStarters = showStarters && userMessages.length === 0 && !isLoading;
   
+  // WhatsApp click-to-chat in the header (Settings → Chat widget → Widget Launcher).
+  const waHeaderDigits = String(settings?.whatsappWidgetNumber || '').replace(/[^\d]/g, '');
+  const waHeaderUrl = settings?.whatsappHeaderEnabled === 'true' && waHeaderDigits.length >= 8
+    ? `https://wa.me/${waHeaderDigits}${settings?.whatsappWidgetMessage ? `?text=${encodeURIComponent(settings.whatsappWidgetMessage)}` : ''}`
+    : null;
+
   // Language selector configuration
   const languageSelectorEnabled = settings?.languageSelectorEnabled !== 'false';
   const availableLanguages: string[] = settings?.availableLanguages 
@@ -1412,6 +1459,9 @@ export default function EmbedChat() {
         }
       })()
     : ['auto', 'en', 'hi', 'kn', 'ta', 'mr'];
+
+  // In the ⋮ menu instead of the header when the header is too narrow (see titleBoxRef).
+  const waHeaderInMenu = !!waHeaderUrl && !hideHeaderMenu && waHeaderFolded;
   
   // Close language dropdown when clicking outside
   useEffect(() => {
@@ -4148,9 +4198,23 @@ export default function EmbedChat() {
             <img src="/c_logo.png" alt="AI Chroney" className="w-5 h-5 object-contain" />
           )}
         </div>
-        <div className="flex-1">
-          <h2 className="embed-chat-title font-semibold text-base">{widgetHeaderText}</h2>
+        <div ref={titleBoxRef} className="flex-1 min-w-0">
+          <h2 className="embed-chat-title font-semibold text-base truncate inline-block max-w-full align-middle" title={widgetHeaderText}>{widgetHeaderText}</h2>
         </div>
+        {/* WhatsApp click-to-chat — same look as the other header icons; in the ⋮ menu when narrow. */}
+        {waHeaderUrl && !waHeaderInMenu && (
+          <a
+            href={waHeaderUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="embed-chat-btn p-1 rounded-full hover:bg-white/20 transition-colors flex-shrink-0"
+            aria-label="Chat on WhatsApp"
+            title="Chat on WhatsApp"
+            data-testid="link-header-whatsapp"
+          >
+            <WhatsAppGlyph className="w-4 h-4" />
+          </a>
+        )}
         {/* Language selector - show if enabled and has multiple languages */}
         {languageSelectorEnabled && availableLanguages.length > 1 && (
           <div className="relative" ref={languageDropdownRef}>
@@ -4218,7 +4282,7 @@ export default function EmbedChat() {
             // composer, so a locked doubt session has to disable it explicitly —
             // otherwise the mic is an open back door into a closed chat.
             disabled={!!doubtLock}
-            className={`embed-chat-btn p-1 rounded-full transition-colors ${isInlineVoiceActive ? 'bg-white/30' : 'hover:bg-white/20'} ${doubtLock ? 'opacity-40 cursor-not-allowed' : ''}`}
+            className={`embed-chat-btn p-1 rounded-full transition-colors flex-shrink-0 ${isInlineVoiceActive ? 'bg-white/30' : 'hover:bg-white/20'} ${doubtLock ? 'opacity-40 cursor-not-allowed' : ''}`}
             aria-label="Voice mode"
             title={doubtLock ? 'This doubt is closed' : 'Voice mode'}
           >
@@ -4263,6 +4327,19 @@ export default function EmbedChat() {
                   <History className="w-4 h-4" />
                   <span>Conversation History</span>
                 </button>
+                {waHeaderUrl && waHeaderInMenu && (
+                  <a
+                    href={waHeaderUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setIsMenuOpen(false)}
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2 text-gray-700 transition-colors"
+                    data-testid="link-menu-whatsapp"
+                  >
+                    <WhatsAppGlyph className="w-4 h-4 text-[#25D366]" />
+                    <span>Chat on WhatsApp</span>
+                  </a>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

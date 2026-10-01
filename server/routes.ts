@@ -27840,6 +27840,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         productComparisonEnabled,
         whatsappOrderEnabled, whatsappOrderNumber, whatsappOrderMessage,
         launcherMode, whatsappWidgetNumber, whatsappWidgetLabel, whatsappWidgetMessage, whatsappWidgetColor, whatsappWidgetPosition,
+        whatsappHeaderEnabled,
         addToCartEnabled,
         tryOnEnabled,
         responseLength,
@@ -27895,6 +27896,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         productComparisonEnabled: string;
         whatsappOrderEnabled: string; whatsappOrderNumber: string; whatsappOrderMessage: string;
         launcherMode: string; whatsappWidgetNumber: string; whatsappWidgetLabel: string; whatsappWidgetMessage: string; whatsappWidgetColor: string; whatsappWidgetPosition: string;
+        whatsappHeaderEnabled: string;
         addToCartEnabled: string;
         tryOnEnabled: string;
         responseLength: string;
@@ -28032,6 +28034,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       if (whatsappWidgetLabel !== undefined) updateData.whatsappWidgetLabel = whatsappWidgetLabel;
       if (whatsappWidgetMessage !== undefined) updateData.whatsappWidgetMessage = whatsappWidgetMessage;
       if (whatsappWidgetColor !== undefined) updateData.whatsappWidgetColor = whatsappWidgetColor;
+      if (whatsappHeaderEnabled !== undefined) updateData.whatsappHeaderEnabled = String(whatsappHeaderEnabled) === 'true' ? 'true' : 'false';
       if (whatsappWidgetPosition !== undefined) {
         const validPositions = ['bottom-right', 'bottom-left', 'top-right', 'top-left'];
         updateData.whatsappWidgetPosition = validPositions.includes(whatsappWidgetPosition) ? whatsappWidgetPosition : null;

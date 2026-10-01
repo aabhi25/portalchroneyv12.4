@@ -157,6 +157,7 @@ interface WidgetSettings {
   whatsappWidgetMessage?: string;
   whatsappWidgetColor?: string;
   whatsappWidgetPosition?: string;
+  whatsappHeaderEnabled?: string;
   responseLength?: string;
   chatFontSize?: string;
   footerLabelEnabled?: string;
@@ -582,6 +583,7 @@ export default function WidgetSettings() {
   const [whatsappWidgetMessage, setWhatsappWidgetMessage] = useState("");
   const [whatsappWidgetColor, setWhatsappWidgetColor] = useState("#25D366");
   const [whatsappWidgetPosition, setWhatsappWidgetPosition] = useState("");
+  const [whatsappHeaderEnabled, setWhatsappHeaderEnabled] = useState(false);
   const [newQuickBrowseLabel, setNewQuickBrowseLabel] = useState("");
   const [newQuickBrowseAction, setNewQuickBrowseAction] = useState("");
   
@@ -788,6 +790,7 @@ export default function WidgetSettings() {
       setWhatsappWidgetMessage(settings.whatsappWidgetMessage || "");
       setWhatsappWidgetColor(settings.whatsappWidgetColor || "#25D366");
       setWhatsappWidgetPosition(settings.whatsappWidgetPosition || "");
+      setWhatsappHeaderEnabled(settings.whatsappHeaderEnabled === "true");
       setAddToCartEnabled(settings.addToCartEnabled !== 'false');
       setTryOnEnabled(settings.tryOnEnabled === 'true');
     }
@@ -1080,6 +1083,7 @@ export default function WidgetSettings() {
       whatsappWidgetMessage?: string;
       whatsappWidgetColor?: string;
       whatsappWidgetPosition?: string;
+      whatsappHeaderEnabled?: string;
       addToCartEnabled?: string;
       tryOnEnabled?: string;
     }) => {
@@ -2168,7 +2172,7 @@ export default function WidgetSettings() {
                       </div>
                       <div>
                         <CardTitle className="text-base">Widget Launcher</CardTitle>
-                        <CardDescription className="text-sm">Choose which launcher visitors see on your site</CardDescription>
+                        <CardDescription className="text-sm">Which launcher visitors see on your site, and WhatsApp click-to-chat</CardDescription>
                       </div>
                     </div>
                   </CardHeader>
@@ -2202,7 +2206,26 @@ export default function WidgetSettings() {
                       </div>
                     </div>
 
-                    {(launcherMode === "whatsapp" || launcherMode === "both") && (
+                    <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-3">
+                      <div>
+                        <Label htmlFor="whatsappHeaderEnabled" className="text-sm font-medium">WhatsApp icon in chat header</Label>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          A small WhatsApp icon in the open chat window's top bar, so visitors can continue the conversation on WhatsApp.
+                          On narrow chat windows it moves into the ⋮ menu to keep the header tidy.
+                        </p>
+                      </div>
+                      <Switch
+                        id="whatsappHeaderEnabled"
+                        checked={whatsappHeaderEnabled}
+                        onCheckedChange={(checked) => {
+                          setWhatsappHeaderEnabled(checked);
+                          updateMutation.mutate({ whatsappHeaderEnabled: checked ? "true" : "false" });
+                        }}
+                        data-testid="switch-whatsapp-header"
+                      />
+                    </div>
+
+                    {(launcherMode !== "ai" || whatsappHeaderEnabled) && (
                       <div className="space-y-4 pt-1">
                         <div>
                           <Label htmlFor="whatsappWidgetNumber" className="text-sm font-medium">WhatsApp Number</Label>
@@ -2215,20 +2238,11 @@ export default function WidgetSettings() {
                             className="mt-1"
                             data-testid="input-whatsapp-widget-number"
                           />
-                          <p className="text-xs text-gray-500 mt-1">Required. If missing or invalid, the AI chat launcher is shown instead.</p>
-                        </div>
-                        <div>
-                          <Label htmlFor="whatsappWidgetLabel" className="text-sm font-medium">Pill Label</Label>
-                          <Input
-                            id="whatsappWidgetLabel"
-                            value={whatsappWidgetLabel}
-                            onChange={(e) => setWhatsappWidgetLabel(e.target.value)}
-                            onBlur={() => updateMutation.mutate({ whatsappWidgetLabel: whatsappWidgetLabel })}
-                            placeholder="How can I help you?"
-                            className="mt-1"
-                            data-testid="input-whatsapp-widget-label"
-                          />
-                          <p className="text-xs text-gray-500 mt-1">Shown on the WhatsApp-only pill. In "Both" mode a round icon is used instead.</p>
+                          {whatsappWidgetNumber.replace(/[^\d]/g, "").length < 8 ? (
+                            <p className="text-xs text-amber-700 mt-1">Required. Until a valid number with country code is saved, no WhatsApp launcher or header icon is shown.</p>
+                          ) : (
+                            <p className="text-xs text-gray-500 mt-1">Used by the WhatsApp launcher and the chat header icon.</p>
+                          )}
                         </div>
                         <div>
                           <Label htmlFor="whatsappWidgetMessage" className="text-sm font-medium">Pre-filled Message <span className="text-gray-400 font-normal">(optional)</span></Label>
@@ -2243,6 +2257,24 @@ export default function WidgetSettings() {
                             data-testid="input-whatsapp-widget-message"
                           />
                           <p className="text-xs text-gray-500 mt-1">Text the visitor's WhatsApp opens pre-filled with.</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {(launcherMode === "whatsapp" || launcherMode === "both") && (
+                      <div className="space-y-4">
+                        <div>
+                          <Label htmlFor="whatsappWidgetLabel" className="text-sm font-medium">Pill Label</Label>
+                          <Input
+                            id="whatsappWidgetLabel"
+                            value={whatsappWidgetLabel}
+                            onChange={(e) => setWhatsappWidgetLabel(e.target.value)}
+                            onBlur={() => updateMutation.mutate({ whatsappWidgetLabel: whatsappWidgetLabel })}
+                            placeholder="How can I help you?"
+                            className="mt-1"
+                            data-testid="input-whatsapp-widget-label"
+                          />
+                          <p className="text-xs text-gray-500 mt-1">Shown on the WhatsApp-only pill. In "Both" mode a round icon is used instead.</p>
                         </div>
                         <div>
                           <Label className="text-sm font-medium">WhatsApp Position</Label>

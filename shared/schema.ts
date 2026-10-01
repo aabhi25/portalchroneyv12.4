@@ -821,6 +821,8 @@ export const widgetSettings = pgTable("widget_settings", {
   whatsappWidgetLabel: text("whatsapp_widget_label").notNull().default("How can I help you?"), // Text shown on the WhatsApp-only pill launcher
   whatsappWidgetMessage: text("whatsapp_widget_message"), // Optional pre-filled message for the WhatsApp chat
   whatsappWidgetColor: text("whatsapp_widget_color").notNull().default("#25D366"), // WhatsApp launcher background color
+  // Small WhatsApp icon in the open chat window's header (uses whatsappWidgetNumber / whatsappWidgetMessage).
+  whatsappHeaderEnabled: text("whatsapp_header_enabled").notNull().default("false"), // 'true' | 'false'
   whatsappWidgetPosition: text("whatsapp_widget_position"), // Corner for the WhatsApp launcher: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'. Null/empty = inherit the chat widget's position.
   
   // Add to Cart Button

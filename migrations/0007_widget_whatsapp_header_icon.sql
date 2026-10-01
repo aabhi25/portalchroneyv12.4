@@ -1,0 +1,1 @@
+ALTER TABLE "widget_settings" ADD COLUMN IF NOT EXISTS "whatsapp_header_enabled" text DEFAULT 'false' NOT NULL;
