@@ -256,7 +256,7 @@ async function generateIntroMessage(businessAccountId: string): Promise<string> 
     const businessName = businessAccount?.name || "our business";
     const intros = [
       `Hey there! Welcome to ${businessName}—happy to help you find exactly what you're looking for.`,
-      `Hi! I'm Chroney, ${businessName}'s AI assistant. How can I help you today?`,
+      `Hi! I'm ${businessName}'s AI assistant. How can I help you today?`,
       `Welcome! Need help with anything at ${businessName}? I'm here to assist!`,
       `Hello! Thanks for visiting ${businessName}. What can I help you with?`,
       `Hey! Looking for something specific at ${businessName}? I'm here to help!`,
@@ -9484,11 +9484,12 @@ Return ONLY the refined instruction, nothing else.`
   // Helper function for rotating intro messages (Phase 1 optimization)
   const getRandomIntroMessage = () => {
     const introMessages = [
-      "Hey there! I'm Chroney, your AI assistant. I can help with products, FAQs, and more. What brings you here today?",
-      "What's up! Chroney here. I know everything about our products and can answer your questions. How can I help?",
-      "Yo! I'm Chroney, your friendly AI sidekick. Need product info? Have questions? Just ask!",
-      "Sup, human? Chroney reporting for duty. Tell me what you need—products, FAQs, or just browsing—I'm here to help!",
-      "Hey hey! Chroney here. Think of me as your personal shopping assistant. What can I help you discover today?"
+      // The assistant speaks for the business it is installed on — never "Chroney" (the software).
+      "Hey there! I'm your AI assistant. I can help with products, FAQs, and more. What brings you here today?",
+      "Hi! I know our products inside out and can answer your questions. How can I help?",
+      "Hello! Need product info or have a question? Just ask!",
+      "Hey! Tell me what you need — products, FAQs, or just browsing — I'm here to help!",
+      "Hi there! Think of me as your personal shopping assistant. What can I help you discover today?"
     ];
     
     return introMessages[Math.floor(Math.random() * introMessages.length)];
@@ -29217,7 +29218,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const openai = createOpenAI({ businessAccountId, apiKey });
 
       // Generate voice sample
-      const sampleText = "Hello! I'm Chroney, your AI assistant. How can I help you today?";
+      const sampleText = "Hello! I'm your AI assistant. How can I help you today?";
       const mp3Response = await openai.audio.speech.create({
         model: "gpt-4o-mini-tts",
         voice: voice as any,

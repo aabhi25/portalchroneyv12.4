@@ -468,6 +468,8 @@ export interface StreamTurnOptions {
   leadBlocksAnswer?: boolean;
   /** The lead block asks (or may ask) for something this turn. */
   leadAsksNow?: boolean;
+  /** "WHO YOU ARE" (services/chatContext/identity): the business's assistant, never "Chroney". */
+  identityBlock?: string;
   /** OTP strict-mode / lockout block. Replaces lead collection and goes last. */
   otpBlock?: string;
   /** Voice turns: spoken-style reply rules (services/voice/voiceStyle). Goes last, before OTP. */
@@ -937,7 +939,7 @@ SCRIPT RULE (CRITICAL - check this before responding):
         languageSection = '';
       }
 
-      const systemPrompt = `You are Chroney, an AI assistant for Hi Chroney business chatbot platform.
+      const systemPrompt = `You are this business's AI assistant: you work for the business described in your context and speak for it. Never call yourself "Chroney" or mention the software platform you run on.
 
 PERSONALITY:
 ${personalityTraits}
@@ -1574,7 +1576,7 @@ ${extraFinalBlock.trim()}` : ''}`;
 1. IDENTITY
 ═══════════════════════════════════════════════════════════════════════════
 
-You are Chroney, an autonomous sales agent for this business on the Hi Chroney platform.
+You are this business's AI assistant — an autonomous sales agent working for the business (who you are exactly is in "WHO YOU ARE" in the final rules).
 You don't just answer questions — you strategically guide every conversation toward the best outcome for both the user and the business.
 ${this.getAutonomousAgentInstructions(userMessageCount, !!promptOptions?.cacheFriendly)}
 
@@ -2146,7 +2148,9 @@ ${languageInstruction ? `🌐 ${languageInstruction}\n` : ''}🚨 ${responseLeng
 - ALWAYS end with a qualifying question, recommendation, or soft CTA — never leave the conversation hanging.
 - When user shares personal details (marks, budget, needs), cross-reference your context and proactively suggest the best match.
 - Detect user emotion from their message tone and adapt: empathize with frustrated users, match excited users' energy, reassure hesitant users.
-${extractedCustomInstructions ? `
+${turnOptions?.identityBlock ? `
+${turnOptions.identityBlock}
+` : ''}${extractedCustomInstructions ? `
 ⚡ BUSINESS CUSTOM INSTRUCTIONS (HIGHEST PRIORITY for tone, style, format and content — they override the rules above, EXCEPT when to ask for contact details, which only the LEAD COLLECTION block below decides):
 ${extractedCustomInstructions}
 These instructions from the business owner MUST be followed. They override the other rules above including response length, tone, style, and format.` : ''}${leadSection ? `
@@ -2357,7 +2361,7 @@ Detection rules:
 
     const personalityTraits = this.getPersonalityTraits(personality);
 
-    const systemPrompt = `You are Chroney, a friendly customer service assistant. Generate a unique, creative welcome greeting message for a customer visiting this chat for the first time.
+    const systemPrompt = `You are this business's friendly AI assistant. Generate a unique, creative welcome greeting message for a customer visiting this chat for the first time.
 
 PERSONALITY:
 ${personalityTraits}
@@ -2372,7 +2376,7 @@ Requirements:
 3. Be conversational and welcoming
 4. Keep it to 2-3 sentences maximum
 5. Be creative and vary your greeting each time
-6. Introduce yourself as Chroney
+6. Introduce yourself as the business's AI assistant (never as "Chroney" — that is only the software)
 7. Use customer-friendly language (avoid business jargon like "lead capture")
 
 Generate only the greeting message, nothing else.`;
@@ -2397,7 +2401,7 @@ Generate only the greeting message, nothing else.`;
       );
     }
 
-    return response.choices[0].message.content || 'Hello! I\'m Chroney, here to help!';
+    return response.choices[0].message.content || 'Hello! How can I help you today?';
   }
 
   /** The per-message funnel stage block (moved to the end of the prompt in cache-friendly mode). */

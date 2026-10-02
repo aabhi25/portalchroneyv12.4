@@ -479,8 +479,9 @@ async function main() {
       const openai = new FakeSocket();
       const streams: Array<() => AsyncGenerator<any>> = [];
       const ttsCalls: string[] = [];
+      const chatContexts: any[] = [];
       svc.setDepsForTesting({
-        streamChat: () => (streams.shift() || scripted(["Okay."]))(),
+        streamChat: (_message: string, ctx: any) => { chatContexts.push(ctx); return (streams.shift() || scripted(["Okay."]))(); },
         commitAssistantMessage: async (_c: any, _content: string, still: () => boolean) => (still() ? "m1" : null),
         rollbackAssistantMessage: async () => undefined,
         createTtsProviders: () => ({
@@ -515,7 +516,7 @@ async function main() {
         event({ type: "input_audio_buffer.speech_stopped", item_id: iid, audio_end_ms: at + ms });
         return event({ type: "conversation.item.input_audio_transcription.completed", item_id: iid, transcript: text });
       };
-      return { svc, client, conversation, conversationId, streams, ttsCalls, utter, msg: (m: any) => svc.handleClientMessage(conversationId, conversation, m) };
+      return { svc, client, conversation, conversationId, streams, ttsCalls, chatContexts, utter, msg: (m: any) => svc.handleClientMessage(conversationId, conversation, m) };
     };
 
     // Server route (HeyGen): audio goes to the provider, never to local playback.
@@ -545,6 +546,7 @@ async function main() {
       expect(rec.audio.length > audioBefore && v.client.binary.length === 0, "answer audio → avatar provider only (local playback muted)", { provider: rec.audio.length - audioBefore, local: v.client.binary.length });
       const prod = v.client.ofType("products")[0];
       expect(prod && JSON.parse(prod.data).items[0].name === "Gold ring" && prod.responseId, "product cards from the same tool results are sent for display under the avatar", prod);
+      expect(v.chatContexts.slice(-1)[0]?.assistantName === "Maya", "answers on a video call introduce the assistant by the avatar's name (not 'Chroney')", v.chatContexts.slice(-1)[0]?.assistantName);
 
       // Confirmed interruption → provider interrupt.
       v.streams.push(scripted(["Diamonds are the hardest natural material. ", "They are made of carbon. ", "They form deep underground. ", "Would you like to see some?"]));

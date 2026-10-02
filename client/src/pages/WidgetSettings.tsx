@@ -5596,7 +5596,7 @@ export default function WidgetSettings() {
                             <div className="bg-white rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
                               <p className="text-gray-800 leading-relaxed" style={{ fontSize: CHAT_FONT_SIZE_PX[chatFontSize] || CHAT_FONT_SIZE_PX.medium }}>
                                 {welcomeMessageType === "ai_generated" 
-                                  ? "Hello! 👋 I'm Chroney, your AI assistant. I can help you explore products, answer questions, and capture leads. How can I assist you?"
+                                  ? "Hello! 👋 I'm your AI assistant. I can help you explore products, answer questions, and capture leads. How can I assist you?"
                                   : welcomeMessage || "Hi! How can I help you today?"}
                               </p>
                             </div>

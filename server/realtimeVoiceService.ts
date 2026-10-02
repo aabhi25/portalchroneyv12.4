@@ -404,6 +404,8 @@ interface VoiceConversation {
     sessionId: string;
     audioRoute: AudioRoute;
     provider: string;
+    /** The avatar's display name: the assistant introduces itself with it. */
+    displayName?: string;
     attachedAt: number;
     lastInterruptAt?: number;
   };
@@ -865,7 +867,7 @@ export class RealtimeVoiceService {
       this.sendToClient(conversation.clientWs, { type: 'avatar_attach_failed', avatarSessionId: sessionId, reason: 'not_found' });
       return;
     }
-    conversation.avatar = { sessionId, audioRoute: attached.audioRoute, provider: attached.provider, attachedAt: Date.now() };
+    conversation.avatar = { sessionId, audioRoute: attached.audioRoute, provider: attached.provider, displayName: attached.displayName, attachedAt: Date.now() };
     this.sendToClient(conversation.clientWs, { type: 'avatar_attached', avatarSessionId: sessionId, audioRoute: attached.audioRoute });
     console.log(`[RealtimeVoice] Avatar attached: ${attached.provider} route=${attached.audioRoute}`, conversation.conversationId);
     if (message.speakIntro !== false && attached.disclosure && !conversation.isProcessing && !this.isAnswerActive(conversation)) {
@@ -1846,7 +1848,7 @@ export class RealtimeVoiceService {
     const femaleVoices = ['coral', 'nova', 'sage', 'shimmer'];
     const voiceGender = maleVoices.includes(selectedVoice) ? 'male' : femaleVoices.includes(selectedVoice) ? 'female' : 'neutral';
 
-    let instructions = `You are Chroney, an AI assistant for ${companyDescription || 'a business'}. `;
+    let instructions = `You are the AI assistant for ${companyDescription || 'this business'} and speak for it (never call yourself Chroney). `;
 
     if (voiceGender === 'male') {
       instructions += 'You are a MALE assistant. In English use "he/him" if referring to yourself in third person. In languages with grammatical gender, always use masculine forms. ';
@@ -3616,6 +3618,7 @@ export class RealtimeVoiceService {
       topscholarSubjectScoping: topScholar,
       deferAssistantPersistence: true,
       voiceResponseStyle: true,
+      assistantName: conversation.avatar?.displayName ?? null,
       prefetchedK12Topic: prefetchedK12Topic ?? null,
     };
   }

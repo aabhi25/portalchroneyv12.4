@@ -31,6 +31,7 @@ import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
 import { VOICE_RESPONSE_STYLE_BLOCK } from './services/voice/voiceStyle';
 import { resolveChatContextMode, type ChatContextMode } from './services/chatContext/config';
 import { buildBusinessProfile, type BusinessProfile } from './services/chatContext/businessProfile';
+import { buildIdentityBlock } from './services/chatContext/identity';
 import { buildRetrievalQuery, capHistoryForModel } from './services/chatContext/conversationWindow';
 import { retrieveKnowledge } from './services/chatContext/knowledgeRetrieval';
 import { ensurePassageVectors } from './services/chatContext/passageVectors';
@@ -173,6 +174,11 @@ export interface ChatContext {
    * a time, no lists/tables/headings). Never set from an HTTP request.
    */
   voiceResponseStyle?: boolean;
+  /**
+   * Server-only (RealtimeVoiceService): the name the visitor sees for the assistant on a
+   * live video-avatar call. Never set from an HTTP request.
+   */
+  assistantName?: string | null;
   /**
    * Server-only (RealtimeVoiceService): a curriculum lookup started
    * speculatively, in parallel with the voice intent router. When the K12 fast
@@ -2907,6 +2913,9 @@ Response:`;
       }
     }
 
+    // "Who you are" applies to the reply written after the tool call too.
+    const identityBlock = buildIdentityBlock((await storage.getBusinessAccount(context.businessAccountId).catch(() => null))?.name, context.assistantName);
+
     // Get final response from AI with tool results (using same relevant tools)
     const finalResponse = await llamaService.continueToolConversation(
       messagesForContinuation,
@@ -2916,7 +2925,7 @@ Response:`;
       context.businessAccountId,
       context.preferredLanguage,
       context.responseLength || 'balanced',
-      finalBlock
+      [identityBlock, finalBlock].filter(Boolean).join('\n\n')
     );
 
     const responseContent = finalResponse.content || 'I processed your request.';
@@ -3798,6 +3807,8 @@ Response:`;
         accountConfigP,
       ]);
       let systemContext = builtContext;
+      // "Who you are" for every reply of this turn, including the one written after a tool call.
+      const identityBlock = buildIdentityBlock(businessAccount?.name, context.assistantName);
       // Per-turn status blocks go at the END in retrieval mode so the stable prefix
       // (instructions + business context) is identical across turns (prompt caching).
       const addTurnBlock = (block: string) => {
@@ -4127,6 +4138,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         otpBlock: otpTurnBlock || undefined,
         voiceStyleBlock: context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : undefined,
         skipFaqPrefetch: knowledge.skipFaqPrefetch || undefined,
+        identityBlock: identityBlock || undefined,
       };
       const firstCallPromptOptions = retrievalMode ? await this.buildFirstCallPromptOptions(context, history, knowledge.itemCount > 0 && !(serverSideLookupOptions || serverSideReturnExchange)) : undefined;
       timing.mark('llm request');
@@ -4662,9 +4674,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           context.businessAccountId,
           context.preferredLanguage,
           context.responseLength || 'balanced',
-          context.voiceResponseStyle
-            ? [continuationBlock, VOICE_RESPONSE_STYLE_BLOCK].filter(Boolean).join('\n\n')
-            : continuationBlock
+          [identityBlock, continuationBlock, context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : ''].filter(Boolean).join('\n\n')
         )) {
           finalContent += token;
           streamedTokens = true;
