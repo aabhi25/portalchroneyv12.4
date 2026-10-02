@@ -27,6 +27,11 @@ export interface LiveAvatarHandle {
   speakIntro: boolean;
 }
 
+function errorText(error: unknown): string {
+  const e = error as { name?: string; message?: string } | null;
+  return [e?.name && e.name !== "Error" ? e.name : "", e?.message || String(error)].filter(Boolean).join(": ").slice(0, 200);
+}
+
 export function useLiveAvatar(opts: { businessAccountId: string; userId: string; getConversationId: () => string | null | undefined }) {
   const [state, dispatch] = useReducer(avatarReducer, initialAvatarState);
   const [session, setSession] = useState<AvatarSessionInfo | null>(null);
@@ -40,7 +45,7 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
   const attemptRef = useRef(0);
   const auth = useCallback(() => ({ businessAccountId: opts.businessAccountId, userId: opts.userId }), [opts.businessAccountId, opts.userId]);
 
-  const teardown = useCallback(async (reason: string | null) => {
+  const teardown = useCallback(async (reason: string | null, detail?: string) => {
     const adapter = adapterRef.current;
     const current = sessionRef.current;
     adapterRef.current = null;
@@ -49,7 +54,7 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
     setRemainingSeconds(null);
     // Tell the server first (with the real reason) — closing the voice socket
     // right after would otherwise end the session as "voice_closed".
-    if (current && reason) endAvatarSession(current.sessionId, { ...auth(), reason });
+    if (current && reason) endAvatarSession(current.sessionId, { ...auth(), reason, ...(detail ? { detail: detail.slice(0, 200) } : {}) });
     if (adapter) { try { await adapter.close(); } catch { /* ignore */ } }
   }, [auth]);
 
@@ -83,7 +88,7 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
     } catch (error) {
       console.warn("[LiveAvatar] adapter failed to load", error);
       dispatch({ type: "provider_error" });
-      void teardown("connect_failed");
+      void teardown("connect_failed", `video library failed to load: ${errorText(error)}`);
       return;
     }
     if (attempt !== attemptRef.current) { void adapter.close(); return; }
@@ -113,7 +118,7 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
       if (attempt !== attemptRef.current || adapterRef.current !== adapter) return;
       console.warn("[LiveAvatar] connect failed", error);
       dispatch(timedOut ? { type: "connect_timeout" } : { type: "provider_error" });
-      void teardown(timedOut ? "connect_timeout" : "connect_failed");
+      void teardown(timedOut ? "connect_timeout" : "connect_failed", errorText(error));
       return;
     }
     clearTimeout(timer);

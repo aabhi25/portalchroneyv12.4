@@ -1,4 +1,6 @@
 import express, { Router, type Request, type Response } from "express";
+import { existsSync } from "fs";
+import path from "path";
 import { z } from "zod";
 import { requireAuth, requireRole } from "../auth";
 import { storage } from "../storage";
@@ -60,6 +62,14 @@ import { AvatarProviderError, CLIENT_END_REASONS, type AvatarEndReason, type Ava
  * Raw API keys are never returned by any endpoint.
  */
 const router = Router();
+
+// The widget loads these browser SDKs only when a visitor taps the avatar. If a checkout
+// skipped `npm install` after they were added, every call fails to connect — say so loudly.
+for (const sdk of ["livekit-client", "@anam-ai/js-sdk"]) {
+  if (!existsSync(path.resolve(process.cwd(), "node_modules", sdk, "package.json"))) {
+    console.warn(`[Avatar] ${sdk} is not installed — Live AI avatar calls will fail to connect. Run npm install and restart.`);
+  }
+}
 
 // ── small in-memory rate limiter (single-instance deployment) ────────────────
 const buckets = new Map<string, number[]>();
@@ -466,7 +476,7 @@ router.post("/api/chat/widget/avatar/session/:id/end", textBody, async (req, res
   const body = bodyOf(req);
   const reason: AvatarEndReason = (CLIENT_END_REASONS as string[]).includes(body.reason) ? body.reason : "visitor_closed";
   try {
-    const ended = await avatarSessionManager.endFromClient(req.params.id, auth, reason);
+    const ended = await avatarSessionManager.endFromClient(req.params.id, auth, reason, body.detail);
     res.json({ ended });
   } catch (error) {
     sendGateError(res, error);

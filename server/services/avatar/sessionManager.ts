@@ -81,6 +81,8 @@ export interface VoiceBinding {
 }
 
 interface LiveSession {
+  /** Why the visitor's browser could not connect/keep the video (shown to super admins). */
+  clientError?: string | null;
   id: string;
   businessAccountId: string;
   visitorId: string;
@@ -425,9 +427,13 @@ export class AvatarSessionManager {
     return { active: true, remainingSeconds: remaining };
   }
 
-  async endFromClient(sessionId: string, auth: { businessAccountId: string; visitorId: string }, reason: AvatarEndReason): Promise<boolean> {
+  async endFromClient(sessionId: string, auth: { businessAccountId: string; visitorId: string }, reason: AvatarEndReason, detail?: unknown): Promise<boolean> {
     const live = this.authorize(sessionId, auth);
     if (!live) return false;
+    if (typeof detail === "string" && detail.trim()) {
+      // Visitor-supplied text: strip control characters and cap it; it is only ever shown to super admins.
+      live.clientError = `Browser: ${detail.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 180)}`;
+    }
     await this.endSession(sessionId, reason);
     return true;
   }
@@ -561,7 +567,7 @@ export class AvatarSessionManager {
           endReason: reason,
           costUsd: costUsd.toFixed(6),
           ...(live.handle.providerSessionId ? { providerSessionId: live.handle.providerSessionId } : {}),
-          metadata: { keySource: live.apiKeySource, timings: live.timings, stats, audioRoute: live.audioRoute },
+          metadata: { keySource: live.apiKeySource, timings: live.timings, stats, audioRoute: live.audioRoute, ...(live.clientError ? { error: live.clientError } : {}) },
         }).where(eq(avatarSessions.id, live.id));
       } catch (error) {
         console.error(`[Avatar] failed to record end of session ${live.id}:`, (error as Error)?.message || error);

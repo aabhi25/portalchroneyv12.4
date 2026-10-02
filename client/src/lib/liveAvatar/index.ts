@@ -58,7 +58,7 @@ export async function avatarHeartbeat(sessionId: string, input: { businessAccoun
 }
 
 /** End the avatar session. `beacon` for page unload (survives the tab closing). */
-export function endAvatarSession(sessionId: string, input: { businessAccountId: string; userId: string; reason: string }, opts: { beacon?: boolean } = {}): void {
+export function endAvatarSession(sessionId: string, input: { businessAccountId: string; userId: string; reason: string; detail?: string }, opts: { beacon?: boolean } = {}): void {
   const url = `/api/chat/widget/avatar/session/${encodeURIComponent(sessionId)}/end`;
   const body = JSON.stringify(input);
   if (opts.beacon && typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {

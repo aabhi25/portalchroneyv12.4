@@ -305,7 +305,12 @@ async function main() {
     r = await call("POST", `/api/chat/widget/avatar/session/${sAnam}/connected`, null, { businessAccountId: A, userId: "widget_visitor_2", providerSessionId: "anam-sess-77" });
     [srow] = await db.select().from(schema.avatarSessions).where(eq(schema.avatarSessions.id, sAnam));
     expect(srow.providerSessionId?.startsWith("fake_") || srow.providerSessionId === "anam-sess-77", "provider session id recorded for client-route providers", srow.providerSessionId);
-    await call("POST", `/api/chat/widget/avatar/session/${sAnam}/end`, null, { businessAccountId: A, userId: "widget_visitor_2" });
+    await call("POST", `/api/chat/widget/avatar/session/${sAnam}/end`, null, { businessAccountId: A, userId: "widget_visitor_2", reason: "connect_failed", detail: "NotAllowedError: video\u0000 blocked " + "x".repeat(400) });
+    {
+      const view = await call("GET", `/api/super-admin/avatar/accounts/${A}`, cSup);
+      const shown = view.json.recentSessions?.find((x: any) => x.id === sAnam);
+      expect(shown?.endReason === "connect_failed" && /^Browser: NotAllowedError: video blocked x+$/.test(shown?.error || "") && shown.error.length <= 200, "browser's connect error is recorded (cleaned, capped) for super admins", shown);
+    }
     await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { provider: "heygen_liveavatar", avatarId: "hg-avatar-1" });
     r = await widgetStart(A, "widget_visitor_3");
     expect(r.status === 200 && heygenFake.sessions.slice(-1)[0].input.apiKey === HG_BIZ, "switch back to HeyGen → HeyGen key again", r.status);
