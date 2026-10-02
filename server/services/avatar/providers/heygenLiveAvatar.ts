@@ -375,7 +375,8 @@ export function createHeygenLiveAvatarProvider(options: HeygenLiveAvatarOptions 
   return {
     id: "heygen_liveavatar",
     audioRoute: "server",
-    connectTimeoutMs: 8_000,
+    // The avatar joining the LiveKit room took 2.4 s in one live test and over 8 s in another.
+    connectTimeoutMs: 15_000,
 
     async createSession(input: CreateProviderSessionInput): Promise<ProviderSession> {
       const opts = input.providerOptions || {};

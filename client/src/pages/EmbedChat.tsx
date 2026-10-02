@@ -25,7 +25,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { convertLatexDelimiters } from '@/lib/convertLatexDelimiters';
 import { CurriculumMarkdownImage } from '@/components/CurriculumMarkdownImage';
-import { LiveAvatarPanel } from '@/components/LiveAvatarPanel';
+import { LiveAvatarPanel, type AvatarVoiceStatus } from '@/components/LiveAvatarPanel';
 import { useLiveAvatar } from '@/hooks/useLiveAvatar';
 import { captionAt } from '@/lib/liveAvatar/captions';
 import { isAvatarCallActive } from '@/lib/liveAvatar/stateMachine';
@@ -1238,6 +1238,11 @@ export default function EmbedChat() {
     getConversationId: () => conversationIdRef.current || null,
   });
   const avatarCallActive = isAvatarCallActive(liveAvatar.state.phase);
+  // Voice launched from the video button: hands-free and listening right away (it's a call).
+  const [avatarVoice, setAvatarVoice] = useState(false);
+  const [avatarVoiceStatus, setAvatarVoiceStatus] = useState<AvatarVoiceStatus | null>(null);
+  const avatarCallStartedAtRef = useRef(0);
+  const [avatarListenRequest, setAvatarListenRequest] = useState(0);
 
   // Tell the page's widget script which conversation this is, so its WhatsApp launcher can hand the
   // visitor over with the topic (the script runs on the site's own origin and can't see this chat).
@@ -1516,12 +1521,16 @@ export default function EmbedChat() {
   const startAvatarCall = () => {
     if (!avatarAvailable || activeFormStep || isFormJourneyComplete) return;
     setIsMenuMode(false);
+    avatarCallStartedAtRef.current = Date.now();
+    setAvatarVoice(true);
     // Voice starts immediately (it is the brain); the video joins when ready.
     setIsInlineVoiceActive(true);
     void liveAvatar.start();
   };
   const closeInlineVoice = () => {
     setIsInlineVoiceActive(false);
+    setAvatarVoice(false);
+    setAvatarVoiceStatus(null);
     inlineVoiceAIMessagesRef.current.clear();
     voiceSpokenTextRef.current.clear();
     setVoiceHighlight(null);
@@ -1534,6 +1543,11 @@ export default function EmbedChat() {
     closeInlineVoice();
     if (reason === 'switched_to_text') setTimeout(() => inputRef.current?.focus(), 50);
   };
+  // The latest answer's product cards during a video call, shown on the call screen.
+  const avatarProductsMsg = avatarCallActive
+    ? [...messages].reverse().find((m) => m.role === 'assistant' && (m.products?.length ?? 0) > 0
+        && new Date(m.timestamp).getTime() >= avatarCallStartedAtRef.current - 1000)
+    : undefined;
   const avatarCaption = liveAvatar.state.phase === 'live' && voiceHighlight
     ? captionAt(voiceSpokenTextRef.current.get(voiceHighlight.messageId) || '', voiceHighlight.offset)
     : '';
@@ -5477,6 +5491,22 @@ export default function EmbedChat() {
           chatColor={chatColor}
           chatColorEnd={chatColorEnd}
           avatarImageUrl={settings?.avatarType && settings.avatarType !== 'none' ? (settings.avatarType === 'custom' ? settings.avatarUrl : `/avatars/avatar-${settings.avatarType.replace('preset-', '')}.png`) : undefined}
+          voiceStatus={avatarVoiceStatus}
+          onRequestListen={() => setAvatarListenRequest((n) => n + 1)}
+          productsKey={avatarProductsMsg?.id ?? null}
+          products={avatarProductsMsg?.products?.length ? (
+            <ProductCard
+              products={avatarProductsMsg.products}
+              currencySymbol={currencySymbol}
+              whatsappEnabled={settings?.whatsappOrderEnabled === 'true'}
+              whatsappNumber={settings?.whatsappOrderNumber}
+              whatsappMessage={settings?.whatsappOrderMessage}
+              chatColor={chatColor}
+              addToCartEnabled={settings?.addToCartEnabled !== 'false'}
+              businessAccountId={businessAccountId}
+              selectedLanguage={selectedLanguage !== 'auto' ? selectedLanguage : undefined}
+            />
+          ) : undefined}
           onToggleMute={() => liveAvatar.setMuted(!liveAvatar.state.muted)}
           onEnd={() => endAvatarCall('visitor_closed')}
           onSwitchToText={() => endAvatarCall('switched_to_text')}
@@ -6180,7 +6210,8 @@ export default function EmbedChat() {
           style={{ 
             paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))',
             position: 'relative',
-            zIndex: 99999
+            // Under the full-screen video call while one is on (the voice bar keeps running beneath it).
+            zIndex: avatarCallActive ? 0 : 99999
           }}
         >
           {doubtLock ? (
@@ -6256,6 +6287,8 @@ export default function EmbedChat() {
                 onClose={() => {
                   if (isAvatarCallActive(liveAvatar.state.phase)) liveAvatar.end('visitor_closed');
                   setIsInlineVoiceActive(false);
+                  setAvatarVoice(false);
+                  setAvatarVoiceStatus(null);
                   inlineVoiceAIMessagesRef.current.clear();
                   voiceSpokenTextRef.current.clear();
                   setVoiceHighlight(null);
@@ -6273,7 +6306,10 @@ export default function EmbedChat() {
                 textConversationId={conversationIdRef.current || undefined}
                 topscholarToken={topscholarTokenRef.current || undefined}
                 topscholarCpId={topscholarCpIdRef.current || undefined}
-                voiceInputMode={settings?.voiceInputMode}
+                voiceInputMode={avatarVoice ? 'hands_free' : settings?.voiceInputMode}
+                autoListen={avatarVoice}
+                listenRequest={avatarListenRequest}
+                onStatusChange={avatarVoice ? setAvatarVoiceStatus : undefined}
                 onUserMessage={(text) => {
                   const userMsg: ChatMessage = {
                     id: 'voice-user-' + Date.now(),

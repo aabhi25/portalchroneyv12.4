@@ -98,6 +98,22 @@ interface InlineVoiceModeProps {
   onAvatarServerMessage?: (message: any) => void;
   /** Avatar mode: product cards for a spoken answer (same payload as text chat's `products`). */
   onAIMessageProducts?: (messageId: string, productsJson: string) => void;
+  /**
+   * Start listening as soon as the session is ready, even before mic permission was
+   * granted in an earlier session (a video call: the visitor already chose to talk).
+   */
+  autoListen?: boolean;
+  /** Live voice status, for UIs that cover this bar (the full-screen avatar call). */
+  onStatusChange?: (status: InlineVoiceStatus) => void;
+  /** Bump to start the microphone from a UI that covers this bar (a tap there). */
+  listenRequest?: number;
+}
+
+export interface InlineVoiceStatus {
+  state: 'idle' | 'listening' | 'thinking' | 'speaking';
+  connecting: boolean;
+  error: string | null;
+  transcript: string;
 }
 
 export function InlineVoiceMode({
@@ -127,7 +143,12 @@ export function InlineVoiceMode({
   avatar,
   onAvatarServerMessage,
   onAIMessageProducts,
+  autoListen = false,
+  onStatusChange,
+  listenRequest = 0,
 }: InlineVoiceModeProps) {
+  const autoListenRef = useRef(autoListen);
+  autoListenRef.current = autoListen;
   // ---- Live AI avatar -------------------------------------------------------
   const avatarRef = useRef<InlineVoiceAvatar | null>(avatar ?? null);
   avatarRef.current = avatar ?? null;
@@ -170,6 +191,11 @@ export function InlineVoiceMode({
   // a toast: a failure before the session is ready leaves the button looking
   // identical to an idle one, so without this it reads as simply not clicking.
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const onStatusChangeRef = useRef(onStatusChange);
+  onStatusChangeRef.current = onStatusChange;
+  useEffect(() => {
+    onStatusChangeRef.current?.({ state, connecting: isConnecting, error: voiceError, transcript: currentTranscript });
+  }, [state, isConnecting, voiceError, currentTranscript]);
 
   const wsRef = useRef<WebSocket | null>(null);
   // Whether voice has had a working session at any point since this control was
@@ -670,7 +696,7 @@ export function InlineVoiceMode({
         // Tell the server how this student takes turns (server VAD vs held turns).
         safeSend(JSON.stringify({ type: 'set_input_mode', mode: inputModeRef.current }));
         if (avatarRef.current) sendAvatarAttach();
-        if (hasPermissionRef.current) {
+        if (hasPermissionRef.current || (autoListenRef.current && inputModeRef.current !== 'hold_to_talk')) {
           try { await startRecording(); } catch (error) { setState('idle'); }
         } else {
           setState('idle');
@@ -1526,6 +1552,10 @@ export function InlineVoiceMode({
       if (!audioContextRef.current) {
         audioContextRef.current = new AudioContext({ sampleRate: 24000 });
       }
+      // Started without a fresh tap (auto-listen on a video call): make sure the mic graph runs.
+      if (audioContextRef.current.state === 'suspended') {
+        try { await audioContextRef.current.resume(); } catch { /* the next tap resumes it */ }
+      }
       const actualSampleRate = audioContextRef.current.sampleRate;
       const source = audioContextRef.current.createMediaStreamSource(stream);
       mediaSourceRef.current = source;
@@ -1895,6 +1925,20 @@ export function InlineVoiceMode({
     cleanup();
     onClose();
   };
+
+  // A tap on a covering UI (the video call's "tap to talk") starts the mic, in that gesture.
+  const lastListenRequestRef = useRef(listenRequest);
+  useEffect(() => {
+    if (listenRequest === lastListenRequestRef.current) return;
+    lastListenRequestRef.current = listenRequest;
+    shouldAutoRestartRef.current = true;
+    if (!isOnlineRef.current) {
+      reconnectAttemptsRef.current = 0;
+      connectWebSocket();
+      return;
+    }
+    if (state === 'idle') void startRecording().catch(() => undefined);
+  }, [listenRequest]);
 
   if (!isActive) return null;
 
