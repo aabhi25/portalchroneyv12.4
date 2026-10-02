@@ -32,6 +32,7 @@ import { VOICE_RESPONSE_STYLE_BLOCK } from './services/voice/voiceStyle';
 import { resolveChatContextMode, type ChatContextMode } from './services/chatContext/config';
 import { buildBusinessProfile, type BusinessProfile } from './services/chatContext/businessProfile';
 import { buildIdentityBlock } from './services/chatContext/identity';
+import { textChatAssistantGender } from './services/chatContext/assistantGender';
 import { buildRetrievalQuery, capHistoryForModel } from './services/chatContext/conversationWindow';
 import { retrieveKnowledge } from './services/chatContext/knowledgeRetrieval';
 import { ensurePassageVectors } from './services/chatContext/passageVectors';
@@ -179,6 +180,11 @@ export interface ChatContext {
    * live video-avatar call. Never set from an HTTP request.
    */
   assistantName?: string | null;
+  /**
+   * Server-only (RealtimeVoiceService): the assistant's gender on this voice/video call
+   * (avatar setting, else the voice). Undefined = text chat (follows the widget's voice).
+   */
+  assistantGender?: 'female' | 'male' | null;
   /**
    * Server-only (RealtimeVoiceService): a curriculum lookup started
    * speculatively, in parallel with the voice intent router. When the K12 fast
@@ -2914,7 +2920,15 @@ Response:`;
     }
 
     // "Who you are" applies to the reply written after the tool call too.
-    const identityBlock = buildIdentityBlock((await storage.getBusinessAccount(context.businessAccountId).catch(() => null))?.name, context.assistantName);
+    const [identityAccount, identityWidget] = await Promise.all([
+      storage.getBusinessAccount(context.businessAccountId).catch(() => null),
+      storage.getWidgetSettings(context.businessAccountId).catch(() => null),
+    ]);
+    const identityBlock = buildIdentityBlock(
+      identityAccount?.name,
+      context.assistantName,
+      context.assistantGender !== undefined ? context.assistantGender : textChatAssistantGender(identityAccount as any, identityWidget as any),
+    );
 
     // Get final response from AI with tool results (using same relevant tools)
     const finalResponse = await llamaService.continueToolConversation(
@@ -3808,7 +3822,10 @@ Response:`;
       ]);
       let systemContext = builtContext;
       // "Who you are" for every reply of this turn, including the one written after a tool call.
-      const identityBlock = buildIdentityBlock(businessAccount?.name, context.assistantName);
+      const assistantGender = context.assistantGender !== undefined
+        ? context.assistantGender
+        : textChatAssistantGender(businessAccount as any, widgetSettings as any);
+      const identityBlock = buildIdentityBlock(businessAccount?.name, context.assistantName, assistantGender);
       // Per-turn status blocks go at the END in retrieval mode so the stable prefix
       // (instructions + business context) is identical across turns (prompt caching).
       const addTurnBlock = (block: string) => {

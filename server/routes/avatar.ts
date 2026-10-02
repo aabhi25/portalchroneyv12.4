@@ -1,5 +1,6 @@
 import express, { Router, type Request, type Response } from "express";
 import { existsSync } from "fs";
+import { genderOfVoice } from "../services/chatContext/assistantGender";
 import path from "path";
 import { z } from "zod";
 import { requireAuth, requireRole } from "../auth";
@@ -62,6 +63,11 @@ import { AvatarProviderError, CLIENT_END_REASONS, type AvatarEndReason, type Ava
  * Raw API keys are never returned by any endpoint.
  */
 const router = Router();
+
+function voiceLabel(selection: string): string {
+  const name = selection.startsWith("elevenlabs-") ? selection.slice("elevenlabs-".length) : selection.startsWith("el:") ? "custom ElevenLabs voice" : selection;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
 
 // The widget loads these browser SDKs only when a visitor taps the avatar. If a checkout
 // skipped `npm install` after they were added, every call fails to connect — say so loudly.
@@ -233,6 +239,14 @@ async function adminView(businessAccountId: string) {
   if (children && !settings.parentalConsentConfirmed) warnings.push("Parental consent not confirmed (children's education account)");
   if (account.voiceModeEnabled !== "true") warnings.push("Voice mode is off for this account — the avatar needs voice mode");
   if (usage.seconds >= settings.monthlyMinuteCap * 60) warnings.push("Monthly avatar minutes are used up");
+  // The face and the voice should be the same gender (Hindi grammar follows it too).
+  const widget = await storage.getWidgetSettings(businessAccountId).catch(() => null);
+  const voiceSelection = widget?.voiceSelection || "shimmer";
+  const voiceGender = await genderOfVoice(voiceSelection, account.elevenlabsApiKey).catch(() => null);
+  const avatarGender = settings.avatarGender === "female" || settings.avatarGender === "male" ? settings.avatarGender : null;
+  const genderMismatch = avatarGender && voiceGender && avatarGender !== voiceGender
+    ? `The avatar is ${avatarGender} but the voice (${voiceLabel(voiceSelection)}) is ${voiceGender}. Pick a ${avatarGender} voice in Widget Settings → Voice, or change the avatar.`
+    : null;
   const { apiKeys, exists: _exists, ...rest } = settings;
   return {
     businessAccountId,
@@ -248,6 +262,8 @@ async function adminView(businessAccountId: string) {
     warnings,
     childrensAccount: children,
     voiceModeEnabled: account.voiceModeEnabled === "true",
+    voice: { selection: voiceSelection, label: voiceLabel(voiceSelection), gender: voiceGender },
+    genderMismatch,
     providers: providers.map((id) => ({ id, label: providerLabel(id) })),
     limits: AVATAR_LIMITS,
     usage,

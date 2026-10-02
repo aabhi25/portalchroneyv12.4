@@ -1,0 +1,1 @@
+ALTER TABLE "avatar_business_settings" ADD COLUMN IF NOT EXISTS "avatar_gender" varchar(10);

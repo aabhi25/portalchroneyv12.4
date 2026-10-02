@@ -1639,6 +1639,8 @@ export const avatarBusinessSettings = pgTable("avatar_business_settings", {
   providerOptions: jsonb("provider_options").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
   displayName: varchar("display_name", { length: 80 }),
   styleHint: varchar("style_hint", { length: 20 }).notNull().default("realistic"), // 'realistic' | 'stylised'
+  // 'female' | 'male' | null (null = follow the voice). Hindi & co. conjugate by the speaker's gender.
+  avatarGender: varchar("avatar_gender", { length: 10 }),
   disclosureEnabled: boolean("disclosure_enabled").notNull().default(true),
   disclosureText: text("disclosure_text"), // null = default "Hi, I'm {name}, an AI assistant…"
   monthlyMinuteCap: integer("monthly_minute_cap").notNull().default(60),

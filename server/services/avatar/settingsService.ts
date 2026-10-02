@@ -61,6 +61,7 @@ export function defaultSettings(businessAccountId: string, account?: Pick<Busine
     providerOptions: {},
     displayName: null,
     styleHint: isChildrensAccount(account) ? "stylised" : "realistic",
+    avatarGender: null,
     disclosureEnabled: true,
     disclosureText: null,
     monthlyMinuteCap: 60,
@@ -115,6 +116,7 @@ export const avatarSettingsInput = z.object({
   providerOptions: z.record(z.unknown()).optional(),
   displayName: nullableText(80),
   styleHint: z.enum(["realistic", "stylised"]).optional(),
+  avatarGender: z.union([z.enum(["female", "male"]), z.null()]).optional(),
   disclosureEnabled: z.boolean().optional(),
   disclosureText: nullableText(300),
   monthlyMinuteCap: z.number().int().min(AVATAR_LIMITS.monthlyMinuteCap.min).max(AVATAR_LIMITS.monthlyMinuteCap.max).optional(),
@@ -162,7 +164,7 @@ export class AvatarSettingsError extends Error {
 }
 
 const AUDITED_FIELDS = [
-  "enabled", "provider", "avatarId", "displayName", "styleHint", "disclosureEnabled", "disclosureText",
+  "enabled", "provider", "avatarId", "displayName", "styleHint", "avatarGender", "disclosureEnabled", "disclosureText",
   "monthlyMinuteCap", "maxConcurrentSessions", "maxSessionMinutes", "idleTimeoutSeconds", "allowPlatformKey",
   "voiceNote", "commercialNotes", "parentalConsentConfirmed", "providerOptions",
 ] as const;
@@ -201,6 +203,7 @@ export async function updateAvatarSettings(
     providerOptions: options.value,
     displayName: input.displayName !== undefined ? (input.displayName || null) : current.displayName,
     styleHint: input.styleHint ?? current.styleHint,
+    avatarGender: input.avatarGender !== undefined ? input.avatarGender : (current.avatarGender ?? null),
     disclosureEnabled: input.disclosureEnabled ?? current.disclosureEnabled,
     disclosureText: input.disclosureText !== undefined ? (input.disclosureText || null) : current.disclosureText,
     monthlyMinuteCap: input.monthlyMinuteCap ?? current.monthlyMinuteCap,
@@ -237,6 +240,7 @@ export async function updateAvatarSettings(
     providerOptions: next.providerOptions,
     displayName: next.displayName,
     styleHint: next.styleHint,
+    avatarGender: next.avatarGender ?? null,
     disclosureEnabled: next.disclosureEnabled,
     disclosureText: next.disclosureText,
     monthlyMinuteCap: next.monthlyMinuteCap,

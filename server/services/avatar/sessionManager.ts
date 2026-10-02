@@ -102,6 +102,8 @@ interface LiveSession {
   ratePerMinUsd: number;
   disclosure: string | null;
   displayName: string;
+  /** 'female' | 'male' | null (null = the voice decides). */
+  avatarGender: "female" | "male" | null;
   voice: VoiceBinding | null;
   endAfterAnswer: { reason: AvatarEndReason; deadlineMs: number } | null;
   ending: Promise<void> | null;
@@ -353,6 +355,7 @@ export class AvatarSessionManager {
       ratePerMinUsd: rates[provider] ?? 0,
       disclosure,
       displayName: settings.displayName?.trim() || DEFAULT_DISPLAY_NAME,
+      avatarGender: settings.avatarGender === "female" || settings.avatarGender === "male" ? settings.avatarGender : null,
       voice: null,
       endAfterAnswer: null,
       ending: null,
@@ -440,7 +443,7 @@ export class AvatarSessionManager {
 
   // ── voice bridge (used by realtimeVoiceService) ─────────────────────────────
 
-  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: AvatarProviderId; disclosure: string | null; displayName: string } | null {
+  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: AvatarProviderId; disclosure: string | null; displayName: string; avatarGender: "female" | "male" | null } | null {
     const live = this.live.get(sessionId);
     if (!live || live.businessAccountId !== auth.businessAccountId || live.visitorId !== auth.visitorId) return null;
     live.voice = binding;
@@ -449,7 +452,7 @@ export class AvatarSessionManager {
       live.conversationId = binding.conversationId;
       void db.update(avatarSessions).set({ conversationId: binding.conversationId }).where(eq(avatarSessions.id, live.id)).catch(() => undefined);
     }
-    return { audioRoute: live.audioRoute, provider: live.provider, disclosure: live.disclosure, displayName: live.displayName };
+    return { audioRoute: live.audioRoute, provider: live.provider, disclosure: live.disclosure, displayName: live.displayName, avatarGender: live.avatarGender };
   }
 
   unbindVoice(sessionId: string, conversationId?: string): void {

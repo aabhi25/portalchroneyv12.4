@@ -25,6 +25,7 @@ interface AdminView {
     providerOptions: Record<string, unknown>;
     displayName: string | null;
     styleHint: string;
+    avatarGender: "female" | "male" | null;
     disclosureEnabled: boolean;
     disclosureText: string | null;
     monthlyMinuteCap: number;
@@ -45,6 +46,8 @@ interface AdminView {
   warnings: string[];
   childrensAccount: boolean;
   voiceModeEnabled: boolean;
+  voice?: { selection: string; label: string; gender: "female" | "male" | null };
+  genderMismatch?: string | null;
   providers: Array<{ id: string; label: string }>;
   usage: { month: string; minutes: number; sessions: number; liveSessions: number; costUsd: number };
   recentSessions: Array<{ id: string; provider: string; startedAt: string; seconds: number; endReason: string | null; status: string; error?: string | null }>;
@@ -153,6 +156,7 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
       providerOptions: form!.providerOptions || {},
       displayName: form!.displayName || null,
       styleHint: form!.styleHint,
+      avatarGender: form!.avatarGender ?? null,
       disclosureEnabled: form!.disclosureEnabled,
       disclosureText: form!.disclosureText || null,
       monthlyMinuteCap: Number(form!.monthlyMinuteCap),
@@ -253,7 +257,28 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
                   </SelectContent>
                 </Select>
               </div>
+              <div>
+                <Label>Avatar gender</Label>
+                <Select value={form.avatarGender ?? "voice"} onValueChange={(v) => set("avatarGender", v === "voice" ? null : (v as "female" | "male"))}>
+                  <SelectTrigger data-testid="select-avatar-gender"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="female">Female</SelectItem>
+                    <SelectItem value="male">Male</SelectItem>
+                    <SelectItem value="voice">Same as the voice{data?.voice?.gender ? ` (${data.voice.gender})` : ""}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="mt-1 text-xs text-muted-foreground">Hindi and similar languages change words with the speaker's gender ("main karti hoon" / "main karta hoon").</p>
+              </div>
             </div>
+            {(() => {
+              const voiceGender = data?.voice?.gender;
+              const mismatch = form.avatarGender && voiceGender && form.avatarGender !== voiceGender;
+              return mismatch ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" data-testid="avatar-gender-mismatch">
+                  The avatar is {form.avatarGender} but the widget voice ({data?.voice?.label}) is {voiceGender}. The visitor will see a {form.avatarGender} face and hear a {voiceGender} voice — pick a {form.avatarGender} voice in Widget Settings → Voice, or change the avatar.
+                </div>
+              ) : null;
+            })()}
 
             <div className="space-y-2 rounded-lg border p-3">
               <p className="font-medium">Provider API key</p>

@@ -28,6 +28,7 @@ import {
   startTopscholarVoiceSession,
 } from './services/topscholar/voiceUsageService';
 import { avatarSessionManager, type VoiceBinding } from './services/avatar/sessionManager';
+import { genderOfVoice, genderOfVoiceSync, resolveAssistantGender, type AssistantGender } from './services/chatContext/assistantGender';
 import type { AudioRoute, AvatarEndReason } from './services/avatar/types';
 
 /**
@@ -107,7 +108,7 @@ export interface RealtimeVoiceDeps {
  * ('server' route) or fed to the provider's browser SDK ('client' route).
  */
 export interface AvatarVoiceBridge {
-  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: string; disclosure: string | null; displayName: string } | null;
+  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: string; disclosure: string | null; displayName: string; avatarGender?: "female" | "male" | null } | null;
   unbindVoice(sessionId: string, conversationId?: string): void;
   sendAudio(sessionId: string, pcm: Buffer): boolean;
   endOfSpeech(sessionId: string): void;
@@ -300,6 +301,8 @@ interface VoiceConversation {
   k12ContentOnly?: boolean;
   elevenlabsApiKey?: string;
   elevenlabsVoiceId?: string;
+  /** Gender of the voice actually used (Hindi & co. conjugate by the speaker's gender). */
+  voiceGender?: AssistantGender | null;
   openaiAudioFallbackBuffer?: Buffer[];
   // In-flight ElevenLabs synth tracking. Only one synth may be streaming
   // PCM bytes to the client at any time — overlapping streams interleave
@@ -406,6 +409,8 @@ interface VoiceConversation {
     provider: string;
     /** The avatar's display name: the assistant introduces itself with it. */
     displayName?: string;
+    /** The avatar's gender (super-admin setting); null = the voice decides. */
+    gender?: AssistantGender | null;
     attachedAt: number;
     lastInterruptAt?: number;
   };
@@ -701,6 +706,10 @@ export class RealtimeVoiceService {
 
       const conversationId = dbConversation.id; // Stable identifier for entire session
 
+      // The voice that will actually speak (ElevenLabs falls back to shimmer without a key/voice id).
+      const spokenVoice = elevenlabsApiKey && elevenlabsVoiceId ? selectedVoice : (isElevenLabsVoice(selectedVoice) ? 'shimmer' : selectedVoice);
+      const voiceGender = await genderOfVoice(spokenVoice, elevenlabsApiKey);
+
       // Create conversation object (OpenAI WebSocket will be created when needed)
       const conversation: VoiceConversation = {
         clientWs,
@@ -742,6 +751,7 @@ export class RealtimeVoiceService {
         topscholarScope: topscholarScope || null,
         elevenlabsApiKey: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsApiKey : undefined,
         elevenlabsVoiceId: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsVoiceId : undefined,
+        voiceGender,
       };
 
       // Use conversationId as the key (stable across reconnections)
@@ -867,7 +877,7 @@ export class RealtimeVoiceService {
       this.sendToClient(conversation.clientWs, { type: 'avatar_attach_failed', avatarSessionId: sessionId, reason: 'not_found' });
       return;
     }
-    conversation.avatar = { sessionId, audioRoute: attached.audioRoute, provider: attached.provider, displayName: attached.displayName, attachedAt: Date.now() };
+    conversation.avatar = { sessionId, audioRoute: attached.audioRoute, provider: attached.provider, displayName: attached.displayName, gender: attached.avatarGender ?? null, attachedAt: Date.now() };
     this.sendToClient(conversation.clientWs, { type: 'avatar_attached', avatarSessionId: sessionId, audioRoute: attached.audioRoute });
     console.log(`[RealtimeVoice] Avatar attached: ${attached.provider} route=${attached.audioRoute}`, conversation.conversationId);
     if (message.speakIntro !== false && attached.disclosure && !conversation.isProcessing && !this.isAnswerActive(conversation)) {
@@ -1844,9 +1854,7 @@ export class RealtimeVoiceService {
     // Determine voice gender from voice selection for proper pronouns
     const settings = await storage.getWidgetSettings(businessAccountId);
     const selectedVoice = (settings?.voiceSelection || 'shimmer').toLowerCase();
-    const maleVoices = ['ash', 'ballad', 'echo', 'fable', 'onyx', 'verse'];
-    const femaleVoices = ['coral', 'nova', 'sage', 'shimmer'];
-    const voiceGender = maleVoices.includes(selectedVoice) ? 'male' : femaleVoices.includes(selectedVoice) ? 'female' : 'neutral';
+    const voiceGender = conversation.voiceGender ?? genderOfVoiceSync(selectedVoice) ?? 'neutral';
 
     let instructions = `You are the AI assistant for ${companyDescription || 'this business'} and speak for it (never call yourself Chroney). `;
 
@@ -3619,6 +3627,8 @@ export class RealtimeVoiceService {
       deferAssistantPersistence: true,
       voiceResponseStyle: true,
       assistantName: conversation.avatar?.displayName ?? null,
+      // On a video call the avatar's gender wins; otherwise the voice's.
+      assistantGender: resolveAssistantGender({ avatarGender: conversation.avatar?.gender, voiceGender: conversation.voiceGender ?? null }),
       prefetchedK12Topic: prefetchedK12Topic ?? null,
     };
   }

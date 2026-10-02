@@ -194,6 +194,13 @@ async function main() {
     expect(r.status === 400, "idle timeout below 15 s rejected");
     r = await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { providerOptions: { videoQuality: "8k" } });
     expect(r.status === 400, "invalid provider option rejected", r.json);
+    r = await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { avatarGender: "robot" });
+    expect(r.status === 400, "avatar gender must be female, male or null", r.json);
+    r = await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { avatarGender: "male" });
+    expect(r.status === 200 && r.json.settings?.avatarGender === "male", "avatar gender saved", r.json?.settings?.avatarGender);
+    expect(r.json.voice?.gender === "female" && /avatar is male but the voice \(Shimmer\) is female/.test(r.json.genderMismatch || ""), "male avatar + female voice → mismatch warning for the super admin", { voice: r.json.voice, mismatch: r.json.genderMismatch });
+    r = await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { avatarGender: null });
+    expect(r.status === 200 && r.json.settings?.avatarGender === null && !r.json.genderMismatch, "avatar gender back to 'same as the voice' → no warning", r.json?.genderMismatch);
 
     // ── 4. enable ────────────────────────────────────────────────────────────
     r = await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, {
@@ -202,7 +209,7 @@ async function main() {
     });
     expect(r.status === 200 && r.json.settings.enabled && r.json.settings.displayName === "Maya", "super admin enables the avatar", r.json?.settings);
     expect(r.json.canStart === false && r.json.effectiveKeySource === null, "…but it cannot start yet: no key", { canStart: r.json.canStart });
-    let [audit] = await auditRows("avatar.settings_updated", A);
+    let audit = (await auditRows("avatar.settings_updated", A)).find((row: any) => (row.metadata as any)?.changedFields?.includes("enabled"));
     expect(!!audit && audit.actorUserId === sup.id && (audit.metadata as any).changedFields.includes("enabled") && (audit.metadata as any).new_enabled === true, "settings change audit-logged with actor + changed fields", audit?.metadata);
     expect(!JSON.stringify(audit?.metadata || {}).includes("1,500"), "commercial notes text is not copied into the audit log");
     invalidatePublicConfig();
@@ -521,7 +528,7 @@ async function main() {
 
     // Server route (HeyGen): audio goes to the provider, never to local playback.
     {
-      await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { provider: "heygen_liveavatar", avatarId: "hg-avatar-1", idleTimeoutSeconds: 600, maxConcurrentSessions: 5 });
+      await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { provider: "heygen_liveavatar", avatarId: "hg-avatar-1", idleTimeoutSeconds: 600, maxConcurrentSessions: 5, avatarGender: "female" });
       const visitorId = "widget_voice_server";
       const sid = (await avatarSessionManager.startSession({ businessAccountId: A, visitorId })).sessionId;
       const rec = heygenFake.sessions.slice(-1)[0];
@@ -547,6 +554,7 @@ async function main() {
       const prod = v.client.ofType("products")[0];
       expect(prod && JSON.parse(prod.data).items[0].name === "Gold ring" && prod.responseId, "product cards from the same tool results are sent for display under the avatar", prod);
       expect(v.chatContexts.slice(-1)[0]?.assistantName === "Maya", "answers on a video call introduce the assistant by the avatar's name (not 'Chroney')", v.chatContexts.slice(-1)[0]?.assistantName);
+      expect(v.chatContexts.slice(-1)[0]?.assistantGender === "female", "answers on a video call use the avatar's gender (feminine Hindi forms for a female avatar)", v.chatContexts.slice(-1)[0]?.assistantGender);
 
       // Confirmed interruption → provider interrupt.
       v.streams.push(scripted(["Diamonds are the hardest natural material. ", "They are made of carbon. ", "They form deep underground. ", "Would you like to see some?"]));
