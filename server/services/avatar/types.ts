@@ -106,6 +106,8 @@ export interface ProviderSession {
   readonly providerSessionId: string | null;
   readonly audioRoute: AudioRoute;
   readonly client: ClientConnectionInfo;
+  /** The longest call the provider granted for this session (its plan may allow less than we asked). */
+  readonly providerMaxSessionSeconds?: number;
   /** Server route only: PCM16 24 kHz mono, any chunk size. Returns false when the session can no longer take audio. */
   sendAudio?(pcm24k: Buffer): boolean;
   /** Server route only: the current answer is complete (no more audio for it). */

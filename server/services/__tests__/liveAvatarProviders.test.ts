@@ -254,6 +254,41 @@ async function main() {
     let protoErr: any = null;
     try { await strict.createSession({ apiKey: "k_1234567890", avatarId: "a", providerOptions: {}, maxSessionSeconds: 60, sessionLabel: "x" }); } catch (e) { protoErr = e; }
     expect(protoErr?.code === "protocol" && api.requests.some((r) => r.path === "/v1/sessions/stop" && r.body.session_id === "full-1"), "start without ws_url → protocol error and the half-started session is stopped", protoErr?.code);
+
+    // Plan allows shorter calls than we ask for (real response seen 2026-10-03) → retry once at the plan's limit.
+    const { planMaxSessionSeconds } = await import("../avatar/providers/heygenLiveAvatar");
+    const planBody = { code: 4000, data: [{ loc: ["max_session_duration"], message: "max_session_duration (660s) exceeds the maximum allowed (120s)", params: { max_session_duration: 660 } }], message: "max_session_duration (660s) exceeds the maximum allowed (120s)" };
+    expect(planMaxSessionSeconds(new AvatarProviderError("bad_request", `LiveAvatar HTTP 400: ${JSON.stringify(planBody)}`)) === 120, "plan limit parsed from the provider's 400 message");
+    expect(planMaxSessionSeconds(new AvatarProviderError("bad_request", "LiveAvatar HTTP 400: avatar not found")) === null, "other 400s are not treated as a plan limit");
+    api.requests.length = 0;
+    api.setHandler((r) => {
+      if (r.path === "/v1/sessions/token") {
+        return r.body.max_session_duration > 120
+          ? { status: 400, body: planBody }
+          : { status: 200, body: { code: 1000, data: { session_id: "plan-1", session_token: "t" } } };
+      }
+      if (r.path === "/v1/sessions/start") return { status: 200, body: { code: 1000, data: { session_id: "plan-1", livekit_url: "wss://lk", livekit_client_token: "c", max_session_duration: 120, ws_url: ws.url } } };
+      return { status: 200, body: { code: 1000, data: null } };
+    });
+    const planSession = await strict.createSession({ apiKey: "k_1234567890", avatarId: "a", providerOptions: {}, maxSessionSeconds: 660, sessionLabel: "x" });
+    const tokenCalls = api.requests.filter((r) => r.path === "/v1/sessions/token").map((r) => r.body.max_session_duration);
+    expect(JSON.stringify(tokenCalls) === "[660,120]", "token retried once at the plan's 120 s limit", tokenCalls);
+    expect(planSession.providerMaxSessionSeconds === 120, "session reports the provider's granted call length", planSession.providerMaxSessionSeconds);
+    await planSession.close("visitor_closed");
+    // Second call with the same key goes straight to the learned limit (no rejected first try).
+    api.requests.length = 0;
+    const planSession2 = await strict.createSession({ apiKey: "k_1234567890", avatarId: "a", providerOptions: {}, maxSessionSeconds: 660, sessionLabel: "y" });
+    const tokenCalls2 = api.requests.filter((r) => r.path === "/v1/sessions/token").map((r) => r.body.max_session_duration);
+    expect(JSON.stringify(tokenCalls2) === "[120]", "learned plan limit reused for the same key", tokenCalls2);
+    await planSession2.close("visitor_closed");
+    const { resetPlanLimitsForTesting } = await import("../avatar/providers/heygenLiveAvatar");
+    resetPlanLimitsForTesting();
+    // A plan limit that is not below what we asked → no retry loop, error surfaces.
+    api.requests.length = 0;
+    api.setHandler((r) => r.path === "/v1/sessions/token" ? { status: 400, body: planBody } : { status: 200, body: { code: 1000, data: null } });
+    let planErr: any = null;
+    try { await strict.createSession({ apiKey: "k_1234567890", avatarId: "a", providerOptions: {}, maxSessionSeconds: 100, sessionLabel: "x" }); } catch (e) { planErr = e; }
+    expect(planErr?.code === "bad_request" && api.requests.filter((r) => r.path === "/v1/sessions/token").length === 1, "no retry when the plan limit would not help", planErr?.code);
     api.close();
     ws.close();
   }

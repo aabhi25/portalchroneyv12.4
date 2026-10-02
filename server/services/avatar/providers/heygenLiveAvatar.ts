@@ -25,7 +25,7 @@
  *      reason ∈ UNKNOWN, USER_DISCONNECTED, SERVER_ERROR, IDLE_TIMEOUT, NO_CREDITS,
  *               USER_CLOSED, AVATAR_DELETED, MAX_DURATION_REACHED, …
  */
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import WebSocket from "ws";
 import {
   AvatarProviderError,
@@ -89,8 +89,7 @@ const STOP_REASON: Partial<Record<AvatarEndReason, string>> = {
   disabled: "USER_CLOSED",
 };
 
-/** Docs example shows code 100, the official SDK checks 1000. Accept either (or none). */
-// UNVERIFIED: which success `code` the live API returns (docs: 100, SDK: 1000).
+/** The live API returns code 1000 (verified 2026-10-03); the docs example shows 100. Accept either. */
 function unwrap(provider: string, payload: any, step: string): any {
   const code = payload?.code;
   if (code !== undefined && code !== 100 && code !== 1000 && code !== 0) {
@@ -101,6 +100,31 @@ function unwrap(provider: string, payload: any, step: string): any {
   }
   return payload.data;
 }
+
+/**
+ * LiveAvatar rejects a token whose max_session_duration is above the plan's limit:
+ *   "max_session_duration (660s) exceeds the maximum allowed (120s)"  (seen live 2026-10-03)
+ * Returns the allowed seconds, or null when the error is something else.
+ */
+export function planMaxSessionSeconds(error: unknown): number | null {
+  const message = (error as Error)?.message || "";
+  const m = /max_session_duration[\s\S]*?maximum allowed \((\d+)\s*s?\)/i.exec(message);
+  const allowed = m ? Number(m[1]) : NaN;
+  return Number.isFinite(allowed) && allowed > 0 ? allowed : null;
+}
+
+/** Plan call-length limits learned per API key (hashed), so later calls skip the rejected first try. */
+const PLAN_LIMIT_TTL_MS = 60 * 60 * 1000;
+const planLimits = new Map<string, { seconds: number; at: number }>();
+const keyId = (apiKey: string) => createHash("sha256").update(apiKey).digest("hex").slice(0, 16);
+function knownPlanLimit(apiKey: string, now = Date.now()): number | null {
+  const hit = planLimits.get(keyId(apiKey));
+  if (!hit) return null;
+  if (now - hit.at > PLAN_LIMIT_TTL_MS) { planLimits.delete(keyId(apiKey)); return null; }
+  return hit.seconds;
+}
+/** Test helper. */
+export function resetPlanLimitsForTesting(): void { planLimits.clear(); }
 
 function decodeMessage(data: unknown): any {
   try {
@@ -132,6 +156,7 @@ class HeygenSession implements ProviderSession {
     private readonly socket: WsLike,
     private readonly apiKey: string,
     private readonly opts: Required<Pick<HeygenLiveAvatarOptions, "chunkMs" | "flushIntervalMs" | "keepAliveMs" | "requestTimeoutMs" | "maxQueuedMs">> & { apiBaseUrl: string; fetch: FetchLike },
+    readonly providerMaxSessionSeconds?: number,
   ) {
     this.chunker = new Pcm16Chunker(bytesForMs(opts.chunkMs));
     socket.on("message", (data) => this.handleMessage(data));
@@ -168,7 +193,7 @@ class HeygenSession implements ProviderSession {
     if (!msg || typeof msg.type !== "string") return;
     switch (msg.type) {
       case "session.state_updated": {
-        // UNVERIFIED: exact field carrying the state (docs list the values only).
+        // Live API (verified 2026-10-03): { type, event_id, source_event_id, state: "connected" }.
         const state = String(msg.state ?? msg.data?.state ?? msg.session_state ?? "").toLowerCase();
         if (state === "connected" && !this.connected) {
           this.connected = true;
@@ -324,6 +349,14 @@ async function stopHeygenSession(fetchImpl: FetchLike, base: string, apiKey: str
   }, timeoutMs);
 }
 
+function providerMax(...values: unknown[]): number | undefined {
+  for (const v of values) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return undefined;
+}
+
 export function createHeygenLiveAvatarProvider(options: HeygenLiveAvatarOptions = {}): AvatarProvider {
   const base = (options.apiBaseUrl || process.env.HEYGEN_LIVEAVATAR_API_URL || HEYGEN_LIVEAVATAR_API).replace(/\/+$/, "");
   const fetchImpl: FetchLike = options.fetch || ((url, init) => fetch(url, init as RequestInit) as any);
@@ -352,15 +385,33 @@ export function createHeygenLiveAvatarProvider(options: HeygenLiveAvatarOptions 
       };
       if (opts.sandbox === true) tokenBody.is_sandbox = true;
       if (typeof opts.videoQuality === "string") tokenBody.video_settings = { quality: opts.videoQuality, encoding: "H264" };
-      // UNVERIFIED: max_session_duration is documented as an integer; we assume seconds.
-      if (input.maxSessionSeconds > 0) tokenBody.max_session_duration = Math.ceil(input.maxSessionSeconds);
+      // Seconds (verified: the API reports limits as "(120s)").
+      if (input.maxSessionSeconds > 0) {
+        const known = knownPlanLimit(input.apiKey);
+        tokenBody.max_session_duration = known ? Math.min(known, Math.ceil(input.maxSessionSeconds)) : Math.ceil(input.maxSessionSeconds);
+      }
 
-      const tokenRes = await fetchWithTimeout(fetchImpl, "LiveAvatar", `${base}/v1/sessions/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-KEY": input.apiKey },
-        body: JSON.stringify(tokenBody),
-      }, cfg.requestTimeoutMs);
-      const token = unwrap("LiveAvatar", parseJson("LiveAvatar", tokenRes.text), "token");
+      const requestToken = async () => {
+        const tokenRes = await fetchWithTimeout(fetchImpl, "LiveAvatar", `${base}/v1/sessions/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-KEY": input.apiKey },
+          body: JSON.stringify(tokenBody),
+        }, cfg.requestTimeoutMs);
+        return unwrap("LiveAvatar", parseJson("LiveAvatar", tokenRes.text), "token");
+      };
+      let token: any;
+      try {
+        token = await requestToken();
+      } catch (error) {
+        // The plan allows shorter calls than we asked for: retry once at the plan's limit.
+        const allowed = planMaxSessionSeconds(error);
+        const asked = Number(tokenBody.max_session_duration) || 0;
+        if (!allowed || !(allowed < asked)) throw error;
+        console.warn(`[Avatar] LiveAvatar plan allows calls of up to ${allowed}s (asked ${asked}s) — using ${allowed}s`);
+        planLimits.set(keyId(input.apiKey), { seconds: allowed, at: Date.now() });
+        tokenBody.max_session_duration = allowed;
+        token = await requestToken();
+      }
       const sessionToken = typeof token.session_token === "string" ? token.session_token : "";
       if (!sessionToken) throw new AvatarProviderError("protocol", "LiveAvatar token response had no session_token");
 
@@ -404,7 +455,7 @@ export function createHeygenLiveAvatarProvider(options: HeygenLiveAvatarOptions 
         audioRoute: "server",
         livekitUrl,
         livekitToken,
-      }, socket, input.apiKey, cfg);
+      }, socket, input.apiKey, cfg, providerMax(started.max_session_duration, tokenBody.max_session_duration));
     },
 
     async stopSession(apiKey: string, providerSessionId: string, reason: AvatarEndReason): Promise<void> {

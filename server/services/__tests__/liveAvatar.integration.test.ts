@@ -350,6 +350,12 @@ async function main() {
       const shown = view.json.recentSessions?.find((x: any) => x.id === failedRow?.id);
       expect(!!shown && typeof shown.error === "string" && shown.error.length > 0, "super admin sees the provider's reason for the failed start", shown);
     }
+    // Provider plan grants shorter calls than our 10-minute setting → our call ends 15 s before theirs.
+    await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { avatarId: "plan-120" });
+    resetAvatarRateLimitsForTesting();
+    r = await widgetStart(A);
+    expect(r.status === 200 && r.json.limits?.maxSessionSeconds === 105, "provider plan limit (120 s) → our call ends at 105 s", r.json.limits ?? r.json);
+    if (r.json.sessionId) await avatarSessionManager.endSession(r.json.sessionId, "visitor_closed");
     await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { avatarId: "hg-avatar-1" });
     resetAvatarRateLimitsForTesting();
     const statuses: number[] = [];

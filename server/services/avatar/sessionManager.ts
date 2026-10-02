@@ -127,6 +127,8 @@ const CONNECT_GRACE_MS = 20_000;
 const END_AFTER_ANSWER_MAX_MS = 60_000;
 const PROVIDER_CREATE_TIMEOUT_MS = 15_000;
 const PROVIDER_CLOSE_TIMEOUT_MS = 5_000;
+/** Our call ends this long before a provider-imposed limit, so the answer can finish first. */
+const PROVIDER_END_MARGIN_SECONDS = 15;
 const TICK_MS = 2_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => Error): Promise<T> {
@@ -290,7 +292,7 @@ export class AvatarSessionManager {
       return { id: row.id as string, startedAtMs: startedAt.getTime(), remaining };
     });
 
-    const maxSessionSeconds = Math.max(30, Math.min(settings.maxSessionMinutes * 60, Math.floor(reserved.remaining)));
+    let maxSessionSeconds = Math.max(30, Math.min(settings.maxSessionMinutes * 60, Math.floor(reserved.remaining)));
     const t0 = this.now();
     let handle: ProviderSession;
     try {
@@ -321,6 +323,13 @@ export class AvatarSessionManager {
     }
 
     const now = this.now();
+    // The provider's plan may allow shorter calls than our setting: end ours a little before
+    // theirs so the current answer finishes and the visitor drops back to text/voice cleanly.
+    const providerMax = handle.providerMaxSessionSeconds;
+    if (providerMax && providerMax - PROVIDER_END_MARGIN_SECONDS < maxSessionSeconds) {
+      maxSessionSeconds = Math.max(15, providerMax - PROVIDER_END_MARGIN_SECONDS);
+      console.warn(`[Avatar] ${provider} plan limits calls to ${providerMax}s — this call ends after ${maxSessionSeconds}s`);
+    }
     const disclosure = disclosureFor(settings, account.name);
     const live: LiveSession = {
       id: reserved.id,

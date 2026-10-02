@@ -8,7 +8,8 @@
  * Knobs (provider options): audioRoute 'client' | 'server' (default from
  * AVATAR_FAKE_AUDIO_ROUTE or 'client'), failConnect (browser simulates a
  * connect failure), dropAfterSeconds (browser simulates a mid-session drop).
- * avatarId 'fail' makes session creation fail; an API key containing
+ * avatarId 'fail' makes session creation fail; avatarId 'plan-<seconds>' simulates a
+ * provider plan that only grants calls of that length; an API key containing
  * 'invalid' fails validation.
  */
 import {
@@ -75,8 +76,10 @@ export function createFakeAvatarProvider(options: { audioRoute?: AudioRoute; onS
       const providerSessionId = `fake_${Date.now().toString(36)}_${++seq}`;
       setTimeout(() => { if (!closed) record.emit({ type: "connected" }); }, 5).unref?.();
 
+      const planMatch = /^plan-(\d+)$/.exec(input.avatarId || "");
       const session: ProviderSession = {
         providerSessionId,
+        providerMaxSessionSeconds: planMatch ? Number(planMatch[1]) : undefined,
         audioRoute: route,
         client: {
           provider: "fake",
