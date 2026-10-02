@@ -664,7 +664,7 @@ export class AvatarSessionManager {
   }
 
   /** Recent sessions for the admin card. */
-  async recentSessions(businessAccountId: string, limit = 10): Promise<Array<{ id: string; provider: string; startedAt: string; endedAt: string | null; seconds: number; endReason: string | null; status: string }>> {
+  async recentSessions(businessAccountId: string, limit = 10): Promise<Array<{ id: string; provider: string; startedAt: string; endedAt: string | null; seconds: number; endReason: string | null; status: string; error: string | null }>> {
     const rows = await db.select().from(avatarSessions)
       .where(eq(avatarSessions.businessAccountId, businessAccountId))
       .orderBy(sql`${avatarSessions.startedAt} desc`)
@@ -680,6 +680,8 @@ export class AvatarSessionManager {
         seconds: live ? Math.round((now - live.startedAtMs) / 1000) : r.billedSeconds,
         endReason: r.endReason,
         status: live ? "live" : r.status,
+        // Provider's own message for a failed start (super-admin view only; never contains the key).
+        error: typeof (r.metadata as any)?.error === "string" ? String((r.metadata as any).error).slice(0, 200) : null,
       };
     });
   }

@@ -345,6 +345,11 @@ async function main() {
     expect(r.status === 502 && r.json.code === "provider_error" && r.json.fallback === "voice", "provider failure → 502 + fallback to voice", r.json);
     const [failedRow] = await db.select().from(schema.avatarSessions).where(and(eq(schema.avatarSessions.businessAccountId, A), eq(schema.avatarSessions.endReason, "provider_error")));
     expect(!!failedRow && failedRow.billedSeconds === 0 && (failedRow.metadata as any).errorCode === "provider_unavailable", "failed start recorded with 0 billed seconds", failedRow?.metadata);
+    {
+      const view = await call("GET", `/api/super-admin/avatar/accounts/${A}`, cSup);
+      const shown = view.json.recentSessions?.find((x: any) => x.id === failedRow?.id);
+      expect(!!shown && typeof shown.error === "string" && shown.error.length > 0, "super admin sees the provider's reason for the failed start", shown);
+    }
     await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { avatarId: "hg-avatar-1" });
     resetAvatarRateLimitsForTesting();
     const statuses: number[] = [];

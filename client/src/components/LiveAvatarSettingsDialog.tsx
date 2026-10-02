@@ -47,7 +47,7 @@ interface AdminView {
   voiceModeEnabled: boolean;
   providers: Array<{ id: string; label: string }>;
   usage: { month: string; minutes: number; sessions: number; liveSessions: number; costUsd: number };
-  recentSessions: Array<{ id: string; provider: string; startedAt: string; seconds: number; endReason: string | null; status: string }>;
+  recentSessions: Array<{ id: string; provider: string; startedAt: string; seconds: number; endReason: string | null; status: string; error?: string | null }>;
 }
 
 type Form = AdminView["settings"];
@@ -325,7 +325,10 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
               {data!.recentSessions.length > 0 && (
                 <ul className="mt-2 space-y-0.5 text-xs text-gray-600">
                   {data!.recentSessions.slice(0, 5).map((s) => (
-                    <li key={s.id}>{new Date(s.startedAt).toLocaleString()} · {providerLabel(s.provider)} · {Math.round(s.seconds)}s · {s.status === "live" ? "live" : s.endReason || s.status}</li>
+                    <li key={s.id}>
+                      {new Date(s.startedAt).toLocaleString()} · {providerLabel(s.provider)} · {Math.round(s.seconds)}s · {s.status === "live" ? "live" : s.endReason || s.status}
+                      {s.error && <span className="block break-words text-red-600" data-testid="avatar-session-error">{s.error}</span>}
+                    </li>
                   ))}
                 </ul>
               )}
