@@ -15,6 +15,10 @@ import { Textarea } from "@/components/ui/textarea";
 
 interface KeyStatus { set: boolean; masked: string | null; updatedAt: string | null }
 
+function providerName(provider: string): string {
+  return provider === "anam" ? "Anam" : provider === "heygen_liveavatar" ? "HeyGen LiveAvatar" : provider === "fake" ? "Fake (dev)" : provider;
+}
+
 interface AdminView {
   businessAccountId: string;
   businessName: string;
@@ -147,6 +151,28 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
   // Initialise once; key saves refresh `data` but must not wipe unsaved form edits.
   useEffect(() => { if (data && !form) setForm(data.settings); }, [data, form]);
   const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
+  // Each provider has its own avatar ids: remember them per provider while switching.
+  const [idsByProvider, setIdsByProvider] = useState<Record<string, string>>({});
+  const [avatarCheck, setAvatarCheck] = useState<{ ok: boolean | null; text: string } | null>(null);
+  const switchProvider = (provider: string) => {
+    setAvatarCheck(null);
+    setForm((f) => {
+      if (!f || f.provider === provider) return f;
+      const remembered = { ...idsByProvider, [f.provider]: f.avatarId || "" };
+      setIdsByProvider(remembered);
+      const savedForProvider = data?.settings.provider === provider ? data.settings.avatarId || "" : "";
+      return { ...f, provider, providerOptions: {}, avatarId: remembered[provider] ?? savedForProvider };
+    });
+  };
+  const checkAvatar = useMutation({
+    mutationFn: () => apiRequest<{ status: "found" | "not_found" | "unchecked"; name?: string; reason?: string; message?: string }>(
+      "POST", `/api/super-admin/avatar/accounts/${businessAccountId}/check-avatar`, { provider: form!.provider, avatarId: form!.avatarId || "" }),
+    onSuccess: (r) => setAvatarCheck(
+      r.status === "found" ? { ok: true, text: `Found at ${providerName(form!.provider)}${r.name ? `: ${r.name}` : ""}` }
+        : r.status === "not_found" ? { ok: false, text: r.message || "Not found at this provider" }
+          : { ok: null, text: r.reason || "Could not check right now" }),
+    onError: (e: Error) => setAvatarCheck({ ok: false, text: e.message }),
+  });
 
   const save = useMutation({
     mutationFn: () => apiRequest<AdminView>("PUT", `/api/super-admin/avatar/accounts/${businessAccountId}`, {
@@ -212,7 +238,7 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <Label>Provider</Label>
-                <Select value={form.provider} onValueChange={(v) => setForm((f) => (f ? { ...f, provider: v, providerOptions: {} } : f))}>
+                <Select value={form.provider} onValueChange={switchProvider}>
                   <SelectTrigger data-testid="select-avatar-provider"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {data!.providers.map((p) => <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>)}
@@ -220,8 +246,23 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
                 </Select>
               </div>
               <div>
-                <Label htmlFor="avatar-id">{form.provider === "anam" ? "Anam avatar id" : "Avatar id"}</Label>
-                <Input id="avatar-id" value={form.avatarId || ""} onChange={(e) => set("avatarId", e.target.value)} placeholder="from the provider's dashboard" data-testid="input-avatar-id" />
+                <Label htmlFor="avatar-id">{providerName(form.provider)} avatar id</Label>
+                <div className="flex gap-2">
+                  <Input id="avatar-id" value={form.avatarId || ""} onChange={(e) => { setAvatarCheck(null); set("avatarId", e.target.value); }} placeholder={form.provider === "anam" ? "from lab.anam.ai/avatars" : form.provider === "heygen_liveavatar" ? "from app.liveavatar.com" : "avatar id"} data-testid="input-avatar-id" />
+                  <Button type="button" variant="outline" size="sm" className="h-10" disabled={!form.avatarId || checkAvatar.isPending} onClick={() => checkAvatar.mutate()} data-testid="button-check-avatar">
+                    {checkAvatar.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Check"}
+                  </Button>
+                </div>
+                {avatarCheck ? (
+                  <p className={`mt-1 flex items-start gap-1 text-xs ${avatarCheck.ok === true ? "text-emerald-700" : avatarCheck.ok === false ? "text-red-600" : "text-amber-700"}`} data-testid="avatar-check-result">
+                    {avatarCheck.ok === true ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> : avatarCheck.ok === false ? <XCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />}
+                    <span>{avatarCheck.text}</span>
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {form.provider === "anam" ? "Anam avatar ids come from lab.anam.ai/avatars or Anam's stock gallery — HeyGen ids won't work." : form.provider === "heygen_liveavatar" ? "LiveAvatar ids come from app.liveavatar.com (your avatars or the public list) — Anam ids won't work." : ""}
+                  </p>
+                )}
               </div>
               {form.provider === "anam" && (
                 <div>

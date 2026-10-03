@@ -14,6 +14,7 @@ import {
   getRates,
   keyAvailability,
   normalizeApiKey,
+  resolveApiKey,
   setPlatformKey,
   setRates,
 } from "../services/avatar/credentials";
@@ -104,6 +105,29 @@ function sendSettingsError(res: Response, error: unknown, fallback: string) {
   if (error instanceof AvatarSettingsError) return res.status(error.status).json({ error: error.message });
   console.error(`[Avatar] ${fallback}:`, (error as Error)?.message || error);
   return res.status(500).json({ error: fallback });
+}
+
+type AvatarCheck = { status: "found"; name?: string } | { status: "not_found" } | { status: "unchecked"; reason: string };
+
+/** Ask the provider whether this avatar id exists (with the key this account would use). Never billed. */
+async function checkAvatarId(provider: AvatarProviderId, avatarId: string, settings: Parameters<typeof resolveApiKey>[1]): Promise<AvatarCheck> {
+  const adapter = getAvatarProvider(provider);
+  if (!adapter.lookupAvatar) return { status: "unchecked", reason: "This provider cannot look up avatars" };
+  const { apiKey } = await resolveApiKey(provider, settings);
+  if (!apiKey) return { status: "unchecked", reason: `No API key for ${providerLabel(provider)} yet — the avatar id will be checked once a key is added` };
+  try {
+    const result = await adapter.lookupAvatar(apiKey, avatarId);
+    return result.found ? { status: "found", name: result.name } : { status: "not_found" };
+  } catch (error) {
+    const code = error instanceof AvatarProviderError ? error.code : "unknown";
+    return { status: "unchecked", reason: code === "auth" ? `${providerLabel(provider)} rejected the API key` : `Could not reach ${providerLabel(provider)} (${code})` };
+  }
+}
+
+function notFoundMessage(provider: AvatarProviderId, avatarId: string): string {
+  const other = provider === "anam" ? "HeyGen LiveAvatar" : "Anam";
+  const where = provider === "anam" ? "lab.anam.ai/avatars (or Anam's stock avatar gallery)" : "app.liveavatar.com (your avatars or the public avatar list)";
+  return `Avatar id ${avatarId} was not found at ${providerLabel(provider)}. Each provider has its own avatar ids — is this one from ${other}? Copy an id from ${where}.`;
 }
 
 function providerParam(req: Request, res: Response): AvatarProviderId | null {
@@ -284,6 +308,15 @@ router.get("/api/super-admin/avatar/accounts/:businessAccountId", requireAuth, r
 router.put("/api/super-admin/avatar/accounts/:businessAccountId", requireAuth, requireRole("super_admin"), async (req, res) => {
   const { businessAccountId } = req.params;
   try {
+    // A new provider or avatar id must exist at that provider (each provider has its own ids).
+    const current = await getEffectiveSettings(businessAccountId);
+    const nextProvider = typeof req.body?.provider === "string" ? req.body.provider : current.provider;
+    const nextAvatarId = req.body?.avatarId !== undefined ? (typeof req.body.avatarId === "string" ? req.body.avatarId.trim() : null) : current.avatarId;
+    if (nextAvatarId && isProviderSelectable(nextProvider) && /^[A-Za-z0-9_.:-]{1,200}$/.test(nextAvatarId)
+        && (nextProvider !== current.provider || nextAvatarId !== current.avatarId)) {
+      const check = await checkAvatarId(nextProvider, nextAvatarId, current);
+      if (check.status === "not_found") return res.status(400).json({ error: notFoundMessage(nextProvider, nextAvatarId), code: "avatar_not_found" });
+    }
     const result = await updateAvatarSettings(businessAccountId, req.body, req.user!.id);
     if (result.changed.length > 0) {
       await recordAuditEventSafely(req, {
@@ -306,6 +339,22 @@ router.put("/api/super-admin/avatar/accounts/:businessAccountId", requireAuth, r
     res.json(await adminView(businessAccountId));
   } catch (error) {
     sendSettingsError(res, error, "Failed to save avatar settings");
+  }
+});
+
+router.post("/api/super-admin/avatar/accounts/:businessAccountId/check-avatar", requireAuth, requireRole("super_admin"), async (req, res) => {
+  const { businessAccountId } = req.params;
+  try {
+    const provider = String(req.body?.provider || "");
+    const avatarId = typeof req.body?.avatarId === "string" ? req.body.avatarId.trim() : "";
+    if (!isProviderSelectable(provider)) return res.status(400).json({ error: `Unknown provider '${provider}'` });
+    if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(avatarId)) return res.status(400).json({ error: "Enter an avatar id (letters, digits, _ . : -)" });
+    const account = await storage.getBusinessAccount(businessAccountId);
+    if (!account) return res.status(404).json({ error: "Business account not found" });
+    const check = await checkAvatarId(provider, avatarId, await getEffectiveSettings(businessAccountId, account));
+    res.json(check.status === "not_found" ? { ...check, message: notFoundMessage(provider, avatarId) } : check);
+  } catch (error) {
+    sendSettingsError(res, error, "Failed to check the avatar id");
   }
 });
 

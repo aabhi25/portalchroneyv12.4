@@ -463,6 +463,23 @@ export function createHeygenLiveAvatarProvider(options: HeygenLiveAvatarOptions 
       await stopHeygenSession(fetchImpl, base, apiKey, providerSessionId, reason, cfg.requestTimeoutMs);
     },
 
+    // GET /v1/avatars/{id} (X-API-KEY): 200 → the avatar (data.name), 404 code 4004 "Avatar not found"
+    // (both seen live 2026-10-03). Public and the account's own avatars both resolve.
+    async lookupAvatar(apiKey: string, avatarId: string) {
+      try {
+        const res = await fetchWithTimeout(fetchImpl, "LiveAvatar", `${base}/v1/avatars/${encodeURIComponent(avatarId)}`, {
+          method: "GET",
+          headers: { "X-API-KEY": apiKey },
+        }, cfg.requestTimeoutMs);
+        const body = parseJson("LiveAvatar", res.text);
+        const name = body?.data?.name;
+        return { found: true as const, name: typeof name === "string" ? name.slice(0, 120) : undefined };
+      } catch (error) {
+        if (error instanceof AvatarProviderError && (error.code === "not_found" || error.code === "bad_request")) return { found: false as const };
+        throw error;
+      }
+    },
+
     // GET /v1/users/credits (X-API-KEY) — listed in the LiveAvatar OpenAPI spec as an
     // API-key endpoint; no session is created, nothing is billed.
     // UNVERIFIED: response body shape (we only rely on the HTTP status).

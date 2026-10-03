@@ -108,6 +108,26 @@ export function createAnamProvider(options: AnamOptions = {}): AvatarProvider {
       await stopAnamSession(fetchImpl, base, apiKey, providerSessionId, timeoutMs);
     },
 
+    // GET /v1/avatars/{id} (Bearer) → { id, displayName, variantName, … } (Anam API reference).
+    async lookupAvatar(apiKey: string, avatarId: string) {
+      try {
+        const res = await fetchWithTimeout(fetchImpl, "Anam", `${base}/v1/avatars/${encodeURIComponent(avatarId)}`, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${apiKey}` },
+        }, timeoutMs);
+        let name: string | undefined;
+        try {
+          const body = JSON.parse(res.text || "{}");
+          const parts = [body?.displayName, body?.variantName].filter((v: unknown) => typeof v === "string" && v);
+          if (parts.length) name = parts.join(" · ").slice(0, 120);
+        } catch { /* found is what matters */ }
+        return { found: true as const, name };
+      } catch (error) {
+        if (error instanceof AvatarProviderError && (error.code === "not_found" || error.code === "bad_request")) return { found: false as const };
+        throw error;
+      }
+    },
+
     async validateKey(apiKey: string): Promise<{ detail?: string }> {
       const res = await fetchWithTimeout(fetchImpl, "Anam", `${base}/v1/sessions/concurrency`, {
         method: "GET",

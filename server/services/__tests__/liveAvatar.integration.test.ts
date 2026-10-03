@@ -194,6 +194,10 @@ async function main() {
     expect(r.status === 400, "idle timeout below 15 s rejected");
     r = await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { providerOptions: { videoQuality: "8k" } });
     expect(r.status === 400, "invalid provider option rejected", r.json);
+    r = await call("POST", `/api/super-admin/avatar/accounts/${A}/check-avatar`, cSup, { provider: "heygen_liveavatar", avatarId: "hg-avatar-1" });
+    expect(r.status === 200 && r.json.status === "unchecked" && /No API key/.test(r.json.reason), "check avatar without a key → 'will be checked once a key is added'", r.json);
+    r = await call("POST", `/api/super-admin/avatar/accounts/${A}/check-avatar`, cBiz, { provider: "heygen_liveavatar", avatarId: "hg-avatar-1" });
+    expect(r.status === 403, "business users cannot use the avatar check", r.status);
     r = await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { avatarGender: "robot" });
     expect(r.status === 400, "avatar gender must be female, male or null", r.json);
     r = await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { avatarGender: "male" });
@@ -305,6 +309,14 @@ async function main() {
 
     // Switch provider while both keys exist → the Anam key is used; then back.
     resetAvatarRateLimitsForTesting();
+    r = await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { provider: "anam", avatarId: "missing-heygen-id" });
+    expect(r.status === 400 && r.json.code === "avatar_not_found" && /not found at Anam.*from HeyGen LiveAvatar\?/.test(r.json.error), "switching to Anam with an id Anam doesn't have → save refused with a clear reason", r.json);
+    r = await call("GET", `/api/super-admin/avatar/accounts/${A}`, cSup);
+    expect(r.json.settings.provider === "heygen_liveavatar", "…and nothing was saved", r.json.settings.provider);
+    r = await call("POST", `/api/super-admin/avatar/accounts/${A}/check-avatar`, cSup, { provider: "anam", avatarId: "anam-avatar-9" });
+    expect(r.status === 200 && r.json.status === "found" && /anam-avatar-9/.test(r.json.name || ""), "Check button: found at Anam (with the business's Anam key)", r.json);
+    r = await call("POST", `/api/super-admin/avatar/accounts/${A}/check-avatar`, cSup, { provider: "anam", avatarId: "missing-x" });
+    expect(r.status === 200 && r.json.status === "not_found" && /not found at Anam/.test(r.json.message), "Check button: not found → explains each provider has its own ids", r.json);
     await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { provider: "anam", avatarId: "anam-avatar-9", providerOptions: { avatarModel: "cara-4" } });
     r = await widgetStart(A, "widget_visitor_2");
     expect(r.status === 200 && r.json.provider === "anam" && r.json.audioRoute === "client" && anamFake.sessions.slice(-1)[0].input.apiKey === ANAM_BIZ, "switch to Anam → its own key + client audio route", { status: r.status, provider: r.json?.provider });

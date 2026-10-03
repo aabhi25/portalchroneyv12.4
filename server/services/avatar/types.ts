@@ -135,6 +135,11 @@ export interface AvatarProvider {
    * (billed) avatar session. Throws AvatarProviderError (code 'auth' = bad key).
    */
   validateKey(apiKey: string): Promise<{ detail?: string }>;
+  /**
+   * Does this avatar id exist at this provider (for this key)? Read-only, not billed.
+   * Throws AvatarProviderError for anything other than "found" / "not found" (bad key, outage).
+   */
+  lookupAvatar?(apiKey: string, avatarId: string): Promise<{ found: true; name?: string } | { found: false }>;
 }
 
 export type AvatarErrorCode =

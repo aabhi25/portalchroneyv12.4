@@ -353,6 +353,36 @@ async function main() {
     expect(keyErr?.code === "auth", "fake validateKey rejects keys containing 'invalid'");
   }
 
+  // ── Avatar id lookups (each provider has its own ids) ─────────────────────
+  {
+    const api = await fakeHttp((r) => {
+      // LiveAvatar: shapes seen live 2026-10-03.
+      if (r.path === "/v1/avatars/513fd1b7-7ef9-466d-9af2-344e51eeb833") {
+        if (r.headers.authorization === "Bearer anam_k") return { status: 404, body: { message: "Avatar not found" } }; // Anam doesn't know HeyGen ids
+        return r.headers["x-api-key"] === "hg_k" ? { status: 200, body: { code: 1000, data: { id: "513fd1b7-7ef9-466d-9af2-344e51eeb833", name: "Ann Therapist" } } } : { status: 401, body: { code: 4001, message: "Invalid API key" } };
+      }
+      if (r.path === "/v1/avatars/anam-avatar-1") {
+        return r.headers.authorization === "Bearer anam_k" ? { status: 200, body: { id: "anam-avatar-1", displayName: "Cara", variantName: "Office" } } : { status: 401, body: {} };
+      }
+      if (r.path.startsWith("/v1/avatars/")) {
+        return r.headers["x-api-key"] ? { status: 404, body: { code: 4004, data: null, message: "Avatar not found" } } : { status: 404, body: { message: "Not found" } };
+      }
+      return { status: 500, body: {} };
+    });
+    const hg = createHeygenLiveAvatarProvider({ apiBaseUrl: api.base });
+    const an = createAnamProvider({ apiBaseUrl: api.base });
+    const found = await hg.lookupAvatar!("hg_k", "513fd1b7-7ef9-466d-9af2-344e51eeb833");
+    expect(found.found && (found as any).name === "Ann Therapist" && api.requests.slice(-1)[0].method === "GET", "LiveAvatar: GET /v1/avatars/{id} → found + name", found);
+    expect((await hg.lookupAvatar!("hg_k", "00000000-0000-0000-0000-000000000000")).found === false, "LiveAvatar: 404 'Avatar not found' → not found");
+    let hgErr: any = null;
+    try { await hg.lookupAvatar!("wrong", "513fd1b7-7ef9-466d-9af2-344e51eeb833"); } catch (e) { hgErr = e; }
+    expect(hgErr?.code === "auth", "LiveAvatar: bad key is an error, not 'not found'", hgErr?.code);
+    const anFound = await an.lookupAvatar!("anam_k", "anam-avatar-1");
+    expect(anFound.found && (anFound as any).name === "Cara · Office" && api.requests.slice(-1)[0].headers.authorization === "Bearer anam_k", "Anam: GET /v1/avatars/{id} with Bearer key → found + name", anFound);
+    expect((await an.lookupAvatar!("anam_k", "513fd1b7-7ef9-466d-9af2-344e51eeb833")).found === false, "Anam: a HeyGen avatar id → not found");
+    api.close();
+  }
+
   if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }
   console.log("\nAll live avatar provider adapter checks passed.");
   process.exit(0);

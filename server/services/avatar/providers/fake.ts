@@ -140,6 +140,11 @@ export function createFakeAvatarProvider(options: { audioRoute?: AudioRoute; onS
 
     async stopSession() { /* nothing to stop */ },
 
+    async lookupAvatar(_apiKey: string, avatarId: string) {
+      if (/^missing/i.test(avatarId)) return { found: false as const };
+      return { found: true as const, name: `Fake avatar ${avatarId}` };
+    },
+
     async validateKey(apiKey: string) {
       if (!apiKey || /invalid/i.test(apiKey)) throw new AvatarProviderError("auth", "fake provider: key rejected", 401);
       return { detail: "fake key accepted" };
