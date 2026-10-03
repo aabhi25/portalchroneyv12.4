@@ -8,7 +8,7 @@
  *   delivered  delivered, read or replied
  *   read       read or replied (a reply implies the message was read)
  *   replied    the person wrote back at least once
- *   interested the reply was classified into a positive outcome (see INTERESTED_KEYS)
+ *   interested the reply was classified into one of the campaign's positive outcomes (interestedFilter)
  *   opted out  the person asked to stop receiving messages
  * Totals and the per-campaign table count messages SENT in the chosen period
  * and what has happened to them since. The daily chart shows activity per day.
@@ -16,9 +16,9 @@
 import { sql } from "drizzle-orm";
 import { db } from "../db";
 import { addDays, dateInTimezone, zonedDateTimeToUtc } from "./campaignAutomationService";
+import { positiveClassifications } from "./campaignRepliesService";
+import type { ReplyClassification } from "@shared/schema";
 
-/** Outcome keys that count as "interested" (matches the presets in shared/campaignPresets.ts). */
-export const INTERESTED_KEYS = ["INTERESTED", "WANTS_DEMO", "POSITIVE", "CONFIRMED", "PTP", "PAID", "TENTATIVE"];
 
 const SENT = sql.raw(`(r.msg91_message_id IS NOT NULL OR r.sent_at IS NOT NULL OR r.status IN ('queued','sent','delivered','read','replied'))`);
 const SENT_TIME = sql.raw(`COALESCE(r.sent_at, r.claimed_at, r.created_at)`);
@@ -26,10 +26,21 @@ const DELIVERED = sql.raw(`(r.delivered_at IS NOT NULL OR r.read_at IS NOT NULL 
 const READ = sql.raw(`(r.read_at IS NOT NULL OR r.first_reply_at IS NOT NULL OR r.status IN ('read','replied'))`);
 const READ_TIME = sql.raw(`COALESCE(r.read_at, r.first_reply_at)`);
 const REPLIED = sql.raw(`(r.first_reply_at IS NOT NULL OR r.reply_count > 0)`);
-const INTERESTED = sql.raw(
-  `(UPPER(COALESCE(r.primary_classification, '')) IN (${INTERESTED_KEYS.map(k => `'${k}'`).join(",")})`
-  + ` OR (UPPER(COALESCE(r.primary_classification, '')) LIKE '%INTEREST%' AND UPPER(COALESCE(r.primary_classification, '')) NOT LIKE '%NOT%'))`,
-);
+/**
+ * "Interested" = the reply was classified into one of the campaign's positive outcome
+ * categories — the same rule the campaign funnel uses (campaignRepliesService), so the
+ * dashboard and each campaign's funnel always agree.
+ */
+async function interestedFilter(businessAccountId: string) {
+  const result = await db.execute(sql`
+    SELECT id, reply_classifications FROM marketing_campaigns WHERE business_account_id = ${businessAccountId}`);
+  const pairs: string[] = [];
+  for (const row of rowsOf(result)) {
+    for (const c of positiveClassifications(row.reply_classifications as ReplyClassification[])) pairs.push(`${row.id}:${c.key}`);
+  }
+  if (pairs.length === 0) return sql.raw("FALSE");
+  return sql`((r.campaign_id || ':' || COALESCE(r.primary_classification, '')) IN (${sql.join(pairs.map((p) => sql`${p}`), sql`, `)}))`;
+}
 const OPTED_OUT = sql.raw(`(r.status = 'opted_out')`);
 
 export const MAX_RANGE_DAYS = 366;
@@ -90,6 +101,7 @@ function rate(part: number, whole: number): number | null {
 }
 
 async function cohortTotals(businessAccountId: string, fromUtc: Date, toUtc: Date): Promise<CampaignTotals> {
+  const INTERESTED = await interestedFilter(businessAccountId);
   const result = await db.execute(sql`
     SELECT
       COUNT(*)::int AS sent,
@@ -180,6 +192,7 @@ export async function getCampaignInsights(
   const tzLit = range.tz;
 
   const totals = await cohortTotals(businessAccountId, range.fromUtc, range.toUtc);
+  const INTERESTED = await interestedFilter(businessAccountId);
 
   const perCampaignRes = await db.execute(sql`
     SELECT

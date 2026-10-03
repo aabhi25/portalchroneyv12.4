@@ -297,7 +297,7 @@ async function main() {
 
     const t = new Date(Date.now() - 60_000);
     const old = new Date(Date.now() - 40 * 86_400_000);
-    const [cA] = await db.insert(schema.marketingCampaigns).values({ businessAccountId: ib, name: 'October offer', templateId: itpl.id, groupIds: [], status: 'completed', startedAt: t } as any).returning();
+    const [cA] = await db.insert(schema.marketingCampaigns).values({ businessAccountId: ib, name: 'October offer', templateId: itpl.id, groupIds: [], status: 'completed', startedAt: t, replyClassifications: [{ key: 'INTERESTED', label: 'Interested', description: 'wants it' }, { key: 'NOT_INTERESTED', label: 'Not interested', description: 'no' }] } as any).returning();
     const [cB] = await db.insert(schema.marketingCampaigns).values({ businessAccountId: ib, name: 'Old one', templateId: itpl.id, groupIds: [], status: 'completed', startedAt: old } as any).returning();
     await db.insert(schema.marketingCampaigns).values({ businessAccountId: ib, name: 'Draft', templateId: itpl.id, groupIds: [], status: 'draft' } as any);
     const R = schema.marketingCampaignRecipients;
