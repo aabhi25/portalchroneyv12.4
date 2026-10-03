@@ -440,8 +440,8 @@ export function ImportContactsDialog({
                     <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
                     <div>
                       <span className="font-medium">{summary.warnings} number{summary.warnings === 1 ? "" : "s"} will fail at send time.</span>{" "}
-                      This group is set to Mixed, so each number must already include its country code.
-                      They will still be imported — set a default country code on the group, or fix the numbers.
+                      This audience is set to Mixed, so each number must already include its country code.
+                      They will still be imported — set a default country code on the audience, or fix the numbers.
                     </div>
                   </div>
                 )}

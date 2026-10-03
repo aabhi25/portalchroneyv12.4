@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -30,6 +31,12 @@ interface Props {
   onMapColumn?: (column: AiWorkbookColumn) => void;
 }
 
+// Simple windowing: with many rows only the visible slice (plus a margin) is rendered.
+// Every row is a fixed height so the spacer rows keep the scrollbar honest.
+const ESTIMATED_ROW_HEIGHT = 37;
+const VIRTUALIZE_AFTER = 150;
+const OVERSCAN = 12;
+
 function safeKey(label: string, columns: AiWorkbookColumn[]) {
   const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "column";
   let key = base;
@@ -53,6 +60,12 @@ export function AiWorkbookGrid({
   const [newColumn, setNewColumn] = useState("");
   const [columnToRemove, setColumnToRemove] = useState<AiWorkbookColumn | null>(null);
   const [addColumnOpen, setAddColumnOpen] = useState(false);
+  const [confirmDeleteRows, setConfirmDeleteRows] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(600);
+  // Real rendered row height (fonts/zoom vary); measured once rows are on screen.
+  const [rowHeight, setRowHeight] = useState(ESTIMATED_ROW_HEIGHT);
 
   const outcomeColumn = sheet.columns.find(c => c.key === "classification_label" || c.key === "classification");
   const outcomes = useMemo(
@@ -74,6 +87,38 @@ export function AiWorkbookGrid({
   useEffect(() => {
     onFilteredRowsChange?.(filteredRows);
   }, [filteredRows, onFilteredRowsChange]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => setViewportHeight(el.clientHeight || 600);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  // A new search/filter starts at the top.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [search, outcome]);
+
+  const virtual = filteredRows.length > VIRTUALIZE_AFTER;
+  useLayoutEffect(() => {
+    if (!virtual) return;
+    const row = scrollRef.current?.querySelector<HTMLTableRowElement>("tbody tr[data-row]");
+    const measured = row?.getBoundingClientRect().height;
+    if (measured && Math.abs(measured - rowHeight) > 0.5) setRowHeight(measured);
+  });
+  const ROW_HEIGHT = rowHeight;
+  const windowStart = virtual ? Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN) : 0;
+  const windowEnd = virtual
+    ? Math.min(filteredRows.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN)
+    : filteredRows.length;
+  const visibleRows = virtual ? filteredRows.slice(windowStart, windowEnd) : filteredRows;
+  const topSpacer = windowStart * ROW_HEIGHT;
+  const bottomSpacer = (filteredRows.length - windowEnd) * ROW_HEIGHT;
 
   const updateCell = (rowId: string, key: string, value: string | boolean) => {
     onChange({
@@ -121,18 +166,18 @@ export function AiWorkbookGrid({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2">
-        <div className="relative flex-1 min-w-[220px]">
+        <div className="relative flex-1 min-w-[200px]">
           <Search className="h-4 w-4 absolute left-3 top-2.5 text-gray-400" />
           <Input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search this tab…"
+            placeholder="Search rows…"
             className="pl-9 bg-white border-slate-200"
           />
         </div>
         {outcomeColumn && outcomes.length > 0 && (
           <Select value={outcome} onValueChange={setOutcome}>
-            <SelectTrigger className="w-[210px] bg-white border-slate-200" data-testid="select-workbook-outcome-filter">
+            <SelectTrigger className="w-full sm:w-[210px] bg-white border-slate-200" data-testid="select-workbook-outcome-filter">
               <SelectValue placeholder="All reply outcomes" />
             </SelectTrigger>
             <SelectContent>
@@ -158,7 +203,7 @@ export function AiWorkbookGrid({
             </DropdownMenuContent>
           </DropdownMenu>
           {selectedRows.size > 0 && (
-            <Button variant="ghost" size="sm" onClick={deleteSelected} className="text-red-600 hover:text-red-700 hover:bg-red-50">
+            <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteRows(true)} className="text-red-600 hover:text-red-700 hover:bg-red-50" data-testid="button-remove-selected-rows">
               <Trash2 className="h-4 w-4 mr-1" /> Remove selected
             </Button>
           )}
@@ -170,7 +215,11 @@ export function AiWorkbookGrid({
         {selectedRows.size > 0 ? <span>{selectedRows.size.toLocaleString()} selected</span> : <span> </span>}
       </div>
 
-      <div className="border rounded-lg overflow-auto max-h-[62vh] bg-white">
+      <div
+        ref={scrollRef}
+        className="border rounded-lg overflow-auto max-h-[62vh] bg-white"
+        onScroll={virtual ? event => setScrollTop(event.currentTarget.scrollTop) : undefined}
+      >
         <table className="w-full text-sm border-collapse">
           <thead className="sticky top-0 z-20 bg-slate-50 shadow-sm">
             <tr>
@@ -229,8 +278,11 @@ export function AiWorkbookGrid({
             </tr>
           </thead>
           <tbody>
-            {filteredRows.map((row, index) => (
-              <tr key={row.id} className={selectedRows.has(row.id) ? "bg-violet-50/70" : "hover:bg-slate-50"}>
+            {virtual && topSpacer > 0 && <tr aria-hidden="true" style={{ height: topSpacer }}><td colSpan={sheet.columns.length + 2} /></tr>}
+            {visibleRows.map((row, offset) => {
+              const index = windowStart + offset;
+              return (
+              <tr key={row.id} data-row="" style={virtual ? { height: ROW_HEIGHT } : undefined} className={selectedRows.has(row.id) ? "bg-violet-50/70" : "hover:bg-slate-50"}>
                 <td className="sticky left-0 z-10 bg-inherit border-r border-b px-3 py-2">
                   <Checkbox
                     disabled={readOnly}
@@ -274,7 +326,9 @@ export function AiWorkbookGrid({
                   );
                 })}
               </tr>
-            ))}
+              );
+            })}
+            {virtual && bottomSpacer > 0 && <tr aria-hidden="true" style={{ height: bottomSpacer }}><td colSpan={sheet.columns.length + 2} /></tr>}
             {filteredRows.length === 0 && (
               <tr><td colSpan={sheet.columns.length + 2} className="text-center text-gray-400 py-12">No rows match this filter.</td></tr>
             )}
@@ -285,7 +339,7 @@ export function AiWorkbookGrid({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add team column</DialogTitle>
-            <DialogDescription>Add a field for your team to update while reviewing this tab.</DialogDescription>
+            <DialogDescription>Add a field for your team to fill in while reviewing these rows.</DialogDescription>
           </DialogHeader>
           <Input
             autoFocus
@@ -300,12 +354,32 @@ export function AiWorkbookGrid({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <AlertDialog open={confirmDeleteRows} onOpenChange={setConfirmDeleteRows}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove {selectedRows.size.toLocaleString()} selected {selectedRows.size === 1 ? "row" : "rows"}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              They will be removed from this sheet when you save. Older versions in the history are not affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => { deleteSelected(); setConfirmDeleteRows(false); }}
+              data-testid="button-confirm-remove-rows"
+            >
+              Remove rows
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <Dialog open={Boolean(columnToRemove)} onOpenChange={open => !open && setColumnToRemove(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Remove column?</DialogTitle>
             <DialogDescription>
-              Remove “{columnToRemove?.label}” from this tab? Its values will be removed when you save this workbook.
+              Remove “{columnToRemove?.label}” from this sheet? Its values will be removed when you save this workbook.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
