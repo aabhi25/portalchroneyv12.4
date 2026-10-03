@@ -45,6 +45,12 @@ import {
   WHATSAPP_EXTRA_TOOL_NAMES, formatSlotsForWhatsapp, formatOrdersForWhatsapp, toWhatsAppText,
   whatsappAppointmentTools, resolveWhatsappModel, processWhatsappFallbackTemplate, WHATSAPP_HISTORY_LIMITS, isModelUnavailableError,
 } from "./whatsapp/aiReplyHelpers";
+import {
+  restrictedReplyLanguage, channelConversationKey, isHandoffPrefill, restrictedLanguageOverride, checkReplyLanguage, ourText,
+  type ChannelReplyLanguage,
+} from "./language/channelReplyLanguage";
+import { describeLanguage } from "./language/languagePolicy";
+import { replyLanguageName } from "@shared/replyLanguages";
 
 /** Which context builder produced the knowledge part of the prompt (logged; read by tests). */
 export interface WhatsappContextStats {
@@ -70,6 +76,8 @@ interface WhatsappBrainOptions {
   appointmentsEnabled?: boolean;
   ordersEnabled?: boolean;
   senderPhone?: string;
+  /** AI reply-language restriction for this reply (null/absent = the channel follows the customer, as before). */
+  replyLanguage?: ChannelReplyLanguage | null;
 }
 
 interface ConversationMessage {
@@ -247,19 +255,25 @@ export class WhatsappAutoReplyService {
   ): Promise<{ success: boolean; reply?: string; error?: string }> {
     const senderKey = `${businessAccountId}:${senderPhone}`;
     const result = await this.withSenderLock(senderKey, () => this._generateAndSendReply(businessAccountId, senderPhone, userMessage, incomingMessageUuid));
-    if (result.aiFailed) await this.sendAiFailureNotice(businessAccountId, senderPhone, incomingMessageUuid);
+    if (result.aiFailed) await this.sendAiFailureNotice(businessAccountId, senderPhone, incomingMessageUuid, userMessage);
     const { aiFailed, ...rest } = result;
     return rest;
   }
 
-  private async sendAiFailureNotice(businessAccountId: string, senderPhone: string, incomingMessageUuid?: string): Promise<void> {
+  private async sendAiFailureNotice(businessAccountId: string, senderPhone: string, incomingMessageUuid?: string, userMessage?: string): Promise<void> {
     const key = `${businessAccountId}:${senderPhone}`;
     if (Date.now() - (this.aiFailureNoticeAt.get(key) || 0) < 5 * 60_000) return;
     this.aiFailureNoticeAt.set(key, Date.now());
     try {
       const [settings] = await db.select().from(whatsappSettings).where(eq(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
       if (!settings) return;
-      const sent = await this.sendSessionAwareMessage(settings, senderPhone, this.AI_FAILURE_REPLY, incomingMessageUuid);
+      // Restricted reply language: the notice in the reply language (quick detection only, no AI call to detect).
+      const lang = await restrictedReplyLanguage({
+        businessAccountId, channel: "whatsapp", conversationKey: channelConversationKey("whatsapp", businessAccountId, senderPhone),
+        message: userMessage || "", detected: userMessage ? LlamaService.quickDetectLanguage(userMessage) : null, allowNote: false,
+      });
+      const notice = await ourText(businessAccountId, this.AI_FAILURE_REPLY, lang);
+      const sent = await this.sendSessionAwareMessage(settings, senderPhone, notice, incomingMessageUuid);
       if (!sent.success) console.error(`[WhatsApp Auto-Reply] AI failure notice not sent: ${sent.error}`);
     } catch (err) {
       console.error("[WhatsApp Auto-Reply] AI failure notice error:", err);
@@ -366,6 +380,11 @@ export class WhatsappAutoReplyService {
       timings.parallelFetch = Date.now() - t;
       this.lastContextStats = contextStats;
       console.log(`[WhatsApp Auto-Reply] Language detected for "${userMessage.substring(0, 30)}": ${detectedLang}`);
+      // AI reply-language setting: null when WhatsApp follows the customer (the default) → prompts unchanged.
+      const replyLanguage = await restrictedReplyLanguage({
+        businessAccountId, channel: "whatsapp", conversationKey: channelConversationKey("whatsapp", businessAccountId, senderPhone),
+        message: userMessage, detected: isHandoffPrefill(userMessage) ? null : detectedLang, apiKey,
+      });
 
       let crossPlatformContext = "";
       try {
@@ -514,6 +533,7 @@ export class WhatsappAutoReplyService {
         appointmentsEnabled: wantsAppointments && !flowSessionActive,
         ordersEnabled: wantsOrders && !flowSessionActive,
         senderPhone,
+        replyLanguage,
       };
       const aiResult = await this.generateAIResponse(
         apiKey,
@@ -546,6 +566,8 @@ export class WhatsappAutoReplyService {
         console.log(`[WhatsApp Auto-Reply] Deflection detected, stripping [[FALLBACK]] marker`);
       }
       processedReply = this.stripFallbackMarker(processedReply);
+      // Restricted reply language: rewrite a reply that slipped into another language (no AI call when it matches).
+      processedReply = await checkReplyLanguage(businessAccountId, processedReply, replyLanguage);
       
       t = Date.now();
       const sendResult = await this.sendSessionAwareMessage(
@@ -585,7 +607,12 @@ export class WhatsappAutoReplyService {
         console.log(`[WhatsApp Auto-Reply] Sending ${cardsWithImages.length} product card(s) with captions to ${senderPhone}`);
 
         let translatedDescriptions: Map<number, string> | null = null;
-        if (detectedLang && detectedLang !== 'en') {
+        // Restricted reply language: captions in the reply language (none when it is English).
+        const captionLang = replyLanguage ? replyLanguage.language : detectedLang;
+        const captionTarget = replyLanguage
+          ? describeLanguage(replyLanguage.language)
+          : (detectedLang === 'hi' ? 'Hinglish (Hindi written in Roman script mixed with English)' : detectedLang);
+        if (captionLang && captionLang !== 'en') {
           try {
             const descriptionsToTranslate = cardsWithImages
               .filter(c => c.description)
@@ -595,7 +622,7 @@ export class WhatsappAutoReplyService {
               const transResult = await openai.chat.completions.create({
                 model: "gpt-4o-mini",
                 messages: [
-                  { role: "system", content: `Translate the following product descriptions to ${detectedLang === 'hi' ? 'Hinglish (Hindi written in Roman script mixed with English)' : detectedLang}. Keep product-specific English terms as-is. Return ONLY the translations, one per line, in the same order. No numbering or labels.` },
+                  { role: "system", content: `Translate the following product descriptions to ${captionTarget}. Keep product-specific English terms as-is. Return ONLY the translations, one per line, in the same order. No numbering or labels.` },
                   { role: "user", content: descriptionsToTranslate.map(d => d.desc).join('\n---\n') }
                 ],
                 temperature: 0.3,
@@ -608,7 +635,7 @@ export class WhatsappAutoReplyService {
               descriptionsToTranslate.forEach((d, i) => {
                 if (translations[i]) translatedDescriptions!.set(d.idx, translations[i].trim());
               });
-              console.log(`[WhatsApp Auto-Reply] Translated ${translatedDescriptions.size} product description(s) to ${detectedLang}`);
+              console.log(`[WhatsApp Auto-Reply] Translated ${translatedDescriptions.size} product description(s) to ${captionLang}`);
             }
           } catch (transErr) {
             console.log(`[WhatsApp Auto-Reply] Caption translation failed (non-fatal), using English:`, transErr);
@@ -654,10 +681,20 @@ export class WhatsappAutoReplyService {
             if (aiResult.hasMoreProducts) {
               ctaButtons.push({ id: "view_more", title: "View More Options" });
             }
+            let ctaBody = "Interested in any of these? Let us help you further!";
+            if (replyLanguage) {
+              // Restricted reply language: our button texts in the reply language. Button ids are
+              // unchanged; a title stays English when its translation exceeds WhatsApp's 20 characters.
+              ctaBody = await ourText(businessAccountId, ctaBody, replyLanguage);
+              for (const b of ctaButtons) {
+                const title = (await ourText(businessAccountId, b.title, replyLanguage)).trim();
+                if (title && title.length <= 20) b.title = title;
+              }
+            }
             await this.sendInteractiveButtons(
               settings,
               senderPhone,
-              "Interested in any of these? Let us help you further!",
+              ctaBody,
               ctaButtons
             );
             console.log(`[WhatsApp Auto-Reply] CTA buttons sent (hasMore: ${aiResult.hasMoreProducts})`);
@@ -1572,7 +1609,8 @@ These rules are MANDATORY and override ALL other instructions.
       ];
       
       if (opts.fallbackReply) {
-        messages[0].content += `\nBUSINESS FALLBACK REPLY: when you must use [[FALLBACK]], the words after the marker should follow this reply written by the business (same meaning, the customer's language; never ask for their phone number): "${opts.fallbackReply}"\n`;
+        const fallbackLanguage = opts.replyLanguage ? `written in ${replyLanguageName(opts.replyLanguage.language)}` : "the customer's language";
+        messages[0].content += `\nBUSINESS FALLBACK REPLY: when you must use [[FALLBACK]], the words after the marker should follow this reply written by the business (same meaning, ${fallbackLanguage}; never ask for their phone number): "${opts.fallbackReply}"\n`;
       }
       if (opts.appointmentsEnabled || opts.ordersEnabled) {
         messages[0].content += whatsappToolGuide(!!opts.appointmentsEnabled, !!opts.ordersEnabled);
@@ -1616,15 +1654,18 @@ These rules are MANDATORY and override ALL other instructions.
         'pt': 'Portuguese', 'it': 'Italian', 'ja': 'Japanese', 'ko': 'Korean',
         'zh': 'Chinese', 'ar': 'Arabic', 'ru': 'Russian', 'tr': 'Turkish',
       };
-      const langName = detectedLanguage ? (LANGUAGE_NAMES[detectedLanguage] || 'English') : 'English';
-      const languageOverride = `🌐 LANGUAGE — ABSOLUTE OVERRIDE (HIGHEST PRIORITY):
+      // Restricted reply language (AI language setting): the business rule replaces the override.
+      const langName = opts.replyLanguage
+        ? replyLanguageName(opts.replyLanguage.language)
+        : detectedLanguage ? (LANGUAGE_NAMES[detectedLanguage] || 'English') : 'English';
+      const languageOverride = opts.replyLanguage ? restrictedLanguageOverride(opts.replyLanguage) : `🌐 LANGUAGE — ABSOLUTE OVERRIDE (HIGHEST PRIORITY):
 The user's current message is in ${langName}. You MUST reply in ${langName}.
 Ignore the language of any previous assistant messages in the conversation history.
 Do NOT switch languages. Do NOT use any other language.
 SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → respond in Latin script only.`;
       messages.push({ role: "system", content: languageOverride });
 
-      console.log(`[WhatsApp Auto-Reply] Language override injected: ${langName}`);
+      console.log(`[WhatsApp Auto-Reply] Language ${opts.replyLanguage ? "rule (restricted)" : "override"} injected: ${langName}`);
       console.log(`[WhatsApp Auto-Reply] System prompt length: ${systemPrompt.length} chars`);
       console.log(`[WhatsApp Auto-Reply] Total messages in context: ${messages.length}`);
 
@@ -1845,6 +1886,9 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
         }
         if (usedExtraTools.size > 0) {
           toolMessages.push({ role: "system", content: whatsappToolResultFormat(usedExtraTools) });
+        }
+        if (opts.replyLanguage) {
+          toolMessages.push({ role: "system", content: languageOverride });
         }
 
         try {

@@ -17,6 +17,11 @@ import {
   type InstagramFlowSession,
 } from "@shared/schema";
 import { eq, and, desc, sql, asc, ne, gte } from "drizzle-orm";
+import type { SocialPlatformId } from "./types";
+import {
+  restrictedReplyLanguage, channelConversationKey, flowResponseLanguageLine, checkReplyLanguage, ourText,
+  type ChannelReplyLanguage,
+} from "../language/channelReplyLanguage";
 
 /** Row types (identical for both platforms). */
 export type SocialFlow = InstagramFlow;
@@ -28,6 +33,8 @@ export interface SocialFlowConfig {
   tag: string;
   /** How the text-step intent prompt describes the conversation, e.g. "an Instagram conversation flow". */
   conversationDescription: string;
+  /** Channel for the AI reply-language setting (absent = no language policy, as before). */
+  platform?: SocialPlatformId;
   tables: {
     flows: typeof instagramFlows;
     steps: typeof instagramFlowSteps;
@@ -97,6 +104,26 @@ export class SocialFlowService {
     return result;
   }
 
+  /**
+   * AI reply-language setting for a flow reply: null when this channel follows the customer (the
+   * default) — the prompts then stay exactly as they were. Never adds the "I can help in …" note.
+   */
+  private async flowReplyLanguage(businessAccountId: string, senderId: string | undefined, message: string, apiKey?: string | null): Promise<ChannelReplyLanguage | null> {
+    if (!this.cfg.platform) return null;
+    return restrictedReplyLanguage({
+      businessAccountId, channel: this.cfg.platform,
+      conversationKey: channelConversationKey(this.cfg.platform, businessAccountId, senderId),
+      message, apiKey, allowNote: false,
+    });
+  }
+
+  /** One of our fixed flow messages (validation / reminders), in the reply language when restricted. */
+  private async flowFixedText(businessAccountId: string, senderId: string, message: string, text: string): Promise<string> {
+    if (!this.cfg.platform || !text) return text;
+    const lang = await this.flowReplyLanguage(businessAccountId, senderId, message);
+    return ourText(businessAccountId, text, lang);
+  }
+
   private normalizeFieldName(field: string): string {
     return field.replace(/[.\s,;:!?]+$/, '').trim();
   }
@@ -120,13 +147,15 @@ export class SocialFlowService {
     businessAccountId: string,
     message: string,
     requiredFields: string[],
-    alreadyCollected: Record<string, any> = {}
+    alreadyCollected: Record<string, any> = {},
+    senderId?: string
   ): Promise<{ extracted: Record<string, any>; missing: string[]; followUp?: string }> {
     const { apiKey, name: businessName } = await this.getApiKeyForBusiness(businessAccountId);
     if (!apiKey) {
       console.warn(`${this.cfg.tag} OpenAI API key not configured for business ${businessAccountId}`);
       return { extracted: {}, missing: requiredFields };
     }
+    const replyLanguage = await this.flowReplyLanguage(businessAccountId, senderId, message, apiKey);
 
     const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
 
@@ -158,7 +187,7 @@ Rules for followUp:
 - If they asked a question, answer it briefly then ask for missing info
 - If they expressed concern, reassure them briefly
 - Don't use bullet points or numbered lists
-- Respond in the SAME LANGUAGE the customer used
+${replyLanguage ? `- ${flowResponseLanguageLine(replyLanguage, "followUp")}` : "- Respond in the SAME LANGUAGE the customer used"}
 
 Example: {"extracted": {"name": "John", "dob": null}, "followUp": "Thanks John! I just need your date of birth to continue."}`;
 
@@ -197,7 +226,8 @@ Example: {"extracted": {"name": "John", "dob": null}, "followUp": "Thanks John! 
 
       console.log(`${this.cfg.tag} AI Extraction - Extracted fields: [${Object.keys(allExtracted || {}).join(", ")}], Missing: ${missing.join(", ")}`);
 
-      return { extracted: allExtracted, missing, followUp: parsed.followUp || undefined };
+      const followUp = replyLanguage && typeof parsed.followUp === "string" && parsed.followUp ? await checkReplyLanguage(businessAccountId, parsed.followUp, replyLanguage) : (parsed.followUp || undefined);
+      return { extracted: allExtracted, missing, followUp };
     } catch (error) {
       console.error(`${this.cfg.tag} AI extraction error:`, error);
       return { extracted: alreadyCollected, missing: requiredFields.filter(f => !this.hasFieldValue(alreadyCollected, f)) };
@@ -227,12 +257,14 @@ Example: {"extracted": {"name": "John", "dob": null}, "followUp": "Thanks John! 
     userMessage: string,
     stepPrompt: string,
     saveToField: string | null,
-    inputValidation: string | null
+    inputValidation: string | null,
+    senderId?: string
   ): Promise<{ intent: "answer" | "question" | "invalid"; response: string; cleanValue?: string }> {
     const { apiKey, name: accountName } = await this.getApiKeyForBusiness(businessAccountId);
     if (!apiKey) {
       return { intent: "answer", response: "" };
     }
+    const replyLanguage = await this.flowReplyLanguage(businessAccountId, senderId, userMessage, apiKey);
 
     const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
 
@@ -274,7 +306,7 @@ For "question" and "invalid" intents, generate a SHORT response (1-2 sentences):
 - For "question": Provide a brief helpful answer if possible, then gently redirect them to answer the original question.
 - For "invalid": Politely explain the expected format and re-ask.
 
-IMPORTANT: Respond in the SAME LANGUAGE the customer used.
+${replyLanguage ? flowResponseLanguageLine(replyLanguage) : "IMPORTANT: Respond in the SAME LANGUAGE the customer used."}
 
 Return ONLY a valid JSON object:
 {"intent": "answer|question|invalid", "response": "your response text (empty for answer)", "cleanValue": "extracted value (only for answer intent)"}`;
@@ -297,7 +329,8 @@ Return ONLY a valid JSON object:
       }
 
       console.log(`${this.cfg.tag} Text Step Intent - Intent: ${parsed.intent}, hasValue: ${!!parsed.cleanValue}, hasResponse: ${!!parsed.response}`);
-      return { intent: parsed.intent, response: parsed.response || "", cleanValue: parsed.cleanValue || undefined };
+      const responseText = replyLanguage && typeof parsed.response === "string" && parsed.response ? await checkReplyLanguage(businessAccountId, parsed.response, replyLanguage) : (parsed.response || "");
+      return { intent: parsed.intent, response: responseText, cleanValue: parsed.cleanValue || undefined };
     } catch (error) {
       console.error(`${this.cfg.tag} Text step intent detection error:`, error);
       return { intent: "answer", response: "" };
@@ -697,7 +730,7 @@ Return ONLY a valid JSON object:
           flowCompleted: true,
           collectedData: (session.collectedData as Record<string, any>) || {},
           sessionId: session.id,
-          response: { type: "text", text: activeFlow.completionMessage || "Thank you! Your information has been recorded." },
+          response: { type: "text", text: activeFlow.completionMessage || await this.flowFixedText(businessAccountId, senderId, message, "Thank you! Your information has been recorded.") },
         };
       }
       const nextActiveStep = await this.getStepByKey(activeFlow.id, nextActiveKey);
@@ -775,7 +808,7 @@ Return ONLY a valid JSON object:
             await this.advanceSession(session.id, session.currentStepKey, collectedData);
             return {
               handled: true,
-              response: { type: "text", text: staticCheck.message },
+              response: { type: "text", text: await this.flowFixedText(businessAccountId, senderId, message, staticCheck.message) },
               sessionId: session.id,
             };
           }
@@ -786,7 +819,8 @@ Return ONLY a valid JSON object:
           message,
           currentStep.prompt,
           currentStep.saveToField,
-          inputValidation
+          inputValidation,
+          senderId
         );
 
         if (intentResult.intent === "question" || intentResult.intent === "invalid") {
@@ -816,7 +850,8 @@ Return ONLY a valid JSON object:
           businessAccountId,
           message,
           requiredFields,
-          collectedData
+          collectedData,
+          senderId
         );
 
         Object.assign(collectedData, extracted);
@@ -825,7 +860,7 @@ Return ONLY a valid JSON object:
           console.log(`${this.cfg.tag} Missing fields: ${missing.join(", ")}`);
           await this.advanceSession(session.id, session.currentStepKey, collectedData);
 
-          const followUpMessage = followUp || this.generateMissingFieldsPromptStatic(missing);
+          const followUpMessage = followUp || await this.flowFixedText(businessAccountId, senderId, message, this.generateMissingFieldsPromptStatic(missing));
           return {
             handled: true,
             response: {
@@ -849,14 +884,15 @@ Return ONLY a valid JSON object:
         sessionId: session.id,
         response: {
           type: "text",
-          text: currentStep.prompt || activeFlow.completionMessage || "Thank you! Your information has been recorded.",
+          text: currentStep.prompt || activeFlow.completionMessage || await this.flowFixedText(businessAccountId, senderId, message, "Thank you! Your information has been recorded."),
         },
       };
     } else {
       nextStepKey = resolveNextStepKey(currentStep.defaultNextStep);
     }
 
-    const completionMsg = activeFlow.completionMessage || "Thank you! Your information has been recorded.";
+    // Only built when the flow completes here (our default text is translated when the reply language is restricted).
+    const completionMsg = async () => activeFlow.completionMessage || await this.flowFixedText(businessAccountId, senderId, message, "Thank you! Your information has been recorded.");
 
     if (!nextStepKey) {
       await this.completeSession(session.id, collectedData);
@@ -867,7 +903,7 @@ Return ONLY a valid JSON object:
         sessionId: session.id,
         response: {
           type: "text",
-          text: completionMsg,
+          text: await completionMsg(),
         },
       };
     }
@@ -881,7 +917,7 @@ Return ONLY a valid JSON object:
         sessionId: session.id,
         response: {
           type: "text",
-          text: completionMsg,
+          text: await completionMsg(),
         },
       };
     }

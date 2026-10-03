@@ -5,7 +5,8 @@ import { SocialAutoReplyEngine } from "./social/autoReplyEngine";
 /**
  * Facebook Messenger auto-replies (engine: social/autoReplyEngine.ts). Smart replies
  * (channel "facebook") are checked before the AI, as on Instagram; the AI reply itself is
- * plain text (no product tool / images / language detection).
+ * plain text (no product tool / images; language detection only when the business restricts
+ * Facebook reply languages — see language/channelReplyLanguage.ts).
  */
 export class FacebookAutoReplyService extends SocialAutoReplyEngine {
   constructor() {

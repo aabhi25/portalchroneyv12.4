@@ -7,6 +7,7 @@ export class InstagramFlowService extends SocialFlowService {
     super({
       tag: "[Instagram Flow]",
       conversationDescription: "an Instagram conversation flow",
+      platform: "instagram",
       tables: { flows: instagramFlows, steps: instagramFlowSteps, sessions: instagramFlowSessions },
     });
   }
