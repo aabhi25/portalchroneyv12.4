@@ -49,6 +49,8 @@ interface PipelineItem {
   leftover: Buffer | null;
   emittedBytes: number;
   controller: AbortController | null;
+  /** Ready-made PCM (e.g. a cached filler phrase): played in order, no synthesis. */
+  prerendered?: Buffer;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -88,6 +90,16 @@ export class SentenceTtsPipeline {
     this.items.push({
       index: this.items.length, text: t, started: false, done: false,
       buffered: [], leftover: null, emittedBytes: 0, controller: null,
+    });
+    this.pump();
+  }
+
+  /** Queue ready-made PCM16 (24 kHz) in sentence order — no TTS call (cached phrases). */
+  enqueueAudio(pcm: Buffer, label = '(prerendered)'): void {
+    if (!pcm || pcm.length < 2 || this.cancelled || this.closed) return;
+    this.items.push({
+      index: this.items.length, text: label, started: false, done: false,
+      buffered: [], leftover: null, emittedBytes: 0, controller: null, prerendered: pcm,
     });
     this.pump();
   }
@@ -191,6 +203,13 @@ export class SentenceTtsPipeline {
   }
 
   private async runItem(item: PipelineItem): Promise<void> {
+    if (item.prerendered) {
+      try { this.emit(item, item.prerendered); } finally {
+        item.done = true;
+        this.advance();
+      }
+      return;
+    }
     const primary = this.options.primary;
     const fallback = this.options.fallback ?? null;
     const usePrimary = !!primary && !this.primaryBroken;

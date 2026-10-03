@@ -29,6 +29,7 @@ import {
 } from './services/topscholar/voiceUsageService';
 import { avatarSessionManager, type VoiceBinding } from './services/avatar/sessionManager';
 import { genderOfVoice, genderOfVoiceSync, resolveAssistantGender, type AssistantGender } from './services/chatContext/assistantGender';
+import { fillerDelayMs, fillerLanguage, fillerPhrases, pickFiller, wantsFiller } from './services/voice/fillers';
 import type { AudioRoute, AvatarEndReason } from './services/avatar/types';
 
 /**
@@ -185,6 +186,8 @@ interface VoiceTurnTiming {
   /** Avatar mode: provider name, and when the avatar started speaking this answer. */
   avatar?: string;
   avatarSpeakAt?: number;
+  /** Video call: when a "Let me check that." filler was queued (answer was late). */
+  fillerAt?: number;
 }
 
 interface VoiceConversation {
@@ -365,6 +368,10 @@ interface VoiceConversation {
   // Recently spoken assistant text (echo detection) and the last full answer
   // (did the tutor just ask a question?).
   recentAssistantSpeech?: string;
+  /** Video-call fillers: PCM per phrase (synthesised once per call), and turn-to-turn state. */
+  fillerAudio?: Map<string, Buffer>;
+  lastFillerText?: string;
+  lastTurnHadFiller?: boolean;
   /** Wall-clock time of the last VAD speech_stopped (start of the reply-latency clock). */
   lastSpeechStoppedAt?: number;
   /** Per-turn stage timestamps, logged as one [VoiceTiming] line when the turn ends. */
@@ -882,6 +889,46 @@ export class RealtimeVoiceService {
     console.log(`[RealtimeVoice] Avatar attached: ${attached.provider} route=${attached.audioRoute}`, conversation.conversationId);
     if (message.speakIntro !== false && attached.disclosure && !conversation.isProcessing && !this.isAnswerActive(conversation)) {
       this.speakAvatarIntro(conversation, attached.disclosure);
+    }
+    void this.prewarmFillers(conversation);
+  }
+
+  /** The assistant's grammatical gender on this call (avatar setting, else the voice). */
+  private callGender(conversation: VoiceConversation): AssistantGender | null {
+    return resolveAssistantGender({ avatarGender: conversation.avatar?.gender, voiceGender: conversation.voiceGender ?? null });
+  }
+
+  /**
+   * Synthesise the call's filler phrases once (≈7 short phrases), so a late answer can be
+   * acknowledged instantly instead of waiting for TTS. Best effort: a phrase that isn't
+   * ready yet is synthesised on demand.
+   */
+  private async prewarmFillers(conversation: VoiceConversation): Promise<void> {
+    if (!conversation.avatar || conversation.fillerAudio) return;
+    const cache = new Map<string, Buffer>();
+    conversation.fillerAudio = cache;
+    const sel = String(conversation.selectedLanguage || 'auto').toLowerCase();
+    const languages: Array<'en' | 'hi'> = sel === 'hi' ? ['hi'] : sel === 'en' ? ['en'] : sel === 'auto' ? ['en', 'hi'] : [];
+    const gender = this.callGender(conversation);
+    const { primary, fallback } = this.createTtsProviders(conversation);
+    const provider = primary || fallback;
+    if (!provider) return;
+    for (const lang of languages) {
+      for (const phrase of fillerPhrases(lang, gender)) {
+        if (!conversation.avatar || conversation.clientWs.readyState !== WebSocket.OPEN || conversation.fillerAudio !== cache) return;
+        const chunks: Buffer[] = [];
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        try {
+          await provider.synthesize(phrase, controller.signal, (pcm) => { if (pcm.length) chunks.push(Buffer.from(pcm)); });
+          const pcm = Buffer.concat(chunks);
+          if (pcm.length >= 4800) cache.set(phrase, pcm.subarray(0, pcm.length & ~1));
+        } catch {
+          // Synthesised on demand instead.
+        } finally {
+          clearTimeout(timer);
+        }
+      }
     }
   }
 
@@ -3197,6 +3244,7 @@ export class RealtimeVoiceService {
       if (t.sentences != null) parts.push(`${t.sentences} sentences/${t.chars} chars`);
       if (extra.audioMs != null) parts.push(`audio ${(extra.audioMs / 1000).toFixed(1)}s${extra.tts ? ` tts=${extra.tts}` : ''}`);
       if (t.avatar) parts.push(`avatar=${t.avatar} AVATAR SPEAK ${rel(t.avatarSpeakAt)}`);
+      if (t.fillerAt) parts.push(`filler ${rel(t.fillerAt)}`);
     }
     parts.push(JSON.stringify(t.text.length > 60 ? `${t.text.slice(0, 60)}…` : t.text));
     console.log(parts.join(' | '));
@@ -3822,8 +3870,39 @@ Never infer intent from a single contained word. For example, "What is stop moti
 
     let spokenText = '';
     let segmentCount = 0;
+    let answerStarted = false;
+
+    // Video call: acknowledge a late answer ("Let me check that."), spoken only — the bubble
+    // and the saved message contain just the answer. See services/voice/fillers.ts.
+    let fillerTimer: NodeJS.Timeout | null = null;
+    let fillerUsed = false;
+    const fillerLang = conversation.avatar ? fillerLanguage(userTranscript, conversation.selectedLanguage) : null;
+    if (fillerLang && wantsFiller({ transcript: userTranscript, lastAssistantText: conversation.lastAssistantText, lastTurnHadFiller: conversation.lastTurnHadFiller })) {
+      fillerTimer = setTimeout(() => {
+        fillerTimer = null;
+        if (answerStarted || abandoned() || !conversation.avatar || conversation.clientWs.readyState !== WebSocket.OPEN) return;
+        const phrase = pickFiller(fillerLang, this.callGender(conversation), conversation.lastFillerText);
+        const cachedAudio = conversation.fillerAudio?.get(phrase);
+        console.log(`[VoiceTurn] Answer is late — filler "${phrase}" (${cachedAudio ? 'cached' : 'synthesising'})`);
+        fillerUsed = true;
+        conversation.lastFillerText = phrase;
+        if (timing) timing.fillerAt = Date.now();
+        spokenText += (spokenText ? ' ' : '') + phrase;
+        segmentCount++;
+        this.sendToClient(conversation.clientWs, { type: 'answer_delta', responseId, display: '', speech: phrase, index: segmentCount - 1 });
+        if (cachedAudio) pipeline.enqueueAudio(cachedAudio, phrase); else pipeline.enqueue(phrase);
+        conversation.recentAssistantSpeech = `${conversation.recentAssistantSpeech || ''} ${phrase}`.slice(-800);
+      }, fillerDelayMs(timing?.stoppedAt));
+      fillerTimer.unref?.();
+    }
+    const stopFillerTimer = () => {
+      if (fillerTimer) { clearTimeout(fillerTimer); fillerTimer = null; }
+    };
+
     const emitSegment = (segment: string) => {
       if (!segment || abandoned()) return;
+      answerStarted = true;
+      stopFillerTimer();
       const speech = markdownToSpeech(segment);
       const speechDelta = speech ? (spokenText ? ' ' : '') + speech : '';
       spokenText += speechDelta;
@@ -3842,6 +3921,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       }
     };
     const bail = () => {
+      stopFillerTimer();
       if (conversation.ttsPipeline === pipeline) {
         conversation.ttsPipeline = undefined;
         conversation.ttsPipelineResponseId = undefined;
@@ -3869,6 +3949,9 @@ Never infer intent from a single contained word. For example, "What is stop moti
       }
       if (abandoned()) { bail(); return; }
       for (const segment of splitter.flush()) emitSegment(segment);
+      stopFillerTimer();
+      // Never two fillers in a row (decided per turn, once the answer exists).
+      conversation.lastTurnHadFiller = fillerUsed;
 
       const displayMarkdown = (finalMarkdown || streamedMarkdown).trim();
       if (!displayMarkdown) {

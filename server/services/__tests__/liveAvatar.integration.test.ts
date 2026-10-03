@@ -573,6 +573,49 @@ async function main() {
       expect(v.chatContexts.slice(-1)[0]?.assistantName === "Maya", "answers on a video call introduce the assistant by the avatar's name (not 'Chroney')", v.chatContexts.slice(-1)[0]?.assistantName);
       expect(v.chatContexts.slice(-1)[0]?.assistantGender === "female", "answers on a video call use the avatar's gender (feminine Hindi forms for a female avatar)", v.chatContexts.slice(-1)[0]?.assistantGender);
 
+      // Late answer on a video call → a short filler first (cached audio, spoken only), then the answer.
+      {
+        const late = (ms: number, parts: string[]) => async function* () { await sleep(ms); yield* scripted(parts)(); };
+        const doneBefore = v.client.ofType("ai_done").length;
+        const ttsBefore = v.ttsCalls.length;
+        v.streams.push(late(1700, ["Weekend batches run on Saturday and Sunday."]));
+        await v.utter("Do you have weekend classes for class ten?", 1300);
+        await until(() => v.client.ofType("ai_done").length > doneBefore, 6000);
+        const rid = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
+        const deltas = v.client.ofType("answer_delta").filter((d) => d.responseId === rid);
+        const fillers = ["Let me check that.", "Sure, one moment.", "Okay, let me see."];
+        expect(deltas[0]?.display === "" && fillers.includes(deltas[0]?.speech) && /Weekend batches/.test(deltas[1]?.display || ""), "late answer: filler spoken first (no visible text), then the answer", deltas.map((d) => [d.display, d.speech]));
+        const newTts = v.ttsCalls.slice(ttsBefore);
+        expect(!newTts.some((t) => fillers.includes(t)) && newTts.some((t) => /Weekend batches/.test(t)), "filler audio came from the per-call cache (no TTS call for it)", newTts);
+        const ready = v.client.ofType("answer_ready").find((m) => m.responseId === rid);
+        expect(ready && !/check that|one moment|let me see/i.test(ready.displayMarkdown) && fillers.some((f) => ready.speechText.startsWith(f)), "saved/displayed answer has no filler; captions include it", { display: ready?.displayMarkdown, speech: ready?.speechText });
+
+        // The very next late answer: no filler (never two in a row).
+        const done2 = v.client.ofType("ai_done").length;
+        v.streams.push(late(1700, ["The fees are 2,500 rupees a month."]));
+        await v.utter("What are the fees for the maths course?", 1300);
+        await until(() => v.client.ofType("ai_done").length > done2, 6000);
+        const rid2 = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
+        const d2 = v.client.ofType("answer_delta").filter((d) => d.responseId === rid2);
+        expect(d2.length > 0 && d2.every((d) => d.display !== ""), "no filler on two turns in a row", d2.map((d) => [d.display, d.speech]));
+
+        // Small talk, even if slow: no filler.
+        const done3 = v.client.ofType("ai_done").length;
+        v.streams.push(late(1700, ["I'm doing great, thanks for asking!"]));
+        await v.utter("How are you doing today?", 1200);
+        await until(() => v.client.ofType("ai_done").length > done3, 6000);
+        const rid3 = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
+        expect(v.client.ofType("answer_delta").filter((d) => d.responseId === rid3).every((d) => d.display !== ""), "small talk (\"how are you\") never gets a filler");
+
+        // A fast answer: no filler.
+        const done4 = v.client.ofType("ai_done").length;
+        v.streams.push(scripted(["We teach maths and science."]));
+        await v.utter("Which subjects do you teach for class ten?", 1300);
+        await until(() => v.client.ofType("ai_done").length > done4, 6000);
+        const rid4 = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
+        expect(v.client.ofType("answer_delta").filter((d) => d.responseId === rid4).every((d) => d.display !== ""), "fast answer: no filler");
+      }
+
       // Confirmed interruption → provider interrupt.
       v.streams.push(scripted(["Diamonds are the hardest natural material. ", "They are made of carbon. ", "They form deep underground. ", "Would you like to see some?"]));
       v.streams.push(scripted(["Sure, here is the price."]));
