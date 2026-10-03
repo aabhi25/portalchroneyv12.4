@@ -128,6 +128,28 @@ export function createAnamProvider(options: AnamOptions = {}): AvatarProvider {
       } catch (error) {
         if (!(error instanceof AvatarProviderError && (error.code === "not_found" || error.code === "bad_request"))) throw error;
       }
+      // A persona id (Anam Lab shows those prominently): use the persona's avatar.
+      try {
+        const res = await fetchWithTimeout(fetchImpl, "Anam", `${base}/v1/personas/${encodeURIComponent(avatarId)}`, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${apiKey}` },
+        }, timeoutMs);
+        const persona = JSON.parse(res.text || "{}");
+        const resolved = typeof persona?.avatar?.id === "string" ? persona.avatar.id : "";
+        if (resolved && /^[A-Za-z0-9_.:-]{1,200}$/.test(resolved)) {
+          const avatarName = nameOf(persona.avatar);
+          const personaName = typeof persona?.name === "string" ? persona.name.slice(0, 80) : "";
+          return {
+            found: true as const,
+            name: [avatarName, personaName ? `from persona "${personaName}"` : "from a persona"].filter(Boolean).join(" "),
+            resolvedAvatarId: resolved,
+            resolvedFrom: "persona" as const,
+            avatarModel: typeof persona?.avatarModel === "string" ? persona.avatarModel : null,
+          };
+        }
+      } catch (error) {
+        if (!(error instanceof AvatarProviderError && (error.code === "not_found" || error.code === "bad_request" || error.code === "protocol"))) throw error;
+      }
       const wanted = avatarId.toLowerCase();
       for (let page = 1; page <= 10; page++) {
         const res = await fetchWithTimeout(fetchImpl, "Anam", `${base}/v1/avatars?page=${page}&perPage=100`, {

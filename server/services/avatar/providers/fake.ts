@@ -142,6 +142,7 @@ export function createFakeAvatarProvider(options: { audioRoute?: AudioRoute; onS
 
     async lookupAvatar(_apiKey: string, avatarId: string) {
       if (/^missing/i.test(avatarId)) return { found: false as const };
+      if (/^persona-/i.test(avatarId)) return { found: true as const, name: `Fake avatar from persona ${avatarId}`, resolvedAvatarId: `avatar-of-${avatarId}`, resolvedFrom: "persona" as const, avatarModel: null };
       return { found: true as const, name: `Fake avatar ${avatarId}` };
     },
 

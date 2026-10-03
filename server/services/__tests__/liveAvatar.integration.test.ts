@@ -313,6 +313,11 @@ async function main() {
     expect(r.status === 400 && r.json.code === "avatar_not_found" && /not found at Anam.*from HeyGen LiveAvatar\?/.test(r.json.error), "switching to Anam with an id Anam doesn't have → save refused with a clear reason", r.json);
     r = await call("GET", `/api/super-admin/avatar/accounts/${A}`, cSup);
     expect(r.json.settings.provider === "heygen_liveavatar", "…and nothing was saved", r.json.settings.provider);
+    r = await call("POST", `/api/super-admin/avatar/accounts/${A}/check-avatar`, cSup, { provider: "anam", avatarId: "persona-maya" });
+    expect(r.status === 200 && r.json.status === "found" && r.json.resolvedFrom === "persona" && r.json.resolvedAvatarId === "avatar-of-persona-maya", "Check button: an Anam persona id resolves to its avatar id", r.json);
+    r = await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { provider: "anam", avatarId: "persona-maya" });
+    expect(r.status === 200 && r.json.settings.avatarId === "avatar-of-persona-maya" && /persona id — saved its avatar id avatar-of-persona-maya/.test(r.json.avatarIdNotice || ""), "saving a persona id stores the persona's avatar id (with a notice)", { id: r.json?.settings?.avatarId, notice: r.json?.avatarIdNotice });
+    await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { provider: "heygen_liveavatar", avatarId: "hg-avatar-1" });
     r = await call("POST", `/api/super-admin/avatar/accounts/${A}/check-avatar`, cSup, { provider: "anam", avatarId: "anam-avatar-9" });
     expect(r.status === 200 && r.json.status === "found" && /anam-avatar-9/.test(r.json.name || ""), "Check button: found at Anam (with the business's Anam key)", r.json);
     r = await call("POST", `/api/super-admin/avatar/accounts/${A}/check-avatar`, cSup, { provider: "anam", avatarId: "missing-x" });

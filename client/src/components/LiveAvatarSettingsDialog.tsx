@@ -165,12 +165,20 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
     });
   };
   const checkAvatar = useMutation({
-    mutationFn: () => apiRequest<{ status: "found" | "not_found" | "unchecked"; name?: string; reason?: string; message?: string }>(
+    mutationFn: () => apiRequest<{ status: "found" | "not_found" | "unchecked"; name?: string; reason?: string; message?: string; resolvedAvatarId?: string; resolvedFrom?: string }>(
       "POST", `/api/super-admin/avatar/accounts/${businessAccountId}/check-avatar`, { provider: form!.provider, avatarId: form!.avatarId || "" }),
-    onSuccess: (r) => setAvatarCheck(
+    onSuccess: (r) => {
+      // A persona id: switch the field to the persona's avatar id (what a session needs).
+      if (r.status === "found" && r.resolvedFrom === "persona" && r.resolvedAvatarId) {
+        set("avatarId", r.resolvedAvatarId);
+        setAvatarCheck({ ok: true, text: `That was a persona id — using its avatar instead${r.name ? `: ${r.name}` : ""}. Save to keep it.` });
+        return;
+      }
+      setAvatarCheck(
       r.status === "found" ? { ok: true, text: `Found at ${providerName(form!.provider)}${r.name ? `: ${r.name}` : ""}` }
         : r.status === "not_found" ? { ok: false, text: r.message || "Not found at this provider" }
-          : { ok: null, text: r.reason || "Could not check right now" }),
+          : { ok: null, text: r.reason || "Could not check right now" });
+    },
     onError: (e: Error) => setAvatarCheck({ ok: false, text: e.message }),
   });
 
@@ -197,7 +205,7 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
     onSuccess: (view) => {
       queryClient.setQueryData(queryKey(businessAccountId), view);
       setForm(view.settings);
-      toast({ title: "Live AI avatar settings saved", description: businessName });
+      toast({ title: "Live AI avatar settings saved", description: (view as AdminView & { avatarIdNotice?: string | null }).avatarIdNotice || businessName });
     },
     onError: (e: Error) => toast({ title: "Could not save", description: e.message, variant: "destructive" }),
   });

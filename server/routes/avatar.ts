@@ -107,7 +107,7 @@ function sendSettingsError(res: Response, error: unknown, fallback: string) {
   return res.status(500).json({ error: fallback });
 }
 
-type AvatarCheck = { status: "found"; name?: string } | { status: "not_found" } | { status: "unchecked"; reason: string };
+type AvatarCheck = { status: "found"; name?: string; resolvedAvatarId?: string; resolvedFrom?: "persona"; avatarModel?: string | null } | { status: "not_found" } | { status: "unchecked"; reason: string };
 
 /** Ask the provider whether this avatar id exists (with the key this account would use). Never billed. */
 async function checkAvatarId(provider: AvatarProviderId, avatarId: string, settings: Parameters<typeof resolveApiKey>[1]): Promise<AvatarCheck> {
@@ -117,7 +117,9 @@ async function checkAvatarId(provider: AvatarProviderId, avatarId: string, setti
   if (!apiKey) return { status: "unchecked", reason: `No API key for ${providerLabel(provider)} yet — the avatar id will be checked once a key is added` };
   try {
     const result = await adapter.lookupAvatar(apiKey, avatarId);
-    return result.found ? { status: "found", name: result.name } : { status: "not_found" };
+    return result.found
+      ? { status: "found", name: result.name, resolvedAvatarId: result.resolvedAvatarId, resolvedFrom: result.resolvedFrom, avatarModel: result.avatarModel ?? null }
+      : { status: "not_found" };
   } catch (error) {
     const code = error instanceof AvatarProviderError ? error.code : "unknown";
     return { status: "unchecked", reason: code === "auth" ? `${providerLabel(provider)} rejected the API key` : `Could not reach ${providerLabel(provider)} (${code})` };
@@ -312,12 +314,19 @@ router.put("/api/super-admin/avatar/accounts/:businessAccountId", requireAuth, r
     const current = await getEffectiveSettings(businessAccountId);
     const nextProvider = typeof req.body?.provider === "string" ? req.body.provider : current.provider;
     const nextAvatarId = req.body?.avatarId !== undefined ? (typeof req.body.avatarId === "string" ? req.body.avatarId.trim() : null) : current.avatarId;
+    let body = req.body;
+    let avatarIdNotice: string | null = null;
     if (nextAvatarId && isProviderSelectable(nextProvider) && /^[A-Za-z0-9_.:-]{1,200}$/.test(nextAvatarId)
         && (nextProvider !== current.provider || nextAvatarId !== current.avatarId)) {
       const check = await checkAvatarId(nextProvider, nextAvatarId, current);
       if (check.status === "not_found") return res.status(400).json({ error: notFoundMessage(nextProvider, nextAvatarId), code: "avatar_not_found" });
+      // A persona id was pasted: save the persona's avatar id instead (that is what a session needs).
+      if (check.status === "found" && check.resolvedAvatarId && check.resolvedAvatarId !== nextAvatarId) {
+        body = { ...req.body, avatarId: check.resolvedAvatarId };
+        avatarIdNotice = `That was a persona id — saved its avatar id ${check.resolvedAvatarId}${check.name ? ` (${check.name})` : ""} instead.`;
+      }
     }
-    const result = await updateAvatarSettings(businessAccountId, req.body, req.user!.id);
+    const result = await updateAvatarSettings(businessAccountId, body, req.user!.id);
     if (result.changed.length > 0) {
       await recordAuditEventSafely(req, {
         action: "avatar.settings_updated",
@@ -336,7 +345,7 @@ router.put("/api/super-admin/avatar/accounts/:businessAccountId", requireAuth, r
     if (result.changed.includes("enabled") && !result.settings.enabled) {
       await Promise.allSettled(avatarSessionManager.liveSessionIds(businessAccountId).map((id) => avatarSessionManager.endSession(id, "disabled")));
     }
-    res.json(await adminView(businessAccountId));
+    res.json({ ...(await adminView(businessAccountId)), avatarIdNotice });
   } catch (error) {
     sendSettingsError(res, error, "Failed to save avatar settings");
   }

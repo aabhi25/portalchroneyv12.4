@@ -139,7 +139,7 @@ export interface AvatarProvider {
    * Does this avatar id exist at this provider (for this key)? Read-only, not billed.
    * Throws AvatarProviderError for anything other than "found" / "not found" (bad key, outage).
    */
-  lookupAvatar?(apiKey: string, avatarId: string): Promise<{ found: true; name?: string } | { found: false }>;
+  lookupAvatar?(apiKey: string, avatarId: string): Promise<{ found: true; name?: string; resolvedAvatarId?: string; resolvedFrom?: "persona"; avatarModel?: string | null } | { found: false }>;
 }
 
 export type AvatarErrorCode =

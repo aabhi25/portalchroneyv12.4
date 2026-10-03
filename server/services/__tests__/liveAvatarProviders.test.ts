@@ -364,6 +364,10 @@ async function main() {
       if (r.path === "/v1/avatars/anam-avatar-1") {
         return r.headers.authorization === "Bearer anam_k" ? { status: 200, body: { id: "anam-avatar-1", displayName: "Cara", variantName: "Office" } } : { status: 401, body: {} };
       }
+      if (r.path === "/v1/personas/ecea9f9d-9116-5e8a-9580-261bc8f75c37") {
+        return { status: 200, body: { id: "ecea9f9d-9116-5e8a-9580-261bc8f75c37", name: "Maya sales", avatarModel: "cara-4", avatar: { id: "30fa96d0-26c4-4e55-94a0-517025942e18", displayName: "Mia", variantName: "Office" } } };
+      }
+      if (r.path.startsWith("/v1/personas/")) return { status: 404, body: { message: "Persona not found" } };
       if (r.path === "/v1/avatars?page=1&perPage=100") {
         return r.headers.authorization === "Bearer anam_k" ? { status: 200, body: { data: [{ id: "stock-x", displayName: "Other" }], meta: { lastPage: 2 } } } : { status: 401, body: {} };
       }
@@ -386,6 +390,8 @@ async function main() {
     const anFound = await an.lookupAvatar!("anam_k", "anam-avatar-1");
     expect(anFound.found && (anFound as any).name === "Cara · Office" && api.requests.slice(-1)[0].headers.authorization === "Bearer anam_k", "Anam: GET /v1/avatars/{id} with Bearer key → found + name", anFound);
     expect((await an.lookupAvatar!("anam_k", "513fd1b7-7ef9-466d-9af2-344e51eeb833")).found === false, "Anam: a HeyGen avatar id → not found");
+    const persona = await an.lookupAvatar!("anam_k", "ecea9f9d-9116-5e8a-9580-261bc8f75c37");
+    expect(persona.found && (persona as any).resolvedFrom === "persona" && (persona as any).resolvedAvatarId === "30fa96d0-26c4-4e55-94a0-517025942e18" && (persona as any).avatarModel === "cara-4" && /Mia · Office from persona "Maya sales"/.test((persona as any).name), "Anam: a PERSONA id resolves to the persona's avatar id", persona);
     const stock = await an.lookupAvatar!("anam_k", "ecea9f9d-stock");
     expect(stock.found && (stock as any).name === "Cara stock · Studio", "Anam: id the single lookup doesn't resolve (e.g. stock) is found in the avatar list (all pages, case-insensitive)", stock);
     api.close();
