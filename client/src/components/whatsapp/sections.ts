@@ -1,5 +1,4 @@
-import type { LucideIcon   ShieldCheck,
-} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   Sparkles, Route, Zap, MessagesSquare, Contact, BarChart3, Link2,
   UsersRound, FileCode2, Megaphone, Settings, ShieldCheck, MessageCircle,
