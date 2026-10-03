@@ -174,21 +174,28 @@ export function mediumLanguage(policy: Pick<LanguagePolicy, "mediumMap">, medium
 
 const HI_FAMILY = new Set(["hi", "hinglish"]);
 
-/** Is `lang` acceptable under `allowed`, treating Hindi and Hinglish as the same family? */
+/**
+ * Is `lang` acceptable under `allowed`, treating Hindi and Hinglish as one family?
+ *   - only Hinglish allowed → always Hinglish (Roman letters);
+ *   - Hindi allowed → the Hindi-script setting decides: Devanagari, English letters, or
+ *     "match" = the customer's own script (Roman Hindi in, Roman Hindi out).
+ */
 function allowedForm(lang: string, allowed: string[], hindiScript: LanguagePolicy["hindiScript"]): string | null {
-  if (allowed.includes(lang)) return applyHindiScript(lang, allowed, hindiScript);
   if (HI_FAMILY.has(lang)) {
-    const sibling = lang === "hi" ? "hinglish" : "hi";
-    if (allowed.includes(sibling)) return applyHindiScript(sibling, allowed, hindiScript);
+    const hiOk = allowed.includes("hi");
+    const hgOk = allowed.includes("hinglish");
+    if (!hiOk && !hgOk) return null;
+    if (hgOk && !hiOk) return "hinglish";
+    return applyHindiScript(lang, allowed, hindiScript);
   }
-  return null;
+  return allowed.includes(lang) ? lang : null;
 }
 
 function applyHindiScript(lang: string, allowed: string[], hindiScript: LanguagePolicy["hindiScript"]): string {
-  if (!HI_FAMILY.has(lang) || hindiScript === "match") return lang;
-  const want = hindiScript === "devanagari" ? "hi" : "hinglish";
-  // The script preference wins when that form is allowed too (or when only Hindi is listed).
-  if (allowed.length === 0 || allowed.includes(want) || (want === "hinglish" && allowed.includes("hi")) || (want === "hi" && allowed.includes("hinglish"))) return want;
+  if (!HI_FAMILY.has(lang)) return lang;
+  if (allowed.length > 0 && allowed.includes("hinglish") && !allowed.includes("hi")) return "hinglish";
+  if (hindiScript === "devanagari") return "hi";
+  if (hindiScript === "roman") return "hinglish";
   return lang;
 }
 

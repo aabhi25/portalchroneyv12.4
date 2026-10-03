@@ -40,7 +40,9 @@ async function main() {
   expect(r1.language === 'hi' && !r1.outsideAllowed && r1.source === 'detected', 'allowed language written → reply in it', r1);
   const r2 = L.resolveReplyLanguage({ policy: enHi, detected: 'ta' });
   expect(r2.language === 'en' && r2.outsideAllowed && r2.source === 'default', 'Tamil (not allowed) → default English + note', r2);
-  expect(L.resolveReplyLanguage({ policy: enHi, detected: 'hinglish' }).language === 'hi', 'Hinglish written, only Hindi allowed → Hindi (same family, no note)');
+  const rH = L.resolveReplyLanguage({ policy: enHi, detected: 'hinglish' });
+  expect(rH.language === 'hinglish' && !rH.outsideAllowed, 'Roman Hindi written, Hindi allowed, script "match" → Roman Hindi back (no note)', rH);
+  expect(L.resolveReplyLanguage({ policy: policy({ mode: 'restricted', allowed: ['en', 'hi'], defaultLanguage: 'en', hindiScript: 'devanagari' }), detected: 'hinglish' }).language === 'hi', 'Hindi script "Devanagari" → Devanagari even for Roman Hindi');
   expect(L.resolveReplyLanguage({ policy: policy({ mode: 'restricted', allowed: ['hinglish'], defaultLanguage: 'hinglish' }), detected: 'hi' }).language === 'hinglish', 'Devanagari written, only Hinglish allowed → Hinglish');
   expect(L.resolveReplyLanguage({ policy: enHi, picked: 'ta', detected: 'en' }).language === 'en', 'a disallowed dropdown value is ignored');
   expect(L.resolveReplyLanguage({ policy: enHi, picked: 'hi', detected: 'en' }).language === 'hi', 'allowed dropdown pick wins over what they typed');
