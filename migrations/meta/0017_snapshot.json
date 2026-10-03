@@ -1,6 +1,6 @@
 {
   "id": "ac232d20-ca94-4310-87d6-94e78ec1abad",
-  "prevId": "c3d9d820-e7d7-4f97-8ea8-c87de5b7eda3",
+  "prevId": "28c9edd9-4bed-4d97-a508-a86afd009bba",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3829,6 +3829,25 @@
         "default_country_code": {
           "name": "default_country_code",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "audience_type": {
+          "name": "audience_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'static'"
+        },
+        "rules": {
+          "name": "rules",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_refreshed_at": {
+          "name": "last_refreshed_at",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false
         },
@@ -12163,6 +12182,320 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.marketing_campaign_follow_up_sends": {
+      "name": "marketing_campaign_follow_up_sends",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "follow_up_id": {
+          "name": "follow_up_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "campaign_id": {
+          "name": "campaign_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recipient_id": {
+          "name": "recipient_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "business_account_id": {
+          "name": "business_account_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'sending'"
+        },
+        "msg91_message_id": {
+          "name": "msg91_message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "send_phone": {
+          "name": "send_phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "mkt_follow_up_sends_step_recipient_unique": {
+          "name": "mkt_follow_up_sends_step_recipient_unique",
+          "columns": [
+            {
+              "expression": "follow_up_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "recipient_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "mkt_follow_up_sends_campaign_idx": {
+          "name": "mkt_follow_up_sends_campaign_idx",
+          "columns": [
+            {
+              "expression": "campaign_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "marketing_campaign_follow_up_sends_follow_up_id_marketing_campaign_follow_ups_id_fk": {
+          "name": "marketing_campaign_follow_up_sends_follow_up_id_marketing_campaign_follow_ups_id_fk",
+          "tableFrom": "marketing_campaign_follow_up_sends",
+          "tableTo": "marketing_campaign_follow_ups",
+          "columnsFrom": [
+            "follow_up_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "marketing_campaign_follow_up_sends_campaign_id_marketing_campaigns_id_fk": {
+          "name": "marketing_campaign_follow_up_sends_campaign_id_marketing_campaigns_id_fk",
+          "tableFrom": "marketing_campaign_follow_up_sends",
+          "tableTo": "marketing_campaigns",
+          "columnsFrom": [
+            "campaign_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "marketing_campaign_follow_up_sends_recipient_id_marketing_campaign_recipients_id_fk": {
+          "name": "marketing_campaign_follow_up_sends_recipient_id_marketing_campaign_recipients_id_fk",
+          "tableFrom": "marketing_campaign_follow_up_sends",
+          "tableTo": "marketing_campaign_recipients",
+          "columnsFrom": [
+            "recipient_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "marketing_campaign_follow_up_sends_business_account_id_business_accounts_id_fk": {
+          "name": "marketing_campaign_follow_up_sends_business_account_id_business_accounts_id_fk",
+          "tableFrom": "marketing_campaign_follow_up_sends",
+          "tableTo": "business_accounts",
+          "columnsFrom": [
+            "business_account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.marketing_campaign_follow_ups": {
+      "name": "marketing_campaign_follow_ups",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "campaign_id": {
+          "name": "campaign_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "business_account_id": {
+          "name": "business_account_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "step_number": {
+          "name": "step_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "delay_hours": {
+          "name": "delay_hours",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 24
+        },
+        "template_id": {
+          "name": "template_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "template_params": {
+          "name": "template_params",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'[]'::jsonb"
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "mkt_follow_ups_campaign_step_unique": {
+          "name": "mkt_follow_ups_campaign_step_unique",
+          "columns": [
+            {
+              "expression": "campaign_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "step_number",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "marketing_campaign_follow_ups_campaign_id_marketing_campaigns_id_fk": {
+          "name": "marketing_campaign_follow_ups_campaign_id_marketing_campaigns_id_fk",
+          "tableFrom": "marketing_campaign_follow_ups",
+          "tableTo": "marketing_campaigns",
+          "columnsFrom": [
+            "campaign_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "marketing_campaign_follow_ups_business_account_id_business_accounts_id_fk": {
+          "name": "marketing_campaign_follow_ups_business_account_id_business_accounts_id_fk",
+          "tableFrom": "marketing_campaign_follow_ups",
+          "tableTo": "business_accounts",
+          "columnsFrom": [
+            "business_account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "marketing_campaign_follow_ups_template_id_whatsapp_templates_id_fk": {
+          "name": "marketing_campaign_follow_ups_template_id_whatsapp_templates_id_fk",
+          "tableFrom": "marketing_campaign_follow_ups",
+          "tableTo": "whatsapp_templates",
+          "columnsFrom": [
+            "template_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.marketing_campaign_messages": {
       "name": "marketing_campaign_messages",
       "schema": "",
@@ -12473,6 +12806,68 @@
           "primaryKey": false,
           "notNull": false
         },
+        "variant": {
+          "name": "variant",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dispatched_at": {
+          "name": "dispatched_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ai_paused": {
+          "name": "ai_paused",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "ai_paused_at": {
+          "name": "ai_paused_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ai_paused_reason": {
+          "name": "ai_paused_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "needs_human": {
+          "name": "needs_human",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "needs_human_reason": {
+          "name": "needs_human_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "needs_human_at": {
+          "name": "needs_human_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "handover_sent_at": {
+          "name": "handover_sent_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "staff_last_read_at": {
+          "name": "staff_last_read_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -12601,6 +12996,27 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "mkt_recipients_biz_first_reply_idx": {
+          "name": "mkt_recipients_biz_first_reply_idx",
+          "columns": [
+            {
+              "expression": "business_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "first_reply_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -12636,6 +13052,144 @@
           "tableTo": "contact_groups",
           "columnsFrom": [
             "group_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.marketing_campaign_test_sends": {
+      "name": "marketing_campaign_test_sends",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "business_account_id": {
+          "name": "business_account_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "campaign_id": {
+          "name": "campaign_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "template_id": {
+          "name": "template_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "phone": {
+          "name": "phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'sending'"
+        },
+        "msg91_message_id": {
+          "name": "msg91_message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "mkt_test_sends_biz_created_idx": {
+          "name": "mkt_test_sends_biz_created_idx",
+          "columns": [
+            {
+              "expression": "business_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "marketing_campaign_test_sends_business_account_id_business_accounts_id_fk": {
+          "name": "marketing_campaign_test_sends_business_account_id_business_accounts_id_fk",
+          "tableFrom": "marketing_campaign_test_sends",
+          "tableTo": "business_accounts",
+          "columnsFrom": [
+            "business_account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "marketing_campaign_test_sends_campaign_id_marketing_campaigns_id_fk": {
+          "name": "marketing_campaign_test_sends_campaign_id_marketing_campaigns_id_fk",
+          "tableFrom": "marketing_campaign_test_sends",
+          "tableTo": "marketing_campaigns",
+          "columnsFrom": [
+            "campaign_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "marketing_campaign_test_sends_template_id_whatsapp_templates_id_fk": {
+          "name": "marketing_campaign_test_sends_template_id_whatsapp_templates_id_fk",
+          "tableFrom": "marketing_campaign_test_sends",
+          "tableTo": "whatsapp_templates",
+          "columnsFrom": [
+            "template_id"
           ],
           "columnsTo": [
             "id"
@@ -12920,6 +13474,55 @@
           "primaryKey": false,
           "notNull": false
         },
+        "quiet_hours_start": {
+          "name": "quiet_hours_start",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "quiet_hours_end": {
+          "name": "quiet_hours_end",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "quiet_hours_timezone": {
+          "name": "quiet_hours_timezone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pause_reason": {
+          "name": "pause_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "paused_at": {
+          "name": "paused_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "variant_b_template_id": {
+          "name": "variant_b_template_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "variant_b_template_params": {
+          "name": "variant_b_template_params",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'[]'::jsonb"
+        },
+        "variant_split_percent": {
+          "name": "variant_split_percent",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -12956,6 +13559,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "marketing_campaigns_status_idx": {
+          "name": "marketing_campaigns_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -12983,6 +13601,19 @@
             "id"
           ],
           "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "marketing_campaigns_variant_b_template_id_whatsapp_templates_id_fk": {
+          "name": "marketing_campaigns_variant_b_template_id_whatsapp_templates_id_fk",
+          "tableFrom": "marketing_campaigns",
+          "tableTo": "whatsapp_templates",
+          "columnsFrom": [
+            "variant_b_template_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -20584,6 +21215,18 @@
           "notNull": true,
           "default": "'active'"
         },
+        "last_synced_at": {
+          "name": "last_synced_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "editing_heartbeat_at": {
+          "name": "editing_heartbeat_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -22960,7 +23603,29 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "whatsapp_opt_outs_business_phone_idx": {
+          "name": "whatsapp_opt_outs_business_phone_idx",
+          "columns": [
+            {
+              "expression": "business_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "phone",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "whatsapp_opt_outs_business_account_id_business_accounts_id_fk": {
           "name": "whatsapp_opt_outs_business_account_id_business_accounts_id_fk",
@@ -23532,6 +24197,18 @@
         },
         "rejection_reason": {
           "name": "rejection_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status_checked_at": {
+          "name": "status_checked_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status_source": {
+          "name": "status_source",
           "type": "text",
           "primaryKey": false,
           "notNull": false
