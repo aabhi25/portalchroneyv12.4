@@ -476,6 +476,61 @@ async function latestVersion(workbookId: string, businessAccountId: string) {
   return version;
 }
 
+/** Rebuild a campaign-linked workbook's sheet from the campaign, keeping team edits. */
+async function buildRefreshedCampaignSheets(
+  businessAccountId: string,
+  campaignId: string,
+  current: { sheets: unknown },
+): Promise<AiWorkbookSheet[]> {
+  const linkedAsCustom = detectLinkMode(validateSheets(current.sheets)[0]) === "custom";
+  if (linkedAsCustom) {
+    const identity = await buildIdentitySheet(businessAccountId, campaignId);
+    const merged = mergeOperatorEdits([identity.sheet], current.sheets as AiWorkbookSheet[]);
+    return [applyColumnMappings(merged[0], identity.recipientsById, identity.outcomeLabels)];
+  }
+  const fresh = await buildCampaignSheets(businessAccountId, campaignId);
+  return mergeOperatorEdits(fresh, current.sheets as AiWorkbookSheet[]);
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value ?? null);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
+}
+
+/** Content identity of a workbook's sheets, ignoring per-row edit timestamps and key order. */
+export function sheetsFingerprint(sheets: unknown): string {
+  const normalized = validateSheets(sheets);
+  return stableStringify(normalized.map(sheet => ({
+    ...sheet,
+    rows: sheet.rows.map(({ updatedAt: _updatedAt, ...row }) => row),
+  })));
+}
+
+/** Did anything happen on this campaign (send, delivery, read, reply, outcome) after `since`? */
+async function campaignHasActivitySince(campaignId: string, since: Date | null): Promise<boolean> {
+  const sinceIso = since ? since.toISOString() : null;
+  const result: any = await db.execute(sql`
+    SELECT (
+      EXISTS (
+        SELECT 1 FROM marketing_campaign_recipients r
+        WHERE r.campaign_id = ${campaignId}
+          AND (${sinceIso}::timestamp IS NULL OR GREATEST(r.created_at, r.claimed_at, r.sent_at, r.delivered_at, r.read_at, r.first_reply_at, r.classified_at) > ${sinceIso}::timestamp)
+      )
+      OR EXISTS (
+        SELECT 1 FROM marketing_campaign_messages m
+        WHERE m.campaign_id = ${campaignId}
+          AND (${sinceIso}::timestamp IS NULL OR m.created_at > ${sinceIso}::timestamp)
+      )
+    ) AS active
+  `);
+  const row = (result?.rows ?? result ?? [])[0];
+  return row?.active === true || row?.active === "t";
+}
+
 export const whatsappAiWorkbookService = {
   async list(businessAccountId: string) {
     const workbooks = await db
@@ -1009,22 +1064,145 @@ export const whatsappAiWorkbookService = {
     if (!workbook.sourceCampaignId) throw new Error("This workbook is not linked to a campaign");
     const current = await latestVersion(workbookId, businessAccountId);
     if (!current) throw new Error("Workbook has no version");
-    const linkedAsCustom = detectLinkMode(validateSheets(current.sheets)[0]) === "custom";
-    let sheets: AiWorkbookSheet[];
-    if (linkedAsCustom) {
-      const identity = await buildIdentitySheet(businessAccountId, workbook.sourceCampaignId);
-      const merged = mergeOperatorEdits([identity.sheet], current.sheets as AiWorkbookSheet[]);
-      sheets = [applyColumnMappings(merged[0], identity.recipientsById, identity.outcomeLabels)];
-    } else {
-      const fresh = await buildCampaignSheets(businessAccountId, workbook.sourceCampaignId);
-      sheets = mergeOperatorEdits(fresh, current.sheets as AiWorkbookSheet[]);
-    }
-    return this.createVersion(businessAccountId, workbookId, {
+    const sheets = await buildRefreshedCampaignSheets(businessAccountId, workbook.sourceCampaignId, current);
+    const version = await this.createVersion(businessAccountId, workbookId, {
       sheets,
       source: "campaign",
       expectedCurrentVersionId: current.id,
       expectedRevision: current.revision,
     });
+    await db.update(whatsappAiWorkbooks).set({ lastSyncedAt: new Date() })
+      .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)));
+    return version;
+  },
+
+  /**
+   * Pull the linked campaign's latest results into the workbook only when
+   * something actually changed (no empty versions). Used by the automatic
+   * sync and by "Sync now". Returns whether a new version was created.
+   */
+  async syncFromLinkedCampaignIfChanged(businessAccountId: string, workbookId: string): Promise<{ changed: boolean; versionId: string | null }> {
+    const checkStartedAt = new Date();
+    const [workbook] = await db.select().from(whatsappAiWorkbooks)
+      .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)))
+      .limit(1);
+    if (!workbook?.sourceCampaignId) return { changed: false, versionId: null };
+    const current = await latestVersion(workbookId, businessAccountId);
+    if (!current) return { changed: false, versionId: null };
+    const sheets = await buildRefreshedCampaignSheets(businessAccountId, workbook.sourceCampaignId, current);
+    let versionId: string | null = null;
+    if (sheetsFingerprint(sheets) !== sheetsFingerprint(current.sheets)) {
+      const version = await this.createVersion(businessAccountId, workbookId, {
+        sheets,
+        source: "campaign_sync",
+        expectedCurrentVersionId: current.id,
+        expectedRevision: current.revision,
+      });
+      versionId = version.id;
+    }
+    await db.update(whatsappAiWorkbooks).set({ lastSyncedAt: checkStartedAt })
+      .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)));
+    return { changed: Boolean(versionId), versionId };
+  },
+
+  /** The editor calls this every minute while it has unsaved changes. */
+  async markEditing(businessAccountId: string, workbookId: string): Promise<boolean> {
+    const updated = await db.update(whatsappAiWorkbooks).set({ editingHeartbeatAt: new Date() })
+      .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)))
+      .returning({ id: whatsappAiWorkbooks.id });
+    return updated.length > 0;
+  },
+
+  /**
+   * "Sync now": bring in every linked campaign's results for this workbook
+   * (the campaign it is linked to, and campaigns sent to audiences created
+   * from it). Safe to press repeatedly — nothing changes when nothing is new.
+   */
+  async syncNow(businessAccountId: string, workbookId: string) {
+    const [workbook] = await db.select().from(whatsappAiWorkbooks)
+      .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)))
+      .limit(1);
+    if (!workbook) throw new Error("Workbook not found");
+    let versionsCreated = 0;
+    let updatedRows = 0;
+    if (workbook.sourceCampaignId) {
+      const r = await this.syncFromLinkedCampaignIfChanged(businessAccountId, workbookId);
+      if (r.changed) versionsCreated++;
+    }
+    const links = await db.select({ id: whatsappAiWorkbookCampaignLinks.id })
+      .from(whatsappAiWorkbookCampaignLinks)
+      .where(and(
+        eq(whatsappAiWorkbookCampaignLinks.businessAccountId, businessAccountId),
+        eq(whatsappAiWorkbookCampaignLinks.workbookId, workbookId),
+        sql`${whatsappAiWorkbookCampaignLinks.campaignId} IS NOT NULL`,
+      ));
+    for (const link of links) {
+      const r = await this.syncCampaignResults(businessAccountId, workbookId, link.id);
+      if (r.version) versionsCreated++;
+      updatedRows += r.updatedRows;
+    }
+    const now = new Date();
+    await db.update(whatsappAiWorkbooks).set({ lastSyncedAt: now })
+      .where(and(eq(whatsappAiWorkbooks.id, workbookId), eq(whatsappAiWorkbooks.businessAccountId, businessAccountId)));
+    return { versionsCreated, updatedRows, linkedSources: links.length + (workbook.sourceCampaignId ? 1 : 0), lastSyncedAt: now };
+  },
+
+  /**
+   * One pass of the automatic sync. Only touches workbooks that are linked
+   * to a campaign with activity (sends, deliveries, replies, outcomes) since
+   * that workbook/link was last synced, and never one that is being edited
+   * right now. Idempotent: re-running with no new activity changes nothing.
+   */
+  async runAutoSyncOnce(opts: { quietMs?: number; limit?: number } = {}) {
+    const quietMs = opts.quietMs ?? 3 * 60 * 1000;
+    const limit = opts.limit ?? 50;
+    const quietCutoff = new Date(Date.now() - quietMs);
+    const busy = (w: { editingHeartbeatAt: Date | null; updatedAt: Date }) =>
+      (w.editingHeartbeatAt && w.editingHeartbeatAt > quietCutoff) || w.updatedAt > quietCutoff;
+    const summary = { workbooksChecked: 0, workbooksUpdated: 0, linksChecked: 0, linksUpdated: 0, skippedBusy: 0, errors: 0 };
+
+    // 1. Workbooks linked directly to a campaign.
+    const linkedWorkbooks = await db.select().from(whatsappAiWorkbooks)
+      .where(and(sql`${whatsappAiWorkbooks.sourceCampaignId} IS NOT NULL`, eq(whatsappAiWorkbooks.status, "active")))
+      .orderBy(sql`${whatsappAiWorkbooks.lastSyncedAt} ASC NULLS FIRST`)
+      .limit(limit);
+    for (const workbook of linkedWorkbooks) {
+      try {
+        if (!(await campaignHasActivitySince(workbook.sourceCampaignId!, workbook.lastSyncedAt))) continue;
+        if (busy(workbook)) { summary.skippedBusy++; continue; }
+        summary.workbooksChecked++;
+        const r = await this.syncFromLinkedCampaignIfChanged(workbook.businessAccountId, workbook.id);
+        if (r.changed) summary.workbooksUpdated++;
+      } catch (error: any) {
+        summary.errors++;
+        console.warn(`[AI Workbook] Auto-sync of workbook ${workbook.id} failed:`, error?.message);
+      }
+    }
+
+    // 2. Result links (audiences created from a workbook, then used by a campaign).
+    const links = await db.select({
+      link: whatsappAiWorkbookCampaignLinks,
+      workbook: whatsappAiWorkbooks,
+    })
+      .from(whatsappAiWorkbookCampaignLinks)
+      .innerJoin(whatsappAiWorkbooks, eq(whatsappAiWorkbooks.id, whatsappAiWorkbookCampaignLinks.workbookId))
+      .where(and(sql`${whatsappAiWorkbookCampaignLinks.campaignId} IS NOT NULL`, eq(whatsappAiWorkbooks.status, "active")))
+      .orderBy(sql`${whatsappAiWorkbookCampaignLinks.lastSyncedAt} ASC NULLS FIRST`)
+      .limit(limit);
+    for (const { link, workbook } of links) {
+      try {
+        if (!(await campaignHasActivitySince(link.campaignId!, link.lastSyncedAt))) continue;
+        if (busy(workbook)) { summary.skippedBusy++; continue; }
+        summary.linksChecked++;
+        const r = await this.syncCampaignResults(link.businessAccountId, link.workbookId, link.id);
+        if (r.version) summary.linksUpdated++;
+        await db.update(whatsappAiWorkbooks).set({ lastSyncedAt: new Date() }).where(eq(whatsappAiWorkbooks.id, workbook.id));
+      } catch (error: any) {
+        summary.errors++;
+        console.warn(`[AI Workbook] Auto-sync of result link ${link.id} failed:`, error?.message);
+      }
+    }
+    return summary;
   },
 
   /** Fields a custom-linked workbook column can be mapped to: the fixed result fields plus this campaign's own capture fields. */
@@ -1299,6 +1477,9 @@ export const whatsappAiWorkbookService = {
   },
 
   async syncCampaignResults(businessAccountId: string, workbookId: string, linkId: string) {
+    // Taken before reading recipients so activity that lands mid-sync is
+    // picked up by the next (automatic) sync rather than skipped.
+    const checkStartedAt = new Date();
     const [link] = await db
       .select()
       .from(whatsappAiWorkbookCampaignLinks)
@@ -1364,7 +1545,12 @@ export const whatsappAiWorkbookService = {
 
     if (changedCells === 0) {
       await db.update(whatsappAiWorkbookCampaignLinks)
-        .set({ status: "campaign_attached", syncedRowCount: 0, updatedAt: new Date() })
+        .set({
+          status: link.status === "synced" ? "synced" : "campaign_attached",
+          syncedRowCount: 0,
+          lastSyncedAt: checkStartedAt,
+          updatedAt: new Date(),
+        })
         .where(eq(whatsappAiWorkbookCampaignLinks.id, link.id));
       return { updatedRows: 0, changedCells: 0, version: null };
     }
@@ -1378,7 +1564,7 @@ export const whatsappAiWorkbookService = {
     await db.update(whatsappAiWorkbookCampaignLinks)
       .set({
         status: "synced",
-        lastSyncedAt: new Date(),
+        lastSyncedAt: checkStartedAt,
         lastSyncedVersionId: version.id,
         syncedRowCount: updatedRows,
         updatedAt: new Date(),
@@ -1387,3 +1573,48 @@ export const whatsappAiWorkbookService = {
     return { updatedRows, changedCells, version };
   },
 };
+
+// ── Automatic result sync (background) ───────────────────────────────────────
+
+const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+let autoSyncTimer: NodeJS.Timeout | null = null;
+let autoSyncRunning = false;
+
+/** One background pass: workbook result sync + keeping dynamic audience counts fresh. */
+export async function runCampaignWorkbookJobsOnce() {
+  if (autoSyncRunning) return null;
+  autoSyncRunning = true;
+  try {
+    const workbooks = await whatsappAiWorkbookService.runAutoSyncOnce();
+    let audiences = 0;
+    try {
+      audiences = await contactGroupService.refreshStaleDynamicAudiences();
+    } catch (error: any) {
+      console.warn("[Audiences] Background refresh failed:", error?.message);
+    }
+    if (workbooks.workbooksUpdated || workbooks.linksUpdated || audiences) {
+      console.log(`[AI Workbook] Auto-sync: ${workbooks.workbooksUpdated + workbooks.linksUpdated} workbook update(s), ${audiences} audience(s) refreshed`);
+    }
+    return { workbooks, audiences };
+  } catch (error: any) {
+    console.warn("[AI Workbook] Auto-sync pass failed:", error?.message);
+    return null;
+  } finally {
+    autoSyncRunning = false;
+  }
+}
+
+/** Started once at boot (server/index.ts), like the campaign scheduler. */
+export function startWorkbookAutoSync(intervalMs = AUTO_SYNC_INTERVAL_MS) {
+  if (autoSyncTimer) return;
+  autoSyncTimer = setInterval(() => { void runCampaignWorkbookJobsOnce(); }, intervalMs);
+  autoSyncTimer.unref?.();
+  // First pass shortly after boot, off the startup path.
+  setTimeout(() => { void runCampaignWorkbookJobsOnce(); }, 60_000).unref?.();
+  console.log(`[AI Workbook] Automatic result sync started (every ${Math.round(intervalMs / 60000)} min)`);
+}
+
+export function stopWorkbookAutoSync() {
+  if (autoSyncTimer) clearInterval(autoSyncTimer);
+  autoSyncTimer = null;
+}
