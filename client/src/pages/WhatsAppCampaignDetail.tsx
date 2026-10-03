@@ -22,6 +22,9 @@ import {
 } from "@/components/whatsapp/CampaignConversationsPanel";
 import { CampaignOutcomesCard } from "@/components/whatsapp/CampaignOutcomesCard";
 import { CampaignFunnelCard } from "@/components/whatsapp/CampaignFunnelCard";
+import { CampaignVariantsCard } from "@/components/whatsapp/CampaignVariantsCard";
+import { CampaignFollowUpsCard } from "@/components/whatsapp/CampaignFollowUpsCard";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import type { ReplyClassification } from "@shared/schema";
 
 /** All filterable statuses. "all" fetches paginated; each specific status fetches up to 1 000. */
@@ -167,11 +170,13 @@ export default function WhatsAppCampaignDetail() {
   };
 
   const sendMutation = useMutation({
-    mutationFn: async () => apiRequest("POST", `/api/whatsapp/campaigns/${id}/send`),
-    onSuccess: () => {
+    mutationFn: async () => apiRequest<any>("POST", `/api/whatsapp/campaigns/${id}/send`),
+    onSuccess: (res: any) => {
       queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}`] });
       invalidateRecipients();
-      toast({ title: "Send started" });
+      toast(res?.pausedForQuietHours
+        ? { title: "Campaign waiting for quiet hours to end", description: res.message }
+        : { title: "Send started" });
     },
     onError: (e: any) => toast({ title: "Send failed", description: e.message, variant: "destructive" }),
   });
@@ -182,6 +187,7 @@ export default function WhatsAppCampaignDetail() {
       queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}`] });
       toast({ title: "Cancelled" });
     },
+    onError: (e: any) => toast({ title: "Could not cancel", description: e.message, variant: "destructive" }),
   });
 
   const resendAllMutation = useMutation({
@@ -237,7 +243,8 @@ export default function WhatsAppCampaignDetail() {
   const captureFieldLabels = Object.fromEntries(
     campaignClassifications.flatMap(c => (c.captureFields || []).map(f => [f.fieldKey, f.fieldLabel || f.fieldKey]))
   );
-  const isLive = campaign?.status === "sending" || campaign?.status === "completed";
+  const isLive = campaign?.status === "sending" || campaign?.status === "paused" || campaign?.status === "completed";
+  const [confirmAction, setConfirmAction] = useState<"send" | "cancel" | null>(null);
   const activeClassificationLabel = classificationFilter
     ? classificationFilter === "__unclassified__"
       ? "Unclassified"
@@ -299,7 +306,7 @@ export default function WhatsAppCampaignDetail() {
         <div className="min-w-0">
           <h1 className="text-xl sm:text-2xl font-bold flex flex-wrap items-center gap-2 break-words">
             {campaign.name}
-            <Badge variant={CAMPAIGN_STATUS_VARIANT[campaign.status] || "outline"} data-testid="badge-campaign-status">{campaignStatusLabel(campaign.status)}</Badge>
+            <Badge variant={CAMPAIGN_STATUS_VARIANT[campaign.status] || "outline"} data-testid="badge-campaign-status">{campaign.status === "paused" && (campaign as any).pauseReason === "quiet_hours" ? "Paused — quiet hours" : campaignStatusLabel(campaign.status)}</Badge>
             <Badge variant="outline">{campaign.campaignType === "automation" ? "Automation campaign" : "One-time"}</Badge>
           </h1>
           <div className="text-xs text-gray-500 mt-1">
@@ -330,12 +337,12 @@ export default function WhatsAppCampaignDetail() {
               Set up automation
             </Button>
           ) : (campaign.status === "draft" || campaign.status === "scheduled") && (
-            <Button onClick={() => sendMutation.mutate()} disabled={sendMutation.isPending}>
+            <Button onClick={() => setConfirmAction("send")} disabled={sendMutation.isPending}>
               <Send className="h-4 w-4 mr-1" /> Send Now
             </Button>
           )}
-          {campaign.status === "sending" && (
-            <Button variant="outline" onClick={() => cancelMutation.mutate()}>
+          {(campaign.status === "sending" || campaign.status === "paused" || campaign.status === "scheduled") && (
+            <Button variant="outline" onClick={() => setConfirmAction("cancel")} disabled={cancelMutation.isPending}>
               <X className="h-4 w-4 mr-1" /> Cancel
             </Button>
           )}
@@ -375,7 +382,32 @@ export default function WhatsAppCampaignDetail() {
         />
       </div>
 
-      {/* VARIANTS_AND_FOLLOWUPS_SLOT — coordinator places <CampaignVariantsCard/> and <CampaignFollowUpsCard/> here */}
+      <AlertDialog open={confirmAction !== null} onOpenChange={(open) => { if (!open) setConfirmAction(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmAction === "send" ? "Send this campaign now?" : "Cancel this campaign?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction === "send"
+                ? `The WhatsApp message will go to everyone in the chosen audience${campaign.totalRecipients ? ` (${campaign.totalRecipients} people)` : ""}. Messages that have been sent cannot be taken back.`
+                : "No more messages will be sent for this campaign. Messages already sent stay sent, and this cannot be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Go back</AlertDialogCancel>
+            <AlertDialogAction
+              className={confirmAction === "cancel" ? "bg-red-600 hover:bg-red-700" : undefined}
+              onClick={() => { if (confirmAction === "send") sendMutation.mutate(); else if (confirmAction === "cancel") cancelMutation.mutate(); setConfirmAction(null); }}
+            >
+              {confirmAction === "send" ? "Yes, send now" : "Yes, cancel campaign"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <div className="space-y-4 mb-6 empty:hidden">
+        <CampaignVariantsCard campaignId={id!} />
+        <CampaignFollowUpsCard campaignId={id!} isLive={isLive} />
+      </div>
 
       {/* Config + preview */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 mb-6" data-testid="campaign-config">
