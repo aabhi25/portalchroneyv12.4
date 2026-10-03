@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams, useLocation } from "wouter";
+import { useParams, useLocation, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,33 +8,33 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Send, X, RotateCcw, Pencil, MessageSquare, Copy, Users, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, Send, X, RotateCcw, Pencil, MessageSquare, Copy, Users, ChevronLeft, ChevronRight, Hand, BotOff } from "lucide-react";
 import { interpolatePreview, type Template, type Group } from "@/components/CampaignForm";
 import {
   type Recipient,
   type CampaignMessage,
   RECIPIENT_STATUS_VARIANT,
+  CAMPAIGN_STATUS_VARIANT,
   RecipientAvatar,
+  MessageBubbles,
+  campaignStatusLabel,
+  recipientStatusLabel,
 } from "@/components/whatsapp/CampaignConversationsPanel";
 import { CampaignOutcomesCard } from "@/components/whatsapp/CampaignOutcomesCard";
+import { CampaignFunnelCard } from "@/components/whatsapp/CampaignFunnelCard";
 import type { ReplyClassification } from "@shared/schema";
-
-const CAMPAIGN_STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
-  draft: "outline", scheduled: "secondary", sending: "secondary",
-  completed: "default", cancelled: "destructive", failed: "destructive",
-};
 
 /** All filterable statuses. "all" fetches paginated; each specific status fetches up to 1 000. */
 const STATUS_FILTERS = [
   { key: "all",       label: "All" },
-  { key: "pending",   label: "Pending" },
-  { key: "queued",    label: "Queued" },
+  { key: "pending",   label: "Waiting to send" },
+  { key: "queued",    label: "Sending" },
   { key: "sent",      label: "Sent" },
   { key: "delivered", label: "Delivered" },
   { key: "read",      label: "Read" },
   { key: "replied",   label: "Replied" },
   { key: "failed",    label: "Failed" },
-  { key: "expired",   label: "Expired" },
+  { key: "expired",   label: "Not delivered" },
   { key: "opted_out", label: "Opted out" },
 ] as const;
 
@@ -289,26 +289,26 @@ export default function WhatsAppCampaignDetail() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto">
       <Button variant="ghost" size="sm" className="mb-4" onClick={() => setLocation("/admin/whatsapp-campaigns")}>
         <ArrowLeft className="h-4 w-4 mr-1" /> Back
       </Button>
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-6">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-bold flex flex-wrap items-center gap-2 break-words">
             {campaign.name}
-            <Badge variant={CAMPAIGN_STATUS_VARIANT[campaign.status] || "outline"}>{campaign.status}</Badge>
+            <Badge variant={CAMPAIGN_STATUS_VARIANT[campaign.status] || "outline"} data-testid="badge-campaign-status">{campaignStatusLabel(campaign.status)}</Badge>
             <Badge variant="outline">{campaign.campaignType === "automation" ? "Automation campaign" : "One-time"}</Badge>
           </h1>
           <div className="text-xs text-gray-500 mt-1">
             {campaign.scheduledAt && <>Scheduled: {new Date(campaign.scheduledAt).toLocaleString()} · </>}
             {campaign.startedAt && <>Started: {new Date(campaign.startedAt).toLocaleString()} · </>}
-            {campaign.completedAt && <>Completed: {new Date(campaign.completedAt).toLocaleString()}</>}
+            {campaign.completedAt && <>Finished: {new Date(campaign.completedAt).toLocaleString()}</>}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
             onClick={() => setLocation(`/admin/whatsapp-campaigns/new?from=${campaign.id}`)}
@@ -353,18 +353,20 @@ export default function WhatsAppCampaignDetail() {
       </div>
 
       {/* Stat tiles */}
-      <div className="grid grid-cols-7 gap-3 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-3 mb-6">
         <Card><CardContent className="p-4"><div className="text-xs text-gray-500">Recipients</div><div className="text-2xl font-bold">{campaign.totalRecipients}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Provider accepted but Meta has not yet confirmed">Queued</div><div className="text-2xl font-bold text-slate-600" data-testid="counter-queued">{counts?.queued ?? 0}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Accepted by Meta, awaiting delivery confirmation">Sent</div><div className="text-2xl font-bold text-emerald-600" data-testid="counter-sent">{((counts?.sent ?? 0) + (counts?.delivered ?? 0) + (counts?.read ?? 0) + (counts?.replied ?? 0)) || campaign.sentCount}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Handed to WhatsApp, waiting for confirmation">Sending</div><div className="text-2xl font-bold text-slate-600" data-testid="counter-queued">{counts?.queued ?? 0}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Accepted by WhatsApp">Sent</div><div className="text-2xl font-bold text-emerald-600" data-testid="counter-sent">{((counts?.sent ?? 0) + (counts?.delivered ?? 0) + (counts?.read ?? 0) + (counts?.replied ?? 0)) || campaign.sentCount}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Confirmed delivered to recipient's device">Delivered</div><div className="text-2xl font-bold text-teal-600" data-testid="counter-delivered">{(counts?.delivered ?? 0) + (counts?.read ?? 0) + (counts?.replied ?? 0)}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Opened by the customer (blue ticks). Customers who turned off read receipts can't be counted.">Read</div><div className="text-2xl font-bold text-sky-600" data-testid="counter-read">{(counts?.read ?? 0) + (counts?.replied ?? 0)}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-gray-500">Replied</div><div className="text-2xl font-bold text-blue-600" data-testid="counter-replied">{counts?.replied ?? campaign.repliedCount}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Includes provider-reported failures and queued rows that timed out">Failed</div><div className="text-2xl font-bold text-red-600" data-testid="counter-failed">{failedCount || campaign.failedCount}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-gray-500" title="Couldn't be delivered, including messages WhatsApp never confirmed">Failed</div><div className="text-2xl font-bold text-red-600" data-testid="counter-failed">{failedCount || campaign.failedCount}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-gray-500">Opted out</div><div className="text-2xl font-bold text-amber-600" data-testid="counter-opted-out">{counts?.opted_out ?? campaign.optedOutCount}</div></CardContent></Card>
       </div>
 
-      {/* Reply outcomes — categories come from this campaign's own config */}
-      <div className="mb-6">
+      {/* Results funnel + reply outcomes (categories come from this campaign's own config) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+        <CampaignFunnelCard campaignId={id!} isLive={isLive} />
         <CampaignOutcomesCard
           campaignId={id!}
           isLive={isLive}
@@ -372,6 +374,8 @@ export default function WhatsAppCampaignDetail() {
           onSelectClassification={changeClassification}
         />
       </div>
+
+      {/* VARIANTS_AND_FOLLOWUPS_SLOT — coordinator places <CampaignVariantsCard/> and <CampaignFollowUpsCard/> here */}
 
       {/* Config + preview */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 mb-6" data-testid="campaign-config">
@@ -392,7 +396,7 @@ export default function WhatsAppCampaignDetail() {
                   ? <span className="font-mono text-gray-500">{campaign.templateId}</span>
                   : NOT_SET}
             </ConfigRow>
-            <ConfigRow label="Contact groups">
+            <ConfigRow label="Audiences">
               {campaign.campaignType === "automation"
                 ? <span className="text-violet-700 font-normal">Selected in Automations</span>
                 : targetGroups.length === 0 ? NOT_SET : (
@@ -670,8 +674,14 @@ export default function WhatsAppCampaignDetail() {
                             className="text-xs whitespace-nowrap"
                             data-testid={`status-${r.id}`}
                           >
-                            {r.status}
+                            {recipientStatusLabel(r.status)}
                           </Badge>
+                          {(r.needsHuman || r.callbackRequired) && (
+                            <div className="text-[11px] text-amber-700 mt-1 flex items-center gap-1"><Hand className="h-3 w-3" /> Needs human</div>
+                          )}
+                          {r.aiPaused && (
+                            <div className="text-[11px] text-gray-500 mt-1 flex items-center gap-1"><BotOff className="h-3 w-3" /> AI paused</div>
+                          )}
                           {r.replyCount > 0 && (
                             <div className="text-[11px] text-gray-400 mt-1">
                               {r.replyCount} {r.replyCount === 1 ? "reply" : "replies"}
@@ -755,7 +765,7 @@ export default function WhatsAppCampaignDetail() {
           if (!open) setSelectedRecipient(null);
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto">
           {selectedRecipient && (
             <>
               <DialogHeader>
@@ -770,8 +780,8 @@ export default function WhatsAppCampaignDetail() {
                       {classificationLabels[selectedRecipient.primaryClassification] || selectedRecipient.primaryClassification}
                     </Badge>
                   )}
-                  {selectedRecipient.callbackRequired && (
-                    <span className="text-amber-700">Callback requested</span>
+                  {(selectedRecipient.callbackRequired || selectedRecipient.needsHuman) && (
+                    <span className="text-amber-700">Needs a person</span>
                   )}
                 </DialogDescription>
               </DialogHeader>
@@ -783,7 +793,7 @@ export default function WhatsAppCampaignDetail() {
                     variant={RECIPIENT_STATUS_VARIANT[selectedRecipient.status] || "outline"}
                     className="mt-1 text-[11px]"
                   >
-                    {selectedRecipient.status}
+                    {recipientStatusLabel(selectedRecipient.status)}
                   </Badge>
                 </div>
                 <div className="rounded-md border bg-gray-50 p-2">
@@ -830,8 +840,15 @@ export default function WhatsAppCampaignDetail() {
               )}
 
               <div>
-                <div className="text-xs font-medium text-gray-500 mb-1.5">Full conversation</div>
-                <div className="rounded-lg border bg-gray-50 p-3 max-h-[320px] overflow-y-auto space-y-2">
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <div className="text-xs font-medium text-gray-500">Full conversation</div>
+                  <Button asChild variant="outline" size="sm" className="h-7 px-2 text-xs" data-testid="button-open-in-replies">
+                    <Link href={`/admin/whatsapp-campaign-conversations?campaign=${campaign.id}&recipient=${selectedRecipient.id}`}>
+                      <MessageSquare className="h-3 w-3 mr-1" /> Reply or take over
+                    </Link>
+                  </Button>
+                </div>
+                <div className="rounded-lg border bg-[#efeae2] p-3 max-h-[320px] overflow-y-auto">
                   {messagesLoading ? (
                     <div className="py-6 text-center text-sm text-gray-400">Loading conversation…</div>
                   ) : selectedRecipientMessages.length === 0 ? (
@@ -839,30 +856,11 @@ export default function WhatsAppCampaignDetail() {
                       No conversation messages are available yet.
                     </div>
                   ) : (
-                    selectedRecipientMessages.map(message => {
-                      const inbound = message.direction === "inbound";
-                      return (
-                        <div key={message.id} className={`flex ${inbound ? "justify-start" : "justify-end"}`}>
-                          <div
-                            className={`max-w-[85%] rounded-lg px-3 py-2 ${
-                              inbound ? "bg-white border text-gray-800" : "bg-emerald-100 text-gray-800"
-                            }`}
-                          >
-                            <div className="text-[10px] font-medium text-gray-500 mb-0.5">
-                              {inbound ? "Recipient" : campaign.aiAgentName || "Campaign"}
-                              {" · "}
-                              {new Date(message.createdAt).toLocaleString([], {
-                                month: "short",
-                                day: "numeric",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })}
-                            </div>
-                            <p className="text-sm whitespace-pre-wrap break-words">{message.body}</p>
-                          </div>
-                        </div>
-                      );
-                    })
+                    <MessageBubbles
+                      messages={selectedRecipientMessages}
+                      agentName={campaign.aiAgentName}
+                      customerName={selectedRecipient.name || selectedRecipient.phone}
+                    />
                   )}
                 </div>
               </div>
