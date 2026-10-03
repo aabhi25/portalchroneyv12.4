@@ -3965,6 +3965,13 @@ Example: "Great! Is there anything else I can help you with?"
       let relevantTools = context.skipLeadTraining
         ? selectedTools.filter((tool: any) => tool.function.name !== 'capture_lead')
         : selectedTools;
+      // SPEED: retrieval already searched every FAQ for this message (or the account has none),
+      // so get_faqs could only repeat that search — at the cost of a second LLM round trip
+      // (~1-1.5 s, measured on voice/avatar turns). Products / other tools are unaffected.
+      if (retrievalMode && knowledge.searched && relevantTools.some((t: any) => t.function?.name === 'get_faqs')) {
+        relevantTools = relevantTools.filter((t: any) => t.function?.name !== 'get_faqs');
+        console.log('[Smart Tools] get_faqs dropped: FAQs already searched for this message');
+      }
 
       if (skipToolsForHandoff) {
         console.log(`[Handoff Guardrail] Tools disabled for this request - AI will respond conversationally`);
@@ -4157,7 +4164,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         skipFaqPrefetch: knowledge.skipFaqPrefetch || undefined,
         identityBlock: identityBlock || undefined,
       };
-      const firstCallPromptOptions = retrievalMode ? await this.buildFirstCallPromptOptions(context, history, knowledge.itemCount > 0 && !(serverSideLookupOptions || serverSideReturnExchange)) : undefined;
+      const firstCallPromptOptions = retrievalMode ? await this.buildFirstCallPromptOptions(context, history, knowledge.itemCount > 0 && !(serverSideLookupOptions || serverSideReturnExchange), !!knowledge.searched) : undefined;
       timing.mark('llm request');
       for await (const chunk of llamaService.streamToolAwareResponse(
         userMessage,
@@ -6110,7 +6117,7 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
     context: ChatContext,
     mode: ChatContextMode,
     timing?: ChatTurnTiming,
-  ): Promise<{ text: string; itemCount: number; skipFaqPrefetch?: boolean }> {
+  ): Promise<{ text: string; itemCount: number; skipFaqPrefetch?: boolean; searched?: boolean }> {
     const msg = (userMessage || '').trim();
     const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content;
     // Small talk ("hey wassup", "thank you so much", "kaise ho"; "ok" unless it answers a
@@ -6149,7 +6156,8 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
       // back empty — skip the query embedding and the searches.
       if (!hasKnowledge && !(bundle.profile?.passages?.length)) {
         timing?.stage('knowledge', 'skipped (no_knowledge)');
-        return { text: '', itemCount: 0 };
+        // Nothing to find: a get_faqs call could only come back empty.
+        return { text: '', itemCount: 0, searched: true };
       }
       let query = buildRetrievalQuery(msg, history);
       // Optional: rewrite short follow-ups into a standalone question with a small LLM
@@ -6183,7 +6191,8 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
       });
       console.log(`[Knowledge] ${result.items.length} item(s) (${result.items.map(i => i.source).join(', ') || 'none'}), ${result.tokens} tokens, from ${result.candidates} candidates in ${Date.now() - started}ms${query.isFollowUp ? ' (follow-up query)' : ''}`);
       timing?.stage('knowledge', Date.now() - started, `${result.items.length} items`);
-      return { text: result.text, itemCount: result.items.length };
+      // `searched`: every FAQ was already searched (semantic + keyword, history-aware) for this turn.
+      return { text: result.text, itemCount: result.items.length, searched: true };
     } catch (error) {
       console.error('[Knowledge] Retrieval failed (continuing without it):', error);
       return { text: '', itemCount: 0 };
@@ -6195,6 +6204,7 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
     context: ChatContext,
     history: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
     knowledgePreloaded: boolean,
+    knowledgeSearched = false,
   ): Promise<StreamPromptOptions> {
     const bundle = await this.getContextBundle(context, 'retrieval');
     const currency = context.currency && context.currencySymbol
@@ -6203,6 +6213,7 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
     return {
       businessProfile: `${currency}${bundle.profile?.text || ''}`.trim(),
       knowledgePreloaded,
+      knowledgeSearched,
       skipFaqPrefetch: true,
       modelHistory: capHistoryForModel(history).messages,
       cacheFriendly: true,

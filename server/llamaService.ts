@@ -448,6 +448,8 @@ export interface StreamPromptOptions {
   businessProfile?: string;
   /** Knowledge (FAQs + documents + pages) was retrieved server-side and is in the context. */
   knowledgePreloaded?: boolean;
+  /** The knowledge base was searched for this message (get_faqs is not offered — nothing more to find). */
+  knowledgeSearched?: boolean;
   /** Skip llamaService's own FAQ pre-fetch (retrieval already covered FAQs). */
   skipFaqPrefetch?: boolean;
   /** History sent to the model (capped). Lead-capture logic still uses the full history. */
@@ -2050,7 +2052,9 @@ SCRIPT RULE (CRITICAL - check this before responding):
       ? '1. FAQ KNOWLEDGE PRE-LOADED: Relevant FAQs are provided above. Use them directly to answer - NO NEED to call get_faqs. Only call get_faqs if you need ADDITIONAL info not covered. For products, use get_products tool.'
       : promptOptions?.knowledgePreloaded
         ? '1. BUSINESS KNOWLEDGE PRE-LOADED: The FAQs, website content and document excerpts relevant to this question are provided above (CRITICAL DOCUMENT KNOWLEDGE) together with the BUSINESS PROFILE. Answer directly from them - NO NEED to call get_faqs. Only call get_faqs if you need information that is not covered there. For products, use get_products tool.'
-        : '1. TOOL USAGE (CRITICAL): For ANY question about the business, products, services, company info - ALWAYS call get_faqs or get_products tools FIRST to search the knowledge base. Never assume you don\'t have info without checking tools.';
+        : promptOptions?.knowledgeSearched
+          ? '1. BUSINESS KNOWLEDGE: The knowledge base (FAQs, website, documents) was already searched for this message and nothing more specific was found — answer from the BUSINESS PROFILE and conversation above. For products, use get_products tool. If the answer is not in your context, say naturally that you don\'t have that detail and offer to help another way.'
+          : '1. TOOL USAGE (CRITICAL): For ANY question about the business, products, services, company info - ALWAYS call get_faqs or get_products tools FIRST to search the knowledge base. Never assume you don\'t have info without checking tools.';
 
     // Empty / whitespace-only message: nothing to collect against.
     const skipLeadCollection = userMessage.trim().length === 0;

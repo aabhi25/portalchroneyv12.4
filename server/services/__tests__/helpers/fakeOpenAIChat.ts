@@ -7,7 +7,9 @@
  *    passage vectors in chatContext/passageVectors.ts lose nothing.
  *  - /chat/completions: records every request. Streaming main call: if the final rules
  *    tell the model to call tools first ("TOOL USAGE (CRITICAL)"), it calls get_faqs —
- *    what the real model does with that instruction; otherwise it answers directly.
+ *    what the real model does with that instruction; when capture_lead is offered and the
+ *    visitor's message contains a 10-digit phone number it calls capture_lead; otherwise it
+ *    answers directly.
  *    Non-streaming calls answer "en" to the language detector and "OK" to everything
  *    else (spam check, titles).
  */
@@ -134,7 +136,13 @@ export function startFakeOpenAIChat(): Promise<FakeOpenAI> {
       const finalRules = textOf([...messages].reverse().find(m => m.role === 'system')?.content);
       const toolFirst = /TOOL USAGE \(CRITICAL\)/.test(finalRules);
       const canFaq = tools.some((t: any) => t?.function?.name === 'get_faqs');
-      if (purpose === 'main' && toolFirst && canFaq) {
+      const canLead = tools.some((t: any) => t?.function?.name === 'capture_lead');
+      const phone = /\b(\d{10})\b/.exec(lastUserText(messages))?.[1];
+      if (purpose === 'main' && canLead && phone) {
+        send({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'capture_lead', arguments: '' } }] });
+        send({ tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ phone }) } }] });
+        send({}, 'tool_calls');
+      } else if (purpose === 'main' && toolFirst && canFaq) {
         send({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'get_faqs', arguments: '' } }] });
         send({ tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ query: lastUserText(messages) }) } }] });
         send({}, 'tool_calls');

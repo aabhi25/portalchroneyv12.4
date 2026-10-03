@@ -10,6 +10,23 @@ interface EmbeddingCacheEntry {
   timestamp: number;
 }
 
+/**
+ * Embeddings are requested as base64 (the same float32 values, ~3.5x smaller than JSON
+ * numbers): measured from India, ~450 ms instead of ~700 ms per query embedding — that
+ * call sits on the critical path of every chat/voice answer. Decoded here to plain
+ * number[] (the rest of the code and pgvector expect arrays); a float response (e.g. a
+ * test double that ignores encoding_format) passes through unchanged.
+ */
+export function decodeEmbedding(value: unknown): number[] {
+  if (Array.isArray(value)) return value as number[];
+  if (typeof value === "string") {
+    const buf = Buffer.from(value, "base64");
+    return Array.from(new Float32Array(buf.buffer, buf.byteOffset, Math.floor(buf.byteLength / 4)));
+  }
+  if (value && typeof (value as ArrayLike<number>).length === "number") return Array.from(value as ArrayLike<number>);
+  throw new Error("Unexpected embedding format");
+}
+
 export class EmbeddingService {
   private embeddingCache: Map<string, EmbeddingCacheEntry> = new Map();
   private readonly CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -108,7 +125,7 @@ export class EmbeddingService {
       const response = await openai.embeddings.create({
         model: 'text-embedding-3-small',
         input: truncatedText,
-        encoding_format: 'float',
+        encoding_format: 'base64',
       });
 
       // Log usage for cost tracking (fire-and-forget)
@@ -118,7 +135,7 @@ export class EmbeddingService {
         response
       ).catch(err => console.error('[Usage] Failed to log embedding:', err));
 
-      const embedding = response.data[0].embedding;
+      const embedding = decodeEmbedding(response.data[0].embedding);
       
       // Cache the embedding for future use
       this.cacheEmbedding(contentHash, embedding);
@@ -165,7 +182,7 @@ export class EmbeddingService {
       const response = await openai.embeddings.create({
         model: 'text-embedding-3-small',
         input: truncatedTexts,
-        encoding_format: 'float',
+        encoding_format: 'base64',
       });
 
       // Log usage for cost tracking
@@ -178,7 +195,7 @@ export class EmbeddingService {
       // Return embeddings in the same order as input
       return response.data
         .sort((a, b) => a.index - b.index)
-        .map(item => item.embedding);
+        .map(item => decodeEmbedding(item.embedding));
     } catch (error: any) {
       console.error('Error generating batch embeddings:', error);
       throw new Error(`Failed to generate batch embeddings: ${error.message}`);

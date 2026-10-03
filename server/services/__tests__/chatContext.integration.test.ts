@@ -174,11 +174,17 @@ async function main() {
     expect(fin2.includes('aged 60 and above'), 'follow-up "And for seniors?" got the senior-discount page into the prompt');
     expect(!t2.chats.some(c => c.purpose === 'language'), 'no language-detect AI call inside the turn');
 
-    // A question with no knowledge → tool call → continuation. Its system context must
-    // also start with the same stable prefix on consecutive turns.
+    // Retrieval already searched every FAQ, so a question with no matching knowledge is
+    // answered in ONE call: get_faqs is not offered (no second round trip).
+    const u0 = `nofaq_${tag}`;
+    const k = await turn(A.accountId, u0, 'What about kayaks?');
+    expect(k.main && !k.main.tools?.some((t: any) => t?.function?.name === 'get_faqs') && !k.cont, 'retrieval turn: get_faqs not offered, no tool round trip', { tools: k.main?.tools?.map((t: any) => t?.function?.name), cont: !!k.cont });
+
+    // A tool call (capture_lead) → continuation. Its system context must also start with
+    // the same stable prefix on consecutive turns.
     const u2 = `stable2_${tag}`;
-    const c1 = await turn(A.accountId, u2, 'What about kayaks?');
-    const c2 = await turn(A.accountId, u2, 'What about canoes?');
+    const c1 = await turn(A.accountId, u2, 'My number is 9876543210, what about kayaks?');
+    const c2 = await turn(A.accountId, u2, 'My number is 9876543211, what about canoes?');
     const p1 = String(c1.cont?.messages[0].content || ''), p2 = String(c2.cont?.messages[0].content || '');
     const stableEnd = p1.indexOf('CURRENT DATE (IST');
     expect(c1.cont && c2.cont && stableEnd > 1000 && p2.startsWith(p1.slice(0, stableEnd)), 'continuation system context: stable part identical, date + turn status only at the end', { stableEnd, len1: p1.length, len2: p2.length });
