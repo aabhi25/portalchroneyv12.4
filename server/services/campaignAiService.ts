@@ -10,13 +10,18 @@ import {
   trainingDocuments,
   products,
   businessAccounts,
+  whatsappSettings,
   type MarketingCampaign,
   type ReplyClassification,
 } from "@shared/schema";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { safeDecrypt } from "./encryptionService";
 import { marketingCampaignService } from "./marketingCampaignService";
-import { restrictedReplyLanguage, channelConversationKey, checkReplyLanguage, ourText } from "./language/channelReplyLanguage";
+import { restrictedReplyLanguage, channelConversationKey, checkReplyLanguage, ourText, type ChannelReplyLanguage } from "./language/channelReplyLanguage";
+import { translateFixedText } from "./language/languageText";
+import { buildIdentityBlock } from "./chatContext/identity";
+import { detectHandover, isHandoverToken, HANDOVER_MESSAGE, HANDOVER_TOKEN } from "./campaignHandover";
+import { claimHandover } from "./campaignRepliesService";
 
 interface BuildContextOptions {
   campaign: MarketingCampaign;
@@ -97,6 +102,70 @@ async function buildKnowledgeContext({ campaign, businessAccountId }: BuildConte
 export interface CampaignAiReply {
   text: string;
   blockedReason?: string;
+  /** This text is the one polite handover message; the AI is now paused for this customer. */
+  handover?: boolean;
+}
+
+type KnowledgeToggles = { faq: boolean; document: boolean; website: boolean; productCatalog: boolean };
+type HistoryTurn = { role: "user" | "assistant"; content: string };
+
+/** Overridable in tests. */
+export const campaignAiDeps = {
+  /**
+   * The WhatsApp AI's business knowledge for this message (one brain: retrieval of the relevant
+   * FAQs / documents / website excerpts + the compact business profile).
+   */
+  async businessKnowledge(businessAccountId: string, message: string, toggles: KnowledgeToggles, history: HistoryTurn[]): Promise<string> {
+    const { whatsappAutoReplyService } = await import("./whatsappAutoReplyService");
+    return whatsappAutoReplyService.businessKnowledgeForMessage(businessAccountId, message, toggles, history);
+  },
+};
+
+/**
+ * Knowledge for one campaign reply: the shared WhatsApp brain (honouring the campaign's FAQ /
+ * document switches and the WhatsApp website-knowledge switch), plus the campaign's own picks
+ * that retrieval can't express (the documents chosen for this campaign, the product catalog).
+ * If the shared retrieval fails, the campaign's previous knowledge builder is used instead.
+ */
+async function buildCampaignKnowledge(campaign: MarketingCampaign, message: string, history: HistoryTurn[]): Promise<string> {
+  const businessAccountId = campaign.businessAccountId;
+  const scopedDocIds = ((campaign.aiKnowledgeDocIds || []) as string[]).filter(Boolean);
+  try {
+    const [settings] = await db
+      .select({ useWebsiteKnowledge: whatsappSettings.useWebsiteKnowledge })
+      .from(whatsappSettings)
+      .where(eq(whatsappSettings.businessAccountId, businessAccountId))
+      .limit(1);
+    const toggles: KnowledgeToggles = {
+      faq: campaign.aiUseFaqs === "true",
+      // Documents picked for this campaign are added below as before; retrieval would search all of them.
+      document: campaign.aiUseDocs === "true" && scopedDocIds.length === 0,
+      website: settings?.useWebsiteKnowledge !== "false",
+      productCatalog: campaign.aiUseProducts === "true",
+    };
+    const brain = (await campaignAiDeps.businessKnowledge(businessAccountId, message, toggles, history)) || "";
+    const extras = await buildKnowledgeContext({
+      campaign: { ...campaign, aiUseFaqs: "false", aiUseDocs: campaign.aiUseDocs === "true" && scopedDocIds.length > 0 ? "true" : "false" },
+      businessAccountId,
+    });
+    return [brain.trim(), extras].filter(Boolean).join("\n\n=========\n\n");
+  } catch (err) {
+    console.error("[CampaignAI] Shared knowledge retrieval failed — using the campaign knowledge builder:", err instanceof Error ? err.message : err);
+    return buildKnowledgeContext({ campaign, businessAccountId });
+  }
+}
+
+/** The handover message in the reply language (the business's setting, else the customer's script/words). */
+async function handoverText(businessAccountId: string, inbound: string, replyLanguage: ChannelReplyLanguage | null): Promise<string> {
+  try {
+    if (replyLanguage) return await ourText(businessAccountId, HANDOVER_MESSAGE, replyLanguage);
+    const { LlamaService } = await import("../llamaService");
+    const detected = LlamaService.quickDetectLanguage(inbound);
+    if (!detected || detected === "en") return HANDOVER_MESSAGE;
+    return await translateFixedText(businessAccountId, HANDOVER_MESSAGE, detected);
+  } catch {
+    return HANDOVER_MESSAGE;
+  }
 }
 
 export interface ClassificationResult {
@@ -342,6 +411,37 @@ export const campaignAiService = {
     }
   },
 
+  /**
+   * Hand the customer to a person: pause the AI, flag "Needs human" and return the ONE polite
+   * handover message (in the reply language). A second trigger (or a concurrent message) gets
+   * nothing — the claim is atomic.
+   */
+  async handOver(
+    campaign: MarketingCampaign,
+    recipientId: string,
+    phone: string,
+    inbound: string,
+    note: string,
+    replyLanguage?: ChannelReplyLanguage | null,
+  ): Promise<CampaignAiReply> {
+    const claimed = await claimHandover(recipientId, note);
+    if (!claimed) return { text: "", blockedReason: "ai_paused" };
+    console.log(`[CampaignAI] Handover for recipient ${recipientId}: ${note} — AI paused, flagged Needs human`);
+    let lang = replyLanguage ?? null;
+    if (replyLanguage === undefined) {
+      try {
+        lang = await restrictedReplyLanguage({
+          businessAccountId: campaign.businessAccountId, channel: "whatsapp",
+          conversationKey: channelConversationKey("whatsapp", campaign.businessAccountId, phone),
+          message: inbound, allowNote: false,
+        });
+      } catch {
+        lang = null;
+      }
+    }
+    return { text: await handoverText(campaign.businessAccountId, inbound, lang), handover: true };
+  },
+
   async generateReply(
     campaignId: string,
     recipientId: string,
@@ -363,15 +463,27 @@ export const campaignAiService = {
         .limit(1);
       if (!recipient) return null;
 
+      // Staff took over, or the AI already handed this customer to a person: stay quiet.
+      if (recipient.aiPaused) {
+        console.log(`[CampaignAI] AI paused for recipient ${recipientId} (${recipient.aiPausedReason || "staff"}) — no auto reply`);
+        return { text: "", blockedReason: "ai_paused" };
+      }
+
+      // Inbound payload size cap (defends against giant pasted blocks)
+      const inboundClipped = (inboundText || "").substring(0, 2000);
+
+      // Angry / abusive, or asking for a person → one polite handover message, then pause.
+      const handover = detectHandover(inboundClipped);
+      if (handover) {
+        return this.handOver(campaign, recipient.id, recipient.phone, inboundClipped, handover.note);
+      }
+
       // ---- Hard guardrails BEFORE any LLM cost ----
       const budget = await marketingCampaignService.checkAiBudget(campaignId, recipientId);
       if (!budget.allowed) {
         console.log(`[CampaignAI] Blocked reply for campaign ${campaignId} recipient ${recipientId}: ${budget.reason}`);
         return { text: "", blockedReason: budget.reason };
       }
-
-      // Inbound payload size cap (defends against giant pasted blocks)
-      const inboundClipped = (inboundText || "").substring(0, 2000);
 
       const [biz] = await db
         .select()
@@ -392,11 +504,6 @@ export const campaignAiService = {
         .where(eq(whatsappTemplates.id, campaign.templateId))
         .limit(1);
 
-      const knowledge = await buildKnowledgeContext({
-        campaign,
-        businessAccountId: campaign.businessAccountId,
-      });
-
       const history = await db
         .select()
         .from(marketingCampaignMessages)
@@ -405,6 +512,13 @@ export const campaignAiService = {
         .limit(20);
 
       const ordered = history.slice().reverse();
+      const knowledge = await buildCampaignKnowledge(
+        campaign,
+        inboundClipped,
+        ordered
+          .filter(m => m.direction === "inbound" || m.direction === "outbound_ai" || m.direction === "outbound_staff")
+          .map(m => ({ role: m.direction === "inbound" ? "user" as const : "assistant" as const, content: m.body })),
+      );
 
       // A phone number alone is not an account selector. If it is attached to
       // multiple live loan/account records, do not let an AI reply disclose one
@@ -461,7 +575,9 @@ export const campaignAiService = {
         persona,
         "",
         "Channel: WhatsApp. Keep replies short (2-4 sentences). No markdown.",
-        "If you genuinely cannot help and the user wants a human, say so briefly and tell them a team member will call back.",
+        `If the customer is angry or abusive, or insists on talking to a person (a human, an agent, a call back), do not argue or keep selling: reply with exactly ${HANDOVER_TOKEN} and nothing else — our team will take over.`,
+        "If you simply don't have the answer, say so briefly and tell them a team member will follow up.",
+        buildIdentityBlock(biz.name, null),
         "Customer name: " + (recipient.name || "(unknown)"),
         "",
         recipientContext,
@@ -479,7 +595,7 @@ export const campaignAiService = {
       for (const m of ordered) {
         if (m.direction === "inbound") {
           messages.push({ role: "user", content: m.body });
-        } else if (m.direction === "outbound_ai") {
+        } else if (m.direction === "outbound_ai" || m.direction === "outbound_staff") {
           messages.push({ role: "assistant", content: m.body });
         } else if (m.direction === "outbound_template") {
           messages.push({ role: "assistant", content: `[Sent campaign template] ${m.body.substring(0, 300)}` });
@@ -501,6 +617,9 @@ export const campaignAiService = {
       await marketingCampaignService.addAiTokensUsed(campaignId, usedTokens);
 
       if (!text) return null;
+      if (isHandoverToken(text)) {
+        return this.handOver(campaign, recipient.id, recipient.phone, inboundClipped, "The AI handed this conversation to your team", replyLanguage);
+      }
       // Restricted reply language: rewrite a reply that slipped into another language (no AI call when it matches).
       return { text: await checkReplyLanguage(campaign.businessAccountId, text, replyLanguage) };
     } catch (err) {

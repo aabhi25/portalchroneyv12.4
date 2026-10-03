@@ -3568,6 +3568,18 @@ export const marketingCampaignRecipients = pgTable("marketing_campaign_recipient
   callbackReason: text("callback_reason"),
   customerFeedback: text("customer_feedback"), // verbatim customer statement, captured regardless of classification
   classifiedAt: timestamp("classified_at"),
+  // ── Campaign replies: human takeover / handover ───────────────────────────
+  // aiPaused: the campaign AI must not auto-reply to this customer (staff took
+  // over, or the AI handed over to a human). needsHuman: shown + filterable in
+  // Campaign replies until staff resume the AI or mark it handled.
+  aiPaused: boolean("ai_paused").notNull().default(false),
+  aiPausedAt: timestamp("ai_paused_at"),
+  aiPausedReason: text("ai_paused_reason"), // 'staff' | 'handover'
+  needsHuman: boolean("needs_human").notNull().default(false),
+  needsHumanReason: text("needs_human_reason"),
+  needsHumanAt: timestamp("needs_human_at"),
+  handoverSentAt: timestamp("handover_sent_at"), // the one polite handover message was sent
+  staffLastReadAt: timestamp("staff_last_read_at"), // powers the "Unread" filter
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   campaignIdx: index("mkt_recipients_campaign_idx").on(table.campaignId),
@@ -3576,6 +3588,8 @@ export const marketingCampaignRecipients = pgTable("marketing_campaign_recipient
   campaignStatusIdx: index("mkt_recipients_campaign_status_idx").on(table.campaignId, table.status),
   msg91MsgIdx: index("mkt_recipients_msg91_msg_idx").on(table.businessAccountId, table.msg91MessageId),
   bizSendPhoneIdx: index("mkt_recipients_biz_send_phone_idx").on(table.businessAccountId, table.sendPhone),
+  // Campaign replies inbox: threads with a reply, newest first, across campaigns.
+  bizFirstReplyIdx: index("mkt_recipients_biz_first_reply_idx").on(table.businessAccountId, table.firstReplyAt),
 }));
 
 export const insertMarketingCampaignRecipientSchema = createInsertSchema(marketingCampaignRecipients).omit({
@@ -3589,7 +3603,7 @@ export const marketingCampaignMessages = pgTable("marketing_campaign_messages", 
   campaignId: varchar("campaign_id").notNull().references(() => marketingCampaigns.id, { onDelete: "cascade" }),
   recipientId: varchar("recipient_id").notNull().references(() => marketingCampaignRecipients.id, { onDelete: "cascade" }),
   businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
-  direction: text("direction").notNull(), // 'outbound_template' | 'outbound_ai' | 'inbound'
+  direction: text("direction").notNull(), // 'outbound_template' | 'outbound_ai' | 'outbound_staff' (manual reply by the business) | 'inbound'
   body: text("body").notNull().default(""),
   metadata: jsonb("metadata").$type<Record<string, any>>().default({}),
   createdAt: timestamp("created_at").notNull().defaultNow(),
