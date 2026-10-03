@@ -18,6 +18,7 @@ import WhatsAppCampaignDetail from "@/pages/WhatsAppCampaignDetail";
 import WhatsAppCampaignConversations from "@/pages/WhatsAppCampaignConversations";
 import WhatsAppCampaignHome from "@/pages/WhatsAppCampaignHome";
 import WhatsAppCampaignResults from "@/pages/WhatsAppCampaignResults";
+import WhatsAppOptOuts from "@/pages/WhatsAppOptOuts";
 import WhatsAppAiWorkbooks from "@/pages/WhatsAppAiWorkbooks";
 import WhatsAppEditCampaign from "@/pages/WhatsAppEditCampaign";
 import WhatsAppTemplates from "@/pages/WhatsAppTemplates";
@@ -377,7 +378,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 {/* Plain-language aliases; the original URLs below keep working. */}
                 <Route path="/admin/whatsapp-campaign-replies"><Redirect to="/admin/whatsapp-campaign-conversations" /></Route>
                 <Route path="/admin/whatsapp-audiences"><Redirect to="/admin/whatsapp-contact-groups" /></Route>
-                {/* CAMPAIGN_ROUTES_SLOT: routes for new campaign pages (e.g. /whatsapp/opt-outs) go here. */}
+                <Route path="/admin/whatsapp-opt-outs">{() => <RequireWhatsappMarketing><WhatsAppOptOuts /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-campaign-conversations">{() => <RequireWhatsappMarketing><WhatsAppCampaignConversations /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-ai-workbooks/:id">{({ id }) => <RequireWhatsappMarketing><WhatsAppAiWorkbooks id={id} /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-ai-workbooks">{() => <RequireWhatsappMarketing><WhatsAppAiWorkbooks /></RequireWhatsappMarketing>}</Route>

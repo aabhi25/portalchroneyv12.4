@@ -1,4 +1,5 @@
-import type { LucideIcon } from "lucide-react";
+import type { LucideIcon   ShieldCheck,
+} from "lucide-react";
 import {
   Sparkles, Route, Zap, MessagesSquare, Contact, BarChart3, Link2,
   UsersRound, FileCode2, Megaphone, Settings, ShieldCheck, MessageCircle,
@@ -328,8 +329,17 @@ const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
     tone: "bg-purple-50 group-hover:bg-purple-100",
     matches: l => l.startsWith("/admin/whatsapp-ai-workbooks"),
   },
-  // CAMPAIGN_SECTIONS_SLOT: an "Opt-outs" item (path /whatsapp/opt-outs, e.g. icon ShieldCheck,
-  // description "People who asked not to be messaged") goes here once its page exists.
+  {
+    key: "opt-outs",
+    label: "Opt-outs",
+    description: "People who asked not to be messaged",
+    href: "/admin/whatsapp-opt-outs",
+    icon: ShieldCheck,
+    sidebarTestId: "link-wa-opt-outs",
+    gradient: "bg-gradient-to-br from-slate-500 to-gray-600",
+    tone: "bg-slate-50 group-hover:bg-slate-100",
+    matches: l => l.startsWith("/admin/whatsapp-opt-outs"),
+  },
 ];
 
 // Setup lives in the Settings hub (Settings > Channels > WhatsApp). The old /admin/whatsapp-config

@@ -305,6 +305,13 @@ async function resolveGroupSource(
 ): Promise<ResolvedGroupSource> {
   const groupIds = Array.from(new Set((sourceGroupIds || []).filter(Boolean)));
   if (!groupIds.length) throw new Error("Choose at least one contact group");
+  // Self-updating audiences: recount their members first (falls back to the last members).
+  try {
+    const { contactGroupService } = await import("./contactGroupService");
+    await contactGroupService.refreshDynamicAmong(businessAccountId, groupIds);
+  } catch (error: any) {
+    console.warn("[CampaignAutomation] Could not refresh self-updating audiences; using their last members:", error?.message);
+  }
   const groups = await db.select().from(contactGroups)
     .where(and(
       eq(contactGroups.businessAccountId, businessAccountId),
