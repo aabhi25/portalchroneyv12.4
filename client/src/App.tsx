@@ -16,6 +16,8 @@ import WhatsAppCampaignAutomationDetail from "@/pages/WhatsAppCampaignAutomation
 import WhatsAppNewCampaign from "@/pages/WhatsAppNewCampaign";
 import WhatsAppCampaignDetail from "@/pages/WhatsAppCampaignDetail";
 import WhatsAppCampaignConversations from "@/pages/WhatsAppCampaignConversations";
+import WhatsAppCampaignHome from "@/pages/WhatsAppCampaignHome";
+import WhatsAppCampaignResults from "@/pages/WhatsAppCampaignResults";
 import WhatsAppAiWorkbooks from "@/pages/WhatsAppAiWorkbooks";
 import WhatsAppEditCampaign from "@/pages/WhatsAppEditCampaign";
 import WhatsAppTemplates from "@/pages/WhatsAppTemplates";
@@ -370,6 +372,12 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/document-type-editor/:id" component={DocumentTypeEditor} />
                 <Route path="/admin/document-type-editor" component={DocumentTypeEditor} />
                 <Route path="/admin/whatsapp-smart-replies">{() => <SmartReplies channel="whatsapp" />}</Route>
+                <Route path="/admin/whatsapp-campaign-home">{() => <RequireWhatsappMarketing><WhatsAppCampaignHome /></RequireWhatsappMarketing>}</Route>
+                <Route path="/admin/whatsapp-campaign-results">{() => <RequireWhatsappMarketing><WhatsAppCampaignResults /></RequireWhatsappMarketing>}</Route>
+                {/* Plain-language aliases; the original URLs below keep working. */}
+                <Route path="/admin/whatsapp-campaign-replies"><Redirect to="/admin/whatsapp-campaign-conversations" /></Route>
+                <Route path="/admin/whatsapp-audiences"><Redirect to="/admin/whatsapp-contact-groups" /></Route>
+                {/* CAMPAIGN_ROUTES_SLOT: routes for new campaign pages (e.g. /whatsapp/opt-outs) go here. */}
                 <Route path="/admin/whatsapp-campaign-conversations">{() => <RequireWhatsappMarketing><WhatsAppCampaignConversations /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-ai-workbooks/:id">{({ id }) => <RequireWhatsappMarketing><WhatsAppAiWorkbooks id={id} /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-ai-workbooks">{() => <RequireWhatsappMarketing><WhatsAppAiWorkbooks /></RequireWhatsappMarketing>}</Route>

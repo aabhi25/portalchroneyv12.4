@@ -1,7 +1,12 @@
+import os from "os";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
+import { trackTimer } from "../lib/lifecycle";
+import { reportError } from "../lib/errorReporter";
 import {
   type AiWorkbookSheet,
+  businessAccounts,
+  whatsappCampaignAutomationScheduleAttempts,
   contactGroupContacts,
   contactGroups,
   marketingCampaigns,
@@ -46,7 +51,21 @@ type AutomationInput = {
   sendTime?: string;
   timezone?: string;
   enabled?: boolean;
+  scheduleEnabled?: boolean;
+  scheduleDays?: number[];
 };
+
+/** Weekday numbers (0 = Sunday … 6 = Saturday), unique and sorted; [] means every day. */
+export function normalizeScheduleDays(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  const days = Array.from(new Set(
+    value.map(day => Number(day)).filter(day => Number.isInteger(day) && day >= 0 && day <= 6),
+  )).sort((a, b) => a - b);
+  return days.length === 7 ? [] : days;
+}
+
+export const SCHEDULE_NEEDS_SAVED_SOURCE =
+  "Automatic daily runs need a saved audience (an AI Workbook or Audiences). An automation that uses an uploaded file has to be run by hand.";
 
 type SpreadsheetPayload = {
   columns: ImportColumn[];
@@ -130,6 +149,10 @@ function cleanConfig(input: any): AutomationInput {
     ? input.eligibleStatuses.map((value: unknown) => String(value || "").trim()).filter(Boolean)
     : [];
 
+  const scheduleEnabled = input.scheduleEnabled === true;
+  if (scheduleEnabled && sourceType === "upload") throw new Error(SCHEDULE_NEEDS_SAVED_SOURCE);
+  const scheduleDays = normalizeScheduleDays(input.scheduleDays);
+
   return {
     ...input,
     name,
@@ -153,6 +176,8 @@ function cleanConfig(input: any): AutomationInput {
     sendTime,
     timezone,
     enabled: input.enabled !== false,
+    scheduleEnabled,
+    scheduleDays,
   } as AutomationInput;
 }
 
@@ -404,13 +429,13 @@ function parseDateOnly(raw: string): string | null {
   return parseSpreadsheetDate(raw);
 }
 
-function addDays(isoDate: string, days: number): string {
+export function addDays(isoDate: string, days: number): string {
   const date = new Date(`${isoDate}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 }
 
-function dateInTimezone(timezone: string, date = new Date()): string {
+export function dateInTimezone(timezone: string, date = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
     year: "numeric",
@@ -422,7 +447,7 @@ function dateInTimezone(timezone: string, date = new Date()): string {
 }
 
 /** Converts a date/time entered in an IANA timezone into a UTC Date. */
-function zonedDateTimeToUtc(isoDate: string, time: string, timezone: string): Date {
+export function zonedDateTimeToUtc(isoDate: string, time: string, timezone: string): Date {
   const [year, month, day] = isoDate.split("-").map(Number);
   const [hour, minute] = time.split(":").map(Number);
   const desiredUtcMillis = Date.UTC(year, month - 1, day, hour, minute);
@@ -729,6 +754,9 @@ export const campaignAutomationService = {
         sendTime: config.sendTime,
         timezone: config.timezone,
         enabled: config.enabled,
+        scheduleEnabled: config.scheduleEnabled === true,
+        scheduleDays: normalizeScheduleDays(config.scheduleDays),
+        scheduleActivatedAt: config.scheduleEnabled === true ? new Date() : null,
       }).returning();
       return row;
     });
@@ -788,6 +816,13 @@ export const campaignAutomationService = {
       }
       const [row] = await tx.update(whatsappCampaignAutomations).set({
         ...config,
+        scheduleEnabled: config.scheduleEnabled === true,
+        scheduleDays: normalizeScheduleDays(config.scheduleDays),
+        // Switching the schedule on starts it from now: a day whose send time
+        // has already passed is not back-filled.
+        scheduleActivatedAt: config.scheduleEnabled === true
+          ? (existing.scheduleEnabled ? existing.scheduleActivatedAt : new Date())
+          : existing.scheduleActivatedAt,
         updatedAt: new Date(),
       }).where(and(eq(whatsappCampaignAutomations.id, id), eq(whatsappCampaignAutomations.businessAccountId, businessAccountId))).returning();
       return row;
@@ -925,7 +960,13 @@ export const campaignAutomationService = {
     };
   },
 
-  async createRun(businessAccountId: string, id: string, payload: any, sourceFileName: string) {
+  async createRun(
+    businessAccountId: string,
+    id: string,
+    payload: any,
+    sourceFileName: string,
+    options: { trigger?: "manual" | "schedule"; scheduleRunDate?: string | null } = {},
+  ) {
     const automation = await this.get(businessAccountId, id);
     if (!automation) throw new Error("Automation not found");
     if (!automation.enabled) throw new Error("This automation is paused");
@@ -1154,6 +1195,8 @@ export const campaignAutomationService = {
         } : null,
         status: automatic ? "scheduled" : "awaiting_review",
         scheduledAt: automatic ? scheduledAt : null,
+        trigger: options.trigger === "schedule" ? "schedule" : "manual",
+        scheduleRunDate: options.trigger === "schedule" ? options.scheduleRunDate || null : null,
         ...evaluated.summary,
       }).returning();
 
@@ -1327,3 +1370,359 @@ export const campaignAutomationService = {
     });
   },
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Automatic daily runs (the automation scheduler)
+//
+// For every active automation with `scheduleEnabled`, once per local day (in
+// the automation's timezone, on its chosen weekdays) the scheduler does what an
+// operator used to do by hand: Validate -> Create run. It reuses preview() and
+// createRun(), so every existing safety check (approved template, unsent
+// blueprint, workbook version pinning, duplicate record keys, paused/deleted
+// automation) still applies. Review-mode automations get a run waiting for
+// approval; automatic ones get a scheduled campaign that the normal campaign
+// scheduler sends (with its own quiet-hours / opt-out checks).
+//
+// Exactly-once per day, across restarts and across several server instances:
+//   1. the day is claimed by INSERTing (automation_id, run_date) into
+//      whatsapp_campaign_automation_schedule_attempts - a unique key, so only
+//      one instance ever wins the claim;
+//   2. the run itself carries schedule_run_date, also unique per automation;
+//   3. automatic runs reserve each record key in the dispatch table (unique).
+// A claim left "running" by a crash is closed out later (never retried), so a
+// day can be missed but never sent twice.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const automationScheduleTuning = {
+  /** Prepare the run this long before send time so the campaign goes out on time. */
+  leadMs: 5 * 60_000,
+  /** If the server was down at send time, still run up to this long afterwards. */
+  catchUpMs: 3 * 60 * 60_000,
+  /** A claim still "running" after this long is treated as interrupted. */
+  staleClaimMinutes: 15,
+  tickMs: 60_000,
+};
+
+const SCHEDULER_INSTANCE = `${os.hostname()}:${process.pid}`;
+
+type SchedulableAutomation = Pick<WhatsappCampaignAutomation,
+  "sendTime" | "timezone" | "scheduleDays" | "scheduleActivatedAt"> & { updatedAt?: Date | string | null };
+
+/**
+ * The schedule only counts from the later of "switched on" and "last edited":
+ * a day whose send time had already passed at that moment is not back-filled,
+ * so changing the time to earlier today never fires an immediate catch-up run.
+ */
+function scheduleStartsAt(automation: SchedulableAutomation): number {
+  const activatedAt = automation.scheduleActivatedAt ? new Date(automation.scheduleActivatedAt).getTime() : 0;
+  const editedAt = automation.updatedAt ? new Date(automation.updatedAt).getTime() : 0;
+  return Math.max(activatedAt, editedAt);
+}
+
+export type ScheduleWindow = {
+  runDate: string;
+  scheduledFor: Date;
+  state: "not_today" | "before_activation" | "early" | "due" | "missed";
+};
+
+function weekdayOf(isoDate: string): number {
+  return new Date(`${isoDate}T12:00:00.000Z`).getUTCDay();
+}
+
+/** Where `now` falls relative to today's scheduled time for this automation. */
+export function scheduleWindowFor(automation: SchedulableAutomation, now = new Date()): ScheduleWindow {
+  const runDate = dateInTimezone(automation.timezone, now);
+  const scheduledFor = zonedDateTimeToUtc(runDate, automation.sendTime, automation.timezone);
+  const days = normalizeScheduleDays(automation.scheduleDays);
+  if (days.length && !days.includes(weekdayOf(runDate))) return { runDate, scheduledFor, state: "not_today" };
+  if (scheduledFor.getTime() < scheduleStartsAt(automation)) {
+    return { runDate, scheduledFor, state: "before_activation" };
+  }
+  if (now.getTime() < scheduledFor.getTime() - automationScheduleTuning.leadMs) return { runDate, scheduledFor, state: "early" };
+  if (now.getTime() > scheduledFor.getTime() + automationScheduleTuning.catchUpMs) return { runDate, scheduledFor, state: "missed" };
+  return { runDate, scheduledFor, state: "due" };
+}
+
+/** The next moment the scheduler will prepare a run, or null when it never will. */
+export function nextScheduledRunAt(
+  automation: SchedulableAutomation & Pick<WhatsappCampaignAutomation, "scheduleEnabled" | "enabled" | "sourceType">,
+  handledRunDates: Set<string>,
+  now = new Date(),
+): Date | null {
+  if (!automation.scheduleEnabled || !automation.enabled || automation.sourceType === "upload") return null;
+  const today = dateInTimezone(automation.timezone, now);
+  const days = normalizeScheduleDays(automation.scheduleDays);
+  const activatedAt = scheduleStartsAt(automation);
+  for (let offset = 0; offset <= 8; offset++) {
+    const runDate = addDays(today, offset);
+    if (days.length && !days.includes(weekdayOf(runDate))) continue;
+    if (handledRunDates.has(runDate)) continue;
+    const scheduledFor = zonedDateTimeToUtc(runDate, automation.sendTime, automation.timezone);
+    if (scheduledFor.getTime() < activatedAt) continue;
+    if (now.getTime() > scheduledFor.getTime() + automationScheduleTuning.catchUpMs) continue;
+    return scheduledFor;
+  }
+  return null;
+}
+
+function describeNothingDue(summary: { totalRows: number; excludedRows: number; duplicateRows: number; invalidRows: number }): string {
+  const parts = [`${summary.totalRows} checked`];
+  if (summary.duplicateRows) parts.push(`${summary.duplicateRows} already messaged`);
+  if (summary.invalidRows) parts.push(`${summary.invalidRows} with missing or invalid details`);
+  return `No one was due today (${parts.join(", ")}). Nothing was sent.`;
+}
+
+export type ScheduledAutomationResult = {
+  automationId: string;
+  action: "not_due" | "already_handled" | "missed" | "created" | "skipped" | "failed";
+  runId?: string;
+  reason?: string;
+};
+
+/**
+ * Handles one automation for the current tick. Safe to call any number of
+ * times, from any number of processes: only the caller that wins the day's
+ * claim does any work.
+ */
+export async function runScheduledAutomation(
+  automation: WhatsappCampaignAutomation,
+  opts: { campaignsEnabled: boolean; now?: Date },
+): Promise<ScheduledAutomationResult> {
+  const now = opts.now ?? new Date();
+  const base = { automationId: automation.id };
+  if (!automation.enabled || !automation.scheduleEnabled || automation.deletedAt) return { ...base, action: "not_due" };
+  const window = scheduleWindowFor(automation, now);
+  if (window.state === "not_today" || window.state === "before_activation" || window.state === "early") {
+    return { ...base, action: "not_due" };
+  }
+
+  if (window.state === "missed") {
+    const reason = "The server was not available at the scheduled time, so this day's run was skipped. Nothing was sent.";
+    const inserted = await db.insert(whatsappCampaignAutomationScheduleAttempts).values({
+      automationId: automation.id,
+      businessAccountId: automation.businessAccountId,
+      runDate: window.runDate,
+      scheduledFor: window.scheduledFor,
+      status: "skipped",
+      outcome: "missed",
+      reason,
+      claimedBy: SCHEDULER_INSTANCE,
+      finishedAt: new Date(),
+    }).onConflictDoNothing().returning({ id: whatsappCampaignAutomationScheduleAttempts.id });
+    return { ...base, action: inserted.length ? "missed" : "already_handled", reason };
+  }
+
+  // The claim. Losing it means another tick/instance already owns this day.
+  const [claim] = await db.insert(whatsappCampaignAutomationScheduleAttempts).values({
+    automationId: automation.id,
+    businessAccountId: automation.businessAccountId,
+    runDate: window.runDate,
+    scheduledFor: window.scheduledFor,
+    status: "running",
+    claimedBy: SCHEDULER_INSTANCE,
+  }).onConflictDoNothing().returning({ id: whatsappCampaignAutomationScheduleAttempts.id });
+  if (!claim) return { ...base, action: "already_handled" };
+
+  const finish = async (
+    status: "created" | "skipped" | "failed",
+    outcome: string,
+    reason: string,
+    extra: { runId?: string; eligibleRows?: number } = {},
+  ): Promise<ScheduledAutomationResult> => {
+    await db.update(whatsappCampaignAutomationScheduleAttempts).set({
+      status,
+      outcome,
+      reason: reason.slice(0, 1000),
+      runId: extra.runId ?? null,
+      eligibleRows: extra.eligibleRows ?? 0,
+      finishedAt: new Date(),
+    }).where(and(
+      eq(whatsappCampaignAutomationScheduleAttempts.id, claim.id),
+      eq(whatsappCampaignAutomationScheduleAttempts.status, "running"),
+    ));
+    return { ...base, action: status, runId: extra.runId, reason };
+  };
+
+  if (!opts.campaignsEnabled) {
+    return finish("skipped", "campaigns_off", "WhatsApp campaigns are switched off for this business, so nothing was sent.");
+  }
+  if (automation.sourceType === "upload") {
+    return finish("skipped", "needs_upload", SCHEDULE_NEEDS_SAVED_SOURCE);
+  }
+
+  let preview: Awaited<ReturnType<typeof campaignAutomationService.preview>>;
+  try {
+    preview = await campaignAutomationService.preview(automation.businessAccountId, automation.id, {});
+  } catch (error: any) {
+    return finish("failed", "validation_failed", `Check failed: ${error?.message || "unknown problem"}. Nothing was sent.`);
+  }
+  if (preview.summary.eligibleRows === 0) {
+    return finish("skipped", "nothing_due", describeNothingDue(preview.summary));
+  }
+
+  try {
+    const source = preview.source as { versionId?: string; revision?: number; campaignUpdatedAt?: Date | string };
+    const result = await campaignAutomationService.createRun(
+      automation.businessAccountId,
+      automation.id,
+      {
+        expectedWorkbookVersionId: source.versionId,
+        expectedWorkbookRevision: source.revision,
+        expectedCampaignUpdatedAt: source.campaignUpdatedAt,
+      },
+      "Automatic daily run",
+      { trigger: "schedule", scheduleRunDate: window.runDate },
+    );
+    const people = `${result.run.eligibleRows} ${result.run.eligibleRows === 1 ? "person" : "people"}`;
+    return result.run.status === "scheduled"
+      ? finish("created", "scheduled", `Campaign created for ${people}. It sends at ${automation.sendTime} (${automation.timezone}).`, {
+          runId: result.run.id, eligibleRows: result.run.eligibleRows,
+        })
+      : finish("created", "awaiting_review", `Run prepared for ${people}. It is waiting for your approval before anything is sent.`, {
+          runId: result.run.id, eligibleRows: result.run.eligibleRows,
+        });
+  } catch (error: any) {
+    return finish("failed", "validation_failed", `Could not create the run: ${error?.message || "unknown problem"}. Nothing was sent.`);
+  }
+}
+
+/**
+ * Closes claims a crashed process left "running". If its run was committed,
+ * the attempt is linked to it; otherwise it is marked interrupted. Never retried.
+ */
+export async function recoverStaleScheduleClaims(): Promise<number> {
+  const stale = await db.select().from(whatsappCampaignAutomationScheduleAttempts)
+    .where(and(
+      eq(whatsappCampaignAutomationScheduleAttempts.status, "running"),
+      sql`${whatsappCampaignAutomationScheduleAttempts.createdAt} < NOW() - (${automationScheduleTuning.staleClaimMinutes} * interval '1 minute')`,
+    ))
+    .limit(200);
+  for (const attempt of stale) {
+    const [run] = await db.select().from(whatsappCampaignAutomationRuns)
+      .where(and(
+        eq(whatsappCampaignAutomationRuns.automationId, attempt.automationId),
+        eq(whatsappCampaignAutomationRuns.scheduleRunDate, attempt.runDate),
+      ))
+      .limit(1);
+    await db.update(whatsappCampaignAutomationScheduleAttempts).set(run
+      ? {
+          status: "created",
+          outcome: run.status === "awaiting_review" ? "awaiting_review" : "scheduled",
+          reason: `Run created for ${run.eligibleRows} ${run.eligibleRows === 1 ? "person" : "people"}.`,
+          runId: run.id,
+          eligibleRows: run.eligibleRows,
+          finishedAt: new Date(),
+        }
+      : {
+          status: "failed",
+          outcome: "interrupted",
+          reason: "The server restarted while preparing this run. Nothing was sent; the next run is on the next scheduled day.",
+          finishedAt: new Date(),
+        })
+      .where(and(
+        eq(whatsappCampaignAutomationScheduleAttempts.id, attempt.id),
+        eq(whatsappCampaignAutomationScheduleAttempts.status, "running"),
+      ));
+  }
+  return stale.length;
+}
+
+/** One scheduler pass over every business. */
+export async function runAutomationScheduleTick(now = new Date()): Promise<ScheduledAutomationResult[]> {
+  await recoverStaleScheduleClaims();
+  const rows = await db.select({
+    automation: whatsappCampaignAutomations,
+    whatsappEnabled: businessAccounts.whatsappEnabled,
+    whatsappMarketingEnabled: businessAccounts.whatsappMarketingEnabled,
+  }).from(whatsappCampaignAutomations)
+    .innerJoin(businessAccounts, eq(businessAccounts.id, whatsappCampaignAutomations.businessAccountId))
+    .where(and(
+      eq(whatsappCampaignAutomations.enabled, true),
+      eq(whatsappCampaignAutomations.scheduleEnabled, true),
+      isNull(whatsappCampaignAutomations.deletedAt),
+    ));
+  const results: ScheduledAutomationResult[] = [];
+  for (const row of rows) {
+    try {
+      results.push(await runScheduledAutomation(row.automation, {
+        campaignsEnabled: row.whatsappEnabled === "true" && row.whatsappMarketingEnabled === "true",
+        now,
+      }));
+    } catch (error) {
+      console.error(`[AutomationScheduler] automation ${row.automation.id} failed:`, (error as Error)?.message);
+      reportError(error, { source: "worker:campaign-automation-scheduler" });
+    }
+  }
+  return results;
+}
+
+let automationSchedulerStarted = false;
+let automationTickRunning = false;
+export function startCampaignAutomationScheduler(): void {
+  if (automationSchedulerStarted) return;
+  automationSchedulerStarted = true;
+  trackTimer(setInterval(() => {
+    if (automationTickRunning) return;
+    automationTickRunning = true;
+    runAutomationScheduleTick()
+      .catch(err => {
+        console.error("[AutomationScheduler] tick error:", err);
+        reportError(err, { source: "worker:campaign-automation-scheduler" });
+      })
+      .finally(() => { automationTickRunning = false; });
+  }, automationScheduleTuning.tickMs));
+  console.log("[AutomationScheduler] Started (60s interval)");
+}
+
+/** Schedule settings, next run time and recent automatic-run history for the UI. */
+export async function getAutomationSchedule(businessAccountId: string, automationId: string) {
+  const automation = await campaignAutomationService.get(businessAccountId, automationId);
+  if (!automation) return undefined;
+  const history = await db.select().from(whatsappCampaignAutomationScheduleAttempts)
+    .where(and(
+      eq(whatsappCampaignAutomationScheduleAttempts.businessAccountId, businessAccountId),
+      eq(whatsappCampaignAutomationScheduleAttempts.automationId, automationId),
+    ))
+    .orderBy(desc(whatsappCampaignAutomationScheduleAttempts.runDate))
+    .limit(60);
+  const handled = new Set(history.map(attempt => attempt.runDate));
+  const nextRunAt = nextScheduledRunAt(automation, handled);
+  return {
+    scheduleEnabled: automation.scheduleEnabled,
+    scheduleDays: normalizeScheduleDays(automation.scheduleDays),
+    sendTime: automation.sendTime,
+    timezone: automation.timezone,
+    sendMode: automation.sendMode,
+    enabled: automation.enabled,
+    canSchedule: automation.sourceType !== "upload",
+    cannotScheduleReason: automation.sourceType === "upload" ? SCHEDULE_NEEDS_SAVED_SOURCE : null,
+    nextRunAt: nextRunAt ? nextRunAt.toISOString() : null,
+    history,
+  };
+}
+
+/** Switches the daily schedule on/off and sets its weekdays, without touching anything else. */
+export async function setAutomationSchedule(
+  businessAccountId: string,
+  automationId: string,
+  input: { scheduleEnabled?: unknown; scheduleDays?: unknown },
+) {
+  const automation = await campaignAutomationService.get(businessAccountId, automationId);
+  if (!automation) return undefined;
+  const scheduleEnabled = input.scheduleEnabled === undefined ? automation.scheduleEnabled : input.scheduleEnabled === true;
+  if (scheduleEnabled && automation.sourceType === "upload") throw new Error(SCHEDULE_NEEDS_SAVED_SOURCE);
+  const scheduleDays = input.scheduleDays === undefined
+    ? normalizeScheduleDays(automation.scheduleDays)
+    : normalizeScheduleDays(input.scheduleDays);
+  const [row] = await db.update(whatsappCampaignAutomations).set({
+    scheduleEnabled,
+    scheduleDays,
+    scheduleActivatedAt: scheduleEnabled && !automation.scheduleEnabled ? new Date() : automation.scheduleActivatedAt,
+    updatedAt: new Date(),
+  }).where(and(
+    eq(whatsappCampaignAutomations.id, automationId),
+    eq(whatsappCampaignAutomations.businessAccountId, businessAccountId),
+    isNull(whatsappCampaignAutomations.deletedAt),
+  )).returning();
+  return row;
+}

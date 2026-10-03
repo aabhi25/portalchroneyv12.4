@@ -96,6 +96,7 @@ import dataRetentionRoutes from "./routes/dataRetention";
 import aiUsageRoutes from "./routes/aiUsage";
 import avatarRoutes from "./routes/avatar";
 import aiLanguageRoutes from "./routes/aiLanguage";
+import { registerCampaignInsightsRoutes } from "./routes/campaignInsights";
 import { replyLanguage as replyLanguageInfo, replyLanguageName } from "@shared/replyLanguages";
 import { getLanguagePolicy } from "./services/language/languagePolicy";
 import { decideChatReplyLanguage, greetingLanguages, localizeFixedText, pickAllowed, publicReplyLanguages, websiteReplyLanguage } from "./services/language/chatLanguage";
@@ -36839,6 +36840,9 @@ Return ONLY a valid JSON object in this format:
       });
     } catch (err: any) { res.status(400).json({ error: err.message }); }
   });
+
+  // campaignInsights routes (campaign home summary, results dashboard, automation daily schedule)
+  registerCampaignInsightsRoutes(app, requireWhatsappMarketing);
 
   // ---- Spreadsheet Campaign Automations ----
   // These definitions turn a reviewed daily spreadsheet into an ordinary

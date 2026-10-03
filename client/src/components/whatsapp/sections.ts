@@ -2,7 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Sparkles, Route, Zap, MessagesSquare, Contact, BarChart3, Link2,
   UsersRound, FileCode2, Megaphone, Settings, ShieldCheck, MessageCircle,
-  FileSpreadsheet, Table2, Store,
+  FileSpreadsheet, Table2, Store, Home, TrendingUp,
 } from "lucide-react";
 import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 
@@ -208,19 +208,21 @@ const LEAD_GEN_ITEMS: WhatsappNavItem[] = [
 
 // Numbered on the overview page because the order is a real dependency, not a suggestion: a
 // campaign cannot be sent without an audience and an approved template already in place.
+// "Home" comes first so it is the section's default entry: it shows that same journey with a
+// tick against each step that is already done.
 const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
   {
-    key: "conversations",
-    label: "Conversations",
-    hubTitle: "Conversations",
-    description: "View reply threads across all campaigns",
-    href: "/admin/whatsapp-campaign-conversations",
-    icon: MessageCircle,
-    hubTestId: "card-wa-campaign-conversations",
-    sidebarTestId: "link-wa-campaign-conversations",
-    gradient: "bg-gradient-to-br from-emerald-500 to-teal-600",
+    key: "campaign-home",
+    label: "Home",
+    hubTitle: "Campaigns home",
+    description: "Your next step, and this month at a glance",
+    href: "/admin/whatsapp-campaign-home",
+    icon: Home,
+    hubTestId: "card-wa-campaign-home",
+    sidebarTestId: "link-wa-campaign-home",
+    gradient: "bg-gradient-to-br from-emerald-500 to-green-600",
     tone: "bg-emerald-50 group-hover:bg-emerald-100",
-    matches: l => l.startsWith("/admin/whatsapp-campaign-conversations"),
+    matches: l => l === "/admin/whatsapp-campaign-home",
   },
   {
     key: "contact-groups",
@@ -234,7 +236,7 @@ const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
     sidebarTestId: "link-wa-contact-groups",
     gradient: "bg-gradient-to-br from-teal-500 to-cyan-600",
     tone: "bg-teal-50 group-hover:bg-teal-100",
-    matches: l => l.startsWith("/admin/whatsapp-contact-groups"),
+    matches: l => l.startsWith("/admin/whatsapp-contact-groups") || l === "/admin/whatsapp-audiences",
     blocked: r =>
       r.marketing && r.marketing.usableAudiences === 0
         ? r.marketing.totalAudiences === 0
@@ -263,7 +265,7 @@ const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
   },
   {
     key: "campaigns",
-    // Not just "Campaigns" — this sits inside a section already called Campaigns.
+    // Not just "Campaigns": this sits inside a section already called Campaigns.
     label: "All campaigns",
     hubTitle: "3. All campaigns",
     description: "Send to an audience and let AI handle replies",
@@ -278,6 +280,44 @@ const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
     blocked: r => (r.marketing && !r.marketing.canSend ? "Needs steps 1 and 2 first" : undefined),
   },
   {
+    key: "conversations",
+    label: "Campaign replies",
+    hubTitle: "4. Campaign replies",
+    description: "What people wrote back, across all campaigns",
+    href: "/admin/whatsapp-campaign-conversations",
+    icon: MessageCircle,
+    formerly: "Conversations",
+    hubTestId: "card-wa-campaign-conversations",
+    sidebarTestId: "link-wa-campaign-conversations",
+    gradient: "bg-gradient-to-br from-emerald-500 to-teal-600",
+    tone: "bg-emerald-50 group-hover:bg-emerald-100",
+    matches: l => l.startsWith("/admin/whatsapp-campaign-conversations") || l === "/admin/whatsapp-campaign-replies",
+  },
+  {
+    key: "campaign-results",
+    label: "Results",
+    hubTitle: "Campaign results",
+    description: "Sent, read, replies and opt-outs across all campaigns",
+    href: "/admin/whatsapp-campaign-results",
+    icon: TrendingUp,
+    hubTestId: "card-wa-campaign-results",
+    sidebarTestId: "link-wa-campaign-results",
+    gradient: "bg-gradient-to-br from-orange-500 to-amber-600",
+    tone: "bg-orange-50 group-hover:bg-orange-100",
+    matches: l => l === "/admin/whatsapp-campaign-results",
+  },
+  {
+    key: "automations",
+    label: "Automations",
+    description: "Send a campaign by itself every day",
+    href: "/admin/whatsapp-campaign-automations",
+    icon: FileSpreadsheet,
+    sidebarTestId: "link-wa-campaign-automations",
+    gradient: "bg-gradient-to-br from-emerald-500 to-teal-600",
+    tone: "bg-emerald-50 group-hover:bg-emerald-100",
+    matches: l => l.startsWith("/admin/whatsapp-campaign-automations"),
+  },
+  {
     key: "ai-workbooks",
     label: "AI Workbooks",
     description: "Review campaign recipients and AI results in one sheet",
@@ -288,17 +328,8 @@ const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
     tone: "bg-purple-50 group-hover:bg-purple-100",
     matches: l => l.startsWith("/admin/whatsapp-ai-workbooks"),
   },
-  {
-    key: "automations",
-    label: "Automations",
-    description: "Turn daily spreadsheets into scheduled campaigns",
-    href: "/admin/whatsapp-campaign-automations",
-    icon: FileSpreadsheet,
-    sidebarTestId: "link-wa-campaign-automations",
-    gradient: "bg-gradient-to-br from-emerald-500 to-teal-600",
-    tone: "bg-emerald-50 group-hover:bg-emerald-100",
-    matches: l => l.startsWith("/admin/whatsapp-campaign-automations"),
-  },
+  // CAMPAIGN_SECTIONS_SLOT: an "Opt-outs" item (path /whatsapp/opt-outs, e.g. icon ShieldCheck,
+  // description "People who asked not to be messaged") goes here once its page exists.
 ];
 
 // Setup lives in the Settings hub (Settings > Channels > WhatsApp). The old /admin/whatsapp-config

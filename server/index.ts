@@ -341,6 +341,13 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
       console.error("[Server] Failed to start campaign scheduler:", err);
     });
 
+    // Start the campaign automation scheduler (automatic daily automation runs)
+    import("./services/campaignAutomationService").then(({ startCampaignAutomationScheduler }) => {
+      startCampaignAutomationScheduler();
+    }).catch(err => {
+      console.error("[Server] Failed to start campaign automation scheduler:", err);
+    });
+
     // Start webhook idempotency cleanup job (deletes >14 day old webhook event rows)
     import("./services/webhookIdempotencyService").then(({ startWebhookCleanupJob }) => {
       startWebhookCleanupJob();

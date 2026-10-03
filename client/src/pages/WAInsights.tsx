@@ -5,6 +5,7 @@ import { MessageSquare, Users, FileText, CheckCircle, TrendingUp, ArrowUpRight, 
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import type { MeResponseDto } from "@shared/dto";
 
 interface InsightsData {
   sessions: {
@@ -42,6 +43,8 @@ const docTypeLabels: Record<string, string> = {
 export default function WAInsights() {
   const [, setLocation] = useLocation();
   const [period, setPeriod] = useState<string>("today");
+  const { data: me } = useQuery<MeResponseDto>({ queryKey: ["/api/auth/me"] });
+  const marketingEnabled = me?.businessAccount?.whatsappEnabled === true && me?.businessAccount?.whatsappMarketingEnabled === true;
 
   const { data, isLoading, error } = useQuery<InsightsData>({
     queryKey: ["/api/whatsapp/insights", period],
@@ -118,9 +121,9 @@ export default function WAInsights() {
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">WA Insights</h1>
-          <p className="text-sm text-gray-500 mt-1">WhatsApp performance overview</p>
+          <p className="text-sm text-gray-500 mt-1">Incoming WhatsApp messages and leads</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {[
             { value: 'today', label: 'Today' },
             { value: 'yesterday', label: 'Yesterday' },
@@ -140,6 +143,15 @@ export default function WAInsights() {
           ))}
         </div>
       </div>
+
+      {marketingEnabled && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-900">
+          <span>These numbers cover people who message you. Campaign numbers (sent, read, replies, opt-outs) are on their own page.</span>
+          <Button size="sm" variant="outline" className="bg-white" onClick={() => setLocation("/admin/whatsapp-campaign-results")} data-testid="link-campaign-results">
+            Campaign results <ArrowUpRight className="h-3.5 w-3.5 ml-1" />
+          </Button>
+        </div>
+      )}
 
       {/* Top Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

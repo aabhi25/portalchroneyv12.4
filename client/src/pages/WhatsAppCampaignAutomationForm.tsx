@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
-import { AlertTriangle, ArrowLeft, BookOpen, Bot, CalendarClock, CheckCircle2, FileSpreadsheet, KeyRound, Loader2, MapPin, Save, SlidersHorizontal, Sparkles, UserRound, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpen, Bot, CalendarClock, CheckCircle2, ChevronDown, FileSpreadsheet, KeyRound, Loader2, MapPin, Save, SlidersHorizontal, Sparkles, UserRound, XCircle } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractAutomationSampleHeaders, type HeaderSource } from "@/lib/automationSampleHeaders";
 import { parseSpreadsheetDate } from "@shared/spreadsheetDate";
@@ -11,8 +11,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import type { CampaignAutomation } from "./WhatsAppCampaignAutomations";
+import { WEEKDAY_SHORT, describeScheduleDays, type CampaignAutomation } from "./WhatsAppCampaignAutomations";
+
+const COMMON_TIMEZONES = [
+  "Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Asia/Jakarta", "Asia/Riyadh", "Asia/Karachi", "Asia/Dhaka",
+  "Asia/Kathmandu", "Asia/Colombo", "Europe/London", "Europe/Berlin", "Africa/Nairobi", "Africa/Lagos",
+  "America/New_York", "America/Chicago", "America/Los_Angeles", "Australia/Sydney", "UTC",
+];
 
 type Template = { id: string; name: string; status: string; paramCount: number; bodyText: string };
 type MappingSuggestion = { columns: string[]; confidence: "high" | "medium" | "low"; reason: string };
@@ -99,6 +106,8 @@ const EMPTY = {
   sendTime: "10:00",
   timezone: "Asia/Kolkata",
   enabled: true,
+  scheduleEnabled: false,
+  scheduleDays: [] as number[],
 };
 
 function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
@@ -151,6 +160,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
   const [isSuggestingMappings, setIsSuggestingMappings] = useState(false);
   const [suggestions, setSuggestions] = useState<MappingResponse | null>(null);
   const [touchedMappingFields, setTouchedMappingFields] = useState<Set<string>>(() => new Set());
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ["/api/whatsapp/templates"] });
   const { data: campaigns = [] } = useQuery<CampaignBlueprint[]>({ queryKey: ["/api/whatsapp/campaigns"] });
   const { data: workbooks = [] } = useQuery<WorkbookSummary[]>({
@@ -211,6 +221,8 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
       sendTime: existing.sendTime,
       timezone: existing.timezone,
       enabled: existing.enabled,
+      scheduleEnabled: existing.scheduleEnabled === true,
+      scheduleDays: Array.isArray(existing.scheduleDays) ? existing.scheduleDays : [],
     });
     setTouchedMappingFields(new Set([
       "phoneColumn", "nameColumn", "recordKeyColumn", "dateColumn", "statusColumn",
@@ -274,7 +286,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
   const groupSource: HeaderSource | undefined = isBlueprintSource && form.sourceAudienceType === "contact_groups" && selectedGroupContacts.length
     ? {
         id: "contact-groups",
-        label: `${form.sourceGroupIds.length} contact group${form.sourceGroupIds.length === 1 ? "" : "s"}`,
+        label: `${form.sourceGroupIds.length} audience${form.sourceGroupIds.length === 1 ? "" : "s"}`,
         columns: [
           { key: "phone", label: "Phone" },
           { key: "name", label: "Name" },
@@ -337,7 +349,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
       toast({
         title: form.sourceType !== "upload" ? "Audience columns unavailable" : "Upload a sample first",
         description: isBlueprintSource
-          ? "Choose an AI Workbook or contact groups with usable contacts."
+          ? "Choose an AI Workbook or audiences with contacts in them."
           : form.sourceType === "ai_workbook"
           ? "Choose an AI Workbook so we can read its saved columns."
           : "Choose an Excel, CSV, or table-based PDF sample so we can read its headers.",
@@ -427,9 +439,9 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
           detail: sampleValue(form.phoneColumn) || `No value in ${form.phoneColumn || "the selected column"}`,
         },
         {
-          label: "Business record key",
+          label: "Record ID",
           passed: recordKeyColumns.length > 0 && sampleRecordValues.every(Boolean),
-          detail: sampleRecordValues.filter(Boolean).join(" · ") || "No complete record key",
+          detail: sampleRecordValues.filter(Boolean).join(" · ") || "No complete record ID",
         },
         {
           label: "Date rule",
@@ -455,14 +467,14 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
   const sampleMappingIssues = selectedSource
     ? [
       ...(!form.phoneColumn.trim() ? ["Choose the column containing the WhatsApp delivery number"] : []),
-      ...(!form.recordKeyColumn.trim() ? ["Choose a business record key so the same invoice, loan, order, or appointment is not processed twice"] : []),
+      ...(!form.recordKeyColumn.trim() ? ["Choose a record ID column (under Advanced settings) so the same invoice, order or appointment is never messaged twice"] : []),
       ...(!form.dateColumn.trim() ? ["Choose the date column that decides when each row becomes eligible"] : []),
       ...(templateUsesName && !form.nameColumn.trim() ? ['Name column is required because the template uses "{{name}}"'] : []),
       ...(form.eligibleStatusesText.trim() && !form.statusColumn.trim() ? ["Choose a status column before limiting the automation to specific status values"] : []),
       ...[
       { label: "Phone", columns: [form.phoneColumn] },
       { label: "Name", columns: form.nameColumn.trim() ? [form.nameColumn] : [] },
-      { label: "Record key", columns: form.recordKeyColumn.split(",").map(value => value.trim()).filter(Boolean) },
+      { label: "Record ID", columns: form.recordKeyColumn.split(",").map(value => value.trim()).filter(Boolean) },
       { label: "Date", columns: [form.dateColumn] },
       { label: "Status", columns: form.statusColumn.trim() ? [form.statusColumn] : [] },
       ...templateColumnReferences.map(reference => ({ label: reference.label, columns: [reference.column] })),
@@ -477,7 +489,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
     ? [
       { label: "Phone column", suggestion: suggestions.suggestions.phoneColumn, onUse: () => applySuggestion("phoneColumn", suggestions.suggestions.phoneColumn) },
       { label: "Name column", suggestion: suggestions.suggestions.nameColumn, onUse: () => applySuggestion("nameColumn", suggestions.suggestions.nameColumn) },
-      { label: "Record key", suggestion: suggestions.suggestions.recordKeyColumn, onUse: () => applySuggestion("recordKeyColumn", suggestions.suggestions.recordKeyColumn) },
+      { label: "Record ID", suggestion: suggestions.suggestions.recordKeyColumn, onUse: () => applySuggestion("recordKeyColumn", suggestions.suggestions.recordKeyColumn) },
       { label: "Date column", suggestion: suggestions.suggestions.dateColumn, onUse: () => applySuggestion("dateColumn", suggestions.suggestions.dateColumn) },
       { label: "Status column", suggestion: suggestions.suggestions.statusColumn, onUse: () => applySuggestion("statusColumn", suggestions.suggestions.statusColumn) },
       ...(!isBlueprintSource ? suggestions.suggestions.templateParams.map((suggestion, index) => ({
@@ -499,6 +511,8 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
       const payload = {
         ...form,
         sourceCampaignId: isBlueprintSource ? form.sourceCampaignId : null,
+        scheduleEnabled: form.sourceType !== "upload" && form.scheduleEnabled,
+        scheduleDays: form.scheduleDays,
         sourceWorkbookId: form.sourceType === "ai_workbook"
           || (isBlueprintSource && (inheritedAudienceType === "ai_workbook"))
           ? effectiveWorkbookId || null
@@ -534,21 +548,21 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
   if (id && isLoading) return <div className="p-6 text-center text-gray-500">Loading automation...</div>;
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-5">
+    <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-5">
       <Button variant="ghost" size="sm" onClick={() => setLocation(id ? `/admin/whatsapp-campaign-automations/${id}` : "/admin/whatsapp-campaign-automations")}>
         <ArrowLeft className="h-4 w-4 mr-1" /> Back to automations
       </Button>
       <div>
         <h1 className="text-2xl font-bold">{id ? "Edit WhatsApp automation" : "New WhatsApp automation"}</h1>
         <p className="text-sm text-gray-600 mt-1">
-          Select a draft campaign blueprint, then add the recurring eligibility and delivery rules.
+          Choose the campaign to repeat, then decide who is included each day and when it sends.
         </p>
       </div>
 
-      <Section title={isLegacyAutomation ? "Campaign and template" : "Campaign blueprint"} icon={<FileSpreadsheet className="h-4 w-4 text-emerald-600" />}>
+      <Section title={isLegacyAutomation ? "Message" : "Campaign to repeat"} icon={<FileSpreadsheet className="h-4 w-4 text-emerald-600" />}>
         <div className="space-y-2">
           <Label htmlFor="automation-name">Automation name</Label>
-          <Input id="automation-name" value={form.name} onChange={event => update("name", event.target.value)} placeholder="EMI reminder — 3 days before due date" />
+          <Input id="automation-name" value={form.name} onChange={event => update("name", event.target.value)} placeholder="Payment reminder — 3 days before due date" />
         </div>
         {isBlueprintSource ? (
           <div className="space-y-3">
@@ -601,7 +615,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
                   Template: {selectedTemplate?.name || "Unavailable"} · AI replies: {selectedBlueprint.aiEnabled === "false" ? "Off" : `On (${selectedBlueprint.aiAgentName || "Sales Agent"})`} · Reply outcomes: {selectedBlueprint.replyClassifications?.length || 0}
                 </p>
                 <p className="text-xs text-gray-500">
-                  Template fields, persona, knowledge sources, AI limits, and reply outcomes are controlled by the campaign blueprint and copied into every run.
+                  Template fields, persona, knowledge sources, AI limits, and reply outcomes come from this campaign and are copied into every run.
                 </p>
               </div>
             )}
@@ -616,7 +630,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
                   {approvedTemplates.map(template => <SelectItem key={template.id} value={template.id}>{template.name} · {template.paramCount} fields</SelectItem>)}
                 </SelectContent>
               </Select>
-              {!approvedTemplates.length && <p className="text-xs text-amber-700">Sync an approved MSG91 template before creating an automation.</p>}
+              {!approvedTemplates.length && <p className="text-xs text-amber-700">Add a template and wait for WhatsApp to approve it before creating an automation.</p>}
               {selectedTemplate && <p className="text-xs text-gray-500">{selectedTemplate.bodyText}</p>}
             </div>
           </>
@@ -641,7 +655,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
         )}
       </Section>
 
-      {!isCampaignOwnedBlueprint && <Section title={isBlueprintSource ? "Automation audience and field mapping" : "Automation source and AI mapping"} icon={<Sparkles className="h-4 w-4 text-violet-600" />}>
+      {!isCampaignOwnedBlueprint && <Section title="Who to message" icon={<Sparkles className="h-4 w-4 text-violet-600" />}>
         {isBlueprintSource ? (
           <div className="space-y-4">
             {!selectedBlueprint ? (
@@ -666,7 +680,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="ai_workbook">AI Workbook</SelectItem>
-                      <SelectItem value="contact_groups">Fixed contact groups</SelectItem>
+                      <SelectItem value="contact_groups">Audiences</SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-gray-500">
@@ -700,7 +714,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <Label>Contact groups</Label>
+                    <Label>Audiences</Label>
                     <div className="max-h-56 overflow-y-auto rounded-md border divide-y">
                       {contactGroups.map(group => {
                         const checked = form.sourceGroupIds.includes(group.id);
@@ -722,7 +736,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
                           </label>
                         );
                       })}
-                      {!contactGroups.length && <p className="p-3 text-sm text-amber-700">Create a contact group before using a fixed audience.</p>}
+                      {!contactGroups.length && <p className="p-3 text-sm text-amber-700">Create an audience first (Campaigns → Audiences).</p>}
                     </div>
                     {isLoadingGroupContacts && <p className="flex items-center gap-2 text-sm text-gray-600"><Loader2 className="h-4 w-4 animate-spin" /> Loading contact fields…</p>}
                   </div>
@@ -807,7 +821,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
                 <p className="text-sm font-medium flex items-center gap-1.5">
                   {form.sourceType !== "upload" && <BookOpen className="h-4 w-4 text-emerald-700" />}
                   {form.sourceType !== "upload"
-                    ? selectedWorkbook?.name || `${form.sourceGroupIds.length} fixed contact group${form.sourceGroupIds.length === 1 ? "" : "s"}`
+                    ? selectedWorkbook?.name || `${form.sourceGroupIds.length} audience${form.sourceGroupIds.length === 1 ? "" : "s"}`
                     : sampleFileName}
                 </p>
                 <p className="text-xs text-gray-500">
@@ -875,14 +889,14 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
 
       {isCampaignOwnedBlueprint && <Section title="Campaign audience" icon={<BookOpen className="h-4 w-4 text-violet-600" />}>
         <div className="rounded-md border bg-gray-50 p-3 space-y-1 text-sm">
-          <p className="font-medium">{blueprintAudienceType === "ai_workbook" ? "AI Workbook" : "Fixed contact groups"} · inherited from {selectedBlueprint?.name}</p>
+          <p className="font-medium">{blueprintAudienceType === "ai_workbook" ? "AI Workbook" : "Audiences"} · set in campaign {selectedBlueprint?.name}</p>
           {blueprintAudienceType === "ai_workbook" ? (
             <p className="text-xs text-gray-600">
               Workbook: {workbooks.find(workbook => workbook.id === selectedBlueprint?.recipientWorkbookId)?.name || "Unavailable"} ·
               mobile number: {selectedBlueprint?.recipientPhoneColumn || "—"}
             </p>
-          ) : <p className="text-xs text-gray-600">{selectedBlueprint?.groupIds?.length || 0} fixed contact group(s)</p>}
-          <p className="text-xs text-gray-500">The campaign controls its recipient source, mobile-number mapping, message, and AI field access. Configure eligibility and duplicate rules below.</p>
+          ) : <p className="text-xs text-gray-600">{selectedBlueprint?.groupIds?.length || 0} audience(s)</p>}
+          <p className="text-xs text-gray-500">The campaign decides who can be messaged, the message and what the AI may see. Below you decide who is due each day.</p>
         </div>
         {selectedSource && (
           <div className="space-y-3 rounded-md border bg-gray-50 p-3">
@@ -908,10 +922,10 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
             On each run, Chroney checks every row in this order:
           </p>
           <ol className="mt-3 grid gap-2 text-sm text-emerald-950 sm:grid-cols-2">
-            <li className="flex gap-2"><span className="font-semibold">1.</span><span>The row has a mobile number and business record key.</span></li>
+            <li className="flex gap-2"><span className="font-semibold">1.</span><span>The row has a mobile number and a record ID.</span></li>
             <li className="flex gap-2"><span className="font-semibold">2.</span><span>Its mapped date matches today after applying the offset.</span></li>
             <li className="flex gap-2"><span className="font-semibold">3.</span><span>Its status is allowed, if you add a status filter.</span></li>
-            <li className="flex gap-2"><span className="font-semibold">4.</span><span>That record key has not already been scheduled by this automation.</span></li>
+            <li className="flex gap-2"><span className="font-semibold">4.</span><span>That record has not already been messaged by this automation.</span></li>
           </ol>
         </div>
 
@@ -992,22 +1006,44 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
           </div>
         </div>
 
-        <div className="rounded-lg border p-4 space-y-4">
-          <div className="flex gap-3">
-            <KeyRound className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
-            <div>
-              <h3 className="font-medium">How should repeat sends be prevented?</h3>
-              <p className="text-xs text-gray-500">Choose the stable ID of the business record—not the customer’s phone number when one customer can have multiple records.</p>
-            </div>
+        <Collapsible open={advancedOpen || !form.recordKeyColumn.trim()} onOpenChange={setAdvancedOpen}>
+          <div className="rounded-lg border">
+            <CollapsibleTrigger asChild>
+              <button type="button" className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left" data-testid="button-automation-advanced">
+                <span>
+                  <span className="font-medium text-sm">Advanced settings</span>
+                  <span className="block text-xs text-gray-500">Repeat protection and phone number format</span>
+                </span>
+                <ChevronDown className={`h-4 w-4 text-gray-500 transition-transform ${advancedOpen || !form.recordKeyColumn.trim() ? "rotate-180" : ""}`} />
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="border-t p-4 space-y-5">
+                <div className="space-y-3">
+                  <div className="flex gap-3">
+                    <KeyRound className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
+                    <div>
+                      <h3 className="font-medium">How should repeat messages be prevented?</h3>
+                      <p className="text-xs text-gray-500">Choose the column holding a unique ID for each record — not the phone number, because one customer can have several records.</p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Record ID column(s)</Label>
+                    <Input list="automation-sample-columns" value={form.recordKeyColumn} onChange={event => updateMapping("recordKeyColumn", event.target.value)} placeholder="e.g. invoice_id, or order_id, item_id" />
+                    <p className="text-xs text-gray-500">
+                      Examples: invoice ID, order ID or appointment ID. To combine columns, separate them with commas, such as <span className="font-mono">order_id, item_id</span>. Once a record has been messaged by this automation, later runs skip it.
+                    </p>
+                  </div>
+                </div>
+                <div className="space-y-2 sm:max-w-xs">
+                  <Label>Default country calling code</Label>
+                  <Input value={form.defaultCountryCode} onChange={event => update("defaultCountryCode", event.target.value)} placeholder="91" />
+                  <p className="text-xs text-gray-500">Added to phone numbers written without one, e.g. 91 for India.</p>
+                </div>
+              </div>
+            </CollapsibleContent>
           </div>
-          <div className="space-y-2">
-            <Label>Business record key column(s)</Label>
-            <Input list="automation-sample-columns" value={form.recordKeyColumn} onChange={event => updateMapping("recordKeyColumn", event.target.value)} placeholder="e.g. loan_id or invoice_id, installment_id" />
-            <p className="text-xs text-gray-500">
-              Examples: invoice ID, loan ID, order ID, or appointment ID. Use comma-separated columns for a combined key, such as <span className="font-mono">loan_id, installment_id</span>. Once a run is scheduled for a key, future runs skip it.
-            </p>
-          </div>
-        </div>
+        </Collapsible>
 
         {selectedSource && <datalist id="automation-sample-columns">{selectedSource.columns.map(column => <option key={column.key} value={column.key}>{column.label}</option>)}</datalist>}
 
@@ -1026,7 +1062,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
               <h3 className="font-medium text-slate-950">{sampleRow ? "First source row: filter preview" : "Current rule in plain language"}</h3>
               <p className="mt-1 text-xs text-slate-600">
                 {sampleRow
-                  ? "This previews filter matching only. Previously scheduled record keys are still skipped at run time."
+                  ? "This previews filter matching only. Records already messaged are still skipped at run time."
                   : "Choose valid column mappings to preview the first available source row here."}
               </p>
             </div>
@@ -1053,30 +1089,82 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
               Include a row when <span className="font-mono">{form.dateColumn || "date column"}</span> is{" "}
               <span className="font-mono font-medium">{dateBeingChecked}</span>
               {allowedStatuses.length > 0 ? <> and <span className="font-mono">{form.statusColumn || "status column"}</span> is one of <span className="font-medium">{allowedStatuses.join(", ")}</span></> : ", regardless of status"}.
-              Then skip it if its business record key was already scheduled.
+              Then skip it if that record was already messaged.
             </p>
           )}
         </div>
       </Section>}
 
-      <Section title="Delivery control" icon={<CalendarClock className="h-4 w-4 text-emerald-600" />}>
+      <Section title="When to send" icon={<CalendarClock className="h-4 w-4 text-emerald-600" />}>
         <div className="grid sm:grid-cols-2 gap-4">
           <div className="space-y-2"><Label>Send time</Label><Input type="time" value={form.sendTime} onChange={event => update("sendTime", event.target.value)} /></div>
-          <div className="space-y-2"><Label>Timezone</Label><Input value={form.timezone} onChange={event => update("timezone", event.target.value)} placeholder="Asia/Kolkata" /></div>
-          <div className="space-y-2"><Label>Default country calling code</Label><Input value={form.defaultCountryCode} onChange={event => update("defaultCountryCode", event.target.value)} placeholder="91" /></div>
-          <div className="space-y-2"><Label>{form.sourceType !== "upload" ? "After a valid workbook run" : "After a valid upload"}</Label>
+          <div className="space-y-2"><Label>Timezone</Label>
+            <Select value={form.timezone} onValueChange={timezone => update("timezone", timezone)}>
+              <SelectTrigger data-testid="select-automation-timezone"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {Array.from(new Set([form.timezone, ...COMMON_TIMEZONES])).map(zone => <SelectItem key={zone} value={zone}>{zone.replace(/_/g, " ")}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2 sm:col-span-2"><Label>When people are due</Label>
             <Select value={form.sendMode} onValueChange={(sendMode: "review" | "automatic") => update("sendMode", sendMode)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="review">Wait for review before scheduling</SelectItem>
-                <SelectItem value="automatic">Schedule automatically</SelectItem>
+                <SelectItem value="review">Wait for my approval before sending</SelectItem>
+                <SelectItem value="automatic">Send automatically at the send time</SelectItem>
               </SelectContent>
             </Select>
           </div>
         </div>
+        <div className="border-t pt-4 space-y-3">
+          <div className="flex items-start gap-3">
+            <Switch
+              checked={form.scheduleEnabled && form.sourceType !== "upload"}
+              disabled={form.sourceType === "upload"}
+              onCheckedChange={scheduleEnabled => update("scheduleEnabled", scheduleEnabled)}
+              id="automation-schedule"
+              data-testid="switch-form-automation-schedule"
+            />
+            <div>
+              <Label htmlFor="automation-schedule">Run by itself every day</Label>
+              <p className="text-xs text-gray-500">
+                {form.sourceType === "upload"
+                  ? "Not available when you upload a file for each run — the automation needs a saved audience or AI Workbook to check by itself."
+                  : form.sendMode === "automatic"
+                    ? `At ${form.sendTime || "the send time"} it checks who is due and messages them, with no clicks needed.`
+                    : `At ${form.sendTime || "the send time"} it checks who is due and prepares a run for your approval.`}
+              </p>
+            </div>
+          </div>
+          {form.scheduleEnabled && form.sourceType !== "upload" && (
+            <div className="space-y-1.5 pl-0 sm:pl-12">
+              <div className="flex flex-wrap gap-1.5">
+                {WEEKDAY_SHORT.map((label, day) => {
+                  const active = form.scheduleDays.length === 0 || form.scheduleDays.includes(day);
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => {
+                        const current = form.scheduleDays.length ? form.scheduleDays : [0, 1, 2, 3, 4, 5, 6];
+                        const next = current.includes(day) ? current.filter(d => d !== day) : [...current, day].sort();
+                        if (next.length) update("scheduleDays", next.length === 7 ? [] : next);
+                      }}
+                      className={`h-8 min-w-[44px] rounded-full border px-2.5 text-xs ${active ? "border-emerald-500 bg-emerald-50 text-emerald-800 font-medium" : "border-gray-200 text-gray-500"}`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-gray-500">{describeScheduleDays(form.scheduleDays)}</p>
+            </div>
+          )}
+        </div>
         <div className="flex items-center gap-3 border-t pt-4">
           <Switch checked={form.enabled} onCheckedChange={enabled => update("enabled", enabled)} id="automation-enabled" />
-          <div><Label htmlFor="automation-enabled">Automation is active</Label><p className="text-xs text-gray-500">Paused automations keep their history but reject new runs.</p></div>
+          <div><Label htmlFor="automation-enabled">Automation is on</Label><p className="text-xs text-gray-500">When off, it keeps its history but creates no new runs.</p></div>
         </div>
       </Section>
 

@@ -11,7 +11,8 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import type { CampaignAutomation } from "./WhatsAppCampaignAutomations";
+import { describeDateRule, type CampaignAutomation } from "./WhatsAppCampaignAutomations";
+import { AutomationScheduleCard } from "./WhatsAppCampaignAutomationSchedule";
 
 type Preview = {
   targetDate: string;
@@ -39,10 +40,17 @@ type Run = {
   sourceType?: "upload" | "ai_workbook" | "campaign_blueprint"; sourceWorkbookVersionId?: string | null;
   sourceCampaignId?: string | null; sourceCampaignName?: string | null;
   campaignId: string | null; campaign?: { status: string; id: string } | null;
+  trigger?: "manual" | "schedule";
 };
 
 const statusVariant: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   awaiting_review: "outline", scheduled: "secondary", completed: "default", failed: "destructive", cancelled: "destructive",
+};
+const RUN_STATUS_LABELS: Record<string, string> = {
+  awaiting_review: "Waiting for approval", scheduled: "Scheduled", completed: "Finished", failed: "Failed", cancelled: "Cancelled",
+};
+const CAMPAIGN_STATUS_LABELS: Record<string, string> = {
+  draft: "Not scheduled", scheduled: "Scheduled", sending: "Sending", completed: "Finished", cancelled: "Cancelled", failed: "Failed", paused: "Paused",
 };
 
 export default function WhatsAppCampaignAutomationDetail({ id }: { id: string }) {
@@ -53,6 +61,7 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
   const [fileName, setFileName] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [cancelRunId, setCancelRunId] = useState<string | null>(null);
   const { data: automation, isLoading } = useQuery<CampaignAutomation & Record<string, any>>({
     queryKey: ["/api/whatsapp/campaign-automations", id],
     queryFn: () => apiRequest("GET", `/api/whatsapp/campaign-automations/${id}`),
@@ -147,9 +156,10 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
 
   if (isLoading) return <div className="p-6 text-center text-gray-500">Loading automation...</div>;
   if (!automation) return <div className="p-6 text-center text-gray-500">Automation not found.</div>;
+  const runCampaignIds = new Map(runs.map(run => [run.id, run.campaignId]));
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-5">
+    <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-5">
       <Button variant="ghost" size="sm" onClick={() => setLocation("/admin/whatsapp-campaign-automations")}>
         <ArrowLeft className="h-4 w-4 mr-1" /> Back to automations
       </Button>
@@ -157,11 +167,11 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
         <div>
           <div className="flex flex-wrap items-center gap-2"><h1 className="text-2xl font-bold">{automation.name}</h1><Badge variant={automation.enabled ? "default" : "outline"}>{automation.enabled ? "Active" : "Paused"}</Badge></div>
           <p className="text-sm text-gray-600 mt-1">
-            {automation.dateOffsetDays > 0 ? `${automation.dateOffsetDays} days after` : automation.dateOffsetDays < 0 ? `${Math.abs(automation.dateOffsetDays)} days before` : "On"} <span className="font-medium">{automation.dateColumn}</span> · send at {automation.sendTime} {automation.timezone}
+            Messages people {describeDateRule(automation.dateOffsetDays, automation.dateColumn)} · sends at {automation.sendTime} ({automation.timezone})
           </p>
           {isBlueprintSource && (
             <p className="text-xs text-violet-700 mt-1">
-              Campaign blueprint: <span className="font-medium">{sourceCampaign?.name || preview?.source.campaignName || automation.sourceCampaignId}</span>. Its template, AI replies, knowledge sources, and outcomes are inherited by every run.
+              Based on campaign <span className="font-medium">{sourceCampaign?.name || preview?.source.campaignName || "(no longer available)"}</span>. Every run uses its message, AI replies and reply outcomes.
             </p>
           )}
         </div>
@@ -196,30 +206,32 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
         </div>
       </div>
 
+      <AutomationScheduleCard automationId={id} runCampaignIds={runCampaignIds} />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             {isManagedSource
               ? <BookOpen className="h-4 w-4 text-emerald-600" />
               : <Upload className="h-4 w-4 text-emerald-600" />}
-            {isBlueprintSource ? "Run automation campaign" : isWorkbookSource ? "Run from AI Workbook" : "Daily spreadsheet upload"}
+            {isManagedSource ? "Run now" : "Upload today's file"}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-gray-600">
             {isBlueprintSource
               ? isGroupSource
-                ? "Validate the fixed contact groups selected by this automation. Each run snapshots the contacts it uses."
-                : "Validate the AI Workbook selected by this automation. Each run pins the exact saved version it uses."
+                ? "Check who in the chosen audiences is due today. Nothing is sent until you create the run."
+                : "Check who in the AI Workbook is due today. Each run keeps a copy of the exact rows it used."
               : isWorkbookSource
-              ? "Validate the linked workbook’s latest saved version. The resulting run records the exact workbook version it used."
+              ? "Check who in the AI Workbook is due today. Each run keeps a copy of the exact rows it used."
               : "Upload the refreshed client file. We validate the configured fields and calculate today’s eligible recipients before creating any campaign."}
           </p>
           {isManagedSource ? (
             <div className="flex flex-wrap items-center gap-3">
               <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending || !automation.enabled}>
                 <CheckCircle2 className="h-4 w-4 mr-1" />
-                {previewMutation.isPending ? "Validating..." : isGroupSource ? "Validate contact groups" : "Validate latest workbook"}
+                {previewMutation.isPending ? "Checking..." : isGroupSource ? "Check who is due" : "Check latest workbook"}
               </Button>
               {isWorkbookSource && !automation.sourceWorkbookId && <span className="text-sm text-red-700">The linked workbook is no longer available. Edit this automation to choose another source.</span>}
             </div>
@@ -228,14 +240,14 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
               <input ref={fileInput} type="file" accept=".xlsx,.xls,.xlsm,.csv,.tsv,.txt" className="hidden" onChange={event => handleFile(event.target.files?.[0])} />
               <Button variant="outline" onClick={() => fileInput.current?.click()}><FileSpreadsheet className="h-4 w-4 mr-1" /> Choose spreadsheet</Button>
               {fileName && <span className="text-sm text-gray-600">{fileName}</span>}
-              {payload && <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending}><CheckCircle2 className="h-4 w-4 mr-1" /> {previewMutation.isPending ? "Validating..." : "Validate upload"}</Button>}
+              {payload && <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending}><CheckCircle2 className="h-4 w-4 mr-1" /> {previewMutation.isPending ? "Checking..." : "Check file"}</Button>}
             </div>
           )}
 
           {preview && (
             <div className="space-y-4 border rounded-lg p-4 bg-gray-50">
               <div>
-                <h3 className="font-medium">Validation result</h3>
+                <h3 className="font-medium">Who is due</h3>
                 <p className="text-sm text-gray-600">Target date: <span className="font-medium">{preview.targetDate}</span></p>
                 {preview.source.type !== "upload" && (
                   <p className="text-xs text-gray-500">
@@ -249,9 +261,9 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
                 <div><span className="block text-gray-500">Rows</span><strong>{preview.summary.totalRows}</strong></div>
                 <div><span className="block text-gray-500">Eligible</span><strong className="text-emerald-700">{preview.summary.eligibleRows}</strong></div>
-                <div><span className="block text-gray-500">Date/status excluded</span><strong>{preview.summary.excludedRows}</strong></div>
+                <div><span className="block text-gray-500">Not due</span><strong>{preview.summary.excludedRows}</strong></div>
                 <div><span className="block text-gray-500">Already sent</span><strong>{preview.summary.duplicateRows}</strong></div>
-                <div><span className="block text-gray-500">Invalid</span><strong className="text-red-700">{preview.summary.invalidRows}</strong></div>
+                <div><span className="block text-gray-500">Missing details</span><strong className="text-red-700">{preview.summary.invalidRows}</strong></div>
               </div>
               {preview.summary.eligibleRows > 0 ? (
                 <Button onClick={() => createRunMutation.mutate()} disabled={createRunMutation.isPending} data-testid="button-create-automation-run">
@@ -288,13 +300,13 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
               {runs.map(run => (
                 <div key={run.id} className="border rounded-lg p-3 flex flex-wrap gap-3 items-center">
                   <div className="flex-1 min-w-[220px]">
-                    <div className="flex items-center gap-2"><span className="font-medium text-sm">{run.sourceFileName}</span><Badge variant={statusVariant[run.status] || "outline"}>{run.status.replace("_", " ")}</Badge>{run.sourceCampaignName && <Badge variant="outline">Blueprint: {run.sourceCampaignName}</Badge>}{run.campaign && <Badge variant={statusVariant[run.campaign.status] || "outline"}>Campaign: {run.campaign.status}</Badge>}</div>
-                    <div className="text-xs text-gray-500 mt-1">{run.eligibleRows} eligible · {run.excludedRows} excluded · {run.duplicateRows} already sent · {run.invalidRows} invalid · created {new Date(run.createdAt).toLocaleString()}</div>
+                    <div className="flex flex-wrap items-center gap-2"><span className="font-medium text-sm">{run.sourceFileName}</span><Badge variant={statusVariant[run.status] || "outline"}>{RUN_STATUS_LABELS[run.status] || run.status.replace("_", " ")}</Badge>{run.trigger === "schedule" && <Badge variant="outline" className="border-emerald-300 text-emerald-700">Automatic</Badge>}{run.campaign && <Badge variant={statusVariant[run.campaign.status] || "outline"}>Campaign: {CAMPAIGN_STATUS_LABELS[run.campaign.status] || run.campaign.status}</Badge>}</div>
+                    <div className="text-xs text-gray-500 mt-1">{run.eligibleRows} due · {run.excludedRows} not due · {run.duplicateRows} already messaged · {run.invalidRows} missing details · created {new Date(run.createdAt).toLocaleString()}</div>
                     {run.scheduledAt && <div className="text-xs text-gray-500">Scheduled: {new Date(run.scheduledAt).toLocaleString()}</div>}
                   </div>
                   <div className="flex gap-2">
                     {run.status === "awaiting_review" && <Button size="sm" onClick={() => approveMutation.mutate(run.id)} disabled={approveMutation.isPending}><CheckCircle2 className="h-4 w-4 mr-1" /> Approve & schedule</Button>}
-                    {["awaiting_review", "scheduled"].includes(run.status) && <Button size="sm" variant="outline" onClick={() => cancelMutation.mutate(run.id)} disabled={cancelMutation.isPending}><XCircle className="h-4 w-4 mr-1" /> Cancel</Button>}
+                    {["awaiting_review", "scheduled"].includes(run.status) && <Button size="sm" variant="outline" onClick={() => setCancelRunId(run.id)} disabled={cancelMutation.isPending}><XCircle className="h-4 w-4 mr-1" /> Cancel</Button>}
                     {run.campaignId && <Button size="sm" variant="ghost" onClick={() => setLocation(`/admin/whatsapp-campaigns/${run.campaignId}`)}>Campaign</Button>}
                   </div>
                 </div>
@@ -303,6 +315,30 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
           )}
         </CardContent>
       </Card>
+
+      <AlertDialog open={!!cancelRunId} onOpenChange={open => { if (!open && !cancelMutation.isPending) setCancelRunId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel this run?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Its campaign will not be sent. The people in it become eligible again, so a later run can message them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancelMutation.isPending}>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              disabled={cancelMutation.isPending}
+              onClick={event => {
+                event.preventDefault();
+                if (cancelRunId) cancelMutation.mutate(cancelRunId, { onSettled: () => setCancelRunId(null) });
+              }}
+            >
+              {cancelMutation.isPending ? "Cancelling..." : "Cancel run"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

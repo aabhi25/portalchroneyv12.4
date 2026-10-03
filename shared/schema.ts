@@ -3440,6 +3440,15 @@ export const whatsappCampaignAutomations = pgTable("whatsapp_campaign_automation
   sendTime: text("send_time").notNull().default("10:00"), // HH:mm in timezone
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   enabled: boolean("enabled").notNull().default(true),
+  // Automatic daily runs. Off by default so existing automations keep the
+  // manual "Validate -> Create run" flow. When on, the automation scheduler
+  // validates and creates the run itself at sendTime (in `timezone`) on the
+  // chosen weekdays (0 = Sunday ... 6 = Saturday; empty = every day).
+  scheduleEnabled: boolean("schedule_enabled").notNull().default(false),
+  scheduleDays: jsonb("schedule_days").$type<number[]>().default([]),
+  // When the schedule was last switched on. A day whose send time was already
+  // past at that moment is not back-filled.
+  scheduleActivatedAt: timestamp("schedule_activated_at"),
   deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -3499,11 +3508,43 @@ export const whatsappCampaignAutomationRuns = pgTable("whatsapp_campaign_automat
   duplicateRows: integer("duplicate_rows").notNull().default(0),
   errorMessage: text("error_message"),
   approvedAt: timestamp("approved_at"),
+  // 'manual' (Validate -> Create run) or 'schedule' (created by the scheduler).
+  trigger: text("trigger").notNull().default("manual"),
+  // For scheduled runs: the local date (YYYY-MM-DD in the automation timezone)
+  // the run belongs to. Unique per automation, so a day can never get two runs.
+  scheduleRunDate: text("schedule_run_date"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
   automationCreatedIdx: index("wa_automation_runs_automation_created_idx").on(table.automationId, table.createdAt),
   businessStatusIdx: index("wa_automation_runs_business_status_idx").on(table.businessAccountId, table.status),
+  automationScheduleDateUniq: uniqueIndex("wa_automation_runs_automation_schedule_date_uniq").on(table.automationId, table.scheduleRunDate),
+}));
+
+// One row per automation per scheduled day: the scheduler's atomic claim and
+// its readable history. The unique (automation, run_date) key is what makes the
+// scheduler safe across restarts and across several server instances: only the
+// instance whose INSERT wins goes on to validate and create the run.
+export const whatsappCampaignAutomationScheduleAttempts = pgTable("whatsapp_campaign_automation_schedule_attempts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  automationId: varchar("automation_id").notNull().references(() => whatsappCampaignAutomations.id, { onDelete: "cascade" }),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  runDate: text("run_date").notNull(), // YYYY-MM-DD in the automation timezone
+  scheduledFor: timestamp("scheduled_for").notNull(),
+  // running | created | skipped | failed
+  status: text("status").notNull().default("running"),
+  // scheduled | awaiting_review | nothing_due | validation_failed | missed | interrupted | campaigns_off | needs_upload
+  outcome: text("outcome"),
+  reason: text("reason"),
+  runId: varchar("run_id").references(() => whatsappCampaignAutomationRuns.id, { onDelete: "set null" }),
+  eligibleRows: integer("eligible_rows").notNull().default(0),
+  claimedBy: text("claimed_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  finishedAt: timestamp("finished_at"),
+}, (table) => ({
+  automationDateUniq: uniqueIndex("wa_automation_schedule_attempts_automation_date_uniq").on(table.automationId, table.runDate),
+  businessCreatedIdx: index("wa_automation_schedule_attempts_business_created_idx").on(table.businessAccountId, table.createdAt),
+  statusIdx: index("wa_automation_schedule_attempts_status_idx").on(table.status, table.createdAt),
 }));
 
 // Stable business record keys (for example loan-id + installment-id) prevent
@@ -3706,6 +3747,7 @@ export type InsertMarketingCampaign = z.infer<typeof insertMarketingCampaignSche
 export type MarketingCampaign = typeof marketingCampaigns.$inferSelect;
 export type WhatsappCampaignAutomation = typeof whatsappCampaignAutomations.$inferSelect;
 export type WhatsappCampaignAutomationRun = typeof whatsappCampaignAutomationRuns.$inferSelect;
+export type WhatsappCampaignAutomationScheduleAttempt = typeof whatsappCampaignAutomationScheduleAttempts.$inferSelect;
 export type InsertMarketingCampaignRecipient = z.infer<typeof insertMarketingCampaignRecipientSchema>;
 export type MarketingCampaignRecipient = typeof marketingCampaignRecipients.$inferSelect;
 export type InsertMarketingCampaignMessage = z.infer<typeof insertMarketingCampaignMessageSchema>;
