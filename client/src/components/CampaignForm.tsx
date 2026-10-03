@@ -1,93 +1,37 @@
-import { useState, useMemo } from "react";
-import { useQuery, useQueries } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Separator } from "@/components/ui/separator";
-import {
-  ArrowLeft, Megaphone, FileCode2, Users, Calendar, Bot,
-  MessageSquare, Clock, Sparkles, AlertTriangle, Tags, ChevronDown,
-} from "lucide-react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { ReplyClassificationEditor } from "@/components/whatsapp/ReplyClassificationEditor";
+import { apiRequest } from "@/lib/queryClient";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { ArrowLeft, ArrowRight, AlertTriangle, Check, Megaphone, Send } from "lucide-react";
 import type { ReplyClassification } from "@shared/schema";
+import {
+  AB_PENDING,
+  type AudiencePreview,
+  type CampaignFormValues,
+  type CampaignSubmitOptions,
+  type SampleContact,
+  type WizardGroup,
+  type WizardTemplate,
+} from "@/components/whatsapp/campaignWizard/types";
+import type { WizardCtx, WorkbookSheet, WorkbookSummary } from "@/components/whatsapp/campaignWizard/context";
+import { StepWho } from "@/components/whatsapp/campaignWizard/StepWho";
+import { StepMessage } from "@/components/whatsapp/campaignWizard/StepMessage";
+import { StepWhen } from "@/components/whatsapp/campaignWizard/StepWhen";
+import { StepAiReplies } from "@/components/whatsapp/campaignWizard/StepAiReplies";
+import { StepReview, type WizardStepKey } from "@/components/whatsapp/campaignWizard/StepReview";
 
 /**
- * Shared campaign configuration form, used by both the create and edit pages so the two
- * cannot drift apart as fields are added. The form owns its own state; the parent supplies
- * the starting values and decides what happens on submit.
+ * Shared campaign set-up, used by the create, duplicate and edit pages so they cannot drift
+ * apart. It is a step-by-step wizard — Who / Message / When / AI replies / Review — that owns
+ * its own state; the parent supplies the starting values and decides what happens on submit.
  */
 
-export interface Template {
-  id: string;
-  name: string;
-  status: string;
-  paramCount: number;
-  bodyText: string;
-  msg91TemplateId?: string | null;
-}
-
-export interface Group {
-  id: string;
-  name: string;
-  contactCount: number;
-}
-
-interface Contact {
-  id: string;
-  name: string;
-  phone: string;
-  attributes?: Record<string, string>;
-}
-interface WorkbookSummary {
-  id: string; name: string; status: string;
-  latestVersion?: { versionNumber: number } | null;
-}
-interface WorkbookDetail {
-  id: string; name: string;
-  currentVersion: {
-    id: string; versionNumber: number;
-    sheets: { id: string; name: string; columns: { key: string; label: string }[]; rows?: { values: Record<string, string | number | boolean | null> }[] }[];
-  } | null;
-}
-
-export interface CampaignFormValues {
-  name: string;
-  campaignType: "one_time" | "automation";
-  templateId: string;
-  groupIds: string[];
-  templateParams: string[];
-  /** datetime-local string ("" means no schedule) */
-  scheduledAt: string;
-  aiEnabled: boolean;
-  aiAgentName: string;
-  aiSystemPrompt: string;
-  aiUseFaqs: boolean;
-  aiUseDocs: boolean;
-  aiUseProducts: boolean;
-  /** Outcome categories the AI sorts inbound replies into. Empty = broadcast only. */
-  replyClassifications: ReplyClassification[];
-  /** Automation blueprints own their audience and eligibility rules. */
-  recipientSourceType?: "ai_workbook" | "contact_groups";
-  recipientWorkbookId?: string;
-  recipientWorkbookSheetId?: string;
-  recipientPhoneColumn?: string;
-  recipientNameColumn?: string;
-  recipientRecordKeyColumn?: string;
-  recipientDateColumn?: string;
-  recipientDateOffsetDays?: number;
-  recipientStatusColumn?: string;
-  recipientEligibleStatuses?: string[];
-  /** Workbook fields the campaign AI may receive. */
-  recipientAiAllowedFields?: string[];
-}
+export type Template = WizardTemplate;
+export type Group = WizardGroup;
+export type { CampaignFormValues, CampaignSubmitOptions };
 
 export const EMPTY_CAMPAIGN_FORM: CampaignFormValues = {
   name: "",
@@ -114,6 +58,13 @@ export const EMPTY_CAMPAIGN_FORM: CampaignFormValues = {
   recipientStatusColumn: "",
   recipientEligibleStatuses: [],
   recipientAiAllowedFields: [],
+  quietHoursStart: "",
+  quietHoursEnd: "",
+  quietHoursTimezone: "",
+  variantBTemplateId: "",
+  variantBTemplateParams: [],
+  variantSplitPercent: 50,
+  followUps: [],
 };
 
 /**
@@ -145,6 +96,14 @@ export interface StoredCampaignConfig {
   recipientStatusColumn?: string | null;
   recipientEligibleStatuses?: string[] | null;
   recipientAiAllowedFields?: string[] | null;
+  quietHoursStart?: string | null;
+  quietHoursEnd?: string | null;
+  quietHoursTimezone?: string | null;
+  variantBTemplateId?: string | null;
+  variantBTemplateParams?: string[] | null;
+  variantSplitPercent?: number | null;
+  /** Saved follow-up steps (returned by the campaign detail API). */
+  followUps?: { delayHours: number; templateId: string; templateParams: string[] | null }[] | null;
 }
 
 /** Convert a stored ISO timestamp into the local-time string a datetime-local input expects. */
@@ -183,6 +142,15 @@ export function campaignToFormValues(campaign: StoredCampaignConfig): CampaignFo
     recipientStatusColumn: campaign.recipientStatusColumn || "",
     recipientEligibleStatuses: Array.isArray(campaign.recipientEligibleStatuses) ? campaign.recipientEligibleStatuses : [],
     recipientAiAllowedFields: Array.isArray(campaign.recipientAiAllowedFields) ? campaign.recipientAiAllowedFields : [],
+    quietHoursStart: campaign.quietHoursStart || "",
+    quietHoursEnd: campaign.quietHoursEnd || "",
+    quietHoursTimezone: campaign.quietHoursTimezone || "",
+    variantBTemplateId: campaign.variantBTemplateId || "",
+    variantBTemplateParams: Array.isArray(campaign.variantBTemplateParams) ? campaign.variantBTemplateParams : [],
+    variantSplitPercent: campaign.variantSplitPercent || 50,
+    followUps: Array.isArray(campaign.followUps)
+      ? campaign.followUps.map(f => ({ delayHours: f.delayHours, templateId: f.templateId, templateParams: Array.isArray(f.templateParams) ? f.templateParams : [] }))
+      : [],
   };
 }
 
@@ -215,53 +183,10 @@ export function interpolatePreview(body: string, params: string[]): string {
   return result;
 }
 
-function SectionCard({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
-  return (
-    <Card>
-      <CardHeader className="pb-3 pt-4 px-5">
-        <CardTitle className="text-base flex items-center gap-2 text-gray-800">
-          {icon}
-          {title}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="px-5 pb-5 space-y-3">
-        {children}
-      </CardContent>
-    </Card>
-  );
-}
-
-const ALWAYS_AVAILABLE = [
-  { key: "name", label: "Name" },
-  { key: "phone", label: "Phone" },
-];
-
-function FieldChips({
-  extraKeys,
-  onInsert,
-}: {
-  extraKeys: string[];
-  onInsert: (placeholder: string) => void;
-}) {
-  const all = [
-    ...ALWAYS_AVAILABLE,
-    ...extraKeys.filter(k => !["name", "phone"].includes(k)).map(k => ({ key: k, label: k })),
-  ];
-  return (
-    <div className="flex flex-wrap gap-1.5 mt-1.5">
-      <span className="text-xs text-gray-400 self-center">Insert field:</span>
-      {all.map(f => (
-        <button
-          key={f.key}
-          type="button"
-          onClick={() => onInsert(`{{${f.key}}}`)}
-          className="inline-flex items-center rounded-full border border-dashed border-emerald-400 bg-emerald-50 px-2.5 py-0.5 text-xs font-mono text-emerald-800 hover:bg-emerald-100 hover:border-emerald-500 transition-colors cursor-pointer"
-        >
-          {`{{${f.key}}}`}
-        </button>
-      ))}
-    </div>
-  );
+interface WorkbookDetail {
+  id: string;
+  name: string;
+  currentVersion: { id: string; versionNumber: number; sheets: WorkbookSheet[] } | null;
 }
 
 export interface CampaignFormProps {
@@ -270,682 +195,331 @@ export interface CampaignFormProps {
   initialValues?: CampaignFormValues;
   submitting: boolean;
   pendingLabel: string;
-  /** Leading text in the footer when the form is valid, e.g. "Ready to create". */
-  readyPrefix: string;
+  /** Kept for the pages that use this form; shown on the review step. */
+  readyPrefix?: string;
   submitLabel: (hasSchedule: boolean, campaignType: CampaignFormValues["campaignType"]) => React.ReactNode;
-  onSubmit: (values: CampaignFormValues) => void;
+  /** Offer "Send now" on the review step (after a confirmation showing how many people get it). */
+  allowSendNow?: boolean;
+  onSubmit: (values: CampaignFormValues, options?: CampaignSubmitOptions) => void;
   onCancel: () => void;
 }
+
+const STEP_LABEL: Record<WizardStepKey, string> = {
+  who: "Who",
+  message: "Message",
+  when: "When",
+  ai: "AI replies",
+  review: "Review",
+};
+
+const pad = (values: string[], count: number) => Array.from({ length: count }, (_, i) => (values[i] ?? "").trim());
 
 export default function CampaignForm({
   heading,
   initialValues = EMPTY_CAMPAIGN_FORM,
   submitting,
   pendingLabel,
-  readyPrefix,
   submitLabel,
+  allowSendNow = false,
   onSubmit,
   onCancel,
 }: CampaignFormProps) {
-  const [name, setName] = useState(initialValues.name);
-  const [campaignType, setCampaignType] = useState<CampaignFormValues["campaignType"]>(initialValues.campaignType);
-  const isAutomation = campaignType === "automation";
-  const [templateId, setTemplateId] = useState(initialValues.templateId);
-  const [selectedGroups, setSelectedGroups] = useState<string[]>(initialValues.groupIds);
-  const [params, setParams] = useState<string[]>(initialValues.templateParams);
-  const [scheduleAt, setScheduleAt] = useState(initialValues.scheduledAt);
-  const [aiEnabled, setAiEnabled] = useState(initialValues.aiEnabled);
-  const [aiAgentName, setAiAgentName] = useState(initialValues.aiAgentName);
-  const [aiSystemPrompt, setAiSystemPrompt] = useState(initialValues.aiSystemPrompt);
-  const [replyClassifications, setReplyClassifications] = useState<ReplyClassification[]>(
-    initialValues.replyClassifications || []
-  );
-  const [aiUseFaqs, setAiUseFaqs] = useState(initialValues.aiUseFaqs);
-  const [aiUseDocs, setAiUseDocs] = useState(initialValues.aiUseDocs);
-  const [aiUseProducts, setAiUseProducts] = useState(initialValues.aiUseProducts);
-  const [recipientSourceType, setRecipientSourceType] = useState<"ai_workbook" | "contact_groups">(initialValues.recipientSourceType || "ai_workbook");
-  const [sourceWorkbookId, setSourceWorkbookId] = useState(initialValues.recipientWorkbookId || "");
-  const [sourceWorkbookSheetId, setSourceWorkbookSheetId] = useState(initialValues.recipientWorkbookSheetId || "");
-  const [phoneColumn, setPhoneColumn] = useState(initialValues.recipientPhoneColumn || "");
-  const [aiFieldAllowlist, setAiFieldAllowlist] = useState<string[]>(initialValues.recipientAiAllowedFields || []);
   const [, setLocation] = useLocation();
+  const [v, setV] = useState<CampaignFormValues>(() => ({ ...EMPTY_CAMPAIGN_FORM, ...initialValues }));
+  const set = (patch: Partial<CampaignFormValues>) => setV(prev => ({ ...prev, ...patch }));
+  const [scheduleMode, setScheduleMode] = useState(Boolean(initialValues.scheduledAt));
+  const [step, setStep] = useState<WizardStepKey>("who");
+  const [confirmSend, setConfirmSend] = useState(false);
+  const isAutomation = v.campaignType === "automation";
+  const source = v.recipientSourceType || "ai_workbook";
 
-  const { data: templates = [] } = useQuery<Template[]>({ queryKey: ["/api/whatsapp/templates"] });
-  const { data: groups = [] } = useQuery<Group[]>({ queryKey: ["/api/whatsapp/contact-groups"] });
-  const { data: workbooks = [] } = useQuery<WorkbookSummary[]>({ queryKey: ["/api/whatsapp/ai-workbooks"] });
+  const { data: templates = [], isLoading: templatesLoading } = useQuery<WizardTemplate[]>({ queryKey: ["/api/whatsapp/templates"] });
+  const { data: groups = [], isLoading: groupsLoading } = useQuery<WizardGroup[]>({ queryKey: ["/api/whatsapp/contact-groups"] });
+  const { data: workbooks = [] } = useQuery<WorkbookSummary[]>({ queryKey: ["/api/whatsapp/ai-workbooks"], enabled: isAutomation });
   const { data: selectedWorkbook } = useQuery<WorkbookDetail>({
-    queryKey: ["/api/whatsapp/ai-workbooks", sourceWorkbookId],
-    queryFn: () => apiRequest("GET", `/api/whatsapp/ai-workbooks/${sourceWorkbookId}`),
-    enabled: isAutomation && recipientSourceType === "ai_workbook" && Boolean(sourceWorkbookId),
+    queryKey: ["/api/whatsapp/ai-workbooks", v.recipientWorkbookId],
+    queryFn: () => apiRequest("GET", `/api/whatsapp/ai-workbooks/${v.recipientWorkbookId}`),
+    enabled: isAutomation && source === "ai_workbook" && Boolean(v.recipientWorkbookId),
   });
-  const selectedWorkbookSheet = selectedWorkbook?.currentVersion?.sheets[0];
-  const sourceColumns = isAutomation && recipientSourceType === "ai_workbook"
-    ? selectedWorkbookSheet?.columns || []
-    : [];
-  const sourceSample = selectedWorkbookSheet?.rows?.[0]?.values;
+  const workbookSheet = isAutomation && source === "ai_workbook" ? selectedWorkbook?.currentVersion?.sheets[0] : undefined;
 
-  // Fetch a sample of contacts from each selected group to discover attribute keys
-  const contactSampleQueries = useQueries({
-    queries: selectedGroups.map(groupId => ({
-      queryKey: ["/api/whatsapp/contact-groups", groupId, "contacts-sample"],
-      queryFn: async () => {
-        const res = await apiRequest("GET", `/api/whatsapp/contact-groups/${groupId}/contacts?limit=50`);
-        return (Array.isArray(res) ? res : res.contacts ?? []) as Contact[];
-      },
-      staleTime: 60_000,
-    })),
+  const groupKey = [...v.groupIds].sort().join(",");
+  const previewEnabled = v.groupIds.length > 0 && (!isAutomation || source === "contact_groups");
+  const { data: preview, isFetching: previewLoading } = useQuery<AudiencePreview>({
+    queryKey: ["/api/whatsapp/campaigns/audience-preview", groupKey],
+    queryFn: () => apiRequest("POST", "/api/whatsapp/campaigns/audience-preview", { groupIds: groupKey.split(",") }),
+    enabled: previewEnabled,
+    staleTime: 30_000,
   });
 
-  const extraAttributeKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const q of contactSampleQueries) {
-      for (const contact of (q.data ?? [])) {
-        for (const k of Object.keys(contact.attributes ?? {})) {
-          keys.add(k);
-        }
-      }
+  // Sample contact + fillable fields: the first audience contact, or the first workbook row.
+  const { sample, fields } = useMemo((): { sample: SampleContact | null; fields: string[] } => {
+    if (workbookSheet) {
+      const row = workbookSheet.rows?.[0]?.values;
+      const attrs: Record<string, string> = {};
+      for (const [k, val] of Object.entries(row || {})) attrs[k] = val === null || val === undefined ? "" : String(val);
+      return {
+        sample: row ? { name: attrs[v.recipientNameColumn || "name"] || attrs.name || "", phone: attrs[v.recipientPhoneColumn || ""] || "", attributes: attrs } : null,
+        fields: workbookSheet.columns.map(c => c.key),
+      };
     }
-    return Array.from(keys).sort();
-  }, [contactSampleQueries]);
-  const contactGroupColumns = useMemo(
-    () => [
-      { key: "phone", label: "Phone" },
-      { key: "name", label: "Name" },
-      ...extraAttributeKeys.map(key => ({ key, label: key })),
-    ],
-    [extraAttributeKeys],
-  );
-  const mappingColumns = recipientSourceType === "ai_workbook" ? sourceColumns : contactGroupColumns;
-  const personalizationKeys = isAutomation
-    ? mappingColumns.map(column => column.key)
-    : extraAttributeKeys;
-  const resolvedParam = (value: string) => value.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, key) => {
-    const normalized = String(key).trim().toLowerCase();
-    if (normalized === "name") return String(sourceSample?.name ?? "Name");
-    if (normalized === "phone") return String(sourceSample?.[phoneColumn] ?? "Phone");
-    return String(sourceSample?.[key] ?? sourceSample?.[normalized] ?? `{{${key}}}`);
-  });
+    return { sample: previewEnabled ? preview?.sampleContact ?? null : null, fields: previewEnabled ? preview?.fields ?? [] : [] };
+  }, [workbookSheet, preview, previewEnabled, v.recipientNameColumn, v.recipientPhoneColumn]);
 
-  const selectedTemplate = templates.find(t => t.id === templateId);
-  const requiredParams = selectedTemplate?.paramCount || 0;
-
-  // These two bars mirror the server's prerequisite checks exactly. WhatsApp only delivers
-  // approved templates, and a group with no contacts produces a campaign addressed to nobody.
-  // If the form were more permissive than the server, the user would fill everything in and
-  // only discover the problem when the save is rejected.
   const approvedTemplates = templates.filter(t => t.status === "approved");
-  const nonEmptyGroups = groups.filter(g => g.contactCount > 0);
-  const selectedTemplateApproved = !selectedTemplate || selectedTemplate.status === "approved";
+  const tplA = templates.find(t => t.id === v.templateId);
+  const abOn = !isAutomation && Boolean(v.variantBTemplateId);
+  const tplB = templates.find(t => t.id === v.variantBTemplateId);
+  const followUp = !isAutomation ? v.followUps[0] : undefined;
+  const followUpTpl = followUp ? templates.find(t => t.id === followUp.templateId) : undefined;
+  const totalContacts = groups.filter(g => v.groupIds.includes(g.id)).reduce((sum, g) => sum + g.contactCount, 0);
+  const blanks = (tpl: WizardTemplate | undefined, values: string[]) =>
+    Array.from({ length: tpl?.paramCount || 0 }, (_, i) => i).filter(i => !(values[i] ?? "").trim());
 
-  const totalContacts = groups
-    .filter(g => selectedGroups.includes(g.id))
-    .reduce((sum, g) => sum + g.contactCount, 0);
-
-  /** Nothing can be sent at all until both of these exist — shown before the form is filled in. */
-  const missingPrerequisite =
-    approvedTemplates.length === 0
+  /** Nothing can be sent at all until both of these exist — said up front, before any effort. */
+  const missingPrerequisite = templatesLoading || groupsLoading ? null
+    : approvedTemplates.length === 0
       ? {
-          title: "You need an approved template first",
-          body:
-            templates.length === 0
-              ? "WhatsApp only lets businesses start conversations using a template it has approved in advance. Add one on the Templates page, then come back."
-              : "None of your templates are approved yet. WhatsApp will not deliver an unapproved template, so a campaign using one would fail for every recipient.",
-          href: "/admin/whatsapp-templates",
-          cta: "Go to Templates",
-        }
-      : !isAutomation && nonEmptyGroups.length === 0
+        title: "You need an approved template first",
+        body: templates.length === 0
+          ? "WhatsApp only lets businesses start conversations with a template it has approved in advance. Add one on the Templates page, then come back."
+          : "None of your templates are approved yet. WhatsApp will not deliver an unapproved template.",
+        href: "/admin/whatsapp-templates",
+        cta: "Go to Templates",
+      }
+      : !isAutomation && groups.every(g => g.contactCount === 0)
         ? {
-            title: "You need an audience with contacts in it",
-            body:
-              groups.length === 0
-                ? "A campaign sends to a contact group. Create one and add contacts, then come back."
-                : "Your contact groups are all empty, so a campaign would reach nobody. Add contacts to a group first.",
-            href: "/admin/whatsapp-contact-groups",
-            cta: "Go to Contact Groups",
-          }
+          title: "You need an audience with contacts in it",
+          body: groups.length === 0 ? "A campaign is sent to an audience. Create one and add contacts, then come back." : "Your audiences are all empty, so a campaign would reach nobody. Add contacts first.",
+          href: "/admin/whatsapp-contact-groups",
+          cta: "Go to Audiences",
+        }
         : null;
 
-  // How many parameters we submit is derived from the selected template's metadata. When
-  // editing, the campaign's template is known before the templates list has loaded — saving in
-  // that window would compute zero required parameters and wipe the stored values. Block
-  // submission until the template actually resolves.
-  const templateResolved = !templateId || Boolean(selectedTemplate);
+  const steps: WizardStepKey[] = isAutomation ? ["who", "message", "ai", "review"] : ["who", "message", "when", "ai", "review"];
 
-  // WhatsApp refuses to deliver a message with an empty personalization slot, and it refuses it
-  // for every recipient, so a blank here is not a partial send — it is a campaign that fails
-  // wholesale once it is too late to edit.
-  const blankParams = Array.from({ length: requiredParams }, (_, i) => i)
-    .filter(i => !(params[i] ?? "").trim());
-  const paramsComplete = blankParams.length === 0;
-
-  const automationSourceComplete = recipientSourceType === "ai_workbook"
-    ? Boolean(sourceWorkbookId && phoneColumn)
-    : selectedGroups.length > 0;
-  const basicsComplete = Boolean(name.trim()) && Boolean(templateId) && (isAutomation ? automationSourceComplete : selectedGroups.length > 0);
-  // totalContacts > 0 is the client-side twin of the server's empty-audience refusal.
-  const audienceUsable = isAutomation || totalContacts > 0;
-  const canSubmit =
-    basicsComplete && templateResolved && paramsComplete && audienceUsable && selectedTemplateApproved;
-
-  const handleSubmit = () => {
-    if (!selectedTemplate || !paramsComplete) return;
-    const padded: string[] = [];
-    for (let i = 0; i < requiredParams; i++) padded.push((params[i] ?? "").trim());
-    onSubmit({
-      name,
-      campaignType,
-      templateId,
-      groupIds: isAutomation && recipientSourceType === "ai_workbook" ? [] : selectedGroups,
-      templateParams: padded,
-      scheduledAt: isAutomation ? "" : scheduleAt,
-      aiEnabled,
-      aiAgentName,
-      aiSystemPrompt,
-      aiUseFaqs,
-      aiUseDocs,
-      aiUseProducts,
-      replyClassifications,
-      ...(isAutomation ? {
-        recipientSourceType,
-        recipientWorkbookId: recipientSourceType === "ai_workbook" ? sourceWorkbookId : "",
-        recipientWorkbookSheetId: recipientSourceType === "ai_workbook" ? selectedWorkbookSheet?.id || sourceWorkbookSheetId : "",
-        recipientPhoneColumn: phoneColumn,
-        recipientAiAllowedFields: recipientSourceType === "ai_workbook" ? aiFieldAllowlist : [],
-      } : {}),
-    });
+  /** Why a step can't be left yet (null = fine). Mirrors the server's checks. */
+  const problemOf = (key: WizardStepKey): string | null => {
+    if (key === "who") {
+      if (!v.name.trim()) return "Give the campaign a name.";
+      if (isAutomation) {
+        if (source === "ai_workbook" && !(v.recipientWorkbookId && v.recipientPhoneColumn)) return "Choose a workbook and its mobile number column.";
+        if (source === "contact_groups" && v.groupIds.length === 0) return "Choose at least one audience.";
+        return null;
+      }
+      if (v.groupIds.length === 0) return "Choose at least one audience.";
+      if (totalContacts === 0) return "The audiences you picked have no contacts.";
+      if (preview && preview.willSend === 0) return "Nobody in these audiences can receive the message.";
+      return null;
+    }
+    if (key === "message") {
+      if (!v.templateId) return "Choose a template.";
+      if (!tplA) return "Loading template details…";
+      if (tplA.status !== "approved") return "This template isn't approved, so WhatsApp won't deliver it.";
+      if (blanks(tplA, v.templateParams).length) return "Fill in every blank in the message.";
+      if (abOn) {
+        if (!tplB || v.variantBTemplateId === AB_PENDING) return "Choose a template for message B, or switch the A/B test off.";
+        if (blanks(tplB, v.variantBTemplateParams).length) return "Fill in every blank in message B.";
+      }
+      return null;
+    }
+    if (key === "when") {
+      if (scheduleMode) {
+        if (!v.scheduledAt) return "Pick a date and time, or choose Send right away.";
+        if (new Date(v.scheduledAt).getTime() <= Date.now()) return "The scheduled time is in the past.";
+      }
+      if (v.quietHoursStart || v.quietHoursEnd) {
+        if (!/^\d\d:\d\d$/.test(v.quietHoursStart) || !/^\d\d:\d\d$/.test(v.quietHoursEnd)) return "Set both quiet-hours times.";
+        if (v.quietHoursStart === v.quietHoursEnd) return "Quiet hours can't start and end at the same time.";
+      }
+      if (followUp) {
+        if (!Number.isInteger(followUp.delayHours) || followUp.delayHours < 1 || followUp.delayHours > 720) return "Reminder wait must be between 1 and 720 hours.";
+        if (!followUp.templateId) return "Choose the reminder template.";
+        if (followUpTpl && blanks(followUpTpl, followUp.templateParams).length) return "Fill in every blank in the reminder.";
+      }
+      return null;
+    }
+    return null;
   };
 
+  const stepIndex = steps.indexOf(step);
+  const firstBlocked = steps.findIndex(k => problemOf(k) !== null);
+  const reachable = (i: number) => firstBlocked === -1 || i <= firstBlocked;
+  const currentProblem = problemOf(step);
+  const goTo = (key: WizardStepKey) => { if (reachable(steps.indexOf(key))) setStep(key); };
+  const allValid = firstBlocked === -1;
+
+  const buildValues = (): CampaignFormValues => {
+    const out: CampaignFormValues = {
+      ...v,
+      name: v.name.trim(),
+      templateParams: pad(v.templateParams, tplA?.paramCount || 0),
+      scheduledAt: isAutomation || !scheduleMode ? "" : v.scheduledAt,
+      groupIds: isAutomation && source === "ai_workbook" ? [] : v.groupIds,
+      quietHoursStart: isAutomation ? "" : v.quietHoursStart,
+      quietHoursEnd: isAutomation ? "" : v.quietHoursEnd,
+      quietHoursTimezone: isAutomation || !v.quietHoursStart ? "" : v.quietHoursTimezone,
+      variantBTemplateId: abOn && tplB ? v.variantBTemplateId : "",
+      variantBTemplateParams: abOn && tplB ? pad(v.variantBTemplateParams, tplB.paramCount || 0) : [],
+      variantSplitPercent: v.variantSplitPercent || 50,
+      followUps: followUp && followUpTpl
+        ? [{ delayHours: followUp.delayHours, templateId: followUp.templateId, templateParams: pad(followUp.templateParams, followUpTpl.paramCount || 0) }]
+        : [],
+    };
+    if (isAutomation) {
+      out.recipientSourceType = source;
+      out.recipientWorkbookId = source === "ai_workbook" ? v.recipientWorkbookId : "";
+      out.recipientWorkbookSheetId = source === "ai_workbook" ? workbookSheet?.id || v.recipientWorkbookSheetId : "";
+      out.recipientAiAllowedFields = source === "ai_workbook" ? v.recipientAiAllowedFields : [];
+    } else {
+      // One-time campaigns don't carry a live recipient source; sending those fields would
+      // make the server validate a workbook nobody chose.
+      for (const key of [
+        "recipientSourceType", "recipientWorkbookId", "recipientWorkbookSheetId", "recipientPhoneColumn",
+        "recipientNameColumn", "recipientRecordKeyColumn", "recipientDateColumn", "recipientDateOffsetDays",
+        "recipientStatusColumn", "recipientEligibleStatuses", "recipientAiAllowedFields",
+      ] as const) delete out[key];
+    }
+    return out;
+  };
+
+  const submit = (options?: CampaignSubmitOptions) => {
+    if (!allValid || submitting) return;
+    onSubmit(buildValues(), options);
+  };
+
+  const ctx: WizardCtx = {
+    v, set, isAutomation, templates, approvedTemplates, groups,
+    preview: previewEnabled ? preview : undefined,
+    previewLoading: previewEnabled && previewLoading,
+    sample, fields, scheduleMode, setScheduleMode,
+    workbooks, workbookName: selectedWorkbook?.name ?? null, workbookSheet,
+  };
+  const willSend = preview?.willSend ?? totalContacts;
+  const hasSchedule = !isAutomation && scheduleMode && Boolean(v.scheduledAt);
+
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* Top bar */}
-      <div className="sticky top-0 z-10 bg-white border-b px-6 py-3 flex items-center gap-3 shadow-sm">
-        <Button variant="ghost" size="sm" onClick={onCancel} className="gap-1.5 text-gray-600">
-          <ArrowLeft className="h-4 w-4" /> Back
-        </Button>
-        <Separator orientation="vertical" className="h-5" />
-        <Megaphone className="h-5 w-5 text-emerald-600" />
-        <h1 className="text-lg font-semibold">{heading}</h1>
+    <div className="flex min-h-screen flex-col bg-gray-50">
+      {/* Top bar with steps */}
+      <div className="sticky top-0 z-10 border-b bg-white shadow-sm">
+        <div className="flex items-center gap-2 px-3 py-2.5 sm:px-6">
+          <Button variant="ghost" size="sm" onClick={onCancel} className="gap-1.5 text-gray-600">
+            <ArrowLeft className="h-4 w-4" /> <span className="hidden sm:inline">Back</span>
+          </Button>
+          <Megaphone className="h-5 w-5 shrink-0 text-emerald-600" />
+          <h1 className="truncate text-base font-semibold sm:text-lg">{heading}</h1>
+        </div>
+        <nav className="overflow-x-auto px-3 pb-2.5 sm:px-6" aria-label="Campaign steps">
+          <ol className="flex min-w-max items-center gap-1.5">
+            {steps.map((key, i) => {
+              const active = key === step;
+              const done = i < stepIndex && problemOf(key) === null;
+              return (
+                <li key={key} className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => goTo(key)}
+                    disabled={!reachable(i)}
+                    className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm transition-colors ${
+                      active ? "bg-emerald-600 text-white" : done ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
+                    aria-current={active ? "step" : undefined}
+                    data-testid={`wizard-step-${key}`}
+                  >
+                    <span className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${active ? "bg-white/20" : "bg-white"}`}>
+                      {done ? <Check className="h-3 w-3" /> : i + 1}
+                    </span>
+                    {STEP_LABEL[key]}
+                  </button>
+                  {i < steps.length - 1 && <span className="h-px w-3 bg-gray-300 sm:w-6" />}
+                </li>
+              );
+            })}
+          </ol>
+        </nav>
       </div>
 
       {/* Body */}
-      <div className="flex-1 p-6 max-w-6xl mx-auto w-full">
-        {/* Stated up front, before the user invests effort in a form that cannot be saved.
-            The server refuses these too; this is what stops the refusal being a surprise. */}
-        {missingPrerequisite && (
-          <Card className="mb-6 border-amber-300 bg-amber-50">
-            <CardContent className="pt-5 pb-5">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-amber-900">{missingPrerequisite.title}</p>
-                  <p className="text-sm text-amber-800 mt-1">{missingPrerequisite.body}</p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="mt-3 bg-white"
-                    onClick={() => setLocation(missingPrerequisite.href)}
-                    data-testid="button-fix-prerequisite"
-                  >
-                    {missingPrerequisite.cta}
-                  </Button>
-                </div>
+      <div className="mx-auto w-full max-w-5xl flex-1 p-3 sm:p-6">
+        {missingPrerequisite && step === "who" && (
+          <Card className="mb-4 border-amber-300 bg-amber-50">
+            <CardContent className="flex items-start gap-3 p-4">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-amber-900">{missingPrerequisite.title}</p>
+                <p className="mt-1 text-sm text-amber-800">{missingPrerequisite.body}</p>
+                <Button size="sm" variant="outline" className="mt-3 bg-white" onClick={() => setLocation(missingPrerequisite.href)} data-testid="button-fix-prerequisite">
+                  {missingPrerequisite.cta}
+                </Button>
               </div>
             </CardContent>
           </Card>
         )}
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-6 items-start">
+        {step === "who" && <StepWho ctx={ctx} />}
+        {step === "message" && <StepMessage ctx={ctx} />}
+        {step === "when" && <StepWhen ctx={ctx} />}
+        {step === "ai" && <StepAiReplies ctx={ctx} />}
+        {step === "review" && <StepReview ctx={ctx} goTo={goTo} />}
+      </div>
 
-          {/* Left: form */}
-          <div className="space-y-4">
-
-            {/* Campaign basics */}
-            <SectionCard icon={<Megaphone className="h-4 w-4 text-emerald-600" />} title="Campaign basics">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Campaign type <span className="text-red-500">*</span></label>
-                <p className="text-xs text-gray-500 mt-0.5 mb-2">Choose whether this campaign is sent once or reused by a recurring automation.</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {([
-                    ["one_time", "One-time campaign", "Choose the audience and optional send time here."],
-                    ["automation", "Automation campaign", "Save the message and AI behavior; choose audience and recurring timing later."],
-                  ] as const).map(([value, label, description]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => {
-                        setCampaignType(value);
-                        if (value === "automation") {
-                          setSelectedGroups([]);
-                          setScheduleAt("");
-                        }
-                      }}
-                      className={`rounded-lg border px-3 py-3 text-left transition-colors ${
-                        campaignType === value
-                          ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500"
-                          : "border-gray-200 hover:border-emerald-300 hover:bg-gray-50"
-                      }`}
-                      data-testid={`button-campaign-type-${value}`}
-                    >
-                      <span className="block text-sm font-medium text-gray-800">{label}</span>
-                      <span className="block text-xs text-gray-500 mt-1">{description}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">Campaign name <span className="text-red-500">*</span></label>
-                <Input
-                  className="mt-1"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  placeholder="Diwali offer 2026"
-                  data-testid="input-campaign-name"
-                />
-              </div>
-            </SectionCard>
-
-            {/* A recurring blueprint owns its recipient source and mobile mapping. Scheduling,
-                eligibility, and duplicate rules are configured on the next automation screen. */}
-            {isAutomation && <SectionCard icon={<Users className="h-4 w-4 text-purple-600" />} title="Recipient source">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-700">Audience source <span className="text-red-500">*</span></label>
-                <Select value={recipientSourceType} onValueChange={(value: "ai_workbook" | "contact_groups") => {
-                  setRecipientSourceType(value);
-                  if (value === "ai_workbook") setSelectedGroups([]);
-                  else {
-                    setSourceWorkbookId("");
-                    setPhoneColumn(current => current || "phone");
-                  }
-                }}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ai_workbook">AI Workbook</SelectItem>
-                    <SelectItem value="contact_groups">Fixed contact groups (compatibility)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-gray-500">This source and its rules are saved with the campaign blueprint.</p>
-              </div>
-              {recipientSourceType === "ai_workbook" ? <>
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Active AI Workbook <span className="text-red-500">*</span></label>
-                  <Select value={sourceWorkbookId} onValueChange={value => {
-                    setSourceWorkbookId(value); setSourceWorkbookSheetId(""); setAiFieldAllowlist([]);
-                  }}>
-                    <SelectTrigger className="mt-1"><SelectValue placeholder="Choose an active AI Workbook" /></SelectTrigger>
-                    <SelectContent>{workbooks.filter(w => w.status === "active").map(w => <SelectItem key={w.id} value={w.id}>{w.name}{w.latestVersion ? ` · v${w.latestVersion.versionNumber}` : ""}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
-                {selectedWorkbookSheet && <div className="rounded-md border bg-gray-50 p-3 text-xs space-y-2">
-                  <p className="font-medium text-gray-700">Sheet: {selectedWorkbookSheet.name} · {sourceColumns.length} columns</p>
-                  <p className="text-gray-600 break-words">Columns: {sourceColumns.map(c => c.label).join(", ")}</p>
-                  {sourceSample && <p className="text-gray-600 break-words">Sample row: {sourceColumns.slice(0, 5).map(c => `${c.label}: ${String(sourceSample[c.key] ?? "—")}`).join(" · ")}</p>}
-                </div>}
-                <div>
-                  <label className="text-xs font-medium text-gray-600">Mobile number column<span className="text-red-500"> *</span></label>
-                  <Input className="mt-1" list="workbook-columns" value={phoneColumn} onChange={e => setPhoneColumn(e.target.value)} placeholder="Choose a Workbook column" />
-                  <p className="text-xs text-gray-500 mt-1">This is the column used to deliver WhatsApp messages. Date, status, and duplicate rules are configured next in Automations.</p>
-                </div>
-                <datalist id="workbook-columns">{sourceColumns.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}</datalist>
-                <div>
-                  <label className="text-xs font-medium text-gray-600">Campaign-AI field allowlist</label>
-                  <p className="text-xs text-gray-500 mt-0.5">Only checked Workbook fields are provided to the campaign AI.</p>
-                  <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2">{sourceColumns.map(c => <label key={c.key} className="flex items-center gap-1.5 text-xs cursor-pointer">
-                    <Checkbox checked={aiFieldAllowlist.includes(c.key)} onCheckedChange={checked => setAiFieldAllowlist(current => checked ? [...current, c.key] : current.filter(key => key !== c.key))} />
-                    {c.label}
-                  </label>)}</div>
-                </div>
-              </> : <>
-                <div className="border rounded-lg divide-y">
-                  {groups.map(g => <label key={g.id} className="flex items-center gap-3 px-4 py-3 text-sm">
-                    <Checkbox checked={selectedGroups.includes(g.id)} disabled={g.contactCount === 0} onCheckedChange={checked => setSelectedGroups(current => checked ? [...current, g.id] : current.filter(id => id !== g.id))} />
-                    <span className="flex-1">{g.name}</span><Badge variant="outline">{g.contactCount} contacts</Badge>
-                  </label>)}
-                </div>
-                <p className="text-xs text-gray-500">Date, status, and duplicate rules are configured next in Automations.</p>
-              </>}
-            </SectionCard>}
-
-            {/* Template */}
-            <SectionCard icon={<FileCode2 className="h-4 w-4 text-blue-600" />} title="Template">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Choose template <span className="text-red-500">*</span></label>
-                <Select value={templateId} onValueChange={v => { setTemplateId(v); setParams([]); }}>
-                  <SelectTrigger className="mt-1" data-testid="select-campaign-template">
-                    <SelectValue placeholder="Select a template" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {templates.length === 0 && (
-                      <div className="p-3 text-sm text-gray-500">
-                        No templates yet — add one on the Templates page first.
-                      </div>
-                    )}
-                    {templates.length > 0 && approvedTemplates.length === 0 && (
-                      <div className="p-3 text-sm text-gray-500">
-                        None of your templates are approved yet, so none can be sent.
-                      </div>
-                    )}
-                    {/* Only approved templates are offered. Listing an unapproved one as a
-                        choosable option invites the user to build a campaign that can never send. */}
-                    {approvedTemplates.map(t => (
-                      <SelectItem key={t.id} value={t.id}>
-                        <span className="font-mono">{t.name}</span>
-                        <span className="ml-2 text-gray-500 text-xs">· {t.paramCount} param{t.paramCount !== 1 ? "s" : ""}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-            </SectionCard>
-
-            {/* Template parameters — only shown when template has params */}
-            {requiredParams > 0 && (
-              <SectionCard icon={<Sparkles className="h-4 w-4 text-amber-500" />} title="Template parameters">
-                <p className="text-xs text-gray-500">
-                  Type a fixed value like <code className="bg-gray-100 px-1 rounded">"50%"</code>, or click a field chip below to personalise per contact (e.g. each person's name).
-                </p>
-                {!isAutomation && selectedGroups.length === 0 && (
-                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                    Select a contact group above to see available contact fields.
-                  </p>
-                )}
-                {Array.from({ length: requiredParams }).map((_, i) => (
-                  <div key={i}>
-                    <label className="text-xs text-gray-500 mb-1 block">
-                      Parameter {i + 1} <span className="font-mono text-gray-400">{`{{${i + 1}}}`}</span>
-                    </label>
-                    <Input
-                      value={params[i] || ""}
-                      onChange={e => {
-                        const next = [...params];
-                        next[i] = e.target.value;
-                        setParams(next);
-                      }}
-                      placeholder={`e.g. {{name}} or "Diwali Offer"`}
-                      aria-invalid={blankParams.includes(i)}
-                      className={blankParams.includes(i) ? "border-amber-400 focus-visible:ring-amber-400" : undefined}
-                      data-testid={`input-param-${i}`}
-                    />
-                    {blankParams.includes(i) && (
-                      <p className="text-xs text-amber-700 mt-1" data-testid={`text-param-required-${i}`}>
-                        Required — WhatsApp won't deliver the message if this is blank.
-                      </p>
-                    )}
-                    <FieldChips
-                      extraKeys={personalizationKeys}
-                      onInsert={placeholder => {
-                        const next = [...params];
-                        next[i] = placeholder;
-                        setParams(next);
-                      }}
-                    />
-                    {isAutomation && sourceSample && params[i] && (
-                      <p className="text-xs text-emerald-700 mt-1">Sample value: {resolvedParam(params[i])}</p>
-                    )}
-                  </div>
-                ))}
-                {isAutomation && selectedTemplate && sourceSample && (
-                  <div className="rounded-md border bg-gray-50 p-3 text-xs text-gray-600">
-                    <span className="font-medium text-gray-700">Sample preview: </span>
-                    {interpolatePreview(selectedTemplate.bodyText, params.map(resolvedParam))}
-                  </div>
-                )}
-              </SectionCard>
+      {/* Bottom bar */}
+      <div className="sticky bottom-0 border-t bg-white px-3 py-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)] sm:px-6">
+        <div className="mx-auto flex max-w-5xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className={`text-sm ${currentProblem ? "text-amber-700" : "text-gray-500"}`} data-testid="text-step-status">
+            {currentProblem
+              ?? (step === "review"
+                ? (isAutomation ? "Ready — next you'll choose when it repeats." : hasSchedule ? "Ready to schedule." : "Ready. Save it as a draft or send it now.")
+                : `Step ${stepIndex + 1} of ${steps.length}`)}
+          </p>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {stepIndex > 0 ? (
+              <Button variant="outline" onClick={() => setStep(steps[stepIndex - 1])}>
+                <ArrowLeft className="mr-1 h-4 w-4" /> Back
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={onCancel}>Cancel</Button>
             )}
-
-            {/* Audience — automation campaigns choose this later in Automations. */}
-            {!isAutomation && <SectionCard icon={<Users className="h-4 w-4 text-purple-600" />} title="Audience">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Contact groups <span className="text-red-500">*</span></label>
-                <p className="text-xs text-gray-500 mt-0.5 mb-2">Select one or more groups to receive this campaign.</p>
-                 <DropdownMenu>
-                   <DropdownMenuTrigger asChild>
-                     <Button
-                       type="button"
-                       variant="outline"
-                       className="mt-1 h-11 w-full justify-between rounded-lg border-gray-200 bg-white px-3 text-left font-normal hover:bg-gray-50"
-                       aria-label="Select contact groups"
-                       data-testid="button-select-contact-groups"
-                     >
-                       <span className={selectedGroups.length > 0 ? "truncate text-gray-900" : "truncate text-gray-500"}>
-                         {selectedGroups.length > 0
-                           ? `${selectedGroups.length} group${selectedGroups.length !== 1 ? "s" : ""} selected · ~${totalContacts} recipients`
-                           : groups.length > 0 ? "Select one or more groups" : "No contact groups available"}
-                       </span>
-                       <ChevronDown className="ml-2 h-4 w-4 shrink-0 text-gray-400" />
-                     </Button>
-                   </DropdownMenuTrigger>
-                   <DropdownMenuContent
-                     align="start"
-                     className="max-h-72 w-[var(--radix-dropdown-menu-trigger-width)] min-w-[280px] max-w-[calc(100vw-2rem)]"
-                   >
-                     <DropdownMenuLabel>Choose audience groups</DropdownMenuLabel>
-                     <DropdownMenuSeparator />
-                     {groups.length === 0 ? (
-                       <div className="px-2 py-5 text-center text-sm text-gray-500">
-                         No groups yet — create a contact group first.
-                       </div>
-                     ) : groups.map(g => {
-                       // An empty group is not a valid audience — the server refuses it too, so it
-                       // remains visible in the menu but cannot be selected.
-                       const isEmpty = g.contactCount === 0;
-                       return (
-                         <DropdownMenuCheckboxItem
-                           key={g.id}
-                           checked={selectedGroups.includes(g.id)}
-                           disabled={isEmpty}
-                           onSelect={event => event.preventDefault()}
-                           onCheckedChange={checked => {
-                             setSelectedGroups(prev => checked ? [...prev, g.id] : prev.filter(id => id !== g.id));
-                           }}
-                           className="gap-2 py-2.5"
-                           data-testid={`checkbox-group-${g.id}`}
-                         >
-                           <Users className="h-4 w-4 shrink-0 text-gray-400" />
-                           <span className="min-w-0 flex-1 truncate">{g.name}</span>
-                           {isEmpty ? (
-                             <span className="ml-2 shrink-0 text-xs text-gray-400">Empty</span>
-                           ) : (
-                             <span className="ml-2 shrink-0 text-xs text-gray-500">{g.contactCount} contacts</span>
-                           )}
-                         </DropdownMenuCheckboxItem>
-                       );
-                     })}
-                   </DropdownMenuContent>
-                 </DropdownMenu>
-                {selectedGroups.length > 0 && (
-                  <p className="text-xs text-emerald-700 font-medium mt-1.5">
-                    {selectedGroups.length} group{selectedGroups.length !== 1 ? "s" : ""} selected · ~{totalContacts} recipients
-                  </p>
+            {step !== "review" ? (
+              <Button onClick={() => setStep(steps[stepIndex + 1])} disabled={Boolean(currentProblem)} data-testid="button-wizard-next">
+                Next <ArrowRight className="ml-1 h-4 w-4" />
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant={allowSendNow && !hasSchedule && !isAutomation ? "outline" : "default"}
+                  disabled={!allValid || submitting}
+                  onClick={() => submit()}
+                  className="gap-1.5"
+                  data-testid="button-submit-campaign"
+                >
+                  {submitting ? pendingLabel : submitLabel(hasSchedule, v.campaignType)}
+                </Button>
+                {allowSendNow && !hasSchedule && !isAutomation && (
+                  <Button disabled={!allValid || submitting} onClick={() => setConfirmSend(true)} className="gap-1.5" data-testid="button-send-now">
+                    <Send className="h-4 w-4" /> Send now
+                  </Button>
                 )}
-              </div>
-            </SectionCard>}
-
-            {/* Schedule — recurring automation timing is configured separately. */}
-            {!isAutomation && <SectionCard icon={<Calendar className="h-4 w-4 text-amber-600" />} title="Schedule">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Send at (optional)</label>
-                <Input
-                  className="mt-1"
-                  type="datetime-local"
-                  value={scheduleAt}
-                  onChange={e => setScheduleAt(e.target.value)}
-                  data-testid="input-schedule"
-                />
-                <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
-                  <Clock className="h-3 w-3" />
-                  Leave blank to send immediately when you click "Send Now" on the campaigns list.
-                </p>
-              </div>
-            </SectionCard>}
-
-            {/* AI replies */}
-            <SectionCard icon={<Bot className="h-4 w-4 text-indigo-600" />} title="AI replies">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium text-gray-700">AI replies on inbound messages</div>
-                  <div className="text-xs text-gray-500 mt-0.5">When a recipient replies, an AI agent negotiates using your knowledge base.</div>
-                </div>
-                <Switch checked={aiEnabled} onCheckedChange={setAiEnabled} data-testid="switch-ai-enabled" />
-              </div>
-
-              {aiEnabled && (
-                <>
-                  <Separator />
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Agent name</label>
-                    <Input
-                      className="mt-1"
-                      value={aiAgentName}
-                      onChange={e => setAiAgentName(e.target.value)}
-                      placeholder="Sales Agent"
-                      data-testid="input-ai-agent-name"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Custom persona / instructions <span className="text-gray-400 font-normal">(optional)</span></label>
-                    <Textarea
-                      className="mt-1"
-                      value={aiSystemPrompt}
-                      onChange={e => setAiSystemPrompt(e.target.value)}
-                      rows={4}
-                      placeholder="You are a warm sales rep promoting our Diwali offer. Goal: get them to book a demo. Allowed discount: up to 15%..."
-                      data-testid="input-ai-system-prompt"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-700 block mb-2">Knowledge base sources</label>
-                    <div className="grid grid-cols-3 gap-2">
-                      <label className="flex items-center gap-2 text-sm border rounded-lg px-3 py-2 hover:bg-gray-50 cursor-pointer">
-                        <Checkbox checked={aiUseFaqs} onCheckedChange={c => setAiUseFaqs(!!c)} />
-                        FAQs
-                      </label>
-                      <label className="flex items-center gap-2 text-sm border rounded-lg px-3 py-2 hover:bg-gray-50 cursor-pointer">
-                        <Checkbox checked={aiUseDocs} onCheckedChange={c => setAiUseDocs(!!c)} />
-                        Training docs
-                      </label>
-                      <label className="flex items-center gap-2 text-sm border rounded-lg px-3 py-2 hover:bg-gray-50 cursor-pointer">
-                        <Checkbox checked={aiUseProducts} onCheckedChange={c => setAiUseProducts(!!c)} />
-                        Products
-                      </label>
-                    </div>
-                  </div>
-                </>
-              )}
-            </SectionCard>
-
-            {/* Reply classification — intentionally outside the AI-replies toggle:
-                outcomes are still recorded for campaigns that don't auto-reply. */}
-            <SectionCard icon={<Tags className="h-4 w-4 text-violet-600" />} title="Reply outcomes">
-              <p className="text-xs text-gray-500 -mt-1">
-                Sort every inbound reply into your own outcome categories and pull out the details you
-                care about. Works whether or not AI replies are switched on.
-              </p>
-              <ReplyClassificationEditor
-                value={replyClassifications}
-                onChange={setReplyClassifications}
-              />
-            </SectionCard>
-
+              </>
+            )}
           </div>
-
-          {/* Right: sticky preview */}
-          <div className="lg:sticky lg:top-[60px] space-y-4">
-            <Card className="overflow-hidden">
-              <CardHeader className="bg-emerald-600 py-3 px-4">
-                <CardTitle className="text-white text-sm flex items-center gap-2">
-                  <MessageSquare className="h-4 w-4" /> Message preview
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-4 bg-[#e5ddd5] min-h-[180px]">
-                {selectedTemplate ? (
-                  <div className="bg-white rounded-lg rounded-tl-none shadow-sm p-3 max-w-[90%] text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
-                    {interpolatePreview(selectedTemplate.bodyText, params)}
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-32 text-center text-gray-500 text-sm gap-2">
-                    <MessageSquare className="h-6 w-6 text-gray-300" />
-                    Select a template to see the preview
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Campaign summary */}
-            <Card>
-              <CardHeader className="pb-2 pt-4 px-4">
-                <CardTitle className="text-sm text-gray-700 flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-amber-500" /> Campaign summary
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="px-4 pb-4 space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Template</span>
-                  <span className="font-mono font-medium text-right truncate max-w-[160px]">
-                    {selectedTemplate ? selectedTemplate.name : <span className="text-gray-400 font-sans font-normal">—</span>}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">{isAutomation ? "Audience" : "Groups"}</span>
-                   <span className="font-medium">{isAutomation ? <span className="text-violet-700">{recipientSourceType === "ai_workbook" ? selectedWorkbook?.name || "Choose a Workbook" : selectedGroups.length > 0 ? `${selectedGroups.length} fixed group${selectedGroups.length === 1 ? "" : "s"}` : "Choose groups"}</span> : selectedGroups.length > 0 ? `${selectedGroups.length} selected` : <span className="text-gray-400">—</span>}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Recipients</span>
-                   <span className="font-medium text-emerald-700">{isAutomation ? <span className="text-violet-700">{recipientSourceType === "ai_workbook" ? "From Workbook" : totalContacts > 0 ? `~${totalContacts}` : "—"}</span> : totalContacts > 0 ? `~${totalContacts}` : <span className="text-gray-400">—</span>}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Schedule</span>
-                   <span className="font-medium">{isAutomation ? <span className="text-violet-700">Recurring setup later</span> : scheduleAt ? new Date(scheduleAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : <span className="text-gray-400">Send manually</span>}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">AI replies</span>
-                  <span className={`font-medium ${aiEnabled ? "text-indigo-700" : "text-gray-400"}`}>{aiEnabled ? `On · ${aiAgentName}` : "Off"}</span>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
         </div>
       </div>
 
-      {/* Sticky bottom action bar */}
-      <div className="sticky bottom-0 bg-white border-t px-6 py-3 flex items-center justify-between shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
-        <div className="text-sm text-gray-500">
-          {!canSubmit && (
-            templateId && !templateResolved
-              ? <span>Loading template details&hellip;</span>
-                 : !basicsComplete
-                 ? <span>{isAutomation ? "Fill in the campaign name, template, recipient source, and mobile number column to continue." : "Fill in name, template, and at least one group to continue."}</span>
-                : !selectedTemplateApproved
-                  ? <span className="text-amber-700">This template is not approved, so WhatsApp will not deliver it. Pick an approved one.</span>
-                : !audienceUsable
-                  ? <span className="text-amber-700" data-testid="text-empty-audience">
-                      The groups you picked have no contacts, so this campaign would reach nobody.
-                    </span>
-                : <span data-testid="text-blank-params">
-                    Fill in {blankParams.length === 1 ? "parameter" : "parameters"}{" "}
-                    {blankParams.map(i => i + 1).join(", ")} &mdash; WhatsApp won't deliver a message with a blank value.
-                  </span>
-          )}
-          {canSubmit && <span className="text-emerald-700 font-medium">
-            {isAutomation
-              ? `${readyPrefix} — message and AI behavior ready for automation setup.`
-              : `${readyPrefix} — ${totalContacts} recipients in ${selectedGroups.length} group${selectedGroups.length !== 1 ? "s" : ""}.`}
-          </span>}
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button
-            disabled={!canSubmit || submitting}
-            onClick={handleSubmit}
-            data-testid="button-submit-campaign"
-            className="gap-1.5"
-          >
-            {submitting ? pendingLabel : submitLabel(Boolean(scheduleAt), campaignType)}
-          </Button>
-        </div>
-      </div>
+      <AlertDialog open={confirmSend} onOpenChange={setConfirmSend}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Send to {willSend.toLocaleString()} {willSend === 1 ? "person" : "people"} now?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Messages start going out right away and can't be taken back.
+              {v.quietHoursStart && v.quietHoursEnd ? ` Nothing is sent between ${v.quietHoursStart} and ${v.quietHoursEnd}; sending waits and carries on after that.` : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Not yet</AlertDialogCancel>
+            <AlertDialogAction onClick={() => submit({ sendNow: true })} data-testid="button-confirm-send-now">Send now</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

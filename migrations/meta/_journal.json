@@ -99,6 +99,13 @@
       "when": 1791054114095,
       "tag": "0013_ai_language_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791062890531,
+      "tag": "0014_campaign_send_upgrade",
+      "breakpoints": true
     }
   ]
 }

@@ -7,6 +7,7 @@ import CampaignForm, {
   CampaignNotice,
   campaignToFormValues,
   type CampaignFormValues,
+  type CampaignSubmitOptions,
   type StoredCampaignConfig,
 } from "@/components/CampaignForm";
 
@@ -34,15 +35,26 @@ export default function WhatsAppEditCampaign() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: async (values: CampaignFormValues) =>
-      apiRequest("PATCH", `/api/whatsapp/campaigns/${id}`, {
+    mutationFn: async ({ values, options }: { values: CampaignFormValues; options?: CampaignSubmitOptions }) => {
+      await apiRequest("PATCH", `/api/whatsapp/campaigns/${id}`, {
         ...values,
         scheduledAt: values.scheduledAt || null,
-      }),
-    onSuccess: () => {
+        // Clearing the time turns a scheduled campaign back into a draft (it would never start otherwise).
+        ...(values.campaignType === "one_time" ? { status: values.scheduledAt ? "scheduled" : "draft" } : {}),
+      });
+      if (!options?.sendNow) return { sendError: null as string | null, sendMessage: null as string | null };
+      try {
+        const sent = await apiRequest<{ message?: string; pausedForQuietHours?: boolean }>("POST", `/api/whatsapp/campaigns/${id}/send`);
+        return { sendError: null, sendMessage: sent.pausedForQuietHours ? sent.message || "Quiet hours are on; sending starts when they end." : "Messages are going out now." };
+      } catch (e: any) {
+        return { sendError: e.message as string, sendMessage: null };
+      }
+    },
+    onSuccess: ({ sendError, sendMessage }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/campaigns"] });
       queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/campaigns/${id}`] });
-      toast({ title: "Campaign updated" });
+      if (sendError) toast({ title: "Changes saved, but sending didn't start", description: sendError, variant: "destructive" });
+      else toast({ title: sendMessage ? "Campaign started" : "Campaign updated", description: sendMessage ?? undefined });
       setLocation(detailPath);
     },
     onError: (e: any) => toast({ title: "Couldn't save changes", description: e.message, variant: "destructive" }),
@@ -89,7 +101,8 @@ export default function WhatsAppEditCampaign() {
       pendingLabel="Saving..."
       readyPrefix="Ready to save"
       submitLabel={() => <><Save className="h-4 w-4" /> Save Changes</>}
-      onSubmit={values => saveMutation.mutate(values)}
+      allowSendNow
+      onSubmit={(values, options) => saveMutation.mutate({ values, options })}
       onCancel={() => setLocation(detailPath)}
     />
   );
