@@ -227,6 +227,8 @@ export function resolveReplyLanguage(input: ReplyLanguageInput): ReplyLanguageRe
 
   if (!policy.restricted) {
     // Unrestricted: unchanged behaviour, except a medium (if enabled) or an explicit request sets it.
+    // A LOCKED medium wins over everything (the student can't switch away from it).
+    if (mediumLang && !policy.mediumSwitchable) return { language: mediumLang, source: "medium", outsideAllowed: false, customerLanguage: detected, restricted: false };
     if (picked) return { language: picked, source: "picked", outsideAllowed: false, customerLanguage: detected, restricted: false };
     if (requested && (policy.mediumSwitchable || !mediumLang)) return { language: requested, source: "requested", outsideAllowed: false, customerLanguage: detected, restricted: false };
     if (mediumLang) return { language: mediumLang, source: "medium", outsideAllowed: false, customerLanguage: detected, restricted: false };

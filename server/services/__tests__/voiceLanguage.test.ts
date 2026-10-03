@@ -159,6 +159,16 @@ async function main() {
     for (const h of [hiOnly, taOnly, anyAuto, hinglish]) h.done();
   }
 
+  // Voice noise filter: a Tamil-only business's Tamil speech is speech, not "foreign-script noise".
+  {
+    const { classifyVoiceTurn, scriptRangesFor } = await import('../voice/turnFilter');
+    const tamil = 'உங்களிடம் வார இறுதி வகுப்புகள் உள்ளதா';
+    expect(classifyVoiceTurn({ transcript: tamil, speechMs: 2000, aiActive: false }).reason === 'foreign_script', 'unrestricted, no pick: Tamil transcript still dropped as before (unchanged filter)');
+    const v = classifyVoiceTurn({ transcript: tamil, speechMs: 2000, aiActive: false, extraScripts: scriptRangesFor(['tamil']) });
+    expect(v.accept && v.words >= 4, 'Tamil allowed: Tamil speech accepted with real word count', v);
+    expect(classifyVoiceTurn({ transcript: 'ありがとう', speechMs: 900, aiActive: false, extraScripts: scriptRangesFor(['tamil']) }).reason === 'foreign_script', 'other scripts still dropped when only Tamil is added');
+    expect(scriptRangesFor(['latin', 'devanagari', undefined]) === '', 'Latin/Devanagari need no extra ranges');
+  }
   if (failed) { out(`\n${failed} check(s) failed, ${passed} passed`); process.exit(1); }
   out(`\nAll ${passed} voice language checks passed.`);
   process.exit(0);

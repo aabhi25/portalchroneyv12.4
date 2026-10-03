@@ -56,6 +56,23 @@ export interface TurnFilterInput {
   recentAssistantSpeech?: string;
   /** Per-token logprobs, when the transcription event provides them. */
   logprobs?: Array<{ logprob?: number }> | null;
+  /**
+   * Extra letter ranges the business speaks (e.g. Tamil for a Tamil-only business), from
+   * scriptRangesFor(). Without it only Latin, Devanagari and Urdu count as speech.
+   */
+  extraScripts?: string;
+}
+
+/** Unicode letter ranges per reply-language script (Latin, Devanagari and Urdu are always allowed). */
+const SCRIPT_RANGES: Record<string, string> = {
+  tamil: "\\u0B80-\\u0BFF", telugu: "\\u0C00-\\u0C7F", kannada: "\\u0C80-\\u0CFF", bengali: "\\u0980-\\u09FF",
+  gujarati: "\\u0A80-\\u0AFF", malayalam: "\\u0D00-\\u0D7F", gurmukhi: "\\u0A00-\\u0A7F", odia: "\\u0B00-\\u0B7F",
+  cyrillic: "\\u0400-\\u04FF", cjk: "\\u3040-\\u30FF\\u4E00-\\u9FFF", hangul: "\\uAC00-\\uD7AF", thai: "\\u0E00-\\u0E7F",
+};
+
+/** The extra script ranges for a set of reply languages' scripts (see shared/replyLanguages). */
+export function scriptRangesFor(scripts: Array<string | undefined>): string {
+  return Array.from(new Set(scripts.filter((x): x is string => !!x && !!SCRIPT_RANGES[x]))).map((x) => SCRIPT_RANGES[x]).join("");
 }
 
 export interface TurnFilterResult {
@@ -120,12 +137,13 @@ const STOP_WORDS = new Set([
 ]);
 
 /** Lower-case, drop punctuation and bracketed tags' brackets, collapse spaces. */
-export function normalizeTranscript(text: string): string {
+export function normalizeTranscript(text: string, extraScripts = ''): string {
+  const keep = extraScripts ? new RegExp(`[^a-z0-9ऀ-ॿ\\u0600-\\u06FF${extraScripts}\\s]`, 'g') : /[^a-z0-9ऀ-ॿ\u0600-\u06FF\s]/g;
   return String(text || '')
     .toLowerCase()
     .replace(/[’']/g, '')
     .replace(/[\[\]()]/g, ' ')
-    .replace(/[^a-z0-9ऀ-ॿ\u0600-\u06FF\s]/g, ' ')
+    .replace(keep, ' ')
     .replace(/[।॥]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -170,12 +188,13 @@ export function looksLikeEcho(normalized: string, recentAssistantSpeech?: string
 }
 
 export function classifyVoiceTurn(input: TurnFilterInput): TurnFilterResult {
-  const normalized = normalizeTranscript(input.transcript);
+  const normalized = normalizeTranscript(input.transcript, input.extraScripts);
   const words = countWords(normalized);
   const speechMs = typeof input.speechMs === 'number' && Number.isFinite(input.speechMs) ? input.speechMs : null;
   const drop = (reason: TurnDropReason): TurnFilterResult => ({ accept: false, reason, words });
 
-  if (!normalized || !/[a-z0-9ऀ-ॿ\u0600-\u06FF]/.test(normalized)) {
+  const speechChars = input.extraScripts ? new RegExp(`[a-z0-9ऀ-ॿ\\u0600-\\u06FF${input.extraScripts}]`) : /[a-z0-9ऀ-ॿ\u0600-\u06FF]/;
+  if (!normalized || !speechChars.test(normalized)) {
     // Only letters of an unrelated script (e.g. Japanese, Chinese, Korean, Cyrillic): a
     // transcription hallucination on noise, not a student speaking.
     return drop(new RegExp('\\p{L}', 'u').test(String(input.transcript || '')) ? 'foreign_script' : 'empty');

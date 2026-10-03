@@ -69,6 +69,7 @@ async function main() {
   expect(L.resolveReplyLanguage({ policy: locked, medium: 'Hindi', requested: 'en', picked: 'en' }).language === 'hi', 'locked to medium: requests and dropdown ignored');
   expect(L.resolveReplyLanguage({ policy: med, medium: 'Marathi', detected: 'mr' }).language === 'en', 'Marathi medium not allowed (en/hi only) → default');
   expect(L.resolveReplyLanguage({ policy: policy({ followMedium: true }), medium: 'Hindi', detected: 'en' }).language === 'hi', 'medium also works without a restriction');
+  expect(L.resolveReplyLanguage({ policy: policy({ followMedium: true, mediumSwitchable: false }), medium: 'Hindi', picked: 'en', requested: 'en' }).language === 'hi', 'locked medium wins over the dropdown and requests even without a restriction');
   const ruleMed = L.buildLanguageRule(m1, med);
   expect(/प्रकाश संश्लेषण \(photosynthesis\)/.test(ruleMed), 'Hindi medium style: Hindi with English technical terms', ruleMed);
 

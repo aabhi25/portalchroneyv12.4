@@ -14,7 +14,7 @@ import { createVoiceDisplayFallback, formatVoiceTranscript, type VoiceDiagramCan
 import { markdownToSpeech } from './services/voice/speechText';
 import { SentenceStreamSplitter, splitIntoSpeechSegments } from './services/voice/sentenceSplitter';
 import { SentenceTtsPipeline, type TtsProvider } from './services/voice/ttsPipeline';
-import { classifyVoiceTurn, endsWithQuestion, MIN_INTERRUPTION_SPEECH_MS, type TurnDropReason } from './services/voice/turnFilter';
+import { classifyVoiceTurn, endsWithQuestion, MIN_INTERRUPTION_SPEECH_MS, scriptRangesFor, type TurnDropReason } from './services/voice/turnFilter';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { resolveCpIdsForScope } from './services/topscholar/scopeResolver';
 import { selectRelevantImages, type CurriculumMediaCandidate } from './services/topscholar/mediaMetadata';
@@ -35,7 +35,7 @@ import type { AudioRoute, AvatarEndReason } from './services/avatar/types';
 import { getLanguagePolicy, policyFromSettings, type LanguagePolicy } from './services/language/languagePolicy';
 import { decideChatReplyLanguage, detectTurnLanguage, pickAllowed, policyTranscriptionLanguage, type ChatReplyLanguage } from './services/language/chatLanguage';
 import { translateFixedText } from './services/language/languageText';
-import { DEFAULT_AI_LANGUAGE_SETTINGS } from '@shared/replyLanguages';
+import { DEFAULT_AI_LANGUAGE_SETTINGS, replyLanguage } from '@shared/replyLanguages';
 
 /**
  * OpenAI Realtime model backing voice mode.
@@ -3368,6 +3368,7 @@ export class RealtimeVoiceService {
       assistantAskedQuestion: endsWithQuestion(conversation.lastAssistantText),
       recentAssistantSpeech: aiActive ? conversation.recentAssistantSpeech : undefined,
       logprobs: input.logprobs,
+      extraScripts: this.voiceSpeechScripts(conversation),
     });
     if (!verdict.accept) {
       console.log(
@@ -3545,6 +3546,20 @@ export class RealtimeVoiceService {
   // the transcriber stays on auto. A restricted business (or a locked TopScholar medium) gets
   // the same language rule as text chat, a pinned transcriber when only one language is
   // allowed, and nudges / fillers / the avatar intro in its language.
+
+  /**
+   * Scripts the visitor may legitimately speak in beyond Latin/Devanagari/Urdu: the business's
+   * allowed languages (restricted) and an explicitly picked widget language — so a Tamil-only
+   * business's Tamil speech isn't dropped as "foreign-script noise". Unrestricted with no pick:
+   * '' (unchanged filter).
+   */
+  private voiceSpeechScripts(conversation: VoiceConversation): string {
+    const policy = this.voiceLanguagePolicy(conversation);
+    const codes = [...(policy.restricted ? policy.allowed : [])];
+    const picked = conversation.selectedLanguage;
+    if (picked && picked !== 'auto') codes.push(picked);
+    return scriptRangesFor(codes.map((c) => replyLanguage(c)?.script));
+  }
 
   private voiceLanguagePolicy(conversation: VoiceConversation): LanguagePolicy {
     return conversation.languagePolicy ?? policyFromSettings(DEFAULT_AI_LANGUAGE_SETTINGS, 'voice');
