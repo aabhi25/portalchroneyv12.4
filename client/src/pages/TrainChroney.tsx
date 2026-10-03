@@ -48,8 +48,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Brain, Save, Check, Plus, Trash2, Edit2, X, AlertCircle, Sparkles, Loader2, Bold, Italic, GraduationCap, Info, Route, ShieldCheck, AlertTriangle, Lightbulb, TrendingUp, UserCheck, Phone, Mail, MessageSquare, ChevronUp, ChevronDown, User, Settings2, ExternalLink } from "lucide-react";
+import { Brain, Save, Check, Plus, Trash2, Edit2, X, AlertCircle, Sparkles, Loader2, Bold, Italic, GraduationCap, Info, Route, ShieldCheck, AlertTriangle, Lightbulb, TrendingUp, UserCheck, Phone, Mail, MessageSquare, ChevronUp, ChevronDown, User, Settings2, ExternalLink, Globe2 } from "lucide-react";
 import { Link } from "wouter";
+import AiLanguageSettingsPanel from "@/components/AiLanguageSettings";
 import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { Switch } from "@/components/ui/switch";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
@@ -1310,6 +1311,14 @@ export default function TrainChroney() {
                 <UserCheck className="w-4 h-4" />
                 Lead Training
               </TabsTrigger>
+              <TabsTrigger
+                value="language"
+                className="gap-2 px-6 py-3 rounded-none border-b-2 border-transparent data-[state=active]:border-purple-600 data-[state=active]:bg-purple-50 dark:data-[state=active]:bg-purple-950/30 data-[state=active]:text-purple-700 dark:data-[state=active]:text-purple-400 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-all duration-200 data-[state=active]:shadow-none"
+                data-testid="tab-language"
+              >
+                <Globe2 className="w-4 h-4" />
+                Language
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="instructions" className="space-y-6">
@@ -2375,6 +2384,10 @@ export default function TrainChroney() {
                 )}
               </CardContent>
               </Card>
+            </TabsContent>
+
+            <TabsContent value="language" className="space-y-6">
+              <AiLanguageSettingsPanel />
             </TabsContent>
           </Tabs>
         )}

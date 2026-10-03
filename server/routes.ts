@@ -96,6 +96,9 @@ import dataRetentionRoutes from "./routes/dataRetention";
 import aiUsageRoutes from "./routes/aiUsage";
 import avatarRoutes from "./routes/avatar";
 import aiLanguageRoutes from "./routes/aiLanguage";
+import { replyLanguage as replyLanguageInfo, replyLanguageName } from "@shared/replyLanguages";
+import { getLanguagePolicy } from "./services/language/languagePolicy";
+import { decideChatReplyLanguage, greetingLanguages, localizeFixedText, pickAllowed, publicReplyLanguages, websiteReplyLanguage } from "./services/language/chatLanguage";
 import { avatarSessionManager } from "./services/avatar/sessionManager";
 import { getPublicAvatarConfig } from "./services/avatar/settingsService";
 import { aiBudgetService, AI_UNAVAILABLE_MESSAGE } from "./services/aiBudgetService";
@@ -985,10 +988,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ response: AI_UNAVAILABLE_MESSAGE, aiUnavailable: true });
       }
 
+      // Reply language (restricted businesses only; "any language" = unchanged, no rule).
+      const widgetLanguage = await websiteReplyLanguage({ businessAccountId, message, conversationKey: widgetUserId });
+
       // Process the message
       const result = await chatService.processMessage(message, {
         userId: widgetUserId,
         businessAccountId,
+        preferredLanguage: widgetLanguage.preferredLanguage,
+        replyLanguage: widgetLanguage.reply,
         personality: settings?.personality || 'friendly',
         responseLength: settings?.responseLength || 'balanced',
         companyDescription: businessAccount.description || '',
@@ -1408,11 +1416,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ? `widget_session_${sessionId}`
         : (typeof sessionToken === 'string' && sessionToken.trim() ? `widget_session_v_${sessionToken.trim()}` : `widget_session_anon_${randomUUID()}`);
       
-      // Fetch widget settings, business account, and API key in parallel
-      const [settings, businessAccount, openaiApiKey] = await Promise.all([
+      // Fetch widget settings, business account, API key and the reply-language policy
+      // (cached 60 s; "any language" unless the business restricted it) in parallel
+      const [settings, businessAccount, openaiApiKey, languagePolicy] = await Promise.all([
         storage.getWidgetSettings(businessAccountId),
         storage.getBusinessAccount(businessAccountId),
         storage.getBusinessAccountOpenAIKey(businessAccountId),
+        getLanguagePolicy(businessAccountId, 'website'),
       ]);
 
       console.log('[Widget Stream] Settings loaded:', { 
@@ -1494,7 +1504,9 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
           if (city) console.log(`[Widget Stream] Geo-located visitor: ${city}`);
           return city;
         }),
-        (!language || language === 'auto')
+        // Restricted businesses also detect when the dropdown value isn't one of their
+        // languages (an old widget build), so the reply can still follow what the visitor writes.
+        (!language || language === 'auto' || (languagePolicy.restricted && !pickAllowed(languagePolicy, language)))
           // Heuristics + per-conversation cache first; the AI detector only when unsure.
           ? import('./services/chatContext/languageSession')
               .then(({ detectWidgetLanguage }) => detectWidgetLanguage(businessAccountId, widgetUserId, message, openaiApiKey))
@@ -1798,6 +1810,22 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         }
       }
 
+      // Reply language for this message: dropdown pick, an explicit "answer in X", the student's
+      // medium, what they wrote — within the business's allowed languages. "Any language":
+      // preferredLanguage stays exactly what it was before (pick, else detected) and no rule is added.
+      const { reply: replyLanguage, preferredLanguage } = decideChatReplyLanguage({
+        policy: languagePolicy,
+        picked: language,
+        detected: detectedLanguage,
+        message,
+        conversationKey: widgetUserId,
+        medium: effMedium,
+        legacyPreferred: effectiveLanguage,
+      });
+      if (replyLanguage.rule) {
+        console.log(`[Widget Stream] Reply language: ${replyLanguage.language} (${replyLanguage.source}${replyLanguage.outsideAllowed ? ', outside allowed' : ''})`);
+      }
+
       for await (const chunk of chatService.streamMessage(message, {
         userId: widgetUserId,
         businessAccountId,
@@ -1808,7 +1836,8 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         currency,
         currencySymbol,
         customInstructions: settings?.customInstructions || undefined,
-        preferredLanguage: effectiveLanguage,
+        preferredLanguage,
+        replyLanguage,
         visitorSessionId: visitorSessionId || undefined,
         visitorCity: visitorCity || undefined,
         visitorToken: sessionToken || undefined,
@@ -2311,12 +2340,24 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         return res.status(400).json({ error: "businessAccountId required" });
       }
 
-      // SPEED: settings, account and journeys are independent reads — load them together.
-      const [settings, businessAccount, journeysForIntro] = await Promise.all([
+      // SPEED: settings, account, journeys and the reply-language policy are independent reads — load them together.
+      const [settings, businessAccount, journeysForIntro, introPolicy] = await Promise.all([
         storage.getWidgetSettings(businessAccountId as string),
         storage.getBusinessAccount(businessAccountId as string),
         storage.getAllJourneys(businessAccountId as string),
+        getLanguagePolicy(businessAccountId as string, 'website'),
       ]);
+
+      // Greeting language: the dropdown pick, as before. A business that restricts its reply
+      // languages (or follows the TopScholar student's medium) greets in its language even
+      // before anything is picked. "Any language" + nothing picked → undefined (unchanged).
+      // The business's own welcome text is translated for a visitor's pick (as before), and for
+      // the business's language only when the business asked for it.
+      const { introLanguage, welcomeLanguage } = greetingLanguages(
+        introPolicy,
+        typeof language === 'string' ? language : undefined,
+        typeof req.query.medium === 'string' ? req.query.medium : null,
+      );
 
       if (!businessAccount) {
         return res.status(404).json({ error: "Business account not found" });
@@ -2343,7 +2384,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       if (welcomeBack === 'true' && businessAccount.openaiApiKey) {
         try {
           const intro = await cachedIntro(
-            introVariantKey('welcome_back', String(language || ''), businessAccount.description, businessAccount.name),
+            introVariantKey('welcome_back', String(introLanguage || ''), businessAccount.description, businessAccount.name),
             async () => {
               console.log('[Intro API] Generating welcome back message for returning visitor');
           
@@ -2372,16 +2413,8 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
               let intro = completion.choices[0]?.message?.content?.trim() || "Welcome back! How can I help you today?";
           
               // Translate if needed
-              if (language && language !== 'auto' && language !== 'en') {
-                const LANGUAGE_NAMES: Record<string, string> = {
-                  'en': 'English', 'hi': 'Hindi', 'hinglish': 'Hinglish', 'ta': 'Tamil', 'te': 'Telugu',
-                  'kn': 'Kannada', 'mr': 'Marathi', 'bn': 'Bengali', 'gu': 'Gujarati', 'ml': 'Malayalam',
-                  'pa': 'Punjabi', 'or': 'Odia', 'as': 'Assamese', 'ur': 'Urdu', 'ne': 'Nepali',
-                  'es': 'Spanish', 'fr': 'French', 'de': 'German', 'pt': 'Portuguese', 'it': 'Italian',
-                  'ja': 'Japanese', 'ko': 'Korean', 'zh': 'Chinese', 'ar': 'Arabic', 'ru': 'Russian',
-                  'th': 'Thai', 'vi': 'Vietnamese', 'id': 'Indonesian', 'ms': 'Malay', 'tr': 'Turkish'
-                };
-                const langName = LANGUAGE_NAMES[language as string];
+              if (introLanguage && introLanguage !== 'en') {
+                const langName = replyLanguageInfo(introLanguage) ? replyLanguageName(introLanguage) : undefined;
                 if (langName) {
                   const translateCompletion = await openai.chat.completions.create({
                     model: 'gpt-4o-mini',
@@ -2407,22 +2440,12 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         }
       }
 
-      // Language name mapping for translation
-      const LANGUAGE_NAMES: Record<string, string> = {
-        'en': 'English', 'hi': 'Hindi', 'hinglish': 'Hinglish', 'ta': 'Tamil', 'te': 'Telugu',
-        'kn': 'Kannada', 'mr': 'Marathi', 'bn': 'Bengali', 'gu': 'Gujarati', 'ml': 'Malayalam',
-        'pa': 'Punjabi', 'or': 'Odia', 'as': 'Assamese', 'ur': 'Urdu', 'ne': 'Nepali',
-        'es': 'Spanish', 'fr': 'French', 'de': 'German', 'pt': 'Portuguese', 'it': 'Italian',
-        'ja': 'Japanese', 'ko': 'Korean', 'zh': 'Chinese', 'ar': 'Arabic', 'ru': 'Russian',
-        'th': 'Thai', 'vi': 'Vietnamese', 'id': 'Indonesian', 'ms': 'Malay', 'tr': 'Turkish'
-      };
-
       // Helper function to translate text using OpenAI
       const translateText = async (text: string, targetLang: string): Promise<string> => {
         if (!targetLang || targetLang === 'auto' || targetLang === 'en') return text;
         if (!businessAccount.openaiApiKey) return text;
-        
-        const langName = LANGUAGE_NAMES[targetLang] || targetLang;
+
+        const langName = replyLanguageName(targetLang);
         try {
           const openai = createOpenAI({ apiKey: businessAccount.openaiApiKey });
           const completion = await openai.chat.completions.create({
@@ -2456,9 +2479,9 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
           
           // Translate if needed
           let introText = firstStep.questionText;
-          if (language && language !== 'auto' && language !== 'en') {
+          if (introLanguage && introLanguage !== 'en') {
             const source = firstStep.questionText;
-            introText = await cachedIntro(introVariantKey('journey', String(language), source), () => translateText(source, language as string));
+            introText = await cachedIntro(introVariantKey('journey', introLanguage, source), () => translateText(source, introLanguage));
           }
           
           const response: any = { 
@@ -2506,8 +2529,8 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       // Check welcome message type
       if (settings?.welcomeMessageType === 'custom' && settings?.welcomeMessage) {
         const welcome = settings.welcomeMessage;
-        const intro = language && language !== 'auto'
-          ? await cachedIntro(introVariantKey('custom', String(language), welcome), () => translateText(welcome, language as string))
+        const intro = welcomeLanguage
+          ? await cachedIntro(introVariantKey('custom', welcomeLanguage, welcome), () => translateText(welcome, welcomeLanguage))
           : welcome;
         return res.json({ intro });
       }
@@ -2515,8 +2538,13 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       // AI-generated greeting already stored for these settings (cleared whenever the
       // personality / welcome type / instructions / products / description change): serve it
       // instead of generating a new one on every page load (~3–4 s).
+      // The AI greeting is written in English: shown in the greeting language (the visitor's pick
+      // or the business's reply language) when there is one; cached per language for an hour.
+      const inIntroLanguage = (text: string): Promise<string> => introLanguage && introLanguage !== 'en'
+        ? cachedIntro(introVariantKey('ai', introLanguage, text), () => translateText(text, introLanguage))
+        : Promise.resolve(text);
       if (businessAccount.openaiApiKey && settings?.cachedIntro && settings.cachedIntro.trim()) {
-        return res.json({ intro: settings.cachedIntro });
+        return res.json({ intro: await inIntroLanguage(settings.cachedIntro) });
       }
 
       // Generate AI intro if needed and API key is available
@@ -2542,7 +2570,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
             await storage.upsertWidgetSettings(businessAccountId as string, { cachedIntro: intro });
           }
 
-          return res.json({ intro });
+          return res.json({ intro: await inIntroLanguage(intro) });
         } catch (error) {
           console.error('[Widget Intro] AI generation failed:', error);
         }
@@ -2550,8 +2578,8 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
 
       // Fallback to default message - translate if needed
       const defaultMsg = "Hi! How can I help you today?";
-      const intro = language && language !== 'auto'
-        ? await cachedIntro(introVariantKey('default', String(language), defaultMsg), () => translateText(defaultMsg, language as string))
+      const intro = introLanguage
+        ? await cachedIntro(introVariantKey('default', introLanguage, defaultMsg), () => translateText(defaultMsg, introLanguage))
         : defaultMsg;
       res.json({ intro });
     } catch (error: any) {
@@ -9624,11 +9652,16 @@ Return ONLY the refined instruction, nothing else.`
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no'); // prevent proxy buffering of the stream
 
+      // The owner sees the website reply-language rule while testing ("any language": unchanged).
+      const homeLanguage = await websiteReplyLanguage({ businessAccountId: user.businessAccountId, message, conversationKey: `home_${user.id}` });
+
       // Stream the response
       // Mark as internal test since this is a business user testing their own chatbot
       for await (const chunk of chatService.streamMessage(message, {
         userId: user.id,
         businessAccountId: user.businessAccountId,
+        preferredLanguage: homeLanguage.preferredLanguage,
+        replyLanguage: homeLanguage.reply,
         personality,
         responseLength,
         companyDescription,
@@ -17277,6 +17310,27 @@ Important:
         return res.status(400).json({ error: 'Failed to submit step - no active form journey' });
       }
 
+      // A business that restricts its reply languages: the next question / completion message in
+      // its language (choice values stay as configured). "Any language": unchanged, no lookup cost
+      // beyond the cached policy.
+      try {
+        const formLanguage = await websiteReplyLanguage({
+          businessAccountId,
+          picked: typeof req.body.language === 'string' ? req.body.language : undefined,
+          conversationKey: null,
+        });
+        if (formLanguage.reply.rule) {
+          if (result.nextStep?.questionText) {
+            result.nextStep = { ...result.nextStep, questionText: await localizeFixedText(businessAccountId, formLanguage.reply, result.nextStep.questionText) };
+          }
+          if (result.completionMessage) {
+            result.completionMessage = await localizeFixedText(businessAccountId, formLanguage.reply, result.completionMessage);
+          }
+        }
+      } catch (langErr) {
+        console.warn('[Form Journey] Reply-language translation skipped:', (langErr as Error)?.message);
+      }
+
       // Save messages to conversation for visibility in admin panel (non-blocking)
       try {
         // Check if this is the first step: if no messages exist yet, Q1 was only shown as a
@@ -21761,6 +21815,15 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         }
       }
 
+      // Reply language ("any language": unchanged — the dropdown value as before, no extra rule).
+      const publicLanguage = await websiteReplyLanguage({
+        businessAccountId,
+        picked: language,
+        message,
+        conversationKey: publicUserId,
+        legacyPreferred: language || undefined,
+      });
+
       // Stream the response
       for await (const chunk of chatService.streamMessage(message, {
         userId: publicUserId,
@@ -21772,7 +21835,8 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         currency,
         currencySymbol,
         customInstructions: settings?.customInstructions || undefined,
-        preferredLanguage: language || undefined,
+        preferredLanguage: publicLanguage.preferredLanguage,
+        replyLanguage: publicLanguage.reply,
         visitorSessionId: visitorSessionId || undefined,
         supportsCalendarUI: true,
         systemMode: businessAccount.systemMode || 'full',
@@ -27932,6 +27996,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         // Live AI avatar button: null unless a super admin enabled it and it can
         // actually start (key, consent, voice on). Never contains keys.
         liveAvatar: chatMode !== 'chat-only' ? await getPublicAvatarConfig(businessAccountId, businessAccount ?? null) : null,
+        // Reply languages the business allows on the website (dropdown limited to them, default
+        // pre-selected). null = any language (widget unchanged).
+        replyLanguages: publicReplyLanguages(await getLanguagePolicy(businessAccountId, 'website')),
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
