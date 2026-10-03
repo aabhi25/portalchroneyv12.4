@@ -1668,6 +1668,18 @@ export type AvatarBusinessSettings = typeof avatarBusinessSettings.$inferSelect;
 
 // One row per avatar session (started only when a visitor taps the avatar button).
 // billed_seconds is OUR metering (per second); monthly totals are summed per IST month.
+// AI reply-language setting (one row per business; absent = "any language", as before).
+// The value is validated by server/services/language/languagePolicy.ts (AiLanguageSettings).
+export const aiLanguageSettings = pgTable("ai_language_settings", {
+  businessAccountId: varchar("business_account_id").primaryKey().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  settings: jsonb("settings").notNull(),
+  updatedBy: varchar("updated_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export type AiLanguageSettingsRow = typeof aiLanguageSettings.$inferSelect;
+
 export const avatarSessions = pgTable("avatar_sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),

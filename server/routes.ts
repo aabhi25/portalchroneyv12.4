@@ -95,6 +95,7 @@ import { resolveAuthorizedLeadAccountId, maskLeadPhone } from "./lib/leadAccess"
 import dataRetentionRoutes from "./routes/dataRetention";
 import aiUsageRoutes from "./routes/aiUsage";
 import avatarRoutes from "./routes/avatar";
+import aiLanguageRoutes from "./routes/aiLanguage";
 import { avatarSessionManager } from "./services/avatar/sessionManager";
 import { getPublicAvatarConfig } from "./services/avatar/settingsService";
 import { aiBudgetService, AI_UNAVAILABLE_MESSAGE } from "./services/aiBudgetService";
@@ -609,6 +610,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Live AI avatar (super-admin settings, widget sessions). Close avatar sessions
   // a previous process left open (billed to their last heartbeat).
   app.use(avatarRoutes);
+  app.use(aiLanguageRoutes);
   avatarSessionManager.recoverOrphans(new Date()).catch((err) => {
     console.error('[Avatar] Failed to close orphaned avatar sessions:', err?.message || err);
   });
