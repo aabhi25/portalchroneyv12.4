@@ -109,23 +109,40 @@ export function createAnamProvider(options: AnamOptions = {}): AvatarProvider {
     },
 
     // GET /v1/avatars/{id} (Bearer) → { id, displayName, variantName, … } (Anam API reference).
+    // That lookup may not resolve every avatar a session accepts (e.g. stock gallery avatars), so a
+    // 404/400 falls back to the avatar list (stock + the organisation's own, per Anam's reference)
+    // before we call an id "not found".
     async lookupAvatar(apiKey: string, avatarId: string) {
+      const nameOf = (a: any): string | undefined => {
+        const parts = [a?.displayName, a?.variantName].filter((v: unknown) => typeof v === "string" && v);
+        return parts.length ? parts.join(" · ").slice(0, 120) : undefined;
+      };
       try {
         const res = await fetchWithTimeout(fetchImpl, "Anam", `${base}/v1/avatars/${encodeURIComponent(avatarId)}`, {
           method: "GET",
           headers: { Authorization: `Bearer ${apiKey}` },
         }, timeoutMs);
         let name: string | undefined;
-        try {
-          const body = JSON.parse(res.text || "{}");
-          const parts = [body?.displayName, body?.variantName].filter((v: unknown) => typeof v === "string" && v);
-          if (parts.length) name = parts.join(" · ").slice(0, 120);
-        } catch { /* found is what matters */ }
+        try { name = nameOf(JSON.parse(res.text || "{}")); } catch { /* found is what matters */ }
         return { found: true as const, name };
       } catch (error) {
-        if (error instanceof AvatarProviderError && (error.code === "not_found" || error.code === "bad_request")) return { found: false as const };
-        throw error;
+        if (!(error instanceof AvatarProviderError && (error.code === "not_found" || error.code === "bad_request"))) throw error;
       }
+      const wanted = avatarId.toLowerCase();
+      for (let page = 1; page <= 10; page++) {
+        const res = await fetchWithTimeout(fetchImpl, "Anam", `${base}/v1/avatars?page=${page}&perPage=100`, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${apiKey}` },
+        }, timeoutMs);
+        let body: any;
+        try { body = JSON.parse(res.text || "{}"); } catch { break; }
+        const items: any[] = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
+        const hit = items.find((a) => String(a?.id || "").toLowerCase() === wanted);
+        if (hit) return { found: true as const, name: nameOf(hit) };
+        const lastPage = Number(body?.meta?.lastPage);
+        if (!items.length || (Number.isFinite(lastPage) && page >= lastPage)) break;
+      }
+      return { found: false as const };
     },
 
     async validateKey(apiKey: string): Promise<{ detail?: string }> {
