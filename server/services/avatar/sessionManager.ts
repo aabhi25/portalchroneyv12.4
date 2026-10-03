@@ -101,6 +101,8 @@ interface LiveSession {
   connectTimeoutMs: number;
   ratePerMinUsd: number;
   disclosure: string | null;
+  /** The standard disclosure (no custom text) — may be spoken in the business's reply language. */
+  disclosureIsDefault?: boolean;
   displayName: string;
   /** 'female' | 'male' | null (null = the voice decides). */
   avatarGender: "female" | "male" | null;
@@ -361,6 +363,7 @@ export class AvatarSessionManager {
       connectTimeoutMs: adapter.connectTimeoutMs,
       ratePerMinUsd: rates[provider] ?? 0,
       disclosure,
+      disclosureIsDefault: !settings.disclosureText?.trim(),
       displayName: settings.displayName?.trim() || DEFAULT_DISPLAY_NAME,
       avatarGender: settings.avatarGender === "female" || settings.avatarGender === "male" ? settings.avatarGender : null,
       voice: null,
@@ -451,7 +454,7 @@ export class AvatarSessionManager {
 
   // ── voice bridge (used by realtimeVoiceService) ─────────────────────────────
 
-  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: AvatarProviderId; disclosure: string | null; displayName: string; avatarGender: "female" | "male" | null } | null {
+  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: AvatarProviderId; disclosure: string | null; disclosureIsDefault: boolean; displayName: string; avatarGender: "female" | "male" | null } | null {
     const live = this.live.get(sessionId);
     if (!live || live.businessAccountId !== auth.businessAccountId || live.visitorId !== auth.visitorId) return null;
     live.voice = binding;
@@ -460,7 +463,7 @@ export class AvatarSessionManager {
       live.conversationId = binding.conversationId;
       void db.update(avatarSessions).set({ conversationId: binding.conversationId }).where(eq(avatarSessions.id, live.id)).catch(() => undefined);
     }
-    return { audioRoute: live.audioRoute, provider: live.provider, disclosure: live.disclosure, displayName: live.displayName, avatarGender: live.avatarGender };
+    return { audioRoute: live.audioRoute, provider: live.provider, disclosure: live.disclosure, disclosureIsDefault: live.disclosureIsDefault !== false, displayName: live.displayName, avatarGender: live.avatarGender };
   }
 
   unbindVoice(sessionId: string, conversationId?: string): void {

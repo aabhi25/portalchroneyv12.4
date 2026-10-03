@@ -458,6 +458,23 @@ export interface StreamPromptOptions {
   cacheFriendly?: boolean;
 }
 
+/** Where the reply language came from (see services/language/chatLanguage). */
+export type PreferredLanguageSource = 'picked' | 'detected' | 'requested' | 'medium' | 'default';
+
+/**
+ * The opening of the "LANGUAGE: …" instruction. Undefined source / a dropdown pick keeps the
+ * original wording; a detected language is no longer described as "selected from the dropdown".
+ */
+export function preferredLanguageSentence(langName: string, source?: PreferredLanguageSource): string {
+  switch (source) {
+    case 'detected': return `The user is writing in ${langName}.`;
+    case 'requested': return `The user asked for replies in ${langName}.`;
+    case 'medium': return `This student studies in ${langName}.`;
+    case 'default': return `Replies for this business are in ${langName}.`;
+    default: return `The user has selected ${langName} from the language dropdown.`;
+  }
+}
+
 /**
  * Per-turn blocks computed by chatService for the website widget. They go in the FINAL rules
  * (the last system message), which is the only part of the per-turn context the model reliably
@@ -476,6 +493,13 @@ export interface StreamTurnOptions {
   otpBlock?: string;
   /** Voice turns: spoken-style reply rules (services/voice/voiceStyle). Goes last, before OTP. */
   voiceStyleBlock?: string;
+  /**
+   * Business reply-language rule (services/language/chatLanguage): goes after the business's
+   * custom instructions so it wins over them. Absent = the existing language rules only.
+   */
+  languageBlock?: string;
+  /** Where `preferredLanguage` came from — "selected from the dropdown" is said only when picked. */
+  languageSource?: PreferredLanguageSource;
   /**
    * Legacy context mode: skip the server-side FAQ pre-fetch (small talk such as "hey wassup" /
    * "thank you so much", or an account with no FAQs at all — nothing to find).
@@ -906,7 +930,8 @@ SCRIPT RULE (CRITICAL - check this before responding):
     businessAccountId?: string,
     preferredLanguage?: string,
     responseLength: string = 'balanced',
-    extraFinalBlock?: string
+    extraFinalBlock?: string,
+    languageSource?: PreferredLanguageSource
   ): Promise<{ openai: any; model: string; messages: ConversationMessage[] }> {
     const { openai, model } = await this.resolveMasterConfig(apiKey);
 
@@ -936,7 +961,7 @@ SCRIPT RULE (CRITICAL - check this before responding):
         };
         const langName = LANGUAGE_NAMES[preferredLanguage] || preferredLanguage;
         
-        languageSection = `LANGUAGE: The user has selected ${langName} from the language dropdown. Always respond in ${langName}.`;
+        languageSection = `LANGUAGE: ${preferredLanguageSentence(langName, languageSource)} Always respond in ${langName}.`;
       } else {
         languageSection = '';
       }
@@ -1193,7 +1218,7 @@ ${this.getJourneyGuidance()}`;
       effectiveLanguage = LANGUAGE_NAMES[preferredLanguage] || preferredLanguage;
       effectiveLanguageUpper = effectiveLanguage.toUpperCase();
       
-      languageInstruction = `LANGUAGE: The user has selected ${effectiveLanguage} from the language dropdown. Always respond in ${effectiveLanguage}. Translate any business content to ${effectiveLanguage}.`;
+      languageInstruction = `LANGUAGE: ${preferredLanguageSentence(effectiveLanguage, languageSource)} Always respond in ${effectiveLanguage}. Translate any business content to ${effectiveLanguage}.`;
     } else {
       effectiveLanguage = "";
       effectiveLanguageUpper = "";
@@ -1319,10 +1344,11 @@ ${extraFinalBlock.trim()}` : ''}`;
     businessAccountId?: string,
     preferredLanguage?: string,
     responseLength: string = 'balanced',
-    extraFinalBlock?: string
+    extraFinalBlock?: string,
+    languageSource?: PreferredLanguageSource
   ) {
     const { openai, model, messages: preparedMessages } = await this._prepareContinuationContext(
-      messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength, extraFinalBlock
+      messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength, extraFinalBlock, languageSource
     );
 
     // withoutUsageTracking: logged below via aiUsageLogger.logChatUsage
@@ -1359,10 +1385,11 @@ ${extraFinalBlock.trim()}` : ''}`;
     businessAccountId?: string,
     preferredLanguage?: string,
     responseLength: string = 'balanced',
-    extraFinalBlock?: string
+    extraFinalBlock?: string,
+    languageSource?: PreferredLanguageSource
   ): AsyncGenerator<string> {
     const { openai, model, messages: preparedMessages } = await this._prepareContinuationContext(
-      messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength, extraFinalBlock
+      messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength, extraFinalBlock, languageSource
     );
 
     // withoutUsageTracking: logged below via aiUsageLogger.logChatUsage
@@ -1444,7 +1471,8 @@ ${extraFinalBlock.trim()}` : ''}`;
                                  !otpVerificationPending &&
                                  !turnOptions?.otpBlock &&
                                  !hasCustomInstructions &&
-                                 !hasLanguagePreference;
+                                 !hasLanguagePreference &&
+                                 !turnOptions?.languageBlock;
     
     if (useGreetingFastPath) {
       console.log('[Fast-Path] Simple English greeting with no custom config - using lightweight response');
@@ -1558,7 +1586,14 @@ ${extraFinalBlock.trim()}` : ''}`;
       ? PREFERRED_LANGUAGE_NAMES[preferredLanguage] || preferredLanguage 
       : null;
     
-    const languageRuleSection = preferredLanguage && preferredLangName
+    const pickedOrLegacy = !turnOptions?.languageSource || turnOptions.languageSource === 'picked';
+    const languageRuleSection = preferredLanguage && preferredLangName && !pickedOrLegacy
+      ? `🚨 CRITICAL RULE #1 - REPLY LANGUAGE (HIGHEST PRIORITY):
+- ${preferredLanguageSentence(preferredLangName, turnOptions?.languageSource)} **YOU MUST RESPOND IN ${preferredLangName.toUpperCase()}**
+- Translate all content (FAQs, products, responses) to ${preferredLangName}
+- Apply this rule to ALL responses including greetings, products, FAQs, appointments, lead capture
+- **THIS RULE OVERRIDES EVERYTHING ELSE INCLUDING AUTO-DETECTION**`
+      : preferredLanguage && preferredLangName
       ? `🚨 CRITICAL RULE #1 - USER-SELECTED LANGUAGE OVERRIDE (HIGHEST PRIORITY):
 - **THE USER HAS EXPLICITLY SELECTED ${preferredLangName.toUpperCase()} AS THEIR PREFERRED LANGUAGE**
 - **YOU MUST RESPOND IN ${preferredLangName.toUpperCase()} REGARDLESS OF WHAT LANGUAGE THE USER WRITES IN**
@@ -1919,7 +1954,7 @@ ${this.getJourneyGuidance()}`;
       effectiveLanguage = PREFERRED_LANGUAGE_NAMES_FINAL[preferredLanguage] || preferredLanguage;
       effectiveLanguageUpper = effectiveLanguage.toUpperCase();
       
-      languageInstruction = `LANGUAGE: The user has selected ${effectiveLanguage} from the language dropdown. Always respond in ${effectiveLanguage}. Translate any business content to ${effectiveLanguage}.`;
+      languageInstruction = `LANGUAGE: ${preferredLanguageSentence(effectiveLanguage, turnOptions?.languageSource)} Always respond in ${effectiveLanguage}. Translate any business content to ${effectiveLanguage}.`;
     } else {
       effectiveLanguage = "";
       effectiveLanguageUpper = "";
@@ -2161,6 +2196,11 @@ These instructions from the business owner MUST be followed. They override the o
 
 ${leadSection}${extractedCustomInstructions ? `
 This LEAD COLLECTION block takes precedence over any business instruction about collecting contact details (e.g. "always ask for the phone number"): never ask again for anything listed as already known or declined.` : ''}` : ''}`;
+
+    // Business reply-language rule: after the business's own instructions, so it wins over them.
+    if (turnOptions?.languageBlock && turnOptions.languageBlock.trim()) {
+      finalOverride += `\n\n${turnOptions.languageBlock.trim()}`;
+    }
 
     // Phone number the visitor just typed failed the digit rule (last position = highest weight).
     if (phoneValidationOverride && !otpBlock) {

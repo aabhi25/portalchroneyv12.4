@@ -32,6 +32,10 @@ import { genderOfVoice, genderOfVoiceSync, resolveAssistantGender, type Assistan
 import { fillerDelayMs, fillerLanguage, fillerPhrases, pickFiller, wantsFiller } from './services/voice/fillers';
 import { createOpenAiTtsProvider, OPENAI_TTS_MODEL, type OpenAiSpeechClient } from './services/voice/openaiTts';
 import type { AudioRoute, AvatarEndReason } from './services/avatar/types';
+import { getLanguagePolicy, policyFromSettings, type LanguagePolicy } from './services/language/languagePolicy';
+import { decideChatReplyLanguage, detectTurnLanguage, pickAllowed, policyTranscriptionLanguage, type ChatReplyLanguage } from './services/language/chatLanguage';
+import { translateFixedText } from './services/language/languageText';
+import { DEFAULT_AI_LANGUAGE_SETTINGS } from '@shared/replyLanguages';
 
 /**
  * OpenAI Realtime model backing voice mode.
@@ -110,7 +114,7 @@ export interface RealtimeVoiceDeps {
  * ('server' route) or fed to the provider's browser SDK ('client' route).
  */
 export interface AvatarVoiceBridge {
-  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: string; disclosure: string | null; displayName: string; avatarGender?: "female" | "male" | null } | null;
+  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: string; disclosure: string | null; disclosureIsDefault?: boolean; displayName: string; avatarGender?: "female" | "male" | null } | null;
   unbindVoice(sessionId: string, conversationId?: string): void;
   sendAudio(sessionId: string, pcm: Buffer): boolean;
   endOfSpeech(sessionId: string): void;
@@ -248,6 +252,14 @@ interface VoiceConversation {
   selectedVoice?: string;
   isInternalTest?: boolean;
   detectedLanguage?: string;
+  /** The business's reply-language policy for voice (loaded at connect; "any language" by default). */
+  languagePolicy?: LanguagePolicy;
+  /** This turn's reply-language decision (services/language/chatLanguage). */
+  replyLanguage?: ChatReplyLanguage;
+  /** preferredLanguage for this turn's ChatContext. */
+  turnPreferredLanguage?: string;
+  /** Language of the latest transcript (heuristics; null = not sure). */
+  turnLanguage?: string | null;
   textConversationId?: string;
   textHistoryInjected?: boolean;
   /**
@@ -585,6 +597,8 @@ export class RealtimeVoiceService {
         if (selectedLanguage !== undefined) {
           conversation.selectedLanguage = selectedLanguage;
         }
+        // Pick up a reply-language setting saved since the call started (cached 60 s).
+        conversation.languagePolicy = await getLanguagePolicy(businessAccountId, 'voice').catch(() => conversation.languagePolicy);
 
         // The guardrail persona (tutor vs business) lives in the OpenAI session
         // instructions, which were built from the OLD scope. Rebuild and push
@@ -719,6 +733,8 @@ export class RealtimeVoiceService {
       // The voice that will actually speak (ElevenLabs falls back to shimmer without a key/voice id).
       const spokenVoice = elevenlabsApiKey && elevenlabsVoiceId ? selectedVoice : (isElevenLabsVoice(selectedVoice) ? 'shimmer' : selectedVoice);
       const voiceGender = await genderOfVoice(spokenVoice, elevenlabsApiKey);
+      // Reply languages the business allows on voice (cached; "any language" unless restricted).
+      const languagePolicy = await getLanguagePolicy(businessAccountId, 'voice');
 
       // Create conversation object (OpenAI WebSocket will be created when needed)
       const conversation: VoiceConversation = {
@@ -752,6 +768,7 @@ export class RealtimeVoiceService {
         reconnectAttempts: 0,
         isReconnecting: false,
         selectedLanguage,
+        languagePolicy,
         selectedVoice: isElevenLabsVoice(selectedVoice) ? 'shimmer' : selectedVoice,
         isInternalTest,
         textConversationId,
@@ -891,7 +908,18 @@ export class RealtimeVoiceService {
     this.sendToClient(conversation.clientWs, { type: 'avatar_attached', avatarSessionId: sessionId, audioRoute: attached.audioRoute });
     console.log(`[RealtimeVoice] Avatar attached: ${attached.provider} route=${attached.audioRoute}`, conversation.conversationId);
     if (message.speakIntro !== false && attached.disclosure && !conversation.isProcessing && !this.isAnswerActive(conversation)) {
-      this.speakAvatarIntro(conversation, attached.disclosure);
+      // A business whose replies are in another language hears the standard (English) AI
+      // disclosure in that language; a business's own disclosure text is spoken as written.
+      const introLang = this.ruledVoiceLanguage(conversation);
+      if (introLang && introLang !== 'en' && attached.disclosureIsDefault !== false) {
+        const disclosure = attached.disclosure;
+        void translateFixedText(conversation.businessAccountId, disclosure, introLang).then((text) => {
+          if (conversation.avatar?.sessionId !== sessionId || conversation.isProcessing || this.isAnswerActive(conversation)) return;
+          this.speakAvatarIntro(conversation, text);
+        });
+      } else {
+        this.speakAvatarIntro(conversation, attached.disclosure);
+      }
     }
     void this.prewarmFillers(conversation);
   }
@@ -910,8 +938,13 @@ export class RealtimeVoiceService {
     if (!conversation.avatar || conversation.fillerAudio) return;
     const cache = new Map<string, Buffer>();
     conversation.fillerAudio = cache;
+    const policy = this.voiceLanguagePolicy(conversation);
     const sel = String(conversation.selectedLanguage || 'auto').toLowerCase();
-    const languages: Array<'en' | 'hi'> = sel === 'hi' ? ['hi'] : sel === 'en' ? ['en'] : sel === 'auto' ? ['en', 'hi'] : [];
+    // A restricted business only ever hears fillers in its own languages (none for e.g. Tamil-only).
+    const allowedFamilies = new Set(policy.allowed.map((c) => (c === 'hinglish' ? 'hi' : c)));
+    const languages: Array<'en' | 'hi'> = policy.restricted
+      ? (['en', 'hi'] as const).filter((l) => allowedFamilies.has(l))
+      : sel === 'hi' ? ['hi'] : sel === 'en' ? ['en'] : sel === 'auto' ? ['en', 'hi'] : [];
     const gender = this.callGender(conversation);
     const { primary, fallback } = this.createTtsProviders(conversation);
     const provider = primary || fallback;
@@ -1002,12 +1035,27 @@ export class RealtimeVoiceService {
   /** Spoken, on-screen "Are you still there?" — no LLM, no history row. */
   private speakIdleNudge(conversation: VoiceConversation): void {
     if (conversation.clientWs.readyState !== WebSocket.OPEN) return;
-    const lang = conversation.selectedLanguage && conversation.selectedLanguage !== 'auto'
+    const english = "Are you still there? Just say something when you're ready.";
+    const ruled = this.ruledVoiceLanguage(conversation);
+    if (ruled && !['en', 'hi', 'hinglish'].includes(ruled)) {
+      // A business rule puts this call in another language: never nudge in English.
+      void translateFixedText(conversation.businessAccountId, english, ruled)
+        .then((text) => { if (text !== english) this.playIdleNudge(conversation, text); });
+      return;
+    }
+    const lang = ruled ?? (conversation.selectedLanguage && conversation.selectedLanguage !== 'auto'
       ? conversation.selectedLanguage
-      : conversation.detectedLanguage;
+      : conversation.detectedLanguage);
     const text = lang === 'hi'
       ? 'क्या आप अभी भी यहाँ हैं? जब तैयार हों, कुछ भी बोलिए।'
-      : "Are you still there? Just say something when you're ready.";
+      : ruled === 'hinglish'
+        ? 'Kya aap abhi bhi yahan hain? Jab ready hon, kuch bhi boliye.'
+        : english;
+    this.playIdleNudge(conversation, text);
+  }
+
+  private playIdleNudge(conversation: VoiceConversation, text: string): void {
+    if (conversation.clientWs.readyState !== WebSocket.OPEN) return;
     const responseId = `voice_nudge_${Date.now()}`;
     const startedAt = Date.now();
     console.log('[RealtimeVoice] Idle nudge:', text);
@@ -1547,7 +1595,7 @@ export class RealtimeVoiceService {
             audio: {
               input: {
                 format: { type: 'audio/pcm', rate: 24000 },
-                transcription: this.transcriptionConfig(conversation.selectedLanguage),
+                transcription: this.transcriptionConfig(this.voiceTranscriptionLanguage(conversation)),
                 noise_reduction: {
                   type: 'far_field'
                 },
@@ -3348,6 +3396,7 @@ export class RealtimeVoiceService {
     // the noise filter let an empty noise transcript orphan an in-flight
     // answer and leave the client on "Thinking…".)
     conversation.currentUserTranscript = trimmedTranscript;
+    this.updateVoiceReplyLanguage(conversation, trimmedTranscript);
     conversation.k12TurnSeq = (conversation.k12TurnSeq ?? 0) + 1;
     const turnSeq = conversation.k12TurnSeq;
     timing.seq = turnSeq;
@@ -3491,6 +3540,72 @@ export class RealtimeVoiceService {
     }));
   }
 
+  // ── reply language (services/language) ────────────────────────────────────
+  // "Any language" (the default) keeps the old behaviour: the widget's pick (if any) wins and
+  // the transcriber stays on auto. A restricted business (or a locked TopScholar medium) gets
+  // the same language rule as text chat, a pinned transcriber when only one language is
+  // allowed, and nudges / fillers / the avatar intro in its language.
+
+  private voiceLanguagePolicy(conversation: VoiceConversation): LanguagePolicy {
+    return conversation.languagePolicy ?? policyFromSettings(DEFAULT_AI_LANGUAGE_SETTINGS, 'voice');
+  }
+
+  /** The widget's explicit pick ('auto' = none — the old code passed 'auto' through as a language). */
+  private voicePickedLanguage(conversation: VoiceConversation): string | undefined {
+    const sel = conversation.selectedLanguage;
+    return sel && sel !== 'auto' ? sel : undefined;
+  }
+
+  /** Decide this turn's reply language from the final transcript (sync: the policy is preloaded). */
+  private updateVoiceReplyLanguage(conversation: VoiceConversation, transcript: string): void {
+    const policy = this.voiceLanguagePolicy(conversation);
+    const picked = this.voicePickedLanguage(conversation);
+    conversation.turnLanguage = detectTurnLanguage(transcript, { arabicIsHindi: true });
+    const { reply, preferredLanguage } = decideChatReplyLanguage({
+      policy,
+      picked,
+      detected: conversation.turnLanguage,
+      message: transcript,
+      conversationKey: conversation.conversationId,
+      medium: conversation.topscholarScope?.medium ?? null,
+      // Before: selectedLanguage || detectedLanguage, which sent 'auto' as the language and
+      // ignored what was spoken. Now: the pick, else the language this turn was spoken in.
+      legacyPreferred: picked ?? conversation.turnLanguage ?? undefined,
+    });
+    conversation.replyLanguage = reply;
+    conversation.turnPreferredLanguage = preferredLanguage;
+    if (reply.rule) console.log(`[RealtimeVoice] Reply language: ${reply.language} (${reply.source})`);
+  }
+
+  /** The language a business rule puts this call in (null = no rule: follow the visitor). */
+  private ruledVoiceLanguage(conversation: VoiceConversation): string | null {
+    const r = conversation.replyLanguage;
+    if (r?.language && (r.restricted || r.rule)) return r.language;
+    const policy = this.voiceLanguagePolicy(conversation);
+    if (r) return null;
+    // Before the first turn: the student's locked medium, else a restricted business's default.
+    const pinned = policy.followMedium && !policy.mediumSwitchable ? policyTranscriptionLanguage(policy, conversation.topscholarScope?.medium) : null;
+    if (pinned) return pinned;
+    return policy.restricted ? (pickAllowed(policy, this.voicePickedLanguage(conversation)) ? this.voicePickedLanguage(conversation)! : policy.defaultLanguage) : null;
+  }
+
+  /** Transcriber language: pinned for a single allowed language / locked medium, else as before. */
+  private voiceTranscriptionLanguage(conversation: VoiceConversation): string | undefined {
+    const policy = this.voiceLanguagePolicy(conversation);
+    const policyPin = policyTranscriptionLanguage(policy, conversation.topscholarScope?.medium);
+    if (policy.followMedium && !policy.mediumSwitchable && policyPin) return policyPin;
+    const picked = this.voicePickedLanguage(conversation);
+    if (picked && (!policy.restricted || pickAllowed(policy, picked))) return picked;
+    return policyPin ?? conversation.selectedLanguage;
+  }
+
+  /** Language hint for video-call fillers (en/hi phrase sets only; others → no filler). */
+  private voiceFillerHint(conversation: VoiceConversation): string | undefined {
+    const ruled = this.ruledVoiceLanguage(conversation);
+    if (ruled) return ruled === 'hinglish' ? 'hi' : ruled;
+    return conversation.selectedLanguage;
+  }
+
   /**
    * Speech-to-text settings. A chosen language pins the transcriber to it. In "auto" no
    * language is pinned (pinning the last detected one garbled the next Hindi sentence after
@@ -3632,7 +3747,12 @@ export class RealtimeVoiceService {
       currency: conversation.currency,
       currencySymbol: conversation.currencySymbol,
       customInstructions: conversation.customInstructions,
-      preferredLanguage: conversation.selectedLanguage || conversation.detectedLanguage,
+      // The turn's reply language (updateVoiceReplyLanguage); before the first transcript: as before
+      // but with 'auto' treated as "no pick".
+      preferredLanguage: conversation.replyLanguage
+        ? conversation.turnPreferredLanguage
+        : (this.voicePickedLanguage(conversation) || conversation.detectedLanguage),
+      replyLanguage: conversation.replyLanguage,
       visitorToken: conversation.userId,
       isInternalTest: conversation.isInternalTest,
       supportsCalendarUI: false,
@@ -3863,7 +3983,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
     // and the saved message contain just the answer. See services/voice/fillers.ts.
     let fillerTimer: NodeJS.Timeout | null = null;
     let fillerUsed = false;
-    const fillerLang = conversation.avatar ? fillerLanguage(userTranscript, conversation.selectedLanguage) : null;
+    const fillerLang = conversation.avatar ? fillerLanguage(userTranscript, this.voiceFillerHint(conversation)) : null;
     if (fillerLang && wantsFiller({ transcript: userTranscript, lastAssistantText: conversation.lastAssistantText, lastTurnHadFiller: conversation.lastTurnHadFiller })) {
       fillerTimer = setTimeout(() => {
         fillerTimer = null;

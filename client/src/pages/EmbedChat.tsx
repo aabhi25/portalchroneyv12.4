@@ -213,6 +213,8 @@ interface WidgetSettings {
   proactiveNudgeMessage?: string;
   languageSelectorEnabled?: string;
   availableLanguages?: string;
+  /** Reply languages the business allows (Train Chroney → Language). null = any language. */
+  replyLanguages?: { restricted: boolean; allowed: string[]; defaultLanguage: string } | null;
   productCarouselEnabled?: string;
   productCarouselTitle?: string;
   quickBrowseEnabled?: string;
@@ -1506,6 +1508,29 @@ export default function EmbedChat() {
       })()
     : ['auto', 'en', 'hi', 'kn', 'ta', 'mr'];
 
+  // Reply languages the business allows (null = any language: dropdown unchanged). Restricted:
+  // only the allowed languages (no "Auto"), the business's default shown until the visitor
+  // picks one, and no dropdown at all when only one language is allowed. `selectedLanguage`
+  // stays 'auto' until the visitor actually picks, so the server can still follow what they
+  // write within the allowed languages (and greet in the default language).
+  const replyLanguagePolicy = settings?.replyLanguages?.restricted ? settings.replyLanguages : null;
+  const dropdownLanguages: string[] = replyLanguagePolicy
+    ? (() => {
+        const allowed = replyLanguagePolicy.allowed.filter((code) => !!LANGUAGE_CONFIG[code]);
+        const shown = availableLanguages.filter((code) => code !== 'auto' && allowed.includes(code));
+        return shown.length > 0 ? shown : allowed;
+      })()
+    : availableLanguages;
+  const displayLanguage = replyLanguagePolicy && (selectedLanguage === 'auto' || !replyLanguagePolicy.allowed.includes(selectedLanguage))
+    ? replyLanguagePolicy.defaultLanguage
+    : selectedLanguage;
+  useEffect(() => {
+    // A pick the business no longer allows counts as no pick.
+    if (replyLanguagePolicy && selectedLanguage !== 'auto' && !replyLanguagePolicy.allowed.includes(selectedLanguage)) {
+      setSelectedLanguage('auto');
+    }
+  }, [replyLanguagePolicy, selectedLanguage]);
+
   // Voice conversation from the chat window: started from the mic next to the text box (or the
   // menu's mic), so it's only offered where it can actually start.
   const voiceChatAvailable = !!settings?.voiceModeEnabled && (settings?.chatMode === 'both' || !settings?.chatMode) && !doubtLock;
@@ -1682,7 +1707,7 @@ export default function EmbedChat() {
     // Load fresh intro message
     try {
       const langParam = selectedLanguage && selectedLanguage !== 'auto' ? `&language=${encodeURIComponent(selectedLanguage)}` : '';
-      const response = await fetch(`/api/chat/widget/intro?businessAccountId=${encodeURIComponent(businessAccountId)}${langParam}`);
+      const response = await fetch(`/api/chat/widget/intro?businessAccountId=${encodeURIComponent(businessAccountId)}${langParam}${studentMediumRef.current ? `&medium=${encodeURIComponent(studentMediumRef.current)}` : ''}`);
       if (response.ok) {
         const data = await response.json();
         
@@ -1833,7 +1858,7 @@ export default function EmbedChat() {
         const langParam = selectedLanguage && selectedLanguage !== 'auto' ? `&language=${encodeURIComponent(selectedLanguage)}` : '';
         // Check if this is a welcome back scenario (returning after 30+ minutes)
         const welcomeBackParam = isWelcomeBackRef.current ? '&welcomeBack=true' : '';
-        const response = await fetch(`/api/chat/widget/intro?businessAccountId=${encodeURIComponent(businessAccountId)}${langParam}${welcomeBackParam}`);
+        const response = await fetch(`/api/chat/widget/intro?businessAccountId=${encodeURIComponent(businessAccountId)}${langParam}${welcomeBackParam}${studentMediumRef.current ? `&medium=${encodeURIComponent(studentMediumRef.current)}` : ''}`);
         if (response.ok) {
           const data = await response.json();
           if (data.intro) {
@@ -3688,7 +3713,7 @@ export default function EmbedChat() {
               body: JSON.stringify({
                 businessAccountId,
                 conversationHistory,
-                targetLanguage: selectedLanguage !== 'auto' ? selectedLanguage : undefined,
+                targetLanguage: displayLanguage !== 'auto' ? displayLanguage : undefined,
                 visitorSessionId,
                 // Task #18: let server short-circuit smart-nudge when this
                 // conversation is awaiting OTP verification.
@@ -3719,7 +3744,7 @@ export default function EmbedChat() {
               console.error('[Smart Nudge] Failed - falling back to static message:', error?.message || error);
             }
             // Smart nudge failed - translate fallback message if non-English
-            if (finalNudgeMessage === nudgeMessage && selectedLanguage && selectedLanguage !== 'auto' && selectedLanguage !== 'en' && businessAccountId) {
+            if (finalNudgeMessage === nudgeMessage && displayLanguage && displayLanguage !== 'auto' && displayLanguage !== 'en' && businessAccountId) {
               try {
                 const translateResponse = await fetch('/api/chat/widget/translate', {
                   method: 'POST',
@@ -3727,7 +3752,7 @@ export default function EmbedChat() {
                   body: JSON.stringify({
                     businessAccountId,
                     text: nudgeMessage,
-                    targetLanguage: selectedLanguage
+                    targetLanguage: displayLanguage
                   })
                 });
                 if (translateResponse.ok) {
@@ -3741,7 +3766,7 @@ export default function EmbedChat() {
               }
             }
           }
-        } else if (selectedLanguage && selectedLanguage !== 'auto' && selectedLanguage !== 'en' && businessAccountId) {
+        } else if (displayLanguage && displayLanguage !== 'auto' && displayLanguage !== 'en' && businessAccountId) {
           // Translate static nudge message if non-English language is selected (smart nudge disabled)
           try {
             const response = await fetch('/api/chat/widget/translate', {
@@ -3750,7 +3775,7 @@ export default function EmbedChat() {
               body: JSON.stringify({
                 businessAccountId,
                 text: nudgeMessage,
-                targetLanguage: selectedLanguage
+                targetLanguage: displayLanguage
               })
             });
             if (response.ok) {
@@ -4314,15 +4339,15 @@ export default function EmbedChat() {
           </a>
         )}
         {/* Language selector - show if enabled and has multiple languages */}
-        {languageSelectorEnabled && availableLanguages.length > 1 && (
+        {languageSelectorEnabled && dropdownLanguages.length > 1 && (
           <div className="relative" ref={languageDropdownRef}>
             <button
               onClick={() => setIsLanguageDropdownOpen(!isLanguageDropdownOpen)}
               className="embed-chat-btn px-2 py-1 rounded-md hover:bg-white/20 transition-colors flex items-center gap-1 text-sm"
               aria-label="Select language"
-              title={`Language: ${LANGUAGE_CONFIG[selectedLanguage]?.name || 'Auto-detect'}`}
+              title={`Language: ${LANGUAGE_CONFIG[displayLanguage]?.name || 'Auto-detect'}`}
             >
-              <span>{LANGUAGE_CONFIG[selectedLanguage]?.shortLabel || 'Auto'}</span>
+              <span>{LANGUAGE_CONFIG[displayLanguage]?.shortLabel || 'Auto'}</span>
               <ChevronDown className={`w-3 h-3 transition-transform ${isLanguageDropdownOpen ? 'rotate-180' : ''}`} />
             </button>
             
@@ -4340,7 +4365,7 @@ export default function EmbedChat() {
                   <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 border-b">
                     Languages
                   </div>
-                  {availableLanguages.map((langCode) => {
+                  {dropdownLanguages.map((langCode) => {
                     const lang = LANGUAGE_CONFIG[langCode];
                     if (!lang) return null;
                     return (
@@ -4351,11 +4376,11 @@ export default function EmbedChat() {
                           setIsLanguageDropdownOpen(false);
                         }}
                         className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-100 flex items-center justify-between gap-2 transition-colors ${
-                          selectedLanguage === langCode ? 'bg-purple-50 text-purple-700' : 'text-gray-700'
+                          displayLanguage === langCode ? 'bg-purple-50 text-purple-700' : 'text-gray-700'
                         }`}
                       >
                         <span className="font-medium">{lang.nativeName}</span>
-                        {selectedLanguage === langCode && (
+                        {displayLanguage === langCode && (
                           <span className="text-purple-600">✓</span>
                         )}
                       </button>

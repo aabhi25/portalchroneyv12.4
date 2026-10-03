@@ -43,6 +43,9 @@ import { smallTalkKind } from './services/chatContext/smallTalk';
 import { accountHasKnowledge } from './services/chatContext/knowledgePresence';
 import { embedQueryCached } from './services/chatContext/queryEmbeddingCache';
 import { ChatTurnTiming } from './services/chatContext/chatTiming';
+import { localizeFixedText, replyLanguageActive, type ChatReplyLanguage } from './services/language/chatLanguage';
+import { correctReplyLanguage, replyLanguageMatches } from './services/language/languageText';
+import { describeLanguage } from './services/language/languagePolicy';
 
 /** Cached business-context block; `profile` is set in retrieval mode only. */
 interface ContextBundle {
@@ -192,6 +195,13 @@ export interface ChatContext {
    * reused instead of searching again. A null result means "run it normally".
    */
   prefetchedK12Topic?: { query: string; result: Promise<any | null> } | null;
+  /**
+   * Server-only (chat routes / RealtimeVoiceService, never read from an HTTP body): the
+   * business's reply-language decision for this turn (services/language/chatLanguage).
+   * `rule` goes into the model's final rules of every reply of the turn; undefined or an
+   * empty rule = "any language" (behaviour unchanged).
+   */
+  replyLanguage?: ChatReplyLanguage;
 }
 
 // Track active conversation IDs for each user session
@@ -1012,12 +1022,49 @@ export class ChatService {
   // Enhanced fallback message with business context and sales-oriented approach
   // Gathers business info and generates a helpful response while preserving lead capture intent
   // Now accepts existingLead to ensure AI doesn't ask for contact info that already exists
+  // ── reply language (services/language) ────────────────────────────────────
+  // Every helper below is a no-op unless a reply-language rule is in force for the turn
+  // (restricted business, or an explicit request / TopScholar medium): "any language"
+  // businesses keep exactly the old prompts, texts and AI calls.
+
+  /** The reply-language block for the model's final rules ('' = none). */
+  private languageBlockFor(context: ChatContext): string {
+    return replyLanguageActive(context.replyLanguage) ? context.replyLanguage.rule : '';
+  }
+
+  /** One line for our own small prompts (fallback rephrase, post-capture): '' = none. */
+  private languageLineFor(context?: ChatContext | null): string {
+    const r = context?.replyLanguage;
+    return replyLanguageActive(r) ? `\n\nWrite your reply entirely in ${describeLanguage(r.language)}.` : '';
+  }
+
+  /** One of our fixed English texts, in the reply language (cached translation). */
+  private async fixedText(context: ChatContext | null | undefined, text: string): Promise<string> {
+    if (!context) return text;
+    return localizeFixedText(context.businessAccountId, context.replyLanguage, text);
+  }
+
+  /**
+   * Safety check for a finished TEXT reply (restricted businesses only; never voice — a spoken
+   * answer can't be taken back): not in the reply language → rewritten in it. No AI call when
+   * unrestricted or when the text already matches.
+   */
+  private async enforceReplyLanguage(context: ChatContext, text: string): Promise<string> {
+    const r = context.replyLanguage;
+    if (!r || !r.restricted || !r.language || context.voiceResponseStyle || !text || !text.trim()) return text;
+    if (replyLanguageMatches(text, r.language)) return text;
+    const fixed = await correctReplyLanguage(context.businessAccountId, text, r.language);
+    return fixed.text;
+  }
+
   private async rephraseFallbackMessage(
     template: string, 
     userQuestion: string,
     businessAccountId: string,
     apiKey?: string,
-    existingLead?: any
+    existingLead?: any,
+    /** Reply-language line (languageLineFor) — empty for "any language" businesses. */
+    languageLine: string = ''
   ): Promise<string> {
     // Determine what contact info the lead already has (outside try so available in catch)
     const hasPhone = !!(existingLead?.phone && existingLead.phone.trim());
@@ -1111,7 +1158,7 @@ BUSINESS CONTEXT (use this to sound knowledgeable):
 ${businessContext}
 
 FALLBACK MESSAGE TO USE AS BASE:
-${processedTemplate}${contactRestrictions}
+${processedTemplate}${contactRestrictions}${languageLine}
 
 🚨 CRITICAL - BANNED PHRASES (NEVER USE):
 ❌ "I don't have information about..."
@@ -1152,7 +1199,7 @@ Keep it natural, conversational, and under 3 sentences. Sound confident and solu
 The user asked: "a question outside the scope of this business"
 
 Message to rephrase:
-${processedTemplate}${contactRestrictions}
+${processedTemplate}${contactRestrictions}${languageLine}
 
 🚨 BANNED PHRASES (NEVER USE):
 ❌ "I don't have information..."
@@ -1186,7 +1233,8 @@ Rephrased message (keep it concise, same length, same intent, stay POSITIVE - ne
     capturedData: { phone?: string; email?: string; name?: string },
     previousAIResponse: string | null,
     businessAccountId: string,
-    apiKey?: string
+    apiKey?: string,
+    context?: ChatContext
   ): Promise<string> {
     try {
       // Check if previous response was asking for contact info
@@ -1197,7 +1245,7 @@ Rephrased message (keep it concise, same length, same intent, stay POSITIVE - ne
       if (previousAskedForContact) {
         // SIMPLE HANDOFF CONFIRMATION - no AI needed, no risk of re-addressing the question
         console.log('[Post-Capture] Previous asked for contact - using simple confirmation (no AI call)');
-        return "Thank you for sharing your details! Our team will reach out to you shortly with the information you need. Feel free to ask if you have any other questions!";
+        return this.fixedText(context, "Thank you for sharing your details! Our team will reach out to you shortly with the information you need. Feel free to ask if you have any other questions!");
       }
       
       // For other cases (e.g., start-timing where AI asked for contact before answering),
@@ -1216,7 +1264,7 @@ Generate a brief, warm response (1-2 sentences) that:
 2. Confirms our team will reach out with the details they need
 3. Invites them to ask other questions
 
-Do NOT try to answer any previous questions - just confirm the handoff.
+Do NOT try to answer any previous questions - just confirm the handoff.${this.languageLineFor(context)}
 
 Response:`;
 
@@ -1228,10 +1276,10 @@ Response:`;
       }
       
       // Fallback if AI fails
-      return "Thank you for sharing your details! Our team will reach out to you shortly with the information you need.";
+      return this.fixedText(context, "Thank you for sharing your details! Our team will reach out to you shortly with the information you need.");
     } catch (error) {
       console.error('[Post-Capture AI] Error generating response:', error);
-      return "Thank you for sharing your details! Our team will reach out to you shortly with the information you need.";
+      return this.fixedText(context, "Thank you for sharing your details! Our team will reach out to you shortly with the information you need.");
     }
   }
   
@@ -2155,9 +2203,9 @@ Response:`;
             );
             const resultData = result.success && 'data' in result && result.data ? result.data : {};
             const serverTitle = resultData.jobTitle || clientJobTitle;
-            const reply = result.success
+            const reply = await this.fixedText(context, result.success
               ? `Your application for **${serverTitle}** has been submitted successfully! The hiring team will review your profile and get back to you soon.`
-              : `Sorry, I couldn't submit your application. ${result.message || 'Please try again.'}`;
+              : `Sorry, I couldn't submit your application. ${result.message || 'Please try again.'}`);
             if (!context.deferAssistantPersistence) {
               conversationMemory.storeMessage(context.userId, 'assistant', reply);
               await this.storeMessageInDB(conversationId, 'assistant', reply);
@@ -2165,7 +2213,7 @@ Response:`;
             return reply;
           } catch (err) {
             console.error('[Chat] JOB_APPLY error:', err);
-            const errReply = `Sorry, something went wrong while submitting your application. Please try again.`;
+            const errReply = await this.fixedText(context, `Sorry, something went wrong while submitting your application. Please try again.`);
             if (!context.deferAssistantPersistence) {
               conversationMemory.storeMessage(context.userId, 'assistant', errReply);
               await this.storeMessageInDB(conversationId, 'assistant', errReply);
@@ -2173,7 +2221,7 @@ Response:`;
             return errReply;
           }
         } else {
-          const errReply = 'Sorry, the application request was malformed. Please try clicking Apply Now again.';
+          const errReply = await this.fixedText(context, 'Sorry, the application request was malformed. Please try clicking Apply Now again.');
           if (!context.deferAssistantPersistence) {
             conversationMemory.storeMessage(context.userId, 'assistant', errReply);
             await this.storeMessageInDB(conversationId, 'assistant', errReply);
@@ -2224,7 +2272,10 @@ Response:`;
         // If engine handled the message, return engine's response immediately
         if (engineResult.shouldBypassAI && engineResult.response) {
           console.log('[Chat] Engine-driven journey handled message - bypassing AI');
-          
+          if (replyLanguageActive(context.replyLanguage)) {
+            engineResult.response = await this.fixedText(context, engineResult.response);
+          }
+
           // Store engine's response
           if (!context.deferAssistantPersistence) {
             conversationMemory.storeMessage(context.userId, 'assistant', engineResult.response);
@@ -2362,9 +2413,11 @@ Response:`;
       });
       const leadTurnNS = preparedNS.turn;
       const phoneValidationContextNS = leadTurnNS?.phoneOverride || '';
+      // Reply-language rule ('' for "any language"): before an OTP step (which stays last).
+      const languageBlockNS = this.languageBlockFor(context);
       const turnBlockNS = otpBlockNS
-        ? `${otpBlockNS}\nThis verification step overrides everything above: no small talk, no answers to other questions, no requests for other contact details.`
-        : (leadTurnNS?.block || '');
+        ? [languageBlockNS, `${otpBlockNS}\nThis verification step overrides everything above: no small talk, no answers to other questions, no requests for other contact details.`].filter(Boolean).join('\n\n')
+        : ([leadTurnNS?.block || '', languageBlockNS].filter(Boolean).join('\n\n'));
 
       // Get AI response with tool awareness
       // Phone validation: pass as last-position system message override (highest GPT attention weight)
@@ -2416,7 +2469,8 @@ Response:`;
             userMessage,
             context.businessAccountId,
             context.openaiApiKey || undefined,
-            existingLead
+            existingLead,
+            this.languageLineFor(context)
           );
           // Update stored message with the rephrased fallback
           conversationMemory.storeMessage(context.userId, 'assistant', rephrased);
@@ -2472,7 +2526,10 @@ Response:`;
             context.openaiApiKey || undefined,
             context.businessAccountId,
             hasProducts,
-            context.responseLength || 'balanced'
+            context.responseLength || 'balanced',
+            undefined,
+            undefined,
+            this.languageBlockFor(context) || undefined
           );
           
           // If the new response has tool calls, handle them
@@ -2498,18 +2555,21 @@ Response:`;
                 originalQuestion,
                 context.businessAccountId,
                 context.openaiApiKey || undefined,
-                freshLeadForPostLead
+                freshLeadForPostLead,
+                this.languageLineFor(context)
               );
               responseToStore = rephrased;
             }
-            
+            responseToStore = await this.enforceReplyLanguage(context, responseToStore);
             conversationMemory.storeMessage(context.userId, 'assistant', responseToStore);
             await this.storeMessageInDB(conversationId, 'assistant', responseToStore);
             return responseToStore;
           }
           
           // Store and return the final response
-          const finalContent = finalResponse.content || 'Thank you! How can I assist you further?';
+          const finalContent = finalResponse.content
+            ? await this.enforceReplyLanguage(context, finalResponse.content)
+            : await this.fixedText(context, 'Thank you! How can I assist you further?');
           conversationMemory.storeMessage(context.userId, 'assistant', finalContent);
           await this.storeMessageInDB(conversationId, 'assistant', finalContent);
           
@@ -2534,7 +2594,8 @@ Response:`;
             userMessage, 
             context.businessAccountId,
             context.openaiApiKey || undefined,
-            existingLead
+            existingLead,
+            this.languageLineFor(context)
           );
           console.log('[Fallback Instruction] Rephrased template applied:', responseContent.substring(0, 100) + '...');
         } else {
@@ -2545,6 +2606,8 @@ Response:`;
       
       // SAFETY: Always strip [[FALLBACK]] marker before returning (in case it leaked through)
       responseContent = this.stripFallbackMarker(responseContent);
+      // Restricted reply language: rewrite a wrong-language reply before it is stored / returned.
+      responseContent = await this.enforceReplyLanguage(context, responseContent);
       
       conversationMemory.storeMessage(context.userId, 'assistant', responseContent);
       await this.storeMessageInDB(conversationId, 'assistant', responseContent);
@@ -2929,6 +2992,8 @@ Response:`;
       context.assistantName,
       context.assistantGender !== undefined ? context.assistantGender : textChatAssistantGender(identityAccount as any, identityWidget as any),
     );
+    // Business reply-language rule ('' for "any language"); processMessage already put it in finalBlock.
+    const languageBlock = this.languageBlockFor(context);
 
     // Get final response from AI with tool results (using same relevant tools)
     const finalResponse = await llamaService.continueToolConversation(
@@ -2939,10 +3004,13 @@ Response:`;
       context.businessAccountId,
       context.preferredLanguage,
       context.responseLength || 'balanced',
-      [identityBlock, finalBlock].filter(Boolean).join('\n\n')
+      [identityBlock, finalBlock, languageBlock && !finalBlock.includes(languageBlock) ? languageBlock : ''].filter(Boolean).join('\n\n'),
+      context.replyLanguage?.promptSource
     );
 
-    const responseContent = finalResponse.content || 'I processed your request.';
+    let responseContent = finalResponse.content || 'I processed your request.';
+    // Restricted reply language: rewrite a wrong-language reply before it is stored / returned.
+    if (!skipDBStore) responseContent = await this.enforceReplyLanguage(context, responseContent);
     conversationMemory.storeMessage(context.userId, 'assistant', responseContent);
     
     // Only store to DB if not in a secondary/nested context (post-lead, post-refusal processing)
@@ -3655,9 +3723,9 @@ Response:`;
             );
             const resultData = result.success && 'data' in result && result.data ? result.data : {};
             const serverTitle = resultData.jobTitle || clientJobTitle;
-            const reply = result.success
+            const reply = await this.fixedText(context, result.success
               ? `Your application for **${serverTitle}** has been submitted successfully! The hiring team will review your profile and get back to you soon.`
-              : `Sorry, I couldn't submit your application. ${result.message || 'Please try again.'}`;
+              : `Sorry, I couldn't submit your application. ${result.message || 'Please try again.'}`);
             conversationMemory.storeMessage(context.userId, 'assistant', reply);
             await this.storeMessageInDB(conversationId, 'assistant', reply);
             yield { type: 'content' as const, data: reply };
@@ -3666,7 +3734,7 @@ Response:`;
             return;
           } catch (err) {
             console.error('[Chat Stream] JOB_APPLY error:', err);
-            const errReply = `Sorry, something went wrong while submitting your application. Please try again.`;
+            const errReply = await this.fixedText(context, `Sorry, something went wrong while submitting your application. Please try again.`);
             conversationMemory.storeMessage(context.userId, 'assistant', errReply);
             await this.storeMessageInDB(conversationId, 'assistant', errReply);
             yield { type: 'content' as const, data: errReply };
@@ -3675,7 +3743,7 @@ Response:`;
             return;
           }
         } else {
-          const errReply = 'Sorry, the application request was malformed. Please try clicking Apply Now again.';
+          const errReply = await this.fixedText(context, 'Sorry, the application request was malformed. Please try clicking Apply Now again.');
           conversationMemory.storeMessage(context.userId, 'assistant', errReply);
           await this.storeMessageInDB(conversationId, 'assistant', errReply);
           yield { type: 'content' as const, data: errReply };
@@ -3728,7 +3796,15 @@ Response:`;
         // If engine handled the message, stream engine's response
         if (engineResult.shouldBypassAI && engineResult.response) {
           console.log('[Chat] Engine-driven journey handled message - bypassing AI (streaming)');
-          
+          // Reply-language rule in force: the journey's next question / completion message in
+          // the reply language (choice values stay as configured — they are matched on submit).
+          if (replyLanguageActive(context.replyLanguage)) {
+            engineResult.response = await this.fixedText(context, engineResult.response);
+            if (engineResult.formStep?.questionText) {
+              engineResult.formStep = { ...engineResult.formStep, questionText: await this.fixedText(context, engineResult.formStep.questionText) };
+            }
+          }
+
           // For form journeys, emit form_step SSE event for visual UI
           if (engineResult.formStep) {
             console.log('[Chat Stream] Engine returned form step - emitting form_step:', engineResult.formStep.questionText?.substring(0, 30));
@@ -3778,7 +3854,7 @@ Response:`;
           yield { type: 'form_step' as const, data: JSON.stringify({ ...journeyResult.formStep, conversationId }) };
           
           // Store a brief acknowledgment as AI response (not the question itself)
-          const acknowledgment = "Great! Let me help you with that. Please select from the options below:";
+          const acknowledgment = await this.fixedText(context, "Great! Let me help you with that. Please select from the options below:");
           if (!context.deferAssistantPersistence) {
             conversationMemory.storeMessage(context.userId, 'assistant', acknowledgment);
             await this.storeMessageInDB(conversationId, 'assistant', acknowledgment);
@@ -4163,6 +4239,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         voiceStyleBlock: context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : undefined,
         skipFaqPrefetch: knowledge.skipFaqPrefetch || undefined,
         identityBlock: identityBlock || undefined,
+        languageBlock: this.languageBlockFor(context) || undefined,
+        languageSource: context.replyLanguage?.promptSource,
       };
       const firstCallPromptOptions = retrievalMode ? await this.buildFirstCallPromptOptions(context, history, knowledge.itemCount > 0 && !(serverSideLookupOptions || serverSideReturnExchange), !!knowledge.searched) : undefined;
       timing.mark('llm request');
@@ -4263,7 +4341,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
             userMessage, 
             context.businessAccountId,
             context.openaiApiKey || undefined,
-            existingLead
+            existingLead,
+            this.languageLineFor(context)
           );
           bufferedContent = [fullResponse];
           console.log('[Fallback Instruction] Rephrased template applied:', fullResponse.substring(0, 100) + '...');
@@ -4294,13 +4373,28 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         }
       }
 
+      // REPLY-LANGUAGE SAFETY CHECK (restricted businesses, text chat only): a reply that isn't
+      // in the business's language is rewritten. Not shown yet → the rewrite is what streams;
+      // already streamed live → a `final` event replaces the bubble (the widget swaps the text
+      // in place). Unrestricted, voice, or a matching reply: nothing happens, no AI call.
+      let languageReplacement: string | null = null;
+      if (!hasToolCalls && fullResponse.trim() && !this.isDeflectionResponse(fullResponse)) {
+        const checked = await this.enforceReplyLanguage(context, fullResponse);
+        if (checked !== fullResponse) {
+          fullResponse = checked;
+          bufferedContent = [checked];
+          if (liveStreamed) languageReplacement = checked;
+        }
+      }
+
       // If NO tool calls detected, stream the buffered content now
       let contentAlreadyYielded = false;
       if (!hasToolCalls) {
         if (liveStreamed) {
           // Already streamed as written: send only what was held back.
           const rest = liveFilter.flush();
-          if (rest) yield { type: 'content', data: rest };
+          if (rest && !languageReplacement) yield { type: 'content', data: rest };
+          if (languageReplacement) yield { type: 'final', data: languageReplacement };
         } else {
           for (const content of bufferedContent) {
             yield { type: 'content', data: content };
@@ -4698,7 +4792,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           context.businessAccountId,
           context.preferredLanguage,
           context.responseLength || 'balanced',
-          [identityBlock, continuationBlock, context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : ''].filter(Boolean).join('\n\n')
+          [identityBlock, continuationBlock, this.languageBlockFor(context), context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : ''].filter(Boolean).join('\n\n'),
+          context.replyLanguage?.promptSource
         )) {
           finalContent += token;
           streamedTokens = true;
@@ -4759,7 +4854,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                   },
                   lastAssistantMessage?.content || null,
                   context.businessAccountId,
-                  context.openaiApiKey || undefined
+                  context.openaiApiKey || undefined,
+                  context
                 );
               } else if (originalQuestion) {
                 // START-TIMING FLOW: AI asked for contact first, now try to answer the question
@@ -4777,7 +4873,10 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                     context.openaiApiKey || undefined,
                     context.businessAccountId,
                     false,
-                    context.responseLength || 'balanced'
+                    context.responseLength || 'balanced',
+                    undefined,
+                    undefined,
+                    this.languageBlockFor(context) || undefined
                   );
                   
                   if (questionResponse.tool_calls && questionResponse.tool_calls.length > 0) {
@@ -4796,7 +4895,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                         { phone: freshLead?.phone || undefined, email: freshLead?.email || undefined, name: freshLead?.name || undefined },
                         lastAssistantMessage?.content || null,
                         context.businessAccountId,
-                        context.openaiApiKey || undefined
+                        context.openaiApiKey || undefined,
+                  context
                       );
                     } else {
                       finalContent = this.stripFallbackMarker(toolResult.response);
@@ -4834,7 +4934,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                         { phone: freshLead?.phone || undefined, email: freshLead?.email || undefined, name: freshLead?.name || undefined },
                         lastAssistantMessage?.content || null,
                         context.businessAccountId,
-                        context.openaiApiKey || undefined
+                        context.openaiApiKey || undefined,
+                  context
                       );
                     } else {
                       finalContent = this.stripFallbackMarker(questionResponse.content);
@@ -4846,16 +4947,17 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                       { phone: freshLead?.phone || undefined, email: freshLead?.email || undefined, name: freshLead?.name || undefined },
                       lastAssistantMessage?.content || null,
                       context.businessAccountId,
-                      context.openaiApiKey || undefined
+                      context.openaiApiKey || undefined,
+                  context
                     );
                   }
                 } catch (err) {
                   console.error('[Chat Stream] Error in post-lead tool-aware response:', err);
-                  finalContent = "Thank you for sharing your details! I'm looking into your question now.";
+                  finalContent = await this.fixedText(context, "Thank you for sharing your details! I'm looking into your question now.");
                 }
               } else {
                 // No substantive question - just thank them
-                finalContent = "Thank you for sharing your details! I'm here to help with any questions you have.";
+                finalContent = await this.fixedText(context, "Thank you for sharing your details! I'm here to help with any questions you have.");
               }
               
               console.log('[Chat Stream] Post-capture response generated');
@@ -4864,18 +4966,18 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
               // Check if they mentioned email preference
               const userMsgLower = userMessage.toLowerCase();
               if (userMsgLower.includes('mail') || userMsgLower.includes('email')) {
-                finalContent = "Sure! Could you please share your email address so I can send you the details?";
+                finalContent = await this.fixedText(context, "Sure! Could you please share your email address so I can send you the details?");
               } else if (userMsgLower.includes('call') || userMsgLower.includes('phone')) {
-                finalContent = "Sure! Could you please share your phone number so we can arrange a callback?";
+                finalContent = await this.fixedText(context, "Sure! Could you please share your phone number so we can arrange a callback?");
               } else {
-                finalContent = "I'd be happy to help! Could you please share your contact details?";
+                finalContent = await this.fixedText(context, "I'd be happy to help! Could you please share your contact details?");
               }
               console.log('[Chat Stream] capture_lead called without real data, asking for contact info instead of thanking');
             }
           } else if (toolNames.includes('get_products')) {
             if (!productData || !Array.isArray(productData) || productData.length === 0) {
               // No products found - apologize naturally
-              finalContent = "Sorry, I couldn't find any products matching your request.";
+              finalContent = await this.fixedText(context, "Sorry, I couldn't find any products matching your request.");
             }
             // Products found: pass through AI's brief acknowledgment (prompt instructs a brief reply)
           } else if (toolNames.includes('get_faqs')) {
@@ -4917,16 +5019,17 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                       userMessage,
                       context.businessAccountId,
                       context.openaiApiKey || undefined,
-                      existingLead
+                      existingLead,
+                      this.languageLineFor(context)
                     );
                     finalContent = rephrased;
                   } else {
                     // No custom fallback - use positive, solution-oriented response
-                    finalContent = "I'd be happy to connect you with our team who can assist you with this. Could you share your contact details so they can reach out?";
+                    finalContent = await this.fixedText(context, "I'd be happy to connect you with our team who can assist you with this. Could you share your contact details so they can reach out?");
                   }
                 }
               } else {
-                finalContent = "I found some information but couldn't format it properly. Could you try asking again?";
+                finalContent = await this.fixedText(context, "I found some information but couldn't format it properly. Could you try asking again?");
               }
             } else {
               // No FAQ data at all - use fallback
@@ -4939,17 +5042,18 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                   userMessage,
                   context.businessAccountId,
                   context.openaiApiKey || undefined,
-                  existingLead
+                  existingLead,
+                  this.languageLineFor(context)
                 );
                 finalContent = rephrased;
               } else {
-                finalContent = "I couldn't find specific information about that. Could you try rephrasing your question?";
+                finalContent = await this.fixedText(context, "I couldn't find specific information about that. Could you try rephrasing your question?");
               }
             }
           } else if (toolNames.includes('book_appointment')) {
-            finalContent = "I've processed your appointment request.";
+            finalContent = await this.fixedText(context, "I've processed your appointment request.");
           } else if (toolNames.includes('list_available_slots')) {
-            finalContent = "I've checked the available time slots for you.";
+            finalContent = await this.fixedText(context, "I've checked the available time slots for you.");
           } else if (toolNames.includes('fetch_k12_topic') || toolNames.includes('fetch_k12_questions')) {
             const k12ToolCallIds = toolCalls
               .filter((tc: any) => tc.function.name === 'fetch_k12_topic' || tc.function.name === 'fetch_k12_questions')
@@ -4963,10 +5067,10 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
               console.log('[Chat Stream] K12 fallback: using topic content for', topic.name);
               finalContent = `Here's what I found about **${topic.name}**:\n\n${contentSnippet}`;
             } else {
-              finalContent = "I couldn't find specific curriculum content for that question. Could you try rephrasing it?";
+              finalContent = await this.fixedText(context, "I couldn't find specific curriculum content for that question. Could you try rephrasing it?");
             }
           } else {
-            finalContent = "How can I assist you today?";
+            finalContent = await this.fixedText(context, "How can I assist you today?");
           }
           
           // Safety: ensure finalContent is always a string before calling .trim()
@@ -4990,6 +5094,10 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
             finalContent = preamble;
           }
         }
+
+        // REPLY-LANGUAGE SAFETY CHECK (restricted, text only): the `final` event below replaces
+        // what streamed, and the rewritten text is what gets stored. No-op otherwise.
+        finalContent = await this.enforceReplyLanguage(context, finalContent);
 
         // Extract product IDs for metadata storage
         const productIds = productData && Array.isArray(productData) 
@@ -5051,7 +5159,10 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                 context.openaiApiKey || undefined,
                 context.businessAccountId,
                 false,
-                context.responseLength || 'balanced'
+                context.responseLength || 'balanced',
+                undefined,
+                undefined,
+                this.languageBlockFor(context) || undefined
               );
               
               let finalAnswer = fullResponse; // Start with the refusal acknowledgment
@@ -5085,7 +5196,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                     pendingQuestion,
                     context.businessAccountId,
                     context.openaiApiKey || undefined,
-                    freshLeadForRefusal
+                    freshLeadForRefusal,
+                    this.languageLineFor(context)
                   );
                   finalAnswer = `No problem! ${enhancedResponse}`;
                 } else {
@@ -5122,6 +5234,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                 }
                 
                 // Store message with product IDs in metadata
+                finalAnswer = await this.enforceReplyLanguage(context, finalAnswer);
                 if (!context.deferAssistantPersistence) {
                   conversationMemory.storeMessage(context.userId, 'assistant', finalAnswer);
                   await this.storeMessageInDB(conversationId, 'assistant', finalAnswer,
@@ -5150,7 +5263,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                     pendingQuestion,
                     context.businessAccountId,
                     context.openaiApiKey || undefined,
-                    freshLeadForRefusal
+                    freshLeadForRefusal,
+                    this.languageLineFor(context)
                   );
                   finalAnswer = `No problem! ${enhancedResponse}`;
                 } else {
@@ -5159,6 +5273,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
                 }
               }
               
+              finalAnswer = await this.enforceReplyLanguage(context, finalAnswer);
               if (!context.deferAssistantPersistence) {
                 conversationMemory.storeMessage(context.userId, 'assistant', finalAnswer);
                 await this.storeMessageInDB(conversationId, 'assistant', finalAnswer);
@@ -5201,11 +5316,12 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
               userMessage,
               context.businessAccountId,
               context.openaiApiKey || undefined,
-              existingLead
+              existingLead,
+              this.languageLineFor(context)
             );
             finalResponse = rephrased;
           } else if (!fullResponse || !fullResponse.trim()) {
-            finalResponse = "I'd be happy to connect you with our team who can help with this. Could you share your contact details so they can reach out?";
+            finalResponse = await this.fixedText(context, "I'd be happy to connect you with our team who can help with this. Could you share your contact details so they can reach out?");
           }
         }
         
