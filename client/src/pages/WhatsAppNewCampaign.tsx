@@ -10,6 +10,7 @@ import CampaignForm, {
   campaignToFormValues,
   toDateTimeLocal,
   type CampaignFormValues,
+  type CampaignSubmitOptions,
   type StoredCampaignConfig,
 } from "@/components/CampaignForm";
 
@@ -83,8 +84,8 @@ export default function WhatsAppNewCampaign() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (values: CampaignFormValues) =>
-      apiRequest("POST", "/api/whatsapp/campaigns", {
+    mutationFn: async ({ values, options }: { values: CampaignFormValues; options?: CampaignSubmitOptions }) => {
+      const created = await apiRequest<{ id: string; campaignType?: "one_time" | "automation" }>("POST", "/api/whatsapp/campaigns", {
         ...values,
         scheduledAt: values.scheduledAt || null,
         ...(source
@@ -94,14 +95,27 @@ export default function WhatsAppNewCampaign() {
               aiMaxRepliesPerRecipient: source.aiMaxRepliesPerRecipient ?? undefined,
             }
           : {}),
-      }),
-    onSuccess: (created: { id: string; campaignType?: "one_time" | "automation" }) => {
+      });
+      if (!options?.sendNow) return { created, sendError: null as string | null, sendMessage: null as string | null };
+      // Saved first, then started: if starting fails the campaign is still there as a draft.
+      try {
+        const sent = await apiRequest<{ message?: string; pausedForQuietHours?: boolean }>("POST", `/api/whatsapp/campaigns/${created.id}/send`);
+        return { created, sendError: null, sendMessage: sent.pausedForQuietHours ? sent.message || "Quiet hours are on; sending starts when they end." : "Messages are going out now." };
+      } catch (e: any) {
+        return { created, sendError: e.message as string, sendMessage: null };
+      }
+    },
+    onSuccess: ({ created, sendError, sendMessage }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/campaigns"] });
-      toast({ title: source ? "Copy created" : "Campaign created" });
+      if (sendError) {
+        toast({ title: "Saved as a draft, but sending didn't start", description: sendError, variant: "destructive" });
+      } else {
+        toast({ title: sendMessage ? "Campaign started" : source ? "Copy created" : "Campaign created", description: sendMessage ?? undefined });
+      }
       setLocation(
         created.campaignType === "automation"
           ? `/admin/whatsapp-campaign-automations/new?campaign=${created.id}`
-          : listPath,
+          : sendMessage || sendError ? `/admin/whatsapp-campaigns/${created.id}` : listPath,
       );
     },
     onError: (e: any) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
@@ -167,7 +181,8 @@ export default function WhatsAppNewCampaign() {
             ? <><Copy className="h-4 w-4" /> Create Copy</>
             : <><Send className="h-4 w-4" /> Create Draft</>
       }
-      onSubmit={values => createMutation.mutate(values)}
+      allowSendNow
+      onSubmit={(values, options) => createMutation.mutate({ values, options })}
       onCancel={() => setLocation(listPath)}
     />
   );

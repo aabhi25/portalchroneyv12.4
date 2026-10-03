@@ -5,6 +5,8 @@ import {
   marketingCampaigns,
   marketingCampaignRecipients,
   marketingCampaignMessages,
+  marketingCampaignFollowUps,
+  marketingCampaignFollowUpSends,
   whatsappCampaignAutomations,
   whatsappCampaignAutomationRuns,
   whatsappTemplates,
@@ -22,7 +24,7 @@ import { contactGroupService, normalizePhone, applyCountryCode } from "./contact
 import { contactGroups } from "@shared/schema";
 import { sendTemplateMessage } from "./whatsappSessionService";
 import { whatsappService } from "./whatsappService";
-import { checkCampaignPrerequisites, type PrerequisiteFailure } from "./whatsapp/campaignPrerequisites";
+import { checkCampaignPrerequisites, isTemplateUsable, type PrerequisiteFailure } from "./whatsapp/campaignPrerequisites";
 
 /**
  * Thrown when a campaign is missing an approved template or a non-empty audience.
@@ -52,7 +54,7 @@ async function parkUnsendableCampaign(
   currentStatus: string,
   reason: string,
 ): Promise<void> {
-  if (currentStatus !== "scheduled" && currentStatus !== "sending") return;
+  if (currentStatus !== "scheduled" && currentStatus !== "sending" && currentStatus !== "paused") return;
 
   // "Already sent" means anything MSG91 may have accepted, not just rows Meta
   // has confirmed: 'queued' (accepted, awaiting Meta), any row carrying a
@@ -77,7 +79,7 @@ async function parkUnsendableCampaign(
 
   await db
     .update(marketingCampaigns)
-    .set({ status: parkedStatus, heartbeatAt: null, updatedAt: new Date() })
+    .set({ status: parkedStatus, heartbeatAt: null, pauseReason: null, pausedAt: null, updatedAt: new Date() })
     .where(and(eq(marketingCampaigns.id, campaignId), eq(marketingCampaigns.businessAccountId, businessAccountId)));
 
   console.warn(
@@ -296,6 +298,22 @@ interface CreatePayload {
   recipientStatusColumn?: string | null;
   recipientEligibleStatuses?: string[];
   recipientAiAllowedFields?: string[];
+  // Quiet hours ("HH:mm"); both empty/null = no quiet hours.
+  quietHoursStart?: string | null;
+  quietHoursEnd?: string | null;
+  quietHoursTimezone?: string | null;
+  // A/B test: optional template B and the share of recipients (1-99 %) that get it.
+  variantBTemplateId?: string | null;
+  variantBTemplateParams?: string[];
+  variantSplitPercent?: number | null;
+  // Follow-up steps ("if no reply within N hours, send template X"). Replaces the saved list.
+  followUps?: FollowUpInput[] | null;
+}
+
+export interface FollowUpInput {
+  delayHours: number;
+  templateId: string;
+  templateParams?: string[];
 }
 
 const campaignSourceFields = [
@@ -630,6 +648,192 @@ export function resolveParams(
   return { params: out, problems };
 }
 
+// ── Quiet hours ────────────────────────────────────────────────────────────
+// Businesses have no time-zone setting yet, so campaigns default to IST.
+export const DEFAULT_CAMPAIGN_TIMEZONE = "Asia/Kolkata";
+export const QUIET_HOURS_PAUSE_REASON = "quiet_hours";
+const HHMM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+type QuietHoursConfig = {
+  quietHoursStart?: string | null;
+  quietHoursEnd?: string | null;
+  quietHoursTimezone?: string | null;
+};
+
+function isValidTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-GB", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Minutes after local midnight in `tz`. */
+export function localMinutesInZone(now: Date, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  const hour = Number(parts.find(p => p.type === "hour")?.value ?? 0) % 24;
+  const minute = Number(parts.find(p => p.type === "minute")?.value ?? 0);
+  return hour * 60 + minute;
+}
+
+export function hasQuietHours(cfg: QuietHoursConfig | null | undefined): boolean {
+  const start = cfg?.quietHoursStart || "";
+  const end = cfg?.quietHoursEnd || "";
+  return HHMM_RE.test(start) && HHMM_RE.test(end) && start !== end;
+}
+
+/**
+ * True when `now` falls inside the campaign's quiet window. A start later than
+ * the end wraps past midnight (21:00 → 09:00). No window configured → false,
+ * so campaigns saved before this setting existed send exactly as before.
+ */
+export function isWithinQuietHours(cfg: QuietHoursConfig | null | undefined, now: Date = new Date()): boolean {
+  if (!cfg || !hasQuietHours(cfg)) return false;
+  const tz = cfg.quietHoursTimezone && isValidTimeZone(cfg.quietHoursTimezone) ? cfg.quietHoursTimezone : DEFAULT_CAMPAIGN_TIMEZONE;
+  const toMin = (v: string) => Number(v.slice(0, 2)) * 60 + Number(v.slice(3, 5));
+  const start = toMin(cfg.quietHoursStart!);
+  const end = toMin(cfg.quietHoursEnd!);
+  const t = localMinutesInZone(now, tz);
+  return start < end ? t >= start && t < end : t >= start || t < end;
+}
+
+// ── A/B split ──────────────────────────────────────────────────────────────
+export function abTestActive(c: { variantBTemplateId?: string | null; variantSplitPercent?: number | null } | null | undefined): boolean {
+  const pct = c?.variantSplitPercent ?? 0;
+  return Boolean(c?.variantBTemplateId) && pct >= 1 && pct <= 99;
+}
+
+/**
+ * Deterministic arm for one phone in one campaign: the same inputs always give
+ * the same answer, so a re-snapshot or a retry never moves a person between arms.
+ */
+export function assignVariant(campaignId: string, phone: string, splitPercent: number | null | undefined): "A" | "B" | null {
+  const pct = Math.round(Number(splitPercent ?? 0));
+  if (!(pct >= 1 && pct <= 99)) return null;
+  const h = advisoryLockKey(`ab:${campaignId}:${normalizePhone(phone) || phone}`);
+  const hundred = BigInt(100);
+  const bucket = Number(((h % hundred) + hundred) % hundred);
+  return bucket < pct ? "B" : "A";
+}
+
+async function loadApprovedTemplate(businessAccountId: string, templateId: string, label: string): Promise<WhatsappTemplate> {
+  const [tpl] = await db
+    .select()
+    .from(whatsappTemplates)
+    .where(and(eq(whatsappTemplates.id, templateId), eq(whatsappTemplates.businessAccountId, businessAccountId)))
+    .limit(1);
+  if (!tpl || tpl.deletedAt) throw new Error(`${label}: template not found`);
+  if (tpl.status !== "approved") throw new Error(`${label}: choose an approved WhatsApp template`);
+  return tpl;
+}
+
+/**
+ * Validate quiet-hours and A/B settings from a create/update payload and return
+ * the columns to write. Keys the payload does not mention are left alone.
+ */
+async function normalizeSendOptions(
+  businessAccountId: string,
+  input: Partial<CreatePayload>,
+  current?: MarketingCampaign,
+): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const pick = (key: keyof CreatePayload): any =>
+    input[key] !== undefined ? input[key] : (current as any)?.[key];
+
+  if (input.quietHoursStart !== undefined || input.quietHoursEnd !== undefined || input.quietHoursTimezone !== undefined) {
+    const start = String(pick("quietHoursStart") ?? "").trim();
+    const end = String(pick("quietHoursEnd") ?? "").trim();
+    const tz = String(pick("quietHoursTimezone") ?? "").trim();
+    if (!start && !end) {
+      out.quietHoursStart = null;
+      out.quietHoursEnd = null;
+      out.quietHoursTimezone = null;
+    } else {
+      if (!HHMM_RE.test(start) || !HHMM_RE.test(end)) {
+        throw new Error("Quiet hours need a start and an end time, for example 21:00 and 09:00");
+      }
+      if (start === end) throw new Error("Quiet hours can't start and end at the same time");
+      if (tz && !isValidTimeZone(tz)) throw new Error(`Unknown time zone "${tz}" for quiet hours`);
+      out.quietHoursStart = start;
+      out.quietHoursEnd = end;
+      out.quietHoursTimezone = tz || null;
+    }
+  }
+
+  if (input.variantBTemplateId !== undefined || input.variantBTemplateParams !== undefined || input.variantSplitPercent !== undefined) {
+    const templateId = String(pick("variantBTemplateId") ?? "").trim();
+    if (!templateId) {
+      out.variantBTemplateId = null;
+      out.variantBTemplateParams = [];
+      out.variantSplitPercent = null;
+    } else {
+      const tpl = await loadApprovedTemplate(businessAccountId, templateId, "Message B");
+      const rawSplit = pick("variantSplitPercent");
+      const pct = Number(rawSplit === null || rawSplit === undefined || rawSplit === "" ? 50 : rawSplit);
+      if (!Number.isInteger(pct) || pct < 1 || pct > 99) throw new Error("The A/B split must be a whole number between 1% and 99%");
+      const params = (pick("variantBTemplateParams") || []) as string[];
+      const paramError = validateTemplateParams(tpl, params);
+      if (paramError) throw new Error(`Message B: ${paramError}`);
+      out.variantBTemplateId = templateId;
+      out.variantBTemplateParams = normalizeParams(tpl, params);
+      out.variantSplitPercent = pct;
+    }
+  }
+  return out;
+}
+
+export const MAX_FOLLOW_UP_STEPS = 3;
+export const MAX_FOLLOW_UP_DELAY_HOURS = 720;
+
+async function validateFollowUps(businessAccountId: string, steps: unknown): Promise<Required<FollowUpInput>[]> {
+  if (steps === null || steps === undefined) return [];
+  if (!Array.isArray(steps)) throw new Error("followUps must be a list");
+  if (steps.length > MAX_FOLLOW_UP_STEPS) throw new Error(`A campaign can have at most ${MAX_FOLLOW_UP_STEPS} follow-up messages`);
+  const out: Required<FollowUpInput>[] = [];
+  for (let i = 0; i < steps.length; i++) {
+    const raw = steps[i];
+    const label = `Follow-up ${i + 1}`;
+    const delayHours = Number((raw as any)?.delayHours);
+    if (!Number.isInteger(delayHours) || delayHours < 1 || delayHours > MAX_FOLLOW_UP_DELAY_HOURS) {
+      throw new Error(`${label}: wait time must be a whole number of hours between 1 and ${MAX_FOLLOW_UP_DELAY_HOURS}`);
+    }
+    const templateId = String((raw as any)?.templateId || "").trim();
+    if (!templateId) throw new Error(`${label}: choose a template`);
+    const tpl = await loadApprovedTemplate(businessAccountId, templateId, label);
+    const params = Array.isArray((raw as any)?.templateParams) ? (raw as any).templateParams as string[] : [];
+    const paramError = validateTemplateParams(tpl, params);
+    if (paramError) throw new Error(`${label}: ${paramError}`);
+    out.push({ delayHours, templateId, templateParams: normalizeParams(tpl, params) });
+  }
+  return out;
+}
+
+/** Replace a campaign's follow-up steps. Refuses once any follow-up has gone out. */
+async function replaceFollowUps(businessAccountId: string, campaignId: string, steps: Required<FollowUpInput>[]): Promise<void> {
+  await db.transaction(async tx => {
+    const [started] = await tx.select({ id: marketingCampaignFollowUpSends.id })
+      .from(marketingCampaignFollowUpSends)
+      .where(eq(marketingCampaignFollowUpSends.campaignId, campaignId))
+      .limit(1);
+    if (started) throw new Error("Follow-ups can't be changed after they have started going out");
+    await tx.delete(marketingCampaignFollowUps).where(and(
+      eq(marketingCampaignFollowUps.campaignId, campaignId),
+      eq(marketingCampaignFollowUps.businessAccountId, businessAccountId),
+    ));
+    if (steps.length) {
+      await tx.insert(marketingCampaignFollowUps).values(steps.map((step, i) => ({
+        campaignId,
+        businessAccountId,
+        stepNumber: i + 1,
+        delayHours: step.delayHours,
+        templateId: step.templateId,
+        templateParams: step.templateParams,
+      })));
+    }
+  });
+}
+
 export const marketingCampaignService = {
   async list(businessAccountId: string): Promise<MarketingCampaign[]> {
     return db
@@ -675,10 +879,13 @@ export const marketingCampaignService = {
     const paramError = validateTemplateParams(tpl, payload.templateParams);
     if (paramError) throw new Error(paramError);
     await validateCampaignWorkbookSource(businessAccountId, payload);
+    const sendOptions = await normalizeSendOptions(businessAccountId, payload);
+    const followUps = payload.followUps !== undefined ? await validateFollowUps(businessAccountId, payload.followUps) : [];
 
     const [row] = await db
       .insert(marketingCampaigns)
       .values({
+        ...(sendOptions as Partial<typeof marketingCampaigns.$inferInsert>),
         businessAccountId,
         name: payload.name.trim(),
         campaignType,
@@ -712,6 +919,15 @@ export const marketingCampaignService = {
         recipientAiAllowedFields: payload.recipientAiAllowedFields || [],
       })
       .returning();
+    if (followUps.length) {
+      try {
+        await replaceFollowUps(businessAccountId, row.id, followUps);
+      } catch (err) {
+        // Keep create all-or-nothing: a campaign without the follow-ups the user asked for is worse than none.
+        await db.delete(marketingCampaigns).where(eq(marketingCampaigns.id, row.id));
+        throw err;
+      }
+    }
     return row;
   },
 
@@ -774,8 +990,10 @@ export const marketingCampaignService = {
       await validateCampaignWorkbookSource(businessAccountId, sourcePayload);
       payload = { ...payload, recipientAiAllowedFields: sourcePayload.recipientAiAllowedFields };
     }
+    const sendOptions = await normalizeSendOptions(businessAccountId, payload, current);
+    const followUps = payload.followUps !== undefined ? await validateFollowUps(businessAccountId, payload.followUps) : null;
 
-    const set: any = { updatedAt: new Date() };
+    const set: any = { updatedAt: new Date(), ...sendOptions };
     const fields: (keyof CreatePayload)[] = [
       "name", "campaignType", "templateId", "templateParams", "groupIds",
       "aiAgentName", "aiSystemPrompt", "aiKnowledgeDocIds",
@@ -800,7 +1018,7 @@ export const marketingCampaignService = {
       ...(opts?.onlyIfStatusIn ? [inArray(marketingCampaigns.status, opts.onlyIfStatusIn)] : []),
     );
     if (isAutomationToOneTime) {
-      return db.transaction(async tx => {
+      const converted = await db.transaction(async tx => {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${"wa-blueprint:" + id}))`);
         const [lockedCampaign] = await tx.select({ id: marketingCampaigns.id })
           .from(marketingCampaigns)
@@ -823,9 +1041,69 @@ export const marketingCampaignService = {
         const [row] = await tx.update(marketingCampaigns).set(set).where(where).returning();
         return row;
       });
+      if (converted && followUps !== null) await replaceFollowUps(businessAccountId, id, followUps);
+      return converted;
     }
     const [row] = await db.update(marketingCampaigns).set(set).where(where).returning();
+    if (row && followUps !== null) await replaceFollowUps(businessAccountId, id, followUps);
     return row;
+  },
+
+  /** Saved follow-up steps for a campaign, in order. */
+  async listFollowUps(businessAccountId: string, campaignId: string) {
+    return db.select().from(marketingCampaignFollowUps)
+      .where(and(
+        eq(marketingCampaignFollowUps.campaignId, campaignId),
+        eq(marketingCampaignFollowUps.businessAccountId, businessAccountId),
+      ))
+      .orderBy(marketingCampaignFollowUps.stepNumber);
+  },
+
+  /**
+   * Per-arm delivery stats for an A/B test campaign, or null when the campaign
+   * never had a test. "Sent" counts every message the provider accepted.
+   */
+  async getVariantStats(businessAccountId: string, campaignId: string) {
+    const campaign = await this.get(businessAccountId, campaignId);
+    if (!campaign) return null;
+    const rows = await db
+      .select({
+        variant: marketingCampaignRecipients.variant,
+        total: sql<number>`COUNT(*)::int`,
+        sent: sql<number>`COUNT(*) FILTER (WHERE msg91_message_id IS NOT NULL OR status IN ('queued','sent','delivered','read','replied'))::int`,
+        delivered: sql<number>`COUNT(*) FILTER (WHERE delivered_at IS NOT NULL OR read_at IS NOT NULL OR status IN ('delivered','read'))::int`,
+        read: sql<number>`COUNT(*) FILTER (WHERE read_at IS NOT NULL OR status = 'read')::int`,
+        replied: sql<number>`COUNT(*) FILTER (WHERE first_reply_at IS NOT NULL)::int`,
+        failed: sql<number>`COUNT(*) FILTER (WHERE status IN ('failed','expired'))::int`,
+      })
+      .from(marketingCampaignRecipients)
+      .where(and(
+        eq(marketingCampaignRecipients.campaignId, campaignId),
+        eq(marketingCampaignRecipients.businessAccountId, businessAccountId),
+        sql`${marketingCampaignRecipients.variant} IS NOT NULL`,
+      ))
+      .groupBy(marketingCampaignRecipients.variant);
+    if (rows.length === 0 && !abTestActive(campaign)) return null;
+
+    const templateIds = [campaign.templateId, campaign.variantBTemplateId].filter(Boolean) as string[];
+    const templates = templateIds.length
+      ? await db.select({ id: whatsappTemplates.id, name: whatsappTemplates.name })
+        .from(whatsappTemplates)
+        .where(and(eq(whatsappTemplates.businessAccountId, businessAccountId), inArray(whatsappTemplates.id, templateIds)))
+      : [];
+    const nameOf = (id: string | null) => templates.find(t => t.id === id)?.name ?? null;
+    const empty = { total: 0, sent: 0, delivered: 0, read: 0, replied: 0, failed: 0 };
+    const arms = (["A", "B"] as const).map(variant => {
+      const row = rows.find(r => r.variant === variant);
+      const templateId = variant === "A" ? campaign.templateId : campaign.variantBTemplateId;
+      return {
+        variant,
+        templateId: templateId ?? null,
+        templateName: nameOf(templateId ?? null),
+        ...(row ? { total: row.total, sent: row.sent, delivered: row.delivered, read: row.read, replied: row.replied, failed: row.failed } : empty),
+      };
+    });
+    return { splitPercent: campaign.variantSplitPercent ?? null, arms };
   },
 
   async remove(businessAccountId: string, id: string): Promise<boolean> {
@@ -965,6 +1243,8 @@ export const marketingCampaignService = {
         name: c.name || "",
         attributes: c.attributes || {},
         status: "pending",
+        // Deterministic A/B arm, fixed at snapshot time (null when no test).
+        variant: abTestActive(campaign) ? assignVariant(campaign.id, c.phone, campaign.variantSplitPercent) : null,
       });
     }
     if (rows.length > 0) {
@@ -1026,6 +1306,8 @@ export const marketingCampaignService = {
       replyCount: r.reply_count,
       aiReplyCount: r.ai_reply_count,
       claimedAt: r.claimed_at,
+      variant: r.variant ?? null,
+      dispatchedAt: r.dispatched_at ?? null,
       createdAt: r.created_at,
     })) as MarketingCampaignRecipient[];
   },
@@ -1066,7 +1348,7 @@ export const marketingCampaignService = {
     businessAccountId: string,
     campaignId: string,
     opts?: { forceResume?: boolean; automationExecution?: boolean },
-  ): Promise<{ started: boolean; reason?: string }> {
+  ): Promise<{ started: boolean; reason?: string; pausedForQuietHours?: boolean }> {
     const key = `${businessAccountId}:${campaignId}`;
     if (inFlight.has(key)) return { started: false, reason: "Campaign send is already in progress on this node" };
 
@@ -1115,6 +1397,9 @@ export const marketingCampaignService = {
     if (campaign.status === "sending" && !opts?.forceResume) {
       return { started: false, reason: "Already sending" };
     }
+    if (campaign.status === "paused" && !opts?.forceResume) {
+      return { started: false, reason: "This campaign is paused for quiet hours and will continue by itself when they end" };
+    }
 
     const settings = await whatsappService.getSettings(businessAccountId);
     if (!settings?.msg91AuthKey || !settings?.msg91IntegratedNumberId) {
@@ -1148,6 +1433,21 @@ export const marketingCampaignService = {
       return { started: false, reason: paramError };
     }
 
+    // A/B test: message B is held to the same bar as message A, since its share
+    // of the audience would otherwise fail.
+    if (abTestActive(campaign)) {
+      const [tplB] = await db.select().from(whatsappTemplates)
+        .where(and(eq(whatsappTemplates.id, campaign.variantBTemplateId!), eq(whatsappTemplates.businessAccountId, businessAccountId)))
+        .limit(1);
+      const bProblem = !isTemplateUsable(tplB)
+        ? "Message B's template is no longer approved. Pick another template for the A/B test."
+        : validateTemplateParams(tplB!, campaign.variantBTemplateParams as string[]);
+      if (bProblem) {
+        await parkUnsendableCampaign(campaignId, businessAccountId, campaign.status, bProblem);
+        return { started: false, reason: bProblem };
+      }
+    }
+
     const existing = await db
       .select({ id: marketingCampaignRecipients.id })
       .from(marketingCampaignRecipients)
@@ -1166,8 +1466,34 @@ export const marketingCampaignService = {
     }
 
     const startableStatuses = opts?.forceResume
-      ? ["draft", "scheduled", "failed", "sending"]
+      ? ["draft", "scheduled", "failed", "sending", "paused"]
       : ["draft", "scheduled", "failed"];
+
+    // Quiet hours: never start inside the window. Park the campaign as paused
+    // (recipients already snapshotted) and let the scheduler resume it.
+    if (isWithinQuietHours(campaign)) {
+      const [paused] = await db
+        .update(marketingCampaigns)
+        .set({
+          status: "paused",
+          pauseReason: QUIET_HOURS_PAUSE_REASON,
+          pausedAt: campaign.pausedAt || new Date(),
+          heartbeatAt: null,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(marketingCampaigns.id, campaignId),
+          eq(marketingCampaigns.businessAccountId, businessAccountId),
+          inArray(marketingCampaigns.status, startableStatuses),
+        ))
+        .returning({ id: marketingCampaigns.id });
+      if (!paused) return { started: false, reason: "Campaign state changed before sending could begin" };
+      return {
+        started: true,
+        pausedForQuietHours: true,
+        reason: `Quiet hours are on, so sending will start at ${campaign.quietHoursEnd}.`,
+      };
+    }
     const claimedCampaign = await db.transaction(async tx => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${"wa-blueprint:" + campaignId}))`);
       const [stillBlueprint] = await tx.select({ id: whatsappCampaignAutomations.id })
@@ -1185,6 +1511,8 @@ export const marketingCampaignService = {
           status: "sending",
           startedAt: campaign.startedAt || new Date(),
           heartbeatAt: new Date(),
+          pauseReason: null,
+          pausedAt: null,
           updatedAt: new Date(),
         })
         .where(and(
@@ -1290,6 +1618,40 @@ export const marketingCampaignService = {
       console.error(`[Campaign] ${campaignId} could not load contact field names:`, err);
     }
 
+    // A/B test: load message B once. If it has since been withdrawn, its arm falls
+    // back to message A rather than failing those recipients.
+    let tplB: WhatsappTemplate | null = null;
+    try {
+      const forVariants = await this.get(businessAccountId, campaignId);
+      if (abTestActive(forVariants)) {
+        const [row] = await db.select().from(whatsappTemplates)
+          .where(and(eq(whatsappTemplates.id, forVariants!.variantBTemplateId!), eq(whatsappTemplates.businessAccountId, businessAccountId)))
+          .limit(1);
+        tplB = row && isTemplateUsable(row) ? row : null;
+      }
+    } catch (err) {
+      console.error(`[Campaign] ${campaignId} could not load template B:`, err);
+    }
+
+    // Quiet hours reached mid-send: hand unsent rows back, mark the campaign
+    // paused, and stop. Only flips a campaign that is still 'sending', so a
+    // cancel that landed in between is never overwritten.
+    const pauseForQuietHours = async (unsentIds: string[]) => {
+      if (unsentIds.length) {
+        await db.update(marketingCampaignRecipients)
+          .set({ status: "pending", claimedAt: null })
+          .where(and(
+            inArray(marketingCampaignRecipients.id, unsentIds),
+            eq(marketingCampaignRecipients.status, "claimed"),
+          ));
+      }
+      await db.update(marketingCampaigns)
+        .set({ status: "paused", pauseReason: QUIET_HOURS_PAUSE_REASON, pausedAt: new Date(), heartbeatAt: null, updatedAt: new Date() })
+        .where(and(eq(marketingCampaigns.id, campaignId), eq(marketingCampaigns.status, "sending")));
+      await this.recomputeCampaignAggregates(campaignId);
+      console.log(`[Campaign] ${campaignId} paused for quiet hours — will resume when they end`);
+    };
+
     let sent = 0;
     let failed = 0;
     let lastHeartbeat = 0;
@@ -1323,6 +1685,10 @@ export const marketingCampaignService = {
           console.log(`[Campaign] ${campaignId} cancelled, stopping send loop`);
           return;
         }
+        if (isWithinQuietHours(refreshed)) {
+          await pauseForQuietHours([]);
+          return;
+        }
 
         const batch = await this.claimNextBatch(campaignId, SEND_BATCH_SIZE);
         if (batch.length === 0) break;
@@ -1330,6 +1696,11 @@ export const marketingCampaignService = {
         let rateLimited = false;
         for (let index = 0; index < batch.length; index++) {
           const r = batch[index];
+          // Re-checked before every message so nothing goes out once the window opens.
+          if (isWithinQuietHours(refreshed)) {
+            await pauseForQuietHours(batch.slice(index).map(row => row.id));
+            return;
+          }
           // Heartbeat throttled
           await touchHeartbeat();
 
@@ -1368,7 +1739,12 @@ export const marketingCampaignService = {
             // campaign is configured correctly. Fail just that recipient, with a reason that says
             // what the contact is missing, instead of sending a broken message or letting the
             // provider answer with something nobody can act on.
-            const { params, problems } = resolveParams(tpl, refreshed!, r, knownFields);
+            const useB = r.variant === "B" && tplB !== null;
+            const rowTpl = useB ? tplB! : tpl;
+            const rowCampaign = useB
+              ? { ...refreshed!, templateParams: (refreshed!.variantBTemplateParams || []) as string[] }
+              : refreshed!;
+            const { params, problems } = resolveParams(rowTpl, rowCampaign, r, knownFields);
             if (problems.length > 0) {
               await db.update(marketingCampaignRecipients)
                 .set({ status: "failed", claimedAt: null, errorMessage: problems.join("; ") })
@@ -1376,9 +1752,9 @@ export const marketingCampaignService = {
               failed++;
               continue;
             }
-            const result = await sendTemplateMessage(settings, sendPhone, tpl.name, params, {
-              language: tpl.language,
-              namespace: tpl.namespace,
+            const result = await sendTemplateMessage(settings, sendPhone, rowTpl.name, params, {
+              language: rowTpl.language,
+              namespace: rowTpl.namespace,
             });
             if (result.success) {
               acceptedMessageId = result.messageId || "";
@@ -1396,20 +1772,24 @@ export const marketingCampaignService = {
                   sendPhone,
                   errorMessage: null,
                   claimedAt: null,
+                  dispatchedAt: new Date(),
                 })
                 .where(eq(marketingCampaignRecipients.id, r.id));
               sent++;
               consecutiveRateLimits = 0;
               sendDelayMs = Math.max(campaignSendTuning.sendDelayMs, Math.floor(sendDelayMs * 0.9));
 
-              const renderedBody = (tpl.bodyText || "").replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n) => params[String(n)] ?? `{{${n}}}`);
+              const renderedBody = (rowTpl.bodyText || "").replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n) => params[String(n)] ?? `{{${n}}}`);
               await db.insert(marketingCampaignMessages).values({
                 campaignId,
                 recipientId: r.id,
                 businessAccountId,
                 direction: "outbound_template",
                 body: renderedBody,
-                metadata: { templateName: tpl.name, msg91MessageId: result.messageId || null, sendPhone, buttons: tpl.buttons ?? [] },
+                metadata: {
+                  templateName: rowTpl.name, msg91MessageId: result.messageId || null, sendPhone, buttons: rowTpl.buttons ?? [],
+                  ...(r.variant ? { variant: r.variant } : {}),
+                },
               });
             } else {
               const errorText = typeof result.error === "string" ? result.error : JSON.stringify(result.error || {}).substring(0, 500);
@@ -2402,6 +2782,40 @@ export const marketingCampaignService = {
       } catch (err) {
         console.error(`[CampaignScheduler] Failed to recover ${c.id}:`, err);
       }
+    }
+
+    // 3. Resume campaigns paused for quiet hours once the window has ended. startSend
+    // re-claims the campaign atomically ('paused' → 'sending') and the send loop's
+    // advisory lock still guarantees a single sender.
+    try {
+      const paused = await db
+        .select()
+        .from(marketingCampaigns)
+        .where(and(
+          eq(marketingCampaigns.status, "paused"),
+          eq(marketingCampaigns.pauseReason, QUIET_HOURS_PAUSE_REASON),
+        ))
+        .limit(50);
+      for (const c of paused) {
+        const key = `${c.businessAccountId}:${c.id}`;
+        if (inFlight.has(key) || isWithinQuietHours(c, now)) continue;
+        console.log(`[CampaignScheduler] Quiet hours over — resuming campaign ${c.id}`);
+        try {
+          await this.startSend(c.businessAccountId, c.id, { forceResume: true, automationExecution: true });
+        } catch (err) {
+          console.error(`[CampaignScheduler] Failed to resume ${c.id}:`, err);
+        }
+      }
+    } catch (err) {
+      console.error("[CampaignScheduler] quiet-hours resume error:", err);
+    }
+
+    // 4. Follow-up messages ("no reply within N hours → send template X").
+    try {
+      const { processFollowUps } = await import("./campaignFollowUpService");
+      await processFollowUps();
+    } catch (err) {
+      console.error("[CampaignScheduler] follow-ups error:", err);
     }
   },
 };

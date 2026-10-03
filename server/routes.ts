@@ -97,6 +97,7 @@ import aiUsageRoutes from "./routes/aiUsage";
 import avatarRoutes from "./routes/avatar";
 import aiLanguageRoutes from "./routes/aiLanguage";
 import { registerCampaignInsightsRoutes } from "./routes/campaignInsights";
+import { registerCampaignSendRoutes } from "./routes/campaignSend";
 import { replyLanguage as replyLanguageInfo, replyLanguageName } from "@shared/replyLanguages";
 import { getLanguagePolicy } from "./services/language/languagePolicy";
 import { decideChatReplyLanguage, greetingLanguages, localizeFixedText, pickAllowed, publicReplyLanguages, websiteReplyLanguage } from "./services/language/chatLanguage";
@@ -37217,6 +37218,9 @@ Return ONLY a valid JSON object in this format:
   });
 
   // ---- Campaigns ----
+  // campaignSend routes
+  registerCampaignSendRoutes(app, requireWhatsappMarketing);
+
   app.get("/api/whatsapp/campaigns", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
     try {
       const { marketingCampaignService } = await import("./services/marketingCampaignService");
@@ -37259,7 +37263,12 @@ Return ONLY a valid JSON object in this format:
       const { marketingCampaignService } = await import("./services/marketingCampaignService");
       const c = await marketingCampaignService.get(req.user!.businessAccountId!, req.params.id);
       if (!c) return res.status(404).json({ error: "Campaign not found" });
-      res.json(c);
+      // variants: A/B stats (null when no test); followUps: saved follow-up steps.
+      const [variants, followUps] = await Promise.all([
+        marketingCampaignService.getVariantStats(req.user!.businessAccountId!, c.id),
+        marketingCampaignService.listFollowUps(req.user!.businessAccountId!, c.id),
+      ]);
+      res.json({ ...c, variants, followUps });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
@@ -37312,7 +37321,7 @@ Return ONLY a valid JSON object in this format:
       const ok = await marketingCampaignService.remove(req.user!.businessAccountId!, req.params.id);
       if (!ok) return res.status(404).json({ error: "Campaign not found" });
       res.json({ success: true });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
   });
 
   app.post("/api/whatsapp/campaigns/:id/send", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {
@@ -37320,7 +37329,7 @@ Return ONLY a valid JSON object in this format:
       const { marketingCampaignService } = await import("./services/marketingCampaignService");
       const result = await marketingCampaignService.startSend(req.user!.businessAccountId!, req.params.id);
       if (!result.started) return res.status(409).json({ error: result.reason || "Could not start send" });
-      res.json({ success: true });
+      res.json({ success: true, pausedForQuietHours: result.pausedForQuietHours === true, message: result.reason });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 

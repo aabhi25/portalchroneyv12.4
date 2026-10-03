@@ -3391,10 +3391,26 @@ export const marketingCampaigns = pgTable("marketing_campaigns", {
   aiUsageDate: text("ai_usage_date"), // YYYY-MM-DD bucket for daily reset
   // Liveness
   heartbeatAt: timestamp("heartbeat_at"), // Bumped each send-loop tick; powers stuck-campaign detection
+  // Quiet hours (optional). Both null = send at any time (the original behaviour).
+  // "HH:mm" in quietHoursTimezone (null = Asia/Kolkata). A start later than the
+  // end is an overnight window, e.g. 21:00 → 09:00.
+  quietHoursStart: text("quiet_hours_start"),
+  quietHoursEnd: text("quiet_hours_end"),
+  quietHoursTimezone: text("quiet_hours_timezone"),
+  // Why a campaign with status 'paused' is paused ('quiet_hours'). The scheduler
+  // resumes it once the reason no longer applies.
+  pauseReason: text("pause_reason"),
+  pausedAt: timestamp("paused_at"),
+  // A/B test (optional). variantSplitPercent = share of recipients (1-99) that get
+  // template B; null = no test, everyone gets templateId.
+  variantBTemplateId: varchar("variant_b_template_id").references(() => whatsappTemplates.id, { onDelete: "set null" }),
+  variantBTemplateParams: jsonb("variant_b_template_params").$type<string[]>().default([]),
+  variantSplitPercent: integer("variant_split_percent"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
   recipientWorkbookIdx: index("marketing_campaigns_recipient_workbook_idx").on(table.businessAccountId, table.recipientWorkbookId),
+  statusIdx: index("marketing_campaigns_status_idx").on(table.status),
 }));
 
 export const insertMarketingCampaignSchema = createInsertSchema(marketingCampaigns).omit({
@@ -3609,6 +3625,10 @@ export const marketingCampaignRecipients = pgTable("marketing_campaign_recipient
   callbackReason: text("callback_reason"),
   customerFeedback: text("customer_feedback"), // verbatim customer statement, captured regardless of classification
   classifiedAt: timestamp("classified_at"),
+  // A/B test arm this recipient was assigned at snapshot time ('A' | 'B'); null = no test.
+  variant: text("variant"),
+  // When the provider accepted the campaign message (follow-up timers count from here).
+  dispatchedAt: timestamp("dispatched_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   campaignIdx: index("mkt_recipients_campaign_idx").on(table.campaignId),
@@ -3623,6 +3643,62 @@ export const insertMarketingCampaignRecipientSchema = createInsertSchema(marketi
   id: true,
   createdAt: true,
 });
+
+// Follow-up steps: "if no reply within N hours, send template X". One row per
+// step (stepNumber 1, 2, …); step n waits for step n-1 to have been sent.
+export const marketingCampaignFollowUps = pgTable("marketing_campaign_follow_ups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  campaignId: varchar("campaign_id").notNull().references(() => marketingCampaigns.id, { onDelete: "cascade" }),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  stepNumber: integer("step_number").notNull().default(1),
+  delayHours: integer("delay_hours").notNull().default(24),
+  templateId: varchar("template_id").notNull().references(() => whatsappTemplates.id, { onDelete: "restrict" }),
+  templateParams: jsonb("template_params").$type<string[]>().default([]),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  campaignStepUnique: uniqueIndex("mkt_follow_ups_campaign_step_unique").on(table.campaignId, table.stepNumber),
+}));
+
+// One row per (follow-up step, recipient). The unique index is the idempotency
+// guard: a worker inserts the row BEFORE sending, so a step is never sent twice.
+export const marketingCampaignFollowUpSends = pgTable("marketing_campaign_follow_up_sends", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  followUpId: varchar("follow_up_id").notNull().references(() => marketingCampaignFollowUps.id, { onDelete: "cascade" }),
+  campaignId: varchar("campaign_id").notNull().references(() => marketingCampaigns.id, { onDelete: "cascade" }),
+  recipientId: varchar("recipient_id").notNull().references(() => marketingCampaignRecipients.id, { onDelete: "cascade" }),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("sending"), // sending | sent | failed | skipped
+  msg91MessageId: text("msg91_message_id"),
+  errorMessage: text("error_message"),
+  sendPhone: text("send_phone"),
+  sentAt: timestamp("sent_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  followUpRecipientUnique: uniqueIndex("mkt_follow_up_sends_step_recipient_unique").on(table.followUpId, table.recipientId),
+  campaignIdx: index("mkt_follow_up_sends_campaign_idx").on(table.campaignId),
+}));
+
+// Log of "Send test to my phone" messages. Never a campaign recipient; also the
+// source of the per-business hourly limit.
+export const marketingCampaignTestSends = pgTable("marketing_campaign_test_sends", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  campaignId: varchar("campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
+  templateId: varchar("template_id").references(() => whatsappTemplates.id, { onDelete: "set null" }),
+  userId: varchar("user_id"),
+  phone: text("phone").notNull(),
+  status: text("status").notNull().default("sending"), // sending | sent | failed
+  msg91MessageId: text("msg91_message_id"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  bizCreatedIdx: index("mkt_test_sends_biz_created_idx").on(table.businessAccountId, table.createdAt),
+}));
+
+export type MarketingCampaignFollowUp = typeof marketingCampaignFollowUps.$inferSelect;
+export type MarketingCampaignFollowUpSend = typeof marketingCampaignFollowUpSends.$inferSelect;
 
 // AI conversation transcript — every inbound + AI outbound for a campaign recipient
 export const marketingCampaignMessages = pgTable("marketing_campaign_messages", {
