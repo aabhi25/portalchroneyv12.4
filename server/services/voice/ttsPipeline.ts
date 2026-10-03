@@ -25,6 +25,14 @@ export type TtsSynthesize = (
 export interface TtsProvider {
   name: string;
   synthesize: TtsSynthesize;
+  /**
+   * Hold this much of each sentence's audio before releasing it. For providers whose stream
+   * starts in bursts (OpenAI TTS: a tiny first chunk, then a ~150-180 ms pause) — the browser
+   * plays chunks the moment they arrive, so an early pause is an audible stutter.
+   */
+  prebufferMs?: number;
+  /** How many sentences to synthesise at once when this is the primary voice (default 2). */
+  preferredParallel?: number;
 }
 
 export interface SentenceTtsPipelineOptions {
@@ -51,6 +59,10 @@ interface PipelineItem {
   controller: AbortController | null;
   /** Ready-made PCM (e.g. a cached filler phrase): played in order, no synthesis. */
   prerendered?: Buffer;
+  /** Bytes of this sentence to collect before any of it is released (provider prebufferMs). */
+  holdBytes: number;
+  /** True once the sentence has started releasing audio (the hold is over). */
+  flowing: boolean;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -72,7 +84,7 @@ export class SentenceTtsPipeline {
   readonly providerLog: Array<{ index: number; provider: string; ok: boolean }> = [];
 
   constructor(private readonly options: SentenceTtsPipelineOptions) {
-    this.maxParallel = Math.max(1, options.maxParallel ?? 2);
+    this.maxParallel = Math.max(1, options.maxParallel ?? options.primary?.preferredParallel ?? 2);
     this.firstChunkTimeoutMs = options.firstChunkTimeoutMs ?? 6000;
     this.finishedPromise = new Promise<void>((resolve) => { this.finishedResolve = resolve; });
   }
@@ -90,6 +102,7 @@ export class SentenceTtsPipeline {
     this.items.push({
       index: this.items.length, text: t, started: false, done: false,
       buffered: [], leftover: null, emittedBytes: 0, controller: null,
+      holdBytes: 0, flowing: false,
     });
     this.pump();
   }
@@ -100,6 +113,7 @@ export class SentenceTtsPipeline {
     this.items.push({
       index: this.items.length, text: label, started: false, done: false,
       buffered: [], leftover: null, emittedBytes: 0, controller: null, prerendered: pcm,
+      holdBytes: 0, flowing: true,
     });
     this.pump();
   }
@@ -162,19 +176,41 @@ export class SentenceTtsPipeline {
     item.leftover = evenLen < merged.length ? Buffer.from(merged.subarray(evenLen)) : null;
     if (evenLen === 0) return;
     const aligned = merged.subarray(0, evenLen);
-    if (item.index === this.head) {
-      if (!this.firstAudioSent) {
-        this.firstAudioSent = true;
-        this.options.onFirstAudio?.();
-      }
-      item.emittedBytes += aligned.length;
-      this.options.sendAudio(aligned);
+    if (item.index === this.head && item.flowing) {
+      this.send(item, aligned);
     } else {
       item.buffered.push(Buffer.from(aligned));
+      if (item.index === this.head) this.releaseIfReady(item);
+    }
+  }
+
+  private send(item: PipelineItem, chunk: Buffer): void {
+    if (!this.firstAudioSent) {
+      this.firstAudioSent = true;
+      this.options.onFirstAudio?.();
+    }
+    item.emittedBytes += chunk.length;
+    this.options.sendAudio(chunk);
+  }
+
+  /** The head sentence starts playing once its hold is filled (or it is complete). */
+  private releaseIfReady(item: PipelineItem): void {
+    if (item.flowing || item.index !== this.head) return;
+    const held = item.buffered.reduce((n, b) => n + b.length, 0);
+    if (!item.done && held < item.holdBytes) return;
+    item.flowing = true;
+    const chunks = item.buffered;
+    item.buffered = [];
+    for (const chunk of chunks) {
+      if (this.externallyCancelled()) break;
+      this.send(item, chunk);
     }
   }
 
   private async synthesizeWith(provider: TtsProvider, item: PipelineItem): Promise<void> {
+    // PCM16 24 kHz = 48 bytes per ms.
+    item.holdBytes = Math.max(0, Math.round((provider.prebufferMs ?? 0) * 48));
+    item.flowing = item.holdBytes === 0;
     const controller = new AbortController();
     item.controller = controller;
     let gotAudio = false;
@@ -225,7 +261,8 @@ export class SentenceTtsPipeline {
           this.options.onProviderFailure?.(first.name, error, item.text);
           if (usePrimary && fallback) {
             this.primaryBroken = true;
-            // Start the sentence over with the fallback voice.
+            // Start the sentence over with the fallback voice (nothing of it was released:
+            // a released sentence only fails over if it never produced audio).
             item.buffered = [];
             item.leftover = null;
             try {
@@ -249,22 +286,25 @@ export class SentenceTtsPipeline {
   /** Move the head past finished sentences, releasing buffered audio in order. */
   private advance(): void {
     if (this.cancelled) return;
+    // A finished head sentence that was still holding releases what it has.
+    const current = this.items[this.head];
+    if (current && current.done) this.releaseIfReady(current);
     while (this.head < this.items.length && this.items[this.head].done) {
       this.head++;
       const next = this.items[this.head];
       if (next && next.buffered.length > 0) {
-        const chunks = next.buffered;
-        next.buffered = [];
-        for (const chunk of chunks) {
-          if (this.externallyCancelled()) break;
-          if (!this.firstAudioSent) {
-            this.firstAudioSent = true;
-            this.options.onFirstAudio?.();
+        if (next.flowing) {
+          const chunks = next.buffered;
+          next.buffered = [];
+          for (const chunk of chunks) {
+            if (this.externallyCancelled()) break;
+            this.send(next, chunk);
           }
-          next.emittedBytes += chunk.length;
-          this.options.sendAudio(chunk);
+        } else {
+          this.releaseIfReady(next);
         }
       }
+      if (next && next.done) this.releaseIfReady(next);
     }
     this.pump();
     this.checkFinished();

@@ -30,6 +30,7 @@ import {
 import { avatarSessionManager, type VoiceBinding } from './services/avatar/sessionManager';
 import { genderOfVoice, genderOfVoiceSync, resolveAssistantGender, type AssistantGender } from './services/chatContext/assistantGender';
 import { fillerDelayMs, fillerLanguage, fillerPhrases, pickFiller, wantsFiller } from './services/voice/fillers';
+import { createOpenAiTtsProvider, OPENAI_TTS_MODEL, type OpenAiSpeechClient } from './services/voice/openaiTts';
 import type { AudioRoute, AvatarEndReason } from './services/avatar/types';
 
 /**
@@ -306,6 +307,8 @@ interface VoiceConversation {
   elevenlabsVoiceId?: string;
   /** Gender of the voice actually used (Hindi & co. conjugate by the speaker's gender). */
   voiceGender?: AssistantGender | null;
+  /** OpenAI client for TTS (reused across sentences). */
+  openaiTtsClient?: OpenAiSpeechClient;
   openaiAudioFallbackBuffer?: Buffer[];
   // In-flight ElevenLabs synth tracking. Only one synth may be streaming
   // PCM bytes to the client at any time — overlapping streams interleave
@@ -1525,6 +1528,12 @@ export class RealtimeVoiceService {
           // Open the HTTPS connection now (kept alive by fetch) so the first answer doesn't
           // also pay DNS + TLS setup (~1-2 s from India on the first turn).
           fetch('https://api.elevenlabs.io/v1/models', { headers: { 'xi-api-key': conversation.elevenlabsApiKey! } })
+            .then(r => r.arrayBuffer())
+            .catch(() => undefined);
+        } else if (conversation.openaiApiKey) {
+          // ChatGPT voice: open the HTTPS connection to OpenAI now, so the first sentence
+          // doesn't also pay connection setup.
+          fetch(`https://api.openai.com/v1/models/${OPENAI_TTS_MODEL}`, { headers: { Authorization: `Bearer ${conversation.openaiApiKey}` } })
             .then(r => r.arrayBuffer())
             .catch(() => undefined);
         }
@@ -3588,40 +3597,18 @@ export class RealtimeVoiceService {
     return { primary: openaiProvider, fallback: null };
   }
 
-  /** OpenAI TTS, streamed: PCM chunks are forwarded as they arrive. */
+  /**
+   * OpenAI TTS ("ChatGPT voices"): streamed, with a short per-sentence hold, more sentences in
+   * flight, one retry and speaking instructions — see services/voice/openaiTts.ts. One client
+   * per conversation so the HTTPS connection is reused between sentences.
+   */
   private createOpenAITtsProvider(conversation: VoiceConversation): TtsProvider {
-    const supportedVoices = new Set([
-      'alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'marin', 'cedar',
-      'nova', 'onyx', 'sage', 'shimmer', 'verse',
-    ]);
-    const voice = supportedVoices.has(conversation.selectedVoice || '') ? conversation.selectedVoice! : 'shimmer';
-    return {
-      name: 'openai',
-      synthesize: async (text, signal, onChunk) => {
-        const client = createOpenAI({ apiKey: conversation.openaiApiKey });
-        const response = await client.audio.speech.create({
-          model: 'gpt-4o-mini-tts',
-          voice: voice as any,
-          input: text.slice(0, 4000),
-          response_format: 'pcm',
-        }, { signal });
-        const body = (response as unknown as { body?: unknown }).body;
-        if (!body) {
-          const pcm = Buffer.from(await response.arrayBuffer());
-          if (pcm.length > 0) onChunk(pcm);
-          return;
-        }
-        const readable = Readable.fromWeb(body as import('stream/web').ReadableStream);
-        for await (const chunk of readable) {
-          if (signal.aborted) {
-            try { readable.destroy(); } catch {}
-            throw Object.assign(new Error('OpenAI TTS aborted'), { name: 'AbortError' });
-          }
-          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          if (buf.length > 0) onChunk(buf);
-        }
-      },
-    };
+    conversation.openaiTtsClient ||= createOpenAI({ apiKey: conversation.openaiApiKey }) as unknown as OpenAiSpeechClient;
+    return createOpenAiTtsProvider({
+      client: conversation.openaiTtsClient,
+      voice: conversation.selectedVoice,
+      tutor: conversation.k12EducationEnabled === true || isTopscholarAccount(conversation.businessAccountId),
+    });
   }
 
   /** The ChatContext a voice turn is generated with (shared with text chat). */
