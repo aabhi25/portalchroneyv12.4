@@ -395,7 +395,7 @@ export const SKIP_REASON_LABELS: Record<SkipReason, string> = {
   missing_phone: "No phone number",
   too_short: "Phone number too short",
   duplicate_in_file: "Duplicated in this file",
-  already_in_group: "Already in this group",
+  already_in_group: "Already in this audience",
 };
 
 export interface EvaluatedRow {
@@ -498,7 +498,7 @@ export function evaluateImportRows(input: EvaluateInput): {
       continue;
     }
     if (existingPhones.has(phone)) {
-      skip("already_in_group", `${phone} is already a contact in this group`);
+      skip("already_in_group", `${phone} is already in this audience`);
       continue;
     }
 

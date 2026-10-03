@@ -106,6 +106,7 @@ import { getPublicAvatarConfig } from "./services/avatar/settingsService";
 import { aiBudgetService, AI_UNAVAILABLE_MESSAGE } from "./services/aiBudgetService";
 import { isAiBudgetExceededError } from "./lib/openaiClient";
 import whatsappDocumentsRoutes from "./routes/whatsappDocuments";
+import { registerCampaignAudienceRoutes } from "./routes/campaignAudiences";
 import knowledgeChannelsRoutes, { invalidateKnowledgeCaches } from "./routes/knowledgeChannels";
 import { parseChannelsInput, isKnowledgeChannel } from "@shared/knowledgeChannels";
 import { sanitizeCustomInstructionsChannels } from "./services/chatContext/customInstructions";
@@ -36568,6 +36569,9 @@ Return ONLY a valid JSON object in this format:
       res.status(500).json({ error: err.message || "Server error" });
     }
   };
+
+  // campaignAudiences routes
+  registerCampaignAudienceRoutes(app, requireWhatsappMarketing);
 
   // ---- Templates ----
   app.get("/api/whatsapp/templates", requireAuth, requireBusinessAccount, requireWhatsappMarketing, async (req, res) => {

@@ -3192,9 +3192,44 @@ export const contactGroups = pgTable("contact_groups", {
   // country code. At campaign send time, 10-digit phones in groups with a
   // default code get the code prepended before being shipped to MSG91.
   defaultCountryCode: text("default_country_code"),
+  // 'static' = a fixed list (imported, typed in, or pulled once from leads / a workbook).
+  // 'dynamic' = a saved segment: its contacts are recomputed from `rules` whenever a campaign
+  // is sent (see contactGroupService.resolveAudienceContacts). Existing groups are 'static'.
+  audienceType: text("audience_type").notNull().default("static"),
+  // Where the audience's people come from, for 'dynamic' audiences and for static audiences
+  // built from leads (so "Refresh from leads" can re-run the same filter). null = manual list.
+  rules: jsonb("rules").$type<AudienceRules | null>(),
+  lastRefreshedAt: timestamp("last_refreshed_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+/** Lead filter used by "audience from leads" and by dynamic lead segments. */
+export interface AudienceLeadFilter {
+  channels?: string[];          // website | whatsapp | instagram | facebook (empty = all enabled)
+  lastNDays?: number | null;    // created in the last N days (wins over from/to)
+  from?: string | null;         // ISO date (inclusive)
+  to?: string | null;           // ISO date (inclusive)
+  status?: string | null;       // channel lead status (e.g. WhatsApp lead "new")
+  topic?: string | null;        // website lead topic of interest (tag)
+  search?: string | null;       // matches name / email / phone / message
+}
+
+export interface AudienceContactCondition {
+  field: string;                // "name" | "phone" | "attr:<key>"
+  op: "equals" | "not_equals" | "contains" | "not_contains" | "is_empty" | "not_empty";
+  value?: string;
+}
+
+export interface AudienceContactFilter {
+  groupIds?: string[];          // static audiences to draw from (empty = all static audiences)
+  match?: "all" | "any";
+  conditions?: AudienceContactCondition[];
+}
+
+export type AudienceRules =
+  | { source: "leads"; leads: AudienceLeadFilter }
+  | { source: "contacts"; contacts: AudienceContactFilter };
 
 export const insertContactGroupSchema = createInsertSchema(contactGroups).omit({
   id: true,
@@ -3239,6 +3274,10 @@ export const whatsappTemplates = pgTable("whatsapp_templates", {
   msg91TemplateId: text("msg91_template_id"), // External MSG91 template id once submitted
   namespace: text("namespace"), // WABA template namespace (required by MSG91 send payload)
   rejectionReason: text("rejection_reason"),
+  // When the approval status was last confirmed and how: 'provider' (checked with the
+  // WhatsApp provider) | 'user_confirmed' (the business confirmed it is approved). null = never.
+  statusCheckedAt: timestamp("status_checked_at"),
+  statusSource: text("status_source"),
   sourceType: text("source_type").notNull().default("manual"), // 'manual' | 'msg91'
   sourceWhatsappNumber: text("source_whatsapp_number"), // Normalized business number used for MSG91 sync
   deletedAt: timestamp("deleted_at"), // Soft delete preserves campaign/automation history
@@ -3738,6 +3777,11 @@ export const whatsappAiWorkbooks = pgTable("whatsapp_ai_workbooks", {
   description: text("description").default(""),
   sourceCampaignId: varchar("source_campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
   status: text("status").notNull().default("active"), // active | archived
+  // Last time linked campaign results were checked/pulled into this workbook (auto or manual).
+  lastSyncedAt: timestamp("last_synced_at"),
+  // Touched by the editor every minute while someone has unsaved changes, so the automatic
+  // result sync never creates a new version underneath an open edit.
+  editingHeartbeatAt: timestamp("editing_heartbeat_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
@@ -3819,7 +3863,9 @@ export const whatsappOptOuts = pgTable("whatsapp_opt_outs", {
   reason: text("reason").default("user_stop"), // 'user_stop' | 'manual' | 'bounce'
   campaignId: varchar("campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }), // Campaign that triggered the opt-out (if any)
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  businessPhoneIdx: index("whatsapp_opt_outs_business_phone_idx").on(table.businessAccountId, table.phone),
+}));
 
 export const insertWhatsappOptOutSchema = createInsertSchema(whatsappOptOuts).omit({
   id: true,

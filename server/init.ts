@@ -169,18 +169,11 @@ export async function initializeDatabase() {
       console.error('[INIT] Error adding can_delete_data column to account_group_admins:', err);
     }
 
-    // Backfill: every saved WhatsApp template is mirrored from the MSG91
-    // dashboard (already Meta-approved). MSG91 has no public create-template
-    // API, so the draft/pending lifecycle is meaningless. Flip any legacy
-    // non-approved rows to "approved" so they appear in campaign dropdowns.
-    // Idempotent — touches only rows where status is currently not 'approved'.
-    try {
-      await db.execute(
-        sql`UPDATE whatsapp_templates SET status = 'approved' WHERE status IS DISTINCT FROM 'approved'`
-      );
-    } catch (err) {
-      console.error('[INIT] Error backfilling whatsapp_templates status:', err);
-    }
+    // (Removed: a boot-time backfill that flipped every WhatsApp template to
+    // "approved". Templates added by hand now start as "not verified" until the
+    // provider confirms them or the business confirms them itself, so that
+    // backfill would undo the real status on every restart. Rows it already
+    // approved stay approved — nothing here changes existing data.)
 
     try {
       await db.execute(sql`ALTER TABLE contact_groups ADD COLUMN IF NOT EXISTS default_country_code TEXT`);

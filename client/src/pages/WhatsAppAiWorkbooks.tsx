@@ -18,7 +18,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  ArrowLeft, Copy, Download, Eye, FileSpreadsheet, FolderOpen,
+  ArrowLeft, Copy, Download, Eye, FileSpreadsheet, FolderOpen, Info,
   Link2, Loader2, Megaphone, MoreHorizontal, Pencil, Plus, RefreshCw, RotateCcw, Save, Upload, Wand2, X,
   Trash2,
 } from "lucide-react";
@@ -31,6 +31,7 @@ interface WorkbookListItem {
   sourceCampaignId: string | null;
   status: string;
   updatedAt: string;
+  lastSyncedAt?: string | null;
   latestVersion: {
     id: string;
     versionNumber: number;
@@ -166,6 +167,31 @@ function uniqueColumnKey(label: string, columns: AiWorkbookColumn[]) {
   return key;
 }
 
+/** Plain explanation of workbooks vs audiences, with the "create an audience" path made obvious. */
+function WorkbookAudienceHelp({ className = "" }: { className?: string }) {
+  return (
+    <div className={`flex items-start gap-2 rounded-lg border border-sky-100 bg-sky-50/60 px-3 py-2 text-xs text-sky-900 ${className}`}>
+      <Info className="h-4 w-4 mt-0.5 shrink-0" />
+      <span>
+        A <strong>workbook</strong> is your spreadsheet with AI columns. An <strong>audience</strong> is the list of people a campaign is sent to.
+        You can create an audience from a workbook: open it, select rows (or filter them), then click <strong>Create audience &amp; campaign</strong>.
+        Replies from that campaign are added back to the workbook automatically.
+      </span>
+    </div>
+  );
+}
+
+function timeAgo(value: string | Date | null | undefined): string {
+  if (!value) return "";
+  const ms = Date.now() - new Date(value).getTime();
+  if (ms < 60_000) return "just now";
+  const min = Math.round(ms / 60_000);
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h} h ago`;
+  return new Date(value).toLocaleString();
+}
+
 function WorkbooksList() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -195,6 +221,7 @@ function WorkbooksList() {
       toast({ title: "Workbook duplicated" });
       setLocation(`/admin/whatsapp-ai-workbooks/${copy.id}`);
     },
+    onError: (error: Error) => toast({ title: "Couldn't duplicate workbook", description: error.message, variant: "destructive" }),
   });
   const deleteWorkbook = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/whatsapp/ai-workbooks/${id}`),
@@ -212,8 +239,8 @@ function WorkbooksList() {
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <Button variant="ghost" size="sm" className="-ml-2 mb-2" onClick={() => setLocation("/admin/whatsapp-campaigns")}>
             <ArrowLeft className="h-4 w-4 mr-1" /> Campaigns
@@ -221,12 +248,13 @@ function WorkbooksList() {
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <FileSpreadsheet className="h-6 w-6 text-violet-600" /> AI Workbooks
           </h1>
-          <p className="text-sm text-gray-600 mt-1">Turn campaign recipients and AI reply outcomes into reusable spreadsheet workspaces.</p>
+          <p className="text-sm text-gray-600 mt-1">Spreadsheets that fill in campaign replies and AI results for you.</p>
         </div>
         <Button onClick={openCreate} data-testid="button-new-ai-workbook">
           <Plus className="h-4 w-4 mr-1" /> New AI Workbook
         </Button>
       </div>
+      <WorkbookAudienceHelp className="mb-6" />
 
       {isLoading ? (
         <div className="py-16 text-center text-gray-500">Loading workbooks…</div>
@@ -235,7 +263,7 @@ function WorkbooksList() {
           <CardContent className="py-16 text-center">
             <FileSpreadsheet className="h-10 w-10 mx-auto text-violet-300 mb-3" />
             <h2 className="font-semibold text-lg">No AI workbooks yet</h2>
-            <p className="text-sm text-gray-500 mt-1 mb-4">Create one from a campaign to organise recipients, outcomes, Promise-to-Pay data, callbacks, and team notes.</p>
+            <p className="text-sm text-gray-500 mt-1 mb-4">Create one to keep campaign replies, outcomes, follow-ups and team notes together in one sheet.</p>
             <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" /> Create workbook</Button>
           </CardContent>
         </Card>
@@ -253,8 +281,7 @@ function WorkbooksList() {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-3 gap-2 text-center mb-4">
-                  <div className="rounded-md bg-slate-50 p-2"><div className="font-semibold">{workbook.latestVersion?.sheetCount ?? 0}</div><div className="text-[11px] text-gray-500">Tabs</div></div>
+                <div className="grid grid-cols-2 gap-2 text-center mb-4">
                   <div className="rounded-md bg-slate-50 p-2"><div className="font-semibold">{workbook.latestVersion?.rowCount?.toLocaleString() ?? 0}</div><div className="text-[11px] text-gray-500">Rows</div></div>
                   <div className="rounded-md bg-slate-50 p-2"><div className="font-semibold">v{workbook.latestVersion?.versionNumber ?? 1}</div><div className="text-[11px] text-gray-500">Version</div></div>
                 </div>
@@ -349,9 +376,14 @@ function WorkbookEditor({ id }: { id: string }) {
   const [linkMode, setLinkMode] = useState<"full" | "custom">("full");
   const [mapColumnTarget, setMapColumnTarget] = useState<AiWorkbookColumn | null>(null);
 
+  const [leaveTarget, setLeaveTarget] = useState<string | null>(null);
+  const leaveBypass = useRef(false);
+
+  // While there are no unsaved edits, quietly pick up results the automatic sync brought in.
   const { data: workbook, isLoading } = useQuery<WorkbookDetail>({
     queryKey: [`/api/whatsapp/ai-workbooks/${id}`],
     refetchOnMount: "always",
+    refetchInterval: dirty ? false : 60_000,
   });
   const { data: previewVersion, isFetching: previewLoading } = useQuery<{
     id: string;
@@ -368,7 +400,65 @@ function WorkbookEditor({ id }: { id: string }) {
   const { data: resultSyncs = [] } = useQuery<WorkbookResultSync[]>({
     queryKey: [`/api/whatsapp/ai-workbooks/${id}/result-syncs`],
     enabled: Boolean(workbook),
+    refetchInterval: dirty ? false : 60_000,
   });
+
+  // ── Unsaved-changes guard ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    // In-app links (sidebar, breadcrumbs): stop the navigation and ask first.
+    const onClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = (event.target as HTMLElement | null)?.closest?.("a");
+      if (!anchor || anchor.target === "_blank" || anchor.hasAttribute("download")) return;
+      const href = anchor.getAttribute("href");
+      if (!href || href.startsWith("#") || href.startsWith("/api/")) return;
+      const url = new URL(anchor.href, window.location.href);
+      if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setLeaveTarget(url.pathname + url.search);
+    };
+    // In-app navigation (sidebar buttons, setLocation) goes through history.pushState:
+    // hold it and ask first. "Leave without saving" sets leaveBypass and replays it.
+    const originalPushState = window.history.pushState;
+    window.history.pushState = function guardedPushState(this: History, ...args: Parameters<History["pushState"]>) {
+      const url = args[2];
+      if (!leaveBypass.current && url != null) {
+        const next = new URL(String(url), window.location.href);
+        if (next.origin === window.location.origin && next.pathname !== window.location.pathname) {
+          setLeaveTarget(next.pathname + next.search);
+          return;
+        }
+      }
+      return originalPushState.apply(this, args);
+    } as History["pushState"];
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("click", onClick, true);
+    return () => {
+      window.history.pushState = originalPushState;
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("click", onClick, true);
+    };
+  }, [dirty]);
+  const navigateAway = (path: string) => {
+    if (dirty) setLeaveTarget(path);
+    else setLocation(path);
+  };
+
+  // Tell the server someone is editing, so the automatic sync waits instead of
+  // creating a new version underneath these unsaved changes.
+  useEffect(() => {
+    if (!dirty) return;
+    const ping = () => { apiRequest("POST", `/api/whatsapp/ai-workbooks/${id}/editing`).catch(() => undefined); };
+    ping();
+    const timer = setInterval(ping, 60_000);
+    return () => clearInterval(timer);
+  }, [dirty, id]);
   const { data: campaigns = [] } = useQuery<Campaign[]>({
     queryKey: ["/api/whatsapp/campaigns"],
     enabled: Boolean(workbook) && (linkOpen || Boolean(workbook?.sourceCampaignId)),
@@ -386,6 +476,12 @@ function WorkbookEditor({ id }: { id: string }) {
   const lastCampaignSync = workbook?.versions
     ?.filter(version => version.source === "campaign" || version.source === "campaign_sync")
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] || null;
+  const hasLinkedResults = Boolean(workbook?.sourceCampaignId) || resultSyncs.some(sync => sync.campaignId);
+  const lastSyncedAt = [
+    workbook?.lastSyncedAt,
+    lastCampaignSync?.createdAt,
+    ...resultSyncs.map(sync => sync.lastSyncedAt),
+  ].filter((v): v is string => Boolean(v)).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
 
   useEffect(() => {
     if (!workbook?.currentVersion || dirty) return;
@@ -623,6 +719,19 @@ function WorkbookEditor({ id }: { id: string }) {
     onError: (error: Error) => toast({ title: "Couldn't sync campaign results", description: error.message, variant: "destructive" }),
   });
 
+  const syncNow = useMutation({
+    mutationFn: () => apiRequest<{ versionsCreated: number; updatedRows: number }>("POST", `/api/whatsapp/ai-workbooks/${id}/sync-now`),
+    onSuccess: result => {
+      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/ai-workbooks/${id}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/whatsapp/ai-workbooks/${id}/result-syncs`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/ai-workbooks"] });
+      toast(result.versionsCreated
+        ? { title: "Campaign results synced", description: "New replies and outcomes were added in a new version." }
+        : { title: "Already up to date", description: "There were no new campaign results." });
+    },
+    onError: (error: Error) => toast({ title: "Couldn't sync campaign results", description: error.message, variant: "destructive" }),
+  });
+
   const createAudience = useMutation({
     mutationFn: () => {
       if (!activeSheet) throw new Error("Workbook sheet is unavailable");
@@ -723,7 +832,7 @@ function WorkbookEditor({ id }: { id: string }) {
       <div className="max-w-[1800px] mx-auto">
       <div className="flex flex-wrap items-end justify-between gap-5 mb-6">
         <div className="min-w-0">
-          <Button variant="ghost" size="sm" className="-ml-2 mb-3 text-slate-500 hover:text-slate-900" onClick={() => setLocation("/admin/whatsapp-ai-workbooks")}>
+          <Button variant="ghost" size="sm" className="-ml-2 mb-3 text-slate-500 hover:text-slate-900" onClick={() => navigateAway("/admin/whatsapp-ai-workbooks")}>
             <ArrowLeft className="h-4 w-4 mr-1" /> AI Workbooks
           </Button>
           <div className="flex items-center gap-3">
@@ -758,25 +867,31 @@ function WorkbookEditor({ id }: { id: string }) {
             )}
             <span className="text-slate-300">•</span>
             <span>Last saved {new Date(workbook.currentVersion.updatedAt).toLocaleString()}</span>
-            {lastCampaignSync && (
-              <><span className="text-slate-300">•</span><span>Last synced {new Date(lastCampaignSync.createdAt).toLocaleString()}</span></>
+            {hasLinkedResults && (
+              <>
+                <span className="text-slate-300">•</span>
+                <span data-testid="text-last-synced" title={lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : undefined}>
+                  {lastSyncedAt ? `Last synced ${timeAgo(lastSyncedAt)}` : "Not synced yet"} · updates automatically
+                </span>
+              </>
             )}
             {dirty && <><span className="text-slate-300">•</span><span className="font-medium text-amber-600">Unsaved changes</span></>}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {workbook.sourceCampaignId ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {hasLinkedResults && (
             <Button
               variant="outline"
               className="bg-white border-slate-200 text-slate-700 shadow-sm"
-              onClick={() => refresh.mutate()}
-              disabled={refresh.isPending || dirty}
-              title={dirty ? "Save your changes before refreshing" : "Pull the latest campaign replies into this workbook"}
-              data-testid="button-refresh-outcomes"
+              onClick={() => syncNow.mutate()}
+              disabled={syncNow.isPending || dirty}
+              title={dirty ? "Save your changes before syncing" : "Bring in the latest campaign replies and outcomes now"}
+              data-testid="button-sync-now"
             >
-              <RefreshCw className={`h-4 w-4 mr-2 ${refresh.isPending ? "animate-spin" : ""}`} /> Refresh outcomes
+              <RefreshCw className={`h-4 w-4 mr-2 ${syncNow.isPending ? "animate-spin" : ""}`} /> Sync now
             </Button>
-          ) : (
+          )}
+          {!workbook.sourceCampaignId && (
             <Button
               variant="outline"
               className="bg-white border-slate-200 text-slate-700 shadow-sm"
@@ -1082,7 +1197,7 @@ function WorkbookEditor({ id }: { id: string }) {
             onKeyDown={event => {
               if (event.key === "Enter" && renameValue.trim() && !rename.isPending) rename.mutate();
             }}
-            placeholder="e.g. April Promise-to-Pay follow-up"
+            placeholder="e.g. April offer follow-up"
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => setRenameOpen(false)}>Cancel</Button>
@@ -1173,11 +1288,11 @@ function WorkbookEditor({ id }: { id: string }) {
         <div className="flex items-start gap-3">
           <div className="mt-0.5 rounded-lg bg-violet-50 p-2"><Megaphone className="h-4 w-4 text-violet-600" /></div>
           <div>
-          <div className="font-semibold text-slate-900">Run another campaign</div>
+          <div className="font-semibold text-slate-900">Send a campaign to these people</div>
           <p className="text-xs text-slate-500 mt-0.5">
             {selectedRows.size > 0
-              ? `Create a protected campaign audience from ${selectedRows.size.toLocaleString()} selected rows.`
-              : `Create a protected campaign audience from ${filteredRows.length.toLocaleString()} currently filtered rows.`}
+              ? `Creates an audience from the ${selectedRows.size.toLocaleString()} selected rows, then opens a new campaign for it.`
+              : `Creates an audience from the ${filteredRows.length.toLocaleString()} rows shown (use search or filters to narrow them), then opens a new campaign for it.`}
           </p>
           <p className="text-xs text-violet-700 mt-1">
             {resultMappings.length
@@ -1191,13 +1306,14 @@ function WorkbookEditor({ id }: { id: string }) {
             <Wand2 className="h-4 w-4 mr-1" /> Map results
           </Button>
           <Button
-            variant="outline"
-            className="border-violet-200 text-violet-700 hover:bg-violet-50"
+            className="bg-violet-600 hover:bg-violet-700 text-white"
             onClick={() => createAudience.mutate()}
-            disabled={createAudience.isPending || (selectedRows.size === 0 && filteredRows.length === 0) || resultMappings.some(mapping => mapping.source === "capture:")}
+            disabled={dirty || createAudience.isPending || (selectedRows.size === 0 && filteredRows.length === 0) || resultMappings.some(mapping => mapping.source === "capture:")}
+            title={dirty ? "Save your changes first" : undefined}
+            data-testid="button-create-audience-campaign"
           >
-            {createAudience.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
-            Create campaign
+            {createAudience.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Megaphone className="h-4 w-4 mr-1" />}
+            Create audience &amp; campaign
           </Button>
         </div>
       </div>
@@ -1209,8 +1325,8 @@ function WorkbookEditor({ id }: { id: string }) {
               <div className="font-medium text-slate-900">Campaign results connected{activeResultSync.campaign ? ` · ${activeResultSync.campaign.name}` : ""}</div>
               <p className="mt-0.5 text-xs text-slate-600">
                 {activeResultSync.lastSyncedAt
-                  ? `${activeResultSync.syncedRowCount} rows were updated ${new Date(activeResultSync.lastSyncedAt).toLocaleString()}.`
-                  : `${activeResultSync.mappings.length} mapped columns are ready to receive campaign replies and delivery results.`}
+                  ? `Last checked ${timeAgo(activeResultSync.lastSyncedAt)}${activeResultSync.syncedRowCount ? ` · ${activeResultSync.syncedRowCount} rows updated` : ""}. New results are added automatically every few minutes.`
+                  : `${activeResultSync.mappings.length} mapped columns will fill in automatically as replies arrive.`}
               </p>
             </div>
           </div>
@@ -1222,10 +1338,36 @@ function WorkbookEditor({ id }: { id: string }) {
             title={dirty ? "Save current workbook edits before syncing campaign results" : undefined}
           >
             {syncCampaignResults.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
-            Sync results
+            Sync now
           </Button>
         </div>
       )}
+      <WorkbookAudienceHelp className="mt-3" />
+
+      <AlertDialog open={!!leaveTarget} onOpenChange={open => { if (!open) setLeaveTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Leave without saving?</AlertDialogTitle>
+            <AlertDialogDescription>You have unsaved changes in this workbook. If you leave now, they will be lost.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-stay-on-workbook">Stay and keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => {
+                const target = leaveTarget;
+                leaveBypass.current = true;
+                setDirty(false);
+                setLeaveTarget(null);
+                if (target) setLocation(target);
+              }}
+              data-testid="button-leave-workbook"
+            >
+              Leave without saving
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       </div>
     </div>
   );
