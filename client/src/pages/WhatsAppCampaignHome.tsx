@@ -129,7 +129,7 @@ export default function WhatsAppCampaignHome() {
         <Card><CardContent className="p-4 text-sm text-gray-600">Could not load your campaign summary. Please refresh the page.</CardContent></Card>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4 gap-3">
         {steps.map(step => {
           const Icon = step.icon;
           const isNext = nextStep?.key === step.key;
