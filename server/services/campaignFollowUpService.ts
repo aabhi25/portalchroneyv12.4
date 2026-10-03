@@ -195,8 +195,15 @@ async function processStep(
     `);
     const sendId: string | undefined = ((claimed?.rows as any[]) ?? [])[0]?.id;
     if (!sendId) continue;
-    const finish = (set: Partial<typeof marketingCampaignFollowUpSends.$inferInsert>) =>
-      db.update(marketingCampaignFollowUpSends).set(set).where(eq(marketingCampaignFollowUpSends.id, sendId));
+    // Explicit allow-list of the columns a finished send may change.
+    const finish = (fields: { status: string; msg91MessageId?: string | null; errorMessage?: string | null; sendPhone?: string | null; sentAt?: Date | null }) =>
+      db.update(marketingCampaignFollowUpSends).set({
+        status: fields.status,
+        msg91MessageId: fields.msg91MessageId,
+        errorMessage: fields.errorMessage,
+        sendPhone: fields.sendPhone,
+        sentAt: fields.sentAt,
+      }).where(eq(marketingCampaignFollowUpSends.id, sendId));
 
     const [r] = await db.select().from(marketingCampaignRecipients)
       .where(eq(marketingCampaignRecipients.id, recipientId)).limit(1) as MarketingCampaignRecipient[];

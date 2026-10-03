@@ -162,7 +162,8 @@ async function main() {
     await db.update(schema.whatsappTemplates).set({ status: 'pending' }).where(eq(schema.whatsappTemplates.id, tpl.id));
     await whatsappTemplateService.update(A, tpl.id, { name: 'promo2', status: 'approved', rejectionReason: 'none', businessAccountId: B, sourceType: 'msg91' } as any);
     const [row] = await db.select().from(schema.whatsappTemplates).where(eq(schema.whatsappTemplates.id, tpl.id));
-    expect(row?.status === 'pending', 'template: tenant cannot self-approve via PATCH status', row?.status);
+    // Renaming a hand-added template sends it back to 'not_verified'; either way never 'approved'.
+    expect(row?.status === 'pending' || row?.status === 'not_verified', 'template: tenant cannot self-approve via PATCH status', row?.status);
     expect(row?.rejectionReason === null, 'template: tenant cannot set rejectionReason', row?.rejectionReason);
     expect(row?.businessAccountId === A && row?.sourceType === 'manual', 'template: tenant/source fields unchanged', { b: row?.businessAccountId, s: row?.sourceType });
     expect(row?.name === 'promo2', 'template: name edit persists', row?.name);
