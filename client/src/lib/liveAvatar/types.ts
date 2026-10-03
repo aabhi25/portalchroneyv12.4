@@ -26,6 +26,8 @@ export interface AvatarSessionInfo {
   disclosure: string | null;
   limits: { maxSessionSeconds: number; idleTimeoutSeconds: number; heartbeatIntervalSeconds: number };
   connectTimeoutMs: number;
+  /** Local testing: post the browser's avatar event trail to the server log. */
+  debug?: boolean;
 }
 
 export type AvatarAdapterEvent = "connected" | "speaking" | "idle" | "error" | "disconnected";
@@ -40,7 +42,7 @@ export interface AvatarClientAdapter {
   /** Client route only: the current answer's audio is complete. */
   endOfSpeech?(): void;
   /** Stop speaking now (barge-in). No-op for server-route providers (the server interrupts). */
-  interrupt(): void;
+  interrupt(reason?: string): void;
   setMuted(muted: boolean): void;
   /** 0..1 — used to duck the avatar while the visitor might be interrupting. */
   setVolume(volume: number): void;

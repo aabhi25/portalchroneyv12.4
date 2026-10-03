@@ -1,5 +1,6 @@
 import { Mic, MicOff, X, Loader2, Hand } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { avatarDebug, avatarDebugOn } from "@/lib/liveAvatar/debug";
 import { useToast } from "@/hooks/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -440,7 +441,10 @@ export function InlineVoiceMode({
   /** Apply the current duck state to the playback gain (smoothly). */
   const applyPlaybackGain = () => {
     const ducked = serverDuckRef.current || localDuckRef.current;
-    if (avatarRef.current) avatarRef.current.adapter.setVolume(ducked ? DUCK_GAIN : 1);
+    // Video call: never dip the avatar's volume. Without headphones the mic hears the avatar
+    // itself, so "possible interruption" fires on its own voice (live call: two dips of ~1.5 s
+    // that turned out to be echo). Real interruptions are still confirmed from the transcript.
+    if (avatarRef.current) avatarRef.current.adapter.setVolume(1);
     const gain = duckGainRef.current;
     const ctx = audioContextRef.current;
     if (!gain || !ctx) return;
@@ -482,8 +486,8 @@ export function InlineVoiceMode({
     }
   };
 
-  const flushQueuedAudio = () => {
-    if (avatarActive()) avatarRef.current?.adapter.interrupt();
+  const flushQueuedAudio = (reason = 'flush') => {
+    if (avatarActive()) avatarRef.current?.adapter.interrupt(reason);
     clearDucks();
     activeSourcesRef.current.forEach((s) => { try { s.stop(); } catch {} });
     activeSourcesRef.current.clear();
@@ -616,18 +620,27 @@ export function InlineVoiceMode({
       startHeartbeatMonitoring();
     };
 
-    ws.onmessage = async (event) => {
-      if (event.data instanceof Blob) {
-        const arrayBuffer = await event.data.arrayBuffer();
-        await handleAudioChunk(arrayBuffer);
-      } else {
-        try {
-          const data = JSON.parse(event.data);
-          handleMessage(data);
-        } catch (error) {
-          console.error('[InlineVoice] Failed to parse message:', error);
+    // Strictly in arrival order. Audio frames need an async Blob read; without the chain a
+    // JSON message (ai_done, response_cancelled) overtook the answer's last audio frames, so
+    // the avatar was told "end of turn" before it got the final words — Anam then held that
+    // tail (it needs 800 ms of audio to speak) until the next answer, which it delayed.
+    let messageChain: Promise<void> = Promise.resolve();
+    ws.onmessage = (event) => {
+      messageChain = messageChain.then(async () => {
+        if (event.data instanceof Blob) {
+          const arrayBuffer = await event.data.arrayBuffer();
+          await handleAudioChunk(arrayBuffer);
+        } else {
+          try {
+            const data = JSON.parse(event.data);
+            // Not awaited: a handler that waits (e.g. the mic permission prompt on 'ready')
+            // must not hold up the audio behind it. Its synchronous part runs in order.
+            void handleMessage(data);
+          } catch (error) {
+            console.error('[InlineVoice] Failed to handle message:', error);
+          }
         }
-      }
+      }).catch((error) => console.error('[InlineVoice] Message handling failed:', error));
     };
 
     ws.onerror = () => {
@@ -672,6 +685,13 @@ export function InlineVoiceMode({
   };
 
   const handleMessage = async (data: any) => {
+    // Local avatar debugging (AVATAR_DEBUG=1 on the server): the voice messages that drive the avatar.
+    if (avatarDebugOn() && avatarActive() && data && typeof data.type === 'string' && !['ping', 'avatar_audio', 'ai_chunk'].includes(data.type)) {
+      avatarDebug(`voice ${data.type}`, data.type === 'answer_delta'
+        ? { rid: String(data.responseId || '').slice(-6), display: data.display ? `${String(data.display).slice(0, 40)}` : '(none)', speech: String(data.speech || '').slice(0, 40) }
+        : data.type === 'transcript' ? String(data.text || '').slice(0, 60)
+          : data.reason || data.responseId ? { reason: data.reason, rid: String(data.responseId || '').slice(-6) } : undefined);
+    }
     switch (data.type) {
       case 'ready':
         if (data.conversationId) conversationIdRef.current = data.conversationId;
@@ -784,7 +804,7 @@ export function InlineVoiceMode({
             currentResponseIdRef.current = null;
           }
         }
-        flushQueuedAudio();
+        flushQueuedAudio('voice control (stop)');
         finishKaraoke();
         noteListeningActivity();
         setState('listening');
@@ -805,7 +825,7 @@ export function InlineVoiceMode({
           markResponseInterrupted(data.responseId);
           const wasCurrent = currentResponseIdRef.current === data.responseId;
           if (wasCurrent) {
-            flushQueuedAudio();
+            flushQueuedAudio('server cancelled this answer');
             // The answer was abandoned server-side — freeze/clear its highlight.
             finishKaraoke();
             currentAIMessageIdRef.current = null;
@@ -1095,7 +1115,7 @@ export function InlineVoiceMode({
           const previousWasAbandoned =
             !!previousResponseId && interruptedResponseIdsRef.current.has(previousResponseId);
           if (isNewResponse && previousWasAbandoned && (isPlayingRef.current || activeSourcesRef.current.size > 0)) {
-            flushQueuedAudio();
+            flushQueuedAudio('new answer after an abandoned one');
           }
           // Karaoke is NOT reset here. The timeline is keyed to the bubble
           // (messageId), not the response: a legitimate continuation appends
@@ -1458,7 +1478,7 @@ export function InlineVoiceMode({
    * this — the server confirms speech-based interruptions from the transcript.
    */
   const handleInterruption = (sendToServer = true) => {
-    if (avatarActive()) avatarRef.current?.adapter.interrupt();
+    if (avatarActive()) avatarRef.current?.adapter.interrupt('visitor tap/hold');
     pendingInterruptRef.current = sendToServer;
     aiDoneReceivedRef.current = false;
     clearDucks();
@@ -1842,7 +1862,7 @@ export function InlineVoiceMode({
       // Let the server drop the stalled answer too.
       safeSend(JSON.stringify({ type: 'interrupt', reason: 'watchdog' }));
     }
-    flushQueuedAudio();
+    flushQueuedAudio('thinking watchdog');
     finishKaraoke();
     if (currentAIMessageIdRef.current) onAIMessageDone?.(currentAIMessageIdRef.current);
     currentAIMessageIdRef.current = null;

@@ -121,6 +121,8 @@ export interface StartSessionResult {
   disclosure: string | null;
   limits: { maxSessionSeconds: number; idleTimeoutSeconds: number; heartbeatIntervalSeconds: number };
   connectTimeoutMs: number;
+  /** Local testing (AVATAR_DEBUG=1): the browser posts its avatar event trail to the server log. */
+  debug?: boolean;
 }
 
 export const HEARTBEAT_INTERVAL_SECONDS = 20;
@@ -134,6 +136,11 @@ const PROVIDER_CLOSE_TIMEOUT_MS = 5_000;
 /** Our call ends this long before a provider-imposed limit, so the answer can finish first. */
 const PROVIDER_END_MARGIN_SECONDS = 15;
 const TICK_MS = 2_000;
+
+/** Local testing only: never on in production builds unless explicitly set. */
+export function avatarDebugEnabled(): boolean {
+  return process.env.AVATAR_DEBUG === "1" && process.env.NODE_ENV !== "production";
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => Error): Promise<T> {
   let timer: NodeJS.Timeout;
@@ -380,6 +387,7 @@ export class AvatarSessionManager {
       disclosure,
       limits: { maxSessionSeconds, idleTimeoutSeconds: settings.idleTimeoutSeconds, heartbeatIntervalSeconds: HEARTBEAT_INTERVAL_SECONDS },
       connectTimeoutMs: adapter.connectTimeoutMs,
+      ...(avatarDebugEnabled() ? { debug: true } : {}),
     };
   }
 

@@ -10,6 +10,7 @@
  * notice, without losing the conversation.
  */
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { avatarDebug, startAvatarDebug, stopAvatarDebug } from "@/lib/liveAvatar/debug";
 import {
   avatarHeartbeat,
   endAvatarSession,
@@ -55,6 +56,7 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
     // Tell the server first (with the real reason) — closing the voice socket
     // right after would otherwise end the session as "voice_closed".
     if (current && reason) endAvatarSession(current.sessionId, { ...auth(), reason, ...(detail ? { detail: detail.slice(0, 200) } : {}) });
+    if (current) { avatarDebug("ended", { reason, detail }); stopAvatarDebug(); }
     if (adapter) { try { await adapter.close(); } catch { /* ignore */ } }
   }, [auth]);
 
@@ -78,6 +80,8 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
       return;
     }
     const info = result.session;
+    if (info.debug) startAvatarDebug(info.sessionId, auth());
+    avatarDebug("session", { provider: info.provider, route: info.audioRoute, tapToSessionMs: Date.now() - tappedAt });
     sessionRef.current = info;
     setSession(info);
     setRemainingSeconds(info.limits.maxSessionSeconds);
@@ -124,6 +128,7 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
     clearTimeout(timer);
     if (attempt !== attemptRef.current || adapterRef.current !== adapter) return;
     const firstFrameMs = Date.now() - tappedAt;
+    avatarDebug("first frame", { msAfterTap: firstFrameMs });
     console.log(`[AvatarTiming] ${info.provider} first frame ${firstFrameMs}ms after tap`);
     adapter.setMuted(stateRef.current.muted);
     dispatch({ type: "connected", at: Date.now() });

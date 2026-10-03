@@ -34,7 +34,7 @@ import {
   setBusinessApiKey,
   updateAvatarSettings,
 } from "../services/avatar/settingsService";
-import { avatarSessionManager, AvatarGateError, VISITOR_FALLBACK_MESSAGES } from "../services/avatar/sessionManager";
+import { avatarDebugEnabled, avatarSessionManager, AvatarGateError, VISITOR_FALLBACK_MESSAGES } from "../services/avatar/sessionManager";
 import { getAvatarProvider } from "../services/avatar/registry";
 import { isFakeProviderAllowed } from "../services/avatar/providers/fake";
 import { AvatarProviderError, CLIENT_END_REASONS, type AvatarEndReason, type AvatarProviderId } from "../services/avatar/types";
@@ -542,6 +542,21 @@ router.post("/api/chat/widget/avatar/session/:id/heartbeat", async (req, res) =>
   } catch (error) {
     sendGateError(res, error);
   }
+});
+
+// Local testing only (AVATAR_DEBUG=1): the browser's avatar event trail, printed next to [VoiceTiming].
+router.post("/api/chat/widget/avatar/session/:id/debug", async (req, res) => {
+  if (!avatarDebugEnabled()) return res.status(404).end();
+  const auth = visitorAuth(req, res);
+  if (!auth) return;
+  const events = Array.isArray(req.body?.events) ? req.body.events.slice(0, 50) : [];
+  const sid = String(req.params.id).slice(0, 8);
+  for (const ev of events) {
+    const name = String(ev?.e ?? "").replace(/[^\w .:>=-]/g, "").slice(0, 60);
+    const detail = typeof ev?.d === "string" ? ev.d.replace(/[\u0000-\u001f]/g, " ").slice(0, 300) : "";
+    console.log(`[AvatarClient] ${sid} +${Number(ev?.t) || 0}ms ${name}${detail ? ` ${detail}` : ""}`);
+  }
+  res.json({ ok: true });
 });
 
 router.post("/api/chat/widget/avatar/session/:id/end", textBody, async (req, res) => {

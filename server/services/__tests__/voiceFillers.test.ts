@@ -20,6 +20,9 @@ async function main() {
   const no = ['How are you?', 'how are you doing', 'Hi there', 'thank you so much', 'ok', 'yes please', 'Rahul', '98765 43210', 'kaise ho aap', 'who are you exactly', 'what is your name please'];
   expect(no.every((t) => !f.wantsFiller({ transcript: t })), 'never for small talk, short replies, names, numbers, "who are you"', no.filter((t) => f.wantsFiller({ transcript: t })));
   expect(!f.wantsFiller({ transcript: 'What are the fees for the maths course?', lastTurnHadFiller: true }), 'never two turns in a row');
+  const meta = ['Can you hear me?', 'Hey, can you hear me?', 'Am I audible to you?', "What's your name?", 'What’s your name?', 'Do you know my name?', 'Are you still there?', 'Are you a real person?', 'Meri awaaz aa rahi hai kya?', 'Aap mujhe sun rahe ho?', 'Aapka naam kya hai?', 'क्या मेरी आवाज़ आ रही है?'];
+  expect(meta.every((t) => !f.wantsFiller({ transcript: t })), 'never for questions about the assistant or the connection (seen live: "Can you hear me?" → "Okay, let me see.")', meta.filter((t) => f.wantsFiller({ transcript: t })));
+  expect(f.wantsFiller({ transcript: 'Can you suggest some maths courses?' }) && f.wantsFiller({ transcript: 'What is the name of your maths course?' }), 'real questions that mention "you"/"name" still qualify');
 
   // Language
   expect(f.fillerLanguage('What are the fees for the maths course?') === 'en', 'English question → English filler');

@@ -59,6 +59,19 @@ export function fillerLanguage(transcript: string, selectedLanguage?: string | n
   return words.length > 0 && markers >= 2 && markers / words.length >= 0.2 ? "hi" : "en";
 }
 
+const ABOUT_THE_CALL = new RegExp([
+  String.raw`\b(can|could|do) you (hear|listen to|understand) me\b`,
+  String.raw`\b(am i|i'?m) (audible|clear|loud enough)\b`,
+  String.raw`\bare you (there|listening|still there|real|human|a (bot|robot|human|real person))\b`,
+  String.raw`\b(what'?s|what is|tell me) your name\b`,
+  String.raw`\b(who|what) are you\b`,
+  String.raw`\b(do you know|what'?s|what is) my name\b`,
+  String.raw`\b(awaaz|aawaz|avaaz) (aa rahi|aa raha|sunai)\b`,
+  String.raw`\b(sun|sunai de) (rahe|rahi|raha|sakte|sakti)\b`,
+  String.raw`\b(aapka|tumhara|aap ka) naam\b`,
+  String.raw`(आवाज़|आवाज) (आ रही|सुनाई)|सुन (रहे|रही|पा रहे)|आपका नाम|आप कौन`,
+].join("|"), "i");
+
 /** Should this turn get a filler if its answer is late? */
 export function wantsFiller(input: { transcript: string; lastAssistantText?: string | null; lastTurnHadFiller?: boolean }): boolean {
   if (input.lastTurnHadFiller) return false;
@@ -69,6 +82,9 @@ export function wantsFiller(input: { transcript: string; lastAssistantText?: str
   if (/^[\d\s+()-]+$/.test(text) || /\d{6,}/.test(text.replace(/\s+/g, ""))) return false; // phone numbers, codes
   if (smallTalkKind(text, input.lastAssistantText ?? null)) return false; // "how are you", "thank you so much"
   if (/^(how are you|how r u|how are u|kaise ho|kaise hain|kya haal|aap kaise|what'?s up|who are you|what is your name|aap kaun)/i.test(text)) return false;
+  // About the assistant itself or the connection — "Let me check that." before "Yes, I can
+  // hear you!" sounds absurd (seen in a live call, 2026-10-03).
+  if (ABOUT_THE_CALL.test(text.replace(/[’']/g, "'"))) return false;
   return true;
 }
 
