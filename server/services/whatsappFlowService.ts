@@ -20,6 +20,10 @@ import {
 } from "@shared/schema";
 import { eq, and, desc, sql, asc, ne, gte, ilike } from "drizzle-orm";
 import OpenAI from "openai";
+import {
+  restrictedReplyLanguage, channelConversationKey, flowResponseLanguageLine, checkReplyLanguage,
+  type ChannelReplyLanguage,
+} from "./language/channelReplyLanguage";
 
 function normalizePhone(phone: string): string {
   let p = phone.replace(/[\s\-\(\)]/g, '');
@@ -307,17 +311,31 @@ export class WhatsappFlowService {
     return val !== undefined && val !== null && val !== "";
   }
 
+  /**
+   * AI reply-language setting for the flow's AI-written texts: null when WhatsApp follows the
+   * customer (the default) — the prompts then stay exactly as they were. Never adds the note.
+   */
+  private async flowReplyLanguage(businessAccountId: string, senderPhone: string | undefined, message: string, apiKey?: string | null): Promise<ChannelReplyLanguage | null> {
+    return restrictedReplyLanguage({
+      businessAccountId, channel: "whatsapp",
+      conversationKey: channelConversationKey("whatsapp", businessAccountId, senderPhone),
+      message, apiKey, allowNote: false,
+    });
+  }
+
   async extractFieldsWithAI(
     businessAccountId: string,
     message: string,
     requiredFields: string[],
-    alreadyCollected: Record<string, any> = {}
+    alreadyCollected: Record<string, any> = {},
+    senderPhone?: string
   ): Promise<{ extracted: Record<string, any>; missing: string[]; followUp?: string }> {
     const { apiKey, name: businessName } = await this.getApiKeyForBusiness(businessAccountId);
     if (!apiKey) {
       console.warn(`[WhatsApp Flow] OpenAI API key not configured for business ${businessAccountId}`);
       return { extracted: {}, missing: requiredFields };
     }
+    const replyLanguage = await this.flowReplyLanguage(businessAccountId, senderPhone, message, apiKey);
 
     const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
 
@@ -349,7 +367,7 @@ Rules for followUp:
 - If they asked a question, answer it briefly then ask for missing info
 - If they expressed concern, reassure them briefly
 - Don't use bullet points or numbered lists
-- Respond in the SAME LANGUAGE the customer used
+${replyLanguage ? `- ${flowResponseLanguageLine(replyLanguage, "followUp")}` : "- Respond in the SAME LANGUAGE the customer used"}
 
 Example: {"extracted": {"name": "John", "dob": null}, "followUp": "Thanks John! I just need your date of birth to continue."}`;
 
@@ -389,7 +407,8 @@ Example: {"extracted": {"name": "John", "dob": null}, "followUp": "Thanks John! 
 
       console.log(`[WhatsApp Flow] AI Extraction - Extracted: [${Object.keys(allExtracted || {}).join(', ')}], Missing: ${missing.join(", ")}`);
 
-      return { extracted: allExtracted, missing, followUp: parsed.followUp || undefined };
+      const followUp = replyLanguage && typeof parsed.followUp === "string" && parsed.followUp ? await checkReplyLanguage(businessAccountId, parsed.followUp, replyLanguage) : (parsed.followUp || undefined);
+      return { extracted: allExtracted, missing, followUp };
     } catch (error) {
       console.error("[WhatsApp Flow] AI extraction error:", error);
       return { extracted: alreadyCollected, missing: requiredFields.filter(f => !this.hasFieldValue(alreadyCollected, f)) };
@@ -490,7 +509,8 @@ Respond with just the message text, no quotes or formatting.`;
     businessAccountId: string,
     userMessage: string,
     documentTypes: { docType: string; label: string; isMandatory: boolean }[],
-    collectedDocTypes: string[]
+    collectedDocTypes: string[],
+    senderPhone?: string
   ): Promise<{ intent: "skip" | "question" | "compliance" | "unrelated"; response: string }> {
     const { apiKey, name: accountName } = await this.getApiKeyForBusiness(businessAccountId);
     if (!apiKey) {
@@ -517,6 +537,7 @@ Respond with just the message text, no quotes or formatting.`;
     }
 
     const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
+    const replyLanguage = await this.flowReplyLanguage(businessAccountId, senderPhone, userMessage, apiKey);
 
     const normCollected2 = collectedDocTypes.map((k: string) => k.toLowerCase().replace(/_card$/, ''));
     const hasDoc2 = (dt: string) => normCollected2.includes(dt.toLowerCase().replace(/_card$/, ''));
@@ -550,7 +571,7 @@ Also generate a SHORT, friendly response (1-2 sentences) appropriate for the int
 - For "compliance": Encouragingly acknowledge and wait for the upload.
 - For "unrelated": Gently redirect them to upload the remaining documents.
 
-IMPORTANT: Respond in the SAME LANGUAGE the customer used (English, Hindi, Hinglish, etc.)
+${replyLanguage ? flowResponseLanguageLine(replyLanguage) : "IMPORTANT: Respond in the SAME LANGUAGE the customer used (English, Hindi, Hinglish, etc.)"}
 
 Return ONLY a valid JSON object:
 {"intent": "skip|question|compliance|unrelated", "response": "your response text"}`;
@@ -579,6 +600,7 @@ Return ONLY a valid JSON object:
       }
 
       console.log(`[WhatsApp Flow] AI Intent Detection - Intent: ${parsed.intent}, Response: "${parsed.response}"`);
+      if (parsed.response && replyLanguage) parsed.response = await checkReplyLanguage(businessAccountId, String(parsed.response), replyLanguage);
       return { intent: parsed.intent, response: parsed.response || "Please upload the required documents to continue." };
     } catch (error) {
       console.error("[WhatsApp Flow] AI intent detection error:", error);
@@ -695,12 +717,14 @@ Return ONLY a valid JSON object:
     stepPrompt: string,
     saveToField: string | null,
     inputValidation: string | null,
-    flowContext?: string
+    flowContext?: string,
+    senderPhone?: string
   ): Promise<{ intent: "answer" | "question" | "invalid"; response: string; cleanValue?: string }> {
     const { apiKey, name: accountName } = await this.getApiKeyForBusiness(businessAccountId);
     if (!apiKey) {
       return { intent: "answer", response: "" };
     }
+    const replyLanguage = await this.flowReplyLanguage(businessAccountId, senderPhone, userMessage, apiKey);
 
     const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 30000 });
 
@@ -747,7 +771,7 @@ For "question" and "invalid" intents, generate a SHORT response (2-3 sentences):
 - For "question": FIRST answer their question using the flow journey context above (explain WHY this information is needed and what the overall process is about), THEN gently redirect them to answer the original question. Be specific and helpful.
 - For "invalid": Politely explain the expected format and re-ask.
 
-IMPORTANT: Respond in the SAME LANGUAGE the customer used.
+${replyLanguage ? flowResponseLanguageLine(replyLanguage) : "IMPORTANT: Respond in the SAME LANGUAGE the customer used."}
 
 Return ONLY a valid JSON object:
 {"intent": "answer|question|invalid", "response": "your response text (empty for answer)", "cleanValue": "extracted value (only for answer intent)"}`;
@@ -776,7 +800,8 @@ Return ONLY a valid JSON object:
       }
 
       console.log(`[WhatsApp Flow] Text Step Intent - Intent: ${parsed.intent}, hasValue: ${!!parsed.cleanValue}, hasResponse: ${!!parsed.response}`);
-      return { intent: parsed.intent, response: parsed.response || "", cleanValue: parsed.cleanValue || undefined };
+      const responseText = replyLanguage && typeof parsed.response === "string" && parsed.response ? await checkReplyLanguage(businessAccountId, parsed.response, replyLanguage) : (parsed.response || "");
+      return { intent: parsed.intent, response: responseText, cleanValue: parsed.cleanValue || undefined };
     } catch (error) {
       console.error("[WhatsApp Flow] Text step intent detection error:", error);
       return { intent: "answer", response: "" };
@@ -865,12 +890,14 @@ Return ONLY a valid JSON object:
     stepType: string,
     expectedInput: string,
     flowContext?: string,
-    useCaseMode?: string
+    useCaseMode?: string,
+    senderPhone?: string
   ): Promise<{ intent: "greeting" | "question" | "wrong_format" | "exit" | "unknown"; response: string }> {
     const { apiKey, name: accountName } = await this.getApiKeyForBusiness(businessAccountId);
     if (!apiKey) {
       return { intent: "unknown", response: "" };
     }
+    const replyLanguage = await this.flowReplyLanguage(businessAccountId, senderPhone, userMessage, apiKey);
 
     const openaiClient = createOpenAI({ businessAccountId, apiKey, timeout: 15000 });
 
@@ -896,7 +923,7 @@ Classify the intent:
 ${exitDefinition}
 - "unknown": unclear intent
 
-Generate a SHORT, friendly response (2-3 sentences max) in the SAME LANGUAGE the customer used:
+${replyLanguage ? `${flowResponseLanguageLine(replyLanguage)}\nGenerate a SHORT, friendly response (2-3 sentences max):` : "Generate a SHORT, friendly response (2-3 sentences max) in the SAME LANGUAGE the customer used:"}
 - For "question": FIRST answer their question using the flow journey context above (explain WHY this information is needed and what the overall process is about), THEN gently ask them to provide what the flow needs. Be specific and helpful, not generic.
 - For "greeting": respond naturally, then gently ask them to provide what the flow needs
 - For "wrong_format": explain the correct format helpfully
@@ -928,7 +955,8 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
       }
 
       console.log(`[WhatsApp Flow] Off-topic Intent: ${parsed.intent}, Response: "${parsed.response || ''}"`);
-      return { intent: parsed.intent, response: parsed.response || "" };
+      const responseText = replyLanguage && typeof parsed.response === "string" && parsed.response ? await checkReplyLanguage(businessAccountId, parsed.response, replyLanguage) : (parsed.response || "");
+      return { intent: parsed.intent, response: responseText };
     } catch (error) {
       console.error("[WhatsApp Flow] Off-topic intent detection error:", error);
       return { intent: "unknown", response: "" };
@@ -986,7 +1014,8 @@ Return ONLY valid JSON: {"intent": "greeting|question|wrong_format|exit|unknown"
       currentStep.type,
       expectedInput,
       flowContext,
-      useCaseMode
+      useCaseMode,
+      session.senderPhone
     );
 
     if (aiResult.intent === "exit") {
@@ -3225,7 +3254,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
         businessAccountId,
         message,
         documentTypes,
-        collectedDocTypes
+        collectedDocTypes,
+        senderPhone
       );
 
       console.log(`[WhatsApp Flow] AI detected intent: "${aiResult.intent}" for upload step`);
@@ -3364,7 +3394,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           currentStep.prompt,
           currentStep.saveToField,
           inputValidation,
-          flowContext
+          flowContext,
+          senderPhone
         );
 
         if (intentResult.intent === "question" || intentResult.intent === "invalid") {
@@ -3413,7 +3444,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           businessAccountId,
           message,
           requiredFields,
-          collectedData
+          collectedData,
+          senderPhone
         );
         
         Object.assign(collectedData, extracted);

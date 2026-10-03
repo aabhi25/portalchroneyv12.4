@@ -16,6 +16,7 @@ import {
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { safeDecrypt } from "./encryptionService";
 import { marketingCampaignService } from "./marketingCampaignService";
+import { restrictedReplyLanguage, channelConversationKey, checkReplyLanguage, ourText } from "./language/channelReplyLanguage";
 
 interface BuildContextOptions {
   campaign: MarketingCampaign;
@@ -425,9 +426,18 @@ export const campaignAiService = {
       const outboundIdentifiesRecord = ordered
         .filter(message => message.direction === "outbound_template")
         .some(message => recordValues.some(value => message.body.includes(value)));
+      // AI reply-language setting (campaigns run on WhatsApp): null when WhatsApp follows the
+      // customer (the default) → prompt unchanged, no detection. Same conversation memory as the
+      // WhatsApp AI replies to this number.
+      const replyLanguage = await restrictedReplyLanguage({
+        businessAccountId: campaign.businessAccountId, channel: "whatsapp",
+        conversationKey: channelConversationKey("whatsapp", campaign.businessAccountId, recipient.phone),
+        message: inboundClipped, apiKey,
+      });
+
       if (ambiguousLoan && !outboundIdentifiesRecord) {
         return {
-          text: "For your privacy, I need to confirm which account you mean. Please share the account reference from our message or ask our team to help.",
+          text: await ourText(campaign.businessAccountId, "For your privacy, I need to confirm which account you mean. Please share the account reference from our message or ask our team to help.", replyLanguage),
           blockedReason: "Multiple active account records share this phone without an outbound record reference",
         };
       }
@@ -457,6 +467,7 @@ export const campaignAiService = {
         recipientContext,
         template ? `\nThis conversation started from this campaign template:\n${template.bodyText}\n` : "",
         knowledge ? `KNOWLEDGE BASE:\n${knowledge}` : "",
+        replyLanguage ? `\n${replyLanguage.rule}` : "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -490,7 +501,8 @@ export const campaignAiService = {
       await marketingCampaignService.addAiTokensUsed(campaignId, usedTokens);
 
       if (!text) return null;
-      return { text };
+      // Restricted reply language: rewrite a reply that slipped into another language (no AI call when it matches).
+      return { text: await checkReplyLanguage(campaign.businessAccountId, text, replyLanguage) };
     } catch (err) {
       console.error("[CampaignAI] generateReply error:", err);
       return null;

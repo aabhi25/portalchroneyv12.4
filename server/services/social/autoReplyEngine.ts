@@ -6,7 +6,8 @@
  * (history, business knowledge, cross-platform memory, lead-collection prompt) → AI → send →
  * lead capture + memory snapshot. `richMedia` platforms (Instagram) also get language
  * detection, the product-catalog tool and product image cards; Facebook keeps the plain
- * text reply it always had. Lead timing (Smart Lead Training: start / custom / intent /
+ * text reply it always had. The AI reply-language setting (language/channelReplyLanguage.ts)
+ * applies to both platforms when the business restricts it. Lead timing (Smart Lead Training: start / custom / intent /
  * keyword, phone digit rule) comes from leadCapture/channelLeadFields.ts.
  */
 import { db } from "../../db";
@@ -31,6 +32,12 @@ import { selectRelevantTools } from "../../aiTools";
 import { ToolExecutionService } from "../toolExecutionService";
 import { createOpenAI, OPENAI_TIMEOUTS } from "../../lib/openaiClient";
 import type { SocialPlatformId } from "./types";
+import {
+  restrictedReplyLanguage, channelConversationKey, restrictedLanguageOverride, checkReplyLanguage, ourText,
+  type ChannelReplyLanguage,
+} from "../language/channelReplyLanguage";
+import { describeLanguage } from "../language/languagePolicy";
+import { replyLanguageName } from "@shared/replyLanguages";
 
 type SendResult = { success: boolean; messageId?: string; error?: string };
 
@@ -163,12 +170,12 @@ export class SocialAutoReplyEngine {
     userMessage: string
   ): Promise<{ success: boolean; reply?: string; error?: string }> {
     const result = await this._generateAndSendReply(businessAccountId, senderId, userMessage);
-    if (result.aiFailed) await this.sendAiFailureNotice(businessAccountId, senderId);
+    if (result.aiFailed) await this.sendAiFailureNotice(businessAccountId, senderId, userMessage);
     const { aiFailed, ...rest } = result;
     return rest;
   }
 
-  private async sendAiFailureNotice(businessAccountId: string, senderId: string): Promise<void> {
+  private async sendAiFailureNotice(businessAccountId: string, senderId: string, userMessage?: string): Promise<void> {
     const key = `${businessAccountId}:${senderId}`;
     if (Date.now() - (this.aiFailureNoticeAt.get(key) || 0) < 5 * 60_000) return;
     this.aiFailureNoticeAt.set(key, Date.now());
@@ -179,12 +186,18 @@ export class SocialAutoReplyEngine {
     try {
       const [settings] = await db.select().from(this.p.tables.settings).where(eq(this.p.tables.settings.businessAccountId, businessAccountId)).limit(1);
       if (!settings) return;
-      const sent = await this.p.sendMessage(settings, senderId, this.AI_FAILURE_REPLY);
+      // Restricted reply language: the notice in the reply language (quick detection only, no AI call to detect).
+      const lang = await restrictedReplyLanguage({
+        businessAccountId, channel: this.p.platform, conversationKey: channelConversationKey(this.p.platform, businessAccountId, senderId),
+        message: userMessage || "", detected: userMessage ? LlamaService.quickDetectLanguage(userMessage) : null, allowNote: false,
+      });
+      const notice = await ourText(businessAccountId, this.AI_FAILURE_REPLY, lang);
+      const sent = await this.p.sendMessage(settings, senderId, notice);
       if (!sent.success) {
         console.error(`${this.tag} AI failure notice not sent: ${sent.error}`);
         return;
       }
-      await this.p.storeMessage(businessAccountId, senderId, this.AI_FAILURE_REPLY, "outgoing");
+      await this.p.storeMessage(businessAccountId, senderId, notice, "outgoing");
     } catch (err) {
       console.error(`${this.tag} AI failure notice error:`, err instanceof Error ? err.message : err);
     }
@@ -263,6 +276,12 @@ export class SocialAutoReplyEngine {
             : llamaService.detectLanguage(userMessage, apiKey).catch(() => 'en')
       ]);
       if (this.p.richMedia) console.log(`${this.tag} Language detected: ${detectedLang}`);
+      // AI reply-language setting: null when this channel follows the customer (the default) → prompts
+      // unchanged. Facebook has no detection of its own, so it is detected here only when restricted.
+      const replyLanguage = await restrictedReplyLanguage({
+        businessAccountId, channel: this.p.platform, conversationKey: channelConversationKey(this.p.platform, businessAccountId, senderId),
+        message: userMessage, detected: this.p.richMedia ? (detectedLang ?? null) : undefined, apiKey,
+      });
 
       let crossPlatformContext = "";
       let persistedExtractedData: Record<string, any> = {};
@@ -334,7 +353,8 @@ export class SocialAutoReplyEngine {
         detectedLang,
         crossPlatformContext || undefined,
         // Facebook: no businessAccountId → no product tool (and no per-account client tag).
-        this.p.richMedia ? businessAccountId : undefined
+        this.p.richMedia ? businessAccountId : undefined,
+        replyLanguage
       );
 
       if (!aiResult) {
@@ -347,6 +367,8 @@ export class SocialAutoReplyEngine {
         console.log(`${this.tag} Deflection detected, stripping [[FALLBACK]] marker`);
       }
       processedReply = this.stripFallbackMarker(processedReply);
+      // Restricted reply language: rewrite a reply that slipped into another language (no AI call when it matches).
+      processedReply = await checkReplyLanguage(businessAccountId, processedReply, replyLanguage);
 
       const sendResult = await this.p.sendMessage(
         settings,
@@ -369,7 +391,7 @@ export class SocialAutoReplyEngine {
       );
 
       if (this.p.richMedia) {
-        await this.sendProductMedia(aiResult, settings, businessAccountId, senderId, apiKey, detectedLang);
+        await this.sendProductMedia(aiResult, settings, businessAccountId, senderId, apiKey, detectedLang, replyLanguage);
       }
 
       console.log(`${this.tag} Successfully sent reply to ${senderId}`);
@@ -416,6 +438,7 @@ export class SocialAutoReplyEngine {
     senderId: string,
     apiKey: string,
     detectedLang: string | undefined,
+    replyLanguage: ChannelReplyLanguage | null = null,
   ): Promise<void> {
     const sendImage = this.p.sendImageMessage;
     if (!sendImage) return;
@@ -429,7 +452,12 @@ export class SocialAutoReplyEngine {
       console.log(`${this.tag} Sending ${cardsWithImages.length} product card(s) to ${senderId}`);
 
       let translatedDescriptions: Map<number, string> | null = null;
-      if (detectedLang && detectedLang !== 'en') {
+      // Restricted reply language: captions in the reply language (none when it is English).
+      const captionLang = replyLanguage ? replyLanguage.language : detectedLang;
+      const captionTarget = replyLanguage
+        ? describeLanguage(replyLanguage.language)
+        : (detectedLang === 'hi' ? 'Hinglish (Hindi written in Roman script mixed with English)' : detectedLang);
+      if (captionLang && captionLang !== 'en') {
         try {
           const descriptionsToTranslate = cardsWithImages
             .filter(c => c.description)
@@ -439,7 +467,7 @@ export class SocialAutoReplyEngine {
             const transResult = await openaiClient.chat.completions.create({
               model: "gpt-4o-mini",
               messages: [
-                { role: "system", content: `Translate the following product descriptions to ${detectedLang === 'hi' ? 'Hinglish (Hindi written in Roman script mixed with English)' : detectedLang}. Keep product-specific English terms as-is. Return ONLY the translations, one per line, in the same order. No numbering or labels.` },
+                { role: "system", content: `Translate the following product descriptions to ${captionTarget}. Keep product-specific English terms as-is. Return ONLY the translations, one per line, in the same order. No numbering or labels.` },
                 { role: "user", content: descriptionsToTranslate.map(d => d.desc).join('\n---\n') }
               ],
               temperature: 0.3,
@@ -452,7 +480,7 @@ export class SocialAutoReplyEngine {
             descriptionsToTranslate.forEach((d, i) => {
               if (translations[i]) translatedDescriptions!.set(d.idx, translations[i].trim());
             });
-            console.log(`${this.tag} Translated ${translatedDescriptions.size} product description(s) to ${detectedLang}`);
+            console.log(`${this.tag} Translated ${translatedDescriptions.size} product description(s) to ${captionLang}`);
           }
         } catch (transErr) {
           console.log(`${this.tag} Caption translation failed (non-fatal), using English:`, transErr);
@@ -1007,7 +1035,8 @@ export class SocialAutoReplyEngine {
     leadCollectionPrompt?: string,
     detectedLanguage?: string,
     crossPlatformContext?: string,
-    businessAccountId?: string
+    businessAccountId?: string,
+    replyLanguage: ChannelReplyLanguage | null = null
   ): Promise<{ text: string; productImages?: string[]; productCards?: { name: string; description?: string; price?: number; imageUrl?: string }[]; isProductSelection?: boolean } | null> {
     try {
       const openai = createOpenAI({ businessAccountId, timeout: OPENAI_TIMEOUTS.chat, apiKey });
@@ -1135,7 +1164,12 @@ These rules are MANDATORY and override ALL other instructions.
 
       messages.push({ role: "user", content: userMessage });
 
-      if (this.p.richMedia) {
+      // Restricted reply language (AI language setting, Instagram and Facebook): the business rule.
+      const restrictedOverride = replyLanguage ? restrictedLanguageOverride(replyLanguage) : "";
+      if (replyLanguage) {
+        messages.push({ role: "system", content: restrictedOverride });
+        console.log(`${this.tag} Language rule (restricted) injected: ${replyLanguageName(replyLanguage.language)}`);
+      } else if (this.p.richMedia) {
         const LANGUAGE_NAMES: Record<string, string> = {
           'en': 'English', 'hi': 'Hindi', 'hinglish': 'Hinglish',
           'ta': 'Tamil', 'te': 'Telugu', 'kn': 'Kannada', 'mr': 'Marathi',
@@ -1300,6 +1334,9 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
             role: "system",
             content: `INSTAGRAM DM FORMAT: Do NOT list individual product names or descriptions — those details will be sent separately as image captions. Instead, write a brief, friendly intro message (e.g., "Here are some wardrobe designs for you!") that naturally references what the user asked for. End with "Reply with a number to know more!" Keep it to 2-3 short sentences max. Do NOT use markdown or bullet points — use plain text that looks good in a DM. Do NOT include image URLs or links.`
           });
+        }
+        if (replyLanguage) {
+          toolMessages.push({ role: "system", content: restrictedOverride });
         }
 
         try {

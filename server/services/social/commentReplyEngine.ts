@@ -15,6 +15,7 @@ import { createOpenAI, OPENAI_TIMEOUTS } from "../../lib/openaiClient";
 import { commentReplyLimiter } from "../commentReplyLimiter";
 import type { SocialPlatformId } from "./types";
 import { appliesToChannel } from "@shared/knowledgeChannels";
+import { restrictedReplyLanguage, channelConversationKey, checkReplyLanguage, withoutLanguageNote, type ChannelReplyLanguage } from "../language/channelReplyLanguage";
 
 export interface SocialCommentData {
   commentId: string;
@@ -166,20 +167,30 @@ export class SocialCommentReplyEngine<S extends CommentSettingsLike> {
         this.resolvePostContext(settings, businessAccountId, commentData.postId, commentData.commentText, apiKey)
       ]);
 
+      // AI reply-language setting: null when this channel follows the commenter (the default) → prompt unchanged.
+      const replyLanguage = await restrictedReplyLanguage({
+        businessAccountId, channel: this.p.platform,
+        conversationKey: channelConversationKey(this.p.platform, businessAccountId, commentData.commenterId, "comment"),
+        message: commentData.commentText, apiKey,
+      });
+
       const delay = parseInt(settings.commentReplyDelay || "5", 10) * 1000;
       if (delay > 0) {
         console.log(`${this.tag} Waiting ${delay / 1000}s before replying...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
 
-      const aiReply = await this.generateCommentReply(
+      const generated = await this.generateCommentReply(
         apiKey,
         commentData.commentText,
         businessContext,
         businessAccount.name || "the business",
         commentData.commenterName,
-        postContext
+        postContext,
+        replyLanguage
       );
+      // Restricted reply language: rewrite a reply that slipped into another language (no AI call when it matches).
+      const aiReply = generated ? await checkReplyLanguage(businessAccountId, generated, replyLanguage) : generated;
 
       if (!aiReply) {
         await this.updateCommentStatus(businessAccountId, commentData.commentId, "failed", null, null);
@@ -198,7 +209,7 @@ export class SocialCommentReplyEngine<S extends CommentSettingsLike> {
 
       console.log(`${this.tag} Successfully replied to comment ${commentData.commentId}`);
 
-      await this.tryAutoDm(settings, businessAccountId, commentData, businessContext, businessAccount.name || "the business", postContext, apiKey);
+      await this.tryAutoDm(settings, businessAccountId, commentData, businessContext, businessAccount.name || "the business", postContext, apiKey, replyLanguage);
 
       return { success: true, reply: aiReply, status: "replied" };
 
@@ -472,7 +483,8 @@ export class SocialCommentReplyEngine<S extends CommentSettingsLike> {
     businessContext: string,
     businessName: string,
     commenterName?: string,
-    postContext?: string | null
+    postContext?: string | null,
+    replyLanguage: ChannelReplyLanguage | null = null
   ): Promise<string | null> {
     try {
       const openai = createOpenAI({ apiKey });
@@ -490,9 +502,9 @@ IMPORTANT GUIDELINES:
 - If the comment is just an emoji or a simple "nice", keep your reply equally brief
 - If the comment is negative or a complaint, be empathetic and offer to help via DM
 - Never argue or be defensive
-- LANGUAGE MATCHING: Always reply in the same language the commenter used. If they write in Hinglish (mix of Hindi and English), reply in Hinglish. If they write in Hindi, reply in Hindi. If they write in any other language, match that language. Only default to English if the comment is clearly in English.
+${replyLanguage ? "- LANGUAGE: follow the REPLY LANGUAGE rule at the end." : "- LANGUAGE MATCHING: Always reply in the same language the commenter used. If they write in Hinglish (mix of Hindi and English), reply in Hinglish. If they write in Hindi, reply in Hindi. If they write in any other language, match that language. Only default to English if the comment is clearly in English."}
 ${postContext ? `\n${postContext}\n\nIMPORTANT: Use the POST CONTEXT above to understand what the post is about. If the comment asks about price, meaning, details, or refers to "this" or "it", ground your reply in the post content. Reference the post's subject naturally.` : ''}
-${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}`;
+${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}${replyLanguage ? `\n\n${replyLanguage.rule}` : ""}`;
 
       const userPrompt = commenterName
         ? `${this.p.prompts.commenterMention(commenterName)} commented: "${commentText}"\n\nWrite a brief, appropriate reply.`
@@ -522,7 +534,8 @@ ${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}`;
     businessContext: string,
     businessName: string,
     postContext: string | null,
-    apiKey: string
+    apiKey: string,
+    commentLanguage: ChannelReplyLanguage | null = null
   ): Promise<void> {
     try {
       if (settings.commentAutoDmEnabled !== "true") return;
@@ -544,7 +557,10 @@ ${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}`;
       }
 
       const dmTemplate = settings.commentDmTemplate || "";
-      const dmText = await this.generateDmMessage(apiKey, commentData.commentText, businessContext, businessName, commentData.commenterName, postContext, dmTemplate);
+      // Same language as the public reply; the "I can help in …" note is not repeated in the DM.
+      const replyLanguage = withoutLanguageNote(commentLanguage);
+      const generatedDm = await this.generateDmMessage(apiKey, commentData.commentText, businessContext, businessName, commentData.commenterName, postContext, dmTemplate, replyLanguage);
+      const dmText = generatedDm ? await checkReplyLanguage(businessAccountId, generatedDm, replyLanguage) : generatedDm;
 
       if (!dmText) {
         console.log(`${this.dmTag} Failed to generate DM`);
@@ -590,7 +606,8 @@ ${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}`;
     businessName: string,
     commenterName?: string,
     postContext?: string | null,
-    dmTemplate?: string
+    dmTemplate?: string,
+    replyLanguage: ChannelReplyLanguage | null = null
   ): Promise<string | null> {
     const pr = this.p.prompts;
     try {
@@ -603,12 +620,12 @@ IMPORTANT GUIDELINES:
 - Reference what they commented about so the ${pr.dmNoun} feels personal and relevant
 - Provide useful information, answer their question, or offer to help further
 - Keep it concise but informative (2-5 sentences)
-- LANGUAGE MATCHING: Always reply in the same language the user commented in. If they write in Hinglish, reply in Hinglish. If Hindi, reply in Hindi.
+${replyLanguage ? "- LANGUAGE: follow the REPLY LANGUAGE rule at the end." : "- LANGUAGE MATCHING: Always reply in the same language the user commented in. If they write in Hinglish, reply in Hinglish. If Hindi, reply in Hindi."}
 - Do NOT sound robotic or overly formal
 - Do NOT use excessive emojis or hashtags
 ${dmTemplate ? `\nSPECIAL INSTRUCTIONS FOR DM:\n${dmTemplate}` : ""}
 ${postContext ? `\n${postContext}` : ""}
-${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}`;
+${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}${replyLanguage ? `\n\n${replyLanguage.rule}` : ""}`;
 
       const userPrompt = commenterName
         ? `${pr.commenterMention(commenterName)} commented on our post: "${commentText}"\n\nWrite a friendly ${pr.privateDmNoun} to send them.`
