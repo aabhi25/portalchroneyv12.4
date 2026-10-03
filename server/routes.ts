@@ -32371,7 +32371,7 @@ Return ONLY a valid JSON object in this format:
                       recipientCtx.recipient.id,
                       businessId,
                       reply.text,
-                      { source: "campaign_ai", sendSuccess: sendResult.success, error: sendResult.error || null },
+                      { source: reply.handover ? "campaign_ai_handover" : "campaign_ai", sendSuccess: sendResult.success, error: sendResult.error || null },
                     );
                   } catch (err) {
                     console.error("[MSG91 Webhook] Campaign AI reply pipeline error:", err);
@@ -33215,7 +33215,7 @@ Return ONLY a valid JSON object in this format:
                         recipientCtx.recipient.id,
                         businessId,
                         reply.text,
-                        { source: "campaign_ai", sendSuccess: sendResult.success, error: sendResult.error || null },
+                        { source: reply.handover ? "campaign_ai_handover" : "campaign_ai", sendSuccess: sendResult.success, error: sendResult.error || null },
                       );
                     } catch (err) {
                       console.error("[MSG91 Webhook] Campaign AI interactive reply error:", err);
@@ -37440,6 +37440,9 @@ Return ONLY a valid JSON object in this format:
       res.json(rows);
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
+
+  // campaignReplies routes
+  (await import("./routes/campaignReplies")).registerCampaignRepliesRoutes(app, requireWhatsappMarketing);
 
 return httpServer;
 }

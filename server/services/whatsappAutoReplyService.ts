@@ -989,6 +989,22 @@ export class WhatsappAutoReplyService {
     return this.buildLegacyBusinessContext(businessAccountId, userMessage, knowledgeToggles);
   }
 
+  /**
+   * The same business knowledge the WhatsApp AI uses for one message (retrieval, profile,
+   * per-source switches, kill switch + fallback) — for campaign AI replies (campaignAiService),
+   * so both speak from one brain instead of a second, hand-built knowledge dump.
+   */
+  async businessKnowledgeForMessage(
+    businessAccountId: string,
+    userMessage: string,
+    knowledgeToggles: { faq: boolean; document: boolean; website: boolean; productCatalog: boolean },
+    history: Array<{ role: "user" | "assistant"; content: string }> = []
+  ): Promise<string> {
+    const turns: ConversationMessage[] = history.map(h => ({ role: h.role, content: h.content, timestamp: new Date() }));
+    const { context } = await this.buildBusinessContext(businessAccountId, userMessage, knowledgeToggles, Promise.resolve(turns));
+    return context;
+  }
+
   /** Retrieval mode (see buildBusinessContext). */
   private async buildRetrievalBusinessContext(
     businessAccountId: string,
