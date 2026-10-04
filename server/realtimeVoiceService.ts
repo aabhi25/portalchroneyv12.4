@@ -847,6 +847,8 @@ export class RealtimeVoiceService {
       });
 
       console.log('[RealtimeVoice] Connection established:', conversationId);
+      // AI Calling: phone calls acknowledge a late answer too — prepare the filler audio now.
+      if (conversation.phone) void this.prewarmFillers(conversation);
 
     } catch (error: any) {
       console.error('[RealtimeVoice] Connection error:', error);
@@ -970,7 +972,7 @@ export class RealtimeVoiceService {
    * ready yet is synthesised on demand.
    */
   private async prewarmFillers(conversation: VoiceConversation): Promise<void> {
-    if (!conversation.avatar || conversation.fillerAudio) return;
+    if (!(conversation.avatar || conversation.phone) || conversation.fillerAudio) return;
     const cache = new Map<string, Buffer>();
     conversation.fillerAudio = cache;
     const policy = this.voiceLanguagePolicy(conversation);
@@ -986,7 +988,7 @@ export class RealtimeVoiceService {
     if (!provider) return;
     for (const lang of languages) {
       for (const phrase of fillerPhrases(lang, gender)) {
-        if (!conversation.avatar || conversation.clientWs.readyState !== WebSocket.OPEN || conversation.fillerAudio !== cache) return;
+        if (!(conversation.avatar || conversation.phone) || conversation.clientWs.readyState !== WebSocket.OPEN || conversation.fillerAudio !== cache) return;
         const chunks: Buffer[] = [];
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 8000);
@@ -4141,11 +4143,12 @@ Never infer intent from a single contained word. For example, "What is stop moti
     // and the saved message contain just the answer. See services/voice/fillers.ts.
     let fillerTimer: NodeJS.Timeout | null = null;
     let fillerUsed = false;
-    const fillerLang = conversation.avatar ? fillerLanguage(userTranscript, this.voiceFillerHint(conversation)) : null;
-    if (fillerLang && wantsFiller({ transcript: userTranscript, lastAssistantText: conversation.lastAssistantText, lastTurnHadFiller: conversation.lastTurnHadFiller })) {
+    // Video calls and phone calls (AI Calling): silence feels like a dropped line there.
+    const fillerLang = (conversation.avatar || conversation.phone) ? fillerLanguage(userTranscript, this.voiceFillerHint(conversation)) : null;
+    if (fillerLang && wantsFiller({ transcript: userTranscript, lastAssistantText: conversation.lastAssistantText, lastTurnHadFiller: conversation.phone ? false : conversation.lastTurnHadFiller })) {
       fillerTimer = setTimeout(() => {
         fillerTimer = null;
-        if (answerStarted || abandoned() || !conversation.avatar || conversation.clientWs.readyState !== WebSocket.OPEN) return;
+        if (answerStarted || abandoned() || !(conversation.avatar || conversation.phone) || conversation.clientWs.readyState !== WebSocket.OPEN) return;
         const phrase = pickFiller(fillerLang, this.callGender(conversation), conversation.lastFillerText);
         const cachedAudio = conversation.fillerAudio?.get(phrase);
         console.log(`[VoiceTurn] Answer is late — filler "${phrase}" (${cachedAudio ? 'cached' : 'synthesising'})`);
