@@ -112,6 +112,13 @@ import MenuBuilder from "@/pages/MenuBuilder";
 import SmartReplies from "@/pages/SmartReplies";
 import WebsiteAgent from "@/pages/WebsiteAgent";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
+// AI Calling (C)
+import { RequireAiCalling } from "@/components/calling/RequireAiCalling";
+import { AiCallingHost } from "@/components/calling/AiCallingHost";
+import CallingCalls from "@/pages/calling/CallingCalls";
+import CallingTry from "@/pages/calling/CallingTry";
+import CallingSettings from "@/pages/calling/CallingSettings";
+import CallingDoNotCall from "@/pages/calling/CallingDoNotCall";
 import K12Content from "@/pages/K12Content";
 import K12TopicDetail from "@/pages/K12TopicDetail";
 import K12Guardrails from "@/pages/K12Guardrails";
@@ -209,6 +216,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
   return (
     <>
       <AppSidebar user={user} />
+      {/* AI Calling (C): test-mode incoming-call popup + in-call card (renders nothing unless enabled) */}
+      <AiCallingHost user={user} />
       <SidebarInset>
         {/* Show impersonation banner for SuperAdmins */}
         {user?.role === "super_admin" && <ImpersonationBanner />}
@@ -410,6 +419,12 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/facebook-insights" component={FacebookInsights} />
                 <Route path="/admin/facebook-comments" component={FacebookComments} />
                 <Route path="/admin/facebook-smart-replies">{() => <SmartReplies channel="facebook" />}</Route>
+                {/* AI Calling (C) */}
+                <Route path="/admin/calling">{() => <RequireAiCalling><CallingCalls /></RequireAiCalling>}</Route>
+                <Route path="/admin/calling/calls/:id">{({ id }) => <RequireAiCalling><CallingCalls callId={id} /></RequireAiCalling>}</Route>
+                <Route path="/admin/calling/try">{() => <RequireAiCalling><CallingTry /></RequireAiCalling>}</Route>
+                <Route path="/admin/calling/settings">{() => <RequireAiCalling><CallingSettings /></RequireAiCalling>}</Route>
+                <Route path="/admin/calling/do-not-call">{() => <RequireAiCalling><CallingDoNotCall /></RequireAiCalling>}</Route>
                 <Route path="/admin/about" component={About} />
                 <Route path="/admin/scan-docs" component={ScanDocs} />
                 <Route path="/admin/url-training" component={UrlTraining} />

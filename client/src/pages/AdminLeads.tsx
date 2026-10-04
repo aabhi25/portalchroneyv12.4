@@ -6,6 +6,7 @@ import WebsiteNavTabs from "@/components/WebsiteNavTabs";
 import { type Lead } from "@shared/schema";
 import { RetentionBanner, RetentionCountdown, type AccountRetention } from "@/components/DataRetentionDialog";
 import { FormSubmissionDetails } from "@/components/FormSubmissionDetails";
+import { LeadCallsPanel } from "@/components/calling/LeadCallsPanel"; // AI Calling (C)
 import type { MeResponseDto } from "@shared/dto";
 import { Button } from "@/components/ui/button";
 import {
@@ -142,6 +143,21 @@ export default function AdminLeads() {
       action: "page.leads.viewed",
       metadata: {},
     }).catch(() => {});
+  }, []);
+
+  // AI Calling (C): /admin/leads?leadId=<id> (linked from a call) opens that lead's details.
+  useEffect(() => {
+    const leadId = new URLSearchParams(window.location.search).get("leadId");
+    if (!leadId) return;
+    let cancelled = false;
+    apiRequest<Lead>("GET", `/api/leads/${encodeURIComponent(leadId)}`)
+      .then(lead => {
+        if (cancelled || !lead) return;
+        setSelectedLeadDetails(lead);
+        setDetailsDialogOpen(true);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   const queryParams = useMemo(() => {
@@ -1706,6 +1722,9 @@ export default function AdminLeads() {
                   </div>
                 </div>
               )}
+
+              {/* AI Calling (C): "Call with AI" + this lead's calls (renders nothing unless enabled). */}
+              <LeadCallsPanel leadId={selectedLeadDetails.id} leadName={selectedLeadDetails.name} phone={selectedLeadDetails.phone} />
 
               <div className="space-y-3">
                 <h4 className="text-sm font-semibold text-gray-700 border-b pb-1">Internal IDs</h4>

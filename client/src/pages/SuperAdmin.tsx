@@ -52,6 +52,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { SuperAdminAiCallingCard } from "@/components/calling/SuperAdminAiCallingCard"; // AI Calling (C)
 
 export default function SuperAdmin() {
   const [retentionAccount, setRetentionAccount] = useState<{ id: string; name: string } | null>(null);
@@ -1621,6 +1622,15 @@ export default function SuperAdmin() {
                     </div>
                   </div>
                 </div>
+
+                {/* AI Calling Module — AI Calling (C) */}
+                {selectedBusiness && (
+                  <SuperAdminAiCallingCard
+                    key={selectedBusiness.id}
+                    businessAccountId={selectedBusiness.id}
+                    initialEnabled={String((selectedBusiness as { aiCallingEnabled?: unknown }).aiCallingEnabled) === "true"}
+                  />
+                )}
 
                 {/* Demo Orders Module */}
                 <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">

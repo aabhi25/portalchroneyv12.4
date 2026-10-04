@@ -19,6 +19,9 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { WhatsAppNavSections } from "@/components/whatsapp/WhatsAppNavSections";
 import { isWhatsappLocation } from "@/components/whatsapp/sections";
 import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
+// AI Calling (C)
+import { CallingNavGroupItem, CallingNavFlat } from "@/components/calling/CallingNav";
+import { useAiCallingAvailability } from "@/lib/aiCallingApi";
 import { Button } from "@/components/ui/button";
 import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Sparkles, Settings, Brain, BarChart3, MessageSquare, ShoppingBag, Calendar, GraduationCap, ChevronRight, Presentation, FileText, Key, LifeBuoy, ClipboardList, Route, Link2, Users, DollarSign, Percent, HardDrive, Gem, Image, Database, Camera, Cloud, Globe, Lightbulb, MessageCircle, MoreHorizontal, Bot, TrendingUp, Zap, BookOpen, Library, HelpCircle as QuizIcon, Briefcase, UserCircle, Terminal, PackageOpen, Megaphone, FileCode2, UsersRound, ScrollText, Gauge } from "lucide-react";
 
@@ -93,6 +96,8 @@ export function AppSidebar({ user }: AppSidebarProps) {
   const hasWhatsappMarketingEnabled = hasWhatsappEnabled && user?.businessAccount?.whatsappMarketingEnabled === true;
   const hasInstagramEnabled = user?.businessAccount?.instagramEnabled === true;
   const hasFacebookEnabled = user?.businessAccount?.facebookEnabled === true;
+  // AI Calling (C): "Phone calls" agent, only when the super admin switched it on.
+  const { enabled: hasAiCallingEnabled } = useAiCallingAvailability(showBusinessNav ? user : null);
   
   const hasTrainingAccess = hasChroneyAccess || hasWhatsappEnabled || hasInstagramEnabled || hasFacebookEnabled;
   const hasProductsAccess = hasChroneyAccess || hasWhatsappEnabled || hasJewelryAccess;
@@ -108,9 +113,9 @@ export function AppSidebar({ user }: AppSidebarProps) {
   // collapse the navigation out from under whichever screen they are looking at.
   const [whatsappNavOpen, setWhatsappNavOpen] = useState(() => isWhatsappLocation(location));
 
-  const enabledAgentCount = [hasChroneyAccess, hasWhatsappEnabled, hasInstagramEnabled, hasFacebookEnabled].filter(Boolean).length;
+  const enabledAgentCount = [hasChroneyAccess, hasWhatsappEnabled, hasInstagramEnabled, hasFacebookEnabled, hasAiCallingEnabled].filter(Boolean).length;
   const isSingleProduct = enabledAgentCount === 1;
-  const hasAnyAgent = hasChroneyAccess || hasWhatsappEnabled || hasInstagramEnabled || hasFacebookEnabled;
+  const hasAnyAgent = hasChroneyAccess || hasWhatsappEnabled || hasInstagramEnabled || hasFacebookEnabled || hasAiCallingEnabled;
   const hasWorkspaceItems = (hasTrainingAccess && showFullFeatures) || hasProductsAccess || hasAppointmentsEnabled || hasJewelryShowcaseEnabled;
 
   const { data: ticketStats } = useQuery<{ open: number }>({
@@ -448,6 +453,11 @@ export function AppSidebar({ user }: AppSidebarProps) {
                         gradient="bg-gradient-to-br from-blue-600 to-blue-500"
                       />
                     )}
+
+                    {/* AI Calling (C) */}
+                    {hasAiCallingEnabled && (
+                      <CallingNavGroupItem location={location} onNavigate={setLocation} />
+                    )}
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
@@ -604,6 +614,17 @@ export function AppSidebar({ user }: AppSidebarProps) {
                       testId="link-fb-comments"
                       gradient="bg-gradient-to-br from-rose-500 to-pink-600"
                     />
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
+
+            {/* AI Calling (C): account whose only AI agent is phone calls */}
+            {isSingleProduct && hasAiCallingEnabled && (
+              <SidebarGroup>
+                <SidebarGroupContent>
+                  <SidebarMenu className="space-y-0.5">
+                    <CallingNavFlat location={location} onNavigate={setLocation} />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
