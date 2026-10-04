@@ -10,6 +10,7 @@
  * applies to both platforms when the business restricts it. Lead timing (Smart Lead Training: start / custom / intent /
  * keyword, phone digit rule) comes from leadCapture/channelLeadFields.ts.
  */
+import { rememberConversationLanguage, stickyTurnLanguage } from "../language/turnLanguage";
 import { db } from "../../db";
 import { businessAccounts, widgetSettings } from "@shared/schema";
 import { eq, and, desc, sql } from "drizzle-orm";
@@ -265,7 +266,13 @@ export class SocialAutoReplyEngine {
         return { success: false, error: "No OpenAI API key configured" };
       }
 
-      const quickLang = this.p.richMedia ? LlamaService.quickDetectLanguage(userMessage) : null;
+      // Sticky per customer (services/language/turnLanguage.ts): unclear messages keep the language.
+      const languageKey = channelConversationKey(this.p.platform, businessAccountId, senderId);
+      const stickyLang = this.p.richMedia ? stickyTurnLanguage(languageKey, userMessage) : null;
+      const quickLang = !this.p.richMedia ? null
+        : stickyLang && (stickyLang.source === "confident" || stickyLang.source === "remembered")
+          ? stickyLang.language
+          : LlamaService.quickDetectLanguage(userMessage);
       const [conversationHistory, { context: businessContext, widgetCustomInstructions, leadTrainingConfig }, detectedLang] = await Promise.all([
         this.getConversationHistory(businessAccountId, senderId),
         this.buildBusinessContext(businessAccountId, userMessage),
@@ -273,7 +280,7 @@ export class SocialAutoReplyEngine {
           ? Promise.resolve(undefined)
           : quickLang !== null
             ? Promise.resolve(quickLang)
-            : llamaService.detectLanguage(userMessage, apiKey).catch(() => 'en')
+            : llamaService.detectLanguage(userMessage, apiKey).then((lang) => { rememberConversationLanguage(languageKey, lang); return lang; }).catch(() => 'en')
       ]);
       if (this.p.richMedia) console.log(`${this.tag} Language detected: ${detectedLang}`);
       // AI reply-language setting: null when this channel follows the customer (the default) → prompts

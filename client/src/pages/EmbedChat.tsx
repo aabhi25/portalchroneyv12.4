@@ -3225,6 +3225,8 @@ export default function EmbedChat() {
           businessAccountId,
           sessionId: sessionIdRef.current,
           language: selectedLanguage !== 'auto' ? selectedLanguage : undefined,
+          // Starting point when the first messages don't show a clear language (e.g. "5 lakh?").
+          browserLanguage: typeof navigator !== 'undefined' ? navigator.language : undefined,
           visitorSessionId: visitorSessionId || undefined,
           sessionToken: visitorSessionTokenRef.current,
           pageUrl: parentPageUrl || undefined,

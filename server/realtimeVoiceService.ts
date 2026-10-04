@@ -33,7 +33,8 @@ import { fillerDelayMs, fillerLanguage, fillerPhrases, pickFiller, wantsFiller }
 import { createOpenAiTtsProvider, OPENAI_TTS_MODEL, type OpenAiSpeechClient } from './services/voice/openaiTts';
 import type { AudioRoute, AvatarEndReason } from './services/avatar/types';
 import { getLanguagePolicy, policyFromSettings, type LanguagePolicy } from './services/language/languagePolicy';
-import { decideChatReplyLanguage, detectTurnLanguage, pickAllowed, policyTranscriptionLanguage, type ChatReplyLanguage } from './services/language/chatLanguage';
+import { decideChatReplyLanguage, pickAllowed, policyTranscriptionLanguage, type ChatReplyLanguage } from './services/language/chatLanguage';
+import { stickyTurnLanguage } from './services/language/turnLanguage';
 import { translateFixedText } from './services/language/languageText';
 import { DEFAULT_AI_LANGUAGE_SETTINGS, replyLanguage } from '@shared/replyLanguages';
 
@@ -189,6 +190,8 @@ export interface PhoneCallVoiceOptions {
 export interface VoiceConnectionOptions {
   channel?: 'phone';
   phone?: PhoneCallVoiceOptions;
+  /** The visitor's browser language ("en-IN") — starting point when the first sentences are unclear. */
+  browserLanguage?: string | null;
 }
 
 const PHONE_TRANSCRIPTION_PROMPT =
@@ -291,6 +294,8 @@ interface VoiceConversation {
   turnPreferredLanguage?: string;
   /** Language of the latest transcript (heuristics; null = not sure). */
   turnLanguage?: string | null;
+  /** Visitor's browser language (website voice / video calls), see services/language/turnLanguage.ts. */
+  browserLanguage?: string | null;
   textConversationId?: string;
   textHistoryInjected?: boolean;
   /**
@@ -631,6 +636,7 @@ export class RealtimeVoiceService {
         if (selectedLanguage !== undefined) {
           conversation.selectedLanguage = selectedLanguage;
         }
+        if (options?.browserLanguage) conversation.browserLanguage = options.browserLanguage;
         // Pick up a reply-language setting saved since the call started (cached 60 s).
         conversation.languagePolicy = await getLanguagePolicy(businessAccountId, 'voice').catch(() => conversation.languagePolicy);
 
@@ -803,6 +809,7 @@ export class RealtimeVoiceService {
         reconnectAttempts: 0,
         isReconnecting: false,
         selectedLanguage,
+        browserLanguage: options?.browserLanguage ?? null,
         languagePolicy,
         selectedVoice: isElevenLabsVoice(selectedVoice) ? 'shimmer' : selectedVoice,
         isInternalTest,
@@ -3718,7 +3725,12 @@ export class RealtimeVoiceService {
   private updateVoiceReplyLanguage(conversation: VoiceConversation, transcript: string): void {
     const policy = this.voiceLanguagePolicy(conversation);
     const picked = this.voicePickedLanguage(conversation);
-    conversation.turnLanguage = detectTurnLanguage(transcript, { arabicIsHindi: true });
+    // Sticky per call: a clear sentence sets / switches the language; an unclear one ("5 lakh?",
+    // "haan", "ok") keeps it; the browser language is the starting point (turnLanguage.ts).
+    conversation.turnLanguage = stickyTurnLanguage(`voice:${conversation.conversationId}`, transcript, {
+      arabicIsHindi: true,
+      browserLanguage: conversation.phone ? null : conversation.browserLanguage,
+    }).language;
     const { reply, preferredLanguage } = decideChatReplyLanguage({
       policy,
       picked,

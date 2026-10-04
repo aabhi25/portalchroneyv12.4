@@ -608,6 +608,10 @@ export function InlineVoiceMode({
     if (selectedLanguage) {
       wsUrl += `&language=${encodeURIComponent(selectedLanguage)}`;
     }
+    // Starting point when the first sentences don't show a clear language.
+    if (typeof navigator !== 'undefined' && navigator.language) {
+      wsUrl += `&browserLanguage=${encodeURIComponent(navigator.language)}`;
+    }
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

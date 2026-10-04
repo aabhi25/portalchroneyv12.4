@@ -1,3 +1,4 @@
+import { isConfidentlyHinglish, latinHindiCounts } from "./services/language/turnLanguage";
 import OpenAI from 'openai';
 import { aiUsageLogger } from './services/aiUsageLogger';
 import { isTopscholarAccount } from './services/topscholar/config';
@@ -2313,35 +2314,13 @@ This LEAD COLLECTION block takes precedence over any business instruction about 
 
     const isLatinOnly = /^[\x00-\x7F\s\u00C0-\u024F\u1E00-\u1EFF.,!?'"()\-:;@#%&*+/\\0-9]*$/.test(text);
     if (isLatinOnly) {
-      // Only genuine Hindi/Urdu vocabulary words written in Latin script.
-      // Deliberately excludes words that also exist in English (main, do, sun, the, hi, etc.)
-      // to avoid false positives on purely English messages.
-      const HINGLISH_WORDS = new Set([
-        'kya','hai','hain','aap','nahi','nahin','bhi','aur','toh','cheez',
-        'bahut','theek','accha','achha','aaj','ghar','kaam','mein','mujhe',
-        'kar','karo','hoga','chahiye','batao','dekho','lekin','sirf',
-        'kuch','yeh','woh','wahi','yahi','bohot','zyada','thoda','baat',
-        'wala','wali','wale','kyun','kyu','hum','tum','kaise','kab','kahan',
-        'abhi','phir','iska','uska','unka','humara','tumhara','aapka',
-        'aapki','aapke','mera','meri','mere','tera','teri','tere','uski',
-        'uske','yaar','bhai','dost','jao','aao','lelo','dedo','milega','milegi',
-        'chahta','chahti','sakta','sakti','raha','rahi','rahe','tha','thi',
-        'hona','karna','lena','dena','jana','aana','rehna','sochna',
-        'samajhna','dikhao','lagta','lagti','waqt','paise','rupay','rupaye',
-        'kitna','kitni','kaisa','kaisi','koi','koyi','sab','sabhi','poora',
-        'poori','pura','puri','bilkul','zaroor','zaruri','jaise',
-        'tarah','tarike','makaan','milne','milta','milti',
-        'liye','baad','pehle','saath','bina','tak','tumhe',
-        'unhe','inhe','isko','usko','inko','unko','humko','tumko','aapko',
-        'tujhe','bolo','bol','suno','dekh','ek','teen',
-        'paanch','hazar','lakh','naya','nayi','naye','purana','purani',
-        'chahiye','samajh','samjho','samjha','batana','dikhana','chahte',
-      ]);
-
+      // Hinglish needs real Hindi sentence words (kya / hai / chahiye…). Number and money words
+      // that are normal in Indian English ("under 5 lakh", "crore", "rupaye", "bhai") don't count on
+      // their own — see services/language/turnLanguage.ts. Mixed / unclear → null (unsure).
+      const counts = latinHindiCounts(text);
+      if (isConfidentlyHinglish(counts)) return 'hinglish';
+      if (counts.strong > 0) return null;
       const words = text.toLowerCase().replace(/[.,!?'"()\-:;@#%&*+/\\]/g, ' ').split(/\s+/).filter(Boolean);
-      const hasHindiWord = words.some(w => HINGLISH_WORDS.has(w));
-      if (hasHindiWord) return 'hinglish';
-
       if (words.length <= 4) return 'en';
     }
 

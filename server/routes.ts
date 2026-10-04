@@ -1399,7 +1399,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/chat/widget/stream", async (req, res) => {
     try {
-      const { message, businessAccountId, sessionId, language, visitorSessionId, sessionToken, isGuidanceChat, starterQAContext, pageUrl: clientPageUrl, resumeContextId, imageContextId, isReturnExchangeLookup, topscholarToken, topscholarCpId: rawTopscholarCpId, studentBoard, studentMedium, studentGrade, studentSubject, studentChapter, studentId: rawStudentId, name: rawStudentName } = req.body;
+      const { message, businessAccountId, sessionId, language, browserLanguage, visitorSessionId, sessionToken, isGuidanceChat, starterQAContext, pageUrl: clientPageUrl, resumeContextId, imageContextId, isReturnExchangeLookup, topscholarToken, topscholarCpId: rawTopscholarCpId, studentBoard, studentMedium, studentGrade, studentSubject, studentChapter, studentId: rawStudentId, name: rawStudentName } = req.body;
       
       // Debug logging for language parameter
       console.log('[Widget Stream] Language debug:', {
@@ -1513,7 +1513,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         (!language || language === 'auto' || (languagePolicy.restricted && !pickAllowed(languagePolicy, language)))
           // Heuristics + per-conversation cache first; the AI detector only when unsure.
           ? import('./services/chatContext/languageSession')
-              .then(({ detectWidgetLanguage }) => detectWidgetLanguage(businessAccountId, widgetUserId, message, openaiApiKey))
+              .then(({ detectWidgetLanguage }) => detectWidgetLanguage(businessAccountId, widgetUserId, message, openaiApiKey, typeof browserLanguage === 'string' ? browserLanguage.slice(0, 35) : null))
               .catch(() => undefined)
           : Promise.resolve(undefined),
       ]);
@@ -36497,7 +36497,9 @@ Return ONLY a valid JSON object in this format:
 
         wss.handleUpgrade(request, socket, head, (ws) => {
           console.log('[WebSocket] Voice connection established');
-          realtimeVoiceService.handleConnection(ws, businessAccountId, userId, conversationId || undefined, selectedLanguage, textConversationId, voiceDoubtId || undefined, voiceScope, voiceIsInternalTest);
+          const rawBrowserLanguage = url.searchParams.get('browserLanguage');
+          const browserLanguage = rawBrowserLanguage && /^[A-Za-z]{2,3}([-_][A-Za-z0-9]{1,8}){0,3}$/.test(rawBrowserLanguage) ? rawBrowserLanguage : null;
+          realtimeVoiceService.handleConnection(ws, businessAccountId, userId, conversationId || undefined, selectedLanguage, textConversationId, voiceDoubtId || undefined, voiceScope, voiceIsInternalTest, { browserLanguage });
         });
       } catch (error: any) {
         console.error('[WebSocket] Upgrade error:', error);

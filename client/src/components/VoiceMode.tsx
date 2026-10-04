@@ -223,6 +223,7 @@ export function VoiceMode({
     if (topscholarToken) wsUrl += `&token=${encodeURIComponent(topscholarToken)}`;
     if (topscholarCpId) wsUrl += `&cpId=${encodeURIComponent(topscholarCpId)}`;
     if (selectedLanguage) wsUrl += `&language=${encodeURIComponent(selectedLanguage)}`;
+    if (typeof navigator !== 'undefined' && navigator.language) wsUrl += `&browserLanguage=${encodeURIComponent(navigator.language)}`;
 
     // CRITICAL FIX: Include conversationId for reconnection to reuse existing session
     if (conversationIdRef.current) {

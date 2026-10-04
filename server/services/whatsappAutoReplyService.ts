@@ -1,3 +1,4 @@
+import { rememberConversationLanguage, stickyTurnLanguage } from "./language/turnLanguage";
 import OpenAI from "openai";
 import { createOpenAI } from "../lib/openaiClient";
 import { aiBudgetService } from "./aiBudgetService";
@@ -358,7 +359,13 @@ export class WhatsappAutoReplyService {
       timings.settingsFetch = Date.now() - startTime;
 
       // Run history, context, and language detection all in parallel — none depend on each other
-      const quickLang = LlamaService.quickDetectLanguage(userMessage);
+      // Sticky per customer: a clear message sets / switches the language, an unclear one
+      // ("5 lakh?", "ok") keeps the conversation's language (services/language/turnLanguage.ts).
+      const languageKey = channelConversationKey("whatsapp", businessAccountId, senderPhone);
+      const stickyLang = stickyTurnLanguage(languageKey, userMessage);
+      const quickLang = stickyLang.source === "confident" || stickyLang.source === "remembered"
+        ? stickyLang.language
+        : LlamaService.quickDetectLanguage(userMessage);
       const knowledgeToggles = {
         faq: settings.useFaqKnowledge !== "false",
         document: settings.useDocumentKnowledge !== "false",
@@ -374,7 +381,7 @@ export class WhatsappAutoReplyService {
         this.buildBusinessContext(businessAccountId, userMessage, knowledgeToggles, historyPromise),
         quickLang !== null
           ? Promise.resolve(quickLang)
-          : llamaService.detectLanguage(userMessage, apiKey).catch(() => 'en'),
+          : llamaService.detectLanguage(userMessage, apiKey).then((lang) => { rememberConversationLanguage(languageKey, lang); return lang; }).catch(() => 'en'),
         resolveWhatsappModel(),
       ]);
       timings.parallelFetch = Date.now() - t;
