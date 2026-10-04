@@ -66,6 +66,7 @@ export const businessAccounts = pgTable("business_accounts", {
   jobPortalEnabled: text("job_portal_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for Job Portal feature (default OFF)
   demoOrdersEnabled: text("demo_orders_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for Demo Orders feature (default OFF)
   whatsappMarketingEnabled: text("whatsapp_marketing_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for WhatsApp Marketing Campaigns feature (default OFF)
+  aiCallingEnabled: text("ai_calling_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for AI Calling (phone calls by the AI; default OFF)
   leadsExportEnabled: text("leads_export_enabled").notNull().default("false"), // 'true' | 'false' - Allow viewers of this business account to export all leads
   leadPhoneMaskingEnabled: text("lead_phone_masking_enabled").notNull().default("false"), // 'true' | 'false' - Mask lead phone numbers for viewers of this business account
   jobImportConfig: jsonb("job_import_config").$type<{
@@ -600,6 +601,11 @@ export const leads = pgTable("leads", {
   customCrmLeadId: text("custom_crm_lead_id"),
   customCrmSyncError: text("custom_crm_sync_error"),
   customCrmSyncPayload: jsonb("custom_crm_sync_payload"),
+
+  // AI Calling consent: 'yes' (asked for / agreed to a call) | 'no' (declined) | null (unknown).
+  callConsent: text("call_consent"),
+  callConsentAt: timestamp("call_consent_at"),
+  callConsentSource: text("call_consent_source"), // 'chat' | 'form' | 'call' | 'staff' | 'import'
   
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -1665,6 +1671,118 @@ export const avatarBusinessSettings = pgTable("avatar_business_settings", {
 });
 
 export type AvatarBusinessSettings = typeof avatarBusinessSettings.$inferSelect;
+
+// ── AI Calling (phone calls by the AI; gated by businessAccounts.aiCallingEnabled) ──────────
+// One row per business. Provider secrets are encrypted ({ enc, last4, updatedAt, updatedBy },
+// same shape as avatar keys) and never returned by an API. See shared/aiCalling.ts.
+export const aiCallingSettings = pgTable("ai_calling_settings", {
+  businessAccountId: varchar("business_account_id").primaryKey().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").notNull().default(false),
+  provider: varchar("provider", { length: 32 }).notNull().default("simulator"), // 'exotel' | 'simulator'
+  exotelAccountSid: text("exotel_account_sid"),
+  exotelSubdomain: text("exotel_subdomain").notNull().default("api.in.exotel.com"),
+  exotelCallerId: text("exotel_caller_id"),
+  exotelFlowAppId: text("exotel_flow_app_id"),
+  exotelApiKey: jsonb("exotel_api_key").$type<{ enc: string; last4: string; updatedAt: string; updatedBy?: string | null }>(),
+  exotelApiToken: jsonb("exotel_api_token").$type<{ enc: string; last4: string; updatedAt: string; updatedBy?: string | null }>(),
+  exotelVerifiedAt: timestamp("exotel_verified_at"),
+  // Secret path segment of the inbound stream URL given to Exotel (identifies the business).
+  inboundKey: varchar("inbound_key", { length: 64 }),
+  // Public https base of this server, captured when settings are saved (used to build webhook / stream URLs
+  // from background jobs when PUBLIC_BASE_URL is not set).
+  publicBaseUrl: text("public_base_url"),
+  autoCallLeads: boolean("auto_call_leads").notNull().default(false),
+  autoCallDelayMinutes: integer("auto_call_delay_minutes").notNull().default(2),
+  autoCallSources: jsonb("auto_call_sources").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  consentMode: varchar("consent_mode", { length: 32 }).notNull().default("explicit"), // 'explicit' | 'business_attested'
+  consentAttestedAt: timestamp("consent_attested_at"),
+  consentAttestedBy: varchar("consent_attested_by"),
+  callingHours: jsonb("calling_hours").$type<{ start: string; end: string; days: number[]; timezone: string }>(),
+  maxAttempts: integer("max_attempts").notNull().default(3),
+  retryGapMinutes: integer("retry_gap_minutes").notNull().default(120),
+  maxCallMinutes: integer("max_call_minutes").notNull().default(5),
+  monthlyMinuteLimit: integer("monthly_minute_limit"), // null = no business limit (super admin may still cap)
+  concurrentCallLimit: integer("concurrent_call_limit").notNull().default(2),
+  recordCalls: boolean("record_calls").notNull().default(true),
+  transferNumber: text("transfer_number"),
+  callPurpose: text("call_purpose"),
+  openingLine: text("opening_line"),
+  inboundGreeting: text("inbound_greeting"),
+  whatsappFollowUp: boolean("whatsapp_follow_up").notNull().default(false),
+  whatsappFollowUpTemplateId: varchar("whatsapp_follow_up_template_id"),
+  updatedBy: varchar("updated_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  inboundKeyIdx: uniqueIndex("ai_calling_settings_inbound_key_idx").on(table.inboundKey),
+}));
+
+export type AiCallingSettingsRow = typeof aiCallingSettings.$inferSelect;
+
+// One row per call attempt (outbound or inbound). The transcript lives in the linked
+// conversation (messages), like voice-mode chats.
+export const aiCalls = pgTable("ai_calls", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  direction: varchar("direction", { length: 16 }).notNull(), // 'outbound' | 'inbound'
+  status: varchar("status", { length: 24 }).notNull().default("queued"), // CallStatus
+  trigger: varchar("trigger", { length: 24 }).notNull(), // CallTrigger
+  provider: varchar("provider", { length: 32 }).notNull(), // CallProviderId
+  phone: text("phone").notNull(), // customer number, +E.164
+  callerId: text("caller_id"),
+  leadId: varchar("lead_id").references(() => leads.id, { onDelete: "set null" }),
+  conversationId: varchar("conversation_id"), // identifier (voice conversations may be cleaned up)
+  providerCallSid: text("provider_call_sid"),
+  providerStreamSid: text("provider_stream_sid"),
+  attempt: integer("attempt").notNull().default(1),
+  // Previous attempt of the same lead call (retries chain back to the first).
+  parentCallId: varchar("parent_call_id"),
+  scheduledAt: timestamp("scheduled_at"), // when it may be placed (queued)
+  claimedAt: timestamp("claimed_at"), // dialer claim (stale-claim recovery)
+  startedAt: timestamp("started_at"), // handed to the provider
+  answeredAt: timestamp("answered_at"),
+  endedAt: timestamp("ended_at"),
+  durationSec: integer("duration_sec"), // talk time (answered → ended)
+  billedSeconds: integer("billed_seconds"), // our metering
+  recordingUrl: text("recording_url"), // provider URL — served to staff only through our proxy
+  outcome: varchar("outcome", { length: 32 }), // CallOutcome
+  outcomeNote: text("outcome_note"),
+  summary: text("summary"),
+  capturedFields: jsonb("captured_fields").$type<Record<string, string>>(),
+  callbackAt: timestamp("callback_at"), // customer asked to be called back at this time
+  endReason: text("end_reason"), // e.g. 'ai_ended', 'customer_hung_up', 'max_duration', 'silence', 'voicemail', 'do_not_call', 'outside_hours'…
+  transferred: boolean("transferred").notNull().default(false),
+  errorMessage: text("error_message"),
+  followUpSentAt: timestamp("follow_up_sent_at"),
+  postProcessedAt: timestamp("post_processed_at"),
+  requestedBy: varchar("requested_by"), // staff user for manual calls
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  bizCreatedIdx: index("ai_calls_biz_created_idx").on(table.businessAccountId, table.createdAt),
+  statusScheduledIdx: index("ai_calls_status_scheduled_idx").on(table.status, table.scheduledAt),
+  leadIdx: index("ai_calls_lead_idx").on(table.leadId),
+  providerSidIdx: index("ai_calls_provider_sid_idx").on(table.provider, table.providerCallSid),
+}));
+
+export type AiCall = typeof aiCalls.$inferSelect;
+
+// Numbers the AI must never call for this business (asked not to be called, added by staff…).
+export const aiCallDoNotCall = pgTable("ai_call_do_not_call", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  phone: text("phone").notNull(), // +E.164
+  reason: text("reason"),
+  source: varchar("source", { length: 24 }).notNull().default("staff"), // 'call' | 'staff' | 'import'
+  callId: varchar("call_id"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  bizPhoneUnique: uniqueIndex("ai_call_dnc_biz_phone_unique").on(table.businessAccountId, table.phone),
+}));
+
+export type AiCallDoNotCall = typeof aiCallDoNotCall.$inferSelect;
 
 // One row per avatar session (started only when a visitor taps the avatar button).
 // billed_seconds is OUR metering (per second); monthly totals are summed per IST month.

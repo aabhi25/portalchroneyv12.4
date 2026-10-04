@@ -127,6 +127,13 @@
       "when": 1791065447431,
       "tag": "0017_campaign_automation_schedule",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791100751598,
+      "tag": "0018_ai_calling",
+      "breakpoints": true
     }
   ]
 }
