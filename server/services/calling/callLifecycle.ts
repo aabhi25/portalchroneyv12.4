@@ -217,6 +217,8 @@ export async function processFinishedCall(callId: string): Promise<void> {
       const email = capturedFields.email || capturedFields.Email;
       if (name && (!lead.name || lead.name === "Anonymous" || lead.name === "Unknown")) patch.name = name.slice(0, 200);
       if (email && !lead.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) patch.email = email.slice(0, 200);
+      // Inbound callers: the number they called from is the lead's phone when it has none.
+      if (!lead.phone && call.direction === "inbound" && call.phone && call.phone !== "+910000000000") patch.phone = call.phone;
       if (outcome === "callback_requested" && !lead.callConsent) Object.assign(patch, { callConsent: "yes", callConsentAt: new Date(), callConsentSource: "call" });
       if (Object.keys(patch).length) await db.update(leads).set({ ...patch, updatedAt: new Date() }).where(eq(leads.id, lead.id));
     }]);

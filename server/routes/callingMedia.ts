@@ -82,6 +82,15 @@ export async function handleCallingUpgrade(request: IncomingMessage, socket: Dup
       const settings = await getSettingsByInboundKey(param);
       if (!settings) return reject(socket, 404, "Not Found"), true;
       if (!settings.enabled || !(await aiCallingAllowed(settings.businessAccountId))) return reject(socket, 403, "Forbidden"), true;
+      // Monthly minutes used up → refuse; the Exotel flow moves on to its next applet (e.g. the business's own line).
+      {
+        const { effectiveMinuteLimit, minutesThisMonth } = await import("../services/calling/settingsService");
+        const { limit } = await effectiveMinuteLimit(settings);
+        if (limit !== null && (await minutesThisMonth(settings.businessAccountId)) >= limit) {
+          console.warn(`[Calling] Inbound call refused: monthly minutes used up (business ${settings.businessAccountId})`);
+          return reject(socket, 403, "Forbidden"), true;
+        }
+      }
       init = { kind: "exotel_inbound", businessAccountId: settings.businessAccountId, urlSampleRate };
     } else if (kind === "simulate" && param && !extra) {
       const user = await portalUser(request);
