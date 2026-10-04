@@ -358,6 +358,8 @@ interface VoiceConversation {
   /** OpenAI client for TTS (reused across sentences). */
   openaiTtsClient?: OpenAiSpeechClient;
   openaiAudioFallbackBuffer?: Buffer[];
+  /** The avatar's spoken intro is being synthesised (filler preparation waits for it). */
+  avatarIntroSpeaking?: boolean;
   // In-flight ElevenLabs synth tracking. Only one synth may be streaming
   // PCM bytes to the client at any time — overlapping streams interleave
   // their bytes on the same WebSocket and decode as garbled audio.
@@ -955,12 +957,16 @@ export class RealtimeVoiceService {
       // A business whose replies are in another language hears the standard (English) AI
       // disclosure in that language; a business's own disclosure text is spoken as written.
       const introLang = this.ruledVoiceLanguage(conversation);
+      conversation.avatarIntroSpeaking = true; // fillers are prepared after the intro (prewarmFillers)
       if (introLang && introLang !== 'en' && attached.disclosureIsDefault !== false) {
         const disclosure = attached.disclosure;
         void translateFixedText(conversation.businessAccountId, disclosure, introLang).then((text) => {
-          if (conversation.avatar?.sessionId !== sessionId || conversation.isProcessing || this.isAnswerActive(conversation)) return;
+          if (conversation.avatar?.sessionId !== sessionId || conversation.isProcessing || this.isAnswerActive(conversation)) {
+            conversation.avatarIntroSpeaking = false;
+            return;
+          }
           this.speakAvatarIntro(conversation, text);
-        });
+        }).catch(() => { conversation.avatarIntroSpeaking = false; });
       } else {
         this.speakAvatarIntro(conversation, attached.disclosure);
       }
@@ -993,8 +999,22 @@ export class RealtimeVoiceService {
     const { primary, fallback } = this.createTtsProviders(conversation);
     const provider = primary || fallback;
     if (!provider) return;
+    // Never compete with the opening line: ElevenLabs plans cap concurrent requests, and a refused
+    // opening line used to fall back to the OpenAI voice (the call started in another voice).
+    // Later answers may overlap (a busy answer is retried in elevenlabsService).
+    const quiet = () => !conversation.avatarIntroSpeaking;
+    let gaveUpWaiting = false;
+    const waitForQuiet = async (): Promise<boolean> => {
+      for (let waited = 0; !gaveUpWaiting && waited < 20_000; waited += 250) {
+        if (quiet()) return true;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      gaveUpWaiting = true; // a stuck intro never blocks the fillers for long
+      return true;
+    };
     for (const lang of languages) {
       for (const phrase of fillerPhrases(lang, gender)) {
+        await waitForQuiet();
         if (!(conversation.avatar || conversation.phone) || conversation.clientWs.readyState !== WebSocket.OPEN || conversation.fillerAudio !== cache) return;
         const chunks: Buffer[] = [];
         const controller = new AbortController();
@@ -1017,6 +1037,7 @@ export class RealtimeVoiceService {
     if (conversation.clientWs.readyState !== WebSocket.OPEN) return;
     const responseId = `voice_avatar_intro_${Date.now()}`;
     const startedAt = Date.now();
+    conversation.avatarIntroSpeaking = true;
     this.sendToClient(conversation.clientWs, { type: 'voice_message_start', responseId });
     this.sendToClient(conversation.clientWs, { type: 'answer_delta', responseId, display: text, speech: text, index: 0 });
     const { primary, fallback } = this.createTtsProviders(conversation);
@@ -1033,7 +1054,10 @@ export class RealtimeVoiceService {
     pipeline.enqueue(markdownToSpeech(text));
     pipeline.close();
     this.sendToClient(conversation.clientWs, { type: 'answer_ready', responseId, displayMarkdown: text, speechText: text, streamed: true });
-    pipeline.finished().then(() => this.sendAiDone(conversation, responseId)).catch(() => undefined);
+    pipeline.finished()
+      .then(() => this.sendAiDone(conversation, responseId))
+      .catch(() => undefined)
+      .finally(() => { conversation.avatarIntroSpeaking = false; });
   }
 
   /**

@@ -576,6 +576,9 @@ async function main() {
       // Late answer on a video call → a short filler first (cached audio, spoken only), then the answer.
       {
         const late = (ms: number, parts: string[]) => async function* () { await sleep(ms); yield* scripted(parts)(); };
+        // Fillers are prepared once the opening line is done (never competing with it).
+        await until(() => (v.conversation.fillerAudio?.size ?? 0) >= 3, 4000);
+        expect((v.conversation.fillerAudio?.size ?? 0) >= 3, "filler audio prepared after the intro", v.conversation.fillerAudio?.size);
         const doneBefore = v.client.ofType("ai_done").length;
         const ttsBefore = v.ttsCalls.length;
         v.streams.push(late(1700, ["Weekend batches run on Saturday and Sunday."]));

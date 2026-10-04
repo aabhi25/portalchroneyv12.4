@@ -39,7 +39,46 @@ export interface ElevenLabsTTSOptions {
   signal?: AbortSignal;
 }
 
+/** Retries on "busy" answers before the caller switches to its backup voice (see below). */
+export const ELEVENLABS_BUSY_RETRIES = 2;
+export const ELEVENLABS_BUSY_RETRY_DELAY_MS = 350;
+
+function isRetryableElevenLabsError(error: unknown): boolean {
+  const msg = String((error as Error)?.message || '');
+  const status = Number(/API error \((\d{3})\)/.exec(msg)?.[1]);
+  if (status === 429 || (status >= 500 && status < 600)) return true; // too many concurrent requests / overloaded
+  const code = String((error as any)?.code || (error as any)?.cause?.code || '');
+  return /ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR|ECONNREFUSED/.test(code) || /fetch failed/i.test(msg);
+}
+
+/**
+ * Streamed ElevenLabs speech. A request ElevenLabs refuses as busy (plan's concurrency limit,
+ * e.g. while a call's opening line and its prepared fillers are synthesised together) is retried
+ * after a short pause instead of failing at once — failing made the voice pipeline switch to the
+ * backup (OpenAI) voice, so a call could start in a different voice. Only retried before any
+ * audio was produced (a mid-sentence retry would repeat words) and never after an abort.
+ */
 export async function synthesizeSpeechStreaming(
+  options: ElevenLabsTTSOptions,
+  onChunk: (pcm16Chunk: Buffer) => void
+): Promise<void> {
+  let gotAudio = false;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await synthesizeSpeechStreamingOnce(options, (chunk) => { gotAudio = true; onChunk(chunk); });
+      return;
+    } catch (error) {
+      if (gotAudio || options.signal?.aborted || attempt >= ELEVENLABS_BUSY_RETRIES || !isRetryableElevenLabsError(error)) throw error;
+      console.warn(`[ElevenLabs] busy (${String((error as Error)?.message || '').slice(0, 80)}) — retrying in ${ELEVENLABS_BUSY_RETRY_DELAY_MS}ms`);
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, ELEVENLABS_BUSY_RETRY_DELAY_MS * (attempt + 1));
+        options.signal?.addEventListener('abort', () => { clearTimeout(t); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }, { once: true });
+      });
+    }
+  }
+}
+
+async function synthesizeSpeechStreamingOnce(
   options: ElevenLabsTTSOptions,
   onChunk: (pcm16Chunk: Buffer) => void
 ): Promise<void> {
