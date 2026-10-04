@@ -16,7 +16,9 @@ import type { WebSocketServer } from "ws";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { validateSession } from "../auth";
-import { aiCallingSettings, aiCalls, businessAccounts } from "@shared/schema";
+import { aiCalls } from "@shared/schema";
+import { isAiCallingEnabled } from "./aiCallingGate";
+import { getSettingsByInboundKey } from "../services/calling/settingsService";
 import { normalizeCallPhone, TERMINAL_CALL_STATUSES, type CallStatus } from "@shared/aiCalling";
 import { verifyCallToken, STREAM_SAMPLE_RATE } from "../services/calling/streamToken";
 import { parseSampleRate } from "../services/calling/audio";
@@ -44,10 +46,7 @@ function sessionCookie(header?: string): string | null {
   return null;
 }
 
-async function aiCallingAllowed(businessAccountId: string): Promise<boolean> {
-  const [biz] = await db.select({ on: businessAccounts.aiCallingEnabled }).from(businessAccounts).where(eq(businessAccounts.id, businessAccountId)).limit(1);
-  return biz?.on === "true";
-}
+const aiCallingAllowed = isAiCallingEnabled;
 
 /** Signed-in portal user and the business they're working in (null = not signed in). */
 async function portalUser(request: IncomingMessage): Promise<{ id: string; role: string; businessAccountId: string | null } | null> {
@@ -80,7 +79,7 @@ export async function handleCallingUpgrade(request: IncomingMessage, socket: Dup
       init = { kind: "exotel_outbound", businessAccountId: call.businessAccountId, callId: call.id, urlSampleRate };
     } else if (kind === "inbound" && param && !extra) {
       if (param.length < 16 || param.length > 64) return reject(socket, 404, "Not Found"), true;
-      const [settings] = await db.select().from(aiCallingSettings).where(eq(aiCallingSettings.inboundKey, param)).limit(1);
+      const settings = await getSettingsByInboundKey(param);
       if (!settings) return reject(socket, 404, "Not Found"), true;
       if (!settings.enabled || !(await aiCallingAllowed(settings.businessAccountId))) return reject(socket, 403, "Forbidden"), true;
       init = { kind: "exotel_inbound", businessAccountId: settings.businessAccountId, urlSampleRate };

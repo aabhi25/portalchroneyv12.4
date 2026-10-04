@@ -19,7 +19,8 @@
  */
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../../db";
-import { aiCallingSettings, aiCalls, businessAccounts, leads, type AiCall, type AiCallingSettingsRow } from "@shared/schema";
+import { aiCalls, businessAccounts, leads, type AiCall, type AiCallingSettingsRow } from "@shared/schema";
+import { getCallingSettings } from "./settingsService";
 import { normalizeCallPhone, TERMINAL_CALL_STATUSES, type CallOutcome, type CallStatus } from "@shared/aiCalling";
 import { OutgoingAudioQueue, StreamResampler, VOICE_SAMPLE_RATE, bytesPerMs, parseSampleRate, pcmDurationMs, MIN_CHUNK_BYTES, CHUNK_ALIGN_BYTES } from "./audio";
 import {
@@ -83,12 +84,6 @@ export const realClock: Clock = {
   clearInterval: (h) => clearInterval(h as NodeJS.Timeout),
 };
 
-/** Ends a provider call that closing the stream would not end (e.g. Exotel call flows). Wired by the calling engine. */
-export type CallHangupHandler = (call: AiCall) => Promise<void>;
-let hangupHandler: CallHangupHandler | null = null;
-export function registerCallHangupHandler(fn: CallHangupHandler | null): void {
-  hangupHandler = fn;
-}
 
 export interface CallStreamDeps {
   createEngine: PhoneEngineFactory;
@@ -196,7 +191,11 @@ export class CallMediaSession {
   private capturedFields: Record<string, string> = {};
   private transferred = false;
 
+  /** What this stream turned out to be (an inbound URL can carry an outbound flow call). */
+  private kind: CallStreamKind;
+
   constructor(private readonly ws: StreamSocket, private readonly init: CallStreamInit, deps: CallStreamDeps) {
+    this.kind = init.kind;
     this.deps = deps;
     this.clock = deps.clock;
     ws.on("message", (data: any, isBinary: boolean) => {
@@ -229,11 +228,11 @@ export class CallMediaSession {
   }
 
   private get isOutbound(): boolean {
-    return this.init.kind === "exotel_outbound" || this.init.kind === "simulator_outbound";
+    return this.kind === "exotel_outbound" || this.kind === "simulator_outbound";
   }
 
   private get isSimulator(): boolean {
-    return this.init.kind === "simulator_outbound" || this.init.kind === "simulator_inbound";
+    return this.kind === "simulator_outbound" || this.kind === "simulator_inbound";
   }
 
   // ── protocol ────────────────────────────────────────────────────────────────
@@ -279,9 +278,18 @@ export class CallMediaSession {
 
     const providerCallSid = typeof start.call_sid === "string" && start.call_sid ? start.call_sid : null;
     try {
-      if (this.init.kind === "exotel_inbound" || this.init.kind === "simulator_inbound") {
-        const rawFrom = this.init.kind === "simulator_inbound" ? (this.init.simulatorFrom || start.from) : start.from;
-        const phone = normalizeCallPhone(rawFrom) ?? (this.init.kind === "simulator_inbound" ? "+910000000000" : (String(rawFrom || "").slice(0, 20) || "unknown"));
+      // Exotel call flows (flowAppId) take the stream URL from the flow, whose Voicebot applet
+      // points at the business's INBOUND URL — so an outbound flow call arrives here too.
+      if (this.kind === "exotel_inbound") {
+        const outboundId = await findOutboundFlowCall(this.init.businessAccountId, providerCallSid, start.custom_parameters);
+        if (outboundId) {
+          this.kind = "exotel_outbound";
+          this.outboundCallId = outboundId;
+        }
+      }
+      if (this.kind === "exotel_inbound" || this.kind === "simulator_inbound") {
+        const rawFrom = this.kind === "simulator_inbound" ? (this.init.simulatorFrom || start.from) : start.from;
+        const phone = normalizeCallPhone(rawFrom) ?? (this.kind === "simulator_inbound" ? "+910000000000" : (String(rawFrom || "").slice(0, 20) || "unknown"));
         const leadId = await findLeadIdByPhone(this.init.businessAccountId, phone).catch(() => null);
         const [row] = await db.insert(aiCalls).values({
           businessAccountId: this.init.businessAccountId,
@@ -300,9 +308,10 @@ export class CallMediaSession {
         }).returning();
         this.call = row;
       } else {
-        const [row] = await db.select().from(aiCalls).where(eq(aiCalls.id, this.init.callId!)).limit(1);
+        const callId = this.outboundCallId ?? this.init.callId!;
+        const [row] = await db.select().from(aiCalls).where(eq(aiCalls.id, callId)).limit(1);
         if (!row || TERMINAL_CALL_STATUSES.includes(row.status as CallStatus)) {
-          console.warn(`${LOG} stream start for a missing / finished call ${this.init.callId} — closing`);
+          console.warn(`${LOG} stream start for a missing / finished call ${callId} — closing`);
           this.started = false;
           return this.closeSocket(1008, "call_not_live");
         }
@@ -321,7 +330,7 @@ export class CallMediaSession {
       this.started = false;
       return this.closeSocket(1011, "call_error");
     }
-    console.log(`${LOG} call ${this.call!.id} answered (${this.init.kind}, ${this.streamRate} Hz)`);
+    console.log(`${LOG} call ${this.call!.id} answered (${this.kind}, ${this.streamRate} Hz)`);
     this.guardTimer = this.clock.setInterval(() => this.guardTick(), GUARD_MS);
     await this.startEngine();
   }
@@ -357,8 +366,7 @@ export class CallMediaSession {
 
   private async startEngine(): Promise<void> {
     const call = this.call!;
-    const [settingsRow] = await db.select().from(aiCallingSettings).where(eq(aiCallingSettings.businessAccountId, call.businessAccountId)).limit(1);
-    this.settings = settingsRow ?? null;
+    this.settings = await getCallingSettings(call.businessAccountId);
     const [biz] = await db.select({ name: businessAccounts.name }).from(businessAccounts).where(eq(businessAccounts.id, call.businessAccountId)).limit(1);
     const lead = call.leadId
       ? (await db.select().from(leads).where(and(eq(leads.id, call.leadId), eq(leads.businessAccountId, call.businessAccountId))).limit(1))[0] ?? null
@@ -435,6 +443,7 @@ export class CallMediaSession {
   }
 
   private openingText = "";
+  private outboundCallId: string | null = null;
 
   private onEngineReady(conversationId: string): void {
     if (this.finalized) return;
@@ -752,8 +761,15 @@ export class CallMediaSession {
     const call = this.call;
     // Exotel with a call flow: closing the stream would move the flow on (e.g. to a transfer),
     // so the provider is asked to hang up (when the calling engine registered a handler).
-    if (call && call.provider === "exotel" && hangupHandler && this.settings?.exotelFlowAppId) {
-      await hangupHandler(call).catch((err) => console.warn(`${LOG} hangup failed for call ${call.id}:`, err instanceof Error ? err.message : err));
+    if (call && call.provider === "exotel" && call.providerCallSid && this.settings?.exotelFlowAppId) {
+      try {
+        const { getCallingProvider } = await import("./providers");
+        const { resolveProviderCredentials } = await import("./credentials");
+        const provider = getCallingProvider("exotel");
+        if (provider.hangup) await provider.hangup(resolveProviderCredentials(this.settings), call.providerCallSid);
+      } catch (err) {
+        console.warn(`${LOG} hangup failed for call ${call.id}:`, err instanceof Error ? err.message : err);
+      }
     }
     this.closeSocket(1000, "call_ended");
     await this.finalize(reason);
@@ -785,7 +801,8 @@ export class CallMediaSession {
       const endedAt = new Date(this.clock.now());
       const durationSec = Math.max(0, Math.round((endedAt.getTime() - this.answeredAt) / 1000));
       const status: CallStatus = this.voicemail ? "voicemail" : "completed";
-      const endReason = this.voicemail ? "voicemail" : this.pendingEnd?.reason ?? reason;
+      const raw = this.voicemail ? "voicemail" : this.pendingEnd?.reason ?? reason;
+      const endReason = raw === "stream_stopped" || raw === "stream_error" ? "call_ended" : raw;
       const patch: Partial<typeof aiCalls.$inferInsert> = {
         status,
         endedAt,
@@ -823,6 +840,31 @@ export class CallMediaSession {
     }
     this.closeSocket(1000, "call_ended");
   }
+}
+
+/**
+ * An outbound Exotel call of this business that is arriving on the inbound URL (call flow):
+ * matched by the provider call sid, else by our CustomField "aicall:<callId>".
+ */
+async function findOutboundFlowCall(businessAccountId: string, callSid: string | null, customParameters: unknown): Promise<string | null> {
+  const live = ["dialing", "ringing", "queued"];
+  if (callSid) {
+    const [row] = await db.select({ id: aiCalls.id, status: aiCalls.status }).from(aiCalls)
+      .where(and(eq(aiCalls.businessAccountId, businessAccountId), eq(aiCalls.provider, "exotel"), eq(aiCalls.direction, "outbound"), eq(aiCalls.providerCallSid, callSid)))
+      .limit(1);
+    if (row && live.includes(row.status)) return row.id;
+  }
+  if (customParameters && typeof customParameters === "object") {
+    for (const value of Object.values(customParameters as Record<string, unknown>)) {
+      const m = typeof value === "string" ? /^aicall:([A-Za-z0-9-]{8,64})$/.exec(value.trim()) : null;
+      if (!m) continue;
+      const [row] = await db.select({ id: aiCalls.id, status: aiCalls.status }).from(aiCalls)
+        .where(and(eq(aiCalls.id, m[1]), eq(aiCalls.businessAccountId, businessAccountId), eq(aiCalls.direction, "outbound")))
+        .limit(1);
+      if (row && !TERMINAL_CALL_STATUSES.includes(row.status as CallStatus)) return row.id;
+    }
+  }
+  return null;
 }
 
 /** The most recent lead of this business with the same number (last 10 digits). */

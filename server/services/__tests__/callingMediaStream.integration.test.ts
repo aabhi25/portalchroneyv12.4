@@ -507,6 +507,44 @@ async function main() {
     expect(h.finished.length === 1, "inbound hang-up → processed once");
   }
 
+  // ═══ 11b. outbound flow call arriving on the inbound URL ══════════════════
+  {
+    const bySid = await mkCall({ provider: "exotel", status: "ringing", providerCallSid: "CAflow1" });
+    const h = harness("exotel_inbound");
+    const st: any = START("16000", "+919876543210");
+    st.start.call_sid = "CAflow1";
+    const inboundBefore = (await db.select().from(schema.aiCalls).where(and(eq(schema.aiCalls.businessAccountId, BIZ), eq(schema.aiCalls.direction, "inbound")))).length;
+    await h.send(st);
+    const row = await getCall(bySid.id);
+    const inboundAfter = (await db.select().from(schema.aiCalls).where(and(eq(schema.aiCalls.businessAccountId, BIZ), eq(schema.aiCalls.direction, "inbound")))).length;
+    expect(h.session.callId === bySid.id && row.status === "in_progress" && inboundAfter === inboundBefore, "flow call on the inbound URL matched by call sid → treated as the outbound call (no inbound row)");
+    h.engine().ready();
+    await flush();
+    expect(h.engine().said.length === 0, "matched flow call behaves as outbound (waits for hello)");
+    h.ws.remoteClose();
+    await h.session.idle();
+
+    const byField = await mkCall({ provider: "exotel", status: "dialing" });
+    const h2 = harness("exotel_inbound");
+    const st2: any = START("16000", "+919876543210");
+    st2.start.call_sid = "CAother";
+    st2.start.custom_parameters = { CustomField: `aicall:${byField.id}` };
+    await h2.send(st2);
+    expect(h2.session.callId === byField.id && (await getCall(byField.id)).status === "in_progress", "flow call matched by CustomField aicall:<id>");
+    h2.ws.remoteClose();
+    await h2.session.idle();
+
+    const foreign = (await db.insert(schema.aiCalls).values({ businessAccountId: OTHER, direction: "outbound", status: "dialing", trigger: "manual", provider: "exotel", phone: "+919800000002" } as any).returning())[0];
+    const h3 = harness("exotel_inbound");
+    const st3: any = START("16000", "+919800000003");
+    st3.start.call_sid = "CAother2";
+    st3.start.custom_parameters = { CustomField: `aicall:${foreign.id}` };
+    await h3.send(st3);
+    expect(h3.session.callId !== foreign.id && (await getCall(foreign.id)).status === "dialing", "another business's call id in CustomField is ignored (new inbound row instead)");
+    h3.ws.remoteClose();
+    await h3.session.idle();
+  }
+
   // ═══ 12. upgrade endpoints over a real server ═════════════════════════════
   const { WebSocketServer, WebSocket } = await import("ws");
   const { handleCallingUpgrade } = await import("../../routes/callingMedia");
