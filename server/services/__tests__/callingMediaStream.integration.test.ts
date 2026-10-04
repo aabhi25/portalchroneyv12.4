@@ -197,6 +197,8 @@ async function main() {
     const named = prompt.buildOpeningLine({ direction: "inbound", businessName: "Acme", assistantName: "Riya" });
     expect(named.text === "Thanks for calling Acme, this is Riya, an AI assistant. How can I help?", "named assistant greeting", named.text);
     const ms0 = await import("../calling/mediaStream");
+    for (const t of ["Please don't call me again", "Stop calling this number", "remove my number from your list", "mujhe call mat karo", "aage se phone mat karna", "मुझे दोबारा कॉल मत करना", "फोन मत करो"]) expect(prompt.askedNotToBeCalled(t), `opt-out understood: "${t}"`);
+    for (const t of ["मुझे क्लास टेन मैथ्स के लिए ट्यूटर चाहिए। आप कैसे हेल्प करोगे?", "Can you call me tomorrow?", "Do you have weekend classes?", "mujhe call karna kal", "I don't know my number"]) expect(!prompt.askedNotToBeCalled(t), `not an opt-out: "${t}"`);
     for (const q of ["Could you share your email?", "कृपया अपना मोबाइल नंबर साझा करें।", "Thanks. Would you like a demo", "Aap apna time bataiye"]) expect(ms0.endsWithQuestion(q), `question detected: "${q}"`);
     for (const g of ["Thanks for calling, have a great day!", "धन्यवाद, आपका दिन शुभ हो।", "Okay, the team will call you tomorrow. Goodbye!"]) expect(!ms0.endsWithQuestion(g), `goodbye is not a question: "${g}"`);
     const noName = prompt.buildOpeningLine({ direction: "outbound", openingLine: "Hello {name}, {assistant} here from {business}!", customerName: null, businessName: "Acme" });
@@ -359,6 +361,11 @@ async function main() {
     e.finishLine("line_1", 200);
     await h.clock.advance(400, h.settle);
     await h.echoMarks();
+    // Without the caller asking, do_not_call is refused (a wrong opt-out blocks a real customer).
+    e.events.onUserTranscript("I need a maths tutor for class 10");
+    const refused = await e.input.chat.executeTool("do_not_call", {});
+    expect(refused.success === false, "do_not_call refused when the caller did not ask for it", refused);
+    e.events.onUserTranscript("Please don't call me again");
     e.events.onAnswerStart("resp_dnc");
     const r = await e.input.chat.executeTool("do_not_call", {});
     e.speak("resp_dnc", 400);

@@ -117,7 +117,7 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
   lines.push("- Plain spoken words only: no markdown, no lists, no links or URLs, no emojis, no symbols. Never read out a web address unless they ask for it.");
   lines.push("- Read numbers naturally (\"twenty-five thousand rupees\", phone numbers in small groups of digits).");
   lines.push("- When they give a phone number or email, repeat it back once to confirm it.");
-  lines.push("- NEVER ask for their phone, mobile or WhatsApp number: you are already talking to them on it and the team will use this number.");
+  lines.push("- NEVER ask for their phone, mobile or WhatsApp number in any language: you are already talking to them on it. If the team needs to follow up, say the team will call them back on this same number (ask only for a good time if needed).");
   lines.push("- Never end the call in a reply that asks them something — wait for their answer first.");
   lines.push("- Never invent prices, offers, dates or promises. If you don't know, say the team will confirm.");
   lines.push("- If they are busy, offer to call back and ask when suits them; then end the call with outcome callback_requested and the time.");
@@ -293,3 +293,24 @@ export function parseCallbackTime(value: unknown, now = new Date()): Date | null
   if (d.getTime() > now.getTime() + 90 * 24 * 3600_000) return null;
   return d;
 }
+
+/**
+ * Did the caller actually ask not to be called again? Guards the do_not_call tool — a wrong
+ * do-not-call silently blocks a real customer, so the model's word alone is not enough.
+ */
+export function askedNotToBeCalled(recentCallerText: string): boolean {
+  const t = String(recentCallerText || "").toLowerCase().replace(/[’']/g, "'");
+  if (!t.trim()) return false;
+  return /\b(don'?t|do not|never|stop|no more)\s+(call|calling|ring|phone|contact)/.test(t)
+    || /\b(remove|delete|take off)\b.*\b(my )?(number|me)\b/.test(t)
+    || /\b(unsubscribe|dnd|do not disturb|block (my|this) number)\b/.test(t)
+    || /\b(call|phone|fon)\s+(mat|na|nahi|nahin)\s+(karo|karna|kijiye|karein|kare)\b/.test(t)
+    || /\b(mat|na)\s+(call|phone)\s+(karo|karna|kijiye|karein)\b/.test(t)
+    || /\b(dobara|phir se|fir se|aage se)\b.*\b(call|phone)\b.*\b(mat|nahi|nahin|na)\b/.test(t)
+    || /\bnumber\s+(hata|hatao|hata do|delete kar)/.test(t)
+    || /(कॉल|फोन|फ़ोन)\s*(मत|ना|न)\s*(करो|करें|कीजिए|करना)/.test(t)
+    || /(मत|ना)\s*(कॉल|फोन|फ़ोन)\s*(करो|करें|कीजिए|करना)/.test(t)
+    || /(दोबारा|फिर से|आगे से).*(कॉल|फोन|फ़ोन).*(मत|नहीं|न)/.test(t)
+    || /नंबर\s*(हटा|डिलीट)/.test(t);
+}
+

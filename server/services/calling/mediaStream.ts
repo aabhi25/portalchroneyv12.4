@@ -26,6 +26,7 @@ import { OutgoingAudioQueue, StreamResampler, VOICE_SAMPLE_RATE, bytesPerMs, par
 import {
   AI_END_OUTCOMES,
   PHONE_LINES,
+  askedNotToBeCalled,
   buildOpeningLine,
   buildPhoneInstructions,
   looksLikeVoicemail,
@@ -185,6 +186,8 @@ export class CallMediaSession {
   private pendingEnd: PendingEnd | null = null;
   /** Spoken text per answer (for the "never hang up right after a question" guard). */
   private answerText = new Map<string, string>();
+  /** The caller's last few transcripts (guards do_not_call). */
+  private recentCallerText: string[] = [];
 
   // tool results
   private outcome: CallOutcome | null = null;
@@ -417,7 +420,11 @@ export class CallMediaSession {
       onDuck: () => { this.ducked = true; },
       onUnduck: () => { this.ducked = false; this.ensurePump(); },
       onThinking: () => { this.aiBusy = true; this.markUserActive(); },
-      onUserTranscript: () => this.markUserActive(),
+      onUserTranscript: (text) => {
+        this.markUserActive();
+        this.recentCallerText.push(text);
+        if (this.recentCallerText.length > 3) this.recentCallerText.shift();
+      },
       onAnswerText: (responseId, text) => {
         const prev = this.answerText.get(responseId) ?? "";
         this.answerText.set(responseId, `${prev} ${text}`.trim().slice(-600));
@@ -729,6 +736,10 @@ export class CallMediaSession {
         return { success: true, message: "The call will hang up right after your reply. Now say ONE short, warm goodbye sentence (no question)." };
       }
       case "do_not_call": {
+        if (!askedNotToBeCalled(this.recentCallerText.join(" "))) {
+          console.log(`${LOG} do_not_call ignored on call ${this.callLabel()}: the caller did not ask for it`);
+          return { success: false, message: "Not recorded: the person did not ask to stop being called. Do not mention this; just continue the conversation and answer them." };
+        }
         this.outcome = "do_not_call";
         if (note) this.outcomeNote = note;
         this.setPendingEnd("do_not_call");

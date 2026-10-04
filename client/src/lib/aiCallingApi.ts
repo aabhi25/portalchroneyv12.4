@@ -231,7 +231,8 @@ export const callingApi = {
   createCall: (body: CreateCallBody) => apiRequest<CreateCallResponse>("POST", "/api/calling/calls", body),
   cancelCall: (id: string) => apiRequest<{ ok?: boolean; call?: AiCallView }>("POST", `/api/calling/calls/${encodeURIComponent(id)}/cancel`),
 
-  stats: (from: string, to: string) => apiRequest<CallStats>("GET", `/api/calling/stats${qs({ from, to })}`),
+  // "Last N days" is open-ended (no `to`), so a call made a moment ago always counts.
+  stats: (from: string, to?: string) => apiRequest<CallStats>("GET", `/api/calling/stats${qs({ from, to })}`),
 
   listDnc: (search: string, offset: number, limit: number) =>
     apiRequest<DoNotCallList>("GET", `/api/calling/do-not-call${qs({ search, offset, limit })}`),

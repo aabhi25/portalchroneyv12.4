@@ -78,7 +78,7 @@ export default function CallingCalls({ callId }: { callId?: string }) {
 
   const stats = useQuery<CallStats>({
     queryKey: callingKeys.stats(range, "now"),
-    queryFn: () => { const b = rangeBounds(Number(range)); return callingApi.stats(b.from, b.to); },
+    queryFn: () => { const b = rangeBounds(Number(range)); return callingApi.stats(b.from); },
     staleTime: 30_000,
     retry: false,
   });
