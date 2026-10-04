@@ -62,7 +62,7 @@ const DEFAULT_MODEL_PRICING: Record<string, ModelRates> = {
   },
 };
 
-export type UsageCategory = 'chat' | 'website_analysis' | 'document_analysis' | 'image_search' | 'voice_mode' | 'rag_embeddings' | 'avatar';
+export type UsageCategory = 'chat' | 'website_analysis' | 'document_analysis' | 'image_search' | 'voice_mode' | 'rag_embeddings' | 'avatar' | 'calling';
 
 /**
  * Modality / cache breakdown of a usage event.
@@ -422,6 +422,35 @@ class AIUsageLogger {
       console.log(`[AIUsageLogger] Logged usage: avatar | ${provider} | ${Math.round(seconds)}s | $${safeCost.toFixed(6)}`);
     } catch (error) {
       console.error('[AIUsageLogger] Error logging avatar usage:', error);
+    }
+  }
+
+  /**
+   * AI Calling phone minutes (no tokens; the AI's own model usage is tracked separately).
+   * Logged once per finished call by server/services/calling/callLifecycle.ts so call minutes
+   * appear in Usage & Limits ("AI Calling") and count toward the monthly AI limit.
+   */
+  async logCallingUsage(
+    businessAccountId: string,
+    provider: string,
+    billedSeconds: number,
+    costUsd: number,
+    metadata?: Record<string, any>,
+  ): Promise<void> {
+    try {
+      const safeCost = Number.isFinite(costUsd) && costUsd > 0 ? costUsd : 0;
+      await db.insert(aiUsageEvents).values({
+        businessAccountId,
+        category: 'calling',
+        model: `calling:${provider}`,
+        tokensInput: '0',
+        tokensOutput: '0',
+        costUsd: safeCost.toFixed(6),
+        metadata: { ...(metadata || {}), feature: 'ai_calling', provider, seconds: Math.max(0, Math.round(billedSeconds)) },
+      });
+      if (safeCost > 0) aiBudgetService.recordSpend(businessAccountId, safeCost);
+    } catch (error) {
+      console.error('[AIUsageLogger] Error logging calling usage:', error);
     }
   }
 

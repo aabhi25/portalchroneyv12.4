@@ -12,6 +12,7 @@
  * Channel is derived from the event's category and its metadata feature/route
  * labels (set automatically by openaiClient / requestContext):
  *   avatar category (Live AI avatar rendering minutes)     → avatar
+ *   calling category (AI Calling phone minutes)            → calling
  *   voice_mode category, or "voice|realtime"               → voice
  *   "whatsapp|msg91"                                       → whatsapp
  *   "instagram"                                            → instagram
@@ -38,7 +39,7 @@ import {
   type LimitLevel,
 } from "./aiBudgetService";
 
-export const USAGE_CHANNELS = ["website", "whatsapp", "instagram", "facebook", "voice", "avatar", "training", "other"] as const;
+export const USAGE_CHANNELS = ["website", "whatsapp", "instagram", "facebook", "voice", "avatar", "calling", "training", "other"] as const;
 export type UsageChannel = typeof USAGE_CHANNELS[number];
 
 export const CHANNEL_LABELS: Record<UsageChannel, string> = {
@@ -48,6 +49,7 @@ export const CHANNEL_LABELS: Record<UsageChannel, string> = {
   facebook: "Facebook",
   voice: "Voice",
   avatar: "Live avatar",
+  calling: "AI Calling",
   training: "Documents & training",
   other: "Other",
 };
@@ -64,6 +66,7 @@ interface ChannelRule {
 
 const CHANNEL_RULES: ChannelRule[] = [
   { channel: "avatar", categories: ["avatar"] },
+  { channel: "calling", categories: ["calling"] },
   { channel: "voice", categories: ["voice_mode"] },
   { channel: "whatsapp", pattern: "whatsapp|msg91" },
   { channel: "instagram", pattern: "instagram" },
