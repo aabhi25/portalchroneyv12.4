@@ -193,7 +193,12 @@ async function main() {
     const human = ["Hello?", "Haan ji, boliye", "Yes, who is this?", "Rahul is not here, I am his wife", "I am available after 5"];
     for (const t of human) expect(!prompt.looksLikeVoicemail(t), `a person is not voicemail: "${t}"`);
     const o = prompt.buildOpeningLine({ direction: "outbound", customerName: "Rahul Sharma", businessName: "Acme Homes" });
-    expect(o.text === "Hi Rahul, this is the AI assistant from Acme Homes. You'd enquired with us — is this a good time to talk for a minute?", "default outbound opening: first name, business, AI assistant", o.text);
+    expect(o.text === "Hi Rahul, I'm an AI assistant calling from Acme Homes. You'd enquired with us — is this a good time to talk for a minute?", "default outbound opening (unnamed assistant): first name, business, AI assistant", o.text);
+    const named = prompt.buildOpeningLine({ direction: "inbound", businessName: "Acme", assistantName: "Riya" });
+    expect(named.text === "Thanks for calling Acme, this is Riya, an AI assistant. How can I help?", "named assistant greeting", named.text);
+    const ms0 = await import("../calling/mediaStream");
+    for (const q of ["Could you share your email?", "कृपया अपना मोबाइल नंबर साझा करें।", "Thanks. Would you like a demo", "Aap apna time bataiye"]) expect(ms0.endsWithQuestion(q), `question detected: "${q}"`);
+    for (const g of ["Thanks for calling, have a great day!", "धन्यवाद, आपका दिन शुभ हो।", "Okay, the team will call you tomorrow. Goodbye!"]) expect(!ms0.endsWithQuestion(g), `goodbye is not a question: "${g}"`);
     const noName = prompt.buildOpeningLine({ direction: "outbound", openingLine: "Hello {name}, {assistant} here from {business}!", customerName: null, businessName: "Acme" });
     expect(noName.text === "Hello there, the AI assistant here from Acme!" && noName.custom, "custom opening with no name → 'Hello there'", noName.text);
     const ib = prompt.buildOpeningLine({ direction: "inbound", businessName: "Acme" });
@@ -267,7 +272,7 @@ async function main() {
 
     expect(e.said.length === 0, "outbound: AI waits for the callee's hello first");
     await h.clock.advance(ms.HELLO_WAIT_MS + 10, h.settle);
-    expect(e.said.length === 1 && e.said[0].persist === true && /^Hi Rahul, this is the AI assistant from Acme Homes/.test(e.said[0].text), "no hello within 2 s → opening line spoken (saved to the transcript)", e.said[0]);
+    expect(e.said.length === 1 && e.said[0].persist === true && /^Hi Rahul, I'm an AI assistant calling from Acme Homes/.test(e.said[0].text), "no hello within 2 s → opening line spoken (saved to the transcript)", e.said[0]);
 
     // opening audio: 1 s at 24 kHz → 16 kHz chunks, paced
     e.finishLine("line_1", 1000);

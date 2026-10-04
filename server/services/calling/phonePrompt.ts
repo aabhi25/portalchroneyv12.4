@@ -16,6 +16,10 @@ export const DEFAULT_OUTBOUND_OPENING =
   "Hi {name}, this is {assistant} from {business}. You'd enquired with us — is this a good time to talk for a minute?";
 export const DEFAULT_INBOUND_GREETING =
   "Thanks for calling {business}, this is {assistant}, an AI assistant. How can I help?";
+// Used when the business hasn't named its assistant (avoids "this is the AI assistant, an AI assistant").
+const UNNAMED_OUTBOUND_OPENING =
+  "Hi {name}, I'm an AI assistant calling from {business}. You'd enquired with us — is this a good time to talk for a minute?";
+const UNNAMED_INBOUND_GREETING = "Thanks for calling {business}. I'm an AI assistant — how can I help?";
 
 /** Outcomes the AI may set with end_call (do_not_call / transferred / voicemail have their own paths). */
 export const AI_END_OUTCOMES: CallOutcome[] = [
@@ -74,7 +78,10 @@ export function fillPlaceholders(template: string, values: { name?: string | nul
 
 export function buildOpeningLine(input: { direction: CallDirection; openingLine?: string | null; inboundGreeting?: string | null; customerName?: string | null; businessName: string; assistantName?: string | null }): { text: string; custom: boolean } {
   const custom = input.direction === "outbound" ? clean(input.openingLine, 400) : clean(input.inboundGreeting, 400);
-  const template = custom || (input.direction === "outbound" ? DEFAULT_OUTBOUND_OPENING : DEFAULT_INBOUND_GREETING);
+  const named = !!clean(input.assistantName, 60);
+  const template = custom || (input.direction === "outbound"
+    ? (named ? DEFAULT_OUTBOUND_OPENING : UNNAMED_OUTBOUND_OPENING)
+    : (named ? DEFAULT_INBOUND_GREETING : UNNAMED_INBOUND_GREETING));
   return {
     text: fillPlaceholders(template, { name: input.customerName, business: input.businessName, assistant: input.assistantName }),
     custom: !!custom,
@@ -110,6 +117,8 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
   lines.push("- Plain spoken words only: no markdown, no lists, no links or URLs, no emojis, no symbols. Never read out a web address unless they ask for it.");
   lines.push("- Read numbers naturally (\"twenty-five thousand rupees\", phone numbers in small groups of digits).");
   lines.push("- When they give a phone number or email, repeat it back once to confirm it.");
+  lines.push("- NEVER ask for their phone, mobile or WhatsApp number: you are already talking to them on it and the team will use this number.");
+  lines.push("- Never end the call in a reply that asks them something — wait for their answer first.");
   lines.push("- Never invent prices, offers, dates or promises. If you don't know, say the team will confirm.");
   lines.push("- If they are busy, offer to call back and ask when suits them; then end the call with outcome callback_requested and the time.");
   lines.push("- If the line is unclear or you didn't catch something, say so briefly and ask them to repeat.");

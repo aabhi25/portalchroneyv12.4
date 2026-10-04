@@ -183,6 +183,8 @@ export class CallMediaSession {
   private wrapWarned = false;
   private voicemail = false;
   private pendingEnd: PendingEnd | null = null;
+  /** Spoken text per answer (for the "never hang up right after a question" guard). */
+  private answerText = new Map<string, string>();
 
   // tool results
   private outcome: CallOutcome | null = null;
@@ -416,6 +418,11 @@ export class CallMediaSession {
       onUnduck: () => { this.ducked = false; this.ensurePump(); },
       onThinking: () => { this.aiBusy = true; this.markUserActive(); },
       onUserTranscript: () => this.markUserActive(),
+      onAnswerText: (responseId, text) => {
+        const prev = this.answerText.get(responseId) ?? "";
+        this.answerText.set(responseId, `${prev} ${text}`.trim().slice(-600));
+        if (this.answerText.size > 20) this.answerText.delete(this.answerText.keys().next().value as string);
+      },
       onError: (message) => console.warn(`${LOG} voice error on call ${call.id}: ${message.slice(0, 120)}`),
       onClosed: (reason) => {
         this.chain = this.chain.then(() => this.finalize(this.pendingEnd?.reason ?? (reason === "call_ended" ? "ai_ended" : "ai_unavailable")));
@@ -665,6 +672,14 @@ export class CallMediaSession {
   private async completePendingEnd(deadlineHit = false): Promise<void> {
     const pending = this.pendingEnd;
     if (!pending || this.finalized) return;
+    // Guard: the model sometimes calls end_call and then still asks a question ("please share
+    // your number"). Hanging up then would cut the customer off — keep the call open instead.
+    if (pending.reason === "ai_ended" && !deadlineHit && pending.afterResponseId && endsWithQuestion(this.answerText.get(pending.afterResponseId))) {
+      this.clock.clearTimeout(pending.deadline);
+      this.pendingEnd = null;
+      console.log(`${LOG} end_call ignored on call ${this.callLabel()}: the last reply asked a question`);
+      return;
+    }
     if (pending.transfer && this.isSimulator && !pending.transferAnnounced && !deadlineHit) {
       // Simulator: no real line to hand over — say what would happen, then end.
       pending.transferAnnounced = true;
@@ -884,3 +899,15 @@ export async function startCallMediaSession(ws: StreamSocket, init: CallStreamIn
   const base = await loadCallStreamDeps();
   return new CallMediaSession(ws, init, { ...base, ...(deps ?? {}) });
 }
+
+/** Does the last sentence of a spoken reply ask the person something? (EN / Hindi / Hinglish) */
+export function endsWithQuestion(text: string | null | undefined): boolean {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  const sentences = t.split(/(?<=[.!?।])\s+/).filter(Boolean);
+  const last = sentences[sentences.length - 1] || t;
+  if (/[?？؟]\s*$/.test(last)) return true;
+  return /\b(please (share|tell|send|let me know|confirm)|could you|can you (tell|share|confirm)|would you like|batayein|bataiye|bata dijiye|share kar)\b/i.test(last)
+    || /(कृपया|बताइए|बताएं|बताइये|साझा कर|क्या आप)/.test(last);
+}
+

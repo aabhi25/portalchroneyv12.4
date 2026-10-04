@@ -34,6 +34,8 @@ export interface PhoneEngineEvents {
   /** A caller turn was accepted and is being answered. */
   onThinking(): void;
   onUserTranscript(text: string): void;
+  /** Spoken text of an answer so far (accumulated per responseId). */
+  onAnswerText?(responseId: string, text: string): void;
   onError(message: string): void;
   /** The voice session ended (by itself or because we closed it). */
   onClosed(reason: string): void;
@@ -144,6 +146,9 @@ export function createVoiceServiceEngine(getService: () => VoiceServiceLike | Pr
             conversationId = msg.conversationId;
             events.onReady(msg.conversationId);
           }
+          break;
+        case "answer_delta":
+          if (msg.responseId && typeof msg.speech === "string") events.onAnswerText?.(String(msg.responseId), msg.speech);
           break;
         case "voice_message_start":
           if (msg.responseId) events.onAnswerStart(String(msg.responseId));
