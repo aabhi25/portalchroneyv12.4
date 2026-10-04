@@ -262,7 +262,7 @@ async function processClaimed(callId: string, now: Date, report: TickReport): Pr
   }
   const { limit, source } = await effectiveMinuteLimit(settings);
   if (limit !== null && (await minutesThisMonth(call.businessAccountId, now)) >= limit) {
-    return skip(call, "monthly_limit", source === "super_admin"
+    return skip(call, "limit_reached", source === "super_admin"
       ? "This month's calling minutes (set by your plan) are used up."
       : "This month's calling minute limit is reached. Raise it in AI Calling settings to keep calling.", report);
   }

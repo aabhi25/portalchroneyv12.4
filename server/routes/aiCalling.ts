@@ -335,7 +335,7 @@ router.post("/api/calling/calls/:id/cancel", ...requireAiCalling, async (req, re
   const businessAccountId = bizOf(req);
   try {
     const [row] = await db.update(aiCalls)
-      .set({ status: "cancelled", endReason: "cancelled_by_staff", endedAt: new Date(), updatedAt: new Date() })
+      .set({ status: "cancelled", endReason: "cancelled", endedAt: new Date(), updatedAt: new Date() })
       .where(and(eq(aiCalls.id, req.params.id), eq(aiCalls.businessAccountId, businessAccountId), eq(aiCalls.status, "queued")))
       .returning();
     if (!row) {
@@ -402,11 +402,12 @@ router.delete("/api/calling/do-not-call/:id", ...requireAiCalling, async (req, r
 router.get("/api/calling/stats", ...requireAiCalling, async (req, res) => {
   const businessAccountId = bizOf(req);
   try {
-    const to = parseDate(req.query.to) ?? new Date();
-    const from = parseDate(req.query.from) ?? new Date(to.getTime() - 30 * 86_400_000);
+    // Default: the last 30 days, no upper bound (so calls created "just now" always count).
+    const to = parseDate(req.query.to);
+    const from = parseDate(req.query.from) ?? new Date((to ?? new Date()).getTime() - 30 * 86_400_000);
     const settings = await getCallingSettings(businessAccountId);
     const tz = effectiveHours(settings).timezone;
-    const range = and(eq(aiCalls.businessAccountId, businessAccountId), gte(aiCalls.createdAt, from), lt(aiCalls.createdAt, to));
+    const range = and(eq(aiCalls.businessAccountId, businessAccountId), gte(aiCalls.createdAt, from), ...(to ? [lt(aiCalls.createdAt, to)] : []));
     const [totals] = await db.select({
       total: sql<number>`COUNT(*)::int`,
       answered: sql<number>`COUNT(*) FILTER (WHERE ${aiCalls.answeredAt} IS NOT NULL)::int`,
@@ -423,7 +424,7 @@ router.get("/api/calling/stats", ...requireAiCalling, async (req, res) => {
       date: dayExpr,
       calls: sql<number>`COUNT(*)::int`,
       answered: sql<number>`COUNT(*) FILTER (WHERE ${aiCalls.answeredAt} IS NOT NULL)::int`,
-    }).from(aiCalls).where(range).groupBy(dayExpr).orderBy(dayExpr);
+    }).from(aiCalls).where(range).groupBy(sql`1`).orderBy(sql`1`); // by ordinal: the time zone is a bound parameter
     res.json({
       total: Number(totals?.total ?? 0),
       answered: Number(totals?.answered ?? 0),
