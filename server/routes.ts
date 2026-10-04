@@ -617,6 +617,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // a previous process left open (billed to their last heartbeat).
   app.use(avatarRoutes);
   app.use(aiLanguageRoutes);
+  app.use((await import("./routes/aiCalling")).default, (await import("./routes/callingWebhooks")).default); // AI Calling (B)
   avatarSessionManager.recoverOrphans(new Date()).catch((err) => {
     console.error('[Avatar] Failed to close orphaned avatar sessions:', err?.message || err);
   });
@@ -9919,7 +9920,8 @@ Return ONLY the refined instruction, nothing else.`
     try {
       const { id } = req.params;
       const { shopifyEnabled, appointmentsEnabled, voiceModeEnabled, visualSearchEnabled, jewelryShowcaseEnabled, supportTicketsEnabled, whatsappEnabled, instagramEnabled, facebookEnabled, chroneyEnabled, k12EducationEnabled, jobPortalEnabled, demoOrdersEnabled, whatsappMarketingEnabled, leadsExportEnabled, leadPhoneMaskingEnabled, systemMode } = req.body;
-      
+      const { aiCallingEnabled } = req.body; // AI Calling (B)
+
       const updates: any = {};
       
       if (shopifyEnabled !== undefined) {
@@ -10018,6 +10020,14 @@ Return ONLY the refined instruction, nothing else.`
           return res.status(400).json({ error: "whatsappMarketingEnabled must be a boolean" });
         }
         updates.whatsappMarketingEnabled = whatsappMarketingEnabled ? "true" : "false";
+      }
+
+      // AI Calling (B): super admin switch for AI phone calls (default off).
+      if (aiCallingEnabled !== undefined) {
+        if (typeof aiCallingEnabled !== "boolean") {
+          return res.status(400).json({ error: "aiCallingEnabled must be a boolean" });
+        }
+        updates.aiCallingEnabled = aiCallingEnabled ? "true" : "false";
       }
 
       if (leadsExportEnabled !== undefined) {

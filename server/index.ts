@@ -385,6 +385,14 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     // receives the final summary. Skips already-summarized and trivial chats so
     // total AI cost goes down versus the old every-3-messages cadence.
     conversationSummarySweepWorker.start();
+
+    // AI Calling (B): dialer — places queued AI calls every 15 s (atomic claims; safe on several instances).
+    import("./services/calling/dialer").then(({ startCallingDialer, stopCallingDialer }) => {
+      startCallingDialer();
+      onShutdown("ai-calling-dialer", () => stopCallingDialer());
+    }).catch(err => {
+      console.error("[Server] Failed to start AI Calling dialer:", err);
+    });
   });
 })().catch((err) => {
   // Startup failed (DB unreachable, missing ENCRYPTION_KEY in production...).
