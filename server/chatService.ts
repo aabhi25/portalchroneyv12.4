@@ -202,6 +202,18 @@ export interface ChatContext {
    * empty rule = "any language" (behaviour unchanged).
    */
   replyLanguage?: ChatReplyLanguage;
+  /**
+   * AI Calling (A) — server-only (RealtimeVoiceService on a phone call, never from an HTTP
+   * body): the phone-call rules (replace the voice style block), extra phone-only tools
+   * (end_call, do_not_call, transfer_to_human, save_call_details) executed by the call
+   * itself, and contact details the call already knows (so the lead plan never asks for them).
+   */
+  phoneCall?: {
+    instructions: string;
+    tools: any[];
+    executeTool: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    knownContact?: { name?: string | null; phone?: string | null; email?: string | null } | null;
+  };
 }
 
 // Track active conversation IDs for each user session
@@ -4010,7 +4022,9 @@ Example: "Great! Is there anything else I can help you with?"
       // Pass API key for AI-based product intent classification fallback
       //
       // Run selectRelevantTools and both intent checks in parallel to reduce latency.
-      const offerCaptureLead = !context.skipLeadTraining && this.leadFieldsMissing(widgetSettings?.leadTrainingConfig, existingLead);
+      // AI Calling (A): on a phone call the number (and, for lead calls, the name) is already known.
+      const leadKnownForTurn = existingLead ?? (context.phoneCall?.knownContact ? { ...context.phoneCall.knownContact } as any : existingLead);
+      const offerCaptureLead = !context.skipLeadTraining && this.leadFieldsMissing(widgetSettings?.leadTrainingConfig, leadKnownForTurn);
 
       // Extract lead training config for enforcement
       // Skip lead training entirely for guidance chatbot
@@ -4020,7 +4034,7 @@ Example: "Great! Is there anything else I can help you with?"
       // whether it blocks answering, refusal caps, phone-number check. Its block is the only lead
       // instruction the model gets. Pending OTP replaces it with the OTP strict-mode block.
       const preparedP = timing.time('lead', () => this.prepareLeadTurnFor({
-        context, conversationId, leadTrainingConfig, existingLead, history, userMessage,
+        context, conversationId, leadTrainingConfig, existingLead: leadKnownForTurn, history, userMessage,
         n: userMessageCount, otpPending: otpPendingForLead,
       }));
 
@@ -4137,6 +4151,12 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         systemContext += otpTurnBlock;
       }
 
+      // AI Calling (A): phone-only tools (not while an OTP step is pending — phone calls never run OTP).
+      if (context.phoneCall?.tools?.length && !otpState.locked && !otpState.awaiting_otp) {
+        const phoneNames = new Set(context.phoneCall.tools.map((t: any) => t.function?.name));
+        streamTools = [...streamTools.filter((t: any) => !phoneNames.has(t.function?.name)), ...context.phoneCall.tools];
+      }
+
       // SHORT-CIRCUIT: when lookup cards will be shown, bypass the full AI streaming pipeline.
       // The one-sentence reply is kept brief and controlled. If the user wrote in a non-English
       // language, a small targeted AI call translates just that sentence — no verbosity risk.
@@ -4236,7 +4256,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         leadBlocksAnswer: leadTurn?.plan.next?.mode === 'block',
         leadAsksNow: !!(leadTurn?.plan.next || leadTurn?.plan.intentOption || leadTurn?.plan.callbackConfirm),
         otpBlock: otpTurnBlock || undefined,
-        voiceStyleBlock: context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : undefined,
+        // AI Calling (A): a phone call gets the phone rules instead of the (student) voice style block.
+        voiceStyleBlock: context.phoneCall?.instructions || (context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : undefined),
         skipFaqPrefetch: knowledge.skipFaqPrefetch || undefined,
         identityBlock: identityBlock || undefined,
         languageBlock: this.languageBlockFor(context) || undefined,
@@ -4487,7 +4508,11 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           if (prefetchedTopic) {
             console.log('[Chat Stream] fetch_k12_topic: reusing speculative voice prefetch');
           }
-          let result = prefetchedTopic ?? await ToolExecutionService.executeTool(
+          // AI Calling (A): phone-only tools are executed by the call itself.
+          const phoneTool = context.phoneCall && context.phoneCall.tools.some((t: any) => t.function?.name === toolName);
+          let result: any = phoneTool
+            ? await context.phoneCall!.executeTool(toolName, toolParams).catch((err: any) => ({ success: false, error: String(err?.message || err) }))
+            : prefetchedTopic ?? await ToolExecutionService.executeTool(
             toolName,
             toolParams,
             {
@@ -4792,7 +4817,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           context.businessAccountId,
           context.preferredLanguage,
           context.responseLength || 'balanced',
-          [identityBlock, continuationBlock, this.languageBlockFor(context), context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : ''].filter(Boolean).join('\n\n'),
+          [identityBlock, continuationBlock, this.languageBlockFor(context), context.phoneCall?.instructions || (context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : '')].filter(Boolean).join('\n\n'),
           context.replyLanguage?.promptSource
         )) {
           finalContent += token;

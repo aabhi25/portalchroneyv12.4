@@ -166,6 +166,35 @@ export interface TopscholarVoiceScope {
   doubtSyncBaseUrl?: string | null;
 }
 
+/**
+ * AI Calling (A): a phone call drives this service through a virtual client socket
+ * (services/calling/phoneBridge.ts). Everything a phone call changes is keyed off
+ * `conversation.phone`; website voice mode never sets it, so its behaviour is unchanged.
+ */
+export interface PhoneCallVoiceOptions {
+  callId: string;
+  /** Title of the conversation that holds the call transcript (e.g. "Phone call (outbound)"). */
+  conversationTitle: string;
+  /** Phone rules, phone-only tools and known contact details for every turn (ChatContext.phoneCall). */
+  chat: NonNullable<ChatContext['phoneCall']>;
+  /** Lead calls: the lead already exists, so the website lead questionnaire is skipped. */
+  skipLeadTraining?: boolean;
+  /** Every final transcript, before turn filtering. 'drop' swallows it (answering-machine screening, waiting for "hello"). */
+  screenTranscript?: (text: string) => 'continue' | 'drop';
+  /** Raw VAD events (silence / answering-machine guards). */
+  onSpeech?: (event: 'started' | 'stopped') => void;
+}
+
+/** AI Calling (A): optional trailing options of handleConnection. */
+export interface VoiceConnectionOptions {
+  channel?: 'phone';
+  phone?: PhoneCallVoiceOptions;
+}
+
+const PHONE_TRANSCRIPTION_PROMPT =
+  'A phone call between a customer and a business assistant, in English, Hindi or a mix of both (Hinglish). ' +
+  'Write Hindi in Devanagari script and English words in English. Never use Urdu or Arabic script.';
+
 /** Stage timestamps of one voice turn (ms since epoch); see logVoiceTiming. */
 /** Speech-to-text hints for Indian students (see transcriptionConfig). */
 const AUTO_TRANSCRIPTION_PROMPT =
@@ -196,6 +225,8 @@ interface VoiceTurnTiming {
 }
 
 interface VoiceConversation {
+  /** AI Calling (A): set only for phone calls (see PhoneCallVoiceOptions). */
+  phone?: PhoneCallVoiceOptions;
   clientWs: WebSocket; // WebSocket to client (browser)
   openaiWs: WebSocket | null; // WebSocket to OpenAI Realtime API
   businessAccountId: string;
@@ -543,8 +574,11 @@ export class RealtimeVoiceService {
     return closed;
   }
 
-  async handleConnection(clientWs: WebSocket, businessAccountId: string, userId: string, existingConversationId?: string, selectedLanguage?: string, textConversationId?: string, topscholarDoubtId?: string, topscholarScope?: TopscholarVoiceScope, isInternalTest = false) {
-    console.log('[RealtimeVoice] New connection:', { businessAccountId, userId, existingConversationId });
+  async handleConnection(clientWs: WebSocket, businessAccountId: string, userId: string, existingConversationId?: string, selectedLanguage?: string, textConversationId?: string, topscholarDoubtId?: string, topscholarScope?: TopscholarVoiceScope, isInternalTest = false, options?: VoiceConnectionOptions) {
+    // AI Calling (A): phone calls never reconnect and never log the caller's id.
+    const phone = options?.channel === 'phone' ? options.phone : undefined;
+    if (phone) existingConversationId = undefined;
+    console.log('[RealtimeVoice] New connection:', phone ? { businessAccountId, phoneCall: phone.callId } : { businessAccountId, userId, existingConversationId });
 
     try {
       // Resolve the launch scope into content packs ONCE per connect. Cheap no-op
@@ -718,7 +752,7 @@ export class RealtimeVoiceService {
       if (!dbConversation) {
         dbConversation = await storage.createConversation({
           businessAccountId,
-          title: 'Voice Chat',
+          title: phone ? phone.conversationTitle : 'Voice Chat',
           visitorToken: userId,
           studentId: topscholarScope?.studentId || null,
           topscholarDoubtId: topscholarDoubtId || null,
@@ -758,7 +792,8 @@ export class RealtimeVoiceService {
         k12VerbatimContentMode: (businessAccount as any).k12VerbatimContentMode === 'true',
         jobPortalEnabled: (businessAccount as any).jobPortalEnabled === true,
         demoOrdersEnabled: (businessAccount as any).demoOrdersEnabled === true,
-        skipLeadTraining: (businessAccount as any).skipLeadTraining === true,
+        skipLeadTraining: (businessAccount as any).skipLeadTraining === true || phone?.skipLeadTraining === true,
+        phone,
         isProcessing: false,
         currentUserTranscript: '',
         currentAITranscript: '',
@@ -1082,6 +1117,103 @@ export class RealtimeVoiceService {
     }).catch(() => undefined);
   }
 
+  // ---------------------------------------------------------------------------
+  // AI Calling (A): lines a phone call says by itself (opening line, "Are you still
+  // there?", time-up goodbye). Only for phone conversations.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Speak a fixed line on a phone call. It owns the call like an answer does: the caller can
+   * interrupt it (the client gets response_cancelled → the phone audio is cleared), and its
+   * ai_done / playback_complete cycle is the same. `persist` saves it as an assistant message
+   * (the opening line belongs in the transcript and in the model's history).
+   * Returns the responseId, or null when the conversation is gone / not a phone call.
+   */
+  async speakPhoneLine(conversationId: string, text: string, opts: { persist?: boolean } = {}): Promise<string | null> {
+    const conversation = this.conversations.get(conversationId);
+    const line = String(text || '').trim();
+    if (!conversation?.phone || !line || conversation.clientWs.readyState !== WebSocket.OPEN) return null;
+    if (conversation.isProcessing || this.isAnswerActive(conversation)) this.cancelResponse(conversation, false);
+    if (opts.persist) {
+      await this.saveMessageToDB(conversationId, 'assistant', line);
+      if (this.conversations.get(conversationId) !== conversation) return null;
+    }
+    const responseId = `voice_phone_${conversationId}_${Date.now()}`;
+    conversation.currentResponseId = responseId;
+    conversation.currentResponseKind = 'canonical';
+    // Already complete: an interruption only stops its audio (nothing to roll back).
+    conversation.canonicalDisplayReadyResponseId = responseId;
+    conversation.canonicalPersistedMessageId = undefined;
+    conversation.canonicalPersistedResponseId = undefined;
+    conversation.canonicalPersistedContent = undefined;
+    conversation.activeElevenLabsStartedAt = undefined;
+    conversation.answerAudioBytes = 0;
+    conversation.answerPlaybackEndsAt = undefined;
+    conversation.lastAssistantText = line;
+    const abandoned = () =>
+      conversation.clientWs.readyState !== WebSocket.OPEN ||
+      conversation.cancelledResponseIds.has(responseId) ||
+      conversation.currentResponseId !== responseId;
+    this.sendToClient(conversation.clientWs, { type: 'voice_message_start', responseId });
+    this.sendToClient(conversation.clientWs, { type: 'answer_delta', responseId, display: line, speech: line, index: 0 });
+    const { primary, fallback } = this.createTtsProviders(conversation);
+    const pipeline = new SentenceTtsPipeline({
+      primary,
+      fallback,
+      sendAudio: (pcm) => {
+        if (abandoned()) return;
+        conversation.answerAudioBytes = (conversation.answerAudioBytes || 0) + pcm.length;
+        this.sendAnswerAudio(conversation, pcm);
+      },
+      isCancelled: () => abandoned(),
+      onFirstAudio: () => { conversation.activeElevenLabsStartedAt ||= Date.now(); },
+      onProviderFailure: (provider, error) => {
+        console.warn(`[RealtimeVoice] Phone line TTS (${provider}) failed:`, error instanceof Error ? error.message : String(error));
+      },
+    });
+    conversation.ttsPipeline = pipeline;
+    conversation.ttsPipelineResponseId = responseId;
+    pipeline.enqueue(markdownToSpeech(line));
+    pipeline.close();
+    conversation.recentAssistantSpeech = `${conversation.recentAssistantSpeech || ''} ${line}`.slice(-800);
+    this.sendToClient(conversation.clientWs, { type: 'answer_ready', responseId, displayMarkdown: line, speechText: line, streamed: true });
+    void pipeline.finished().then(() => {
+      if (conversation.ttsPipeline === pipeline) {
+        conversation.ttsPipeline = undefined;
+        conversation.ttsPipelineResponseId = undefined;
+      }
+      if (abandoned()) return;
+      const audioMs = Math.round(((conversation.answerAudioBytes || 0) / 48000) * 1000);
+      const playbackStart = conversation.activeElevenLabsStartedAt || Date.now();
+      conversation.answerPlaybackEndsAt = Math.max(Date.now(), playbackStart + audioMs) + 5000;
+      this.sendAiDone(conversation, responseId);
+    }).catch(() => undefined);
+    return responseId;
+  }
+
+  /**
+   * A fixed phone line in the call's language: the business's reply-language rule first,
+   * else the language the caller is speaking. Ready-made Hindi / Hinglish versions are used
+   * when given; any other ruled language is translated (cached); otherwise English.
+   */
+  async phoneLocalizedText(conversationId: string, line: { en: string; hi?: string; hinglish?: string }): Promise<string> {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) return line.en;
+    const ruled = this.ruledVoiceLanguage(conversation);
+    const lang = ruled ?? conversation.turnLanguage ?? this.voicePickedLanguage(conversation) ?? null;
+    if (lang === 'hi' && line.hi) return line.hi;
+    if (lang === 'hinglish' && line.hinglish) return line.hinglish;
+    if (ruled && ruled !== 'en') {
+      return translateFixedText(conversation.businessAccountId, line.en, ruled).catch(() => line.en);
+    }
+    return line.en;
+  }
+
+  /** AI Calling (A): is a phone conversation still live (for the call's own guards)? */
+  hasConversation(conversationId: string): boolean {
+    return this.conversations.has(conversationId);
+  }
+
   private touchActivity(conversation: VoiceConversation) {
     conversation.lastHeartbeat = Date.now();
   }
@@ -1131,7 +1263,8 @@ export class RealtimeVoiceService {
       clearInterval(conversation.heartbeatInterval);
     }
 
-    this.startIdleWatch(conversationId, conversation);
+    // AI Calling (A): phone calls run their own (much shorter) silence guard.
+    if (!conversation.phone) this.startIdleWatch(conversationId, conversation);
 
     // Send ping every 30 seconds
     conversation.heartbeatInterval = setInterval(() => {
@@ -1595,9 +1728,10 @@ export class RealtimeVoiceService {
             audio: {
               input: {
                 format: { type: 'audio/pcm', rate: 24000 },
-                transcription: this.transcriptionConfig(this.voiceTranscriptionLanguage(conversation)),
+                transcription: this.transcriptionConfig(this.voiceTranscriptionLanguage(conversation), !!conversation.phone),
                 noise_reduction: {
-                  type: 'far_field'
+                  // AI Calling (A): a phone handset is a near-field microphone.
+                  type: conversation.phone ? 'near_field' : 'far_field'
                 },
                 // Hold-to-talk sessions have no VAD: the client commits each turn.
                 turn_detection: this.turnDetectionConfig(conversation)
@@ -2468,6 +2602,7 @@ export class RealtimeVoiceService {
           // (handleFinalTranscript), and un-ducked if it doesn't.
           this.beginPossibleInterruption(conversation, event.item_id);
           this.sendToClient(conversation.clientWs, { type: 'speech_started' });
+          conversation.phone?.onSpeech?.('started'); // AI Calling (A)
           break;
 
         case 'input_audio_buffer.speech_stopped':
@@ -2475,6 +2610,7 @@ export class RealtimeVoiceService {
           conversation.lastSpeechStoppedAt = Date.now();
           this.recordSpeechTiming(conversation, event.item_id, { endMs: event.audio_end_ms });
           this.armFalseInterruptionTimer(conversation, event.item_id);
+          conversation.phone?.onSpeech?.('stopped'); // AI Calling (A)
           break;
 
         case 'input_audio_buffer.committed':
@@ -2502,6 +2638,11 @@ export class RealtimeVoiceService {
           console.log('[RealtimeVoice] User transcript:', userTranscript);
           const timing = this.takeSpeechTiming(conversation, event.item_id);
           const manual = this.takeManualTurn(conversation);
+          // AI Calling (A): answering-machine screening / waiting for the callee's "hello".
+          if (conversation.phone?.screenTranscript && conversation.phone.screenTranscript(userTranscript) === 'drop') {
+            if (conversation.bargeIn) this.resolveFalseInterruption(conversation, 'screened');
+            break;
+          }
           const speechMs = manual
             ? manual.durationMs ?? null
             : timing && typeof timing.startMs === 'number' && typeof timing.endMs === 'number'
@@ -3627,13 +3768,13 @@ export class RealtimeVoiceService {
    * an English one) and a prompt keeps Indian students' Hindi/Hinglish in Devanagari or
    * English letters instead of Urdu script.
    */
-  private transcriptionConfig(language?: string | null): Record<string, unknown> {
+  private transcriptionConfig(language?: string | null, phoneCall = false): Record<string, unknown> {
     const config: Record<string, unknown> = { model: 'gpt-4o-mini-transcribe' };
     if (language && language !== 'auto') {
       config.language = this.toTranscriptionLangCode(language);
-      if (config.language === 'hi') config.prompt = HINDI_TRANSCRIPTION_PROMPT;
+      if (config.language === 'hi') config.prompt = phoneCall ? PHONE_TRANSCRIPTION_PROMPT : HINDI_TRANSCRIPTION_PROMPT;
     } else {
-      config.prompt = AUTO_TRANSCRIPTION_PROMPT;
+      config.prompt = phoneCall ? PHONE_TRANSCRIPTION_PROMPT : AUTO_TRANSCRIPTION_PROMPT;
     }
     return config;
   }
@@ -3771,7 +3912,9 @@ export class RealtimeVoiceService {
       visitorToken: conversation.userId,
       isInternalTest: conversation.isInternalTest,
       supportsCalendarUI: false,
-      channel: 'widget',
+      // AI Calling (A): a phone call is not the website widget (no OTP / conversion pixel).
+      channel: conversation.phone ? 'other' : 'widget',
+      phoneCall: conversation.phone?.chat,
       systemMode: conversation.systemMode,
       k12EducationEnabled: conversation.k12EducationEnabled === true || topScholar,
       k12ContentOnlyMode: conversation.k12ContentOnly === true,

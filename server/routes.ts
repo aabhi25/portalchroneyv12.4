@@ -36494,6 +36494,13 @@ Return ONLY a valid JSON object in this format:
         socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
         socket.destroy();
       }
+    } else if (url.pathname.startsWith('/api/calling/')) {
+      // AI Calling (A): phone-call media streams (Exotel AgentStream + portal simulator).
+      const { handleCallingUpgrade } = await import('./routes/callingMedia');
+      await handleCallingUpgrade(request, socket, head, wss).catch((err) => {
+        console.error('[Calling] upgrade error:', err instanceof Error ? err.message : err);
+        try { socket.destroy(); } catch {}
+      });
     } else {
       return;
     }
