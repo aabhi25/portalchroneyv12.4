@@ -31,6 +31,7 @@ export type MeResponseDto = SafeUser & {
     whatsappMarketingEnabled: boolean;
     leadsExportEnabled: boolean;
     leadPhoneMaskingEnabled: boolean;
+    aiCallingEnabled: boolean; // AI Calling (B)
     isTopscholar: boolean;
   } | null;
 };
@@ -71,6 +72,7 @@ export function toMeResponseDto(
         whatsappMarketingEnabled: businessAccount.whatsappMarketingEnabled,
         leadsExportEnabled: businessAccount.leadsExportEnabled,
         leadPhoneMaskingEnabled: businessAccount.leadPhoneMaskingEnabled,
+        aiCallingEnabled: !!businessAccount.aiCallingEnabled,
         isTopscholar: !!isTopscholar,
       },
     };

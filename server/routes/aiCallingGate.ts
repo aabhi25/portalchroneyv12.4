@@ -6,7 +6,7 @@
  *   (business_accounts.ai_calling_enabled = 'true'; default 'false').
  *
  * Usage:
- *   app.get("/api/calling/x", requireAiCalling, handler)          // array of middlewares
+ *   app.get("/api/calling/x", ...requireAiCalling, handler)       // array of middlewares (spread keeps req/res typed)
  *   app.get("/api/calling/x", requireAuth, requireBusinessAccount, requireAiCallingFlag, handler)
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";

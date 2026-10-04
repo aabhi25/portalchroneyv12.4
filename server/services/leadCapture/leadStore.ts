@@ -69,6 +69,11 @@ const PROFILE_LINK_WAIT_MS = 1500;
 
 export async function upsertConversationLead(input: LeadUpsert): Promise<LeadUpsertResult> {
   const result = await writeConversationLead(input);
+  // AI Calling (B): the lead got a phone number → maybe queue an automatic call (fire-and-forget; the
+  // trigger calls each lead automatically at most once, dedupes by number and never throws).
+  if (result.changed.includes('phone') && result.lead?.phone) {
+    import('../calling/leadTrigger').then(m => m.triggerAutoLeadCall(result.lead)).catch(() => undefined);
+  }
   // Same turn, not one turn later: link the customer profile as soon as the lead has a new phone /
   // email (whatsappHandoffService.linkWebsiteLeadProfile never throws).
   if (result.changed.includes('phone') || result.changed.includes('email')) {

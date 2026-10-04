@@ -2164,6 +2164,8 @@ export class DatabaseStorage implements IStorage {
       .insert(leads)
       .values(insertLead)
       .returning();
+    // AI Calling (B): maybe queue an automatic call to the new lead (fire-and-forget, never throws).
+    if (lead?.phone) import("./services/calling/leadTrigger").then(m => m.triggerAutoLeadCall(lead)).catch(() => {});
     return lead;
   }
 
@@ -2290,11 +2292,20 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateLead(id: string, businessAccountId: string, leadData: Partial<InsertLead>): Promise<Lead> {
+    // AI Calling (B): note whether the lead had a phone before this update (only when a phone is being set).
+    const settingPhone = typeof leadData.phone === "string" && leadData.phone.trim() !== "";
+    const [before] = settingPhone
+      ? await db.select({ phone: leads.phone }).from(leads).where(and(eq(leads.id, id), eq(leads.businessAccountId, businessAccountId)))
+      : [undefined];
     const [lead] = await db
       .update(leads)
       .set({ ...stripProtectedFields(leadData), createdAt: undefined as any, updatedAt: new Date() }) // Prevent createdAt from being updated, set updatedAt
       .where(and(eq(leads.id, id), eq(leads.businessAccountId, businessAccountId)))
       .returning();
+    // AI Calling (B): first phone number for this lead → maybe queue an automatic call (fire-and-forget).
+    if (settingPhone && before && !before.phone?.trim() && lead?.phone) {
+      import("./services/calling/leadTrigger").then(m => m.triggerAutoLeadCall(lead)).catch(() => {});
+    }
     return lead;
   }
 
