@@ -1,3 +1,4 @@
+import { DEFAULT_PHONE_COUNTRY_CODE, normalizePhoneCodeStyle, phoneCodeExample, type PhoneCodeStyle } from "@shared/phoneFormat";
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useLocation } from "wouter";
@@ -109,6 +110,10 @@ const renderFormattedText = (text: string) => {
   return <>{parts}</>;
 };
 
+/** Sources that carry a phone number (offer "Add +91 to 10-digit numbers"). */
+const isLsqPhoneSource = (sourceField: string | null | undefined): boolean =>
+  !!sourceField && (sourceField === 'lead.phone' || sourceField === 'lead.whatsapp' || /phone|mobile|whatsapp/i.test(sourceField));
+
 interface GroupTrainingResponse {
   groupId: string;
   groupName: string;
@@ -160,6 +165,8 @@ interface GroupLeadsquaredFieldMapping {
   sourceField: string | null;
   customValue: string | null;
   fallbackValue: string | null;
+  phoneCountryCode?: string | null;
+  phoneCodeStyle?: string | null;
   displayName: string;
   isEnabled: boolean;
   sortOrder: number;
@@ -358,6 +365,8 @@ export default function GroupTrainingEditor() {
     customValue: '',
     displayName: '',
     fallbackValue: '',
+    addCountryCode: false,
+    phoneCodeStyle: 'dash' as PhoneCodeStyle,
   });
   
   // Menu Builder state
@@ -666,6 +675,8 @@ export default function GroupTrainingEditor() {
         sourceField: newLsqMapping.sourceType === 'dynamic' ? newLsqMapping.sourceField : null,
         customValue: newLsqMapping.sourceType === 'custom' ? newLsqMapping.customValue : null,
         fallbackValue: newLsqMapping.sourceType === 'dynamic' ? (newLsqMapping.fallbackValue || null) : null,
+        phoneCountryCode: newLsqMapping.sourceType === 'dynamic' && isLsqPhoneSource(newLsqMapping.sourceField) && newLsqMapping.addCountryCode ? DEFAULT_PHONE_COUNTRY_CODE : null,
+        phoneCodeStyle: newLsqMapping.phoneCodeStyle,
         displayName: newLsqMapping.displayName,
         isEnabled: true,
         sortOrder: lsqFieldMappings.length,
@@ -691,6 +702,8 @@ export default function GroupTrainingEditor() {
         customValue: '',
         displayName: '',
         fallbackValue: '',
+        addCountryCode: false,
+        phoneCodeStyle: 'dash' as PhoneCodeStyle,
       });
       fetchLsqFieldMappings();
     } catch (error: any) {
@@ -2472,6 +2485,8 @@ export default function GroupTrainingEditor() {
                         customValue: '',
                         displayName: '',
                         fallbackValue: '',
+                        addCountryCode: false,
+                        phoneCodeStyle: 'dash' as PhoneCodeStyle,
                       });
                       setShowLsqMappingDialog(true);
                     }}
@@ -2511,6 +2526,9 @@ export default function GroupTrainingEditor() {
                           <p className="text-sm text-muted-foreground">
                             {mapping.sourceType === 'dynamic' ? (
                               <>Source: {LSQ_DYNAMIC_SOURCE_OPTIONS.find(o => o.value === mapping.sourceField)?.label || mapping.sourceField}
+                                {mapping.phoneCountryCode && (
+                                  <span className="ml-1 text-emerald-700">· adds +{mapping.phoneCountryCode} ({phoneCodeExample(mapping.phoneCountryCode, normalizePhoneCodeStyle(mapping.phoneCodeStyle))})</span>
+                                )}
                                 {mapping.fallbackValue && (
                                   <span className="ml-1 text-gray-400">(fallback: "{mapping.fallbackValue}")</span>
                                 )}
@@ -2537,6 +2555,8 @@ export default function GroupTrainingEditor() {
                                 customValue: mapping.customValue || '',
                                 displayName: mapping.displayName,
                                 fallbackValue: mapping.fallbackValue || '',
+                                addCountryCode: !!mapping.phoneCountryCode,
+                                phoneCodeStyle: normalizePhoneCodeStyle(mapping.phoneCodeStyle),
                               });
                               setShowLsqMappingDialog(true);
                             }}
@@ -4064,7 +4084,7 @@ export default function GroupTrainingEditor() {
         setShowLsqMappingDialog(open);
         if (!open) {
           setEditingLsqMapping(null);
-          setNewLsqMapping({ leadsquaredField: '', sourceType: 'dynamic', sourceField: '', customValue: '', displayName: '', fallbackValue: '' });
+          setNewLsqMapping({ leadsquaredField: '', sourceType: 'dynamic', sourceField: '', customValue: '', displayName: '', fallbackValue: '', addCountryCode: false, phoneCodeStyle: 'dash' });
         }
       }}>
         <DialogContent>
@@ -4140,6 +4160,26 @@ export default function GroupTrainingEditor() {
                     If the dynamic value is empty, this value will be sent instead
                   </p>
                 </div>
+                {isLsqPhoneSource(newLsqMapping.sourceField) && (
+                  <div className="space-y-3 rounded-md border p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <Label>Add +{DEFAULT_PHONE_COUNTRY_CODE} to 10-digit numbers</Label>
+                        <p className="text-xs text-muted-foreground">9876543210 is sent as {phoneCodeExample(DEFAULT_PHONE_COUNTRY_CODE, newLsqMapping.phoneCodeStyle)}.</p>
+                      </div>
+                      <Switch checked={newLsqMapping.addCountryCode} onCheckedChange={(v) => setNewLsqMapping({ ...newLsqMapping, addCountryCode: v })} />
+                    </div>
+                    {newLsqMapping.addCountryCode && (
+                      <Select value={newLsqMapping.phoneCodeStyle} onValueChange={(v) => setNewLsqMapping({ ...newLsqMapping, phoneCodeStyle: normalizePhoneCodeStyle(v) })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="dash">{phoneCodeExample(DEFAULT_PHONE_COUNTRY_CODE, 'dash')} (with a dash)</SelectItem>
+                          <SelectItem value="compact">{phoneCodeExample(DEFAULT_PHONE_COUNTRY_CODE, 'compact')} (no dash)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                )}
               </>
             ) : (
               <div className="space-y-2">

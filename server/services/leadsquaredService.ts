@@ -1,3 +1,4 @@
+import { formatPhoneWithCountryCode, normalizePhoneCodeStyle } from "@shared/phoneFormat";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { z } from 'zod';
 import { LeadsquaredFieldMapping } from '@shared/schema';
@@ -368,6 +369,9 @@ export class LeadSquaredService {
           // source is present) instead of the raw source value.
           if (mapping.valueWhenPresent) {
             value = mapping.valueWhenPresent;
+          } else if (mapping.phoneCountryCode) {
+            // Phone field: "9876543210" → "+91-9876543210" (numbers with another country code unchanged).
+            value = formatPhoneWithCountryCode(value, mapping.phoneCountryCode, normalizePhoneCodeStyle(mapping.phoneCodeStyle)) || value;
           }
         } else if (mapping.fallbackValue) {
           value = mapping.fallbackValue;

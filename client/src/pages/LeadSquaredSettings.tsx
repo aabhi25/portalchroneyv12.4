@@ -1,3 +1,4 @@
+import { DEFAULT_PHONE_COUNTRY_CODE, normalizePhoneCodeStyle, phoneCodeExample, type PhoneCodeStyle } from "@shared/phoneFormat";
 import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { integrationPath } from "@/pages/settings/settingsPaths";
@@ -25,6 +26,10 @@ interface UrlRule {
   createdAt: string;
 }
 
+/** Sources that carry a phone number (offer "Add +91 to 10-digit numbers"). */
+const isPhoneSource = (sourceField: string | null | undefined): boolean =>
+  !!sourceField && (sourceField === 'lead.phone' || sourceField === 'lead.whatsapp' || /phone|mobile|whatsapp/i.test(sourceField));
+
 interface FieldMapping {
   id: string;
   leadsquaredField: string;
@@ -33,6 +38,8 @@ interface FieldMapping {
   customValue: string | null;
   fallbackValue: string | null;
   valueWhenPresent: string | null;
+  phoneCountryCode?: string | null;
+  phoneCodeStyle?: string | null;
   displayName: string;
   isEnabled: string;
   sortOrder: number;
@@ -127,6 +134,8 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
     fallbackValue: '',
     valueWhenPresent: '',
     displayName: '',
+    addCountryCode: false,
+    phoneCodeStyle: 'dash' as PhoneCodeStyle,
   });
 
   const [urlRules, setUrlRules] = useState<UrlRule[]>([]);
@@ -207,6 +216,8 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
           customValue: newMapping.sourceType === 'custom' ? newMapping.customValue : null,
           fallbackValue: newMapping.sourceType === 'dynamic' ? (newMapping.fallbackValue || null) : null,
           valueWhenPresent: newMapping.sourceType === 'dynamic' ? (newMapping.valueWhenPresent || null) : null,
+          phoneCountryCode: newMapping.sourceType === 'dynamic' && isPhoneSource(newMapping.sourceField) && newMapping.addCountryCode ? DEFAULT_PHONE_COUNTRY_CODE : null,
+          phoneCodeStyle: newMapping.phoneCodeStyle,
           displayName: newMapping.displayName,
         }),
       });
@@ -230,6 +241,8 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
         fallbackValue: '',
         valueWhenPresent: '',
         displayName: '',
+        addCountryCode: false,
+        phoneCodeStyle: 'dash' as PhoneCodeStyle,
       });
       fetchFieldMappings();
     } catch (error: any) {
@@ -312,6 +325,8 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
       fallbackValue: mapping.fallbackValue || '',
       valueWhenPresent: mapping.valueWhenPresent || '',
       displayName: mapping.displayName,
+      addCountryCode: !!mapping.phoneCountryCode,
+      phoneCodeStyle: normalizePhoneCodeStyle(mapping.phoneCodeStyle),
     });
     setShowMappingDialog(true);
   };
@@ -326,6 +341,8 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
       fallbackValue: '',
       valueWhenPresent: '',
       displayName: '',
+      addCountryCode: false,
+      phoneCodeStyle: 'dash' as PhoneCodeStyle,
     });
     setShowMappingDialog(true);
   };
@@ -1270,6 +1287,9 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
                               {mapping.fallbackValue && (
                                 <span className="ml-1 text-gray-400">(fallback: "{mapping.fallbackValue}")</span>
                               )}
+                              {mapping.phoneCountryCode && (
+                                <span className="ml-1 text-emerald-700" data-testid={`badge-phone-code-${mapping.id}`}>· adds +{mapping.phoneCountryCode} ({phoneCodeExample(mapping.phoneCountryCode, normalizePhoneCodeStyle(mapping.phoneCodeStyle))})</span>
+                              )}
                             </span>
                           )}
                         </td>
@@ -1395,6 +1415,37 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
                     />
                     <p className="text-xs text-gray-500">Optional. When set, this fixed value is sent whenever the data source has a value (e.g. send "PRChat" whenever a UTM source is present), instead of the raw source value. Leave blank to send the raw value.</p>
                   </div>
+                  {isPhoneSource(newMapping.sourceField) && (
+                    <div className="space-y-3 rounded-md border p-3" data-testid="phone-country-code-option">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <Label htmlFor="addCountryCode">Add +{DEFAULT_PHONE_COUNTRY_CODE} to 10-digit numbers</Label>
+                          <p className="text-xs text-gray-500">9876543210 is sent as {phoneCodeExample(DEFAULT_PHONE_COUNTRY_CODE, newMapping.phoneCodeStyle)}. Numbers that already have a country code are cleaned up or left as they are.</p>
+                        </div>
+                        <Switch
+                          id="addCountryCode"
+                          checked={newMapping.addCountryCode}
+                          onCheckedChange={(v) => setNewMapping({ ...newMapping, addCountryCode: v })}
+                          data-testid="switch-add-country-code"
+                        />
+                      </div>
+                      {newMapping.addCountryCode && (
+                        <div className="space-y-1">
+                          <Label>Format</Label>
+                          <Select value={newMapping.phoneCodeStyle} onValueChange={(v) => setNewMapping({ ...newMapping, phoneCodeStyle: normalizePhoneCodeStyle(v) })}>
+                            <SelectTrigger data-testid="select-phone-code-style"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="dash">{phoneCodeExample(DEFAULT_PHONE_COUNTRY_CODE, 'dash')} (with a dash)</SelectItem>
+                              <SelectItem value="compact">{phoneCodeExample(DEFAULT_PHONE_COUNTRY_CODE, 'compact')} (no dash)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          {newMapping.valueWhenPresent && (
+                            <p className="text-xs text-amber-700">"Value When Source Is Present" is set, so that fixed value is sent instead of the number.</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="space-y-2">

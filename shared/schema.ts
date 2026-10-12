@@ -1465,6 +1465,8 @@ export const accountGroupLeadsquaredFieldMappings = pgTable("account_group_leads
   sourceField: text("source_field"), // For dynamic: 'lead.name', 'session.city', 'business.name', etc.
   customValue: text("custom_value"), // For custom: static value like "AI Chroney"
   fallbackValue: text("fallback_value"), // For dynamic: value to use when dynamic data is empty
+  phoneCountryCode: text("phone_country_code"), // see leadsquaredFieldMappings.phoneCountryCode
+  phoneCodeStyle: text("phone_code_style"),
   displayName: text("display_name").notNull(), // Friendly name shown in UI, e.g., "Full Name", "City"
   isEnabled: text("is_enabled").notNull().default("true"), // 'true' | 'false'
   sortOrder: integer("sort_order").notNull().default(0), // For ordering in UI
@@ -2648,6 +2650,9 @@ export const leadsquaredFieldMappings = pgTable("leadsquared_field_mappings", {
   customValue: text("custom_value"), // For custom: static value like "AI Chroney"
   fallbackValue: text("fallback_value"), // For dynamic: value to use when dynamic data is empty
   valueWhenPresent: text("value_when_present"), // For dynamic: when set, emit this static value instead of the raw source value whenever the dynamic source resolves to a non-empty value (e.g. send "PRChat" whenever a UTM source is present). Null = legacy behavior (emit the raw source value).
+  // Phone fields: add this country code to 10-digit numbers (e.g. "91" → +91-9876543210). Null = send as captured.
+  phoneCountryCode: text("phone_country_code"),
+  phoneCodeStyle: text("phone_code_style"), // 'dash' (+91-9876543210, default) | 'compact' (+919876543210); see shared/phoneFormat.ts
   displayName: text("display_name").notNull(), // Friendly name shown in UI, e.g., "Full Name", "City"
   isEnabled: text("is_enabled").notNull().default("true"), // 'true' | 'false'
   sortOrder: integer("sort_order").notNull().default(0), // For ordering in UI

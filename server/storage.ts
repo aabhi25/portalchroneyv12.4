@@ -5040,6 +5040,9 @@ export class DatabaseStorage implements IStorage {
               sourceType: mapping.sourceType,
               sourceField: mapping.sourceField,
               customValue: mapping.customValue,
+              fallbackValue: mapping.fallbackValue,
+              phoneCountryCode: mapping.phoneCountryCode,
+              phoneCodeStyle: mapping.phoneCodeStyle,
               displayName: mapping.displayName,
               isEnabled: mapping.isEnabled,
               sortOrder: mapping.sortOrder,
@@ -5291,6 +5294,8 @@ export class DatabaseStorage implements IStorage {
                 sourceField: mapping.sourceField,
                 customValue: mapping.customValue,
                 fallbackValue: mapping.fallbackValue,
+                phoneCountryCode: mapping.phoneCountryCode,
+                phoneCodeStyle: mapping.phoneCodeStyle,
                 displayName: mapping.displayName,
                 isEnabled: mapping.isEnabled,
                 sortOrder: mapping.sortOrder

@@ -1,3 +1,4 @@
+import { normalizeCountryCode, normalizePhoneCodeStyle } from "@shared/phoneFormat";
 import { fetchWithTimeout, LONG_FETCH_TIMEOUT_MS } from "./lib/fetchWithTimeout";
 import type { Express, Request, Response as ExpressResponse } from "express";
 import { getLogBuffer, logEvents } from './services/logCapture';
@@ -563,6 +564,15 @@ function writeAiUnavailableSse(res: ExpressResponse): void {
   res.write(`data: ${JSON.stringify({ type: 'final', data: AI_UNAVAILABLE_MESSAGE })}\n\n`);
   res.write(`data: ${JSON.stringify({ type: 'done', data: '' })}\n\n`);
   res.end();
+}
+
+/**
+ * LeadSquared field mapping "Add +91 to 10-digit numbers" option from a request body
+ * (dynamic mappings only; null = send the number as captured). See shared/phoneFormat.ts.
+ */
+function lsqPhoneOptions(body: any, sourceType: string | undefined): { phoneCountryCode: string | null; phoneCodeStyle: string | null } {
+  const code = sourceType === 'custom' ? null : normalizeCountryCode(body?.phoneCountryCode);
+  return { phoneCountryCode: code, phoneCodeStyle: code ? normalizePhoneCodeStyle(body?.phoneCodeStyle) : null };
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -13790,6 +13800,7 @@ Return ONLY the refined instruction, nothing else.`
         sourceField,
         customValue,
         fallbackValue: sourceType === 'dynamic' ? (fallbackValue || null) : null,
+        ...lsqPhoneOptions(req.body, sourceType),
         displayName,
         isEnabled: isEnabled !== false,
         sortOrder: sortOrder || 0,
@@ -13814,6 +13825,7 @@ Return ONLY the refined instruction, nothing else.`
         sourceField,
         customValue,
         fallbackValue: sourceType === 'dynamic' ? (fallbackValue || null) : null,
+        ...(req.body.phoneCountryCode !== undefined ? lsqPhoneOptions(req.body, sourceType) : {}),
         displayName,
         isEnabled,
         sortOrder,
@@ -18866,6 +18878,7 @@ Important:
         customValue: sourceType === 'custom' ? customValue : null,
         fallbackValue: sourceType === 'dynamic' ? (fallbackValue || null) : null,
         valueWhenPresent: sourceType === 'dynamic' ? (valueWhenPresent || null) : null,
+        ...lsqPhoneOptions(req.body, sourceType),
         displayName,
         isEnabled: isEnabled ?? 'true',
         sortOrder: sortOrder ?? 0,
@@ -18933,6 +18946,10 @@ Important:
         if (valueWhenPresent !== undefined) updates.valueWhenPresent = valueWhenPresent || null;
       }
       
+      if (req.body.phoneCountryCode !== undefined || sourceType === 'custom') {
+        Object.assign(updates, lsqPhoneOptions(req.body, sourceType ?? existing.sourceType));
+      }
+
       const updated = await storage.updateLeadsquaredFieldMapping(id, businessAccountId, updates);
       res.json(updated);
     } catch (error: any) {
