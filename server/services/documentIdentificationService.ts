@@ -1,3 +1,4 @@
+import { repairPanNumber } from "@shared/pan";
 import OpenAI from "openai";
 import { createOpenAI } from "../lib/openaiClient";
 import { db } from "../db";
@@ -54,6 +55,7 @@ export interface DocumentIdentificationHooks {
 }
 
 const isAadhaarKey = (docType: string | undefined) => (docType || '').toLowerCase().replace(/_card$/, '') === 'aadhaar';
+const isPanKey = (docType: string | undefined) => (docType || '').toLowerCase().replace(/_card$/, '') === 'pan';
 
 export interface PdfExtractionResult {
   success: boolean;
@@ -692,6 +694,27 @@ IMPORTANT: When the image is NOT a recognized document (documentType is "unknown
       }
     }
 
+    // PAN number: fix look-alike characters by position (G/6, O/0, I/1, S/5, B/8, Z/2 —
+    // 5 letters + 4 digits + 1 letter) before the format gate below, and take the number from
+    // the generic documentNumber when the model put it there. Only a valid PAN is ever kept.
+    if (isPanKey(result.documentType) && result.extractedData) {
+      const numberField = docTypeConfig.extractionFields.find(f => f.key === 'pan_number');
+      if (numberField) {
+        const read = result.extractedData.pan_number ?? result.extractedData.documentNumber ?? null;
+        if (read !== null && read !== undefined && String(read).trim() !== '') {
+          const repaired = repairPanNumber(read);
+          const cleanRead = String(read).replace(/[\s-]/g, '').toUpperCase();
+          if (repaired) {
+            if (repaired !== cleanRead) {
+              console.log(`[Document ID] PAN look-alike repair applied (${cleanRead.length} chars → valid PAN)`);
+              result.validationNotes = `${result.validationNotes || ''} [PAN number look-alike characters corrected]`.trim();
+            }
+            result.extractedData.pan_number = repaired;
+          }
+        }
+      }
+    }
+
     // PR1 FAIL-CLOSED VALIDATION
     // Required field whose value is present but does NOT match formatRegex:
     //   1. null out the field (so downstream code never sees a corrupt value)
@@ -745,6 +768,17 @@ AADHAAR NUMBER — READ THIS CAREFULLY
 - IGNORE the Enrolment No. (e.g. "1234/56789/01234", top of an e-Aadhaar letter) and any dates, phone numbers or PIN codes.
 - If the number is MASKED (some digits replaced by X, e.g. "XXXX XXXX 1234"), return it EXACTLY as printed including the X characters — do not invent the hidden digits.
 - The back side / address block: return the full address (house, street, locality, district, state, PIN). "C/O", "S/O", "D/O", "W/O" names inside the address are NOT the cardholder's name.
+`;
+    const PAN_RULES = `
+═══════════════════════════════════════════════════════════
+PAN CARD — READ THIS CAREFULLY
+═══════════════════════════════════════════════════════════
+- The PAN is EXACTLY 10 characters: 5 LETTERS, then 4 DIGITS, then 1 LETTER (e.g. ABCDE1234F). It is printed under the label "Permanent Account Number" (older cards) or "Permanent Account Number Card" / next to the photo (newer cards).
+- Read each of the 10 characters one by one. When a character could be one of a look-alike pair (0/O, 1/I, 2/Z, 5/S, 6/G, 8/B), choose the one the structure requires at that position: positions 1-5 and 10 are letters, positions 6-9 are digits.
+- NAME: return only the PAN holder's own name.
+  * OLDER cards (no "Name" label): the FIRST line under "INCOME TAX DEPARTMENT" is the holder's name; the SECOND line is the FATHER'S name — never join the two lines.
+  * NEWER cards: use the line under the label "Name" / "नाम"; the line under "Father's Name" / "पिता का नाम" is the father's name.
+- Date of birth: the date printed on the card (DD/MM/YYYY on the card).
 `;
     const requiredFields = config.extractionFields.filter(f => f.required);
     const optionalFields = config.extractionFields.filter(f => !f.required);
@@ -825,7 +859,7 @@ The REQUIRED list is for the whole document across ALL its sides. Many cards pri
 - Return null for fields that are simply not on this side — that is expected.
 - Do NOT lower confidence and do NOT set isValid=false because this image shows only one side.
 - A single image may show BOTH sides (side by side, one above the other, or a printed/e-Aadhaar sheet): extract every field from both.
-${isAadhaarKey(config.key) ? AADHAAR_NUMBER_RULES : ''}${customInstructions ? '\nDOC-TYPE-SPECIFIC RULES:\n' + customInstructions + '\n' : ''}
+${isAadhaarKey(config.key) ? AADHAAR_NUMBER_RULES : ''}${isPanKey(config.key) ? PAN_RULES : ''}${customInstructions ? '\nDOC-TYPE-SPECIFIC RULES:\n' + customInstructions + '\n' : ''}
 ═══════════════════════════════════════════════════════════
 FIELDS TO EXTRACT (output schema is enforced)
 ═══════════════════════════════════════════════════════════

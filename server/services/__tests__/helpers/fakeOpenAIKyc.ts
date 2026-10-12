@@ -45,6 +45,18 @@ export const SCENARIOS: Record<string, { cls?: string; mini: Answer; gpt4o?: Ans
     mini: { data: { aadhaar_number: `${VALID.slice(0, 4)} ${VALID.slice(4, 8)} ${VALID.slice(8)}`, full_name: 'Asha Verma', address: '12 MG Road, Pune 411001', dob: '01/02/1990', gender: 'Female', father_name: null }, confidence: 0.95, side: null },
   },
   not_a_doc: { cls: 'unknown', mini: { data: {}, confidence: 0 } },
+  // Old-style PAN photo where the model reads the name and DOB but not the number (every tier).
+  pan_no_number: {
+    cls: 'pan',
+    mini: { data: {}, confidence: 0 },
+    byDoc: { pan: { data: { pan_number: null, full_name: 'VINDYARANI', dob: '22/08/1987', father_name: null }, confidence: 0.7, side: 'front' } },
+  },
+  // PAN read with a look-alike character in a digit position ("I" for "1").
+  pan_lookalike: {
+    cls: 'pan',
+    mini: { data: {}, confidence: 0 },
+    byDoc: { pan: { data: { pan_number: 'APRPC5I24K', full_name: 'PRINCE CHAKRABORTY', dob: '14/06/1989', father_name: null }, confidence: 0.9, side: 'front' } },
+  },
 };
 
 export interface Call { kind: 'classify' | 'strict'; model: string; scenario: string; detail?: string; system: string; user: string }
@@ -72,7 +84,10 @@ export function startFakeOpenAI(): Promise<{ baseUrl: string; close: () => void 
       calls.push({ kind: isClassify ? 'classify' : 'strict', model: body.model, scenario, detail: image?.image_url?.detail, system, user: userText });
       const sc = SCENARIOS[scenario];
       let content: string;
-      if (isClassify) {
+      if (!sc && !isClassify) {
+        // A text-only AI call (e.g. upload-step intent): a neutral answer.
+        content = JSON.stringify({ intent: 'question', response: 'Please upload the requested document.' });
+      } else if (isClassify) {
         content = JSON.stringify({ docType: sc?.cls ?? 'aadhaar', confidence: 0.95, validationNotes: sc?.cls === 'unknown' ? 'appears to be a selfie' : null });
       } else {
         const docKey = /extraction specialist for PAN/i.test(system) ? 'pan' : /extraction specialist for Aadhaar/i.test(system) ? 'aadhaar' : '';

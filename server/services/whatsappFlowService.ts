@@ -1,3 +1,4 @@
+import { findPanInText, isValidPan, looksLikePanAttempt } from "@shared/pan";
 import { trackTimer } from "../lib/lifecycle";
 import { createOpenAI } from "../lib/openaiClient";
 import { db } from "../db";
@@ -2918,6 +2919,13 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       };
     }
 
+    // ── PAN typed after an unreadable PAN photo (before the AI intent check, which could
+    // mistake "ABCDE1234F" for "update my PAN field") ──
+    if (!isInteractive && currentStep.type === "upload") {
+      const typedPanResult = await this.tryTypedPanNumber(session, activeFlow.id, currentStep, collectedData, message);
+      if (typedPanResult) return typedPanResult;
+    }
+
     // ── Global intent check: field update or full restart (works at any step) ──
     // Skip for interactive responses (button/list/dropdown clicks) — those are valid selections, not free-text requests
     if (isInteractive) {
@@ -3956,6 +3964,63 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       collectedData._documentState = {};
     }
     return collectedData._documentState as DocumentState;
+  }
+
+  /** A PAN photo arrived, but its number could not be read (the name / date of birth may have been). */
+  private panNumberUnread(docTypeState: DocTypeState | undefined): boolean {
+    return !!docTypeState
+      && docTypeState.status === 'processing'
+      && (docTypeState.pages?.length || 0) >= 1
+      && !isValidPan(docTypeState.mergedData?.pan_number);
+  }
+
+  /** What to tell the customer when the PAN number couldn't be read from the photo. */
+  private panNumberHelpText(misses: number, mergedData: Record<string, any> | undefined): string {
+    const readName = !!(mergedData?.full_name || mergedData?.name);
+    const readDob = !!(mergedData?.dob || mergedData?.date_of_birth || mergedData?.dateOfBirth);
+    const what = readName && readDob ? 'the name and date of birth' : readName ? 'the name' : readDob ? 'the date of birth' : '';
+    const first = what
+      ? `I could read ${what}, but not the PAN number clearly.`
+      : `I couldn't read the PAN number clearly.`;
+    if (misses >= 2) {
+      return `${first}\n\n*Please type the 10-character PAN number here* (5 letters, 4 digits, then 1 letter — for example ABCDE1234F).`;
+    }
+    return `${first}\n\n*Please send a clearer photo of the PAN card* (flat, in good light, no glare) — *or simply type the 10-character PAN number here* (for example ABCDE1234F).`;
+  }
+
+  /**
+   * At a PAN upload step whose photo was read except for the PAN number: a typed PAN completes
+   * the document through the normal document path (duplicate check, confirmation, lead fields,
+   * next step), keeping the uploaded photo. Returns null when the message isn't for this.
+   */
+  private async tryTypedPanNumber(session: any, flowId: string, currentStep: any, collectedData: Record<string, any>, message: string): Promise<ProcessResult | null> {
+    const documentTypes: any[] = (currentStep.options as FlowStepOptions | null)?.documentTypes || [];
+    const panCfg = documentTypes.find((d: any) => String(d.docType || '').toLowerCase().replace(/_card$/, '') === 'pan');
+    if (!panCfg) return null;
+    const docState = collectedData._documentState?.pan as DocTypeState | undefined;
+    if (!this.panNumberUnread(docState)) return null;
+    const typed = findPanInText(message);
+    if (typed) {
+      const lastPage = docState!.pages[docState!.pages.length - 1];
+      console.log(`[WhatsApp Flow] PAN number typed after an unreadable PAN photo — completing the PAN document`);
+      return this.handleDocumentResult(session, flowId, {
+        documentType: panCfg.docType,
+        confidence: 0.99,
+        isValid: true,
+        side: 'front',
+        extractedData: { pan_number: typed },
+        validationNotes: 'PAN number typed by the customer',
+        _extractionTier: 'typed',
+      }, collectedData, lastPage?.sourceMediaUrl);
+    }
+    if (looksLikePanAttempt(message)) {
+      return {
+        handled: true,
+        response: { type: "text", text: "That doesn't look like a PAN number. A PAN has 10 characters — 5 letters, 4 digits, then 1 letter (for example ABCDE1234F). Please check it and type it again." },
+        sessionId: session.id,
+      };
+    }
+    return null;
   }
 
   private getDocTypeState(collectedData: Record<string, any>, docType: string): DocTypeState {
@@ -6216,6 +6281,8 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       const sidePrompt = this.buildPartialDocSidePrompt(norm, dState, label);
       if (sidePrompt) {
         backSideMessages.push(sidePrompt);
+      } else if (norm === 'pan' && this.panNumberUnread(dState)) {
+        backSideMessages.push(this.panNumberHelpText(Number(latestData._panNumberMisses) || 1, dState?.mergedData));
       } else if (dState?.status === 'processing' && (dState as any).pages?.length >= 1) {
         backSideMessages.push(`Your ${label} was partially received. Please upload all pages clearly.`);
       } else {
@@ -7204,7 +7271,18 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       const sidePrompt = this.buildPartialDocSidePrompt(normalizedMatchedType, docTypeState, justUploadedLabel);
 
       let promptLine: string;
-      if (sidePrompt) {
+      if (!sidePrompt && normalizedMatchedType === 'pan' && this.panNumberUnread(docTypeState)) {
+        // PAN photo read, but not its number: say exactly that and offer to type it (after 2
+        // misses, ask to type it) instead of "PAN Card received… Please also upload: PAN Card".
+        collectedData._panNumberMisses = (Number(collectedData._panNumberMisses) || 0) + 1;
+        await this.updateSessionData(session.id, collectedData);
+        const otherMissing = documentTypes
+          .filter((d: any) => missingMandatory.includes(d.docType) && d.docType.toLowerCase().replace(/_card$/, '') !== 'pan')
+          .map((d: any) => d.label);
+        promptLine = this.panNumberHelpText(collectedData._panNumberMisses, docTypeState.mergedData)
+          + (otherMissing.length > 0 ? `\n\n*Also upload: ${otherMissing.join(", ")}.*` : '');
+        console.log(`[WhatsApp Flow] PAN number not readable from the photo (miss ${collectedData._panNumberMisses}) — asking for a clearer photo or the typed number`);
+      } else if (sidePrompt) {
         // If other mandatory docs are also still missing (e.g. partial Aadhaar + PAN not uploaded),
         // append them after the side prompt so we don't silently drop the other asks.
         const justUploadedDocType = documentTypes.find((d: any) =>
