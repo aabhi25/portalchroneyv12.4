@@ -10,6 +10,9 @@
  *   - each sentence is held until OPENAI_TTS_PREBUFFER_MS of it exists (smooth start);
  *   - more sentences are synthesised at once (OPENAI_TTS_PARALLEL);
  *   - one quick retry when a request fails before any audio (rate limit / 5xx / network);
+ *   - a hedged second request when a sentence has no audio after OPENAI_TTS_HEDGE_MS: now and
+ *     then one sentence of a batch takes >6 s to start, and it used to be skipped (the avatar
+ *     "missed a sentence"); the faster of the two requests is played;
  *   - speaking instructions (gpt-4o-mini-tts): warm and clear, Hindi pronounced natively.
  * ElevenLabs voices are unaffected.
  */
@@ -23,6 +26,12 @@ const envNumber = (name: string, fallback: number, min: number, max: number) => 
 /** Overridable for tuning/measurement (OPENAI_TTS_PREBUFFER_MS=0, OPENAI_TTS_PARALLEL=2 = the old behaviour). */
 export const OPENAI_TTS_PREBUFFER_MS = envNumber("OPENAI_TTS_PREBUFFER_MS", 350, 0, 2000);
 export const OPENAI_TTS_PARALLEL = envNumber("OPENAI_TTS_PARALLEL", 4, 1, 8);
+/**
+ * A sentence with no audio after this is sent again. Normal first audio is 0.6–1.8 s; a stalled
+ * request never starts at all (local test 2026-10-13: stalled ones produced nothing, their
+ * second request started in ~0.6 s), so waiting longer only adds silence.
+ */
+export const OPENAI_TTS_HEDGE_MS = envNumber("OPENAI_TTS_HEDGE_MS", 1500, 500, 6000);
 export const OPENAI_TTS_VOICES = new Set([
   "alloy", "ash", "ballad", "coral", "echo", "fable", "marin", "cedar",
   "nova", "onyx", "sage", "shimmer", "verse",
@@ -74,10 +83,14 @@ export function createOpenAiTtsProvider(opts: {
     name: "openai",
     prebufferMs: OPENAI_TTS_PREBUFFER_MS,
     preferredParallel: OPENAI_TTS_PARALLEL,
+    hedgeAfterMs: OPENAI_TTS_HEDGE_MS,
     synthesize: async (text, signal, onChunk) => {
       let attempt = 0;
+      const t0 = Date.now();
+      let headersAt = 0;
       for (;;) {
         let gotAudio = false;
+        headersAt = 0;
         try {
           const response = await opts.client.audio.speech.create({
             model: OPENAI_TTS_MODEL,
@@ -86,6 +99,7 @@ export function createOpenAiTtsProvider(opts: {
             instructions,
             response_format: "pcm",
           }, { signal });
+          headersAt = Date.now();
           const body = response.body as AsyncIterable<Uint8Array> | ReadableStream<Uint8Array> | undefined;
           if (!body) {
             const pcm = Buffer.from(await response.arrayBuffer());
@@ -102,6 +116,13 @@ export function createOpenAiTtsProvider(opts: {
           }
           return;
         } catch (error) {
+          // A request given up without any audio (hedge won / no audio in time): say where it was
+          // stuck — before OpenAI answered at all (connection/queue) or after (audio never came).
+          const waited = Date.now() - t0;
+          if (signal.aborted && !gotAudio && waited >= 1000) {
+            console.warn(`[TtsStall] openai: no audio after ${waited}ms for a ${text.length}-char sentence — ` +
+              (headersAt ? `OpenAI answered after ${headersAt - t0}ms but sent no audio` : "OpenAI had not answered yet"));
+          }
           // Retry once, only if nothing was played yet (a mid-sentence retry would repeat words).
           if (attempt === 0 && !gotAudio && !signal.aborted && isRetryable(error)) {
             attempt++;

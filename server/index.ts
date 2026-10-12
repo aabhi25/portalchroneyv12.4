@@ -244,9 +244,15 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     console.error('[TopScholar] Content schema bootstrap failed:', err);
   }
 
+  // Local runs against a copy of production data: DISABLE_BACKGROUND_JOBS=1 skips every
+  // scheduler/worker (campaign sends, CRM pushes, Shopify sync, backups, dialer...) so the
+  // copy can never message customers or write to their systems. Never set in production.
+  const backgroundJobsDisabled = process.env.DISABLE_BACKGROUND_JOBS === "1";
+  if (backgroundJobsDisabled) console.warn('[Boot] DISABLE_BACKGROUND_JOBS=1 — schedulers and workers are not started');
+
   // TopScholar FULL-sync embedding jobs (OpenAI Batch API) are async — a background
   // poller advances them to completion and resumes any left in-flight by a restart.
-  try {
+  if (!backgroundJobsDisabled) try {
     const { startEmbedJobPoller } = await import('./services/topscholar/embedJobPoller');
     startEmbedJobPoller();
   } catch (err) {
@@ -256,7 +262,7 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
   // Plan-level full syncs are admin-triggered, but their CP IDs are processed
   // by one durable worker after the request has returned. This prevents a
   // Plan click from starting an unbounded number of in-process MongoDB jobs.
-  try {
+  if (!backgroundJobsDisabled) try {
     const { startPlanSyncWorker } = await import('./services/topscholar/planSyncWorker');
     startPlanSyncWorker();
   } catch (err) {
@@ -330,7 +336,8 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     reusePort: process.platform !== "darwin",
   }, () => {
     log(`serving on port ${port}`);
-    
+    if (backgroundJobsDisabled) return;
+
     // Start Shopify auto-sync scheduler
     shopifySyncScheduler.start();
 

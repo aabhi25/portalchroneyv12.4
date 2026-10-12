@@ -3454,7 +3454,7 @@ export class RealtimeVoiceService {
    *   [VoiceTiming] #3 answered | stop→text 640ms | route +310 | first token +1180 |
    *   first sentence +1650 | FIRST AUDIO +1890 | full text +3400 | audio 8.2s tts=elevenlabs | "what is photo…"
    */
-  private logVoiceTiming(t: VoiceTurnTiming, outcome: string, extra: { audioMs?: number; tts?: string } = {}): void {
+  private logVoiceTiming(t: VoiceTurnTiming, outcome: string, extra: { audioMs?: number; tts?: string; sentences?: string } = {}): void {
     if (t.logged) return;
     t.logged = true;
     const base = t.stoppedAt ?? t.transcriptAt;
@@ -3474,6 +3474,8 @@ export class RealtimeVoiceService {
       );
       if (t.sentences != null) parts.push(`${t.sentences} sentences/${t.chars} chars`);
       if (extra.audioMs != null) parts.push(`audio ${(extra.audioMs / 1000).toFixed(1)}s${extra.tts ? ` tts=${extra.tts}` : ''}`);
+      // Per sentence: ms to first audio (h = hedge sent, ✗ = not spoken, c = cached phrase).
+      if (extra.sentences) parts.push(`tts first audio ${extra.sentences}`);
       if (t.avatar) parts.push(`avatar=${t.avatar} AVATAR SPEAK ${rel(t.avatarSpeakAt)}`);
       if (t.fillerAt) parts.push(`filler ${rel(t.fillerAt)}`);
     }
@@ -4324,7 +4326,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       const audioMs = Math.round(((conversation.answerAudioBytes || 0) / 48000) * 1000);
       const playbackStart = conversation.activeElevenLabsStartedAt || Date.now();
       conversation.answerPlaybackEndsAt = Math.max(Date.now(), playbackStart + audioMs) + 5000;
-      if (timing) this.logVoiceTiming(timing, 'answered', { audioMs, tts: pipeline.providerUsed() });
+      if (timing) this.logVoiceTiming(timing, 'answered', { audioMs, tts: pipeline.providerUsed(), sentences: pipeline.sentenceSummary() });
       this.sendAiDone(conversation, responseId);
     } catch (error) {
       bail();

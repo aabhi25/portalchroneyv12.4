@@ -33,6 +33,13 @@ export interface TtsProvider {
   prebufferMs?: number;
   /** How many sentences to synthesise at once when this is the primary voice (default 2). */
   preferredParallel?: number;
+  /**
+   * Hedged request: if a sentence has produced no audio after this long, send the same
+   * sentence again and keep whichever request starts streaming first. For providers with
+   * a long latency tail (OpenAI TTS sometimes takes >6 s to start one sentence of a batch,
+   * which used to drop that sentence). Unset = no hedge.
+   */
+  hedgeAfterMs?: number;
 }
 
 export interface SentenceTtsPipelineOptions {
@@ -63,6 +70,10 @@ interface PipelineItem {
   holdBytes: number;
   /** True once the sentence has started releasing audio (the hold is over). */
   flowing: boolean;
+  /** Diagnostics: ms from request to first audio, whether a hedge was sent, whether it failed. */
+  firstByteMs?: number;
+  hedged?: boolean;
+  failed?: boolean;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -93,6 +104,19 @@ export class SentenceTtsPipeline {
   providerUsed(): string {
     const used = Array.from(new Set(this.providerLog.filter(p => p.ok).map(p => p.provider)));
     return used.join('+') || 'none';
+  }
+
+  /**
+   * Per-sentence first-audio times for the [VoiceTiming] line, e.g. "820,1400,h2900,✗,c":
+   * ms to first audio, h = a hedge request was sent, ✗ = sentence not spoken, c = cached phrase.
+   */
+  sentenceSummary(): string {
+    return this.items.map((item) => {
+      if (item.prerendered) return 'c';
+      if (item.failed) return '✗';
+      if (item.firstByteMs == null) return '-';
+      return `${item.hedged ? 'h' : ''}${item.firstByteMs}`;
+    }).join(',');
   }
 
   /** Queue the next sentence (already converted to speech text). */
@@ -207,34 +231,83 @@ export class SentenceTtsPipeline {
     }
   }
 
+  /**
+   * Speak one sentence with `provider`. Normally one request; with `hedgeAfterMs`, a second
+   * identical request is sent if the first has no audio by then (or fails before any audio),
+   * and the first one to stream wins — the other is aborted and its audio ignored, so nothing
+   * is ever played twice. No audio from any request within `firstChunkTimeoutMs` = failure.
+   */
   private async synthesizeWith(provider: TtsProvider, item: PipelineItem): Promise<void> {
     // PCM16 24 kHz = 48 bytes per ms.
     item.holdBytes = Math.max(0, Math.round((provider.prebufferMs ?? 0) * 48));
     item.flowing = item.holdBytes === 0;
-    const controller = new AbortController();
-    item.controller = controller;
-    let gotAudio = false;
+    // cancel() aborts item.controller; every attempt follows it.
+    const parent = new AbortController();
+    item.controller = parent;
+    const startedAt = Date.now();
+    const attempts: AbortController[] = [];
+    let winner = -1;
     let timedOut = false;
-    const timer = setTimeout(() => {
-      if (!gotAudio) {
+    type Settled = { k: number; ok: boolean; error?: unknown };
+    const running = new Map<number, Promise<Settled>>();
+
+    const launch = () => {
+      const k = attempts.length;
+      const controller = new AbortController();
+      attempts.push(controller);
+      if (parent.signal.aborted) controller.abort();
+      else parent.signal.addEventListener('abort', () => { try { controller.abort(); } catch { /* ignore */ } }, { once: true });
+      const run = provider.synthesize(item.text, controller.signal, (chunk) => {
+        if (controller.signal.aborted || chunk.length === 0) return;
+        if (winner === -1) {
+          winner = k;
+          item.firstByteMs = Date.now() - startedAt;
+          attempts.forEach((c, i) => { if (i !== k) { try { c.abort(); } catch { /* ignore */ } } });
+        }
+        if (winner === k) this.emit(item, chunk);
+      });
+      running.set(k, run.then(() => ({ k, ok: true }), (error) => ({ k, ok: false, error })));
+    };
+    const canHedge = () => provider.hedgeAfterMs != null && attempts.length < 2 && winner === -1 && !parent.signal.aborted;
+
+    let wake: (() => void) | null = null;
+    const hedgeTimer = provider.hedgeAfterMs != null
+      ? setTimeout(() => { if (canHedge()) { item.hedged = true; launch(); wake?.(); } }, provider.hedgeAfterMs)
+      : null;
+    const deadline = setTimeout(() => {
+      if (winner === -1) {
         timedOut = true;
-        try { controller.abort(); } catch { /* ignore */ }
+        try { parent.abort(); } catch { /* ignore */ }
       }
     }, this.firstChunkTimeoutMs);
+    const noAudioError = () => new Error(`${provider.name} produced no audio within ${this.firstChunkTimeoutMs}ms`);
+
     try {
-      await provider.synthesize(item.text, controller.signal, (chunk) => {
-        if (controller.signal.aborted) return;
-        if (chunk.length > 0) gotAudio = true;
-        this.emit(item, chunk);
-      });
-      if (timedOut) throw new Error(`${provider.name} produced no audio within ${this.firstChunkTimeoutMs}ms`);
-    } catch (error) {
-      if (timedOut && !this.cancelled) {
-        throw new Error(`${provider.name} produced no audio within ${this.firstChunkTimeoutMs}ms`);
+      launch();
+      for (;;) {
+        // Wait for an attempt to settle, or for a hedge to be launched (then race again).
+        const woke = new Promise<null>((resolve) => { wake = () => resolve(null); });
+        const settled = await Promise.race([...Array.from(running.values()), woke]);
+        wake = null;
+        if (!settled) continue;
+        running.delete(settled.k);
+        if (timedOut && !this.cancelled) throw noAudioError();
+        if (settled.k === winner) {
+          if (settled.ok) return;
+          throw settled.error;
+        }
+        if (winner !== -1) continue; // a loser we aborted
+        // No audio yet from anyone.
+        if (!settled.ok && canHedge()) { item.hedged = true; launch(); continue; }
+        if (running.size > 0) continue;
+        if (settled.ok) return; // finished without audio (empty sentence)
+        throw settled.error;
       }
-      throw error;
     } finally {
-      clearTimeout(timer);
+      if (hedgeTimer) clearTimeout(hedgeTimer);
+      clearTimeout(deadline);
+      // Losers still streaming are aborted; their settle promises are already handled.
+      attempts.forEach((c, i) => { if (i !== winner) { try { c.abort(); } catch { /* ignore */ } } });
     }
   }
 
@@ -259,6 +332,7 @@ export class SentenceTtsPipeline {
           if (this.cancelled || (isAbortError(error) && this.externallyCancelled())) return;
           this.providerLog.push({ index: item.index, provider: first.name, ok: false });
           this.options.onProviderFailure?.(first.name, error, item.text);
+          item.failed = !(usePrimary && fallback);
           if (usePrimary && fallback) {
             this.primaryBroken = true;
             // Start the sentence over with the fallback voice (nothing of it was released:
@@ -272,6 +346,7 @@ export class SentenceTtsPipeline {
               if (this.cancelled) return;
               this.providerLog.push({ index: item.index, provider: fallback.name, ok: false });
               this.options.onProviderFailure?.(fallback.name, fallbackError, item.text);
+              item.failed = true;
             }
           }
         }

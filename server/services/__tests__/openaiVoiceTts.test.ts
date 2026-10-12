@@ -107,6 +107,87 @@ async function main() {
   two.enqueue('a'); two.enqueue('b'); two.close(); await two.finished();
   expect(seq.length === 2 && seq[0][1] === 500 && seq[1][1] === 600, 'consecutive sentences released in order without loss', seq);
 
+  // ── Hedged request: a sentence whose request stalls is sent again, never skipped ──────────
+  const { OPENAI_TTS_HEDGE_MS } = await import('../voice/openaiTts');
+  expect(tutor.hedgeAfterMs === OPENAI_TTS_HEDGE_MS && OPENAI_TTS_HEDGE_MS >= 1000 && OPENAI_TTS_HEDGE_MS <= 2000, 'OpenAI voices hedge a stalled sentence well before the 6 s give-up', OPENAI_TTS_HEDGE_MS);
+  const stall = (signal: AbortSignal) => new Promise<void>((_, reject) => {
+    signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+  });
+  // Scripted attempts per sentence: each entry is how attempt #k behaves.
+  function scriptedProvider(name: string, attempts: Record<string, Array<(s: AbortSignal, on: (b: Buffer) => void) => Promise<void>>>, extra: Record<string, unknown> = {}) {
+    const log: Array<{ text: string; k: number; aborted: boolean }> = [];
+    const provider = { name, ...extra, synthesize: async (text: string, signal: AbortSignal, onChunk: (b: Buffer) => void) => {
+      const k = log.filter((l) => l.text === text).length;
+      const entry = { text, k, aborted: false };
+      log.push(entry);
+      signal.addEventListener('abort', () => { entry.aborted = true; }, { once: true });
+      const behave = attempts[text]?.[k] ?? (async (_s, on) => { await sleep(20); on(Buffer.alloc(480, 9)); });
+      await behave(signal, onChunk);
+    } };
+    return { provider, log };
+  }
+  async function speak(provider: any, texts: string[], opts: Record<string, unknown> = {}) {
+    const sent: number[] = [];
+    const failures: string[] = [];
+    const p = new SentenceTtsPipeline({ primary: provider, sendAudio: (pcm) => sent.push(pcm[0]), onProviderFailure: (_n, _e, t) => failures.push(t), ...opts });
+    for (const t of texts) p.enqueue(t);
+    p.close(); await p.finished();
+    return { sent, failures, summary: p.sentenceSummary(), pipeline: p };
+  }
+
+  // 1) First request stalls → hedge after 100 ms streams → spoken once, stalled request aborted.
+  {
+    const { provider, log } = scriptedProvider('openai', { B: [(s) => stall(s), async (_s, on) => { await sleep(30); on(Buffer.alloc(480, 2)); }] }, { hedgeAfterMs: 100 });
+    const r = await speak(provider, ['A', 'B', 'C'], { firstChunkTimeoutMs: 1000 });
+    expect(r.failures.length === 0 && r.sent.filter((b) => b === 2).length === 1, 'stalled sentence is hedged and spoken (not skipped)', r);
+    expect(log.filter((l) => l.text === 'B').length === 2 && log.find((l) => l.text === 'B' && l.k === 0)?.aborted, 'the stalled request is aborted once the hedge wins', log);
+    expect(/^\d+,h\d+,\d+$/.test(r.summary), 'summary marks the hedged sentence', r.summary);
+  }
+  // 2) Both requests eventually stream: only the first to start is played (no doubled words).
+  {
+    const { provider, log } = scriptedProvider('openai', { B: [
+      async (s, on) => { await sleep(150); if (!s.aborted) { on(Buffer.alloc(480, 3)); await sleep(30); on(Buffer.alloc(480, 3)); } },
+      async (s, on) => { await sleep(300); if (!s.aborted) on(Buffer.alloc(480, 4)); },
+    ] }, { hedgeAfterMs: 100 });
+    const r = await speak(provider, ['B'], { firstChunkTimeoutMs: 1000 });
+    expect(r.sent.filter((b) => b === 3).length === 2 && !r.sent.includes(4), 'original wins → its audio only; the hedge is dropped', r.sent);
+    expect(log[1]?.aborted, 'the losing hedge request is aborted', log);
+  }
+  // 3) Request fails before any audio (e.g. 400) → hedge sent at once, sentence spoken.
+  {
+    const { provider, log } = scriptedProvider('openai', { B: [async () => { throw Object.assign(new Error('bad'), { status: 400 }); }] }, { hedgeAfterMs: 2000 });
+    const t0 = Date.now();
+    const r = await speak(provider, ['B'], { firstChunkTimeoutMs: 3000 });
+    expect(r.failures.length === 0 && r.sent.length === 1 && Date.now() - t0 < 500 && log.length === 2, 'early failure → immediate second request, no wait for the hedge timer', { r, ms: Date.now() - t0, calls: log.length });
+  }
+  // 4) Both stall → reported as not spoken after the timeout; the next sentence still plays.
+  {
+    const { provider } = scriptedProvider('openai', { B: [(s) => stall(s), (s) => stall(s)] }, { hedgeAfterMs: 50 });
+    const r = await speak(provider, ['A', 'B', 'C'], { firstChunkTimeoutMs: 300 });
+    expect(r.failures.join() === 'B' && r.sent.length === 2 && /^\d+,✗,\d+$/.test(r.summary), 'both stalled → one failure, ✗ in summary, answer carries on', r);
+  }
+  // 5) No hedgeAfterMs (ElevenLabs) → exactly one request, as before.
+  {
+    const { provider, log } = scriptedProvider('elevenlabs', { B: [(s) => stall(s)] });
+    const r = await speak(provider, ['B'], { firstChunkTimeoutMs: 200 });
+    expect(log.length === 1 && r.failures.join() === 'B', 'providers without a hedge still make a single request', log);
+  }
+  // 6) Interruption while hedging → every request aborted, nothing sent afterwards.
+  {
+    const { provider, log } = scriptedProvider('openai', { B: [(s) => stall(s), (s) => stall(s)] }, { hedgeAfterMs: 30 });
+    const sent: number[] = [];
+    const p = new SentenceTtsPipeline({ primary: provider as any, sendAudio: (pcm) => sent.push(pcm[0]), firstChunkTimeoutMs: 5000 });
+    p.enqueue('B'); p.close();
+    await sleep(80); p.cancel(); await p.finished(); await sleep(20);
+    expect(log.length === 2 && log.every((l) => l.aborted) && sent.length === 0, 'cancel aborts the original and the hedge', log);
+  }
+  // 7) Cached phrases show as "c" in the summary.
+  {
+    const p = new SentenceTtsPipeline({ primary: scriptedProvider('openai', {}).provider as any, sendAudio: () => undefined });
+    p.enqueueAudio(Buffer.alloc(480, 1), 'filler'); p.enqueue('A'); p.close(); await p.finished();
+    expect(/^c,\d+$/.test(p.sentenceSummary()), 'summary: cached filler then a spoken sentence', p.sentenceSummary());
+  }
+
   if (failed) { console.log(`\n${failed} check(s) failed`); process.exit(1); }
   console.log('\nAll ChatGPT-voice TTS checks passed.');
   process.exit(0);
