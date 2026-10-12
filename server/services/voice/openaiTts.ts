@@ -32,6 +32,12 @@ export const OPENAI_TTS_PARALLEL = envNumber("OPENAI_TTS_PARALLEL", 4, 1, 8);
  * second request started in ~0.6 s), so waiting longer only adds silence.
  */
 export const OPENAI_TTS_HEDGE_MS = envNumber("OPENAI_TTS_HEDGE_MS", 1500, 500, 6000);
+/**
+ * Copies of one sentence allowed (one more every OPENAI_TTS_HEDGE_MS). About a third of requests
+ * stalled in local tests and two copies sometimes both stalled (sentence lost); with 4 copies
+ * inside the 6 s limit that becomes rare.
+ */
+export const OPENAI_TTS_HEDGE_ATTEMPTS = envNumber("OPENAI_TTS_HEDGE_ATTEMPTS", 4, 2, 6);
 export const OPENAI_TTS_VOICES = new Set([
   "alloy", "ash", "ballad", "coral", "echo", "fable", "marin", "cedar",
   "nova", "onyx", "sage", "shimmer", "verse",
@@ -84,6 +90,7 @@ export function createOpenAiTtsProvider(opts: {
     prebufferMs: OPENAI_TTS_PREBUFFER_MS,
     preferredParallel: OPENAI_TTS_PARALLEL,
     hedgeAfterMs: OPENAI_TTS_HEDGE_MS,
+    hedgeMaxAttempts: OPENAI_TTS_HEDGE_ATTEMPTS,
     synthesize: async (text, signal, onChunk) => {
       let attempt = 0;
       const t0 = Date.now();

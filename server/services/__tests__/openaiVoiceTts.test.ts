@@ -166,6 +166,23 @@ async function main() {
     const r = await speak(provider, ['A', 'B', 'C'], { firstChunkTimeoutMs: 300 });
     expect(r.failures.join() === 'B' && r.sent.length === 2 && /^\d+,✗,\d+$/.test(r.summary), 'both stalled → one failure, ✗ in summary, answer carries on', r);
   }
+  // 4b) Original AND first copy stall (seen live: sentence lost) → a third copy speaks it.
+  {
+    const { provider, log } = scriptedProvider('openai', { B: [(s) => stall(s), (s) => stall(s), async (_s, on) => { await sleep(20); on(Buffer.alloc(480, 5)); }] }, { hedgeAfterMs: 60, hedgeMaxAttempts: 4 });
+    const r = await speak(provider, ['A', 'B', 'C'], { firstChunkTimeoutMs: 1000 });
+    expect(r.failures.length === 0 && r.sent.filter((b) => b === 5).length === 1, 'two stalled requests → third copy speaks the sentence', r);
+    expect(log.filter((l) => l.text === 'B').length === 3 && log.filter((l) => l.text === 'B' && l.k < 2).every((l) => l.aborted), 'exactly 3 requests; the stalled ones are aborted', log);
+  }
+  // 4c) Copies are capped: everything stalls → hedgeMaxAttempts requests, then the sentence fails.
+  {
+    const { provider, log } = scriptedProvider('openai', { B: [(s) => stall(s), (s) => stall(s), (s) => stall(s), (s) => stall(s), (s) => stall(s)] }, { hedgeAfterMs: 40, hedgeMaxAttempts: 3 });
+    const r = await speak(provider, ['B'], { firstChunkTimeoutMs: 400 });
+    expect(log.length === 3 && r.failures.join() === 'B', 'no more than hedgeMaxAttempts copies of one sentence', log.length);
+  }
+  {
+    const { OPENAI_TTS_HEDGE_ATTEMPTS } = await import('../voice/openaiTts');
+    expect(tutor.hedgeMaxAttempts === OPENAI_TTS_HEDGE_ATTEMPTS && OPENAI_TTS_HEDGE_ATTEMPTS * OPENAI_TTS_HEDGE_MS > 4000 && (OPENAI_TTS_HEDGE_ATTEMPTS - 1) * OPENAI_TTS_HEDGE_MS < 6000, 'OpenAI: several copies, all sent inside the 6 s limit', { attempts: OPENAI_TTS_HEDGE_ATTEMPTS, every: OPENAI_TTS_HEDGE_MS });
+  }
   // 5) No hedgeAfterMs (ElevenLabs) → exactly one request, as before.
   {
     const { provider, log } = scriptedProvider('elevenlabs', { B: [(s) => stall(s)] });

@@ -40,6 +40,8 @@ export interface TtsProvider {
    * which used to drop that sentence). Unset = no hedge.
    */
   hedgeAfterMs?: number;
+  /** With hedgeAfterMs: total requests allowed for one sentence, one more every hedgeAfterMs (default 2). */
+  hedgeMaxAttempts?: number;
 }
 
 export interface SentenceTtsPipelineOptions {
@@ -232,10 +234,11 @@ export class SentenceTtsPipeline {
   }
 
   /**
-   * Speak one sentence with `provider`. Normally one request; with `hedgeAfterMs`, a second
-   * identical request is sent if the first has no audio by then (or fails before any audio),
-   * and the first one to stream wins — the other is aborted and its audio ignored, so nothing
-   * is ever played twice. No audio from any request within `firstChunkTimeoutMs` = failure.
+   * Speak one sentence with `provider`. Normally one request; with `hedgeAfterMs`, another
+   * identical request is sent each time that passes with no audio (or at once when one fails
+   * before any audio), up to `hedgeMaxAttempts`. The first to stream wins — the others are
+   * aborted and their audio ignored, so nothing is ever played twice. No audio from any
+   * request within `firstChunkTimeoutMs` = failure.
    */
   private async synthesizeWith(provider: TtsProvider, item: PipelineItem): Promise<void> {
     // PCM16 24 kHz = 48 bytes per ms.
@@ -268,12 +271,25 @@ export class SentenceTtsPipeline {
       });
       running.set(k, run.then(() => ({ k, ok: true }), (error) => ({ k, ok: false, error })));
     };
-    const canHedge = () => provider.hedgeAfterMs != null && attempts.length < 2 && winner === -1 && !parent.signal.aborted;
+    const maxAttempts = provider.hedgeAfterMs != null ? Math.max(2, provider.hedgeMaxAttempts ?? 2) : 1;
+    const canHedge = () => attempts.length < maxAttempts && winner === -1 && !parent.signal.aborted;
 
+    // Another copy every hedgeAfterMs while nothing streams (stalls are per request: a second
+    // copy can stall too, a third rarely does).
     let wake: (() => void) | null = null;
-    const hedgeTimer = provider.hedgeAfterMs != null
-      ? setTimeout(() => { if (canHedge()) { item.hedged = true; launch(); wake?.(); } }, provider.hedgeAfterMs)
-      : null;
+    let hedgeTimer: NodeJS.Timeout | null = null;
+    const scheduleHedge = () => {
+      if (provider.hedgeAfterMs == null) return;
+      hedgeTimer = setTimeout(() => {
+        hedgeTimer = null;
+        if (!canHedge()) return;
+        item.hedged = true;
+        launch();
+        wake?.();
+        scheduleHedge();
+      }, provider.hedgeAfterMs);
+    };
+    scheduleHedge();
     const deadline = setTimeout(() => {
       if (winner === -1) {
         timedOut = true;

@@ -1015,18 +1015,25 @@ export class RealtimeVoiceService {
     for (const lang of languages) {
       for (const phrase of fillerPhrases(lang, gender)) {
         await waitForQuiet();
-        if (!(conversation.avatar || conversation.phone) || conversation.clientWs.readyState !== WebSocket.OPEN || conversation.fillerAudio !== cache) return;
-        const chunks: Buffer[] = [];
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 8000);
-        try {
-          await provider.synthesize(phrase, controller.signal, (pcm) => { if (pcm.length) chunks.push(Buffer.from(pcm)); });
-          const pcm = Buffer.concat(chunks);
-          if (pcm.length >= 4800) cache.set(phrase, pcm.subarray(0, pcm.length & ~1));
-        } catch {
-          // Synthesised on demand instead.
-        } finally {
-          clearTimeout(timer);
+        // A stalled TTS request never starts (see services/voice/openaiTts.ts): give it up after
+        // 3 s without audio and send a fresh one, up to 3 tries; still nothing = synthesised on demand.
+        for (let attempt = 0; attempt < 3 && !cache.has(phrase); attempt++) {
+          if (!(conversation.avatar || conversation.phone) || conversation.clientWs.readyState !== WebSocket.OPEN || conversation.fillerAudio !== cache) return;
+          const chunks: Buffer[] = [];
+          const controller = new AbortController();
+          const stall = setTimeout(() => { if (!chunks.length) controller.abort(); }, 3000);
+          const timer = setTimeout(() => controller.abort(), 8000);
+          try {
+            await provider.synthesize(phrase, controller.signal, (pcm) => { if (pcm.length) chunks.push(Buffer.from(pcm)); });
+            const pcm = Buffer.concat(chunks);
+            if (pcm.length >= 4800) cache.set(phrase, pcm.subarray(0, pcm.length & ~1));
+            else break; // finished but too short: not a stall, don't retry
+          } catch {
+            if (chunks.length) break; // failed mid-phrase: not a stall
+          } finally {
+            clearTimeout(stall);
+            clearTimeout(timer);
+          }
         }
       }
     }
