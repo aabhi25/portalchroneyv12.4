@@ -1033,10 +1033,29 @@ export async function createLeadSquaredServiceFromSettings(
  * Obviously-fake lead data for previewing / testing a UDS payload. Every enabled
  * mapping source gets a value so the preview shows the full field list.
  */
+export const SAMPLE_TEST_PHONE = '9000000000';
+
+/**
+ * A mobile number typed for a UDS test lead (so several test leads can be sent, each with its
+ * own number): digits with an optional leading "+", spaces / dashes / brackets allowed, 7–15
+ * digits. Returns the cleaned number, '' when nothing was typed, or null when it isn't valid.
+ */
+export function sanitizeTestPhone(raw: unknown): string | null | '' {
+  if (raw === undefined || raw === null) return '';
+  const s = String(raw).trim();
+  if (!s) return '';
+  if (!/^\+?[\d\s\-()]+$/.test(s)) return null;
+  const digits = s.replace(/\D/g, '');
+  if (digits.length < 7 || digits.length > 15) return null;
+  return (s.startsWith('+') ? '+' : '') + digits;
+}
+
 export function buildSampleLeadContext(
   mappings: LeadsquaredFieldMapping[],
   business: { name?: string | null; website?: string | null },
+  opts: { phone?: string | null } = {},
 ): LeadDataContext {
+  const phone = opts.phone || SAMPLE_TEST_PHONE;
   const journey: Record<string, string> = {};
   for (const m of mappings) {
     if (m.isEnabled === 'true' && m.sourceType === 'dynamic' && m.sourceField?.startsWith('journey.')) {
@@ -1048,8 +1067,8 @@ export function buildSampleLeadContext(
     lead: {
       name: 'AI Chroney Test Lead',
       email: 'test.lead@example.com',
-      phone: '9000000000',
-      whatsapp: '9000000000',
+      phone,
+      whatsapp: phone,
       createdAt: new Date(),
       sourceUrl: pageUrl,
       captchaStatus: 'verified',

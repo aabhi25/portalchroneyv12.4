@@ -106,6 +106,8 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
   const [showUdsKey, setShowUdsKey] = useState(false);
   const [clearApiKeys, setClearApiKeys] = useState(false);
   const [udsPreview, setUdsPreview] = useState<Record<string, string> | null>(null);
+  // Mobile number used for the UDS sample / test lead (blank = 9000000000), so several test leads can be sent.
+  const [udsTestPhone, setUdsTestPhone] = useState("");
   const [loadingUdsPreview, setLoadingUdsPreview] = useState(false);
   const [confirmUdsTestOpen, setConfirmUdsTestOpen] = useState(false);
   const [credentialsCorrupted, setCredentialsCorrupted] = useState(false);
@@ -598,7 +600,8 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
   const loadUdsPreview = async () => {
     try {
       setLoadingUdsPreview(true);
-      const response = await fetch("/api/leadsquared/uds/sample-payload", { credentials: "include" });
+      const phoneQuery = udsTestPhone.trim() ? `?phone=${encodeURIComponent(udsTestPhone.trim())}` : "";
+      const response = await fetch(`/api/leadsquared/uds/sample-payload${phoneQuery}`, { credentials: "include" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Failed to build sample payload");
       setUdsPreview(data.payload);
@@ -632,6 +635,7 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
         body: JSON.stringify({
           udsWebhookUrl: settings.udsWebhookUrl.trim() || undefined,
           udsKey: udsKey.trim() || undefined,
+          testPhone: udsTestPhone.trim() || undefined,
         }),
       });
       const data = await response.json();
@@ -992,6 +996,19 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
                   <p className="text-xs text-muted-foreground">Sent as a request header, never in the URL. Stored encrypted.</p>
                 </div>
 
+                <div className="space-y-2">
+                  <Label htmlFor="udsTestPhone">Test mobile number</Label>
+                  <Input
+                    id="udsTestPhone"
+                    inputMode="tel"
+                    placeholder="9000000000"
+                    value={udsTestPhone}
+                    onChange={(e) => setUdsTestPhone(e.target.value)}
+                    data-testid="input-uds-test-phone"
+                  />
+                  <p className="text-xs text-muted-foreground">Used for the preview and the test lead. Change it to send another test lead; leave blank for 9000000000.</p>
+                </div>
+
                 <div className="flex flex-col sm:flex-row gap-2">
                   <Button type="button" variant="outline" className="flex-1" onClick={loadUdsPreview} disabled={loadingUdsPreview}>
                     {loadingUdsPreview ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileJson className="mr-2 h-4 w-4" />}
@@ -1175,7 +1192,7 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
             <AlertDialogHeader>
               <AlertDialogTitle>Send a test lead to UDS?</AlertDialogTitle>
               <AlertDialogDescription>
-                This sends one lead named "AI Chroney Test Lead" (phone 9000000000, test.lead@example.com) to the webhook.
+                This sends one lead named "AI Chroney Test Lead" (phone {udsTestPhone.trim() || "9000000000"}, test.lead@example.com) to the webhook.
                 If the client's UDS flow is live, it will be created in their LeadSquared — ask them to delete it afterwards.
               </AlertDialogDescription>
             </AlertDialogHeader>

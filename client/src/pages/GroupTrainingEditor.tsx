@@ -346,6 +346,7 @@ export default function GroupTrainingEditor() {
   const [lsqHasApiKeys, setLsqHasApiKeys] = useState(false);
   const [lsqClearApiKeys, setLsqClearApiKeys] = useState(false);
   const [lsqUdsPreview, setLsqUdsPreview] = useState<Record<string, string> | null>(null);
+  const [lsqUdsTestPhone, setLsqUdsTestPhone] = useState("");
   const [loadingLsqUdsPreview, setLoadingLsqUdsPreview] = useState(false);
   const [testingLsqUds, setTestingLsqUds] = useState(false);
   const [confirmLsqUdsTestOpen, setConfirmLsqUdsTestOpen] = useState(false);
@@ -618,7 +619,7 @@ export default function GroupTrainingEditor() {
     if (!groupId) return;
     try {
       setLoadingLsqUdsPreview(true);
-      const data = await apiRequest<{ payload: Record<string, string> }>("GET", `/api/super-admin/account-groups/${groupId}/leadsquared/uds/sample-payload`);
+      const data = await apiRequest<{ payload: Record<string, string> }>("GET", `/api/super-admin/account-groups/${groupId}/leadsquared/uds/sample-payload${lsqUdsTestPhone.trim() ? `?phone=${encodeURIComponent(lsqUdsTestPhone.trim())}` : ""}`);
       setLsqUdsPreview(data.payload);
     } catch (error: any) {
       toast({ title: "Error", description: error.message || "Failed to build sample payload", variant: "destructive" });
@@ -646,7 +647,7 @@ export default function GroupTrainingEditor() {
       const data = await apiRequest<{ message: string; payload?: Record<string, string> }>(
         "POST",
         `/api/super-admin/account-groups/${groupId}/leadsquared/uds/send-test`,
-        { udsWebhookUrl: lsqUdsUrl.trim() || undefined, udsKey: lsqUdsKey.trim() || undefined },
+        { udsWebhookUrl: lsqUdsUrl.trim() || undefined, udsKey: lsqUdsKey.trim() || undefined, testPhone: lsqUdsTestPhone.trim() || undefined },
       );
       setLsqUdsTestResult({ ok: true, message: `${data.message}. Check the client's UDS logs / LeadSquared for "AI Chroney Test Lead".` });
       if (data.payload) setLsqUdsPreview(data.payload);
@@ -2333,6 +2334,12 @@ export default function GroupTrainingEditor() {
                     <p className="text-xs text-muted-foreground">Sent as a request header, never in the URL. Stored encrypted and copied to member accounts on publish.</p>
                   </div>
 
+                  <div className="space-y-2">
+                    <Label>Test mobile number</Label>
+                    <Input inputMode="tel" placeholder="9000000000" value={lsqUdsTestPhone} onChange={(e) => setLsqUdsTestPhone(e.target.value)} />
+                    <p className="text-xs text-muted-foreground">Used for the preview and the test lead. Change it to send another test lead; leave blank for 9000000000.</p>
+                  </div>
+
                   <div className="flex flex-col sm:flex-row gap-2">
                     <Button type="button" variant="outline" className="flex-1" onClick={loadLsqUdsPreview} disabled={loadingLsqUdsPreview}>
                       {loadingLsqUdsPreview ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileJson className="w-4 h-4 mr-2" />}
@@ -2454,7 +2461,7 @@ export default function GroupTrainingEditor() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Send a test lead to UDS?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This sends one lead named "AI Chroney Test Lead" (phone 9000000000, test.lead@example.com) to the webhook.
+                    This sends one lead named "AI Chroney Test Lead" (phone {lsqUdsTestPhone.trim() || "9000000000"}, test.lead@example.com) to the webhook.
                     If the client's UDS flow is live, it will be created in their LeadSquared — ask them to delete it afterwards.
                   </AlertDialogDescription>
                 </AlertDialogHeader>

@@ -14,6 +14,7 @@ import {
   createLeadSquaredServiceFromSettings,
   validateUdsWebhookUrl,
   buildSampleLeadContext,
+  sanitizeTestPhone,
   type LeadDataContext,
 } from "../leadsquaredService";
 import type { LeadsquaredFieldMapping } from "@shared/schema";
@@ -192,6 +193,21 @@ async function main() {
     );
     expect(attrs[0]?.Value === "Sample answer", "sample context fills journey.* fields");
     expect(sample.lead.name === "AI Chroney Test Lead", "sample lead is clearly labelled as a test");
+  }
+
+  // ── Test lead with a chosen mobile number ─────────────────────────────────────
+  {
+    expect(sanitizeTestPhone(undefined) === "" && sanitizeTestPhone("  ") === "", "test number: blank → default");
+    expect(sanitizeTestPhone("98765 43210") === "9876543210" && sanitizeTestPhone("+91-98765-43210") === "+919876543210", "test number: spaces / dashes cleaned, + kept");
+    expect(sanitizeTestPhone("abc123") === null && sanitizeTestPhone("12345") === null && sanitizeTestPhone("1234567890123456") === null, "test number: letters / too short / too long rejected");
+    const phoneMapping = mapping({ leadsquaredField: "Phone", sourceType: "dynamic", sourceField: "lead.phone" });
+    const svc = new LeadSquaredService({ accessKey: "", secretKey: "", region: "other" });
+    const withNumber = buildSampleLeadContext([phoneMapping], { name: "Biz" }, { phone: "9123456789" });
+    expect(svc.buildAttributesFromMappings([phoneMapping], withNumber)[0]?.Value === "9123456789", "test lead uses the typed mobile number");
+    const byDefault = buildSampleLeadContext([phoneMapping], { name: "Biz" });
+    expect(byDefault.lead.phone === "9000000000", "no number typed → 9000000000 as before");
+    const withPlus91 = svc.buildAttributesFromMappings([{ ...phoneMapping, phoneCountryCode: "91", phoneCodeStyle: "dash" } as LeadsquaredFieldMapping], withNumber);
+    expect(withPlus91[0]?.Value === "+91-9123456789", "typed test number also gets the +91 option when it is on");
   }
 
   if (failed > 0) {

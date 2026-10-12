@@ -13430,7 +13430,7 @@ Return ONLY the refined instruction, nothing else.`
   
   // SuperAdmin: UDS payload preview / test for the group-level LeadSquared settings.
   // Uses the group's field mappings (what member accounts get on publish).
-  async function buildGroupUdsSample(groupId: string) {
+  async function buildGroupUdsSample(groupId: string, testPhone?: string | null) {
     const [group, groupMappings] = await Promise.all([
       storage.getAccountGroup(groupId),
       storage.getGroupLeadsquaredFieldMappings(groupId),
@@ -13439,14 +13439,17 @@ Return ONLY the refined instruction, nothing else.`
     const { LeadSquaredService, buildSampleLeadContext } = await import('./services/leadsquaredService');
     // Group mappings have the same shape minus valueWhenPresent, which the builder treats as unset.
     const mappings = groupMappings as unknown as LeadsquaredFieldMapping[];
-    const context = buildSampleLeadContext(mappings, { name: `${group.name} (sample account)`, website: null });
+    const context = buildSampleLeadContext(mappings, { name: `${group.name} (sample account)`, website: null }, { phone: testPhone });
     const attributes = new LeadSquaredService({ accessKey: '', secretKey: '', region: 'other' }).buildAttributesFromMappings(mappings, context);
     return { attributes, LeadSquaredService };
   }
 
   app.get("/api/super-admin/account-groups/:groupId/leadsquared/uds/sample-payload", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
-      const sample = await buildGroupUdsSample(req.params.groupId);
+      const { sanitizeTestPhone } = await import('./services/leadsquaredService');
+      const testPhone = sanitizeTestPhone(req.query.phone);
+      if (testPhone === null) return res.status(400).json({ error: "Enter a valid mobile number (7–15 digits)" });
+      const sample = await buildGroupUdsSample(req.params.groupId, testPhone);
       if (!sample) return res.status(404).json({ error: "Account group not found" });
       const payload: Record<string, string> = {};
       for (const attr of sample.attributes) payload[attr.Attribute] = attr.Value;
@@ -13474,7 +13477,10 @@ Return ONLY the refined instruction, nothing else.`
         key = decrypt(training.leadsquaredUdsKey);
       }
 
-      const sample = await buildGroupUdsSample(groupId);
+      const { sanitizeTestPhone } = await import('./services/leadsquaredService');
+      const testPhone = sanitizeTestPhone(req.body?.testPhone);
+      if (testPhone === null) return res.status(400).json({ error: "Enter a valid mobile number (7–15 digits)" });
+      const sample = await buildGroupUdsSample(groupId, testPhone);
       if (!sample) return res.status(404).json({ error: "Account group not found" });
       const service = new sample.LeadSquaredService({ accessKey: '', secretKey: '', region: 'other', uds: { webhookUrl, key } });
       const result = await service.sendToUds(sample.attributes, 'test');
@@ -18476,8 +18482,10 @@ Important:
         storage.getLeadsquaredFieldMappings(businessAccountId),
         storage.getBusinessAccount(businessAccountId),
       ]);
-      const { LeadSquaredService, buildSampleLeadContext } = await import('./services/leadsquaredService');
-      const context = buildSampleLeadContext(fieldMappings, { name: businessAccount?.name, website: businessAccount?.website });
+      const { LeadSquaredService, buildSampleLeadContext, sanitizeTestPhone } = await import('./services/leadsquaredService');
+      const testPhone = sanitizeTestPhone(req.query.phone);
+      if (testPhone === null) return res.status(400).json({ error: "Enter a valid mobile number (7–15 digits)" });
+      const context = buildSampleLeadContext(fieldMappings, { name: businessAccount?.name, website: businessAccount?.website }, { phone: testPhone });
       const service = new LeadSquaredService({ accessKey: '', secretKey: '', region: 'other' });
       const payload: Record<string, string> = {};
       for (const attr of service.buildAttributesFromMappings(fieldMappings, context)) {
@@ -18496,7 +18504,9 @@ Important:
     try {
       const businessAccountId = req.user!.businessAccountId!;
       const settings = await storage.getWidgetSettings(businessAccountId);
-      const { validateUdsWebhookUrl, LeadSquaredService, buildSampleLeadContext } = await import('./services/leadsquaredService');
+      const { validateUdsWebhookUrl, LeadSquaredService, buildSampleLeadContext, sanitizeTestPhone } = await import('./services/leadsquaredService');
+      const testPhone = sanitizeTestPhone(req.body?.testPhone);
+      if (testPhone === null) return res.status(400).json({ error: "Enter a valid mobile number (7–15 digits)" });
 
       const webhookUrl = String(req.body?.udsWebhookUrl || settings?.leadsquaredUdsWebhookUrl || '').trim();
       if (!webhookUrl) return res.status(400).json({ error: "UDS webhook URL is required" });
@@ -18514,7 +18524,7 @@ Important:
         storage.getBusinessAccount(businessAccountId),
       ]);
       const service = new LeadSquaredService({ accessKey: '', secretKey: '', region: 'other', uds: { webhookUrl, key } });
-      const context = buildSampleLeadContext(fieldMappings, { name: businessAccount?.name, website: businessAccount?.website });
+      const context = buildSampleLeadContext(fieldMappings, { name: businessAccount?.name, website: businessAccount?.website }, { phone: testPhone });
       const result = await service.sendToUds(service.buildAttributesFromMappings(fieldMappings, context), 'test');
 
       if (result.success) {
