@@ -37,6 +37,7 @@ import { buildRetrievalQuery, capHistoryForModel } from './services/chatContext/
 import { retrieveKnowledge } from './services/chatContext/knowledgeRetrieval';
 import { ensurePassageVectors } from './services/chatContext/passageVectors';
 import { buildCustomInstructionsBlock } from './services/chatContext/customInstructions';
+import { matchesDeflectionPattern } from './services/chatContext/deflection';
 import { appliesToChannel } from '@shared/knowledgeChannels';
 import { embeddingService } from './services/embeddingService';
 import { smallTalkKind } from './services/chatContext/smallTalk';
@@ -890,33 +891,8 @@ export class ChatService {
       return true;
     }
     
-    // BACKUP: Pattern-based detection for edge cases
-    // BROADER PATTERNS: Use .*? to allow words between key phrases (e.g., "specific fee information")
-    const deflectionPatterns = [
-      // "I don't have [anything] information/details/data" - catches all variations
-      /I don't have .*?(information|details|data|pricing|info)/i,
-      /I don't have .*?(available|on that|about that|for that)/i,
-      // "I cannot/can't [anything]" patterns
-      /I (can't|cannot) .*?(answer|help|provide|find|assist)/i,
-      // "I don't know" patterns
-      /I don't know .*?(about|if|whether|the|that)/i,
-      /I don't know\b/i,
-      // Uncertainty patterns
-      /I'm not sure .*?(about|if|whether|what)/i,
-      /I'm not sure\b/i,
-      // Outside knowledge patterns
-      /that's (outside|beyond) .*?(knowledge|expertise|information)/i,
-      /I'm (not|unable to) (familiar with|aware of)/i,
-      // Couldn't find patterns
-      /I couldn't find .*?(information|details|data|anything)/i,
-      // Apologetic deflections
-      /unfortunately.*?I (don't|can't|cannot)/i,
-      /I apologize.*?(don't|can't|cannot|couldn't)/i,
-      // Simple "no information" patterns
-      /no (specific |particular )?(information|details|data) (available|on|about)/i,
-    ];
-    
-    const isPatternMatch = deflectionPatterns.some(pattern => pattern.test(response));
+    // BACKUP: Pattern-based detection for edge cases ("I don't know your name yet" is not a deflection)
+    const isPatternMatch = matchesDeflectionPattern(response);
     if (isPatternMatch) {
       console.log('[Deflection] Detected via backup pattern matching');
     }

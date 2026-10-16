@@ -11,6 +11,7 @@
  * keyword, phone digit rule) comes from leadCapture/channelLeadFields.ts.
  */
 import { rememberConversationLanguage, stickyTurnLanguage } from "../language/turnLanguage";
+import { matchesDeflectionPattern } from '../chatContext/deflection';
 import { db } from "../../db";
 import { businessAccounts, widgetSettings } from "@shared/schema";
 import { eq, and, desc, sql } from "drizzle-orm";
@@ -1384,23 +1385,8 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
       return true;
     }
 
-    const deflectionPatterns = [
-      /I don't have .*?(information|details|data|pricing|info)/i,
-      /I don't have .*?(available|on that|about that|for that)/i,
-      /I (can't|cannot) .*?(answer|help|provide|find|assist)/i,
-      /I don't know .*?(about|if|whether|the|that)/i,
-      /I don't know\b/i,
-      /I'm not sure .*?(about|if|whether|what)/i,
-      /I'm not sure\b/i,
-      /that's (outside|beyond) .*?(knowledge|expertise|information)/i,
-      /I'm (not|unable to) (familiar with|aware of)/i,
-      /I couldn't find .*?(information|details|data|anything)/i,
-      /unfortunately.*?I (don't|can't|cannot)/i,
-      /I apologize.*?(don't|can't|cannot|couldn't)/i,
-      /no (specific |particular )?(information|details|data) (available|on|about)/i,
-    ];
-
-    const isPatternMatch = deflectionPatterns.some(pattern => pattern.test(response));
+    // BACKUP: Pattern-based detection for edge cases ("I don't know your name yet" is not a deflection)
+    const isPatternMatch = matchesDeflectionPattern(response);
     if (isPatternMatch) {
       console.log(`${this.deflectionTag} Detected via backup pattern matching`);
     }

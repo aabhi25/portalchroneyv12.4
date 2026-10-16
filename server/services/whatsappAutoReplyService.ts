@@ -1,5 +1,6 @@
 import { rememberConversationLanguage, stickyTurnLanguage } from "./language/turnLanguage";
 import OpenAI from "openai";
+import { matchesDeflectionPattern } from "./chatContext/deflection";
 import { createOpenAI } from "../lib/openaiClient";
 import { aiBudgetService } from "./aiBudgetService";
 import { db } from "../db";
@@ -1450,6 +1451,7 @@ The following kinds of customer messages are NOT factual questions. Reply natura
 - Greetings & pleasantries: "hi", "hello", "good morning", "thanks", "bye", "ok", "sure"
 - Short acknowledgments or meta replies: "why", "what", "ok", "hmm", "🙂", emoji-only messages
 - Numeric/short-data replies that look like an answer to something the flow or prior message just asked (e.g. a phone number, a name, a city, a yes/no)
+- Questions about the details the customer shared in this chat ("do you know my name?", "what number did I give?"): answer from the chat, or say they haven't shared it yet
 - Confirmations and follow-up questions about something you previously offered
 
 Examples of CONVERSATIONAL replies (always answer in persona, never [[FALLBACK]]):
@@ -2000,23 +2002,8 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
       return true;
     }
     
-    const deflectionPatterns = [
-      /I don't have .*?(information|details|data|pricing|info)/i,
-      /I don't have .*?(available|on that|about that|for that)/i,
-      /I (can't|cannot) .*?(answer|help|provide|find|assist)/i,
-      /I don't know .*?(about|if|whether|the|that)/i,
-      /I don't know\b/i,
-      /I'm not sure .*?(about|if|whether|what)/i,
-      /I'm not sure\b/i,
-      /that's (outside|beyond) .*?(knowledge|expertise|information)/i,
-      /I'm (not|unable to) (familiar with|aware of)/i,
-      /I couldn't find .*?(information|details|data|anything)/i,
-      /unfortunately.*?I (don't|can't|cannot)/i,
-      /I apologize.*?(don't|can't|cannot|couldn't)/i,
-      /no (specific |particular )?(information|details|data) (available|on|about)/i,
-    ];
-    
-    const isPatternMatch = deflectionPatterns.some(pattern => pattern.test(response));
+    // BACKUP: Pattern-based detection for edge cases ("I don't know your name yet" is not a deflection)
+    const isPatternMatch = matchesDeflectionPattern(response);
     if (isPatternMatch) {
       console.log('[WhatsApp Deflection] Detected via backup pattern matching');
     }
