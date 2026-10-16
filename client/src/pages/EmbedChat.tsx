@@ -6096,6 +6096,7 @@ export default function EmbedChat() {
                 conversationId={conversationIdRef.current || undefined}
               onSubmit={async (value) => {
                 // Submit directly to the journey endpoint - no AI involvement
+                const submittedStep = activeFormStep;
                 try {
                   setIsLoading(true);
                   setActiveFormStep(null);
@@ -6113,13 +6114,35 @@ export default function EmbedChat() {
                     })
                   });
                   
-                  const result = await response.json();
+                  const result = await response.json().catch(() => ({}));
                   
                   // Update conversationId if we got a new one from the server
                   if (result.conversationId && !conversationIdRef.current) {
                     conversationIdRef.current = result.conversationId;
                     setHasConversation(true);
                     console.log('[Form Journey] Got conversationId from server:', result.conversationId);
+                  }
+
+                  // Answer not accepted (e.g. not a valid mobile number): say why and ask again.
+                  if (!response.ok) {
+                    if (result.error) {
+                      setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'assistant', content: result.error, timestamp: new Date() }]);
+                    }
+                    setActiveFormStep(result.nextStep || submittedStep);
+                    return;
+                  }
+
+                  // A mobile number was just given and this business verifies it with a CAPTCHA.
+                  if (result.captcha?.required) {
+                    captchaWidgetIdRef.current = null;
+                    setCaptchaToken(null);
+                    setCaptchaError(null);
+                    setMidChatCaptcha({
+                      required: true,
+                      siteKey: result.captcha.siteKey ?? null,
+                      provider: result.captcha.provider ?? null,
+                      misconfigured: !!result.captcha.misconfigured,
+                    });
                   }
                   
                   if (result.completed && result.nextStep?.stepType === 'journey_complete') {

@@ -594,7 +594,7 @@ async function main() {
     expect(r.ok, "stream: valid token for a live call → accepted");
     r.ws!.send(JSON.stringify({ event: "connected" }));
     r.ws!.send(JSON.stringify(START()));
-    await until(async () => (await getCall(liveCall.id)).status === "in_progress");
+    await until(async () => (await getCall(liveCall.id)).status === "in_progress" && routeEngines.length === 1);
     expect((await getCall(liveCall.id)).status === "in_progress" && routeEngines.length === 1, "stream start (frames sent right after open) → call in_progress, voice session started");
     r.ws!.send(JSON.stringify({ event: "stop", stream_sid: "MZtest", stop: { reason: "callended" } }));
     await until(() => routeFinished.includes(liveCall.id));

@@ -17,6 +17,9 @@ export interface JourneyState {
   firstQuestionShownAsGreeting?: boolean; // True when startFromScratch journey - first question already shown
   leadId?: string; // Track associated lead for progressive enrichment
   journeyType?: 'conversational' | 'form'; // Journey type - conversational (AI chat) or form (visual UI)
+  triggerMessage?: string; // The visitor's message that started the journey (answered by the AI when it ends)
+  stepAttempts?: Record<string, number>; // Unusable answers per step (the step is left behind after two)
+  offTopicCount?: number; // Off-topic questions during this journey (the AI takes over after two)
 }
 
 class JourneyService {

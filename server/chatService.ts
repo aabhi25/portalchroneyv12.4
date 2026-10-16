@@ -1822,11 +1822,6 @@ Response:`;
 
       const fields: any[] = Array.isArray(leadConfig?.fields) ? leadConfig.fields : [];
       const mobileField = fields.find((f: any) => f?.id === 'mobile' && f.enabled);
-      // OTP that can't be delivered (no sender, Sample OTP off) is treated as off, so leads aren't blocked.
-      const otpEffective = !!(mobileField && mobileField.otpEnabled === true) && channel === 'widget'
-        && await (await import('./services/otp')).isOtpEffectivelyEnabled(businessAccountId, leadConfig);
-      const otpGateActive = otpEffective;
-      const captchaGateActive = !!(mobileField && mobileField.captchaEnabled === true && mobileField.otpEnabled !== true) && channel === 'widget';
       if (mobileField?.otpEnabled === true && channel && channel !== 'widget') {
         console.log(`[OTP] Skipped: channel not widget (channel=${channel}, business=${businessAccountId})`);
       }
@@ -1847,31 +1842,10 @@ Response:`;
         await storage.updateConversationTitle(conversationId, businessAccountId, newTitle).catch(() => undefined);
       }
 
-      const phoneChanged = up.changed.includes('phone') && !!lead.phone;
-      // OTP gate: a phone typed mid-chat gets its challenge here (idempotent per conversation+phone).
-      if (otpGateActive && phoneChanged) {
-        try {
-          const { OtpService } = await import('./services/otp');
-          const alreadyVerified = await OtpService.hasVerifiedChallenge(businessAccountId, conversationId, lead.phone!);
-          if (alreadyVerified) {
-            console.log(`[OTP-Gate] Auto-detect skipping issueChallenge — phone already verified for conversation ${conversationId}`);
-          } else {
-            const issued = await OtpService.issueChallenge(businessAccountId, conversationId, lead.phone!, { leadId: lead.id, channelOrigin: 'widget' });
-            if (issued.ok) console.log(`[OTP-Gate] Auto-detect issued OTP challenge for conversation ${conversationId}, phone …${lead.phone!.slice(-4)}`);
-            else console.warn(`[OTP-Gate] Auto-detect issueChallenge failed: ${issued.reason}`);
-          }
-        } catch (err) {
-          console.error('[OTP-Gate] Auto-detect issueChallenge error:', err);
-        }
-      }
-      // CAPTCHA gate: lock the conversation so the widget renders the reCAPTCHA checkbox.
-      if (captchaGateActive && phoneChanged) {
-        try {
-          await storage.markConversationAwaitingCaptchaIfUnverified(conversationId, businessAccountId);
-          console.log(`[CAPTCHA-Gate] Auto-detect locked conversation ${conversationId} pending CAPTCHA`);
-        } catch (err) {
-          console.error('[CAPTCHA-Gate] Auto-detect markAwaiting error:', err);
-        }
+      // A phone typed mid-chat gets the mobile field's verification (OTP challenge / CAPTCHA lock).
+      if (up.changed.includes('phone') && lead.phone) {
+        const { applyMidChatPhoneGate } = await import('./services/leadCapture/phoneGate');
+        await applyMidChatPhoneGate({ businessAccountId, conversationId, leadId: lead.id, phone: lead.phone, leadConfig, channel });
       }
 
       // CRM: only when every mandatory field is in and verification passed; updates afterwards.
@@ -2272,14 +2246,22 @@ Response:`;
       }
 
       // Only process journeys if business has active journeys configured
+      let journeyHandoffNote = '';
       if (hasActiveJourneys) {
         // ENGINE-DRIVEN MODE: Try processing through journey engine first
         const engineResult = await journeyOrchestrator.processUserMessageEngineDriven(
           conversationId,
           context.userId,
           context.businessAccountId,
-          userMessage
+          userMessage,
+          { channel: context.channel }
         );
+
+        // Conversational journey just ended: the AI replies to the question that started it.
+        if (engineResult.isComplete && !engineResult.shouldBypassAI && engineResult.handoffNote) {
+          journeyHandoffNote = engineResult.handoffNote;
+          if (engineResult.handoffQuestion) userMessage = engineResult.handoffQuestion;
+        }
 
         // If engine handled the message, return engine's response immediately
         if (engineResult.shouldBypassAI && engineResult.response) {
@@ -2313,6 +2295,7 @@ Response:`;
       // This includes PDF summaries and key points - should answer most questions
       const contextMode = await this.resolveContextMode(context);
       let systemContext = await this.buildEnrichedContext(context, contextMode, { userMessage });
+      if (journeyHandoffNote) systemContext += `\n\n${journeyHandoffNote}`;
 
       // Run RAG search and DB fetches in parallel — they are fully independent
       // RAG embedding call (~200ms) now overlaps with DB reads (~50ms) instead of preceding them
@@ -3796,14 +3779,36 @@ Response:`;
       }
 
       // Only process journeys if business has active journeys configured
+      let journeyHandoffNote = '';
       if (hasActiveJourneys) {
         // ENGINE-DRIVEN MODE: Try processing through journey engine first
         const engineResult = await journeyOrchestrator.processUserMessageEngineDriven(
           conversationId,
           context.userId,
           context.businessAccountId,
-          userMessage
+          userMessage,
+          { channel: context.channel }
         );
+
+        // A mobile number the journey just saved locked the chat: show the CAPTCHA now.
+        if (engineResult.captchaRequired) {
+          try {
+            const { deriveCaptchaMethodConfig } = await import('./services/otp');
+            const captchaCfg = await deriveCaptchaMethodConfig(context.businessAccountId);
+            if (captchaCfg.enabled) {
+              yield { type: 'captcha_state' as const, data: JSON.stringify({ required: true, provider: captchaCfg.provider, siteKey: captchaCfg.siteKey, misconfigured: captchaCfg.misconfigured }) };
+            }
+          } catch (captchaErr) {
+            console.warn('[CAPTCHA Gate] journey captcha_state failed:', captchaErr);
+          }
+        }
+
+        // Conversational journey just ended: the AI replies to the question that started it
+        // (the visitor's latest message was only an answer to the last journey question).
+        if (engineResult.isComplete && !engineResult.shouldBypassAI && engineResult.handoffNote) {
+          journeyHandoffNote = engineResult.handoffNote;
+          if (engineResult.handoffQuestion) userMessage = engineResult.handoffQuestion;
+        }
 
         // If engine handled the message, stream engine's response
         if (engineResult.shouldBypassAI && engineResult.response) {
@@ -3920,6 +3925,7 @@ Response:`;
         if (!block) return;
         systemContext = retrievalMode ? `${systemContext}\n\n${block}` : block + systemContext;
       };
+      addTurnBlock(journeyHandoffNote ? `${journeyHandoffNote}\n\n` : '');
 
       // Visitor message number, counted in the database (custom "ask on message #N" timing must
       // survive idle expiry, restarts and multiple instances). Reloads memory if it is behind.

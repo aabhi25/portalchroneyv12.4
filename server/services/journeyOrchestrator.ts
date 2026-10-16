@@ -1,6 +1,13 @@
 import { journeyService, type JourneyState } from './journeyService';
 import { conversationMemory } from '../conversationMemory';
 import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
+import { validatePhoneNumber } from '../../shared/validation/phone';
+import { autoFillKnownSteps, contactSlot, describeFilled, loadKnownAnswers } from './journeyKnownAnswers';
+import { emailInMessage, extractPhoneCandidates, isDecline, isValidEmail, isValidLeadName, nameInMessage } from './leadCapture/detectors';
+import { phoneModeFor } from './leadCapture/fields';
+import { upsertConversationLead } from './leadCapture/leadStore';
+import { syncConversationLeadIfReady } from './leadCapture/crmGate';
+import { applyMidChatPhoneGate } from './leadCapture/phoneGate';
 
 /**
  * Journey Orchestrator - Unified middleware for conversation journey handling
@@ -185,6 +192,8 @@ function isContactRelatedStep(step: any): boolean {
  */
 interface EntityExtractionResult {
   answer: string | null;
+  /** Set when a contact answer was given but is not valid (e.g. a fake / short mobile number). */
+  validationMessage?: string;
   is_off_topic: boolean;
   is_refusal: boolean;
   quality: 'valid' | 'needs_clarification' | 'invalid';
@@ -204,6 +213,12 @@ interface EngineJourneyResponse {
   shouldBypassAI: boolean;
   response?: string;
   isComplete?: boolean;
+  /** A mobile number saved by this journey locked the chat until the visitor passes the CAPTCHA. */
+  captchaRequired?: boolean;
+  /** Conversational journey finished: the visitor's question that started it (the AI answers it). */
+  handoffQuestion?: string;
+  /** Conversational journey finished: instructions for the AI's reply (answers collected, what to answer). */
+  handoffNote?: string;
   formStep?: FormStepData; // For form journeys, include form step data for visual UI
   // For conversational journeys, surface dropdown/radio choices as quick-reply buttons
   options?: string[];
@@ -229,6 +244,41 @@ function parseStepChoiceOptions(step: any): string[] | undefined {
   return undefined;
 }
 
+/** A step the visitor doesn't answer after this many tries is left behind (never asked forever). */
+const MAX_STEP_ATTEMPTS = 2;
+/** After this many off-topic questions in one journey, the journey ends and the AI answers normally. */
+const MAX_OFF_TOPIC = 2;
+
+const NOT_A_NAME_ANSWER = new Set([
+  'yes', 'yeah', 'yep', 'no', 'nope', 'ok', 'okay', 'k', 'sure', 'hi', 'hii', 'hello', 'hey', 'thanks', 'thank', 'what', 'why', 'how',
+  'when', 'where', 'who', 'which', 'can', 'could', 'please', 'tell', 'show', 'give', 'send', 'fees', 'fee', 'price', 'cost', 'course',
+  'details', 'info', 'haan', 'nahi', 'kya', 'kyu', 'kyun', 'hmm', 'skip', 'later',
+]);
+
+/** A name typed as the answer to "what's your name?" ("Rahul", "rahul sharma", "My name is Priya", "राहुल"). */
+export function nameAnswer(message: string): string | null {
+  const stated = nameInMessage(message);
+  if (stated) return stated;
+  const t = message.trim().replace(/[.!]+$/, '').replace(/\s+/g, ' ');
+  if (t.length < 2 || t.length > 40 || /[\d?@]/.test(t) || isDecline(t)) return null;
+  if (!new RegExp(String.raw`^[\p{L}\p{M}][\p{L}\p{M}.' -]*$`, 'u').test(t)) return null;
+  const words = t.split(' ');
+  if (words.length > 4 || NOT_A_NAME_ANSWER.has(words[0].toLowerCase())) return null;
+  return words.map(w => /^[a-z]/.test(w) ? w.charAt(0).toUpperCase() + w.slice(1) : w).join(' ');
+}
+
+/** Does the visitor's message contain this (already saved) answer? Phones compare on the last 10 digits. */
+function messageContainsAnswer(message: string, answer: string): boolean {
+  const digits = answer.replace(/\D/g, '');
+  if (digits.length >= 7) return message.replace(/\D/g, '').includes(digits.slice(-10));
+  return !!answer.trim() && message.toLowerCase().includes(answer.trim().toLowerCase());
+}
+
+function phoneProblemMessage(mode: string): string {
+  const rule = mode === '10' ? 'a 10-digit mobile number' : mode === '12' ? 'the mobile number with the country code (12 digits)' : 'a valid mobile number';
+  return `That doesn't look like a valid mobile number. Could you share ${rule}?`;
+}
+
 export class JourneyOrchestrator {
   /**
    * Helper method to get OpenAI client with business account API key
@@ -249,16 +299,21 @@ export class JourneyOrchestrator {
   /**
    * ENGINE-DRIVEN MODE: Process user message through strict state machine
    * Returns a complete response if the engine handles it, or null to continue with AI
+   *
+   * Questions whose answer this chat already holds (the lead's mobile / name / email, answers to
+   * earlier journeys) are skipped (journeyKnownAnswers). A step the visitor doesn't answer after
+   * two tries is left behind instead of being asked forever; a visitor who keeps asking other
+   * things gets the normal AI. When a conversational journey ends, the AI replies to the
+   * question that started it (handoffQuestion / handoffNote).
    */
   async processUserMessageEngineDriven(
     conversationId: string,
     userId: string,
     businessAccountId: string,
-    userMessage: string
+    userMessage: string,
+    opts: { channel?: string | null } = {}
   ): Promise<EngineJourneyResponse> {
     try {
-      const storage = (await import('../storage')).storage;
-      
       // Check if a conversation journey is active
       const journeyState = await journeyService.getOrStartJourney(conversationId, userId, businessAccountId, userMessage);
       
@@ -268,29 +323,24 @@ export class JourneyOrchestrator {
       }
 
       console.log('[Engine] Journey active - processing through state machine');
-      
-      // Get current step
-      const currentStep = await journeyService.getCurrentStep(conversationId);
-      
-      if (!currentStep) {
-        // Journey completed - AUTO-CAPTURE LEAD FROM JOURNEY RESPONSES
-        await journeyService.completeJourney(conversationId);
-        
-        // Extract name and phone from journey responses and create lead
-        await this.captureLeadFromJourney(conversationId, journeyState, businessAccountId);
-        
-        return {
-          shouldBypassAI: true,
-          response: "Thank you! I've collected all the information I need. Our team will review your responses and get back to you soon.",
-          isComplete: true
-        };
-      }
 
-      // First interaction - ask the first question
+      // Skip questions already answered in this chat (e.g. the mobile number saved by lead capture
+      // while the CAPTCHA was open, or a detail another journey already asked for).
       const isFirstInteraction = journeyState.awaitingFirstUserResponse;
       if (isFirstInteraction) {
         await journeyService.markJourneyPrompted(conversationId);
-        
+        journeyState.triggerMessage ??= userMessage;
+      }
+      const prefill = await autoFillKnownSteps(conversationId, businessAccountId);
+      const currentStep = await journeyService.getCurrentStep(conversationId);
+      
+      if (!currentStep) {
+        // Nothing left to ask (everything was already known, or the journey had ended).
+        return this.finishJourney(conversationId, journeyState, businessAccountId, opts);
+      }
+
+      // First interaction - ask the first question
+      if (isFirstInteraction) {
         // For FORM journeys, return form step data for visual UI instead of text question
         if (journeyState.journeyType === 'form') {
           console.log('[Engine] Form journey first interaction - returning form step data');
@@ -331,8 +381,22 @@ export class JourneyOrchestrator {
         };
       }
 
-      // Extract entity from user message using constrained NLU
-      const extraction = await this.extractEntityFromMessage(
+      if (prefill.filled.length > 0) {
+        // The question the visitor was answering is already known. When THIS message is that
+        // answer (their number, saved by the chat's lead capture as it arrived), acknowledge it and
+        // ask the next question; otherwise their message answers the next question.
+        const last = prefill.filled[prefill.filled.length - 1];
+        if (prefill.filled.some(f => messageContainsAnswer(userMessage, f.answer))) {
+          console.log('[Engine] This message answered the current step (already saved by lead capture) - asking the next question');
+          return this.continueJourney(conversationId, journeyState, businessAccountId, userMessage, {
+            situation: 'acknowledgment', answeredQuestion: last.question, answer: last.answer,
+          }, opts);
+        }
+        console.log('[Engine] Current step was already answered elsewhere in the chat - moved to the next question');
+      }
+
+      // Extract the answer: contact details deterministically, anything else via constrained NLU
+      const extraction = await this.extractAnswer(
         userMessage,
         currentStep,
         businessAccountId
@@ -342,11 +406,16 @@ export class JourneyOrchestrator {
 
       // Build context for natural responses (journey name, business, previous answers)
       const responseContext = await this.buildResponseContext(conversationId, journeyState, businessAccountId);
+      const attempts = (journeyState.stepAttempts ??= {});
+      const failedAttempt = () => (attempts[currentStep.id] = (attempts[currentStep.id] || 0) + 1);
 
       // Handle refusals FIRST (more important than off-topic)
       // If someone says "not interested", that's a refusal, not off-topic
       if (extraction.is_refusal) {
         if (currentStep.isRequired === 'true') {
+          if (failedAttempt() >= MAX_STEP_ATTEMPTS) {
+            return this.moveOnFromStep(conversationId, journeyState, businessAccountId, currentStep, userMessage, opts);
+          }
           // Generate natural response for required step refusal
           const naturalResponse = await this.generateNaturalResponse(
             'refusal',
@@ -364,57 +433,23 @@ export class JourneyOrchestrator {
             response: naturalResponse,
             options: parseStepChoiceOptions(currentStep)
           };
-        } else {
-          // Skip optional step
-          journeyState.responses.set(currentStep.id, '[SKIPPED: User declined]');
-          console.log('[Engine] Optional step skipped due to refusal');
-          
-          // Advance to next step
-          await journeyService.advanceToNextStep(conversationId);
-          const nextStep = await journeyService.getCurrentStep(conversationId);
-          
-          if (!nextStep) {
-            await journeyService.completeJourney(conversationId);
-
-            // Conversational journeys hand off to the AI for a contextual reply.
-            if (journeyState.journeyType !== 'form') {
-              console.log('[Engine] Conversational journey complete (after skip) - handing off to AI');
-              return {
-                shouldBypassAI: false,
-                isComplete: true
-              };
-            }
-
-            return {
-              shouldBypassAI: true,
-              response: "Thank you! I've collected all the information I need.",
-              isComplete: true
-            };
-          }
-          
-          // Generate natural skip response
-          const naturalResponse = await this.generateNaturalResponse(
-            'skip',
-            userMessage,
-            nextStep.questionText || '',
-            {
-              isRequired: false,
-              ...responseContext
-            },
-            businessAccountId
-          );
-          
-          return {
-            shouldBypassAI: true,
-            response: naturalResponse,
-            options: parseStepChoiceOptions(nextStep)
-          };
         }
+        // Skip optional step
+        console.log('[Engine] Optional step skipped due to refusal');
+        return this.moveOnFromStep(conversationId, journeyState, businessAccountId, currentStep, userMessage, opts);
       }
 
       // Handle off-topic interrupts (after refusals)
       // These are genuine questions not related to the current step
       if (extraction.is_off_topic) {
+        journeyState.offTopicCount = (journeyState.offTopicCount || 0) + 1;
+        if (journeyState.offTopicCount >= MAX_OFF_TOPIC) {
+          // The visitor keeps asking other things: stop the questions and let the AI answer.
+          console.log('[Engine] Visitor keeps asking other things - ending the journey, AI answers normally');
+          await journeyService.completeJourney(conversationId);
+          await this.captureLeadFromJourney(conversationId, journeyState, businessAccountId, opts.channel);
+          return { shouldBypassAI: false, isComplete: true };
+        }
         // Generate natural off-topic response with redirect
         const naturalResponse = await this.generateNaturalResponse(
           'off_topic',
@@ -434,28 +469,17 @@ export class JourneyOrchestrator {
         };
       }
 
-      // Validate answer quality
-      if (extraction.quality === 'invalid' || extraction.quality === 'needs_clarification' || !extraction.answer) {
-        // Generate natural clarification request
-        const naturalResponse = await this.generateNaturalResponse(
-          'clarification',
-          userMessage,
-          currentStep.questionText || '',
-          responseContext,
-          businessAccountId
-        );
-        
-        return {
-          shouldBypassAI: true,
-          response: naturalResponse,
-          options: parseStepChoiceOptions(currentStep)
-        };
-      }
-
       // Validate answer format (email, phone, etc.)
-      const validationResult = await this.validateAnswer(extraction.answer, currentStep);
-      
+      const validationResult = extraction.validationMessage
+        ? { valid: false, message: extraction.validationMessage }
+        : extraction.answer
+          ? await this.validateAnswer(extraction.answer, currentStep, businessAccountId)
+          : { valid: true };
+
       if (!validationResult.valid) {
+        if (failedAttempt() >= MAX_STEP_ATTEMPTS) {
+          return this.moveOnFromStep(conversationId, journeyState, businessAccountId, currentStep, userMessage, opts);
+        }
         // Generate natural validation error response
         const naturalResponse = await this.generateNaturalResponse(
           'validation_error',
@@ -475,11 +499,33 @@ export class JourneyOrchestrator {
         };
       }
 
+      // Validate answer quality
+      if (extraction.quality === 'invalid' || extraction.quality === 'needs_clarification' || !extraction.answer) {
+        if (failedAttempt() >= MAX_STEP_ATTEMPTS) {
+          return this.moveOnFromStep(conversationId, journeyState, businessAccountId, currentStep, userMessage, opts);
+        }
+        // Generate natural clarification request
+        const naturalResponse = await this.generateNaturalResponse(
+          'clarification',
+          userMessage,
+          currentStep.questionText || '',
+          responseContext,
+          businessAccountId
+        );
+        
+        return {
+          shouldBypassAI: true,
+          response: naturalResponse,
+          options: parseStepChoiceOptions(currentStep)
+        };
+      }
+
       // Record valid answer
       const { db } = await import('../db');
       const { journeyResponses } = await import('../../shared/schema');
+      const answer = extraction.answer;
       
-      journeyState.responses.set(currentStep.id, extraction.answer);
+      journeyState.responses.set(currentStep.id, answer);
       
       try {
         await db.insert(journeyResponses).values({
@@ -487,7 +533,7 @@ export class JourneyOrchestrator {
           journeyId: journeyState.journeyId,
           conversationId: conversationId,
           stepId: currentStep.id,
-          response: extraction.answer,
+          response: answer,
         });
       } catch (error: any) {
         // Ignore duplicate errors
@@ -496,87 +542,237 @@ export class JourneyOrchestrator {
         }
       }
 
-      console.log('[Engine] Recorded answer:', extraction.answer);
+      console.log('[Engine] Recorded answer for step:', currentStep.id);
 
-      // INSTANT LEAD CAPTURE: Capture contact info immediately
-      await this.captureLeadIncremental(conversationId, businessAccountId, currentStep, extraction.answer, journeyState);
+      // A contact answer goes to this chat's lead right away (same lead, checks and CRM rules as chat).
+      const contact = await this.saveJourneyContact(conversationId, businessAccountId, currentStep, answer, journeyState, opts.channel);
 
       // Advance to next step
       await journeyService.advanceToNextStep(conversationId);
-      let nextStep = await journeyService.getCurrentStep(conversationId);
-      
-      if (!nextStep) {
-        // Journey complete
-        await journeyService.completeJourney(conversationId);
-
-        // For CONVERSATIONAL journeys, hand control back to the AI so it can give a
-        // genuinely helpful, contextual reply about the visitor's selection instead of
-        // dead-ending on a generic "our team will get back to you" message. The journey
-        // is already marked complete, so the AI simply continues the conversation.
-        if (journeyState.journeyType !== 'form') {
-          console.log('[Engine] Conversational journey complete - handing off to AI for a contextual response');
-          return {
-            shouldBypassAI: false,
-            isComplete: true
-          };
-        }
-
-        return {
-          shouldBypassAI: true,
-          response: "Perfect! Thank you for providing all the information. Our team will review your responses and get in touch with you soon.",
-          isComplete: true
-        };
-      }
-
-      // For FORM journeys, return next step's form_step data for visual UI
-      if (journeyState.journeyType === 'form') {
-        console.log('[Engine] Form journey - returning next form step data');
-        
-        // Parse options if this is a dropdown/radio step
-        let options: string[] | undefined;
-        if ((nextStep.questionType === 'radio' || nextStep.questionType === 'dropdown') && nextStep.multipleChoiceOptions) {
-          try {
-            options = JSON.parse(nextStep.multipleChoiceOptions);
-          } catch (e) {
-            console.error('[Engine] Failed to parse choice options:', e);
-          }
-        }
-        
-        return {
-          shouldBypassAI: true,
-          response: "Great choice! Please continue with the next question:",
-          formStep: {
-            stepId: nextStep.id,
-            questionText: nextStep.questionText || '',
-            questionType: nextStep.questionType || 'text',
-            isRequired: nextStep.isRequired === 'true',
-            options,
-            placeholder: nextStep.placeholderText || undefined,
-            stepType: nextStep.toolTrigger || undefined,
-            journeyId: journeyState.journeyId // Include for client to track active journey
-          }
-        };
-      }
-
-      // For conversational journeys, generate natural acknowledgment + next question
-      const naturalResponse = await this.generateNaturalResponse(
-        'acknowledgment',
-        userMessage,
-        nextStep.questionText || '',
-        responseContext,
-        businessAccountId
-      );
-      
-      return {
-        shouldBypassAI: true,
-        response: naturalResponse,
-        options: parseStepChoiceOptions(nextStep)
-      };
+      return this.continueJourney(conversationId, journeyState, businessAccountId, userMessage, {
+        situation: 'acknowledgment',
+        answeredQuestion: currentStep.questionText || '',
+        answer,
+        captchaRequired: contact.captchaRequired,
+      }, opts);
       
     } catch (error) {
       console.error('[Engine] Error in engine-driven journey:', error);
       // Fall back to AI on error
       return { shouldBypassAI: false };
+    }
+  }
+
+  /**
+   * After a step: skip what is already known, then ask the next question (or finish the journey).
+   */
+  private async continueJourney(
+    conversationId: string,
+    journeyState: JourneyState,
+    businessAccountId: string,
+    userMessage: string,
+    turn: { situation: 'acknowledgment' | 'skip'; answeredQuestion?: string; answer?: string; captchaRequired?: boolean },
+    opts: { channel?: string | null }
+  ): Promise<EngineJourneyResponse> {
+    const fill = await autoFillKnownSteps(conversationId, businessAccountId);
+    const nextStep = await journeyService.getCurrentStep(conversationId);
+    if (!nextStep) {
+      const done = await this.finishJourney(conversationId, journeyState, businessAccountId, opts);
+      return { ...done, captchaRequired: turn.captchaRequired || done.captchaRequired };
+    }
+
+    // For FORM journeys, return next step's form_step data for visual UI
+    if (journeyState.journeyType === 'form') {
+      console.log('[Engine] Form journey - returning next form step data');
+      
+      // Parse options if this is a dropdown/radio step
+      let options: string[] | undefined;
+      if ((nextStep.questionType === 'radio' || nextStep.questionType === 'dropdown') && nextStep.multipleChoiceOptions) {
+        try {
+          options = JSON.parse(nextStep.multipleChoiceOptions);
+        } catch (e) {
+          console.error('[Engine] Failed to parse choice options:', e);
+        }
+      }
+      
+      return {
+        shouldBypassAI: true,
+        response: "Great choice! Please continue with the next question:",
+        captchaRequired: turn.captchaRequired,
+        formStep: {
+          stepId: nextStep.id,
+          questionText: nextStep.questionText || '',
+          questionType: nextStep.questionType || 'text',
+          isRequired: nextStep.isRequired === 'true',
+          options,
+          placeholder: nextStep.placeholderText || undefined,
+          stepType: nextStep.toolTrigger || undefined,
+          journeyId: journeyState.journeyId // Include for client to track active journey
+        }
+      };
+    }
+
+    // For conversational journeys, generate natural acknowledgment + next question
+    const responseContext = await this.buildResponseContext(conversationId, journeyState, businessAccountId);
+    const naturalResponse = await this.generateNaturalResponse(
+      turn.situation,
+      userMessage,
+      nextStep.questionText || '',
+      {
+        ...responseContext,
+        answeredQuestion: turn.answeredQuestion,
+        answer: turn.answer,
+        skippedInfo: fill.filled.length ? describeFilled(fill.filled) : undefined,
+      },
+      businessAccountId
+    );
+    
+    return {
+      shouldBypassAI: true,
+      response: naturalResponse,
+      options: parseStepChoiceOptions(nextStep),
+      captchaRequired: turn.captchaRequired,
+    };
+  }
+
+  /** Leave an unanswered step behind (declined, or no usable answer after two tries) and go on. */
+  private async moveOnFromStep(
+    conversationId: string,
+    journeyState: JourneyState,
+    businessAccountId: string,
+    step: any,
+    userMessage: string,
+    opts: { channel?: string | null }
+  ): Promise<EngineJourneyResponse> {
+    console.log('[Engine] Moving on from an unanswered step:', step.id);
+    journeyState.responses.set(step.id, '[SKIPPED: not answered]');
+    await journeyService.advanceToNextStep(conversationId);
+    return this.continueJourney(conversationId, journeyState, businessAccountId, userMessage, { situation: 'skip' }, opts);
+  }
+
+  /** The journey has no question left: save the lead details and hand back. */
+  private async finishJourney(
+    conversationId: string,
+    journeyState: JourneyState,
+    businessAccountId: string,
+    opts: { channel?: string | null }
+  ): Promise<EngineJourneyResponse> {
+    await journeyService.completeJourney(conversationId);
+    await this.captureLeadFromJourney(conversationId, journeyState, businessAccountId, opts.channel);
+
+    if (journeyState.journeyType === 'form') {
+      return {
+        shouldBypassAI: true,
+        response: "Perfect! Thank you for providing all the information. Our team will review your responses and get in touch with you soon.",
+        isComplete: true
+      };
+    }
+
+    // CONVERSATIONAL journeys hand control back to the AI so it gives a genuinely helpful,
+    // contextual reply to what the visitor asked before the questions (not to their last answer).
+    console.log('[Engine] Conversational journey complete - handing off to AI for a contextual response');
+    const { previousAnswers } = await this.buildResponseContext(conversationId, journeyState, businessAccountId);
+    const known = await loadKnownAnswers(conversationId, businessAccountId).catch(() => new Map<string, string>());
+    const question = journeyState.triggerMessage?.trim() || '';
+    const handoffNote = [
+      '=== QUESTIONS JUST FINISHED ===',
+      previousAnswers ? `The visitor has just answered these questions:\n${previousAnswers}` : 'The visitor has just answered your questions.',
+      known.has('phone') ? 'The visitor HAS shared their mobile number (it is saved).' : '',
+      'Their latest message was an answer to your question, NOT a new question. Do not ask for any of these details again.',
+      question
+        ? `Now reply to what they asked before the questions: "${question}". If a business instruction says what to reply about this topic, reply with exactly that — it takes priority over saying you will forward the question to the team, and do not add that you lack the information.`
+        : 'Thank them briefly and offer further help.',
+    ].filter(Boolean).join('\n');
+    return {
+      shouldBypassAI: false,
+      isComplete: true,
+      handoffQuestion: question || undefined,
+      handoffNote,
+    };
+  }
+
+  /** The answer to the current step: contact details deterministically, anything else via NLU. */
+  private async extractAnswer(userMessage: string, step: any, businessAccountId: string): Promise<EntityExtractionResult> {
+    const slot = contactSlot(step);
+    const message = userMessage.trim();
+    const valid = (answer: string): EntityExtractionResult => ({ answer, is_off_topic: false, is_refusal: false, quality: 'valid', brief_offtopic_answer: null });
+    if (slot === 'phone') {
+      const candidates = extractPhoneCandidates(message);
+      if (candidates.length > 0) {
+        const mode = await this.phoneMode(businessAccountId);
+        for (const c of candidates) {
+          const r = validatePhoneNumber(c.raw, mode);
+          if (r.isValid) return valid(r.normalized);
+        }
+        return { answer: null, is_off_topic: false, is_refusal: false, quality: 'invalid', brief_offtopic_answer: null, validationMessage: phoneProblemMessage(mode) };
+      }
+    } else if (slot === 'email') {
+      const email = emailInMessage(message);
+      if (email) return valid(email);
+    } else if (slot === 'name') {
+      const name = nameAnswer(message);
+      if (name) return valid(name);
+    }
+    return this.extractEntityFromMessage(userMessage, step, businessAccountId);
+  }
+
+  private async phoneMode(businessAccountId: string) {
+    const storage = (await import('../storage')).storage;
+    const ws = await storage.getWidgetSettings(businessAccountId);
+    return phoneModeFor(ws?.leadTrainingConfig);
+  }
+
+  /** Form journeys (POST /api/journey/submit-step): save a contact answer exactly like a chat journey does. */
+  async saveFormJourneyContact(conversationId: string, businessAccountId: string, step: any, answer: string, channel?: string | null): Promise<{ captchaRequired: boolean }> {
+    return this.saveJourneyContact(conversationId, businessAccountId, step, answer, null, channel);
+  }
+
+  /**
+   * A journey answer that is a contact detail is saved on this conversation's lead (one lead per
+   * chat, returning-visitor reuse), then gets the mobile field's OTP / CAPTCHA check and the
+   * usual CRM rule (sent once every mandatory field is in and verification passed).
+   */
+  private async saveJourneyContact(
+    conversationId: string,
+    businessAccountId: string,
+    step: any,
+    answer: string,
+    journeyState: JourneyState | null,
+    channel?: string | null
+  ): Promise<{ captchaRequired: boolean }> {
+    const slot = contactSlot(step);
+    if (!slot || !answer || conversationId.startsWith('temp_')) return { captchaRequired: false };
+    try {
+      const storage = (await import('../storage')).storage;
+      const ws = await storage.getWidgetSettings(businessAccountId);
+      const leadConfig = ws?.leadTrainingConfig as any;
+      const values: { phone?: string; email?: string; name?: string } = {};
+      if (slot === 'phone') {
+        const r = validatePhoneNumber(answer, phoneModeFor(leadConfig));
+        if (!r.isValid) return { captchaRequired: false };
+        values.phone = r.normalized;
+      } else if (slot === 'email') {
+        if (!isValidEmail(answer)) return { captchaRequired: false };
+        values.email = answer.trim().toLowerCase();
+      } else {
+        if (!isValidLeadName(answer)) return { captchaRequired: false };
+        values.name = answer.trim();
+      }
+      const up = await upsertConversationLead({ businessAccountId, conversationId, values });
+      if (journeyState) journeyState.leadId = up.lead.id;
+      if (up.changed.length === 0) return { captchaRequired: false };
+      console.log(`[Journey Lead] ${up.created ? 'Created' : 'Updated'} lead ${up.lead.id}: ${up.changed.join(', ')}`);
+      let captchaRequired = false;
+      if (up.changed.includes('phone') && up.lead.phone) {
+        const gate = await applyMidChatPhoneGate({ businessAccountId, conversationId, leadId: up.lead.id, phone: up.lead.phone, leadConfig, channel });
+        captchaRequired = gate.captchaLocked;
+      }
+      syncConversationLeadIfReady({ leadId: up.lead.id, businessAccountId, conversationId, changedFields: up.changed, channel, source: 'journey' })
+        .catch(err => console.error('[Journey Lead] CRM sync failed:', err));
+      return { captchaRequired };
+    } catch (error) {
+      console.error('[Journey Lead] Could not save the contact answer:', error);
+      return { captchaRequired: false };
     }
   }
 
@@ -955,289 +1151,38 @@ Respond with JSON:
   }
 
   /**
-   * AUTO-CAPTURE LEAD FROM JOURNEY RESPONSES
-   * Extracts contact information from completed journey and creates/updates lead
+   * Journey finished: make sure every contact answer of this journey is on the chat's lead
+   * (normally already saved step by step by saveJourneyContact; this catches answers recorded by
+   * the "already known" skip or a restart).
    */
   private async captureLeadFromJourney(
     conversationId: string,
     journeyState: JourneyState,
-    businessAccountId: string
+    businessAccountId: string,
+    channel?: string | null
   ): Promise<void> {
     try {
-      // If incremental capture already created a lead, just update it with any missing fields
-      if (journeyState.leadId) {
-        console.log('[Lead Capture] Journey already has lead - ensuring completeness');
-        // The incremental capture already handled this - no duplicate needed
-        return;
-      }
-
       const { db } = await import('../db');
-      const { leads, journeyResponses, journeySteps } = await import('../../shared/schema');
-      const { eq, and } = await import('drizzle-orm');
-      
-      // Get all responses for this journey
+      const { journeyResponses, journeySteps } = await import('../../shared/schema');
+      const { eq } = await import('drizzle-orm');
+      if (!journeyState.sessionId) return;
       const responses = await db
         .select({
           response: journeyResponses.response,
-          fieldName: journeySteps.fieldName,
+          questionText: journeySteps.questionText,
           questionType: journeySteps.questionType,
+          fieldName: journeySteps.fieldName,
+          crmFieldKey: journeySteps.crmFieldKey,
         })
         .from(journeyResponses)
         .innerJoin(journeySteps, eq(journeyResponses.stepId, journeySteps.id))
         .where(eq(journeyResponses.sessionId, journeyState.sessionId));
-      
-      console.log('[Lead Capture] Journey responses:', responses);
-      
-      // Extract contact fields
-      let name: string | null = null;
-      let phone: string | null = null;
-      let email: string | null = null;
-      
-      for (const resp of responses) {
-        const fieldName = resp.fieldName?.toLowerCase();
-        if (fieldName === 'name' || fieldName === 'fullname' || fieldName === 'full_name') {
-          name = resp.response;
-        } else if (fieldName === 'phone' || fieldName === 'contact' || fieldName === 'mobile') {
-          phone = resp.response;
-        } else if (fieldName === 'email') {
-          email = resp.response;
-        }
-      }
-      
-      // Only create lead if we have at least name OR phone
-      if (!name && !phone) {
-        console.log('[Lead Capture] No contact information found in journey responses - skipping lead creation');
-        return;
-      }
-      
-      console.log('[Lead Capture] Extracted from journey:', { name, phone, email });
-      
-      // Check if lead already exists for this conversation
-      const existingLeads = await db
-        .select()
-        .from(leads)
-        .where(
-          and(
-            eq(leads.businessAccountId, businessAccountId),
-            eq(leads.conversationId, conversationId)
-          )
-        )
-        .limit(1);
-      
-      if (existingLeads.length > 0) {
-        // Update existing lead with new information
-        const updateData: any = {};
-        if (name) updateData.name = name;
-        if (phone) updateData.phone = phone;
-        if (email) updateData.email = email;
-        
-        await db
-          .update(leads)
-          .set({
-            ...updateData,
-            updatedAt: new Date(),
-          })
-          .where(eq(leads.id, existingLeads[0].id));
-        
-        console.log('[Lead Capture] ✓ Updated existing lead:', existingLeads[0].id);
-      } else {
-        // Create new lead
-        const newLead = await db.insert(leads).values({
-          businessAccountId,
-          conversationId,
-          name: name || 'Unknown',
-          phone: phone || null,
-          email: email || null,
-          message: `Journey: ${journeyState.journeyId}`,
-        }).returning();
-        
-        console.log('[Lead Capture] ✓ Created new lead from journey:', newLead[0].id);
+      for (const r of responses) {
+        if (!r.response || r.response.startsWith('[SKIPPED') || !contactSlot(r)) continue;
+        await this.saveJourneyContact(conversationId, businessAccountId, r, r.response, journeyState, channel);
       }
     } catch (error) {
       console.error('[Lead Capture] Error capturing lead from journey:', error);
-    }
-  }
-
-  /**
-   * INSTANT PROGRESSIVE LEAD CAPTURE (AI-POWERED)
-   * Uses AI to detect name/phone/email in ANY journey response
-   * No field configuration needed - automatically captures contact info!
-   */
-  private async captureLeadIncremental(
-    conversationId: string,
-    businessAccountId: string,
-    step: any,
-    answer: string,
-    journeyState: JourneyState
-  ): Promise<void> {
-    try {
-      // Use AI to detect if this answer contains contact information
-      const openai = await this.getOpenAIClient(businessAccountId);
-      
-      const detectionPrompt = `Analyze this user response and detect if it contains contact information.
-
-Question asked: "${step.questionText}"
-User's answer: "${answer}"
-
-Extract ONLY if explicitly provided by the user:
-- name: Full name if present (first name, last name, or full name)
-- phone: Phone number if present (any format)
-- email: Email address if present
-
-Rules:
-- Only extract if the user ACTUALLY provided it in their answer
-- Do NOT infer or guess
-- For phone: accept any numeric format (with or without country code, spaces, dashes)
-- For name: accept any name format (first only, last only, or full)
-- Return null if that field was not provided
-
-Respond with JSON:
-{
-  "name": "extracted name or null",
-  "phone": "extracted phone or null", 
-  "email": "extracted email or null"
-}`;
-
-      const detectionResponse = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an expert at extracting contact information. Always respond with valid JSON only.'
-          },
-          {
-            role: 'user',
-            content: detectionPrompt
-          }
-        ],
-        temperature: 0.1,
-        response_format: { type: 'json_object' },
-      });
-
-      const detected = JSON.parse(detectionResponse.choices[0].message.content || '{}');
-      const { name, phone, email } = detected;
-
-      // If no contact info detected, skip
-      if (!name && !phone && !email) {
-        return;
-      }
-
-      console.log(`[Lead Capture] 🔔 AI detected contact info: ${name ? 'name' : ''} ${phone ? 'phone' : ''} ${email ? 'email' : ''}`.trim());
-
-      const { db } = await import('../db');
-      const { leads } = await import('../../shared/schema');
-      const { eq, and, or } = await import('drizzle-orm');
-
-      // Helper: Normalize phone number for consistent duplicate detection
-      const normalizePhone = (phoneNum: string): string => {
-        // Keep only digits and leading +
-        const cleaned = phoneNum.replace(/[^\d+]/g, '');
-        // If starts with +, keep it; otherwise just digits
-        return cleaned.startsWith('+') ? cleaned : cleaned.replace(/\+/g, '');
-      };
-
-      // Build update data with AI-detected contact info
-      const updateData: any = {};
-      if (name) updateData.name = name.trim();
-      if (phone) updateData.phone = normalizePhone(phone);
-      if (email) updateData.email = email.toLowerCase().trim();
-
-      // PROGRESSIVE ENRICHMENT LOGIC
-      
-      // Case 1: Journey already has an associated lead - update it
-      if (journeyState.leadId) {
-        await db
-          .update(leads)
-          .set({
-            ...updateData,
-            updatedAt: new Date(),
-          })
-          .where(eq(leads.id, journeyState.leadId));
-        
-        console.log(`[Lead Capture] ✓ Updated existing journey lead: ${journeyState.leadId}`);
-        return;
-      }
-
-      // Case 2: Check for duplicate by email/phone (if AI detected them)
-      if (email || phone) {
-        const conditions: any[] = [eq(leads.businessAccountId, businessAccountId)];
-        const contactConditions: any[] = [];
-        
-        if (email && updateData.email) {
-          contactConditions.push(eq(leads.email, updateData.email));
-        }
-        if (phone && updateData.phone) {
-          contactConditions.push(eq(leads.phone, updateData.phone));
-        }
-        
-        if (contactConditions.length > 0) {
-          conditions.push(or(...contactConditions));
-        }
-
-        const existingLeads = await db
-          .select()
-          .from(leads)
-          .where(and(...conditions))
-          .limit(1);
-
-        if (existingLeads.length > 0) {
-          // Found duplicate - update it and link to journey
-          await db
-            .update(leads)
-            .set({
-              ...updateData,
-              updatedAt: new Date(),
-            })
-            .where(eq(leads.id, existingLeads[0].id));
-          
-          journeyState.leadId = existingLeads[0].id;
-          console.log(`[Lead Capture] ✓ Updated duplicate lead: ${existingLeads[0].id}`);
-          return;
-        }
-      }
-
-      // Case 3: Check if lead exists for this conversation
-      const conversationLeads = await db
-        .select()
-        .from(leads)
-        .where(
-          and(
-            eq(leads.businessAccountId, businessAccountId),
-            eq(leads.conversationId, conversationId)
-          )
-        )
-        .limit(1);
-
-      if (conversationLeads.length > 0) {
-        // Update existing conversation lead
-        await db
-          .update(leads)
-          .set({
-            ...updateData,
-            updatedAt: new Date(),
-          })
-          .where(eq(leads.id, conversationLeads[0].id));
-        
-        journeyState.leadId = conversationLeads[0].id;
-        console.log(`[Lead Capture] ✓ Updated conversation lead: ${conversationLeads[0].id}`);
-        return;
-      }
-
-      // Case 4: Create new lead (even with just name - we don't want to lose it)
-      const newLead = await db.insert(leads).values({
-        businessAccountId,
-        conversationId,
-        name: updateData.name || 'Unknown',
-        phone: updateData.phone || null,
-        email: updateData.email || null,
-        message: `Journey: ${journeyState.journeyId}`,
-      }).returning();
-      
-      journeyState.leadId = newLead[0].id;
-      console.log(`[Lead Capture] ✓ Created new lead instantly: ${newLead[0].id}`);
-      
-    } catch (error) {
-      console.error('[Lead Capture] Error in incremental capture:', error);
     }
   }
 
@@ -1482,10 +1427,11 @@ Analyze the response and provide:
 4. quality: "valid" if answer is clear and complete, "needs_clarification" if vague, "invalid" if no answer
 5. brief_offtopic_answer: If off-topic, provide a very brief (1 sentence) answer to their question, or null
 
-STRICT RULES:
+RULES:
 - Only extract information that directly answers the current question
 - If user asks something else, mark is_off_topic=true
-- Be strict about quality - require clear, specific answers
+- Short answers are complete answers: "B.Com", "MBA", "Graduate", "12th pass", "5 years", "Mumbai", "Finance" are all "valid". Never ask for more detail than the question asks for.
+- Use "needs_clarification" only when the answer is genuinely vague ("something", "not sure yet", "maybe")
 - Detect refusals accurately
 
 Respond with ONLY valid JSON matching this exact schema:
@@ -1629,6 +1575,9 @@ Respond with ONLY valid JSON matching this exact schema:
       businessName?: string;
       previousAnswers?: string;
       skippedInfo?: string;
+      /** acknowledgment: the question the visitor just answered, and their answer. */
+      answeredQuestion?: string;
+      answer?: string;
     },
     businessAccountId: string
   ): Promise<string> {
@@ -1663,7 +1612,10 @@ Respond with ONLY valid JSON matching this exact schema:
         
         case 'acknowledgment':
           const skippedContext = context.skippedInfo 
-            ? `\n\nIMPORTANT: You already have some information from earlier in the conversation: ${context.skippedInfo}. Mention this briefly to show you remember, then ask the current question.`
+            ? `\n\nIMPORTANT: You already have some information from earlier in the conversation: ${context.skippedInfo}. Do NOT ask for it again. You may mention briefly that you have it, then ask the next question.`
+            : '';
+          const answeredContext = context.answeredQuestion
+            ? ` The visitor just answered the question "${context.answeredQuestion}"${context.answer ? ` with "${context.answer}"` : ''}. That answer is accepted — never comment on its format or say it answers a different question.`
             : '';
           
           // Rotate acknowledgments for variety (no AI memory needed)
@@ -1683,11 +1635,11 @@ Respond with ONLY valid JSON matching this exact schema:
           ];
           const randomAck = acknowledgments[Math.floor(Math.random() * acknowledgments.length)];
           
-          situationPrompt = `The user gave a valid answer. Start with "${randomAck}" then smoothly ask the next question. Keep it natural and flowing.${skippedContext}`;
+          situationPrompt = `The user gave a valid answer.${answeredContext} Start with "${randomAck}" then smoothly ask the next question. Keep it natural and flowing.${skippedContext}`;
           break;
         
         case 'skip':
-          situationPrompt = `The user skipped an optional question. Say something brief like "No problem!" or "That's fine!" then smoothly move to the next question. Keep it positive and flowing.`;
+          situationPrompt = `The user did not answer the previous question, and that's fine — do not insist or repeat it. Say something brief like "No problem!" or "That's fine!" then smoothly move to the next question. Keep it positive and flowing.${context.skippedInfo ? ` You already know: ${context.skippedInfo} — do not ask for it.` : ''}`;
           break;
       }
       
@@ -1702,7 +1654,9 @@ Respond with ONLY valid JSON matching this exact schema:
           },
           {
             role: 'user',
-            content: `Current question we need to ask: ${currentQuestion}\n\nUser just said: ${userMessage}\n\nGenerate your response:`
+            content: situation === 'acknowledgment' || situation === 'skip'
+              ? `Next question to ask: ${currentQuestion}\n\nThe visitor's last message: ${userMessage}\n\nGenerate your response:`
+              : `Current question we need to ask: ${currentQuestion}\n\nUser just said: ${userMessage}\n\nGenerate your response:`
           }
         ],
         temperature: 0.8, // Higher for more variation
@@ -1719,31 +1673,20 @@ Respond with ONLY valid JSON matching this exact schema:
 
 
   /**
-   * ENGINE HELPER: Validate answer format (email, phone, etc.)
+   * ENGINE HELPER: Validate answer format (email, phone) — the phone rule is the lead training's
+   * (same digits rule as the chat's lead capture, fake numbers like 9876543210 refused).
    */
-  private async validateAnswer(answer: string, step: any): Promise<{ valid: boolean; message?: string }> {
-    const questionLower = (step.questionText || '').toLowerCase();
-    
-    // Email validation
-    if (questionLower.includes('email')) {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(answer)) {
-        return {
-          valid: false,
-          message: "That doesn't look like a valid email address. Could you provide a valid email (e.g., name@example.com)?"
-        };
-      }
+  private async validateAnswer(answer: string, step: any, businessAccountId: string): Promise<{ valid: boolean; message?: string }> {
+    const slot = contactSlot(step);
+    if (slot === 'email' && !isValidEmail(answer)) {
+      return {
+        valid: false,
+        message: "That doesn't look like a valid email address. Could you provide a valid email (e.g., name@example.com)?"
+      };
     }
-
-    // Phone validation (basic - accepts various formats)
-    if (questionLower.includes('phone') || questionLower.includes('number') || questionLower.includes('whatsapp')) {
-      const phoneRegex = /^[\d\s\-\+\(\)]{7,}$/;
-      if (!phoneRegex.test(answer)) {
-        return {
-          valid: false,
-          message: "That doesn't look like a valid phone number. Could you provide your phone number with digits only?"
-        };
-      }
+    if (slot === 'phone') {
+      const mode = await this.phoneMode(businessAccountId);
+      if (!validatePhoneNumber(answer, mode).isValid) return { valid: false, message: phoneProblemMessage(mode) };
     }
 
     // All other answers are valid

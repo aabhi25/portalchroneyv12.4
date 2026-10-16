@@ -266,7 +266,7 @@ export function buildLeadTurnBlock(plan: LeadPlan, opts: { knownName?: string | 
   if (plan.collected.length || plan.knownOther.length) {
     const parts = plan.collected.map(id => id === 'name' && opts.knownName ? `name (${opts.knownName})` : FIELD_LABEL[id]);
     for (const k of plan.knownOther) parts.push(k === 'phone' ? 'phone number' : k === 'email' ? 'email address' : (opts.knownName ? `name (${opts.knownName})` : 'name'));
-    lines.push(`Already have — NEVER ask for these again: ${parts.join(', ')}.`);
+    lines.push(`Already have — NEVER ask for these again: ${parts.join(', ')}. This overrides any business instruction or template that says to ask for them: leave that request out (e.g. say the team will contact them on the number they shared).`);
   }
   const stopped = plan.stopped.filter(s => !plan.collected.includes(s.id));
   if (stopped.length) {

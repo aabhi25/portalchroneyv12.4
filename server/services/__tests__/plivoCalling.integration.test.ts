@@ -635,7 +635,7 @@ async function main() {
     const received: any[] = [];
     r.ws!.on("message", (d) => received.push(JSON.parse(String(d))));
     r.ws!.send(JSON.stringify(PSTART("live-out-ws")));
-    await until(async () => (await getCall(live.id)).status === "in_progress");
+    await until(async () => (await getCall(live.id)).status === "in_progress" && routeEngines.length === 1);
     expect((await getCall(live.id)).status === "in_progress" && routeEngines.length === 1, "Plivo start over the socket → call in_progress, voice session started");
     routeEngines[0].ready();
     const id = await routeEngines[0].say("Hello from the AI");

@@ -17325,12 +17325,32 @@ Important:
 
       // Get current form step data BEFORE submitting (to capture the question)
       const currentStep = await journeyService.getFormStepData(activeConversationId, true);
+      const { journeyOrchestrator } = await import('./services/journeyOrchestrator');
+      const { autoFillKnownSteps, contactSlot } = await import('./services/journeyKnownAnswers');
+      // The website widget sends its visitor token; the portal's test chat doesn't (no CAPTCHA there).
+      const journeyChannel = typeof visitorToken === 'string' && visitorToken.trim() ? 'widget' : 'other';
+      const captchaState = async () => {
+        const { deriveCaptchaMethodConfig } = await import('./services/otp');
+        const cfg = await deriveCaptchaMethodConfig(businessAccountId);
+        return cfg.enabled ? { required: true, provider: cfg.provider, siteKey: cfg.siteKey, misconfigured: cfg.misconfigured } : null;
+      };
 
-      // Server-side validation for phone fields
-      if (currentStep && answer && currentStep.questionType === 'phone') {
-        const cleanPhone = answer.replace(/\D/g, '');
-        if (cleanPhone.length !== 10) {
-          return res.status(400).json({ error: 'Please enter a valid 10-digit mobile number' });
+      // A chat waiting for its CAPTCHA (a mobile number was just given) stays on this step until it is passed.
+      if (journeyChannel === 'widget' && currentStep && await storage.isConversationAwaitingVerification(activeConversationId, businessAccountId)) {
+        const captcha = await captchaState();
+        if (captcha) {
+          return res.json({ success: true, completed: false, conversationId: activeConversationId, nextStep: currentStep, captcha });
+        }
+      }
+
+      // Server-side validation for phone fields: the lead training's digits rule (fake numbers refused)
+      if (currentStep && answer && contactSlot(currentStep) === 'phone') {
+        const ws = await storage.getWidgetSettings(businessAccountId);
+        const { phoneModeFor } = await import('./services/leadCapture/fields');
+        const mode = phoneModeFor(ws?.leadTrainingConfig);
+        if (!validatePhoneNumber(String(answer), mode).isValid) {
+          const rule = mode === '10' ? 'a valid 10-digit mobile number' : mode === '12' ? 'your mobile number with the country code (12 digits)' : 'a valid mobile number';
+          return res.status(400).json({ error: `Please enter ${rule}`, nextStep: currentStep, conversationId: activeConversationId });
         }
       }
 
@@ -17339,6 +17359,34 @@ Important:
 
       if (!result.success) {
         return res.status(400).json({ error: 'Failed to submit step - no active form journey' });
+      }
+
+      // A contact answer goes to this chat's lead (same lead, checks and CRM rules as the chat); a new
+      // mobile number gets the CAPTCHA when the business uses it.
+      let captcha: Awaited<ReturnType<typeof captchaState>> = null;
+      if (currentStep && answer !== undefined && answer !== null && String(answer).trim()) {
+        const saved = await journeyOrchestrator.saveFormJourneyContact(activeConversationId, businessAccountId, currentStep, String(answer), journeyChannel);
+        if (saved.captchaRequired) captcha = await captchaState();
+      }
+
+      // Questions this chat already answered (mobile, name, earlier journeys) are not asked again.
+      if (!result.completed) {
+        const fill = await autoFillKnownSteps(activeConversationId, businessAccountId);
+        if (fill.filled.length > 0) {
+          const step = fill.completed ? null : await journeyService.getFormStepData(activeConversationId, true);
+          if (!step) {
+            result.completed = true;
+            result.nextStep = undefined;
+            result.completionMessage = result.completionMessage || 'Thank you for completing the form!';
+          } else if (step.stepType === 'journey_complete') {
+            await journeyService.completeJourney(activeConversationId);
+            result.completed = true;
+            result.nextStep = step;
+            result.completionMessage = step.questionText || 'Thank you for completing the form!';
+          } else {
+            result.nextStep = step;
+          }
+        }
       }
 
       // A business that restricts its reply languages: the next question / completion message in
@@ -17415,78 +17463,6 @@ Important:
         console.error('[Form Journey] Error saving messages:', msgError);
       }
 
-      // Immediately create partial lead when phone step is answered mid-journey
-      if (!result.completed && currentStep && currentStep.questionType === 'phone') {
-        try {
-          const cleanPhone = answer.replace(/\D/g, '');
-          if (cleanPhone.length >= 10) {
-            const [sessionData] = await db
-              .select()
-              .from(journeySessions)
-              .where(eq(journeySessions.conversationId, activeConversationId))
-              .orderBy(desc(journeySessions.createdAt))
-              .limit(1);
-
-            let partialName: string | null = null;
-            if (sessionData) {
-              const priorResponses = await db
-                .select({ questionType: journeySteps.questionType, response: journeyResponses.response, questionText: journeySteps.questionText })
-                .from(journeyResponses)
-                .innerJoin(journeySteps, eq(journeyResponses.stepId, journeySteps.id))
-                .where(eq(journeyResponses.sessionId, sessionData.id));
-              for (const r of priorResponses) {
-                if (r.questionType === 'text' && r.response && r.questionText?.toLowerCase().includes('name')) {
-                  partialName = r.response;
-                  break;
-                }
-              }
-            }
-
-            const normalizedPhone = cleanPhone.slice(-10);
-            const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-            const recentLeads = await db.select().from(leads)
-              .where(and(
-                eq(leads.businessAccountId, businessAccountId),
-                gte(leads.createdAt, twentyFourHoursAgo),
-                isNotNull(leads.phone)
-              )).limit(50);
-            const dupLead = recentLeads.find(l => l.phone && l.phone.replace(/\D/g, '').slice(-10) === normalizedPhone) || null;
-
-            if (!dupLead) {
-              let visitorCity: string | null = null;
-              try {
-                const clientIp = getClientIp(req);
-                if (clientIp && clientIp !== 'unknown' && !clientIp.startsWith('127.') && !clientIp.startsWith('192.168.') && !clientIp.startsWith('10.') && !clientIp.startsWith('::1')) {
-                  const geoResp = await fetchWithTimeout(`http://ip-api.com/json/${clientIp}?fields=status,city`, undefined, 5_000);
-                  if (geoResp.ok) {
-                    const geoData = await geoResp.json();
-                    if (geoData.status === 'success' && geoData.city) visitorCity = geoData.city;
-                  }
-                }
-              } catch {}
-              const partialLead = await storage.createLead({
-                businessAccountId,
-                name: partialName || null,
-                phone: answer,
-                email: null,
-                source: 'journey_form',
-                notes: 'Captured via Journey Form (partial)',
-                status: 'new',
-                topicsOfInterest: ['Via Journey Form'],
-                city: visitorCity,
-                sourceUrl: pageUrl || null,
-                conversationId: activeConversationId || null,
-              });
-              console.log('[Form Journey] Partial lead created on phone capture:', partialLead.id);
-            } else {
-              console.log('[Form Journey] Phone already captured in lead:', dupLead.id, '— skipping partial creation');
-            }
-          }
-        } catch (partialLeadError) {
-          console.error('[Form Journey] Error creating partial lead on phone capture:', partialLeadError);
-        }
-      }
-
       // Auto-create lead when form journey completes with contact data
       if (result.completed) {
         try {
@@ -17531,9 +17507,10 @@ Important:
               const normalizedEmail = email ? email.trim().toLowerCase() : null;
 
               const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-              let existingLead = null;
+              // The chat's own lead (saved step by step above) comes first.
+              let existingLead = (await storage.getLeadByConversation(activeConversationId, businessAccountId)) || null;
 
-              if (normalizedPhone) {
+              if (!existingLead && normalizedPhone) {
                 const recentLeads = await db
                   .select().from(leads)
                   .where(and(
@@ -17668,7 +17645,7 @@ Important:
       }
 
       // Include the conversationId in response so frontend can track it
-      res.json({ ...result, conversationId: activeConversationId });
+      res.json({ ...result, conversationId: activeConversationId, ...(captcha ? { captcha } : {}) });
     } catch (error: any) {
       console.error('[Form Journey] Error submitting step:', error);
       res.status(500).json({ error: error.message });
