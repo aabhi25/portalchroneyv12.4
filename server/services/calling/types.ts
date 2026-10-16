@@ -2,8 +2,9 @@
  * AI Calling — telephony provider contract.
  *
  * A provider places outbound calls and reports their status. The AUDIO of every call
- * (Exotel or simulator) arrives on our media-stream WebSocket in Exotel's AgentStream
- * format (see mediaStream.ts), so the call pipeline is identical for all providers.
+ * arrives on our media-stream WebSocket in Exotel's AgentStream format (see mediaStream.ts);
+ * Plivo's stream protocol is translated to it (providers/plivoStream.ts), so the call
+ * pipeline is identical for all providers.
  */
 import type { CallProviderId, CallStatus } from "@shared/aiCalling";
 
@@ -18,6 +19,11 @@ export interface ProviderCredentials {
     callerId: string;       // ExoPhone
     flowAppId?: string | null;
   };
+  plivo?: {
+    authId: string;
+    authToken: string;
+    number: string;         // Plivo number, +E.164
+  };
 }
 
 export interface PlaceCallInput {
@@ -28,6 +34,8 @@ export interface PlaceCallInput {
   streamUrl: string;
   /** https URL the provider posts status updates to (signed). */
   statusCallbackUrl: string;
+  /** Plivo: https URL Plivo fetches when the call is answered (returns the Stream XML; signed). */
+  answerUrl?: string;
   record: boolean;
   timeLimitSec: number;
   ringTimeoutSec?: number;
@@ -56,6 +64,10 @@ export interface TelephonyProvider {
   placeCall(creds: ProviderCredentials, input: PlaceCallInput): Promise<PlaceCallResult>;
   /** Ask the provider to hang up a live call (best effort). */
   hangup?(creds: ProviderCredentials, providerCallSid: string): Promise<void>;
+  /** Move a live call to new call instructions (Plivo: the transfer XML at `url`). */
+  transfer?(creds: ProviderCredentials, providerCallSid: string, url: string): Promise<void>;
+  /** Start recording a live call; returns where the recording will be (null = not available). */
+  startRecording?(creds: ProviderCredentials, providerCallSid: string, opts: { timeLimitSec: number }): Promise<{ recordingUrl: string | null }>;
   /** Parse a status webhook body into a normalised update (null = ignore). */
   parseStatusWebhook?(body: Record<string, unknown>): ProviderStatusUpdate | null;
   /** Download a recording (for our staff-only proxy). */

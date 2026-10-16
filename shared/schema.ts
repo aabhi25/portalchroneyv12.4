@@ -1680,7 +1680,7 @@ export type AvatarBusinessSettings = typeof avatarBusinessSettings.$inferSelect;
 export const aiCallingSettings = pgTable("ai_calling_settings", {
   businessAccountId: varchar("business_account_id").primaryKey().references(() => businessAccounts.id, { onDelete: "cascade" }),
   enabled: boolean("enabled").notNull().default(false),
-  provider: varchar("provider", { length: 32 }).notNull().default("simulator"), // 'exotel' | 'simulator'
+  provider: varchar("provider", { length: 32 }).notNull().default("simulator"), // 'exotel' | 'plivo' | 'simulator'
   exotelAccountSid: text("exotel_account_sid"),
   exotelSubdomain: text("exotel_subdomain").notNull().default("api.in.exotel.com"),
   exotelCallerId: text("exotel_caller_id"),
@@ -1688,6 +1688,12 @@ export const aiCallingSettings = pgTable("ai_calling_settings", {
   exotelApiKey: jsonb("exotel_api_key").$type<{ enc: string; last4: string; updatedAt: string; updatedBy?: string | null }>(),
   exotelApiToken: jsonb("exotel_api_token").$type<{ enc: string; last4: string; updatedAt: string; updatedBy?: string | null }>(),
   exotelVerifiedAt: timestamp("exotel_verified_at"),
+  // Plivo (provider 'plivo'): Auth ID + encrypted Auth Token from the Plivo console, and the Plivo number
+  // used as the caller ID (+E.164).
+  plivoAuthId: text("plivo_auth_id"),
+  plivoAuthToken: jsonb("plivo_auth_token").$type<{ enc: string; last4: string; updatedAt: string; updatedBy?: string | null }>(),
+  plivoNumber: text("plivo_number"),
+  plivoVerifiedAt: timestamp("plivo_verified_at"),
   // Secret path segment of the inbound stream URL given to Exotel (identifies the business).
   inboundKey: varchar("inbound_key", { length: 64 }),
   // Public https base of this server, captured when settings are saved (used to build webhook / stream URLs

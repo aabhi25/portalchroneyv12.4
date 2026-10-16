@@ -1,7 +1,7 @@
 /**
  * AI Calling — provider status webhooks (no session; the signed token in the path identifies the call).
  *
- *   POST /api/calling/webhooks/:provider/status/:token     (form-encoded or JSON)
+ *   POST /api/calling/webhooks/:provider/status/:token     (form-encoded or JSON; provider exotel | plivo)
  *
  * Token = signCallToken(callId, "status") (see streamToken.ts); a bad / expired token → 403.
  * The update only moves a call forward (dialing → ringing → in_progress → terminal). A terminal update
@@ -15,6 +15,8 @@ import { aiCalls } from "@shared/schema";
 import { LIVE_CALL_STATUSES, TERMINAL_CALL_STATUSES, type CallStatus } from "@shared/aiCalling";
 import { verifyCallToken } from "../services/calling/streamToken";
 import { getCallingProvider } from "../services/calling/providers";
+import { getCallingSettings } from "../services/calling/settingsService";
+import { plivoSignatureOk } from "./callingPlivo";
 
 const router = Router();
 
@@ -23,11 +25,14 @@ const RANK: Record<string, number> = { queued: 0, dialing: 1, ringing: 2, in_pro
 router.post("/api/calling/webhooks/:provider/status/:token", async (req, res) => {
   try {
     const providerId = req.params.provider;
-    if (providerId !== "exotel") return res.status(404).json({ error: "Unknown provider" });
+    if (providerId !== "exotel" && providerId !== "plivo") return res.status(404).json({ error: "Unknown provider" });
     const callId = verifyCallToken(req.params.token, "status");
     if (!callId) return res.status(403).json({ error: "Invalid or expired link" });
     const [call] = await db.select().from(aiCalls).where(eq(aiCalls.id, callId)).limit(1);
     if (!call || call.provider !== providerId) return res.status(404).json({ error: "Call not found" });
+    if (providerId === "plivo" && !plivoSignatureOk(req, await getCallingSettings(call.businessAccountId))) {
+      return res.status(403).json({ error: "Invalid signature" });
+    }
 
     const provider = getCallingProvider(providerId);
     const body = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;

@@ -6,8 +6,11 @@
  *   /api/calling/inbound/<inboundKey>   Exotel inbound stream — the business's secret inbound key.
  *   /api/calling/simulate/<callId>      Portal simulator for a ringing simulator call (session cookie).
  *   /api/calling/simulate-inbound       Portal simulator for an inbound call (session cookie; ?from=).
+ *   /api/calling/plivo/stream/<token>          Plivo outbound stream — signed call token.
+ *   /api/calling/plivo/inbound-stream/<token>  Plivo inbound stream — signed token from the inbound answer URL.
  *
- * All four speak the Exotel AgentStream protocol and run the same handler (mediaStream.ts).
+ * All of them run the same handler (mediaStream.ts) in the Exotel AgentStream protocol; Plivo
+ * sockets are wrapped in PlivoStreamSocket, which translates Plivo's stream protocol.
  * Anything that fails a check is refused at the HTTP level (no WebSocket is opened).
  */
 import type { IncomingMessage } from "http";
@@ -20,7 +23,8 @@ import { aiCalls } from "@shared/schema";
 import { isAiCallingEnabled } from "./aiCallingGate";
 import { getSettingsByInboundKey } from "../services/calling/settingsService";
 import { normalizeCallPhone, TERMINAL_CALL_STATUSES, type CallStatus } from "@shared/aiCalling";
-import { verifyCallToken, STREAM_SAMPLE_RATE } from "../services/calling/streamToken";
+import { verifyCallToken, verifyPlivoInboundStreamToken, STREAM_SAMPLE_RATE } from "../services/calling/streamToken";
+import { PlivoStreamSocket, type PlivoStreamMeta } from "../services/calling/providers/plivoStream";
 import { parseSampleRate } from "../services/calling/audio";
 import { CallMediaSession, loadCallStreamDeps, type CallStreamInit } from "../services/calling/mediaStream";
 
@@ -69,8 +73,28 @@ export async function handleCallingUpgrade(request: IncomingMessage, socket: Dup
   const urlSampleRate = parseSampleRate(url.searchParams.get("sample-rate"), STREAM_SAMPLE_RATE);
 
   let init: CallStreamInit | null = null;
+  let plivoMeta: PlivoStreamMeta | null = null;
   try {
-    if (kind === "stream" && param && !extra) {
+    if (kind === "plivo" && param === "stream" && extra) {
+      const callId = verifyCallToken(extra, "stream");
+      if (!callId) return reject(socket, 401, "Unauthorized"), true;
+      const [call] = await db.select().from(aiCalls).where(eq(aiCalls.id, callId)).limit(1);
+      if (!call || call.provider !== "plivo" || TERMINAL_CALL_STATUSES.includes(call.status as CallStatus)) return reject(socket, 410, "Gone"), true;
+      if (!(await aiCallingAllowed(call.businessAccountId))) return reject(socket, 403, "Forbidden"), true;
+      const meta = (call.metadata || {}) as Record<string, unknown>;
+      plivoMeta = { callUuid: typeof meta.plivoCallUuid === "string" ? meta.plivoCallUuid : null };
+      init = { kind: "plivo_outbound", businessAccountId: call.businessAccountId, callId: call.id, urlSampleRate: 8000 };
+    } else if (kind === "plivo" && param === "inbound-stream" && extra) {
+      const data = verifyPlivoInboundStreamToken(extra);
+      if (!data) return reject(socket, 401, "Unauthorized"), true;
+      const { getCallingSettings } = await import("../services/calling/settingsService");
+      const settings = await getCallingSettings(data.businessAccountId);
+      if (!settings.exists || !settings.enabled || settings.provider !== "plivo" || !(await aiCallingAllowed(data.businessAccountId))) {
+        return reject(socket, 403, "Forbidden"), true;
+      }
+      plivoMeta = { callUuid: data.callUuid, from: data.from, to: data.to };
+      init = { kind: "plivo_inbound", businessAccountId: data.businessAccountId, urlSampleRate: 8000 };
+    } else if (kind === "stream" && param && !extra) {
       const callId = verifyCallToken(param, "stream");
       if (!callId) return reject(socket, 401, "Unauthorized"), true;
       const [call] = await db.select().from(aiCalls).where(eq(aiCalls.id, callId)).limit(1);
@@ -118,8 +142,9 @@ export async function handleCallingUpgrade(request: IncomingMessage, socket: Dup
   const accepted = init;
   // Loaded before the upgrade so the session listens from the very first frame.
   const deps = await loadCallStreamDeps();
+  const meta = plivoMeta;
   wss.handleUpgrade(request, socket, head, (ws) => {
-    new CallMediaSession(ws as any, accepted, deps);
+    new CallMediaSession(meta ? new PlivoStreamSocket(ws as any, meta) : (ws as any), accepted, deps);
   });
   return true;
 }

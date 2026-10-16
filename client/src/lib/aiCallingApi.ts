@@ -56,11 +56,13 @@ export type CallingSettingsResponse = AiCallingSettingsView & {
 
 /** PUT /api/calling/settings body: any view field + write-only secrets ("" = keep). */
 export type CallingSettingsUpdate = Partial<
-  Omit<AiCallingSettingsView, "exotel" | "setup" | "consentAttestedAt" | "updatedAt">
+  Omit<AiCallingSettingsView, "exotel" | "plivo" | "setup" | "consentAttestedAt" | "updatedAt">
 > & {
   exotel?: Partial<Pick<AiCallingSettingsView["exotel"], "accountSid" | "subdomain" | "callerId" | "flowAppId">>;
+  plivo?: Partial<Pick<AiCallingSettingsView["plivo"], "authId" | "number">>;
   exotelApiKey?: string;
   exotelApiToken?: string;
+  plivoAuthToken?: string;
   attestConsent?: boolean;
 };
 

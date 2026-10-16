@@ -627,7 +627,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // a previous process left open (billed to their last heartbeat).
   app.use(avatarRoutes);
   app.use(aiLanguageRoutes);
-  app.use((await import("./routes/aiCalling")).default, (await import("./routes/callingWebhooks")).default); // AI Calling (B)
+  app.use((await import("./routes/aiCalling")).default, (await import("./routes/callingWebhooks")).default, (await import("./routes/callingPlivo")).default); // AI Calling (B)
   avatarSessionManager.recoverOrphans(new Date()).catch((err) => {
     console.error('[Avatar] Failed to close orphaned avatar sessions:', err?.message || err);
   });

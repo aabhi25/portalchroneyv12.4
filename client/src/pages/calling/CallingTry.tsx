@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Headset, Info, Loader2, PhoneIncoming, PhoneOutgoing, Settings } from "lucide-react";
 import { isCallingUnavailable, useCallingSettings } from "@/lib/aiCallingApi";
+import { CALL_PROVIDER_LABELS } from "@shared/aiCalling";
 import { CallingPageHeader, CallingUnavailable } from "@/components/calling/RequireAiCalling";
 import { CallTargetPicker, useCreateCall, type CallTarget } from "@/components/calling/CallNowDialog";
 import { ActiveCallPanel } from "@/components/calling/ActiveCallPanel";
@@ -22,6 +23,7 @@ export default function CallingTry() {
   if (isCallingUnavailable(settings.error)) return <CallingUnavailable />;
 
   const testMode = settings.data?.provider === "simulator";
+  const providerName = CALL_PROVIDER_LABELS[settings.data?.provider ?? "exotel"] ?? "Exotel";
   const inCall = session.phase !== "idle";
   const busy = session.phase === "connecting" || session.phase === "live";
 
@@ -37,7 +39,7 @@ export default function CallingTry() {
             <div className="flex gap-2 text-sm text-amber-900">
               <Info className="h-4 w-4 mt-0.5 shrink-0" />
               <span>
-                Your phone provider is set to Exotel, so calls go to real phones. To practise here in the portal, switch the phone provider to
+                Your phone provider is set to {providerName}, so calls go to real phones. To practise here in the portal, switch the phone provider to
                 <b> Test mode</b> in settings. (Testing an incoming call below still works.)
               </span>
             </div>
@@ -97,7 +99,7 @@ export default function CallingTry() {
                 <p className="text-center text-xs text-gray-500">The call follows your settings (calling hours, do-not-call list) just like a real one.</p>
               </>
             ) : (
-              <p className="text-sm text-gray-600">Available in Test mode. In Exotel mode use “Call someone now” on the Calls page — it rings a real phone.</p>
+              <p className="text-sm text-gray-600">Available in Test mode. In {providerName} mode use “Call someone now” on the Calls page — it rings a real phone.</p>
             )}
           </CardContent>
         </Card>

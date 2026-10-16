@@ -18,6 +18,7 @@ import {
   CALL_LIMITS,
   CALL_PROVIDERS,
   DEFAULT_CALL_PURPOSE,
+  normalizeCallProvider,
   DEFAULT_CALLING_HOURS,
   normalizeCallPhone,
   type AiCallingSettingsView,
@@ -25,8 +26,8 @@ import {
 } from "@shared/aiCalling";
 import { systemSettingsService } from "../systemSettingsService";
 import { istMonthKey, istMonthRange } from "../aiBudgetService";
-import { buildInboundStreamUrl, newInboundKey, resolvePublicBaseUrl } from "./streamToken";
-import { describeSecret, exotelMissing, normalizeApiKey, sealSecret } from "./credentials";
+import { buildInboundStreamUrl, buildPlivoInboundAnswerUrl, newInboundKey, resolvePublicBaseUrl } from "./streamToken";
+import { describeSecret, exotelMissing, normalizeApiKey, plivoMissing, sealSecret } from "./credentials";
 
 export const AUTO_CALL_SOURCES = ["website", "whatsapp", "instagram", "facebook", "voice", "form", "import", "other"] as const;
 export const EXOTEL_SUBDOMAINS = ["api.in.exotel.com", "api.exotel.com"] as const;
@@ -137,6 +138,10 @@ export function defaultSettingsRow(businessAccountId: string): AiCallingSettings
     exotelApiKey: null,
     exotelApiToken: null,
     exotelVerifiedAt: null,
+    plivoAuthId: null,
+    plivoAuthToken: null,
+    plivoNumber: null,
+    plivoVerifiedAt: null,
     inboundKey: null,
     publicBaseUrl: null,
     autoCallLeads: false,
@@ -175,7 +180,7 @@ export async function getCallingSettings(businessAccountId: string): Promise<AiC
   return row ? { ...row, exists: true } : { ...defaultSettingsRow(businessAccountId), exists: false };
 }
 
-/** Business settings for an inbound stream key (Exotel inbound URL), or null. */
+/** Business settings for an inbound key (Exotel inbound stream URL / Plivo inbound answer URL), or null. */
 export async function getSettingsByInboundKey(inboundKey: string): Promise<AiCallingSettingsRow | null> {
   if (!inboundKey || inboundKey.length > 64) return null;
   const [row] = await db.select().from(aiCallingSettings).where(eq(aiCallingSettings.inboundKey, inboundKey)).limit(1);
@@ -205,9 +210,10 @@ export function toSettingsView(row: AiCallingSettingsRow & { exists?: boolean })
   const base = resolvePublicBaseUrl(row.publicBaseUrl);
   const key = describeSecret(row.exotelApiKey);
   const token = describeSecret(row.exotelApiToken);
+  const plivoToken = describeSecret(row.plivoAuthToken);
   return {
     enabled: row.enabled,
-    provider: (CALL_PROVIDERS as string[]).includes(row.provider) ? (row.provider as AiCallingSettingsView["provider"]) : "simulator",
+    provider: normalizeCallProvider(row.provider),
     exotel: {
       accountSid: row.exotelAccountSid,
       subdomain: row.exotelSubdomain || "api.in.exotel.com",
@@ -219,9 +225,17 @@ export function toSettingsView(row: AiCallingSettingsRow & { exists?: boolean })
       apiTokenMask: token.mask,
       verifiedAt: iso(row.exotelVerifiedAt),
     },
+    plivo: {
+      authId: row.plivoAuthId,
+      number: row.plivoNumber,
+      authTokenSet: plivoToken.set,
+      authTokenMask: plivoToken.mask,
+      verifiedAt: iso(row.plivoVerifiedAt),
+    },
     setup: {
       inboundStreamUrl: base && row.inboundKey ? buildInboundStreamUrl(base, row.inboundKey) : null,
       statusCallbackUrl: statusCallbackBase(base),
+      plivoAnswerUrl: base && row.inboundKey ? buildPlivoInboundAnswerUrl(base, row.inboundKey) : null,
     },
     autoCallLeads: row.autoCallLeads,
     autoCallDelayMinutes: row.autoCallDelayMinutes,
@@ -248,7 +262,7 @@ export function toSettingsView(row: AiCallingSettingsRow & { exists?: boolean })
 export interface SettingsResponse extends AiCallingSettingsView {
   superAdminMinuteCap: number | null;
   minutesThisMonth: number;
-  /** Public https address used in the URLs given to Exotel (null = unknown yet). */
+  /** Public https address used in the URLs given to the phone provider (null = unknown yet). */
   publicBaseUrl: string | null;
 }
 
@@ -350,7 +364,7 @@ function normalizeCallerId(v: unknown): string | null {
 }
 
 const AUDITED = [
-  "enabled", "provider", "exotelAccountSid", "exotelSubdomain", "exotelCallerId", "exotelFlowAppId",
+  "enabled", "provider", "exotelAccountSid", "exotelSubdomain", "exotelCallerId", "exotelFlowAppId", "plivoAuthId", "plivoNumber",
   "autoCallLeads", "autoCallDelayMinutes", "autoCallSources", "consentMode", "callingHours", "maxAttempts",
   "retryGapMinutes", "maxCallMinutes", "monthlyMinuteLimit", "concurrentCallLimit", "recordCalls", "transferNumber",
   "callPurpose", "openingLine", "inboundGreeting", "whatsappFollowUp", "whatsappFollowUpTemplateId",
@@ -367,8 +381,8 @@ export interface UpdateResult {
 
 /**
  * Validate a partial update (body shape = AiCallingSettingsView fields, `exotel: {accountSid, subdomain,
- * callerId, flowAppId}`, plus write-only `exotelApiKey` / `exotelApiToken` (empty = keep) and
- * `attestConsent: true` when switching to business_attested) and save it.
+ * callerId, flowAppId}`, `plivo: {authId, number}`, plus write-only `exotelApiKey` / `exotelApiToken` /
+ * `plivoAuthToken` (empty = keep) and `attestConsent: true` when switching to business_attested) and save it.
  */
 export async function updateCallingSettings(
   businessAccountId: string,
@@ -384,7 +398,7 @@ export async function updateCallingSettings(
 
   if (has(body, "enabled")) next.enabled = bool("Turn on AI Calling", body.enabled);
   if (has(body, "provider")) {
-    if (!(CALL_PROVIDERS as unknown[]).includes(body.provider)) throw new CallingSettingsError("Provider must be Exotel or the in-portal simulator");
+    if (!(CALL_PROVIDERS as unknown[]).includes(body.provider)) throw new CallingSettingsError("Provider must be Exotel, Plivo or the in-portal simulator");
     next.provider = body.provider as string;
   }
 
@@ -412,13 +426,34 @@ export async function updateCallingSettings(
     }
   }
 
+  if (has(body, "plivo")) {
+    const pv = body.plivo;
+    if (!pv || typeof pv !== "object") throw new CallingSettingsError("Plivo details are invalid");
+    const p = pv as Record<string, unknown>;
+    if (has(p, "authId")) {
+      if (p.authId === null || p.authId === "") next.plivoAuthId = null;
+      else if (typeof p.authId !== "string" || !/^[A-Za-z0-9]{10,40}$/.test(p.authId.trim())) {
+        throw new CallingSettingsError("Plivo Auth ID may only contain letters and digits (it looks like MAXXXXXXXXXXXXXXXXXX)");
+      } else next.plivoAuthId = p.authId.trim();
+    }
+    if (has(p, "number")) {
+      if (p.number === null || p.number === "") next.plivoNumber = null;
+      else {
+        const n = normalizeCallPhone(p.number);
+        if (!n) throw new CallingSettingsError("Plivo number must be a phone number with the country code, for example +91 80 4718 1234");
+        next.plivoNumber = n;
+      }
+    }
+  }
+
   const secretsChanged: string[] = [];
-  for (const [field, col] of [["exotelApiKey", "exotelApiKey"], ["exotelApiToken", "exotelApiToken"]] as const) {
+  const SECRET_LABELS = { exotelApiKey: "Exotel API key", exotelApiToken: "Exotel API token", plivoAuthToken: "Plivo Auth Token" } as const;
+  for (const [field, col] of [["exotelApiKey", "exotelApiKey"], ["exotelApiToken", "exotelApiToken"], ["plivoAuthToken", "plivoAuthToken"]] as const) {
     if (!has(body, field)) continue;
     const raw = body[field];
     if (raw === "" || raw === null) continue; // empty = keep the saved value
     const key = normalizeApiKey(raw);
-    if (!key) throw new CallingSettingsError(`${field === "exotelApiKey" ? "Exotel API key" : "Exotel API token"} must be 8–512 characters with no spaces`);
+    if (!key) throw new CallingSettingsError(`${SECRET_LABELS[field]} must be 8–512 characters with no spaces`);
     next[col] = sealSecret(key, actorUserId);
     secretsChanged.push(field);
   }
@@ -485,12 +520,19 @@ export async function updateCallingSettings(
     const missing = exotelMissing(next);
     if (missing.length) throw new CallingSettingsError(`To make real calls with Exotel, first add your ${missing.join(", ")}.`);
   }
+  if (next.enabled && next.provider === "plivo") {
+    const missing = plivoMissing(next);
+    if (missing.length) throw new CallingSettingsError(`To make real calls with Plivo, first add your ${missing.join(", ")}.`);
+  }
 
   // Credentials or provider changed → the old "verified" no longer applies.
-  const credsChanged = secretsChanged.length > 0 || next.provider !== current.provider
+  const exotelChanged = secretsChanged.some((f) => f.startsWith("exotel")) || next.provider !== current.provider
     || next.exotelAccountSid !== current.exotelAccountSid || next.exotelSubdomain !== current.exotelSubdomain
     || next.exotelCallerId !== current.exotelCallerId;
-  if (credsChanged) next.exotelVerifiedAt = null;
+  if (exotelChanged) next.exotelVerifiedAt = null;
+  const plivoChanged = secretsChanged.includes("plivoAuthToken") || next.provider !== current.provider
+    || next.plivoAuthId !== current.plivoAuthId || next.plivoNumber !== current.plivoNumber;
+  if (plivoChanged) next.plivoVerifiedAt = null;
 
   if (!next.inboundKey) next.inboundKey = newInboundKey();
   if (!process.env.PUBLIC_BASE_URL?.trim() && opts.requestBaseUrl && /^https:\/\/[^/\s]+$/i.test(opts.requestBaseUrl)) {
@@ -499,7 +541,7 @@ export async function updateCallingSettings(
 
   const changed: string[] = AUDITED.filter((f) => JSON.stringify((current as any)[f] ?? null) !== JSON.stringify((next as any)[f] ?? null));
   const pick = (s: Record<string, unknown>) => Object.fromEntries(
-    changed.filter((f) => !["callPurpose", "openingLine", "inboundGreeting", "transferNumber", "exotelCallerId"].includes(f)).map((f) => [f, s[f] ?? null]),
+    changed.filter((f) => !["callPurpose", "openingLine", "inboundGreeting", "transferNumber", "exotelCallerId", "plivoNumber"].includes(f)).map((f) => [f, s[f] ?? null]),
   );
   const now = new Date();
   const { businessAccountId: _b, createdAt: _c, ...values } = next;
@@ -512,8 +554,10 @@ export async function updateCallingSettings(
   return { changed, secretsChanged, attested, before: pick(current as any), after: pick(next as any), row };
 }
 
-export async function markProviderVerified(businessAccountId: string): Promise<void> {
-  await db.update(aiCallingSettings).set({ exotelVerifiedAt: new Date() }).where(eq(aiCallingSettings.businessAccountId, businessAccountId));
+export async function markProviderVerified(businessAccountId: string, provider: string = "exotel"): Promise<void> {
+  const where = eq(aiCallingSettings.businessAccountId, businessAccountId);
+  if (provider === "plivo") await db.update(aiCallingSettings).set({ plivoVerifiedAt: new Date() }).where(where);
+  else await db.update(aiCallingSettings).set({ exotelVerifiedAt: new Date() }).where(where);
 }
 
 export async function rotateInboundKey(businessAccountId: string, actorUserId: string | null): Promise<AiCallingSettingsRow> {

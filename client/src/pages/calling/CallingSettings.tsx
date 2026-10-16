@@ -86,6 +86,8 @@ interface Draft {
   subdomain: string;
   callerId: string;
   flowAppId: string;
+  plivoAuthId: string;
+  plivoNumber: string;
   autoCallLeads: boolean;
   autoCallDelayMinutes: string;
   autoCallSources: string[];
@@ -117,6 +119,8 @@ function toDraft(v: AiCallingSettingsView): Draft {
     subdomain: v.exotel?.subdomain || "api.in.exotel.com",
     callerId: v.exotel?.callerId || "",
     flowAppId: v.exotel?.flowAppId || "",
+    plivoAuthId: v.plivo?.authId || "",
+    plivoNumber: v.plivo?.number || "",
     autoCallLeads: v.autoCallLeads,
     autoCallDelayMinutes: String(v.autoCallDelayMinutes ?? CALL_LIMITS.autoCallDelayMinutes.default),
     autoCallSources: [...(v.autoCallSources || [])].sort(),
@@ -161,11 +165,13 @@ function validate(d: Draft): Record<string, string> {
   if (d.hoursDays.length === 0) e.days = "Pick at least one day.";
   if (d.transferNumber.trim() && !normalizeCallPhone(d.transferNumber)) e.transferNumber = "Enter a valid phone number.";
   if (d.provider === "exotel" && d.callerId.trim() && !normalizeCallPhone(d.callerId)) e.callerId = "Enter your ExoPhone number, e.g. 080 4718 1234.";
+  if (d.provider === "plivo" && d.plivoNumber.trim() && !normalizeCallPhone(d.plivoNumber)) e.plivoNumber = "Enter your Plivo number with the country code, e.g. +91 80 4718 1234.";
+  if (d.provider === "plivo" && d.plivoAuthId.trim() && !/^[A-Za-z0-9]{10,40}$/.test(d.plivoAuthId.trim())) e.plivoAuthId = "The Auth ID is letters and digits only, e.g. MAXXXXXXXXXXXXXXXXXX.";
   if (d.whatsappFollowUp && !d.whatsappFollowUpTemplateId) e.template = "Pick the WhatsApp message to send.";
   return e;
 }
 
-function buildBody(d: Draft, secrets: { apiKey: string; apiToken: string }, attest: boolean): CallingSettingsUpdate {
+function buildBody(d: Draft, secrets: { apiKey: string; apiToken: string; plivoAuthToken: string }, attest: boolean): CallingSettingsUpdate {
   const body: CallingSettingsUpdate = {
     enabled: d.enabled,
     provider: d.provider,
@@ -174,6 +180,10 @@ function buildBody(d: Draft, secrets: { apiKey: string; apiToken: string }, atte
       subdomain: d.subdomain,
       callerId: d.callerId.trim() ? normalizeCallPhone(d.callerId) : null,
       flowAppId: d.flowAppId.trim() || null,
+    },
+    plivo: {
+      authId: d.plivoAuthId.trim() || null,
+      number: d.plivoNumber.trim() ? normalizeCallPhone(d.plivoNumber) : null,
     },
     autoCallLeads: d.autoCallLeads,
     autoCallDelayMinutes: Number(d.autoCallDelayMinutes),
@@ -195,6 +205,7 @@ function buildBody(d: Draft, secrets: { apiKey: string; apiToken: string }, atte
   };
   if (secrets.apiKey.trim()) body.exotelApiKey = secrets.apiKey.trim();
   if (secrets.apiToken.trim()) body.exotelApiToken = secrets.apiToken.trim();
+  if (secrets.plivoAuthToken.trim()) body.plivoAuthToken = secrets.plivoAuthToken.trim();
   if (attest) body.attestConsent = true;
   return body;
 }
@@ -233,7 +244,7 @@ function Field({ label, htmlFor, help, error, children }: { label: ReactNode; ht
   );
 }
 
-function SecretField({ id, label, set, mask, value, onChange }: { id: string; label: string; set: boolean; mask: string | null; value: string; onChange: (v: string) => void }) {
+function SecretField({ id, label, set, mask, value, onChange, source = "Exotel" }: { id: string; label: string; set: boolean; mask: string | null; value: string; onChange: (v: string) => void; source?: string }) {
   const [replacing, setReplacing] = useState(false);
   useEffect(() => { if (!set) setReplacing(false); }, [set]);
   if (set && !replacing) {
@@ -249,7 +260,7 @@ function SecretField({ id, label, set, mask, value, onChange }: { id: string; la
   return (
     <Field label={label} htmlFor={id} help={set ? "Leave empty to keep the saved one." : undefined}>
       <div className="flex items-center gap-2">
-        <Input id={id} type="password" autoComplete="off" value={value} onChange={e => onChange(e.target.value)} placeholder={set ? "Paste the new value" : "Paste from Exotel"} data-testid={`input-${id}`} />
+        <Input id={id} type="password" autoComplete="off" value={value} onChange={e => onChange(e.target.value)} placeholder={set ? "Paste the new value" : `Paste from ${source}`} data-testid={`input-${id}`} />
         {set && (
           <Button type="button" variant="ghost" onClick={() => { onChange(""); setReplacing(false); }}>Cancel</Button>
         )}
@@ -300,6 +311,7 @@ export default function CallingSettings() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [apiToken, setApiToken] = useState("");
+  const [plivoAuthToken, setPlivoAuthToken] = useState("");
   const [attest, setAttest] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [verifyResult, setVerifyResult] = useState<{ ok: boolean; detail: string } | null>(null);
@@ -326,7 +338,7 @@ export default function CallingSettings() {
   });
   const approved = (templates.data || []).filter(t => t.status === "approved");
 
-  const dirty = !!draft && (JSON.stringify(draft) !== initial.current || !!apiKey.trim() || !!apiToken.trim());
+  const dirty = !!draft && (JSON.stringify(draft) !== initial.current || !!apiKey.trim() || !!apiToken.trim() || !!plivoAuthToken.trim());
   useUnsavedChangesGuard(dirty);
 
   const errors = useMemo(() => (draft ? validate(draft) : {}), [draft]);
@@ -334,10 +346,11 @@ export default function CallingSettings() {
   const attestMissing = needsAttest && !attest;
 
   const save = useMutation({
-    mutationFn: () => callingApi.saveSettings(buildBody(draft!, { apiKey, apiToken }, needsAttest && attest)),
+    mutationFn: () => callingApi.saveSettings(buildBody(draft!, { apiKey, apiToken, plivoAuthToken }, needsAttest && attest)),
     onSuccess: view => {
       setApiKey("");
       setApiToken("");
+      setPlivoAuthToken("");
       setAttest(false);
       setShowErrors(false);
       const d = toDraft(view);
@@ -353,7 +366,7 @@ export default function CallingSettings() {
   const verify = useMutation({
     mutationFn: () => callingApi.verify(),
     onSuccess: r => {
-      setVerifyResult({ ok: !!r.ok, detail: r.detail || (r.ok ? "Connected to Exotel." : "Exotel didn't accept these details.") });
+      setVerifyResult({ ok: !!r.ok, detail: r.detail || (r.ok ? "Connected to your phone provider." : "Your phone provider didn't accept these details.") });
       queryClient.invalidateQueries({ queryKey: callingKeys.settings });
     },
     onError: (e: Error) => setVerifyResult({ ok: false, detail: e.message }),
@@ -381,6 +394,7 @@ export default function CallingSettings() {
     : null;
   const timezones = COMMON_TIMEZONES.includes(draft.timezone) ? COMMON_TIMEZONES : [draft.timezone, ...COMMON_TIMEZONES];
   const exotel = draft.provider === "exotel";
+  const plivo = draft.provider === "plivo";
   const minutesUsed = Math.round(saved.minutesThisMonth || 0);
   const effectiveCap = [saved.superAdminMinuteCap, saved.monthlyMinuteLimit].filter((n): n is number => typeof n === "number").sort((a, b) => a - b)[0];
 
@@ -425,11 +439,11 @@ export default function CallingSettings() {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Phone provider</CardTitle>
-            <CardDescription>Start in test mode to try everything in the portal. Switch to Exotel when your account is ready.</CardDescription>
+            <CardDescription>Start in test mode to try everything in the portal. Switch to Exotel or Plivo when your account is ready.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <RadioGroup value={draft.provider} onValueChange={v => set("provider", v as CallProviderId)} className="grid gap-2 sm:grid-cols-2">
-              <label className={`flex cursor-pointer gap-3 rounded-lg border p-3 ${!exotel ? "border-purple-300 bg-purple-50/50" : ""}`}>
+            <RadioGroup value={draft.provider} onValueChange={v => { setVerifyResult(null); set("provider", v as CallProviderId); }} className="grid gap-2 sm:grid-cols-3">
+              <label className={`flex cursor-pointer gap-3 rounded-lg border p-3 ${draft.provider === "simulator" ? "border-purple-300 bg-purple-50/50" : ""}`}>
                 <RadioGroupItem value="simulator" className="mt-0.5" data-testid="radio-provider-simulator" />
                 <span>
                   <span className="block text-sm font-medium">Test mode</span>
@@ -443,7 +457,55 @@ export default function CallingSettings() {
                   <span className="block text-xs text-gray-500">Real calls through your Exotel number.</span>
                 </span>
               </label>
+              <label className={`flex cursor-pointer gap-3 rounded-lg border p-3 ${plivo ? "border-purple-300 bg-purple-50/50" : ""}`}>
+                <RadioGroupItem value="plivo" className="mt-0.5" data-testid="radio-provider-plivo" />
+                <span>
+                  <span className="block text-sm font-medium">Plivo</span>
+                  <span className="block text-xs text-gray-500">Real calls through your Plivo number.</span>
+                </span>
+              </label>
             </RadioGroup>
+
+            {plivo && (
+              <div className="space-y-4 rounded-lg border p-4">
+                <p className="text-xs text-gray-500">Find your Auth ID and Auth Token on the Plivo console's Overview page.</p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Auth ID" htmlFor="plivo-auth-id" error={err("plivoAuthId")}>
+                    <Input id="plivo-auth-id" value={draft.plivoAuthId} onChange={e => set("plivoAuthId", e.target.value)} autoComplete="off" placeholder="MAXXXXXXXXXXXXXXXXXX" data-testid="input-plivo-auth-id" />
+                  </Field>
+                  <SecretField id="plivo-auth-token" label="Auth Token" source="Plivo" set={saved.plivo.authTokenSet} mask={saved.plivo.authTokenMask} value={plivoAuthToken} onChange={setPlivoAuthToken} />
+                  <Field label="Plivo number" htmlFor="plivo-number" help="A number from your Plivo account (Phone Numbers → Your Numbers). Customers see it when the AI calls." error={err("plivoNumber")}>
+                    <Input id="plivo-number" value={draft.plivoNumber} onChange={e => set("plivoNumber", e.target.value)} inputMode="tel" placeholder="e.g. +91 80 4718 1234" data-testid="input-plivo-number" />
+                  </Field>
+                </div>
+
+                <div className="flex flex-col gap-2 border-t pt-4 sm:flex-row sm:items-center">
+                  <Button type="button" variant="outline" onClick={() => { setVerifyResult(null); verify.mutate(); }} disabled={verify.isPending || dirty} data-testid="button-verify-plivo">
+                    {verify.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-1" />} Check connection
+                  </Button>
+                  <div className="text-xs text-gray-500">
+                    {dirty ? "Save your changes first, then check." : saved.plivo.verifiedAt ? `Last checked ${formatDateTime(saved.plivo.verifiedAt)}.` : "Not checked yet."}
+                  </div>
+                </div>
+                {verifyResult && (
+                  <p className={`flex items-start gap-1.5 rounded p-2 text-sm ${verifyResult.ok ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700"}`} data-testid="text-verify-result">
+                    {verifyResult.ok ? <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" /> : <XCircle className="h-4 w-4 mt-0.5 shrink-0" />}
+                    {verifyResult.detail}
+                  </p>
+                )}
+
+                <div className="space-y-3 rounded-lg bg-gray-50 p-3">
+                  <p className="text-sm font-medium">Set up incoming calls in Plivo</p>
+                  <ol className="list-decimal space-y-1 pl-5 text-xs text-gray-600">
+                    <li>In the Plivo console, open <b>Voice → Applications</b> and add a new application.</li>
+                    <li>Paste the <b>answer link</b> below as its <b>Answer URL</b> (method <b>POST</b>) and save.</li>
+                    <li>Under <b>Phone Numbers</b>, open your number and choose that application. Calls to it are now answered by the AI.</li>
+                  </ol>
+                  <CopyRow label="Answer link (for the Plivo application)" value={saved.setup.plivoAnswerUrl} />
+                  <p className="text-xs text-gray-500">Calls the AI makes need no setup in Plivo — their links are added automatically.</p>
+                </div>
+              </div>
+            )}
 
             {exotel && (
               <div className="space-y-4 rounded-lg border p-4">

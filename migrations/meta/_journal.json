@@ -141,6 +141,13 @@
       "when": 1791827405686,
       "tag": "0019_lsq_phone_country_code",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792153243365,
+      "tag": "0020_plivo_calling",
+      "breakpoints": true
     }
   ]
 }

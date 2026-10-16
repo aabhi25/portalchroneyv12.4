@@ -180,7 +180,7 @@ router.post("/api/calling/settings/verify", ...requireAiCalling, async (req, res
     try { creds = resolveProviderCredentials(settings); } catch (e: any) { return res.status(400).json({ error: e?.message || "Calling is not set up" }); }
     try {
       const r = await getCallingProvider(creds.provider).verify(creds);
-      if (creds.provider === "exotel" && settings.exists) await markProviderVerified(businessAccountId);
+      if (creds.provider !== "simulator" && settings.exists) await markProviderVerified(businessAccountId, creds.provider);
       await recordAuditEventSafely(req, { action: "ai_calling.provider_verified", outcome: "success", businessAccountId, resourceType: "ai_calling_settings", resourceId: businessAccountId, metadata: { provider: creds.provider } });
       res.json({ ok: true, detail: r.detail ?? null });
     } catch (e: any) {

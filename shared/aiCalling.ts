@@ -3,13 +3,22 @@
  *
  * The AI phones leads (and answers the business's number) using the same brain as the
  * website chat / WhatsApp: the business's training, lead fields, reply-language policy,
- * identity and voice. A telephony provider (Exotel first) carries the call; until a
- * business adds its Exotel keys it can use the in-browser "simulator" provider, which
+ * identity and voice. A telephony provider (Exotel or Plivo) carries the call; until a
+ * business adds its provider keys it can use the in-browser "simulator" provider, which
  * rings in the portal and runs the exact same call pipeline.
  */
 
-export type CallProviderId = "exotel" | "simulator";
-export const CALL_PROVIDERS: CallProviderId[] = ["exotel", "simulator"];
+export type CallProviderId = "exotel" | "plivo" | "simulator";
+export const CALL_PROVIDERS: CallProviderId[] = ["exotel", "plivo", "simulator"];
+/** Real phone companies (everything except the in-portal simulator). */
+export const REAL_CALL_PROVIDERS: CallProviderId[] = ["exotel", "plivo"];
+
+/** A stored / requested provider id → a known one (anything unknown = the simulator). */
+export function normalizeCallProvider(value: unknown): CallProviderId {
+  return value === "exotel" || value === "plivo" ? value : "simulator";
+}
+
+export const CALL_PROVIDER_LABELS: Record<CallProviderId, string> = { exotel: "Exotel", plivo: "Plivo", simulator: "Test mode" };
 
 export type CallDirection = "outbound" | "inbound";
 
@@ -105,8 +114,18 @@ export interface AiCallingSettingsView {
     apiTokenMask: string | null;
     verifiedAt: string | null;
   };
-  /** Where to point Exotel (shown in settings): inbound Voicebot URL + status webhook. */
-  setup: { inboundStreamUrl: string | null; statusCallbackUrl: string | null };
+  plivo: {
+    authId: string | null;       // Plivo console → Auth ID
+    number: string | null;       // Plivo number shown to the customer (+E.164)
+    authTokenSet: boolean;
+    authTokenMask: string | null;
+    verifiedAt: string | null;
+  };
+  /**
+   * Where to point the provider (shown in settings): Exotel inbound Voicebot URL + status webhook;
+   * Plivo: the Answer URL of the Plivo Application the number is attached to.
+   */
+  setup: { inboundStreamUrl: string | null; statusCallbackUrl: string | null; plivoAnswerUrl: string | null };
   autoCallLeads: boolean;
   autoCallDelayMinutes: number;
   /** Lead sources that get an automatic call; empty = all. Values: 'website' | 'whatsapp' | 'instagram' | 'facebook' | 'voice' | 'form' | 'import' | 'other'. */

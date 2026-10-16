@@ -52,7 +52,7 @@ export function SuperAdminAiCallingCard({ businessAccountId, initialEnabled }: {
       <div className="flex-1 min-w-0">
         <h4 className="font-semibold text-gray-900 mb-1">AI Calling</h4>
         <p className="text-sm text-gray-600 mb-2">
-          The AI phones new leads and answers the business's number (Exotel), with summaries, outcomes, retries and a do-not-call list. Includes a test mode that rings in the portal.
+          The AI phones new leads and answers the business's number (Exotel or Plivo), with summaries, outcomes, retries and a do-not-call list. Includes a test mode that rings in the portal.
         </p>
         {unavailable ? (
           <p className="text-xs text-amber-700">The AI Calling server update isn't installed yet.</p>

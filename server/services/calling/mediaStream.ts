@@ -1,5 +1,6 @@
 /**
  * AI Calling — media stream: one phone call's audio WebSocket, Exotel AgentStream protocol.
+ * (Plivo calls arrive through PlivoStreamSocket, which translates Plivo's stream protocol to this one.)
  *
  * Exotel (and the portal simulator, which speaks the same protocol) sends JSON events:
  *   connected → start (stream_sid, call_sid, from, to, media_format.sample_rate) →
@@ -57,7 +58,10 @@ const END_DEADLINE_MS = 15000;
 /** Caller audio kept while the voice session starts (24 kHz PCM16 → 3 s). */
 const PRE_READY_MAX_BYTES = VOICE_SAMPLE_RATE * 2 * 3;
 
-export type CallStreamKind = "exotel_outbound" | "exotel_inbound" | "simulator_outbound" | "simulator_inbound";
+export type CallStreamKind =
+  | "exotel_outbound" | "exotel_inbound"
+  | "plivo_outbound" | "plivo_inbound"
+  | "simulator_outbound" | "simulator_inbound";
 
 /** Minimal WebSocket surface (ws.WebSocket in production, a fake in tests). */
 export interface StreamSocket {
@@ -233,12 +237,19 @@ export class CallMediaSession {
   }
 
   private get isOutbound(): boolean {
-    return this.kind === "exotel_outbound" || this.kind === "simulator_outbound";
+    return this.kind === "exotel_outbound" || this.kind === "plivo_outbound" || this.kind === "simulator_outbound";
   }
 
   private get isSimulator(): boolean {
     return this.kind === "simulator_outbound" || this.kind === "simulator_inbound";
   }
+
+  private get isPlivo(): boolean {
+    return this.kind === "plivo_outbound" || this.kind === "plivo_inbound";
+  }
+
+  /** The provider's id for the LIVE call (Plivo: CallUUID; an outbound row stores the request id). */
+  private liveCallId: string | null = null;
 
   // ── protocol ────────────────────────────────────────────────────────────────
 
@@ -282,6 +293,7 @@ export class CallMediaSession {
     this.lastUserActivity = now;
 
     const providerCallSid = typeof start.call_sid === "string" && start.call_sid ? start.call_sid : null;
+    this.liveCallId = providerCallSid;
     try {
       // Exotel call flows (flowAppId) take the stream URL from the flow, whose Voicebot applet
       // points at the business's INBOUND URL — so an outbound flow call arrives here too.
@@ -292,7 +304,7 @@ export class CallMediaSession {
           this.outboundCallId = outboundId;
         }
       }
-      if (this.kind === "exotel_inbound" || this.kind === "simulator_inbound") {
+      if (this.kind === "exotel_inbound" || this.kind === "plivo_inbound" || this.kind === "simulator_inbound") {
         const rawFrom = this.kind === "simulator_inbound" ? (this.init.simulatorFrom || start.from) : start.from;
         const phone = normalizeCallPhone(rawFrom) ?? (this.kind === "simulator_inbound" ? "+910000000000" : (String(rawFrom || "").slice(0, 20) || "unknown"));
         const leadId = await findLeadIdByPhone(this.init.businessAccountId, phone).catch(() => null);
@@ -301,7 +313,7 @@ export class CallMediaSession {
           direction: "inbound",
           status: "in_progress",
           trigger: "inbound",
-          provider: this.isSimulator ? "simulator" : "exotel",
+          provider: this.isSimulator ? "simulator" : this.isPlivo ? "plivo" : "exotel",
           phone,
           callerId: typeof start.to === "string" && start.to ? start.to.slice(0, 20) : null,
           leadId,
@@ -337,7 +349,26 @@ export class CallMediaSession {
     }
     console.log(`${LOG} call ${this.call!.id} answered (${this.kind}, ${this.streamRate} Hz)`);
     this.guardTimer = this.clock.setInterval(() => this.guardTick(), GUARD_MS);
+    if (this.isPlivo) void this.startProviderRecording();
     await this.startEngine();
+  }
+
+  /** Plivo records through its API once the call is live (Exotel records from the call request). */
+  private async startProviderRecording(): Promise<void> {
+    const call = this.call;
+    if (!call || !this.liveCallId) return;
+    try {
+      const settings = this.settings ?? await getCallingSettings(call.businessAccountId);
+      if (!settings.recordCalls) return;
+      const { getCallingProvider } = await import("./providers");
+      const { resolveProviderCredentials } = await import("./credentials");
+      const provider = getCallingProvider("plivo");
+      if (!provider.startRecording) return;
+      const { recordingUrl } = await provider.startRecording(resolveProviderCredentials({ ...settings, provider: "plivo" }), this.liveCallId, { timeLimitSec: this.maxCallMinutes() * 60 });
+      if (recordingUrl) await db.update(aiCalls).set({ recordingUrl, updatedAt: new Date() }).where(eq(aiCalls.id, call.id));
+    } catch (err) {
+      console.warn(`${LOG} recording could not be started for call ${call.id}:`, err instanceof Error ? err.message : err);
+    }
   }
 
   private handleMedia(msg: any): void {
@@ -700,6 +731,22 @@ export class CallMediaSession {
       }
     }
     this.clock.clearTimeout(pending.deadline);
+    if (pending.transfer && this.isPlivo) {
+      // Plivo: move the live call to the transfer instructions (Dial the team's number).
+      this.chain = this.chain.then(async () => {
+        if (await this.plivoTransfer()) {
+          this.closeSocket(1000, "transfer");
+          await this.finalize("transferred");
+        } else {
+          this.transferred = false;
+          if (this.outcome === "transferred") this.outcome = "callback_requested";
+          pending.reason = "ai_ended";
+          pending.transfer = false;
+          await this.hangUpAndFinalize("ai_ended");
+        }
+      });
+      return;
+    }
     if (pending.transfer && !this.isSimulator) {
       // Exotel call flow: closing the stream hands the caller to the flow's next (Connect) applet.
       this.chain = this.chain.then(async () => {
@@ -714,8 +761,29 @@ export class CallMediaSession {
   private transferAvailable(): boolean {
     const number = this.settings?.transferNumber?.trim();
     if (!number) return false;
-    if (this.isSimulator) return true;
+    if (this.isSimulator || this.isPlivo) return true;
     return !!this.settings?.exotelFlowAppId?.trim();
+  }
+
+  /** Plivo transfer through the API (true = Plivo took the call over). */
+  private async plivoTransfer(): Promise<boolean> {
+    const call = this.call;
+    if (!call || !this.liveCallId) return false;
+    try {
+      const { resolvePublicBaseUrl, buildPlivoTransferUrl } = await import("./streamToken");
+      const settings = this.settings ?? await getCallingSettings(call.businessAccountId);
+      const base = resolvePublicBaseUrl(settings.publicBaseUrl);
+      if (!base) throw new Error("public address unknown");
+      const { getCallingProvider } = await import("./providers");
+      const { resolveProviderCredentials } = await import("./credentials");
+      const provider = getCallingProvider("plivo");
+      if (!provider.transfer) return false;
+      await provider.transfer(resolveProviderCredentials({ ...settings, provider: "plivo" }), this.liveCallId, buildPlivoTransferUrl(base, call.id));
+      return true;
+    } catch (err) {
+      console.warn(`${LOG} transfer failed for call ${call.id}:`, err instanceof Error ? err.message : err);
+      return false;
+    }
   }
 
   // ── phone tools (called by the chat brain mid-turn) ───────────────────────
@@ -793,6 +861,18 @@ export class CallMediaSession {
         const { resolveProviderCredentials } = await import("./credentials");
         const provider = getCallingProvider("exotel");
         if (provider.hangup) await provider.hangup(resolveProviderCredentials(this.settings), call.providerCallSid);
+      } catch (err) {
+        console.warn(`${LOG} hangup failed for call ${call.id}:`, err instanceof Error ? err.message : err);
+      }
+    }
+    // Plivo: the stream keeps the call alive (keepCallAlive), so the call is hung up explicitly.
+    if (call && this.isPlivo && this.liveCallId) {
+      try {
+        const { getCallingProvider } = await import("./providers");
+        const { resolveProviderCredentials } = await import("./credentials");
+        const settings = this.settings ?? await getCallingSettings(call.businessAccountId);
+        const provider = getCallingProvider("plivo");
+        if (provider.hangup) await provider.hangup(resolveProviderCredentials({ ...settings, provider: "plivo" }), this.liveCallId);
       } catch (err) {
         console.warn(`${LOG} hangup failed for call ${call.id}:`, err instanceof Error ? err.message : err);
       }

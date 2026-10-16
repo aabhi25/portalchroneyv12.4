@@ -20,9 +20,9 @@
 import { and, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import { aiCallDoNotCall, aiCalls, businessAccounts, conversations, leads, messages, type AiCall, type Lead } from "@shared/schema";
-import { LIVE_CALL_STATUSES, type CallStatus, type CallTrigger } from "@shared/aiCalling";
+import { CALL_PROVIDER_LABELS, LIVE_CALL_STATUSES, normalizeCallProvider, type CallStatus, type CallTrigger } from "@shared/aiCalling";
 import { trackTimer, untrackTimer } from "../../lib/lifecycle";
-import { buildOutboundStreamUrl, buildStatusCallbackUrl, resolvePublicBaseUrl } from "./streamToken";
+import { buildOutboundStreamUrl, buildPlivoAnswerUrl, buildStatusCallbackUrl, resolvePublicBaseUrl } from "./streamToken";
 import { effectiveHours, effectiveMinuteLimit, getCallingSettings, minutesThisMonth, nextAllowedTime } from "./settingsService";
 import { resolveProviderCredentials } from "./credentials";
 import { getCallingProvider } from "./providers";
@@ -104,7 +104,7 @@ export async function enqueueCall(input: EnqueueInput): Promise<AiCall> {
     direction: "outbound",
     status: "queued",
     trigger: input.trigger,
-    provider: input.provider === "exotel" ? "exotel" : "simulator",
+    provider: normalizeCallProvider(input.provider),
     phone: input.phone,
     leadId: input.leadId ?? null,
     attempt: input.attempt ?? 1,
@@ -174,8 +174,8 @@ async function recoverStale(now: Date, report: TickReport): Promise<void> {
   const exoCutoff = nowIso(new Date(now.getTime() - EXOTEL_NO_STATUS_MS));
   const exoLost: any = await db.execute(sql`
     UPDATE ai_calls SET status = 'failed', end_reason = 'no_status_from_provider', ended_at = ${nowIso(now)}, updated_at = ${nowIso(now)},
-      error_message = 'Exotel never told us how this call went.'
-    WHERE provider = 'exotel' AND status IN ('dialing', 'ringing') AND provider_call_sid IS NOT NULL AND started_at < ${exoCutoff}
+      error_message = CASE WHEN provider = 'plivo' THEN 'Plivo never told us how this call went.' ELSE 'Exotel never told us how this call went.' END
+    WHERE provider IN ('exotel', 'plivo') AND status IN ('dialing', 'ringing') AND provider_call_sid IS NOT NULL AND started_at < ${exoCutoff}
     RETURNING id`);
   const liveCutoff = nowIso(new Date(now.getTime() - STALE_IN_PROGRESS_MS));
   const stuck: any = await db.execute(sql`
@@ -276,13 +276,13 @@ async function processClaimed(callId: string, now: Date, report: TickReport): Pr
       or(inArray(aiCalls.status, ["ringing", "in_progress"]), and(eq(aiCalls.status, "dialing"), isNotNull(aiCalls.startedAt))),
     ));
     if (Number(r?.n ?? 0) >= settings.concurrentCallLimit) return false;
-    const up = await tx.update(aiCalls).set({ startedAt: new Date(), provider: settings.provider === "exotel" ? "exotel" : "simulator", updatedAt: new Date() })
+    const up = await tx.update(aiCalls).set({ startedAt: new Date(), provider: normalizeCallProvider(settings.provider), updatedAt: new Date() })
       .where(and(eq(aiCalls.id, call.id), eq(aiCalls.status, "dialing"))).returning({ id: aiCalls.id });
     return up.length > 0;
   });
   if (!gotLine) return requeue(call, new Date(now.getTime() + CONCURRENCY_WAIT_MS), "waiting_for_free_line", report);
 
-  const providerId = settings.provider === "exotel" ? "exotel" : "simulator";
+  const providerId = normalizeCallProvider(settings.provider);
   let creds;
   try {
     creds = resolveProviderCredentials(settings);
@@ -290,8 +290,8 @@ async function processClaimed(callId: string, now: Date, report: TickReport): Pr
     return fail({ ...call, provider: providerId }, err?.message || "Calling is not set up.", true, report);
   }
   const base = resolvePublicBaseUrl(settings.publicBaseUrl);
-  if (providerId === "exotel" && !base) {
-    return fail(call, "The portal's public web address is not known yet, so Exotel can't reach us. Open AI Calling settings from your portal's public address and press Save once (or ask support to set PUBLIC_BASE_URL).", true, report);
+  if (providerId !== "simulator" && !base) {
+    return fail(call, `The portal's public web address is not known yet, so ${CALL_PROVIDER_LABELS[providerId]} can't reach us. Open AI Calling settings from your portal's public address and press Save once (or ask support to set PUBLIC_BASE_URL).`, true, report);
   }
   const provider = getCallingProvider(providerId);
   try {
@@ -301,10 +301,11 @@ async function processClaimed(callId: string, now: Date, report: TickReport): Pr
       to: call.phone,
       streamUrl: base ? buildOutboundStreamUrl(base, call.id) : "",
       statusCallbackUrl: base ? buildStatusCallbackUrl(base, providerId, call.id) : "",
+      ...(providerId === "plivo" && base ? { answerUrl: buildPlivoAnswerUrl(base, call.id) } : {}),
       record: settings.recordCalls,
       timeLimitSec: settings.maxCallMinutes * 60,
     });
-    const callerId = providerId === "exotel" ? settings.exotelCallerId : null;
+    const callerId = providerId === "exotel" ? settings.exotelCallerId : providerId === "plivo" ? settings.plivoNumber : null;
     await db.update(aiCalls).set({ providerCallSid: result.providerCallSid, callerId, updatedAt: new Date() }).where(eq(aiCalls.id, call.id));
     // Only move forward from 'dialing' (a fast webhook / media start may already have advanced it).
     await db.update(aiCalls).set({ status: result.status as CallStatus }).where(and(eq(aiCalls.id, call.id), eq(aiCalls.status, "dialing")));
