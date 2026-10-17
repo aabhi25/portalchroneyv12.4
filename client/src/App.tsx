@@ -6,7 +6,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
-import { HubFrame } from "@/components/hub/HubFrame";
+import { HubFrame, usesHubLayout } from "@/components/hub/HubFrame";
+import HomeDashboard from "@/pages/HomeDashboard";
 import AreaSettingsPage from "@/pages/hub/AreaSettingsPage";
 import WhatsAppHub from "@/components/whatsapp/WhatsAppHub";
 import type { HubAreaId } from "@/navigation/hubAreas";
@@ -161,6 +162,13 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
     }
   }, [currentUser, setLocation]);
 
+  // Apple-style portal look (index.css), only for logged-in business views, never on public pages.
+  const isPublicPage = /^\/(embed|demo|public-chat|reset-password)(\/|$)/.test(location);
+  const portalLook = !!user && usesHubLayout(user) && !isPublicPage && location !== "/change-password";
+  useEffect(() => {
+    document.documentElement.classList.toggle("portal-apple", portalLook);
+  }, [portalLook]);
+
   const handleLogin = (loggedInUser: MeResponseDto) => {
     setUser(loggedInUser);
   };
@@ -308,13 +316,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                     if (user?.businessAccount?.productTier === 'jewelry_showcase') {
                       return <Redirect to="/jewelry-showcase" />;
                     }
-                    if (user?.businessAccount?.whatsappEnabled === true && user?.businessAccount?.chroneyEnabled !== true) {
-                      return <Redirect to="/admin/whatsapp-leads" />;
-                    }
-                    if (user?.businessAccount?.instagramEnabled === true && user?.businessAccount?.chroneyEnabled !== true && user?.businessAccount?.whatsappEnabled !== true) {
-                      return <Redirect to={SETTINGS_PATHS.instagramConnection} />;
-                    }
-                    return <Home />;
+                    // Standard accounts land on the dashboard; K12 tutors and job portals keep their test chat.
+                    return usesHubLayout(user) ? <HomeDashboard user={user} /> : <Home />;
                   })()}
                 </Route>
                 <Route path="/insights">
@@ -429,6 +432,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/url-training" component={UrlTraining} />
                 <Route path="/admin/website"><Redirect to="/conversations" /></Route>
                 <Route path="/admin/website/leads">{() => <AdminLeads channel="website" />}</Route>
+                <Route path="/admin/website/try" component={Home} />
                 <Route path="/admin/menu-builder" component={MenuBuilder} />
                 <Route path="/admin/smart-replies">
                   <SmartReplies channel="website" headerContent={<TrainingNavTabs />} />

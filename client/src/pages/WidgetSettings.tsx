@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { LiveAvatarStatusCard } from "@/components/LiveAvatarStatusCard";
 import { ElevenLabsVoiceBrowser } from "@/components/voice/ElevenLabsVoiceBrowser";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1544,13 +1545,15 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
         <div className="mb-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent flex items-center gap-3">
-                <Wand2 className="w-8 h-8 text-purple-600" />
-                Widget Studio
-              </h1>
-              <p className="text-muted-foreground mt-2 text-sm">
-                Design and customize your AI chatbot widget in real-time
-              </p>
+              <HideInHub>
+                <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent flex items-center gap-3">
+                  <Wand2 className="w-8 h-8 text-purple-600" />
+                  Widget Studio
+                </h1>
+                <p className="text-muted-foreground mt-2 text-sm">
+                  Design and customize your AI chatbot widget in real-time
+                </p>
+              </HideInHub>
             </div>
             
             {/* Auto-save indicator */}

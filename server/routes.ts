@@ -91,6 +91,7 @@ import topscholarRoutes from "./routes/topscholar";
 import topscholarAnalyticsRoutes from "./routes/topscholarAnalytics";
 import verificationRoutes from "./routes/verification";
 import unifiedLeadsRoutes from "./routes/unifiedLeads";
+import homeSummaryRoutes from "./routes/homeSummary";
 import whatsappHandoffRoutes from "./routes/whatsappHandoff";
 import { resolveAuthorizedLeadAccountId, maskLeadPhone } from "./lib/leadAccess";
 import dataRetentionRoutes from "./routes/dataRetention";
@@ -620,6 +621,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(jobPortalRoutes);
   app.use(verificationRoutes);
   app.use(unifiedLeadsRoutes);
+  app.use(homeSummaryRoutes);
   app.use(whatsappHandoffRoutes);
   app.use(dataRetentionRoutes);
   app.use(aiUsageRoutes);

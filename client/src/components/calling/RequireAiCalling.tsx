@@ -75,7 +75,8 @@ export function CallingPageHeader({ title, description, actions }: { title: stri
       </div>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold">{title}</h1>
+          {/* Inside the Phone calls frame the tab already names the page. */}
+          <h1 className={inHub ? "sr-only" : "text-2xl font-bold"}>{title}</h1>
           {description && <p className="text-sm text-gray-600 mt-1">{description}</p>}
         </div>
         {actions && <div className="flex flex-wrap gap-2">{actions}</div>}

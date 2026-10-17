@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -780,17 +781,19 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 [.portal-apple_&]:bg-transparent">
       <WebsiteNavTabs />
-      <div className="p-4 md:p-6 max-w-7xl mx-auto">
+      <div className="p-4 md:p-6 max-w-7xl mx-auto [.portal-apple_&]:max-w-[1400px] [.portal-apple_&]:md:px-8">
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
+              <HideInHub>
               <CardTitle className="text-2xl flex items-center gap-2">
                 <Contact className="w-6 h-6 text-purple-600" />
                 Leads Management
               </CardTitle>
+              </HideInHub>
               <CardDescription>
                 {hasOtherChannels
                   ? `View and export leads from ${availableChannels.map(c => CHANNEL_META[c].label).join(', ')}`

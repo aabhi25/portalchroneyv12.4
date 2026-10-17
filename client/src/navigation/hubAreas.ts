@@ -177,6 +177,7 @@ export const HUB_AREAS: HubArea[] = [
       { key: "leads", label: "Leads", href: "/admin/website/leads", matches: exact("/admin/website/leads") },
       { key: "insights", label: "Insights", href: "/insights", matches: exact("/insights"), visible: a => !a.topScholar },
       { key: "tickets", label: "Support tickets", href: "/tickets", matches: l => l.startsWith("/tickets") || l === "/automation-analytics", visible: a => a.supportTickets },
+      { key: "try", label: "Try it", href: "/admin/website/try", matches: exact("/admin/website/try") },
       settingsTab("website"),
     ],
     alsoMatches: exact("/admin/website"),

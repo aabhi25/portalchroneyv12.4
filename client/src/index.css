@@ -590,3 +590,29 @@
   position: relative;
   z-index: 1;
 }
+/*
+ * Apple-style look for the business portal. App.tsx sets html.portal-apple only for logged-in
+ * business views (never on the chat widget, embeds, demos or public chat pages).
+ */
+html.portal-apple {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, system-ui, sans-serif;
+}
+html.portal-apple body {
+  background-color: #f5f5f7;
+  letter-spacing: -0.006em;
+}
+html.portal-apple .shadcn-card {
+  border-radius: 1rem;
+  border-color: rgba(0, 0, 0, 0.07);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+/* Calm sidebar: a still, light surface with a hairline edge instead of the moving gradient. */
+html.portal-apple .sidebar-ocean [data-sidebar="sidebar"] {
+  background: #fbfbfd !important;
+  animation: none;
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+}
+html.portal-apple .sidebar-ocean [data-sidebar="sidebar"]::before,
+html.portal-apple .sidebar-ocean [data-sidebar="sidebar"]::after {
+  display: none;
+}

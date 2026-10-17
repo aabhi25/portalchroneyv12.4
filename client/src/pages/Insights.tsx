@@ -1,4 +1,5 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, MessageSquare, Package, Users, TrendingUp, Clock, Calendar, Brain, Lightbulb, Heart, AlertCircle, Sparkles, ClipboardList, Eye, Monitor, Smartphone, Tablet, Globe, MapPin, Tag, Loader2, ArrowRight, FileText, Zap, Leaf, Percent, RefreshCw, CheckCircle, Settings, X, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -460,10 +461,12 @@ export default function Insights() {
     <div className="min-h-screen bg-gray-50">
       <WebsiteNavTabs />
       <div className="p-3 md:p-4 max-w-7xl mx-auto">
-      <div className="mb-3">
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">Insights</h1>
-        <p className="text-sm text-gray-600">Track your business performance and customer engagement</p>
-      </div>
+      <HideInHub>
+        <div className="mb-3">
+          <h1 className="text-2xl font-bold text-gray-900 mb-1">Insights</h1>
+          <p className="text-sm text-gray-600">Track your business performance and customer engagement</p>
+        </div>
+      </HideInHub>
 
       {/* Date Filter */}
       <Card className="mb-3">

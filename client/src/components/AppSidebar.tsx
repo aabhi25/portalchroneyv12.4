@@ -110,7 +110,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
   const isGroupAdmin = user?.role === "account_group_admin";
   const showBusinessNav = (!isSuperAdmin && !isGroupAdmin) || isSuperAdminImpersonating;
   
-  const hasChroneyAccess = user?.businessAccount?.chroneyEnabled === true;
   const isTopscholar = user?.businessAccount?.isTopscholar === true;
   
   const isEducationK12 = user?.businessAccount?.k12EducationEnabled === true;
@@ -338,7 +337,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
             <>
             {SIDEBAR_GROUPS.map((group, gi) => {
               const areas = group.areas.map(hubArea).filter(a => a.visible(hubAccess));
-              const showHome = gi === 0 && hasChroneyAccess;
+              const showHome = gi === 0; // Home is the dashboard for every standard account
               if (areas.length === 0 && !showHome) return null;
               return (
                 <SidebarGroup key={group.label ?? "top"}>
