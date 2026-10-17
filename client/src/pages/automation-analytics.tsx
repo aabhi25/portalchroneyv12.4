@@ -75,6 +75,13 @@ export default function AutomationAnalytics() {
     );
   }
 
+  // With no resolved tickets yet both times are 0, so guard every division.
+  const slowest = Math.max(analytics.averageAutoResolveTime, analytics.averageHumanResolveTime);
+  const barWidth = (hours: number) => (slowest > 0 ? (hours / slowest) * 100 : 0);
+  const aiFasterBy = analytics.averageHumanResolveTime > 0 && analytics.averageAutoResolveTime > 0
+    ? Math.round(((analytics.averageHumanResolveTime - analytics.averageAutoResolveTime) / analytics.averageHumanResolveTime) * 100)
+    : null;
+
   const escalationData = Object.entries(analytics.escalationReasons).map(([reason, count]) => ({
     name: reason,
     value: count
@@ -179,7 +186,7 @@ export default function AutomationAnalytics() {
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div 
                     className="bg-purple-600 h-2 rounded-full" 
-                    style={{ width: `${(analytics.averageAutoResolveTime / Math.max(analytics.averageAutoResolveTime, analytics.averageHumanResolveTime)) * 100}%` }}
+                    style={{ width: `${barWidth(analytics.averageAutoResolveTime)}%` }}
                   />
                 </div>
               </div>
@@ -196,16 +203,24 @@ export default function AutomationAnalytics() {
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div 
                     className="bg-orange-600 h-2 rounded-full" 
-                    style={{ width: `${(analytics.averageHumanResolveTime / Math.max(analytics.averageAutoResolveTime, analytics.averageHumanResolveTime)) * 100}%` }}
+                    style={{ width: `${barWidth(analytics.averageHumanResolveTime)}%` }}
                   />
                 </div>
               </div>
               <div className="pt-2 border-t">
-                <p className="text-sm text-muted-foreground">
-                  AI resolves tickets <span className="font-bold text-green-600">
-                    {Math.round(((analytics.averageHumanResolveTime - analytics.averageAutoResolveTime) / analytics.averageHumanResolveTime) * 100)}%
-                  </span> faster than human agents
-                </p>
+                {aiFasterBy !== null && aiFasterBy >= 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    AI resolves tickets <span className="font-bold text-green-600">{aiFasterBy}%</span> faster than human agents
+                  </p>
+                ) : aiFasterBy !== null ? (
+                  <p className="text-sm text-muted-foreground">
+                    Human agents resolve tickets <span className="font-bold text-orange-600">{Math.round((analytics.averageAutoResolveTime / analytics.averageHumanResolveTime - 1) * 100)}%</span> faster than the AI
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    The comparison shows up once both the AI and your team have resolved tickets.
+                  </p>
+                )}
               </div>
             </div>
           </CardContent>

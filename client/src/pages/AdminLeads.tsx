@@ -104,6 +104,12 @@ function safeExcelCell(value: unknown): string {
 }
 
 /** `channel` shows only that channel's leads (Website chat › Leads); without it, every channel. */
+// From tablet width up, the CRM column (Sync now / Retry) and the row menu stay pinned to the
+// right edge, so they are visible on laptop screens while the other columns scroll sideways.
+const STICKY_ACTIONS = "md:sticky md:right-0 z-[1] w-[52px] min-w-[52px]";
+const STICKY_CRM = "md:sticky md:right-[52px] z-[1] md:shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.15)]";
+const STICKY_ROW_BG = "bg-white group-hover:bg-[#fcfaff]";
+
 export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) {
   const { toast } = useToast();
   const [currentPage, setCurrentPage] = useState(1);
@@ -739,10 +745,10 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
         <TableCell className="px-4 py-3">
           <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">{funnel}</span>
         </TableCell>
-        <TableCell className="px-2 py-3">
+        <TableCell className={`px-2 py-3 ${STICKY_CRM} ${STICKY_ROW_BG}`}>
           <LeadCrmCell targets={targets} isSyncing={crm => isRowSyncing(row, crm)} onSync={crm => syncRow(row, crm)} />
         </TableCell>
-        <TableCell className="text-center px-2 py-3" onClick={(e) => e.stopPropagation()}>
+        <TableCell className={`text-center px-2 py-3 ${STICKY_ACTIONS} ${STICKY_ROW_BG}`} onClick={(e) => e.stopPropagation()}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="icon" variant="ghost" className="h-8 w-8 text-gray-400 hover:text-gray-600" aria-label="Lead actions">
@@ -1082,7 +1088,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                     <TableHead className="font-semibold text-gray-900 w-[180px] px-4 py-3">
                       <div className="flex items-center gap-2">
                         <MessageSquare className="h-4 w-4 text-purple-600" />
-                        Topics of Interest
+                        Topics
                       </div>
                     </TableHead>
                     <TableHead className="font-semibold text-gray-900 w-[120px] px-4 py-3">
@@ -1091,13 +1097,13 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                         Funnel
                       </div>
                     </TableHead>
-                    <TableHead className="font-semibold text-gray-900 w-[150px] px-2 py-3">
+                    <TableHead className={`font-semibold text-gray-900 w-[150px] px-2 py-3 ${STICKY_CRM} bg-blue-50`}>
                       <div className="flex items-center gap-2">
                         <Users className="h-4 w-4 text-blue-600" />
                         CRM
                       </div>
                     </TableHead>
-                    <TableHead className="text-center font-semibold text-gray-900 w-[50px] px-2 py-3"></TableHead>
+                    <TableHead className={`text-center font-semibold text-gray-900 px-2 py-3 ${STICKY_ACTIONS} bg-blue-50`}><span className="sr-only">Actions</span></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1236,10 +1242,10 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                             return <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">Via Chat</span>;
                           })()}
                         </TableCell>
-                        <TableCell className="px-2 py-3">
+                        <TableCell className={`px-2 py-3 ${STICKY_CRM} ${STICKY_ROW_BG}`}>
                           <LeadCrmCell targets={crmTargetsForRow(row)} isSyncing={crm => isRowSyncing(row, crm)} onSync={crm => syncRow(row, crm)} />
                         </TableCell>
-                        <TableCell className="text-center px-2 py-3" onClick={(e) => e.stopPropagation()}>
+                        <TableCell className={`text-center px-2 py-3 ${STICKY_ACTIONS} ${STICKY_ROW_BG}`} onClick={(e) => e.stopPropagation()}>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button

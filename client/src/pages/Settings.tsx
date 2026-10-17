@@ -53,13 +53,15 @@ const LUXE_THEMES: Record<ThemePreset, { name: string; description: string; prim
 
 /**
  * Account-level settings. Rendered by the Settings hub in two places:
- *   section="account"       password, Vista look & feel, education/TopScholar options
+ *   section="account"       password, education/TopScholar options
  *   section="lead-privacy"  lead export access and lead phone masking
+ *   section="vista-look"    Vista theme and logo (Vista › Settings › Look & logo)
  * With no `section` everything is shown (the original single page).
  */
-export default function Settings({ section, embedded = false }: { section?: "account" | "lead-privacy"; embedded?: boolean } = {}) {
-  const showAccount = section !== "lead-privacy";
-  const showPrivacy = section !== "account";
+export default function Settings({ section, embedded = false }: { section?: "account" | "lead-privacy" | "vista-look"; embedded?: boolean } = {}) {
+  const showAccount = !section || section === "account";
+  const showPrivacy = !section || section === "lead-privacy";
+  const showVistaLook = !section || section === "vista-look";
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -192,7 +194,7 @@ export default function Settings({ section, embedded = false }: { section?: "acc
       return response.json();
     },
     // Only the Vista customization card reads these.
-    enabled: hasJewelryAccess && showAccount,
+    enabled: hasJewelryAccess && showVistaLook,
   });
 
   useEffect(() => {
@@ -481,9 +483,7 @@ export default function Settings({ section, embedded = false }: { section?: "acc
           </div>
         )}
 
-        {showAccount && (
-          <>
-        {hasJewelryAccess && (
+        {hasJewelryAccess && showVistaLook && (
           <Card className="shadow-lg border-gray-200">
             <CardHeader className="border-b bg-gradient-to-r from-purple-50 to-pink-50 py-4">
               <CardTitle className="text-base flex items-center gap-2">
@@ -628,6 +628,8 @@ export default function Settings({ section, embedded = false }: { section?: "acc
           </Card>
         )}
 
+        {showAccount && (
+          <>
         {/* Visual Search Settings - Only for Jewelry Showcase users (the Settings hub lists it in its own nav) */}
         {hasJewelryAccess && !embedded && (
           <Card className="shadow-lg border-gray-200">

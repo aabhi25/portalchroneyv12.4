@@ -49,6 +49,7 @@ const SCREENS: Partial<Record<`${HubAreaId}/${string}`, (user: MeResponseDto | n
   "facebook/connection": () => <FacebookSettings embedded />,
   "facebook/comments": () => <FacebookCommentSettings embedded />,
 
+  "vista/look": () => <Settings section="vista-look" embedded />,
   "vista/visual-search": () => <VisualSearchSettings embedded />,
 };
 

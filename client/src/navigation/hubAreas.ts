@@ -309,6 +309,7 @@ export const HUB_AREAS: HubArea[] = [
       settingsTab("vista"),
     ],
     settings: [
+      { key: "look", label: "Look & logo", description: "Vista's colour theme and your brand logo", icon: Palette, group: "Look", formerly: "Settings › Account & password › Vista Customization" },
       { key: "visual-search", label: "Match strictness", description: "How close a photo must be to count as a match", icon: SlidersHorizontal, group: "Search", formerly: "Settings › Other › Visual search" },
       { key: "erp", label: "ERP product sync", description: "Bring designs in from your ERP", icon: Link2, group: "Stock", href: integrationPath("erp"), leavesArea: true, formerly: "Settings › Integrations › ERP" },
     ],
