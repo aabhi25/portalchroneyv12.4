@@ -175,83 +175,128 @@ export interface ElevenLabsVoice {
   description: string | null;
   preview_url: string | null;
   labels: Record<string, string>;
+  /** Voice Library popularity: characters spoken with it in the last year, and how many accounts added it. */
+  usage_1y?: number | null;
+  cloned_by_count?: number | null;
+  language?: string | null;
 }
 
 export interface ElevenLabsVoiceResult {
   voices: ElevenLabsVoice[];
   has_more: boolean;
-  last_sort_id: string | null;
+  /** Pass back as `page` for the next page (null = no more). */
+  next_page: number | null;
 }
 
+/** Voice Library sort orders offered in the voice picker. */
+export const VOICE_SORTS = ['usage_character_count_1y', 'cloned_by_count', 'trending', 'created_date'] as const;
+export type VoiceSort = typeof VOICE_SORTS[number];
+
+const toVoice = (v: any): ElevenLabsVoice => ({
+  voice_id: v.voice_id,
+  name: v.name,
+  category: v.category || 'community',
+  description: v.description || null,
+  preview_url: v.preview_url || null,
+  labels: v.labels || {
+    ...(v.gender ? { gender: v.gender } : {}),
+    ...(v.accent ? { accent: v.accent } : {}),
+    ...(v.use_case ? { use_case: v.use_case } : {}),
+    ...(v.age ? { age: v.age } : {}),
+  },
+  usage_1y: typeof v.usage_character_count_1y === 'number' ? v.usage_character_count_1y : null,
+  cloned_by_count: typeof v.cloned_by_count === 'number' ? v.cloned_by_count : null,
+  language: v.language || null,
+});
+
+/**
+ * Search the public ElevenLabs Voice Library (/v1/shared-voices). Several languages are searched
+ * at once (the API filters one language per request) and merged: by popularity for the
+ * popularity sorts, otherwise interleaved in each language's own order.
+ */
 export async function searchElevenLabsVoices(
   apiKey: string,
   options: {
     search?: string;
-    language?: string;
+    languages?: string[];
     gender?: string;
     pageSize?: number;
-    nextSortId?: string;
+    page?: number;
+    sort?: VoiceSort;
     businessAccountId?: string;
   }
 ): Promise<ElevenLabsVoiceResult> {
-  const { search, language, gender, pageSize = 20, nextSortId, businessAccountId } = options;
+  const { search, gender, pageSize = 20, page = 0, businessAccountId } = options;
+  const sort: VoiceSort = options.sort && (VOICE_SORTS as readonly string[]).includes(options.sort) ? options.sort : 'usage_character_count_1y';
+  const languages = Array.from(new Set((options.languages || []).map((l) => l.trim().toLowerCase()).filter((l) => /^[a-z]{2,3}$/.test(l)))).slice(0, 6);
 
-  const cacheKey = JSON.stringify({ businessAccountId: businessAccountId || apiKey.slice(-8), search, language, gender, pageSize, nextSortId });
+  const cacheKey = JSON.stringify({ businessAccountId: businessAccountId || apiKey.slice(-8), search, languages, gender, pageSize, page, sort });
   const cached = voiceSearchCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.data;
   }
 
-  const params = new URLSearchParams();
-  if (search) params.set('search', search);
-  if (language) params.set('language', language);
-  if (gender) params.set('gender', gender);
-  params.set('page_size', String(pageSize));
-  if (nextSortId) params.set('sort_id', nextSortId);
-
-  // NOTE: Use /v1/shared-voices (the public Voice Library search endpoint).
-  // /v1/voices/search does not exist — /v1/voices/{voice_id} treats the path
-  // segment as a voice ID, which is why hitting /v1/voices/search returned
-  // a 400 "voice_not_found" for ID 'search'. The shared-voices endpoint
-  // accepts search/language/gender/page_size/sort_id and returns
-  // { voices, has_more, last_sort_id } — matching what the client expects.
-  const url = `https://api.elevenlabs.io/v1/shared-voices?${params.toString()}`;
-
-  const response = await fetchWithTimeout(url, {
-    method: 'GET',
-    headers: {
-      'xi-api-key': apiKey,
-    },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`ElevenLabs voice search API error (${response.status}): ${errorText}`);
-  }
-
-  const data = await response.json() as { voices: ElevenLabsVoice[]; has_more: boolean; last_sort_id?: string };
-
-  const result: ElevenLabsVoiceResult = {
-    voices: data.voices.map((v) => ({
-      voice_id: v.voice_id,
-      name: v.name,
-      category: v.category || 'community',
-      description: v.description || null,
-      preview_url: v.preview_url || null,
-      labels: v.labels || {},
-    })),
-    has_more: data.has_more || false,
-    last_sort_id: data.last_sort_id || null,
+  // With several languages each request returns a share of the page.
+  const perLanguage = languages.length > 1 ? Math.max(5, Math.ceil(pageSize / languages.length)) : pageSize;
+  const fetchOne = async (language?: string): Promise<{ voices: ElevenLabsVoice[]; has_more: boolean }> => {
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    if (language) params.set('language', language);
+    if (gender) params.set('gender', gender);
+    params.set('page_size', String(perLanguage));
+    params.set('sort', sort);
+    params.set('page', String(page));
+    const response = await fetchWithTimeout(`https://api.elevenlabs.io/v1/shared-voices?${params.toString()}`, {
+      method: 'GET',
+      headers: { 'xi-api-key': apiKey },
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`ElevenLabs voice search API error (${response.status}): ${errorText}`);
+    }
+    const data = await response.json() as { voices: any[]; has_more: boolean };
+    return { voices: (data.voices || []).map(toVoice), has_more: !!data.has_more };
   };
+
+  const pages = await Promise.all(languages.length ? languages.map((l) => fetchOne(l)) : [fetchOne(undefined)]);
+  const seen = new Set<string>();
+  let merged: ElevenLabsVoice[];
+  if (sort === 'usage_character_count_1y' || sort === 'cloned_by_count') {
+    const metric = (v: ElevenLabsVoice) => (sort === 'cloned_by_count' ? v.cloned_by_count : v.usage_1y) ?? 0;
+    merged = pages.flatMap((p) => p.voices).sort((a, b) => metric(b) - metric(a));
+  } else {
+    merged = [];
+    const longest = Math.max(0, ...pages.map((p) => p.voices.length));
+    for (let i = 0; i < longest; i++) for (const p of pages) if (p.voices[i]) merged.push(p.voices[i]);
+  }
+  merged = merged.filter((v) => (seen.has(v.voice_id) ? false : (seen.add(v.voice_id), true)));
+  const hasMore = pages.some((p) => p.has_more);
+
+  const result: ElevenLabsVoiceResult = { voices: merged, has_more: hasMore, next_page: hasMore ? page + 1 : null };
 
   voiceSearchCache.set(cacheKey, { data: result, expiresAt: Date.now() + VOICE_CACHE_TTL });
 
   if (voiceSearchCache.size > 100) {
     const now = Date.now();
-    for (const [key, entry] of voiceSearchCache) {
+    voiceSearchCache.forEach((entry, key) => {
       if (entry.expiresAt < now) voiceSearchCache.delete(key);
-    }
+    });
   }
 
   return result;
+}
+
+const voiceDetailsCache = new Map<string, { data: ElevenLabsVoice | null; expiresAt: number }>();
+
+/** One voice by id (its name and sample for the "selected voice" card); null when not found. */
+export async function getElevenLabsVoice(apiKey: string, voiceId: string): Promise<ElevenLabsVoice | null> {
+  if (!/^[A-Za-z0-9]{10,40}$/.test(voiceId)) return null;
+  const key = `${apiKey.slice(-8)}|${voiceId}`;
+  const cached = voiceDetailsCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+  const response = await fetchWithTimeout(`https://api.elevenlabs.io/v1/voices/${voiceId}`, { method: 'GET', headers: { 'xi-api-key': apiKey } });
+  const data = response.ok ? toVoice(await response.json()) : null;
+  if (voiceDetailsCache.size > 500) voiceDetailsCache.clear();
+  voiceDetailsCache.set(key, { data, expiresAt: Date.now() + 60 * 60 * 1000 });
+  return data;
 }

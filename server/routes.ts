@@ -29340,12 +29340,16 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
 
       const { searchElevenLabsVoices } = await import('./services/elevenlabsService');
+      // `languages` = comma-separated codes ("hi,en"); the older single `language` still works.
+      const languages = String(req.query.languages ?? req.query.language ?? '').split(',').filter(Boolean);
+      const pageSize = Math.min(50, Math.max(5, parseInt(String(req.query.pageSize ?? '20'), 10) || 20));
       const result = await searchElevenLabsVoices(apiKey, {
         search: (req.query.search as string) || undefined,
-        language: (req.query.language as string) || undefined,
+        languages,
         gender: (req.query.gender as string) || undefined,
-        pageSize: req.query.pageSize ? parseInt(req.query.pageSize as string, 10) : 20,
-        nextSortId: (req.query.nextSortId as string) || undefined,
+        pageSize,
+        page: Math.max(0, parseInt(String(req.query.page ?? '0'), 10) || 0),
+        sort: (req.query.sort as any) || undefined,
         businessAccountId,
       });
 
@@ -29353,6 +29357,25 @@ Be constructive and helpful. Return ONLY valid JSON.`;
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : String(error);
       console.error("[ElevenLabs] Voice search error:", errMsg);
+      res.status(500).json({ error: errMsg });
+    }
+  });
+
+  // One voice's name / sample / labels, for the "selected voice" card in the voice picker.
+  app.get("/api/elevenlabs/voices/:voiceId", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      const businessAccountId = req.user?.businessAccountId;
+      if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const apiKey = businessAccount?.elevenlabsApiKey;
+      if (!apiKey) return res.status(400).json({ error: "ElevenLabs API key not configured" });
+      const { getElevenLabsVoice } = await import('./services/elevenlabsService');
+      const voice = await getElevenLabsVoice(apiKey, String(req.params.voiceId));
+      if (!voice) return res.status(404).json({ error: "Voice not found" });
+      res.json(voice);
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error("[ElevenLabs] Voice lookup error:", errMsg);
       res.status(500).json({ error: errMsg });
     }
   });
