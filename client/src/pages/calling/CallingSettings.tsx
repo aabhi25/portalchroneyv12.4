@@ -27,6 +27,7 @@ import {
   type CallConsentMode,
   type CallProviderId,
 } from "@shared/aiCalling";
+import { CallVoicePicker } from "@/components/voice/CallVoicePicker";
 import {
   callingApi,
   callingKeys,
@@ -111,6 +112,7 @@ interface Draft {
   openingLine: string;
   inboundGreeting: string;
   assistantName: string;
+  voiceSelection: string | null;
   speakingSpeed: number;
   backgroundSound: CallBackgroundSound;
   whatsappFollowUp: boolean;
@@ -156,6 +158,7 @@ function toDraft(v: AiCallingSettingsView): Draft {
     openingLine: v.openingLine || "",
     inboundGreeting: v.inboundGreeting || "",
     assistantName: v.assistantName || "",
+    voiceSelection: v.voiceSelection ?? null,
     speakingSpeed: v.speakingSpeed ?? DEFAULT_SPEAKING_SPEED,
     backgroundSound: v.backgroundSound === "call_centre" ? "call_centre" : "none",
     whatsappFollowUp: v.whatsappFollowUp,
@@ -221,6 +224,7 @@ function buildBody(d: Draft, secrets: { apiKey: string; apiToken: string; plivoA
     openingLine: d.openingLine.trim() || null,
     inboundGreeting: d.inboundGreeting.trim() || null,
     assistantName: d.assistantName.trim() || null,
+    voiceSelection: d.voiceSelection,
     speakingSpeed: d.speakingSpeed,
     backgroundSound: d.backgroundSound,
     whatsappFollowUp: d.whatsappFollowUp,
@@ -794,6 +798,17 @@ export default function CallingSettings() {
             <Field label="Greeting when someone calls you (optional)" htmlFor="inbound-greeting" help="What the AI says when it answers your number. Leave empty for a friendly default.">
               <Textarea id="inbound-greeting" rows={2} value={draft.inboundGreeting} onChange={e => set("inboundGreeting", e.target.value)} maxLength={300} placeholder={`Thanks for calling ${businessName}. How can I help you today?`} data-testid="input-inbound-greeting" />
             </Field>
+          </CardContent>
+        </Card>
+
+        {/* The voice on calls */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Voice on calls</CardTitle>
+            <CardDescription>The voice the AI speaks with on phone calls. By default it uses the same voice as your website chat widget.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CallVoicePicker value={draft.voiceSelection} onChange={v => set("voiceSelection", v)} />
           </CardContent>
         </Card>
 

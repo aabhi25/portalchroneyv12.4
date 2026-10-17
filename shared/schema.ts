@@ -1721,6 +1721,8 @@ export const aiCallingSettings = pgTable("ai_calling_settings", {
   assistantName: text("assistant_name"),
   speakingSpeed: integer("speaking_speed").notNull().default(90),
   backgroundSound: varchar("background_sound", { length: 32 }).notNull().default("none"),
+  // The voice on calls ("shimmer", "el:<ElevenLabs voice id>"); null = the website chat widget's voice.
+  voiceSelection: text("voice_selection"),
   whatsappFollowUp: boolean("whatsapp_follow_up").notNull().default(false),
   whatsappFollowUpTemplateId: varchar("whatsapp_follow_up_template_id"),
   updatedBy: varchar("updated_by"),

@@ -544,6 +544,7 @@ export class CallMediaSession {
         skipLeadTraining: !leadCaptureOn,
         assistantName: this.settings?.assistantName ?? null,
         speakingSpeed: this.settings?.speakingSpeed ?? undefined,
+        voiceSelection: this.settings?.voiceSelection ?? null,
         screenTranscript: (text) => this.screenTranscript(text),
         onSpeech: (event) => this.onSpeech(event),
       }, events);

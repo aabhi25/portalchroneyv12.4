@@ -155,6 +155,13 @@
       "when": 1792238738403,
       "tag": "0021_call_voice_options",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792247088395,
+      "tag": "0022_call_voice_selection",
+      "breakpoints": true
     }
   ]
 }

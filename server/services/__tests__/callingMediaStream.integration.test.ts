@@ -318,13 +318,14 @@ async function main() {
   // ═══ 3a. background sound: fills the silences, sits under the answer, marks still echo ═══
   {
     const { invalidateSettingsCache } = await import("../calling/settingsService");
-    await db.update(schema.aiCallingSettings).set({ backgroundSound: "call_centre", assistantName: "Anika", speakingSpeed: 85 } as any).where(eq(schema.aiCallingSettings.businessAccountId, BIZ));
+    await db.update(schema.aiCallingSettings).set({ backgroundSound: "call_centre", assistantName: "Anika", speakingSpeed: 85, voiceSelection: "el:gHu9GtaHOXcSqFTK06ux" } as any).where(eq(schema.aiCallingSettings.businessAccountId, BIZ));
     invalidateSettingsCache(BIZ);
     const call = await mkCall();
     const h = harness("simulator_outbound", call.id);
     await h.send(START());
     const e = h.engine();
     expect(e.input.assistantName === "Anika" && e.input.speakingSpeed === 85, "the assistant's name and speaking speed reach the voice session", { n: e.input.assistantName, s: e.input.speakingSpeed });
+    expect(e.input.voiceSelection === "el:gHu9GtaHOXcSqFTK06ux", "the call's own voice reaches the voice session", e.input.voiceSelection);
     expect(/your name is Anika/.test(e.input.chat.instructions), "the phone rules carry the name");
     e.ready("conv-ambience");
     await flush();
@@ -353,7 +354,7 @@ async function main() {
     const after = h.ws.media().length;
     await h.clock.advance(1000, h.settle);
     expect(h.ws.media().length === after, "nothing more is sent after the call ends");
-    await db.update(schema.aiCallingSettings).set({ backgroundSound: "none", assistantName: null, speakingSpeed: 90 } as any).where(eq(schema.aiCallingSettings.businessAccountId, BIZ));
+    await db.update(schema.aiCallingSettings).set({ backgroundSound: "none", assistantName: null, speakingSpeed: 90, voiceSelection: null } as any).where(eq(schema.aiCallingSettings.businessAccountId, BIZ));
     invalidateSettingsCache(BIZ);
   }
 

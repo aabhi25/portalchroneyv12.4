@@ -1,0 +1,1 @@
+ALTER TABLE "ai_calling_settings" ADD COLUMN IF NOT EXISTS "voice_selection" text;

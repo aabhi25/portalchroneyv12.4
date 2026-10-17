@@ -191,6 +191,8 @@ export interface PhoneCallVoiceOptions {
   assistantName?: string | null;
   /** Speaking speed on this call, percent of normal (AI Calling settings; 100 = the voice as is). */
   speakingSpeed?: number;
+  /** The voice on this call (AI Calling settings); unset = the chat widget's voice. */
+  voiceSelection?: string | null;
   /** Every final transcript, before turn filtering. 'drop' swallows it (answering-machine screening, waiting for "hello"). */
   screenTranscript?: (text: string) => 'continue' | 'drop';
   /** Raw VAD events (silence / answering-machine guards). */
@@ -814,7 +816,8 @@ export class RealtimeVoiceService {
         return;
       }
 
-      const selectedVoice = settings?.voiceSelection || 'shimmer';
+      // Phone calls may have their own voice (AI Calling settings); else the chat widget's.
+      const selectedVoice = phone?.voiceSelection || settings?.voiceSelection || 'shimmer';
       let elevenlabsApiKey: string | undefined;
       let elevenlabsVoiceId: string | undefined;
 
@@ -1901,7 +1904,7 @@ export class RealtimeVoiceService {
         console.log(`[VoiceTiming] openai connect: socket open +${openedAt - connectT0}ms | history + instructions +${Date.now() - openedAt}ms`);
         
         const settings = await storage.getWidgetSettings(conversation.businessAccountId);
-        const selectedVoice = settings?.voiceSelection || 'shimmer';
+        const selectedVoice = conversation.phone?.voiceSelection || settings?.voiceSelection || 'shimmer';
         const businessAccount = await storage.getBusinessAccount(conversation.businessAccountId);
         const appointmentsEnabled = businessAccount?.appointmentsEnabled || false;
 
@@ -2300,7 +2303,7 @@ export class RealtimeVoiceService {
 
     // Determine voice gender from voice selection for proper pronouns
     const settings = await storage.getWidgetSettings(businessAccountId);
-    const selectedVoice = (settings?.voiceSelection || 'shimmer').toLowerCase();
+    const selectedVoice = (conversation.phone?.voiceSelection || settings?.voiceSelection || 'shimmer').toLowerCase();
     const voiceGender = conversation.voiceGender ?? genderOfVoiceSync(selectedVoice) ?? 'neutral';
 
     let instructions = `You are the AI assistant for ${companyDescription || 'this business'} and speak for it (never call yourself Chroney). `;
