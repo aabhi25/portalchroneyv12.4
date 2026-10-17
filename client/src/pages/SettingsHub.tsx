@@ -10,6 +10,7 @@ import {
 import type { MeResponseDto } from "@shared/dto";
 import { buildSettingsGroups, findSettingsItem, type SettingsGroup, type SettingsItem } from "./settings/settingsNav";
 import { SETTINGS_PATHS } from "./settings/settingsPaths";
+import { SuperAdminBadge } from "@/components/hub/SuperAdminBadge";
 
 /** Keeps one broken settings screen from taking the whole app down. */
 export class SettingsErrorBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
@@ -68,7 +69,12 @@ function NavList({ groups, activeKey, onNavigate }: { groups: SettingsGroup[]; a
                       } ${item.subgroup ? "pl-5" : ""}`}
                     >
                       <Icon className={`w-3.5 h-3.5 shrink-0 ${active ? "text-purple-600" : "text-gray-400"}`} />
-                      <span className="truncate">{item.label}</span>
+                      {item.superAdminOnly ? (
+                        // The badge needs room, so these labels wrap instead of being cut short.
+                        <span className="min-w-0 flex-1 leading-snug">{item.label} <SuperAdminBadge /></span>
+                      ) : (
+                        <span className="truncate">{item.label}</span>
+                      )}
                       {item.href && <ExternalLink className="w-3 h-3 ml-auto text-gray-300" />}
                     </button>
                   </li>
@@ -135,12 +141,13 @@ function Overview({ groups, onNavigate }: { groups: SettingsGroup[]; onNavigate:
                   data-testid={`settings-card-${item.key}`}
                 >
                   <CardContent className="p-4 flex items-start gap-3">
-                    <div className="rounded-lg bg-purple-50 p-2 shrink-0">
-                      <Icon className="w-4 h-4 text-purple-600" />
+                    <div className={`rounded-lg p-2 shrink-0 ${item.superAdminOnly ? "bg-orange-50" : "bg-purple-50"}`}>
+                      <Icon className={`w-4 h-4 ${item.superAdminOnly ? "text-orange-600" : "text-purple-600"}`} />
                     </div>
                     <div className="min-w-0">
-                      <p className="font-medium text-sm text-gray-900 flex items-center gap-1">
+                      <p className="font-medium text-sm text-gray-900 flex flex-wrap items-center gap-1">
                         {item.subgroup ? `${item.subgroup} · ${item.label}` : item.label}
+                        {item.superAdminOnly && <SuperAdminBadge />}
                         {item.href && <ExternalLink className="w-3 h-3 text-gray-400" />}
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5">{item.description}</p>
@@ -231,7 +238,10 @@ export default function SettingsHub({ user }: { user: MeResponseDto | null }) {
             {group.label}
             {item.subgroup && (<><ChevronRight className="w-3 h-3" />{item.subgroup}</>)}
           </p>
-          <h2 className="text-2xl font-bold text-gray-900 mt-0.5" data-testid="settings-page-title">{item.label}</h2>
+          <h2 className="text-2xl font-bold text-gray-900 mt-0.5 flex flex-wrap items-center gap-2" data-testid="settings-page-title">
+            {item.label}
+            {item.superAdminOnly && <SuperAdminBadge />}
+          </h2>
           <p className="text-sm text-muted-foreground mt-1">{item.description}</p>
         </div>
         <SettingsErrorBoundary resetKey={item.key}>{item.render!()}</SettingsErrorBoundary>

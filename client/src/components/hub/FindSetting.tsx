@@ -29,7 +29,10 @@ function buildEntries(access: HubAccess): Entry[] {
   }
   out.push({ label: "Account & password", place: "Settings", href: SETTINGS_PATHS.account });
   out.push({ label: "Connected apps", place: "Settings", href: SETTINGS_PATHS.integrations, formerly: "CRM & integrations · LeadSquared · Salesforce · Custom CRM · Shopify · ERP" });
-  if (access.isSuperAdminViewing) out.push({ label: "AI usage & limits", place: "Settings", href: SETTINGS_PATHS.usage });
+  if (access.isSuperAdminViewing) {
+    out.push({ label: "AI usage & limits", place: "Settings", href: SETTINGS_PATHS.usage });
+    out.push({ label: "Features on this account", place: "Settings", href: SETTINGS_PATHS.features, formerly: "Manage modules · Product features · switch agents and add-ons on or off" });
+  }
   return out;
 }
 

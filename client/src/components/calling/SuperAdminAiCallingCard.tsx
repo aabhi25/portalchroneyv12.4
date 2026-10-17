@@ -11,8 +11,9 @@ import { callingApi, callingKeys, errorStatus, type SuperAdminCallingState } fro
 /**
  * Super admin → business modules: "AI Calling" switch + optional monthly minute cap.
  * Uses GET/PUT /api/super-admin/ai-calling/:businessAccountId.
+ * `bare` shows only the controls (Phone calls › Settings puts its own heading around them).
  */
-export function SuperAdminAiCallingCard({ businessAccountId, initialEnabled }: { businessAccountId: string; initialEnabled?: boolean }) {
+export function SuperAdminAiCallingCard({ businessAccountId, initialEnabled, bare }: { businessAccountId: string; initialEnabled?: boolean; bare?: boolean }) {
   const { toast } = useToast();
   const q = useQuery<SuperAdminCallingState>({
     queryKey: callingKeys.superAdmin(businessAccountId),
@@ -38,11 +39,56 @@ export function SuperAdminAiCallingCard({ businessAccountId, initialEnabled }: {
     onSuccess: (data, body) => {
       queryClient.setQueryData(callingKeys.superAdmin(businessAccountId), { ...q.data, ...data });
       queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", businessAccountId] });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      queryClient.invalidateQueries({ queryKey: callingKeys.settings });
       toast({ title: "AI Calling updated", description: body.enabled ? "Enabled for this business." : "Disabled for this business." });
     },
     onError: (e: Error) => toast({ title: "Couldn't update AI Calling", description: e.message, variant: "destructive" }),
   });
+
+  const controls = unavailable ? (
+    <p className="text-xs text-amber-700">The AI Calling server update isn't installed yet.</p>
+  ) : (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Switch
+          checked={enabled}
+          disabled={q.isLoading || save.isPending}
+          onCheckedChange={v => save.mutate({ enabled: v, monthlyMinuteCap: savedCap })}
+          data-testid="switch-ai-calling"
+        />
+        <span className="text-sm font-medium text-gray-700">{enabled ? "Enabled" : "Disabled"}</span>
+        {(q.isLoading || save.isPending) && <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />}
+      </div>
+      {enabled && (
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-gray-600" htmlFor={`ai-calling-cap-${businessAccountId}`}>Monthly minute cap (optional)</label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              id={`ai-calling-cap-${businessAccountId}`}
+              className="w-32 h-8"
+              inputMode="numeric"
+              placeholder="No cap"
+              value={cap}
+              onChange={e => setCap(e.target.value)}
+              data-testid="input-ai-calling-cap"
+            />
+            <span className="text-xs text-gray-500">minutes</span>
+            <Button size="sm" variant="outline" className="h-8" disabled={!capDirty || save.isPending} onClick={() => save.mutate({ enabled, monthlyMinuteCap: capNumber })} data-testid="button-save-ai-calling-cap">
+              Save cap
+            </Button>
+          </div>
+          {!capValid && <p className="text-xs text-red-600">Enter a whole number of minutes, or leave empty for no cap.</p>}
+          {typeof q.data?.minutesThisMonth === "number" && (
+            <p className="text-xs text-gray-500">{Math.round(q.data.minutesThisMonth).toLocaleString()} minutes used this month.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  if (bare) return <div data-testid="card-super-admin-ai-calling">{controls}</div>;
 
   return (
     <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors" data-testid="card-super-admin-ai-calling">
@@ -54,46 +100,7 @@ export function SuperAdminAiCallingCard({ businessAccountId, initialEnabled }: {
         <p className="text-sm text-gray-600 mb-2">
           The AI phones new leads and answers the business's number (Exotel or Plivo), with summaries, outcomes, retries and a do-not-call list. Includes a test mode that rings in the portal.
         </p>
-        {unavailable ? (
-          <p className="text-xs text-amber-700">The AI Calling server update isn't installed yet.</p>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Switch
-                checked={enabled}
-                disabled={q.isLoading || save.isPending}
-                onCheckedChange={v => save.mutate({ enabled: v, monthlyMinuteCap: savedCap })}
-                data-testid="switch-ai-calling"
-              />
-              <span className="text-sm font-medium text-gray-700">{enabled ? "Enabled" : "Disabled"}</span>
-              {(q.isLoading || save.isPending) && <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />}
-            </div>
-            {enabled && (
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-gray-600" htmlFor={`ai-calling-cap-${businessAccountId}`}>Monthly minute cap (optional)</label>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input
-                    id={`ai-calling-cap-${businessAccountId}`}
-                    className="w-32 h-8"
-                    inputMode="numeric"
-                    placeholder="No cap"
-                    value={cap}
-                    onChange={e => setCap(e.target.value)}
-                    data-testid="input-ai-calling-cap"
-                  />
-                  <span className="text-xs text-gray-500">minutes</span>
-                  <Button size="sm" variant="outline" className="h-8" disabled={!capDirty || save.isPending} onClick={() => save.mutate({ enabled, monthlyMinuteCap: capNumber })} data-testid="button-save-ai-calling-cap">
-                    Save cap
-                  </Button>
-                </div>
-                {!capValid && <p className="text-xs text-red-600">Enter a whole number of minutes, or leave empty for no cap.</p>}
-                {typeof q.data?.minutesThisMonth === "number" && (
-                  <p className="text-xs text-gray-500">{Math.round(q.data.minutesThisMonth).toLocaleString()} minutes used this month.</p>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+        {controls}
       </div>
     </div>
   );

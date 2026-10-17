@@ -1,8 +1,9 @@
 import type { LucideIcon } from "lucide-react";
-import { UserCog, Gauge, Link2 } from "lucide-react";
+import { UserCog, Gauge, Link2, ToggleRight } from "lucide-react";
 import type { MeResponseDto } from "@shared/dto";
 import Settings from "@/pages/Settings";
 import { UsageDashboard } from "@/components/usage/UsageDashboard";
+import AccountFeaturesSettings from "./AccountFeaturesSettings";
 import IntegrationsSettings, { visibleIntegrationTabs, type IntegrationsAccess } from "./IntegrationsSettings";
 import { SETTINGS_PATHS } from "./settingsPaths";
 
@@ -23,6 +24,8 @@ export interface SettingsItem {
   matchPrefix?: boolean;
   /** Needs the full content width, so the hub's side navigation is replaced by a back link. */
   wide?: boolean;
+  /** Only super admins viewing as the account see it; marked with an orange "Super admin" badge. */
+  superAdminOnly?: boolean;
   render?: () => JSX.Element;
 }
 
@@ -63,6 +66,7 @@ export function getSettingsAccess(user: MeResponseDto | null) {
   };
 
   return {
+    activeBusinessAccountId: isSuperAdminImpersonating ? user!.activeBusinessAccountId! : null,
     isSuperAdminImpersonating, isGroupAdmin, isBusinessView,
     hasChroney, hasWhatsapp, hasInstagram, hasFacebook, hasJewelry, hasWebsiteChat, integrations,
   };
@@ -107,15 +111,27 @@ export function buildSettingsGroups(user: MeResponseDto | null): SettingsGroup[]
         path: SETTINGS_PATHS.account,
         render: () => <Settings section="account" embedded />,
       },
-      // AI spend is for super admins only (viewing as the account); business users never see it.
-      ...(a.isSuperAdminImpersonating ? [{
-        key: "usage",
-        label: "AI usage & limits",
-        description: "AI usage and spend this month, by channel",
-        icon: Gauge,
-        path: SETTINGS_PATHS.usage,
-        render: () => <UsageDashboard />,
-      }] : []),
+      // Super admins only (viewing as the account); business users never see these.
+      ...(a.activeBusinessAccountId ? [
+        {
+          key: "usage",
+          label: "AI usage & limits",
+          description: "AI usage and spend this month, by channel",
+          icon: Gauge,
+          path: SETTINGS_PATHS.usage,
+          superAdminOnly: true,
+          render: () => <UsageDashboard />,
+        },
+        {
+          key: "features",
+          label: "Features on this account",
+          description: "Switch this account's AI agents and add-ons on or off",
+          icon: ToggleRight,
+          path: SETTINGS_PATHS.features,
+          superAdminOnly: true,
+          render: () => <AccountFeaturesSettings businessAccountId={a.activeBusinessAccountId!} />,
+        },
+      ] satisfies SettingsItem[] : []),
     ],
   });
 

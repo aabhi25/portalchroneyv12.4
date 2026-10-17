@@ -13,6 +13,7 @@ export const SETTINGS_PATHS = {
   // Account-wide (stay in the Settings hub)
   account: `${SETTINGS_ROOT}/account`,
   usage: `${SETTINGS_ROOT}/usage`,
+  features: `${SETTINGS_ROOT}/features`,
   integrations: `${SETTINGS_ROOT}/integrations`,
 
   // These belong to one area and live in that area's Settings tab (see navigation/hubAreas.ts).

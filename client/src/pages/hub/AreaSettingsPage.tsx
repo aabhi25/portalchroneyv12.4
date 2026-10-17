@@ -2,16 +2,13 @@ import { useLocation } from "wouter";
 import { ArrowUpRight, ChevronLeft, ChevronRight } from "lucide-react";
 import type { MeResponseDto } from "@shared/dto";
 import { useHubAccess } from "@/components/hub/HubFrame";
+import { SuperAdminBadge } from "@/components/hub/SuperAdminBadge";
 import {
   hubArea, hubSettingsPath, settingsItemHref, visibleSettings,
   type HubArea, type HubAreaId, type HubSettingsItem,
 } from "@/navigation/hubAreas";
 import { SettingsErrorBoundary } from "@/pages/SettingsHub";
 import { hubSettingsScreen } from "./hubSettingsScreens";
-
-function SuperAdminBadge() {
-  return <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10.5px] font-semibold text-orange-700">Super admin</span>;
-}
 
 /** Apple-style grouped list of an area's settings. */
 function SettingsList({ area, items, activeKey, onOpen }: {

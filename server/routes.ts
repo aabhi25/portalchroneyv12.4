@@ -9817,6 +9817,20 @@ Return ONLY the refined instruction, nothing else.`
     }
   });
 
+  // SuperAdmin: One business account (Settings › Features on this account, while viewing as it)
+  app.get("/api/business-accounts/:id", requireAuth, requireRole("super_admin"), async (req, res) => {
+    try {
+      const businessAccount = await storage.getBusinessAccount(req.params.id);
+      if (!businessAccount) {
+        return res.status(404).json({ error: "Business account not found" });
+      }
+      const { toBusinessAccountDto } = await import("@shared/dto/businessAccount");
+      res.json(toBusinessAccountDto(businessAccount));
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // SuperAdmin: Update business account
   app.put("/api/business-accounts/:id", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {

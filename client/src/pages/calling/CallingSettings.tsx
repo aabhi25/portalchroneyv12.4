@@ -39,6 +39,8 @@ import {
   type WhatsappTemplateOption,
 } from "@/lib/aiCallingApi";
 import { CallingPageHeader, CallingUnavailable } from "@/components/calling/RequireAiCalling";
+import { SuperAdminAiCallingCard } from "@/components/calling/SuperAdminAiCallingCard";
+import { SuperAdminBadge } from "@/components/hub/SuperAdminBadge";
 
 const LEAD_SOURCES: { value: string; label: string }[] = [
   { value: "website", label: "Website chat" },
@@ -356,6 +358,8 @@ export default function CallingSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saved]);
 
+  // Business users never see the super admin block.
+  const superAdminViewingId = me?.role === "super_admin" ? me.activeBusinessAccountId || null : null;
   const marketingEnabled = me?.businessAccount?.whatsappEnabled === true && me?.businessAccount?.whatsappMarketingEnabled === true;
   const templates = useQuery<WhatsappTemplateOption[]>({
     queryKey: ["/api/whatsapp/templates"],
@@ -443,6 +447,24 @@ export default function CallingSettings() {
       <CallingPageHeader title="Calling settings" description="How the AI phones your leads and answers your number." />
 
       <div className="space-y-5">
+        {/* Super admins viewing as the account: the account-level switch and cap from Business accounts. */}
+        {superAdminViewingId && (
+          <Card className="border-orange-200" data-testid="card-calling-super-admin">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                AI Calling for this account
+                <SuperAdminBadge />
+              </CardTitle>
+              <CardDescription>
+                Whether this business may use AI Calling at all, and the most minutes it may use each month. The business's own on/off switch is just below. Same switch as Super Admin › Business accounts.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <SuperAdminAiCallingCard bare businessAccountId={superAdminViewingId} initialEnabled={me?.businessAccount?.aiCallingEnabled} />
+            </CardContent>
+          </Card>
+        )}
+
         {/* On / off */}
         <Card>
           <CardContent className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">

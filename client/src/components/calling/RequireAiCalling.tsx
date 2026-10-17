@@ -7,10 +7,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, Phone } from "lucide-react";
 import { useAiCallingAvailability } from "@/lib/aiCallingApi";
+import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { CALLING_NAV_ITEMS } from "./callingSections";
 
 export function CallingUnavailable({ detail }: { detail?: string }) {
   const [, setLocation] = useLocation();
+  const { data: user } = useQuery<MeResponseDto>({ queryKey: ["/api/auth/me"] });
+  // A super admin viewing as the account can switch it on themselves.
+  const superAdminViewing = user?.role === "super_admin" && !!user.activeBusinessAccountId;
   return (
     <div className="p-6">
       <Card className="max-w-lg mx-auto mt-12">
@@ -20,11 +24,21 @@ export function CallingUnavailable({ detail }: { detail?: string }) {
           </div>
           <div className="space-y-1">
             <h3 className="font-semibold text-base">AI Calling isn't switched on for this account</h3>
-            <p className="text-sm text-muted-foreground">{detail || "Ask your administrator to turn on AI Calling."}</p>
+            <p className="text-sm text-muted-foreground">
+              {detail || (superAdminViewing
+                ? "You can switch it on in Settings › Features on this account."
+                : "Ask your administrator to turn on AI Calling.")}
+            </p>
           </div>
-          <Button variant="outline" onClick={() => setLocation("/")} data-testid="button-calling-back-home">
-            Back to home
-          </Button>
+          {superAdminViewing ? (
+            <Button variant="outline" onClick={() => setLocation(SETTINGS_PATHS.features)} data-testid="button-calling-open-features">
+              Open Features on this account
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={() => setLocation("/")} data-testid="button-calling-back-home">
+              Back to home
+            </Button>
+          )}
         </CardContent>
       </Card>
     </div>
