@@ -42,7 +42,9 @@ export function genderOfVoiceSync(voiceSelection: string | null | undefined): As
 
 // Custom ElevenLabs voices ("el:<voiceId>"): the voice's own "gender" label, cached.
 const LABEL_TTL_MS = 24 * 60 * 60 * 1000;
-const MISS_TTL_MS = 60 * 60 * 1000;
+// A failed / timed-out lookup is retried after 2 minutes (it used to stay "unknown" for an
+// hour, and Hindi replies fell back to masculine forms for the whole hour).
+const MISS_TTL_MS = 2 * 60 * 1000;
 const labelCache = new Map<string, { gender: AssistantGender | null; at: number }>();
 const inFlight = new Map<string, Promise<AssistantGender | null>>();
 
@@ -56,7 +58,7 @@ export function resetVoiceGenderCacheForTesting(): void {
 
 /**
  * Gender of a widget voice choice, looking up custom ElevenLabs voices once (cached a day;
- * failures are cached for an hour and never block for more than `timeoutMs`).
+ * failures are retried after 2 minutes and never block for more than `timeoutMs`).
  */
 export async function genderOfVoice(
   voiceSelection: string | null | undefined,
@@ -127,4 +129,12 @@ export function textChatAssistantGender(
   if (!account || account.voiceModeEnabled !== "true") return null;
   if (widget?.chatMode === "chat-only") return null;
   return voiceGenderNow(widget?.voiceSelection || "shimmer", account.elevenlabsApiKey);
+}
+
+/**
+ * Warm the gender cache for a business's selected voice (e.g. when an AI call is placed, so the
+ * call already knows it when answered). Never throws.
+ */
+export async function prefetchVoiceGender(voiceSelection: string | null | undefined, elevenlabsApiKey?: string | null): Promise<void> {
+  try { await genderOfVoice(voiceSelection, elevenlabsApiKey, { timeoutMs: 4000 }); } catch { /* best effort */ }
 }

@@ -37,6 +37,10 @@ export interface ElevenLabsTTSOptions {
   // honour this signal and throw an AbortError that the caller treats as
   // a clean exit.
   signal?: AbortSignal;
+  /** Text spoken just before this one (same answer): ElevenLabs keeps the intonation flowing. */
+  previousText?: string;
+  /** Text likely to follow (e.g. after a pre-recorded "Achha…"): the clip ends on a continuing tone. */
+  nextText?: string;
 }
 
 /** Retries on "busy" answers before the caller switches to its backup voice (see below). */
@@ -93,6 +97,8 @@ async function synthesizeSpeechStreamingOnce(
     modelId = 'eleven_flash_v2_5',
     outputFormat = 'pcm_24000',
     signal,
+    previousText,
+    nextText,
   } = options;
 
   // optimize_streaming_latency=3 trades a small amount of pronunciation
@@ -109,6 +115,8 @@ async function synthesizeSpeechStreamingOnce(
     body: JSON.stringify({
       text,
       model_id: modelId,
+      ...(previousText ? { previous_text: previousText } : {}),
+      ...(nextText ? { next_text: nextText } : {}),
       voice_settings: {
         stability: 0.5,
         similarity_boost: 0.75,

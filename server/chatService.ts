@@ -16,7 +16,7 @@ import { categorizeAndSaveConversation } from './services/conversationCategoriza
 import { summarizeAndSaveConversation } from './services/conversationSummarizationService';
 import { buildOtpGatingOverride } from './services/leadTrainingPrompt';
 import {
-  assistantAskedForNameIn, countUserMessages, emailInMessage, extractPhoneCandidates, finalizeLeadTurn, getConversationLead,
+  assistantAskedFields, assistantAskedForNameIn, countUserMessages, emailInMessage, extractPhoneCandidates, finalizeLeadTurn, getConversationLead,
   isDecline, isValidLeadName, loadLeadCaptureState, loadRecentHistory, nameInMessage, normalizeLeadFields, phoneModeFor,
   prepareLeadTurn, replanLeadTurn, syncConversationLeadIfReady, upsertConversationLead, type LeadTurn,
 } from './services/leadCapture';
@@ -40,7 +40,8 @@ import { buildCustomInstructionsBlock } from './services/chatContext/customInstr
 import { matchesDeflectionPattern } from './services/chatContext/deflection';
 import { appliesToChannel } from '@shared/knowledgeChannels';
 import { embeddingService } from './services/embeddingService';
-import { smallTalkKind } from './services/chatContext/smallTalk';
+import { isBareAcknowledgement, isConversationMeta, smallTalkKind } from './services/chatContext/smallTalk';
+import { phoneToolsForTurn } from './services/calling/phonePrompt';
 import { accountHasKnowledge } from './services/chatContext/knowledgePresence';
 import { embedQueryCached } from './services/chatContext/queryEmbeddingCache';
 import { ChatTurnTiming } from './services/chatContext/chatTiming';
@@ -214,7 +215,39 @@ export interface ChatContext {
     tools: any[];
     executeTool: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
     knownContact?: { name?: string | null; phone?: string | null; email?: string | null } | null;
+    /**
+     * Awaited once, right before the model request. Returns the words the call has already said
+     * (or is about to say) as the start of THIS reply — a short reaction plus a contextual opener
+     * (voice/phoneOpener.ts; it waits for one still being written, bounded) — which are then
+     * always spoken before the answer, and the call's language. Also tells the call when the
+     * answer was requested, so it can time its reaction to end just before the answer.
+     */
+    prepareTurn?: () => Promise<{ spokenSoFar: string | null; callLanguage: 'en' | 'hi' | null }>;
+    /** The call's language right now (what the caller speaks), for every model pass of a turn. */
+    callLanguage?: () => 'en' | 'hi' | null;
   };
+}
+
+/**
+ * Phone call: a short answer to the agent's own question ("Motor.", "A car.", "Hyundai i20, 2019
+ * model.") — no question in it, at most 5 words. The reply builds on the call and the business
+ * profile (always in the prompt), so the knowledge search (0.4-1.1 s on self-calls) is skipped.
+ */
+const PHONE_QUESTION_WORD = /\?|\b(what|which|how|why|when|where|who|whom|whose|is|are|do|does|did|can|could|will|would|should|kya|kaun|kaunsa|kitna|kitne|kitni|kaise|kab|kahan|kyun|kyon|batao|bataiye|bata do)\b|क्या|कौन|कितना|कितने|कितनी|कैसे|कब|कहाँ|क्यों|बताइए|बताओ/i;
+function isShortPhoneAnswer(msg: string): boolean {
+  const words = msg.trim().split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.length <= 5 && !PHONE_QUESTION_WORD.test(msg);
+}
+
+/** Phone rules + "you already said this" for a reply that a contextual opener has started. */
+function withSpokenOpener(instructions: string, opener: string | null, callLanguage: 'en' | 'hi' | null = null): string {
+  let out = instructions;
+  // One language for the whole call, from what the caller speaks (seen: Hindi replies to an
+  // English caller after a one-word "Sure." / a misheard "मोटर").
+  if (callLanguage === 'en') out += `\n\nLANGUAGE OF THIS CALL: English. Reply in ENGLISH words only — not Hindi, and not Hindi written in English letters (no "aap", "ji", "achha", "koi baat nahi") — even when their message is very short, written in Hindi script, or your own earlier replies slipped into Hindi. Switch only if they speak a full sentence in Hindi or ask you to.`;
+  if (callLanguage === 'hi') out += `\n\nLANGUAGE OF THIS CALL: Hindi. Reply in everyday spoken Hindi written in Devanagari, keeping business words (insurance, plan, cover, premium, claim) in English letters — switch to English only if they speak a full English sentence or ask you to.`;
+  if (opener) out += `\n\nYOU HAVE ALREADY SAID ALOUD, as the start of this reply: "${opener}"\nYour reply is spoken right after those words, as the same breath — so it must begin with what comes AFTER them. Never write those words again, not even as the subject of your sentence — write only what follows them. No reaction, greeting or thanks either.`;
+  return out;
 }
 
 // Track active conversation IDs for each user session
@@ -4136,7 +4169,38 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       // AI Calling (A): phone-only tools (not while an OTP step is pending — phone calls never run OTP).
       if (context.phoneCall?.tools?.length && !otpState.locked && !otpState.awaiting_otp) {
         const phoneNames = new Set(context.phoneCall.tools.map((t: any) => t.function?.name));
-        streamTools = [...streamTools.filter((t: any) => !phoneNames.has(t.function?.name)), ...context.phoneCall.tools];
+        // Only the phone tools this turn's words point to (calling/phonePrompt.ts phoneToolsForTurn).
+        const lastAssistantForTools = [...history].reverse().find((m: any) => m.role === 'assistant')?.content || '';
+        const turnPhoneTools = phoneToolsForTurn(context.phoneCall.tools, userMessage, String(lastAssistantForTools));
+        streamTools = [...streamTools.filter((t: any) => !phoneNames.has(t.function?.name)), ...turnPhoneTools];
+        // The caller's number is already known, so it is saved here (same path as the model's own
+        // capture_lead) instead of by the model — whose capture_lead call costs a second model
+        // round trip, +1.1-1.2 s on that reply (live calls, 2026-10-16).
+        let phoneLeadSaved = !!existingLead;
+        const knownPhone = context.phoneCall.knownContact?.phone;
+        if (!existingLead && knownPhone && streamTools.some((t: any) => t.function?.name === 'capture_lead')) {
+          const saved: any = await ToolExecutionService.executeTool('capture_lead', { phone: knownPhone }, {
+            businessAccountId: context.businessAccountId,
+            userId: context.userId,
+            conversationId,
+            visitorCity: context.visitorCity,
+            userMessage,
+            selectedLanguage: context.preferredLanguage,
+            channel: context.channel,
+            skipLeadTraining: context.skipLeadTraining,
+          }, userMessage, appointmentsEnabled).catch((err: any) => ({ success: false, error: String(err?.message || err) }));
+          phoneLeadSaved = !!saved?.success;
+          console.log(`[AI Calling] caller's number saved as the lead: ${phoneLeadSaved}`);
+        }
+        // Then capture_lead only helps when this message may carry a NEW detail (a name / email in
+        // it, or the answer to our own name / email question) — else the model re-"saves" the
+        // known number every turn.
+        if (phoneLeadSaved && streamTools.some((t: any) => t.function?.name === 'capture_lead')) {
+          const lastAssistantText = [...history].reverse().find((m: any) => m.role === 'assistant')?.content || '';
+          const mayCarryDetail = !!nameInMessage(userMessage) || !!emailInMessage(userMessage)
+            || assistantAskedFields(String(lastAssistantText)).size > 0;
+          if (!mayCarryDetail) streamTools = streamTools.filter((t: any) => t.function?.name !== 'capture_lead');
+        }
       }
 
       // SHORT-CIRCUIT: when lookup cards will be shown, bypass the full AI streaming pipeline.
@@ -4233,13 +4297,17 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       const fallbackTemplateConfigured = !!(this.fallbackInstructionsCache.get(context.businessAccountId)?.length);
       const liveAllowed = !phoneValidationFailed && !fallbackTemplateConfigured;
       timing.delivery = liveAllowed ? 'live' : `buffered (${phoneValidationFailed ? 'phone_validation' : 'fallback_template'})`;
+      const phoneTurn = context.phoneCall?.prepareTurn ? await timing.time('opener', () => context.phoneCall!.prepareTurn!()) : null;
       const turnOptions: StreamTurnOptions = {
         leadBlock: leadTurn?.block || undefined,
         leadBlocksAnswer: leadTurn?.plan.next?.mode === 'block',
         leadAsksNow: !!(leadTurn?.plan.next || leadTurn?.plan.intentOption || leadTurn?.plan.callbackConfirm),
         otpBlock: otpTurnBlock || undefined,
-        // AI Calling (A): a phone call gets the phone rules instead of the (student) voice style block.
-        voiceStyleBlock: context.phoneCall?.instructions || (context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : undefined),
+        // AI Calling (A): a phone call gets the phone rules instead of the (student) voice style block
+        // (plus the words already spoken as the start of this reply, if any).
+        voiceStyleBlock: context.phoneCall
+          ? withSpokenOpener(context.phoneCall.instructions, phoneTurn?.spokenSoFar ?? null, phoneTurn?.callLanguage ?? null)
+          : (context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : undefined),
         skipFaqPrefetch: knowledge.skipFaqPrefetch || undefined,
         identityBlock: identityBlock || undefined,
         languageBlock: this.languageBlockFor(context) || undefined,
@@ -4774,6 +4842,18 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           }
         }
 
+        // AI Calling: after a call-ending tool the only thing left is ONE short goodbye. The tool
+        // result says so, yet the model replied "How can I assist you today?" after do_not_call
+        // (simulated call, 2026-10-17) — so the rule is put where it can't be missed.
+        if (context.phoneCall) {
+          const ok = (name: string) => messages.some((m: any) => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('"success":true') && toolCalls.some((tc: any) => tc.id === m.tool_call_id && tc.function?.name === name));
+          if (ok('do_not_call')) {
+            continuationBlock = `${continuationBlock}\n\nTHE CALL IS ENDING: the caller asked not to be called again and it is recorded. Reply with EXACTLY ONE short sentence in the caller's language: apologise for the call and say goodbye (e.g. "Ji, pareshani ke liye maafi — aapko dobara call nahi aayega. Dhanyavaad!" / "Sorry for the trouble — we won't call you again. Take care!"). No question, nothing else.`.trim();
+          } else if (ok('end_call') || ok('transfer_to_human')) {
+            continuationBlock = `${continuationBlock}\n\nTHE CALL IS ENDING now: reply with ONE short warm sentence in the caller's language (goodbye, or that you are connecting them). No question, no new topic.`.trim();
+          }
+        }
+
         // Stream the continuation response token-by-tokenso the widget can
         // display the answer in real time (instead of waiting for the entire
         // tool-call → second-LLM cycle to finish before showing anything).
@@ -4799,7 +4879,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           context.businessAccountId,
           context.preferredLanguage,
           context.responseLength || 'balanced',
-          [identityBlock, continuationBlock, this.languageBlockFor(context), context.phoneCall?.instructions || (context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : '')].filter(Boolean).join('\n\n'),
+          [identityBlock, continuationBlock, this.languageBlockFor(context), context.phoneCall ? withSpokenOpener(context.phoneCall.instructions, null, context.phoneCall.callLanguage?.() ?? null) : (context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : '')].filter(Boolean).join('\n\n'),
           context.replyLanguage?.promptSource
         )) {
           finalContent += token;
@@ -6176,6 +6256,21 @@ This rule is MANDATORY and overrides ALL other instructions, including any earli
       return finalContext;
     }
 
+    // AI Calling: on a phone call the number is already known — the website's "share your mobile
+    // number" redirect was spoken on a simulated call (2026-10-17). Same rule, phone wording.
+    if (context.phoneCall) {
+      finalContext += `
+
+🚨 WHEN YOU DON'T HAVE THE SPECIFIC INFORMATION (live phone call):
+- Never say "I don't know" / "I don't have information". Say the team will confirm that exact detail and call them back on this same number, then keep the call going with one easy question. Example: "Exact premium hamari team confirm karke aapko isi number par call karegi — kya main aapke parents ke liye health plan note kar loon?"
+- NEVER ask for their mobile / phone / WhatsApp number — you are already talking to them on it.
+`;
+      if (retrievalMode) {
+        finalContext += buildDateTail(bundle.appointmentBookingEnabled || TIME_SENSITIVE_MESSAGE.test(opts.userMessage || ''));
+      }
+      return finalContext;
+    }
+
     const communicationGuidelines = `
 
 🚨 FINAL CRITICAL RULES - MUST FOLLOW 🚨
@@ -6247,7 +6342,9 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
     // question the assistant asked) has nothing to find in the knowledge base.
     const smallTalk = msg.length < 2
       || /^(hi+|hey+|hello+|yo|sup|wassup|bye|goodbye|see you|cya|thanks?|thank you|thx|ty)[\s!.]*$/i.test(msg)
-      || !!smallTalkKind(msg, lastAssistant);
+      || !!smallTalkKind(msg, lastAssistant)
+      || isConversationMeta(msg)
+      || (!!context.phoneCall && (isBareAcknowledgement(msg) || isShortPhoneAnswer(msg)));
     if (mode !== 'retrieval') {
       // Legacy: document-chunk RAG + the FAQ pre-fetch in llamaService. Accounts with no
       // knowledge at all and small talk skip both.

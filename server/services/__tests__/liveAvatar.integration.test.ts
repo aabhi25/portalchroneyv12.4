@@ -577,8 +577,9 @@ async function main() {
       {
         const late = (ms: number, parts: string[]) => async function* () { await sleep(ms); yield* scripted(parts)(); };
         // Fillers are prepared once the opening line is done (never competing with it).
-        await until(() => (v.conversation.fillerAudio?.size ?? 0) >= 3, 4000);
-        expect((v.conversation.fillerAudio?.size ?? 0) >= 3, "filler audio prepared after the intro", v.conversation.fillerAudio?.size);
+        const lookupCount = (await import("../voice/fillers")).fillerPhrasesFor("lookup", "en", null).length;
+        await until(() => (v.conversation.fillerAudio?.size ?? 0) >= lookupCount, 6000);
+        expect((v.conversation.fillerAudio?.size ?? 0) === lookupCount, "filler audio prepared after the intro (only the \"let me check\" kind a video call uses)", v.conversation.fillerAudio?.size);
         const doneBefore = v.client.ofType("ai_done").length;
         const ttsBefore = v.ttsCalls.length;
         v.streams.push(late(1700, ["Weekend batches run on Saturday and Sunday."]));
@@ -586,7 +587,7 @@ async function main() {
         await until(() => v.client.ofType("ai_done").length > doneBefore, 6000);
         const rid = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
         const deltas = v.client.ofType("answer_delta").filter((d) => d.responseId === rid);
-        const fillers = ["Let me check that.", "Sure, one moment.", "Okay, let me see."];
+        const fillers = (await import("../voice/fillers")).fillerPhrasesFor("lookup", "en", null);
         expect(deltas[0]?.display === "" && fillers.includes(deltas[0]?.speech) && /Weekend batches/.test(deltas[1]?.display || ""), "late answer: filler spoken first (no visible text), then the answer", deltas.map((d) => [d.display, d.speech]));
         const newTts = v.ttsCalls.slice(ttsBefore);
         expect(!newTts.some((t) => fillers.includes(t)) && newTts.some((t) => /Weekend batches/.test(t)), "filler audio came from the per-call cache (no TTS call for it)", newTts);

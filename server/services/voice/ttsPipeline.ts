@@ -20,6 +20,9 @@ export type TtsSynthesize = (
   text: string,
   signal: AbortSignal,
   onChunk: (pcm: Buffer) => void,
+  /** What was said just before this sentence in the same answer (filler included), so a provider
+   * that supports it (ElevenLabs previous_text) continues the same intonation. */
+  context?: { previousText?: string; nextText?: string },
 ) => Promise<void>;
 
 export interface TtsProvider {
@@ -142,6 +145,12 @@ export class SentenceTtsPipeline {
       holdBytes: 0, flowing: true,
     });
     this.pump();
+  }
+
+  /** The answer's text before this item (last ~300 chars), for provider-side intonation continuity. */
+  private previousTextFor(item: PipelineItem): string | undefined {
+    const before = this.items.slice(0, item.index).map((it) => it.text).filter((t) => t && t !== '(prerendered)').join(' ').trim();
+    return before ? before.slice(-300) : undefined;
   }
 
   /** No more sentences will be enqueued. */
@@ -268,7 +277,7 @@ export class SentenceTtsPipeline {
           attempts.forEach((c, i) => { if (i !== k) { try { c.abort(); } catch { /* ignore */ } } });
         }
         if (winner === k) this.emit(item, chunk);
-      });
+      }, { previousText: this.previousTextFor(item) });
       running.set(k, run.then(() => ({ k, ok: true }), (error) => ({ k, ok: false, error })));
     };
     const maxAttempts = provider.hedgeAfterMs != null ? Math.max(2, provider.hedgeMaxAttempts ?? 2) : 1;

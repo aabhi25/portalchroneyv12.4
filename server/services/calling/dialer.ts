@@ -306,6 +306,7 @@ async function processClaimed(callId: string, now: Date, report: TickReport): Pr
       timeLimitSec: settings.maxCallMinutes * 60,
     });
     const callerId = providerId === "exotel" ? settings.exotelCallerId : providerId === "plivo" ? settings.plivoNumber : null;
+    void prefetchCallVoiceGender(call.businessAccountId);
     await db.update(aiCalls).set({ providerCallSid: result.providerCallSid, callerId, updatedAt: new Date() }).where(eq(aiCalls.id, call.id));
     // Only move forward from 'dialing' (a fast webhook / media start may already have advanced it).
     await db.update(aiCalls).set({ status: result.status as CallStatus }).where(and(eq(aiCalls.id, call.id), eq(aiCalls.status, "dialing")));
@@ -315,6 +316,16 @@ async function processClaimed(callId: string, now: Date, report: TickReport): Pr
     console.error(`[Calling] placing call ${call.id} failed: ${err?.message || err}`);
     return fail(call, err?.message || "The call could not be placed.", permanent, report);
   }
+}
+
+/** While the phone rings: look up the business voice's gender, so the answered call already knows it. */
+async function prefetchCallVoiceGender(businessAccountId: string): Promise<void> {
+  try {
+    const { storage } = await import("../../storage");
+    const [ws, biz] = await Promise.all([storage.getWidgetSettings(businessAccountId), storage.getBusinessAccount(businessAccountId)]);
+    const { prefetchVoiceGender } = await import("../chatContext/assistantGender");
+    await prefetchVoiceGender(ws?.voiceSelection || "shimmer", biz?.elevenlabsApiKey);
+  } catch { /* best effort */ }
 }
 
 /** One dialer pass. Exported for tests (two concurrent passes must never dial the same call twice). */

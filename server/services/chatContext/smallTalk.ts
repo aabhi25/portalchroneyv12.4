@@ -100,3 +100,42 @@ export function smallTalkKind(message: string, lastAssistantMessage?: string | n
 export function isSmallTalk(message: string, lastAssistantMessage?: string | null): boolean {
   return smallTalkKind(message, lastAssistantMessage) !== null;
 }
+
+/**
+ * A question or request about the conversation itself, not the business: "who's speaking?",
+ * "can you hear me?", "tell me in English", "say that again", "kaun bol raha hai?". Nothing in
+ * the knowledge base answers these, so they skip the search too (voice and phone calls ask
+ * them a lot, and the search cost up to 1.6 s on a live call).
+ */
+const CONVERSATION_META_RE = new RegExp([
+  String.raw`^(hello+[\s,.!?]*)?(who('?s| is) (this|speaking|calling|on the (line|phone))|who are you|who('?s| is) there)\b`,
+  String.raw`\b(can|could|do) you (hear|listen to|understand) me\b`,
+  String.raw`\bare you (there|still there|listening|a (bot|robot|human|real person)|real)\b`,
+  String.raw`\b(what'?s|what is) your name\b|\bdo you know my name\b`,
+  String.raw`\b(tell|speak|talk|say|explain|reply|answer)( (me|it|this|that|this to me|it to me))? in (english|hindi|hinglish)\b`,
+  String.raw`\b(in (english|hindi)( please)?)\??$`,
+  String.raw`\b(say|repeat) (that|it|this)( again)?\b|\bcome again\b|\bpardon\b|\bsorry,? (what|i didn'?t (get|catch) that)\b`,
+  String.raw`\b(kaun|kon) (bol|baat kar) (raha|rahi|rahe) (hai|hain|ho)\b|\baap kaun\b`,
+  String.raw`\b(english|hindi) (mein|me) (bolo|boliye|bataiye|batao|baat karo|baat kariye)\b`,
+  String.raw`\b(phir se|dobara|fir se|ek baar aur) (bolo|boliye|bataiye|batao|bolna|batana)\b|\bsamajh nahi aaya\b|\bsunai nahi (diya|de raha|de rahi)\b`,
+  String.raw`\b(awaaz|aawaz|avaaz) (aa rahi|aa raha|sunai)\b|\b(aapka|tumhara) naam\b`,
+  String.raw`कौन (बोल|बात कर) (रहा|रही|रहे)|आप कौन|आपका नाम|(इंग्लिश|अंग्रेज़ी|अंग्रेजी|हिंदी) (में|मे) (बोलो|बोलिए|बताइए|बताओ)|(फिर से|दोबारा|एक बार और) (बोलो|बोलिए|बताइए|बताओ|बोलना|बताना)|समझ नहीं आया|आवाज़? (आ रही|सुनाई)`,
+].join("|"), "i");
+
+export function isConversationMeta(message: string): boolean {
+  const text = String(message || "").trim().replace(/[’']/g, "'");
+  if (!text || text.length > 120) return false;
+  return CONVERSATION_META_RE.test(text);
+}
+
+/**
+ * A bare yes / okay / go-ahead / thanks, with nothing to look up: "Sure.", "Yes, go ahead.",
+ * "Yeah, please tell me.", "Okay, thank you.", "हाँ, बताइए।", "theek hai", "ji boliye". On a phone
+ * call these skip the knowledge search (up to 1.4 s on simulated calls, 2026-10-17) — the reply
+ * moves the call on from what is already known. Anything naming a topic is not bare.
+ */
+const BARE_ACK_WORD = new RegExp(String.raw`^(yes|yeah|yep|yup|ya|sure|ok|okay|okey|alright|all|right|fine|cool|great|good|go|ahead|please|tell|me|carry|on|continue|thanks|thank|you|so|much|that|sounds|nice|perfect|le|lo|lijiye|haan|han|ha|hanji|ji|jee|haanji|achha|acha|accha|theek|thik|hai|hain|bataiye|batao|bataie|boliye|bolo|bolie|kahiye|zaroor|jarur|bilkul|shukriya|dhanyavaad|dhanyawad|हाँ|हां|जी|अच्छा|ठीक|है|बताइए|बताइये|बताओ|बोलिए|बोलो|कहिए|ज़रूर|जरूर|बिल्कुल|शुक्रिया|धन्यवाद|ओके|हैं|ले|लो|लीजिए)$`, "i");
+export function isBareAcknowledgement(message: string): boolean {
+  const words = String(message || "").toLowerCase().replace(/[’']/g, "").split(/[\s,.!?।-]+/).filter(Boolean);
+  return words.length > 0 && words.length <= 6 && words.every((w) => BARE_ACK_WORD.test(w));
+}

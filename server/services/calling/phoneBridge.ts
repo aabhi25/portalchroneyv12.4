@@ -9,9 +9,9 @@
  * gets the business's whole brain — knowledge, lead capture, identity, reply-language
  * policy, voice and gender, barge-in — without a second implementation.
  *
- * Fillers ("Let me check that") stay OFF on the phone: the service only plays them on video
- * calls, where a cached clip exists; on a phone line an uncached filler would arrive later
- * than the answer itself.
+ * Before a late answer the service speaks a short reaction ("Ji…", pre-recorded per call) and,
+ * for questions, a contextual opener written live from the caller's words, both timed so the
+ * answer follows without a gap (realtimeVoiceService + voice/fillers.ts + voice/phoneOpener.ts).
  */
 import { EventEmitter } from "events";
 import type { ChatContext } from "../../chatService";

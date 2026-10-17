@@ -44,8 +44,21 @@ const LOG = "[Calling]";
 export const LEAD_MS = 300;
 const PUMP_MS = 20;
 const GUARD_MS = 250;
-/** Outbound: wait this long for the callee's "hello" before speaking anyway. */
+/** Outbound: wait this long for the callee's "hello" before speaking anyway (never while they talk). */
 export const HELLO_WAIT_MS = 2000;
+/**
+ * Outbound: the callee's "hello" is also detected right here from the sound level, because
+ * speech-to-text may still be connecting when they answer: this much voice, then this much
+ * quiet → they finished their hello → the opening line starts.
+ */
+export const HELLO_MIN_VOICED_MS = 200;
+// 0.3 s took a breath inside "Hello, I am calling from…" for the end (live call 2026-10-16).
+export const HELLO_END_QUIET_MS = 600;
+/** PCM16 level (RMS) that counts as speech on a phone line (line noise is ~50–300). */
+export const HELLO_SPEECH_RMS = 700;
+/** A plain "hello" / "haan ji" heard this soon after the opening started is not a question. */
+const GREETING_ECHO_MS = 6000;
+const GREETING_ONLY = /^(?:(?:hello+|helo+|hi+|hey+|haa?n+|haan ji|han ji|ha|ji|yes|yeah|yup|ok(?:ay)?|bolo|boliye|bolie|ai|sir|madam|ma'?am|हेलो|हैलो|हाँ|हां|जी|बोलिए|बोलो|हाय)[\s,.!?।-]*)+$/i;
 /** Outbound: uninterrupted speech this long at the start = an answering-machine greeting. */
 export const LONG_GREETING_MS = 7000;
 /** Outbound: answering-machine phrases are checked on this many caller transcripts. */
@@ -178,6 +191,13 @@ export class CallMediaSession {
   private helloTimer: unknown = null;
   private openingSaid = false;
   private screenedTranscripts = 0;
+  // local hello detection (outbound)
+  private helloVoicedMs = 0;
+  private helloQuietMs = 0;
+  private helloHeard = false;
+  /** Clock time of the last loud (voiced) caller audio before the opening. */
+  private lastVoicedAt: number | null = null;
+  private openingAt = 0;
   private userSpeakingSince: number | null = null;
   private lastUserActivity = 0;
   private aiSpeechEndsAt = 0;
@@ -375,7 +395,9 @@ export class CallMediaSession {
     if (!this.started || !this.inResampler) return;
     const payload = msg?.media?.payload;
     if (typeof payload !== "string" || !payload) return;
-    const pcm = this.inResampler.processBuffer(Buffer.from(payload, "base64"));
+    const raw = Buffer.from(payload, "base64");
+    this.trackHello(raw);
+    const pcm = this.inResampler.processBuffer(raw);
     if (!pcm.length) return;
     if (this.engine && this.engineReady) {
       this.engine.sendCallerAudio(pcm);
@@ -386,6 +408,34 @@ export class CallMediaSession {
     while (this.preReadyBytes > PRE_READY_MAX_BYTES && this.preReady.length > 1) {
       this.preReadyBytes -= this.preReady.shift()!.length;
     }
+  }
+
+  /** Outbound, before the opening: the callee's voice is on the line right now (sound level). */
+  private callerTalkingNow(): boolean {
+    return !this.helloHeard && this.lastVoicedAt !== null && this.clock.now() - this.lastVoicedAt < HELLO_END_QUIET_MS
+      && this.helloQuietMs < HELLO_END_QUIET_MS;
+  }
+
+  /** Outbound: notice the callee's "hello" from the sound level (see HELLO_SPEECH_RMS). */
+  private trackHello(pcm: Buffer): void {
+    if (!this.isOutbound || this.openingSaid || this.helloHeard || pcm.length < 2) return;
+    const samples = Math.floor(pcm.length / 2);
+    let sum = 0;
+    for (let i = 0; i < samples; i++) { const v = pcm.readInt16LE(i * 2); sum += v * v; }
+    const rms = Math.sqrt(sum / samples);
+    const ms = pcmDurationMs(pcm.length, this.streamRate);
+    if (rms >= HELLO_SPEECH_RMS) {
+      if (this.helloVoicedMs === 0) this.markStart("caller_speech");
+      this.lastVoicedAt = this.clock.now();
+      this.helloVoicedMs += ms;
+      this.helloQuietMs = 0;
+      return;
+    }
+    if (this.helloVoicedMs < HELLO_MIN_VOICED_MS) return;
+    this.helloQuietMs += ms;
+    if (this.helloQuietMs < HELLO_END_QUIET_MS) return;
+    this.helloHeard = true;
+    if (this.engineReady && (this.phase === "awaiting_hello" || this.phase === "starting")) void this.sayOpening();
   }
 
   private handleMarkEcho(name: string): void {
@@ -490,8 +540,19 @@ export class CallMediaSession {
   private openingText = "";
   private outboundCallId: string | null = null;
 
+  /** Call-start timing (ms after the call was answered), logged once per call. */
+  private startTiming: Record<string, number> = {};
+  private markStart(event: string): void {
+    if (this.startTiming[event] !== undefined || !this.answeredAt) return;
+    this.startTiming[event] = this.clock.now() - this.answeredAt;
+    if (event === "opening_audio") {
+      console.log(`[CallTiming] call ${this.callLabel()} start: ${Object.entries(this.startTiming).map(([k, v]) => `${k} +${v}ms`).join(" | ")}`);
+    }
+  }
+
   private onEngineReady(conversationId: string): void {
     if (this.finalized) return;
+    this.markStart("voice_ready");
     this.engineReady = true;
     this.conversationId = conversationId;
     if (this.call) {
@@ -500,13 +561,24 @@ export class CallMediaSession {
     for (const pcm of this.preReady) this.engine?.sendCallerAudio(pcm);
     this.preReady = [];
     this.preReadyBytes = 0;
-    if (this.isOutbound) {
+    if (this.isOutbound && this.helloHeard) {
+      // They already said hello while the voice was getting ready.
+      void this.sayOpening();
+    } else if (this.isOutbound) {
       // Let the callee say "hello" first (and give an answering machine a chance to show itself).
       this.phase = "awaiting_hello";
-      this.helloTimer = this.clock.setTimeout(() => {
+      const waitForQuiet = () => {
         this.helloTimer = null;
-        if (this.phase === "awaiting_hello" && this.userSpeakingSince === null) void this.sayOpening();
-      }, HELLO_WAIT_MS);
+        if (this.phase !== "awaiting_hello") return;
+        // Still talking (speech-to-text reports that late, the sound level doesn't): never start
+        // the opening over them — check again shortly; trackHello starts it when they finish.
+        if (this.userSpeakingSince !== null || this.callerTalkingNow()) {
+          this.helloTimer = this.clock.setTimeout(waitForQuiet, 250);
+          return;
+        }
+        void this.sayOpening();
+      };
+      this.helloTimer = this.clock.setTimeout(waitForQuiet, HELLO_WAIT_MS);
     } else {
       void this.sayOpening();
     }
@@ -514,7 +586,9 @@ export class CallMediaSession {
 
   private async sayOpening(): Promise<void> {
     if (this.openingSaid || this.finalized || !this.engine) return;
+    this.markStart(this.helloHeard || this.userSpeakingSince !== null || this.screenedTranscripts > 0 ? "opening_after_hello" : "opening_after_wait");
     this.openingSaid = true;
+    this.openingAt = this.clock.now();
     this.phase = "talking";
     if (this.helloTimer) { this.clock.clearTimeout(this.helloTimer); this.helloTimer = null; }
     const custom = this.call?.direction === "inbound" ? !!this.settings?.inboundGreeting?.trim() : !!this.settings?.openingLine?.trim();
@@ -526,6 +600,7 @@ export class CallMediaSession {
 
   private onAnswerAudio(pcm24k: Buffer): void {
     if (this.finalized || !this.outResampler || !this.outQueue) return;
+    if (this.openingSaid) this.markStart("opening_audio");
     const pcm = this.outResampler.processBuffer(pcm24k);
     this.outQueue.pushAudio(pcm);
     this.ensurePump();
@@ -565,6 +640,7 @@ export class CallMediaSession {
 
   private onSpeech(event: "started" | "stopped"): void {
     if (event === "started") {
+      this.markStart("caller_speech");
       this.userSpeakingSince = this.clock.now();
       this.markUserActive();
     } else {
@@ -594,6 +670,12 @@ export class CallMediaSession {
     if (this.phase === "awaiting_hello") {
       // Their "hello?" — answer it with the opening line, not with a chat reply.
       void this.sayOpening();
+      return "drop";
+    }
+    // Their "hello?" arriving just after the opening started is not a new question (it used to
+    // get a second greeting: "Hello! I'm an AI assistant…" right after the opening line).
+    if (this.openingSaid && this.clock.now() - this.openingAt < GREETING_ECHO_MS && GREETING_ONLY.test(text.trim())) {
+      console.log(`${LOG} greeting during the opening ignored on call ${this.callLabel()}`);
       return "drop";
     }
     return "continue";

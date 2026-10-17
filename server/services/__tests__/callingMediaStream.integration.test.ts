@@ -315,6 +315,56 @@ async function main() {
     expect(e.closed, "voice session closed at the end of the call");
   }
 
+  // ═══ 3b. hello heard from the sound level (speech-to-text still connecting) ════
+  {
+    const call = await mkCall();
+    const h = harness("simulator_outbound", call.id);
+    await h.send(START());
+    const e = h.engine();
+    const chunk = (loud: boolean) => ({ event: "media", stream_sid: "MZtest", media: { payload: (loud ? pcmTone(1600, 16000) : Buffer.alloc(3200)).toString("base64") } });
+    for (let i = 0; i < 3; i++) await h.send(chunk(true));   // 300 ms "Hello?"
+    for (let i = 0; i < 7; i++) await h.send(chunk(false));  // 700 ms quiet
+    expect(e.said.length === 0, "voice not ready yet: nothing said");
+    e.ready();
+    await flush();
+    expect(e.said.length === 1 && /^Hi Rahul/.test(e.said[0].text), "hello heard from the sound level before the voice was ready → opening as soon as it is (no 1.5 s wait)", e.said);
+    expect(e.input.screenTranscript("Hello, AI.") === "drop" && e.input.screenTranscript("haan ji") === "drop", "their 'hello' transcribed after the opening started is not answered again");
+    expect(e.input.screenTranscript("Hello, what is the price?") === "continue", "a real question still goes to the brain");
+    h.ws.remoteClose();
+    await h.session.idle();
+
+    const call2 = await mkCall();
+    const h2 = harness("simulator_outbound", call2.id);
+    await h2.send(START());
+    const e2 = h2.engine();
+    e2.ready();
+    for (let i = 0; i < 2; i++) await h2.send(chunk(true));
+    for (let i = 0; i < 5; i++) await h2.send(chunk(false));
+    expect(e2.said.length === 0, "a breath (500 ms) is not the end of their hello → still waiting");
+    await h2.send(chunk(false));
+    expect(e2.said.length === 1, "hello finished (voice then 600 ms quiet) → opening line", e2.said.length);
+    h2.ws.remoteClose();
+    await h2.session.idle();
+
+    // Live call 2026-10-16: they started a long sentence at 1.3 s and the opening began at 1.6 s,
+    // over them. The 2 s wait now never fires while their voice is on the line.
+    const call3 = await mkCall();
+    const h3 = harness("simulator_outbound", call3.id);
+    await h3.send(START());
+    const e3 = h3.engine();
+    e3.ready();
+    for (let t = 0; t < ms.HELLO_WAIT_MS + 600; t += 100) {  // "Hello, I am calling from the business…"
+      await h3.send(chunk(true));
+      await h3.clock.advance(100, h3.settle);
+    }
+    expect(e3.said.length === 0, "the hello wait ends while they are still talking → no opening over them", e3.said.length);
+    for (let i = 0; i < 7; i++) await h3.send(chunk(false));
+    await h3.clock.advance(300, h3.settle);
+    expect(e3.said.length === 1 && /^Hi Rahul/.test(e3.said[0].text), "…the opening starts once they finish", e3.said.length);
+    h3.ws.remoteClose();
+    await h3.session.idle();
+  }
+
   // ═══ 4. callee says hello → opening; end_call tool → goodbye → hang up ══════
   {
     const call = await mkCall();
