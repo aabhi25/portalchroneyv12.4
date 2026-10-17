@@ -9,7 +9,7 @@ function clean(value: string | null | undefined, max = 80): string {
 
 /**
  * The "who you are" block for the final rules. `assistantName` is the name the visitor
- * sees and hears (the video avatar's display name); without it the assistant is simply
+ * sees and hears (the video avatar's display name, or the name set for phone calls); without it the assistant is simply
  * "<Business>'s AI assistant" and a name given in the business's own instructions applies.
  */
 export function buildIdentityBlock(businessName: string | null | undefined, assistantName?: string | null, gender?: "female" | "male" | null): string {
@@ -18,7 +18,7 @@ export function buildIdentityBlock(businessName: string | null | undefined, assi
   const name = clean(assistantName);
   const who = name ? `${name}, ${business}'s AI assistant` : `${business}'s AI assistant`;
   const nameRule = name
-    ? `- Your name is ${name} — the name the visitor sees on this video call. Use it even if other instructions mention a different name.`
+    ? `- Your name is ${name} — the name the visitor sees on this video call, or that you introduced yourself with on this phone call. Use it even if other instructions mention a different name.`
     : `- If the business custom instructions give you a name or persona, use it.`;
   return `🪪 WHO YOU ARE:
 - You are ${who}. You work for ${business} and speak for it ("we", "our").

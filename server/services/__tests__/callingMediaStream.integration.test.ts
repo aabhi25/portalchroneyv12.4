@@ -315,6 +315,48 @@ async function main() {
     expect(e.closed, "voice session closed at the end of the call");
   }
 
+  // ═══ 3a. background sound: fills the silences, sits under the answer, marks still echo ═══
+  {
+    const { invalidateSettingsCache } = await import("../calling/settingsService");
+    await db.update(schema.aiCallingSettings).set({ backgroundSound: "call_centre", assistantName: "Anika", speakingSpeed: 85 } as any).where(eq(schema.aiCallingSettings.businessAccountId, BIZ));
+    invalidateSettingsCache(BIZ);
+    const call = await mkCall();
+    const h = harness("simulator_outbound", call.id);
+    await h.send(START());
+    const e = h.engine();
+    expect(e.input.assistantName === "Anika" && e.input.speakingSpeed === 85, "the assistant's name and speaking speed reach the voice session", { n: e.input.assistantName, s: e.input.speakingSpeed });
+    expect(/your name is Anika/.test(e.input.chat.instructions), "the phone rules carry the name");
+    e.ready("conv-ambience");
+    await flush();
+    await h.clock.advance(1000, h.settle);
+    const quietBytes = h.ws.media().reduce((n, m) => n + Buffer.from(m.media.payload, "base64").length, 0);
+    expect(quietBytes >= 32000 * 0.9 && quietBytes <= 32000 + 2 * 3200, "before anyone speaks, the background sound streams in real time (~1 s at 16 kHz)", quietBytes);
+    const quietPayload = Buffer.from(h.ws.media()[1].media.payload, "base64");
+    let level = 0; for (let i = 0; i < quietPayload.length; i += 2) level = Math.max(level, Math.abs(quietPayload.readInt16LE(i)));
+    expect(level > 0 && level < 3000, "…and it is quiet", level);
+    await h.clock.advance(ms.HELLO_WAIT_MS, h.settle);
+    expect(/^Hi Rahul, this is Anika, an AI assistant from Acme Homes/.test(e.said[0]?.text || ""), "the named opening line", e.said[0]?.text);
+    const beforeLine = h.ws.media().length;
+    e.finishLine("line_amb", 500);
+    await h.clock.advance(1500, h.settle);
+    const sizes = h.ws.media().map((m) => Buffer.from(m.media.payload, "base64").length);
+    expect(sizes.every((n) => audio.isValidOutgoingChunk(n)), "background chunks obey Exotel chunk rules too");
+    expect(h.ws.marks().length === 1 && h.ws.media().length > beforeLine, "the answer is sent (with its mark) while the sound goes on");
+    await h.echoMarks();
+    expect(e.completes.includes("line_amb"), "mark echo still completes the answer");
+    const sentAt3s = h.ws.media().reduce((n, m) => n + Buffer.from(m.media.payload, "base64").length, 0);
+    const elapsedMs = 1000 + ms.HELLO_WAIT_MS + 1500;
+    expect(Math.abs(sentAt3s / 32 - elapsedMs) <= 450, "audio sent stays close to real time (no pile-up)", { sentMs: sentAt3s / 32, elapsedMs });
+    await h.send({ event: "stop", stream_sid: "MZtest", stop: { call_sid: "CAtest", account_sid: "X", reason: "callended" } });
+    h.ws.remoteClose();
+    await h.session.idle();
+    const after = h.ws.media().length;
+    await h.clock.advance(1000, h.settle);
+    expect(h.ws.media().length === after, "nothing more is sent after the call ends");
+    await db.update(schema.aiCallingSettings).set({ backgroundSound: "none", assistantName: null, speakingSpeed: 90 } as any).where(eq(schema.aiCallingSettings.businessAccountId, BIZ));
+    invalidateSettingsCache(BIZ);
+  }
+
   // ═══ 3b. hello heard from the sound level (speech-to-text still connecting) ════
   {
     const call = await mkCall();

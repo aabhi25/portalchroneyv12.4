@@ -10,6 +10,7 @@ import { journeyOrchestrator } from './services/journeyOrchestrator';
 import { journeyService } from './services/journeyService';
 import { Readable } from 'stream';
 import { isElevenLabsVoice, getElevenLabsVoiceId, synthesizeSpeechStreaming } from './services/elevenlabsService';
+import { hinglishToDevanagari, isRomanHinglish } from './services/voice/hinglishToDevanagari';
 import { createVoiceDisplayFallback, formatVoiceTranscript, type VoiceDiagramCandidate } from './services/voiceFormatterService';
 import { markdownToSpeech } from './services/voice/speechText';
 import { SentenceStreamSplitter, splitIntoSpeechSegments } from './services/voice/sentenceSplitter';
@@ -35,7 +36,7 @@ import { colloquialHindi, englishFromDevanagari } from './services/voice/colloqu
 import { aiPhoneOpener, dropEchoedClause, firstWord } from './services/voice/phoneOpener';
 import { isBareAcknowledgement } from './services/chatContext/smallTalk';
 import { PhoneAnswerShaper } from './services/voice/phoneAnswerShaper';
-import { isClosingTurn } from './services/calling/phonePrompt';
+import { soundsUnfinished, declinedToTalk, isClosingTurn, isPromiseOnly, isUnsureCaller, phoneTurnHints, questionsIn, repeatsAskedQuestion, stripContinuationStart } from './services/calling/phonePrompt';
 import { createOpenAiTtsProvider, OPENAI_TTS_MODEL, type OpenAiSpeechClient } from './services/voice/openaiTts';
 import type { AudioRoute, AvatarEndReason } from './services/avatar/types';
 import { getLanguagePolicy, policyFromSettings, type LanguagePolicy } from './services/language/languagePolicy';
@@ -186,6 +187,10 @@ export interface PhoneCallVoiceOptions {
   chat: NonNullable<ChatContext['phoneCall']>;
   /** Lead calls: the lead already exists, so the website lead questionnaire is skipped. */
   skipLeadTraining?: boolean;
+  /** The AI's name on this call (AI Calling settings); null = "<Business>'s AI assistant". */
+  assistantName?: string | null;
+  /** Speaking speed on this call, percent of normal (AI Calling settings; 100 = the voice as is). */
+  speakingSpeed?: number;
   /** Every final transcript, before turn filtering. 'drop' swallows it (answering-machine screening, waiting for "hello"). */
   screenTranscript?: (text: string) => 'continue' | 'drop';
   /** Raw VAD events (silence / answering-machine guards). */
@@ -198,6 +203,20 @@ export interface VoiceConnectionOptions {
   phone?: PhoneCallVoiceOptions;
   /** The visitor's browser language ("en-IN") — starting point when the first sentences are unclear. */
   browserLanguage?: string | null;
+}
+
+/**
+ * Phone calls: no pre-recorded reactions ("अच्छा…", "Okay…") or live openers before the answer
+ * (PHONE_FILLERS=1 brings them back). A clip made apart from the sentence after it has its own
+ * tone, and the caller hears the seam (live call 2026-10-17: "fillers sound very unnatural").
+ * The reply's own first words ("जी," / "Right,") are spoken in one breath with the answer, and
+ * the short pause before it sits under the call's background sound.
+ */
+/** A greeting / call-centre line is never a language switch ("Hello, this is", "Hello, can I help you?"). */
+const GREETING_LIKE = /^\s*(hello|hi|hey|hallo|helo)\b|can i help you|may i help you|this is\b/i;
+
+function phoneFillersOn(): boolean {
+  return process.env.PHONE_FILLERS === '1';
 }
 
 const PHONE_TRANSCRIPTION_PROMPT =
@@ -440,8 +459,18 @@ interface VoiceConversation {
   lastFillerLang?: 'en' | 'hi';
   /** Phone: the call's language has been set by the caller's own words (not just the greeting). */
   callLangFromCaller?: boolean;
+  /** Phone: the caller is speaking right now (VAD). */
+  phoneCallerSpeaking?: boolean;
+  /** Phone: the reply being held after an unfinished-sounding turn (its audio waits). */
+  phoneHeldResponseId?: string;
+  /** Phone: the caller spoke during that hold and their transcript is not handled yet. */
+  phoneSpeechDuringHold?: boolean;
+  /** Phone: clear sentences in a row in the OTHER language (the call switches at 2). */
+  phoneLangSwitchVotes?: number;
   /** Phone: this call's last contextual opener (the next one takes a different shape). */
   lastOpenerText?: string;
+  /** Phone: questions the AI asked on this call, newest last (never asked again — phoneTurnHints). */
+  phoneAskedQuestions?: string[];
   /** Phone: running estimates (ms) of the opener model's time and the answer's first-token time. */
   phoneOpenerMs?: number;
   phoneTtftMs?: number;
@@ -506,7 +535,14 @@ const PHONE_PENDING_AUDIO_MAX_BYTES = 24000 * 2 * 4;
  * Phone calls: silence that ends the caller's turn. 600 ms was tried (2026-10-16) and cut callers
  * off mid-question ("क्या तुम…") — the AI felt rushed; back to 800 ms like web voice.
  */
-const PHONE_END_OF_TURN_SILENCE_MS = 800;
+const PHONE_END_OF_TURN_SILENCE_MS = 450;
+/**
+ * ...and 450 ms after a turn that sounds unfinished ("मुझे…", "और…"), the reply — prepared
+ * meanwhile — waits this much more silence before it plays (≈ the old 800 ms + a margin). If they
+ * speak again it is dropped and their next words are answered (2026-10-17: 800 ms of silence
+ * before every reply was the largest fixed delay on a call).
+ */
+const PHONE_UNFINISHED_HOLD_MS = 700;
 
 /**
  * Phone calls: "I don't have specific details about that." / "मुझे इसके बारे में सटीक जानकारी नहीं
@@ -921,6 +957,8 @@ export class RealtimeVoiceService {
             try { conversation.openaiWs?.close(); } catch { /* already closed */ }
             return;
           }
+          // The opening line may already be playing: give speech-to-text its words.
+          this.updatePhoneTranscriptionContext(conversation);
           this.flushPendingInputAudio(conversation);
           console.log('[RealtimeVoice] Connection established:', conversationId);
           console.log(`[VoiceTiming] session start (phone): ${startMarks.join(' | ')}`);
@@ -1091,13 +1129,15 @@ export class RealtimeVoiceService {
    */
   private async prewarmFillers(conversation: VoiceConversation): Promise<void> {
     if (!(conversation.avatar || conversation.phone) || conversation.fillerAudio) return;
+    if (conversation.phone && !phoneFillersOn()) return;
     const cache = new Map<string, Buffer>();
     conversation.fillerAudio = cache;
     // Gendered Hindi phrases ("main dekhti hoon") need the voice's gender, looked up in the background.
     if (conversation.voiceGenderReady) {
       await Promise.race([conversation.voiceGenderReady, new Promise((r) => setTimeout(r, 4000))]);
     }
-    const voiceKey = conversation.elevenlabsVoiceId ? `el:${conversation.elevenlabsVoiceId}` : `oa:${conversation.selectedVoice || 'shimmer'}`;
+    // The speaking speed is part of the clip: a cached 100% "Achha…" would sound rushed at 90%.
+    const voiceKey = `${conversation.elevenlabsVoiceId ? `el:${conversation.elevenlabsVoiceId}` : `oa:${conversation.selectedVoice || 'shimmer'}`}@${this.phoneSpeed(conversation)}`;
     const policy = this.voiceLanguagePolicy(conversation);
     const sel = String(conversation.selectedLanguage || 'auto').toLowerCase();
     // A restricted business only ever hears fillers in its own languages (none for e.g. Tamil-only).
@@ -1309,6 +1349,7 @@ export class RealtimeVoiceService {
     conversation.answerAudioBytes = 0;
     conversation.answerPlaybackEndsAt = undefined;
     conversation.lastAssistantText = line;
+    this.updatePhoneTranscriptionContext(conversation);
     const abandoned = () =>
       conversation.clientWs.readyState !== WebSocket.OPEN ||
       conversation.cancelledResponseIds.has(responseId) ||
@@ -1954,6 +1995,12 @@ export class RealtimeVoiceService {
    */
   private turnDetectionConfig(conversation: VoiceConversation): Record<string, unknown> | null {
     if (conversation.inputMode === 'hold_to_talk') return null;
+    // Phone calls, opt-in (PHONE_SEMANTIC_VAD=1): semantic end-of-turn. Tried on a live call
+    // (2026-10-17): no clear gain (~0.3 s) and a "Thank you. Are you there?" went unanswered
+    // for ~10 s, so silence-based detection stays the default.
+    if (conversation.phone && process.env.PHONE_SEMANTIC_VAD === '1') {
+      return { type: 'semantic_vad', eagerness: 'high', create_response: false, interrupt_response: false };
+    }
     return {
       type: 'server_vad',
       threshold: 0.8,
@@ -2762,6 +2809,11 @@ export class RealtimeVoiceService {
           // to the detector. An in-flight answer is only ducked here; it is
           // cancelled when the transcript confirms a real interruption
           // (handleFinalTranscript), and un-ducked if it doesn't.
+          if (conversation.phone) {
+            conversation.phoneCallerSpeaking = true;
+            // Words spoken during a hold must be transcribed and judged before the reply may play.
+            if (conversation.phoneHeldResponseId) conversation.phoneSpeechDuringHold = true;
+          }
           this.beginPossibleInterruption(conversation, event.item_id);
           this.sendToClient(conversation.clientWs, { type: 'speech_started' });
           conversation.phone?.onSpeech?.('started'); // AI Calling (A)
@@ -2770,6 +2822,7 @@ export class RealtimeVoiceService {
         case 'input_audio_buffer.speech_stopped':
           console.log('[RealtimeVoice] User stopped speaking');
           conversation.lastSpeechStoppedAt = Date.now();
+          if (conversation.phone) conversation.phoneCallerSpeaking = false;
           this.recordSpeechTiming(conversation, event.item_id, { endMs: event.audio_end_ms });
           this.armFalseInterruptionTimer(conversation, event.item_id);
           conversation.phone?.onSpeech?.('stopped'); // AI Calling (A)
@@ -2785,6 +2838,7 @@ export class RealtimeVoiceService {
           break;
 
         case 'conversation.item.input_audio_transcription.failed': {
+          conversation.phoneSpeechDuringHold = false;
           console.warn('[RealtimeVoice] Transcription failed:', event.error?.message || event.error);
           this.takeSpeechTiming(conversation, event.item_id);
           const held = this.takeManualTurn(conversation);
@@ -2798,6 +2852,9 @@ export class RealtimeVoiceService {
           // User's speech transcribed
           const userTranscript = String(event.transcript || '');
           console.log('[RealtimeVoice] User transcript:', userTranscript);
+          // This transcript settles whatever the caller said during a held reply (answered, ignored
+          // or screened — handled synchronously below, before the hold's next check).
+          conversation.phoneSpeechDuringHold = false;
           const timing = this.takeSpeechTiming(conversation, event.item_id);
           const manual = this.takeManualTurn(conversation);
           // AI Calling (A): answering-machine screening / waiting for the callee's "hello".
@@ -3523,7 +3580,9 @@ export class RealtimeVoiceService {
     if (!this.isAnswerActive(conversation)) return;
     if (
       conversation.activeElevenLabsStartedAt &&
-      Date.now() - conversation.activeElevenLabsStartedAt < this.BARGE_IN_GRACE_MS
+      Date.now() - conversation.activeElevenLabsStartedAt < this.BARGE_IN_GRACE_MS &&
+      // A held phone reply has not been heard yet: no echo is possible.
+      conversation.phoneHeldResponseId !== conversation.currentResponseId
     ) {
       console.log('[VoiceTurn] speech_started inside the playback grace window — likely echo, not ducking');
       return;
@@ -3569,6 +3628,8 @@ export class RealtimeVoiceService {
     const bargeIn = conversation.bargeIn;
     if (!bargeIn || !this.clearBargeIn(conversation)) return;
     console.log(`[VoiceTurn] False interruption (${reason}) — resuming answer`, bargeIn.responseId);
+    // A held phone reply is released by its own timer (holdPhoneReplyIfUnfinished), not here.
+    if (conversation.phone && conversation.phoneHeldResponseId) return;
     this.sendToClient(conversation.clientWs, { type: 'unduck', responseId: bargeIn.responseId, reason });
   }
 
@@ -3651,6 +3712,9 @@ export class RealtimeVoiceService {
     const trimmedTranscript = userTranscript.trim();
     const topScholar = isTopscholarAccount(conversation.businessAccountId);
     const aiActive = this.isAnswerActive(conversation);
+    // Phone: a reply held after an unfinished-sounding turn has not been heard — the caller is
+    // just carrying on, so their words are judged like any new turn (not as an interruption).
+    const heldUnheard = !!conversation.phone && aiActive && conversation.phoneHeldResponseId === conversation.currentResponseId;
     const now = Date.now();
     const stoppedAt = conversation.lastSpeechStoppedAt && now - conversation.lastSpeechStoppedAt < 30_000
       ? conversation.lastSpeechStoppedAt
@@ -3678,7 +3742,7 @@ export class RealtimeVoiceService {
     const verdict = classifyVoiceTurn({
       transcript: trimmedTranscript,
       speechMs: input.speechMs,
-      aiActive,
+      aiActive: aiActive && !heldUnheard,
       heldTurn: input.heldTurn,
       assistantAskedQuestion: endsWithQuestion(conversation.lastAssistantText),
       recentAssistantSpeech: aiActive ? conversation.recentAssistantSpeech : undefined,
@@ -3776,6 +3840,7 @@ export class RealtimeVoiceService {
     // pipeline authors and persists the canonical Markdown; speech is derived
     // from it sentence by sentence while it streams.
     console.log('[RealtimeVoice] Canonical voice turn: streaming ChatService answer into TTS');
+    if (conversation.phone) this.holdPhoneReplyIfUnfinished(conversation, trimmedTranscript, stoppedAt);
     await this.generateCanonicalVoiceAnswer(conversation, trimmedTranscript, voiceIntentRoute, prefetchedK12Topic);
   }
 
@@ -3947,15 +4012,43 @@ export class RealtimeVoiceService {
    * an English one) and a prompt keeps Indian students' Hindi/Hinglish in Devanagari or
    * English letters instead of Urdu script.
    */
-  private transcriptionConfig(language?: string | null, phoneCall = false): Record<string, unknown> {
+  private transcriptionConfig(language?: string | null, phoneCall = false, phoneContext?: string | null): Record<string, unknown> {
     const config: Record<string, unknown> = { model: 'gpt-4o-mini-transcribe' };
+    const phonePrompt = phoneCall && phoneContext ? `${PHONE_TRANSCRIPTION_PROMPT} ${phoneContext}` : PHONE_TRANSCRIPTION_PROMPT;
     if (language && language !== 'auto') {
       config.language = this.toTranscriptionLangCode(language);
-      if (config.language === 'hi') config.prompt = phoneCall ? PHONE_TRANSCRIPTION_PROMPT : HINDI_TRANSCRIPTION_PROMPT;
+      if (config.language === 'hi') config.prompt = phoneCall ? phonePrompt : HINDI_TRANSCRIPTION_PROMPT;
     } else {
-      config.prompt = phoneCall ? PHONE_TRANSCRIPTION_PROMPT : AUTO_TRANSCRIPTION_PROMPT;
+      config.prompt = phoneCall ? phonePrompt : AUTO_TRANSCRIPTION_PROMPT;
     }
     return config;
+  }
+
+  /**
+   * Phone calls: tell speech-to-text what the assistant just said, so the caller's short reply is
+   * heard as an answer to it. A two-word "Health insurance." on its own came out as "Hello, this
+   * is" and "Hello, can I help you?" (live call 2026-10-17 — the recording, transcribed whole,
+   * reads "हेल्थ इंश्योरेंस" each time); with the question it was answering it is the obvious
+   * reading. Sent after every line the assistant says (opening line, each answer).
+   */
+  private updatePhoneTranscriptionContext(conversation: VoiceConversation): void {
+    if (!conversation.phone || !conversation.openaiWs || conversation.openaiWs.readyState !== WebSocket.OPEN) return;
+    // Only the last sentence (usually the question being answered): with the whole opening line the
+    // transcriber wrote the caller's "हां, बताओ।" as "Hello, Anika." (live call 2026-10-17).
+    const text = String(conversation.lastAssistantText || '').replace(/[*_#`>\[\]()]/g, '').replace(/\s+/g, ' ').trim();
+    const sentences = text.split(/(?<=[.!?।])\s+/).filter(Boolean);
+    const said = (sentences[sentences.length - 1] || '').slice(-200);
+    if (!said) return;
+    const context = `The assistant just asked: "${said}" — the customer is now replying to that (often in a few words).`;
+    try {
+      conversation.openaiWs.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          audio: { input: { transcription: this.transcriptionConfig(this.voiceTranscriptionLanguage(conversation), true, context) } },
+        },
+      }));
+    } catch { /* the next update carries it */ }
   }
 
   /** Switch between hands-free (server VAD) and hold-to-talk (manual commits). */
@@ -4029,18 +4122,18 @@ export class RealtimeVoiceService {
   /** Primary/fallback TTS: ElevenLabs then OpenAI, or OpenAI alone. */
   private createTtsProviders(conversation: VoiceConversation): { primary: TtsProvider | null; fallback: TtsProvider | null } {
     if (this.deps.createTtsProviders) return this.deps.createTtsProviders(conversation);
-    const openaiProvider = this.createOpenAITtsProvider(conversation);
+    const openaiProvider = this.withPhoneHindiScript(conversation, this.createOpenAITtsProvider(conversation));
     if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
       const apiKey = conversation.elevenlabsApiKey;
       const voiceId = conversation.elevenlabsVoiceId;
       return {
-        primary: {
+        primary: this.withPhoneHindiScript(conversation, {
           name: 'elevenlabs',
           synthesize: (text, signal, onChunk, ctx) => synthesizeSpeechStreaming(
-            { apiKey, voiceId, text, outputFormat: 'pcm_24000', signal, previousText: ctx?.previousText, nextText: ctx?.nextText },
+            { apiKey, voiceId, text, outputFormat: 'pcm_24000', signal, previousText: ctx?.previousText, nextText: ctx?.nextText, speed: this.phoneSpeed(conversation) / 100, languageCode: this.phoneSpeechLanguage(conversation, text) },
             onChunk,
           ),
-        },
+        }),
         fallback: openaiProvider,
       };
     }
@@ -4058,7 +4151,68 @@ export class RealtimeVoiceService {
       client: conversation.openaiTtsClient,
       voice: conversation.selectedVoice,
       tutor: conversation.k12EducationEnabled === true || isTopscholarAccount(conversation.businessAccountId),
+      speedPercent: this.phoneSpeed(conversation),
     });
+  }
+
+  /**
+   * Phone calls: ElevenLabs is told the text is Hindi once the caller speaks Hindi (the call's
+   * language), or whenever the sentence is in Devanagari — else a Hindi sentence is read by an
+   * English-trained voice as a guess ("Anika" is an English voice; live call 2026-10-17).
+   */
+  private phoneSpeechLanguage(conversation: VoiceConversation, text: string): string | undefined {
+    if (!conversation.phone) return undefined;
+    if (/[ऀ-ॿ]/.test(text) || conversation.lastFillerLang === 'hi') return 'hi';
+    return undefined;
+  }
+
+  /** Phone calls: Roman-letter Hindi is rewritten in Devanagari before it is spoken (voice/hinglishToDevanagari.ts). */
+  private withPhoneHindiScript(conversation: VoiceConversation, provider: TtsProvider): TtsProvider {
+    if (!conversation.phone) return provider;
+    return {
+      ...provider,
+      synthesize: async (text, signal, onChunk, ctx) => {
+        let spoken = text;
+        if (isRomanHinglish(text)) {
+          spoken = hinglishToDevanagari(text);
+          console.log(`[VoiceTurn] Hinglish → Devanagari: "${text.slice(0, 60)}" → "${spoken.slice(0, 60)}"`);
+        }
+        return provider.synthesize(spoken, signal, onChunk, ctx);
+      },
+    };
+  }
+
+  /**
+   * Phone calls: the caller's turn ended on 450 ms of silence. If it sounds unfinished, the reply
+   * about to be prepared is held (its audio paused) until PHONE_UNFINISHED_HOLD_MS more silence;
+   * if they speak again, the barge-in path drops it and their next words are answered.
+   */
+  private holdPhoneReplyIfUnfinished(conversation: VoiceConversation, transcript: string, stoppedAt?: number): void {
+    conversation.phoneHeldResponseId = undefined;
+    if (!soundsUnfinished(transcript)) return;
+    const releaseAt = (stoppedAt ?? Date.now()) + PHONE_UNFINISHED_HOLD_MS;
+    // The reply's responseId is assigned when it starts; hold whatever reply follows this turn.
+    const turnSeq = conversation.k12TurnSeq;
+    conversation.phoneHeldResponseId = '__pending__';
+    this.sendToClient(conversation.clientWs, { type: 'duck', responseId: '__held__' });
+    console.log(`[VoiceTurn] Turn sounds unfinished ("${transcript.slice(-30)}") — reply held until ${PHONE_UNFINISHED_HOLD_MS} ms more silence`);
+    const check = () => {
+      if (conversation.k12TurnSeq !== turnSeq) return; // a newer turn took over
+      if (conversation.phoneCallerSpeaking || conversation.phoneSpeechDuringHold || conversation.bargeIn || Date.now() < releaseAt) {
+        setTimeout(check, 100).unref?.();
+        return;
+      }
+      conversation.phoneHeldResponseId = undefined;
+      console.log('[VoiceTurn] Held reply released');
+      this.sendToClient(conversation.clientWs, { type: 'unduck', responseId: '__held__', reason: 'turn_complete' });
+    };
+    setTimeout(check, Math.max(0, releaseAt - Date.now())).unref?.();
+  }
+
+  /** Phone calls: the business's speaking speed (percent; 100 elsewhere — website voice is unchanged). */
+  private phoneSpeed(conversation: VoiceConversation): number {
+    const s = Number(conversation.phone?.speakingSpeed);
+    return conversation.phone && Number.isFinite(s) && s >= 70 && s <= 120 ? s : 100;
   }
 
   /** The ChatContext a voice turn is generated with (shared with text chat). */
@@ -4118,7 +4272,7 @@ export class RealtimeVoiceService {
       topscholarSubjectScoping: topScholar,
       deferAssistantPersistence: true,
       voiceResponseStyle: true,
-      assistantName: conversation.avatar?.displayName ?? null,
+      assistantName: conversation.avatar?.displayName ?? conversation.phone?.assistantName ?? null,
       // On a video call the avatar's gender wins; otherwise the voice's.
       assistantGender: resolveAssistantGender({ avatarGender: conversation.avatar?.gender, voiceGender: conversation.voiceGender ?? null }),
       prefetchedK12Topic: prefetchedK12Topic ?? null,
@@ -4267,6 +4421,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
     }
 
     conversation.currentResponseId = responseId;
+    if (conversation.phoneHeldResponseId === '__pending__') conversation.phoneHeldResponseId = responseId;
     conversation.currentResponseKind = 'canonical';
     conversation.currentAITranscript = '';
     conversation.canonicalDisplayReadyResponseId = undefined;
@@ -4337,11 +4492,23 @@ Never infer intent from a single contained word. For example, "What is stop moti
     }
     // After that it moves only with a real sentence (4+ words) that is mostly in the other
     // language: "Phir se batana." is not English, and "Hyundai i20 2019 मॉडल." is not Hindi.
-    else if (conversation.phone && fillerLang && userTranscript.trim().split(/\s+/).length >= 4) {
+    // Two in a row: one misheard line ("Health insurance." → "Hello, can I help you?", live call
+    // 2026-10-17) turned a Hindi call English for three replies.
+    else if (conversation.phone && fillerLang) {
+      const words = userTranscript.trim().split(/\s+/).filter(Boolean).length;
       const deva = (userTranscript.match(/[ऀ-ॿ]/g) || []).length;
       const latin = (userTranscript.match(/[A-Za-z]/g) || []).length;
-      const mostly = fillerLang === 'hi' ? (deva > latin || deva === 0) : deva === 0;
-      if (mostly) conversation.lastFillerLang = fillerLang;
+      const mostly = fillerLang === 'hi' ? deva > latin : deva === 0 && latin > 0;
+      if (words >= 4 && mostly && fillerLang !== conversation.lastFillerLang && !GREETING_LIKE.test(userTranscript)) {
+        conversation.phoneLangSwitchVotes = (conversation.phoneLangSwitchVotes ?? 0) + 1;
+        if (conversation.phoneLangSwitchVotes >= 2) {
+          console.log(`[VoiceTurn] Call language → ${fillerLang} (two sentences in a row)`);
+          conversation.lastFillerLang = fillerLang;
+          conversation.phoneLangSwitchVotes = 0;
+        }
+      } else if (fillerLang === conversation.lastFillerLang || (words >= 3 && !mostly)) {
+        conversation.phoneLangSwitchVotes = 0;
+      }
     }
     // Reactions and openers speak the call's language, not the language of one word in a reply
     // ("Motor.", "मोटर", "Hyundai i20 2019 मॉडल." on an English call).
@@ -4394,10 +4561,13 @@ Never infer intent from a single contained word. For example, "What is stop moti
     // stitched and drew the caller into talking over the answer. No opener for a bare yes / okay /
     // thanks, a one- or two-word reply, a repeat request, or a goodbye / refusal / do-not-call.
     const callerWords = userTranscript.trim().split(/\s+/).filter(Boolean).length;
-    const closingTurn = isPhone && isClosingTurn(userTranscript);
+    const turnStartAssistantText = conversation.lastAssistantText ?? null;
+    const closingTurn = isPhone && isClosingTurn(userTranscript, turnStartAssistantText);
     type OpenerState = { text: string | null; status: 'pending' | 'ready' | 'committed' | 'spoken' | 'dropped' };
     const opener: OpenerState | null = isPhone && fillerLang && rawKind && rawKind !== 'repeat' && callerWords > 2
-      && !isBareAcknowledgement(userTranscript) && !isClosingTurn(userTranscript) && process.env.PHONE_OPENER_AI !== '0'
+      && !isBareAcknowledgement(userTranscript) && !closingTurn && process.env.PHONE_OPENER_AI !== '0' && phoneFillersOn()
+      // "पता नहीं, आईडिया नहीं है" → the opener echoed it back ("अरे, options का आईडिया नहीं है…", live call 2026-10-17).
+      && !isUnsureCaller(userTranscript)
       ? { text: null, status: 'pending' } : null;
     let echoCheckPending = false;
     /** What this reply has said (or will say) before the answer: quick reaction + opener. */
@@ -4472,13 +4642,17 @@ Never infer intent from a single contained word. For example, "What is stop moti
           if (opener?.status === 'ready') opener.status = 'committed';
           modelRequestAt = Date.now();
           scheduleReaction();
-          return { spokenSoFar: preAnswer.length ? preAnswer.join(' ') : null, callLanguage: conversation.lastFillerLang ?? null };
+          return {
+            spokenSoFar: preAnswer.length ? preAnswer.join(' ') : null,
+            callLanguage: conversation.lastFillerLang ?? null,
+            hints: phoneTurnHints({ callerText: userTranscript, lastAssistantText: turnStartAssistantText, askedQuestions: conversation.phoneAskedQuestions }),
+          };
         },
         callLanguage: () => conversation.lastFillerLang ?? null,
       };
     }
 
-    if (fillerLang && ruleKind && (isPhone || !conversation.lastTurnHadFiller)) {
+    if (fillerLang && ruleKind && (isPhone ? phoneFillersOn() : !conversation.lastTurnHadFiller)) {
       let waitedForAi = false;
       fireFiller = () => {
         fillerTimer = null;
@@ -4539,6 +4713,16 @@ Never infer intent from a single contained word. For example, "What is stop moti
       }
       // Phone calls: everyday spoken Hindi ("health insurance के plans", not "स्वास्थ्य बीमा योजनाएँ").
       if (isPhone && speech) speech = colloquialHindi(speech);
+      if (isPhone && speech) {
+        speech = stripContinuationStart(speech);
+        // A question already asked on this call is not asked again (reworded or not).
+        if (repeatsAskedQuestion(speech, conversation.phoneAskedQuestions)) {
+          console.log(`[VoiceTurn] Repeated question not spoken: "${speech}"`);
+          speech = '';
+        }
+        // "मैं आपको बताती हूँ।" before the answer adds nothing: held back, said only if nothing follows.
+        else if (!answerSpoke && isPromiseOnly(speech)) { heldPromise = heldPromise ? `${heldPromise} ${speech}` : speech; speech = ''; }
+      }
       // Phone calls: "I don't have that information" is not said when the answer goes on (the team
       // confirming it usually follows); kept for the end in case nothing else comes.
       if (isPhone && speech && isNoInfoSentence(speech)) { heldNoInfo = heldNoInfo ? `${heldNoInfo} ${segment}` : segment; speech = ''; }
@@ -4565,11 +4749,13 @@ Never infer intent from a single contained word. For example, "What is stop moti
     };
     /** Phone: a held-back "I don't have that information" sentence, and whether real words were said. */
     let heldNoInfo: string | null = null;
+    let heldPromise: string | null = null;
     let answerSpoke = false;
     // Phone calls: short spoken answers, lists said as one sentence (voice/phoneAnswerShaper.ts).
     // A refusal / goodbye / do-not-call reply asks nothing (seen: "आपको किस तरह की insurance की
     // तलाश है?" after "interest nahi hai"); a call-back request may still ask for the time.
-    const shaper = isPhone ? new PhoneAnswerShaper({ noQuestions: isClosingTurn(userTranscript) && !/call|kal|baad|later|tomorrow|कॉल|कल|बाद/i.test(userTranscript) }) : null;
+    // A "not now" to "is this a good time?" may ask when to call back.
+    const shaper = isPhone ? new PhoneAnswerShaper({ noQuestions: closingTurn && !declinedToTalk(userTranscript, turnStartAssistantText) && !/call|kal|baad|later|tomorrow|कॉल|कल|बाद/i.test(userTranscript) }) : null;
     const emitShaped = (segment: string) => {
       if (!shaper) { emitSegment(segment); return; }
       for (const s of shaper.push(segment)) emitSegment(s);
@@ -4626,7 +4812,14 @@ Never infer intent from a single contained word. For example, "What is stop moti
       }
       if (shaper) {
         for (const segment of shaper.flush()) emitSegment(segment);
-        // Nothing but "I don't have that information": say it after all rather than nothing.
+        // Nothing but "I don't have that information" / "I'll tell you": said after all rather than nothing.
+        if (heldPromise && !answerSpoke && !heldNoInfo) {
+          console.log(`[VoiceTurn] Reply was only a promise: "${heldPromise}"`);
+          spokenText += (spokenText ? ' ' : '') + heldPromise;
+          segmentCount++;
+          this.sendToClient(conversation.clientWs, { type: 'answer_delta', responseId, display: '', speech: heldPromise, index: segmentCount - 1 });
+          pipeline.enqueue(heldPromise);
+        }
         if (heldNoInfo && !answerSpoke) {
           const said = colloquialHindi(markdownToSpeech(heldNoInfo));
           spokenText += (spokenText ? ' ' : '') + said;
@@ -4667,6 +4860,11 @@ Never infer intent from a single contained word. For example, "What is stop moti
 
       conversation.currentAITranscript = spokenText;
       conversation.lastAssistantText = displayMarkdown;
+      if (isPhone) {
+        const asked = questionsIn(spokenText);
+        if (asked.length) conversation.phoneAskedQuestions = [...(conversation.phoneAskedQuestions ?? []), ...asked].slice(-4);
+        this.updatePhoneTranscriptionContext(conversation);
+      }
       // The complete, persisted answer. From here an interruption only stops
       // the audio; the answer stays on screen and in history.
       conversation.canonicalDisplayReadyResponseId = responseId;

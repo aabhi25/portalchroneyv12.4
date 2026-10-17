@@ -62,6 +62,9 @@ export interface RetrievalResult {
   tokens: number;
   candidates: number;
   usedVectors: boolean;
+  /** Time spent on the query embedding(s) and on the database lookups (ms). */
+  embedMs?: number;
+  dbMs?: number;
 }
 
 export interface RetrieveInput {
@@ -361,10 +364,12 @@ export async function retrieveKnowledge(input: RetrieveInput): Promise<Retrieval
       return null;
     }
   };
+  const embedStarted = Date.now();
   const [embedding, primaryEmbedding] = await Promise.all([
     embed(query.query),
     query.isFollowUp && query.primary.trim() && query.primary !== query.query ? embed(query.primary) : Promise.resolve(null),
   ]);
+  const embedMs = Date.now() - embedStarted;
   const vec = embedding ? JSON.stringify(embedding) : null;
   const vecPrimary = primaryEmbedding ? JSON.stringify(primaryEmbedding) : null;
   const terms = queryTerms(query.primary, query.context);
@@ -389,7 +394,9 @@ export async function retrieveKnowledge(input: RetrieveInput): Promise<Retrieval
       use('url') ? settle(urlCandidates(businessAccountId, vecPrimary, [], k, channel), 'URL') : none,
     );
   }
+  const dbStarted = Date.now();
   const dbCandidates = ([] as Candidate[]).concat(...(await Promise.all(lookups)));
+  const dbMs = Date.now() - dbStarted;
   // Passages come from the caller's (per-channel) profile; filter again defensively.
   const passages = (input.passages || []).filter(p => use(p.source) && appliesToChannel(p.channels, channel));
   const passC = [
@@ -400,5 +407,5 @@ export async function retrieveKnowledge(input: RetrieveInput): Promise<Retrieval
   const all = [...dbCandidates, ...passC];
   const items = rankCandidates(all, query, options);
   const text = formatKnowledgeBlock(items, options.maxItemTokens);
-  return { items, text, tokens: estimateTokens(text), candidates: all.length, usedVectors: !!embedding };
+  return { items, text, tokens: estimateTokens(text), candidates: all.length, usedVectors: !!embedding, embedMs, dbMs };
 }

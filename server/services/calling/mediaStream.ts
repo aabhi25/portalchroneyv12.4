@@ -37,12 +37,15 @@ import {
   type FixedLine,
 } from "./phonePrompt";
 import type { PhoneEngine, PhoneEngineEvents, PhoneEngineFactory } from "./phoneBridge";
+import { CallAmbience } from "./ambience";
 
 const LOG = "[Calling]";
 
 /** How far ahead of real time answer audio is sent (keeps 'clear' effective). */
 export const LEAD_MS = 300;
 const PUMP_MS = 20;
+/** Background sound (settings): kept this far ahead of real time — a reply waits at most this plus one chunk behind it. */
+const AMBIENCE_LEAD_MS = 80;
 const GUARD_MS = 250;
 /** Outbound: wait this long for the callee's "hello" before speaking anyway (never while they talk). */
 export const HELLO_WAIT_MS = 2000;
@@ -169,6 +172,10 @@ export class CallMediaSession {
   private outResampler: StreamResampler | null = null;
   private outQueue: OutgoingAudioQueue | null = null;
   private playedUntil = 0;
+  /** End of everything sent to the phone (AI audio + background sound). */
+  private sentUntil = 0;
+  /** The quiet call-centre sound under the call (settings "Background sound"), if on. */
+  private ambience: CallAmbience | null = null;
   private ducked = false;
   private pumpTimer: unknown = null;
   private guardTimer: unknown = null;
@@ -453,6 +460,11 @@ export class CallMediaSession {
   private async startEngine(): Promise<void> {
     const call = this.call!;
     this.settings = await getCallingSettings(call.businessAccountId);
+    if (this.settings?.backgroundSound === "call_centre" && process.env.CALL_AMBIENCE !== "0" && !this.finalized) {
+      // Built here (first call at this rate: ~0.25 s at 8 kHz), before the opening line.
+      this.ambience = new CallAmbience(this.streamRate);
+      this.ensurePump();
+    }
     const [biz] = await db.select({ name: businessAccounts.name }).from(businessAccounts).where(eq(businessAccounts.id, call.businessAccountId)).limit(1);
     const lead = call.leadId
       ? (await db.select().from(leads).where(and(eq(leads.id, call.leadId), eq(leads.businessAccountId, call.businessAccountId))).limit(1))[0] ?? null
@@ -479,6 +491,7 @@ export class CallMediaSession {
       maxCallMinutes,
       timezone: this.settings?.callingHours?.timezone || "Asia/Kolkata",
       leadCaptureOn,
+      assistantName: this.settings?.assistantName ?? null,
     });
     const opening = buildOpeningLine({
       direction: call.direction === "inbound" ? "inbound" : "outbound",
@@ -486,6 +499,7 @@ export class CallMediaSession {
       inboundGreeting: this.settings?.inboundGreeting,
       customerName,
       businessName,
+      assistantName: this.settings?.assistantName ?? null,
     });
     this.openingText = opening.text;
 
@@ -528,6 +542,8 @@ export class CallMediaSession {
           knownContact: { name: customerName, phone: call.phone, email: lead?.email ?? null },
         },
         skipLeadTraining: !leadCaptureOn,
+        assistantName: this.settings?.assistantName ?? null,
+        speakingSpeed: this.settings?.speakingSpeed ?? undefined,
         screenTranscript: (text) => this.screenTranscript(text),
         onSpeech: (event) => this.onSpeech(event),
       }, events);
@@ -628,6 +644,7 @@ export class CallMediaSession {
     // Marks already sent for this answer will still echo; their audio is gone.
     if (this.streamSid && this.ws.readyState === 1) this.ws.send(JSON.stringify({ event: "clear", stream_sid: this.streamSid }));
     this.playedUntil = this.clock.now();
+    this.sentUntil = this.playedUntil; // 'clear' flushed the background sound too
     this.aiSpeechEndsAt = Math.min(this.aiSpeechEndsAt, this.playedUntil);
     this.ducked = false;
     if (this.pendingEnd && this.pendingEnd.afterResponseId === responseId) this.pendingEnd.afterResponseId = null;
@@ -694,10 +711,11 @@ export class CallMediaSession {
   private ensurePump(): void {
     if (this.pumpTimer || this.finalized) return;
     this.pump();
-    if (this.outQueue && !this.outQueue.isEmpty) {
+    // With a background sound the pump runs for the whole call (it fills the gaps between replies).
+    if ((this.outQueue && !this.outQueue.isEmpty) || this.ambience) {
       this.pumpTimer = this.clock.setInterval(() => {
         this.pump();
-        if (!this.outQueue || this.outQueue.isEmpty || this.finalized) {
+        if (((!this.outQueue || this.outQueue.isEmpty) && !this.ambience) || this.finalized) {
           if (this.pumpTimer) this.clock.clearInterval(this.pumpTimer);
           this.pumpTimer = null;
         }
@@ -707,18 +725,32 @@ export class CallMediaSession {
 
   private pump(): void {
     const q = this.outQueue;
-    if (!q || this.finalized || this.ducked || !this.streamSid || this.ws.readyState !== 1) return;
+    if (!q || this.finalized || !this.streamSid || this.ws.readyState !== 1) return;
     const now = this.clock.now();
     if (this.playedUntil < now) this.playedUntil = now;
-    while (this.playedUntil - now < LEAD_MS) {
+    if (this.sentUntil < now) this.sentUntil = now;
+    while (!this.ducked && this.playedUntil - now < LEAD_MS) {
       const item = q.take();
       if (!item) break;
       if (item.kind === "mark") {
         this.ws.send(JSON.stringify({ event: "mark", stream_sid: this.streamSid, mark: { name: item.name } }));
         continue;
       }
-      this.ws.send(JSON.stringify({ event: "media", stream_sid: this.streamSid, media: { payload: item.data.toString("base64") } }));
+      // The AI's audio plays after any background sound already sent, with the sound under it.
+      if (this.playedUntil < this.sentUntil) this.playedUntil = this.sentUntil;
+      const data = this.ambience ? this.ambience.mix(item.data) : item.data;
+      this.ws.send(JSON.stringify({ event: "media", stream_sid: this.streamSid, media: { payload: data.toString("base64") } }));
       this.playedUntil += pcmDurationMs(item.data.length, this.streamRate);
+      this.sentUntil = this.playedUntil;
+    }
+    // Between replies (and while the caller talks): the background sound alone.
+    if (this.ambience) {
+      // Plivo takes any size; Exotel (and the simulator) need 320-byte multiples of at least 3,200.
+      const bytes = this.kind.startsWith("plivo") ? Math.round(bytesPerMs(this.streamRate) * 60 / 2) * 2 : MIN_CHUNK_BYTES;
+      while (this.sentUntil - now < AMBIENCE_LEAD_MS) {
+        this.ws.send(JSON.stringify({ event: "media", stream_sid: this.streamSid, media: { payload: this.ambience.next(bytes).toString("base64") } }));
+        this.sentUntil += pcmDurationMs(bytes, this.streamRate);
+      }
     }
   }
 

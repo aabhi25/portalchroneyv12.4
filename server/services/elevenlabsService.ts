@@ -41,6 +41,10 @@ export interface ElevenLabsTTSOptions {
   previousText?: string;
   /** Text likely to follow (e.g. after a pre-recorded "Achha…"): the clip ends on a continuing tone. */
   nextText?: string;
+  /** Speaking speed, 1 = the voice as is (ElevenLabs accepts 0.7–1.2). */
+  speed?: number;
+  /** ISO 639-1 language of the text ("hi"): the voice pronounces it as that language. */
+  languageCode?: string;
 }
 
 /** Retries on "busy" answers before the caller switches to its backup voice (see below). */
@@ -99,7 +103,10 @@ async function synthesizeSpeechStreamingOnce(
     signal,
     previousText,
     nextText,
+    speed,
+    languageCode,
   } = options;
+  const speedSetting = typeof speed === 'number' && Number.isFinite(speed) && speed !== 1 ? Math.min(1.2, Math.max(0.7, speed)) : null;
 
   // optimize_streaming_latency=3 trades a small amount of pronunciation
   // accuracy for faster time-to-first-byte. Combined with flash_v2_5 this
@@ -117,11 +124,13 @@ async function synthesizeSpeechStreamingOnce(
       model_id: modelId,
       ...(previousText ? { previous_text: previousText } : {}),
       ...(nextText ? { next_text: nextText } : {}),
+      ...(languageCode ? { language_code: languageCode } : {}),
       voice_settings: {
         stability: 0.5,
         similarity_boost: 0.75,
         style: 0.0,
         use_speaker_boost: true,
+        ...(speedSetting !== null ? { speed: speedSetting } : {}),
       },
     }),
     signal,

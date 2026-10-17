@@ -495,6 +495,13 @@ export interface StreamTurnOptions {
   /** Voice turns: spoken-style reply rules (services/voice/voiceStyle). Goes last, before OTP. */
   voiceStyleBlock?: string;
   /**
+   * AI Calling: the short phone version of the final rules (no product cards, appointment
+   * triggers, chat-script rules or the long sales block — the phone rules in voiceStyleBlock cover
+   * how to talk). The final rules are not cached between turns, so their size is paid in
+   * first-token time on every reply: ~19.5k chars → ~6k (calls, 2026-10-17).
+   */
+  phoneCompact?: boolean;
+  /**
    * Business reply-language rule (services/language/chatLanguage): goes after the business's
    * custom instructions so it wins over them. Absent = the existing language rules only.
    */
@@ -2110,7 +2117,28 @@ SCRIPT RULE (CRITICAL - check this before responding):
           ? '1. CONTACT DETAIL FIRST: the LEAD COLLECTION block at the end names the ONE detail to ask for before answering — ask for it and do not answer the question in this reply.'
           : toolUsageInstruction;
 
-    let finalOverride = `🔒 FINAL RULES (HIGHEST PRIORITY):
+    let finalOverride = turnOptions?.phoneCompact ? `🔒 FINAL RULES (HIGHEST PRIORITY) — this is a live PHONE CALL:
+${starterQAContext ? `
+🎯 GUIDANCE Q&A (ABSOLUTE PRIORITY #0 - OVERRIDE EVERYTHING):
+${starterQAContext}
+` : ''}
+${ragContextForOverride ? ragContextForOverride + '\n' : ''}${!leadBlocksAnswer && !otpBlock && preFetchedFaqSection ? preFetchedFaqSection + '\n' : ''}
+${firstRule}
+
+${turnOptions?.voiceStyleBlock?.includes('LANGUAGE OF THIS CALL') ? '' : languageSection}
+
+- Never say "FAQ", "knowledge base", "database" or "tools": present the information as your own.
+- Answer only from the business information you have (business profile, knowledge above, tool results). No general world knowledge.
+- Prices, fees and other numbers: only the EXACT figures in your information — never guess or give "typical" values. Not there → start your reply with [[FALLBACK]].
+- Never speak negatively about the business; offer what it does do instead.
+${turnOptions?.identityBlock ? `
+${turnOptions.identityBlock}
+` : ''}${extractedCustomInstructions ? `
+⚡ BUSINESS CUSTOM INSTRUCTIONS (they override the rules above for tone and content — EXCEPT when to ask for contact details, which only the LEAD COLLECTION block below decides, and the phone-call rules at the end):
+${extractedCustomInstructions}` : ''}${leadSection ? `
+
+${leadSection}${extractedCustomInstructions ? `
+This LEAD COLLECTION block takes precedence over any business instruction about collecting contact details: never ask again for anything listed as already known or declined.` : ''}` : ''}` : `🔒 FINAL RULES (HIGHEST PRIORITY):
 ${promptOptions?.cacheFriendly ? `\n${this.getFunnelStageBlock(userMessageCount)}\n` : ''}${starterQAContext ? `
 🎯 GUIDANCE Q&A (ABSOLUTE PRIORITY #0 - OVERRIDE EVERYTHING):
 ${starterQAContext}
@@ -2233,6 +2261,9 @@ This LEAD COLLECTION block takes precedence over any business instruction about 
 
     // Add language override as the LAST message before sending (GPT weights final messages more heavily)
     messages.push({ role: 'system', content: finalOverride });
+    // Prompt size per turn (first-token time grows with it): phone calls measured here (2026-10-17).
+    const historyChars = messages.slice(1, -2).reduce((n, m) => n + String((m as any).content || '').length, 0);
+    console.log(`[LLM Prompt] ${model} | system ${firstSystemContent.length} chars | history ${messages.length - 3} msgs/${historyChars} chars | final ${finalOverride.length} chars | tools ${tools.length} (${JSON.stringify(tools).length} chars)`);
 
     const stream = await openai.chat.completions.create({
       model: model,

@@ -13,7 +13,7 @@ import { DEFAULT_CALL_PURPOSE } from "@shared/aiCalling";
 export const DEFAULT_ASSISTANT_LABEL = "the AI assistant";
 
 export const DEFAULT_OUTBOUND_OPENING =
-  "Hi {name}, this is {assistant} from {business}. You'd enquired with us — is this a good time to talk for a minute?";
+  "Hi {name}, this is {assistant}, an AI assistant from {business}. You'd enquired with us — is this a good time to talk for a minute?";
 export const DEFAULT_INBOUND_GREETING =
   "Thanks for calling {business}, this is {assistant}, an AI assistant. How can I help?";
 // Used when the business hasn't named its assistant (avoids "this is the AI assistant, an AI assistant").
@@ -50,6 +50,8 @@ export interface PhonePromptInput {
   now?: Date;
   /** The business's lead form is used on this call (inbound / no lead): capture_lead is available. */
   leadCaptureOn: boolean;
+  /** The name the AI uses on calls (AI Calling settings), if the business set one. */
+  assistantName?: string | null;
 }
 
 function clean(value: unknown, max = 300): string {
@@ -128,8 +130,13 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
   lines.push("- Language: keep speaking the language of the call so far. A one- or two-word reply (\"Motor.\", \"Yes.\", \"मोटर\") is not a switch — only change language when they speak a full sentence in another language or ask you to.");
   lines.push("- Never invent prices, offers, dates or promises. If you don't know, say the team will confirm.");
   lines.push("- If they are busy, offer to call back and ask when suits them; then end the call with outcome callback_requested and the time.");
+  if (input.direction === "outbound") {
+    lines.push("- If they answer your opening question (\"is this a good time?\") with no / not now / busy (\"nahi\", \"abhi nahi\", \"नहीं\"), do NOT start pitching: say one warm line and ask once when to call back, in the call's language (English call: \"No problem — when should I call you back, this evening or tomorrow?\"; Hindi call: \"कोई बात नहीं जी — कब call करूँ, शाम को या कल?\"). If they give a time, end the call with outcome callback_requested and that time; if they just want to go, end it politely.");
+  }
+  lines.push("- If they ask your name or who you are, answer that in one short warm line" + (clean(input.assistantName, 60) ? ` (your name is ${clean(input.assistantName, 60)})` : "") + ", then continue the conversation naturally — do not repeat a question you already asked.");
   lines.push("- If they say they are not interested (\"nahi chahiye\", \"interest nahi hai\", \"not interested\"): say ONE warm line in the call's language (English call: \"No problem at all — have a good day!\"; Hindi call: \"Koi baat nahi ji, aapka din achha ho!\") and end the call with outcome not_interested. Do not pitch again or ask another question.");
   lines.push("- When they agree to go ahead (\"le lo\", \"kar do\", \"theek hai, aage badhao\", \"okay, go ahead\"): confirm in a few words and take the next step, in the call's language (English call: \"Great! I'll have the team send quotes — which car is it for?\"; Hindi call: \"Bahut badhiya ji! Toh team aapko quotes bhejegi — aapki gaadi kaunsi hai?\"). Never just repeat what you already told them.");
+  lines.push("- Never reply with only a promise (\"मैं आपको बताती हूँ\", \"main batati hoon\", \"let me explain\"): say the actual thing in the same reply.");
   lines.push("- If the line is unclear or you didn't catch something, say so briefly and ask them to repeat.");
   lines.push(`- Keep the whole call under ${Math.max(1, input.maxCallMinutes)} minute${input.maxCallMinutes === 1 ? "" : "s"}.`);
   lines.push(`- Current date and time for the business: ${localTime(now, input.timezone)} (${input.timezone}). Use it to turn "tomorrow evening" into a real time.`);
@@ -173,7 +180,7 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
   lines.push("- At most 2 short sentences, about 30 words. Several options? Name 2 or 3 in one sentence and ask which they want — never read out a list or every detail.");
   lines.push("- When you speak Hindi (only when the caller does): talk the way people talk on the phone, mixing in the English words they use — keep business words in English (insurance, plan, cover, premium, claim) and use अलग-अलग (not विभिन्न), ज़रूरत (not आवश्यकता), बड़ी companies (not प्रमुख कंपनियाँ). When the call is in English, reply in English.");
   lines.push("- Never say \"I don't know\" / \"I don't have that information\": say the team will confirm that exact detail and call them back on this number.");
-  lines.push("- Begin with at most a 1-3 word reaction that fits what they just did, in the language you are speaking, or none. Hindi/Hinglish: a question → \"Ji,\" or nothing · they told you something → their key word (\"Achha, parents ke liye —\") · a problem → \"Arre, sorry ji,\" · they agree → \"Bahut badhiya ji,\" · they refuse → \"Koi baat nahi ji,\". English: a question → \"Right,\" or nothing · info → their key word (\"Okay, for your parents —\") · a problem → \"Oh, I'm sorry,\" · agree → \"Perfect,\" · refuse → \"No problem,\". Never repeat their question back to them. Never start two replies in a row with the same word. Sound warm and end with one easy question.");
+  lines.push("- Begin with at most a 1-3 word reaction that fits what they just did, in the language you are speaking, or none. Hindi/Hinglish: a question → \"Ji,\" or nothing · they told you something → their key word (\"Achha, parents ke liye —\") · a problem → \"Arre, sorry ji,\" · they agree → \"Bahut badhiya ji,\" · they refuse → \"Koi baat nahi ji,\" · they give a time to call back → \"Theek hai ji,\" (never \"koi baat nahi\" — nothing went wrong). English: a question → \"Right,\" or nothing · info → their key word (\"Okay, for your parents —\") · a problem → \"Oh, I'm sorry,\" · agree → \"Perfect,\" · refuse → \"No problem,\" · a time to call back → \"Sure,\". Never repeat their question back to them. Never start two replies in a row with the same word. Sound warm and end with one easy question.");
   lines.push("- Never write a list on a call. Asked what is covered / included? Name the 2-3 main things in ONE sentence (\"Third-party, own damage aur personal accident cover — teeno milte hain.\") and offer details on any one.");
   lines.push("- Use simple spoken words, not written Hindi: ये (not निम्नलिखित), usually (not आमतौर पर), के हिसाब से (not के अनुसार), देते हैं (not पेश/प्रदान करते हैं), खास (not विशेष).");
   return lines.join("\n");
@@ -352,7 +359,7 @@ export function phoneToolsForTurn(tools: any[], callerText: string, lastAssistan
   const keep = (name: string): boolean => {
     switch (name) {
       case "do_not_call": return askedNotToBeCalled(text);
-      case "end_call": return ENDING.test(text) || askedNotToBeCalled(text) || (askedAnythingElse && /^\s*(no|nope|nahi|nahin|नहीं|that'?s it|bas)\b/i.test(text));
+      case "end_call": return ENDING.test(text) || askedNotToBeCalled(text) || declinedToTalk(text, lastAssistantText) || (askedAnythingElse && /^\s*(no|nope|nahi|nahin|नहीं|that'?s it|bas)\b/i.test(text));
       case "transfer_to_human": return WANTS_PERSON.test(text);
       case "save_call_details": return DETAIL.test(text);
       default: return true;
@@ -366,7 +373,142 @@ export function phoneToolsForTurn(tools: any[], callerText: string, lastAssistan
  * later / wrong number / don't call again / "give me a person". It gets one plain line, never a
  * live opener (seen: "अरे sorry जी, call नहीं करने की बात" before a do-not-call goodbye).
  */
-export function isClosingTurn(callerText: string): boolean {
+export function isClosingTurn(callerText: string, lastAssistantText?: string | null): boolean {
   const text = String(callerText || "").replace(/[’']/g, "'");
-  return ENDING.test(text) || askedNotToBeCalled(text) || WANTS_PERSON.test(text);
+  return ENDING.test(text) || askedNotToBeCalled(text) || WANTS_PERSON.test(text) || declinedToTalk(text, lastAssistantText);
 }
+
+/**
+ * "Is this a good time to talk?" → "नहीं।" (live call 2026-10-17: the AI said "कोई बात नहीं जी"
+ * and pitched anyway). A no to that question closes the turn: one warm line + when to call back.
+ */
+const ASKED_GOOD_TIME = /good time|right time|free to talk|talk for a minute|got a minute|baat kar sakte|time hai|sahi samay|बात कर सकते|समय है|सही समय|टाइम है/i;
+// Only no-words ("नहीं।", "Nahi, abhi nahi.", "No, I'm busy right now") — not "नहीं, बताइए क्या है".
+const NO_WORD = String.raw`(?:no+|nope|nah|not|now|really|right|nahi+n?|nahin|na|abhi|busy|i'?m|am|bit|a|little|thoda|sa|hoon|hu|ji|yaar|bhai|sir|madam|नहीं|ना|अभी|बिज़ी|बिजी|थोड़ा|हूँ|हूं|जी)`;
+const ONLY_NO_WORDS = new RegExp(String.raw`^\s*(?:${NO_WORD}[\s,.!।]*)+$`, "i");
+const HAS_NO = /\b(no+|nope|nah|not now|nahi+n?|nahin|busy)\b|नहीं|बिज़ी|बिजी/i;
+export function declinedToTalk(callerText: string, lastAssistantText?: string | null): boolean {
+  const t = String(callerText || "").replace(/[’']/g, "'");
+  return !!lastAssistantText && ASKED_GOOD_TIME.test(lastAssistantText) && HAS_NO.test(t) && ONLY_NO_WORDS.test(t);
+}
+
+/**
+ * The caller doesn't know what to pick ("पता नहीं, आईडिया नहीं है", "I'm not sure", "aap batao").
+ * Seen live: the AI then read the same list of options a third time.
+ */
+const UNSURE = /\b(i don'?t know|dunno|not sure|no idea|you (tell|suggest)|what do you suggest|pata nahi+n?|idea nahi+n?|malum nahi+n?|maloom nahi+n?|samajh nahi+n? aa|aap (batao|bataiye|suggest)|aap hi batao)\b|पता नहीं|आइडिया नहीं|आईडिया नहीं|मालूम नहीं|मालुम नहीं|समझ नहीं|आप बताइए|आप बताओ|आप ही बता/i;
+export function isUnsureCaller(callerText: string): boolean {
+  return UNSURE.test(String(callerText || "").replace(/[’']/g, "'"));
+}
+
+/** The questions in a reply ("…हैं। आपको किस प्रकार का insurance चाहिए?" → that last sentence). */
+export function questionsIn(text: string): string[] {
+  return String(text || "").split(/(?<=[.!?।])\s+/).map((s) => s.trim()).filter((s) => s.endsWith("?") && s.length > 6);
+}
+
+/**
+ * Extra per-turn guidance for the main model (appended to the phone rules for this reply only):
+ * what the caller already said no to, the questions already asked on this call (never asked
+ * again — live call 2026-10-17 asked "आपको किस प्रकार का insurance चाहिए?" four times), and what
+ * to do when the caller is unsure.
+ */
+export function phoneTurnHints(input: { callerText: string; lastAssistantText?: string | null; askedQuestions?: string[] }): string | null {
+  const hints: string[] = [];
+  if (declinedToTalk(input.callerText, input.lastAssistantText)) {
+    hints.push("They just said it is NOT a good time. Do not pitch or ask about their needs: one warm line, then ask only when to call them back.");
+  }
+  const asked = (input.askedQuestions || []).filter(Boolean).slice(-4);
+  if (asked.length) {
+    hints.push(`Questions you ALREADY asked on this call (do not ask them again, in any wording): ${asked.map((q) => `"${q}"`).join(" · ")}. If they still haven't answered, help them decide instead.`);
+  }
+  if (isUnsureCaller(input.callerText)) {
+    hints.push("They are unsure what they need. Don't list the options again. In THIS reply (not later), suggest the most common choice in one short line and ask ONE easy question about their situation that they can answer in a word and that fits what they already told you (e.g. for health insurance: who it is for, or their age — not which kind of insurance again).");
+  }
+  return hints.length ? `THIS REPLY:\n- ${hints.join("\n- ")}` : null;
+}
+
+// ── Spoken-answer guards (live call 2026-10-17) ─────────────────────────────────────
+
+/** Same meaning, different words: "kaunsa / kis / which / what" and "type / plan / tarah / kind". */
+const Q_SYNONYMS: Array<[RegExp, string]> = [
+  [/^(kaunsa|kaunse|kaunsi|kaun|kis|kin|which|what|कौन|कौनसा|कौन-सा|कौनसी|कौनसे|किस|किन)$/, "WHICH"],
+  [/^(type|types|kind|kinds|sort|tarah|prakar|category|plan|plans|option|options|तरह|प्रकार|टाइप|प्लान|ऑप्शन)$/, "KIND"],
+  [/^(chahiye|chahte|chahti|want|need|looking|considering|interested|चाहिए|चाहते|चाहती)$/, "WANT"],
+];
+const Q_STOP = new Set([
+  "aap", "aapko", "aapka", "aapki", "aapke", "kya", "ka", "ki", "ke", "ko", "hai", "hain", "ho", "se", "mein", "ya", "aur", "toh", "to", "ji",
+  "आप", "आपको", "आपका", "आपकी", "आपके", "क्या", "का", "की", "के", "को", "है", "हैं", "हो", "से", "में", "या", "और", "तो", "जी", "सा", "से",
+  "you", "your", "the", "a", "an", "is", "are", "do", "does", "would", "like", "to", "for", "in", "of", "or", "and", "be", "it", "that", "this", "with", "about", "most", "specific",
+]);
+const Q_PUNCT = new RegExp(String.raw`[^\p{L}\p{M}\p{N}\s-]`, "gu");
+function questionWords(q: string): Set<string> {
+  const words = String(q || "").toLowerCase().replace(Q_PUNCT, " ").split(/\s+/).filter(Boolean);
+  const out = new Set<string>();
+  for (const w of words) {
+    if (Q_STOP.has(w)) continue;
+    const syn = Q_SYNONYMS.find(([re]) => re.test(w));
+    out.add(syn ? syn[1] : w);
+  }
+  return out;
+}
+
+/**
+ * The question was already asked on this call (same content words, possibly reworded or in the
+ * other language's words): "Aapko kaunsa insurance plan chahiye?" → "Aapko kis type ka insurance
+ * chahiye?" → "What type of insurance are you considering?" were all one question, asked three
+ * times. A question that adds new content ("…health plan — basic ya premium?") is a new one.
+ */
+export function repeatsAskedQuestion(question: string, asked: string[] | null | undefined): boolean {
+  if (!/\?\s*$/.test(String(question || ""))) return false;
+  const now = questionWords(question);
+  if (now.size < 2) return false;
+  return (asked || []).some((a) => {
+    const before = questionWords(a);
+    let shared = 0;
+    now.forEach((w) => { if (before.has(w)) shared++; });
+    return shared / now.size >= 0.75;
+  });
+}
+
+/** "मैं आपको बताती हूँ।" / "Let me explain." — a promise to answer, with nothing in it. */
+const PROMISE = /^(?:(?:अच्छा|तो|चलिए|देखिए|ठीक है|जी|achha|toh|to|chaliye|dekhiye|okay|ok|sure|right|so)[\s,।.!]*)*(?:मैं\s+(?:आपको\s+)?(?:बताती|बताता|समझाती|समझाता)\s+(?:हूँ|हूं)|main\s+(?:aapko\s+)?(?:batati|batata|samjhati|samjhata)\s+(?:hoon|hu|hun)|let me (?:tell|explain|walk you through|share)(?: (?:you|that|it))?|i(?:'ll| will) (?:tell|explain)(?: (?:you|that|it))?)[\s.!।…]*$/i;
+export function isPromiseOnly(sentence: string): boolean {
+  return PROMISE.test(String(sentence || "").trim());
+}
+
+/** "...toh aapko kis type…" / "…what type…" → a fresh sentence (the reply carried on from a filler). */
+export function stripContinuationStart(speech: string): string {
+  const m = /^\s*(?:\.{2,}|…)\s*(?:(?:toh|to|so|तो)\b[\s,]*)?/i.exec(String(speech || ""));
+  if (!m || !m[0]) return speech;
+  const rest = speech.slice(m[0].length);
+  return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : rest;
+}
+
+// ── End of turn (2026-10-17) ─────────────────────────────────────────────────────────
+
+/** Words a sentence doesn't end on ("मुझे वो…", "and…", "matlab…"). */
+const TRAILING = new Set([
+  "and", "or", "but", "so", "because", "the", "a", "an", "to", "of", "with", "for", "my", "your", "i", "i'm", "um", "uh", "umm", "like", "if", "that", "which",
+  "और", "या", "लेकिन", "पर", "तो", "कि", "क्योंकि", "मतलब", "वो", "वह", "जो", "अगर", "के", "का", "की", "में", "से", "को", "मेरे", "मेरा", "मेरी", "मुझे", "मैं", "हम", "आप", "अं", "उम्म", "जैसे",
+  "aur", "ya", "lekin", "par", "toh", "ki", "kyunki", "matlab", "wo", "woh", "jo", "agar", "ke", "ka", "mein", "se", "ko", "mera", "mere", "meri", "mujhe", "main", "hum", "aap", "jaise",
+]);
+
+/**
+ * Does the caller's turn sound unfinished? Then the reply is prepared at once but held until a
+ * little more silence confirms they are done (a 0.6 s silence used to cut off "क्या तुम…").
+ */
+export function soundsUnfinished(transcript: string): boolean {
+  const t = String(transcript || "").trim();
+  if (!t) return false;
+  if (/(?:,|…|\.\.\.|-|—)\s*$/.test(t)) return true;
+  const words = t.replace(/[.!?।]+$/, "").toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return false;
+  const last = words[words.length - 1].replace(/[,;:]+$/, "");
+  if (!TRAILING.has(last)) return false;
+  // A finished sentence may end on a pronoun in Hindi ("Health insurance का बता दो आप।" — held for
+  // nothing on a live call): with a full stop / "?" only joining words count, unless it is the
+  // only word ("मुझे।").
+  if (/[.!?।]\s*$/.test(t) && words.length > 1 && PRONOUNS.has(last)) return false;
+  return true;
+}
+const PRONOUNS = new Set(["i", "my", "your", "मुझे", "मैं", "हम", "आप", "मेरे", "मेरा", "मेरी", "वो", "वह", "mujhe", "main", "hum", "aap", "mera", "mere", "meri", "wo", "woh"]);

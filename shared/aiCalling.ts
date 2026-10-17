@@ -145,10 +145,24 @@ export interface AiCallingSettingsView {
   /** Optional custom first line; placeholders {name}, {business}, {assistant}. */
   openingLine: string | null;
   inboundGreeting: string | null;
+  /** The name the AI uses on calls ("this is Anika, an AI assistant from …"); null = unnamed. */
+  assistantName: string | null;
+  /** Speaking speed on calls, percent of normal (CALL_SPEAKING_SPEEDS). */
+  speakingSpeed: number;
+  /** A quiet background sound under the call. */
+  backgroundSound: CallBackgroundSound;
   whatsappFollowUp: boolean;
   whatsappFollowUpTemplateId: string | null;
   updatedAt: string | null;
 }
+
+export type CallBackgroundSound = "none" | "call_centre";
+export const CALL_BACKGROUND_SOUNDS: CallBackgroundSound[] = ["none", "call_centre"];
+/** Speaking speeds offered in settings (percent of the voice's normal speed). */
+export const CALL_SPEAKING_SPEEDS = [80, 85, 90, 95, 100, 105] as const;
+export const DEFAULT_SPEAKING_SPEED = 90;
+/** An assistant name: letters (any script), spaces, dots, apostrophes, hyphens — "Anika", "अनिका". */
+export const ASSISTANT_NAME = new RegExp(String.raw`^[\p{L}\p{M}][\p{L}\p{M} .'-]*$`, "u");
 
 export const DEFAULT_CALLING_HOURS: CallingHours = { start: "10:00", end: "19:00", days: [1, 2, 3, 4, 5, 6], timezone: "Asia/Kolkata" };
 

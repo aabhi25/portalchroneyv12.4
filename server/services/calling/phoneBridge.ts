@@ -56,6 +56,10 @@ export interface PhoneEngineStartInput {
   conversationTitle: string;
   chat: NonNullable<ChatContext["phoneCall"]>;
   skipLeadTraining: boolean;
+  /** The AI's name on this call (AI Calling settings), if set. */
+  assistantName?: string | null;
+  /** Speaking speed, percent of normal (AI Calling settings). */
+  speakingSpeed?: number;
   screenTranscript?: (text: string) => "continue" | "drop";
   onSpeech?: (event: "started" | "stopped") => void;
 }
@@ -208,6 +212,8 @@ export function createVoiceServiceEngine(getService: () => VoiceServiceLike | Pr
           conversationTitle: input.conversationTitle,
           chat: input.chat,
           skipLeadTraining: input.skipLeadTraining,
+          assistantName: input.assistantName ?? null,
+          speakingSpeed: input.speakingSpeed,
           screenTranscript: input.screenTranscript,
           onSpeech: input.onSpeech,
         },

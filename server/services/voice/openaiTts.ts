@@ -50,8 +50,18 @@ const BASE_INSTRUCTIONS =
 const TUTOR_INSTRUCTIONS =
   " You are a patient, encouraging tutor explaining to a school student: articulate numbers, formulas and key terms clearly.";
 
-export function openAiTtsInstructions(opts: { tutor?: boolean } = {}): string {
-  return BASE_INSTRUCTIONS + (opts.tutor ? TUTOR_INSTRUCTIONS : "");
+/**
+ * gpt-4o-mini-tts ignores the API's `speed` field, so a slower phone voice (AI Calling "speaking
+ * speed" below 100%) is asked for in the speaking instructions instead.
+ */
+export function openAiTtsInstructions(opts: { tutor?: boolean; speedPercent?: number } = {}): string {
+  const s = opts.speedPercent ?? 100;
+  const pace = s <= 85
+    ? " Speak noticeably slower than usual, calm and unhurried, with a short natural pause between sentences."
+    : s < 100
+      ? " Speak at a relaxed, unhurried pace — a little slower than usual — with small natural pauses between sentences."
+      : s > 100 ? " Speak a little briskly, but stay clear." : "";
+  return BASE_INSTRUCTIONS + (opts.tutor ? TUTOR_INSTRUCTIONS : "") + pace;
 }
 
 /** Minimal surface of the OpenAI SDK used here (a fake in tests). */
@@ -82,9 +92,11 @@ export function createOpenAiTtsProvider(opts: {
   voice?: string | null;
   tutor?: boolean;
   retryDelayMs?: number;
+  /** Phone calls: speaking speed, percent of normal (asked for in the instructions). */
+  speedPercent?: number;
 }): TtsProvider {
   const voice = OPENAI_TTS_VOICES.has(String(opts.voice || "")) ? String(opts.voice) : "shimmer";
-  const instructions = openAiTtsInstructions({ tutor: opts.tutor });
+  const instructions = openAiTtsInstructions({ tutor: opts.tutor, speedPercent: opts.speedPercent });
   return {
     name: "openai",
     prebufferMs: OPENAI_TTS_PREBUFFER_MS,

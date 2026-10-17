@@ -15,8 +15,12 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { useToast } from "@/hooks/use-toast";
 import { CheckCircle2, ChevronDown, Copy, Loader2, ShieldCheck, XCircle } from "lucide-react";
 import {
+  ASSISTANT_NAME,
   CALL_LIMITS,
+  CALL_SPEAKING_SPEEDS,
   DEFAULT_CALL_PURPOSE,
+  DEFAULT_SPEAKING_SPEED,
+  type CallBackgroundSound,
   DEFAULT_CALLING_HOURS,
   normalizeCallPhone,
   type AiCallingSettingsView,
@@ -106,9 +110,21 @@ interface Draft {
   callPurpose: string;
   openingLine: string;
   inboundGreeting: string;
+  assistantName: string;
+  speakingSpeed: number;
+  backgroundSound: CallBackgroundSound;
   whatsappFollowUp: boolean;
   whatsappFollowUpTemplateId: string;
 }
+
+const SPEED_LABELS: Record<number, string> = {
+  80: "Slow (80%)",
+  85: "Slower (85%)",
+  90: "Relaxed (90%, recommended)",
+  95: "Slightly relaxed (95%)",
+  100: "Normal (100%)",
+  105: "A bit faster (105%)",
+};
 
 function toDraft(v: AiCallingSettingsView): Draft {
   const h = v.callingHours || DEFAULT_CALLING_HOURS;
@@ -139,6 +155,9 @@ function toDraft(v: AiCallingSettingsView): Draft {
     callPurpose: v.callPurpose || "",
     openingLine: v.openingLine || "",
     inboundGreeting: v.inboundGreeting || "",
+    assistantName: v.assistantName || "",
+    speakingSpeed: v.speakingSpeed ?? DEFAULT_SPEAKING_SPEED,
+    backgroundSound: v.backgroundSound === "call_centre" ? "call_centre" : "none",
     whatsappFollowUp: v.whatsappFollowUp,
     whatsappFollowUpTemplateId: v.whatsappFollowUpTemplateId || "",
   };
@@ -167,6 +186,7 @@ function validate(d: Draft): Record<string, string> {
   if (d.provider === "exotel" && d.callerId.trim() && !normalizeCallPhone(d.callerId)) e.callerId = "Enter your ExoPhone number, e.g. 080 4718 1234.";
   if (d.provider === "plivo" && d.plivoNumber.trim() && !normalizeCallPhone(d.plivoNumber)) e.plivoNumber = "Enter your Plivo number with the country code, e.g. +91 80 4718 1234.";
   if (d.provider === "plivo" && d.plivoAuthId.trim() && !/^[A-Za-z0-9]{10,40}$/.test(d.plivoAuthId.trim())) e.plivoAuthId = "The Auth ID is letters and digits only, e.g. MAXXXXXXXXXXXXXXXXXX.";
+  if (d.assistantName.trim() && !ASSISTANT_NAME.test(d.assistantName.trim())) e.assistantName = "Use letters only, for example Anika.";
   if (d.whatsappFollowUp && !d.whatsappFollowUpTemplateId) e.template = "Pick the WhatsApp message to send.";
   return e;
 }
@@ -200,6 +220,9 @@ function buildBody(d: Draft, secrets: { apiKey: string; apiToken: string; plivoA
     callPurpose: d.callPurpose.trim(),
     openingLine: d.openingLine.trim() || null,
     inboundGreeting: d.inboundGreeting.trim() || null,
+    assistantName: d.assistantName.trim() || null,
+    speakingSpeed: d.speakingSpeed,
+    backgroundSound: d.backgroundSound,
     whatsappFollowUp: d.whatsappFollowUp,
     whatsappFollowUpTemplateId: d.whatsappFollowUpTemplateId || null,
   };
@@ -390,7 +413,7 @@ export default function CallingSettings() {
   const err = (k: string) => (showErrors ? errors[k] : undefined);
   const businessName = me?.businessAccount?.name || "your business";
   const openingPreview = draft.openingLine.trim()
-    ? previewOpeningLine(draft.openingLine, { name: SAMPLE_NAME, business: businessName, assistant: "your assistant" })
+    ? previewOpeningLine(draft.openingLine, { name: SAMPLE_NAME, business: businessName, assistant: draft.assistantName.trim() || "your assistant" })
     : null;
   const timezones = COMMON_TIMEZONES.includes(draft.timezone) ? COMMON_TIMEZONES : [draft.timezone, ...COMMON_TIMEZONES];
   const exotel = draft.provider === "exotel";
@@ -728,6 +751,30 @@ export default function CallingSettings() {
             <CardDescription>It already knows everything you've trained it on. Tell it what each call is for.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
+            <Field label="Assistant's name (optional)" htmlFor="assistant-name" error={err("assistantName")} help="The AI introduces itself with this name and gives it when asked, for example Anika. Pick a name that suits the voice. It always says it's an AI assistant.">
+              <Input id="assistant-name" className="max-w-xs" value={draft.assistantName} onChange={e => set("assistantName", e.target.value)} maxLength={40} placeholder="Anika" data-testid="input-assistant-name" />
+            </Field>
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field label="Speaking speed" htmlFor="speaking-speed" help="How fast the AI talks on calls. Slightly slower is easier to follow on a phone line.">
+                <Select value={String(draft.speakingSpeed)} onValueChange={v => set("speakingSpeed", Number(v))}>
+                  <SelectTrigger id="speaking-speed" data-testid="select-speaking-speed"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {CALL_SPEAKING_SPEEDS.map(n => (
+                      <SelectItem key={n} value={String(n)}>{SPEED_LABELS[n] ?? `${n}%`}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Background sound" htmlFor="background-sound" help="A very quiet office sound under the call (people talking far away, typing, a phone ringing now and then), so the line doesn't sound empty.">
+                <Select value={draft.backgroundSound} onValueChange={v => set("backgroundSound", v as CallBackgroundSound)}>
+                  <SelectTrigger id="background-sound" data-testid="select-background-sound"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None (silent)</SelectItem>
+                    <SelectItem value="call_centre">Quiet call centre</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
             <Field label="Purpose of the call" htmlFor="call-purpose" help="In your own words. Leave empty to use the suggestion shown.">
               <Textarea id="call-purpose" rows={4} value={draft.callPurpose} onChange={e => set("callPurpose", e.target.value)} placeholder={DEFAULT_CALL_PURPOSE} maxLength={2000} data-testid="input-call-purpose" />
             </Field>

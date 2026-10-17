@@ -15,9 +15,14 @@ import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "../../db";
 import { aiCalls, aiCallingSettings, type AiCallingSettingsRow } from "@shared/schema";
 import {
+  ASSISTANT_NAME,
+  CALL_BACKGROUND_SOUNDS,
   CALL_LIMITS,
   CALL_PROVIDERS,
+  CALL_SPEAKING_SPEEDS,
   DEFAULT_CALL_PURPOSE,
+  DEFAULT_SPEAKING_SPEED,
+  type CallBackgroundSound,
   normalizeCallProvider,
   DEFAULT_CALLING_HOURS,
   normalizeCallPhone,
@@ -32,7 +37,7 @@ import { describeSecret, exotelMissing, normalizeApiKey, plivoMissing, sealSecre
 export const AUTO_CALL_SOURCES = ["website", "whatsapp", "instagram", "facebook", "voice", "form", "import", "other"] as const;
 export const EXOTEL_SUBDOMAINS = ["api.in.exotel.com", "api.exotel.com"] as const;
 export const MONTHLY_MINUTE_LIMIT = { min: 1, max: 100_000 } as const;
-export const TEXT_LIMITS = { callPurpose: 1500, openingLine: 300, inboundGreeting: 300 } as const;
+export const TEXT_LIMITS = { callPurpose: 1500, openingLine: 300, inboundGreeting: 300, assistantName: 40 } as const;
 
 export class CallingSettingsError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -161,6 +166,9 @@ export function defaultSettingsRow(businessAccountId: string): AiCallingSettings
     callPurpose: null,
     openingLine: null,
     inboundGreeting: null,
+    assistantName: null,
+    speakingSpeed: DEFAULT_SPEAKING_SPEED,
+    backgroundSound: "none",
     whatsappFollowUp: false,
     whatsappFollowUpTemplateId: null,
     updatedBy: null,
@@ -253,6 +261,9 @@ export function toSettingsView(row: AiCallingSettingsRow & { exists?: boolean })
     callPurpose: row.callPurpose?.trim() || DEFAULT_CALL_PURPOSE,
     openingLine: row.openingLine,
     inboundGreeting: row.inboundGreeting,
+    assistantName: row.assistantName ?? null,
+    speakingSpeed: row.speakingSpeed ?? DEFAULT_SPEAKING_SPEED,
+    backgroundSound: row.backgroundSound === "call_centre" ? "call_centre" : "none",
     whatsappFollowUp: row.whatsappFollowUp,
     whatsappFollowUpTemplateId: row.whatsappFollowUpTemplateId,
     updatedAt: row.exists === false ? null : iso(row.updatedAt),
@@ -367,7 +378,7 @@ const AUDITED = [
   "enabled", "provider", "exotelAccountSid", "exotelSubdomain", "exotelCallerId", "exotelFlowAppId", "plivoAuthId", "plivoNumber",
   "autoCallLeads", "autoCallDelayMinutes", "autoCallSources", "consentMode", "callingHours", "maxAttempts",
   "retryGapMinutes", "maxCallMinutes", "monthlyMinuteLimit", "concurrentCallLimit", "recordCalls", "transferNumber",
-  "callPurpose", "openingLine", "inboundGreeting", "whatsappFollowUp", "whatsappFollowUpTemplateId",
+  "callPurpose", "openingLine", "inboundGreeting", "assistantName", "speakingSpeed", "backgroundSound", "whatsappFollowUp", "whatsappFollowUpTemplateId",
 ] as const;
 
 export interface UpdateResult {
@@ -501,6 +512,20 @@ export async function updateCallingSettings(
   if (has(body, "callPurpose")) next.callPurpose = optText("Call purpose", body.callPurpose, TEXT_LIMITS.callPurpose);
   if (has(body, "openingLine")) next.openingLine = optText("Opening line", body.openingLine, TEXT_LIMITS.openingLine);
   if (has(body, "inboundGreeting")) next.inboundGreeting = optText("Greeting for incoming calls", body.inboundGreeting, TEXT_LIMITS.inboundGreeting);
+  if (has(body, "assistantName")) {
+    const name = optText("Assistant name", body.assistantName, TEXT_LIMITS.assistantName);
+    if (name && !ASSISTANT_NAME.test(name)) throw new CallingSettingsError("Assistant name can only have letters and spaces, for example Anika");
+    next.assistantName = name;
+  }
+  if (has(body, "speakingSpeed")) {
+    const v = Number(body.speakingSpeed);
+    if (!(CALL_SPEAKING_SPEEDS as readonly number[]).includes(v)) throw new CallingSettingsError(`Speaking speed must be one of ${CALL_SPEAKING_SPEEDS.join(", ")}`);
+    next.speakingSpeed = v;
+  }
+  if (has(body, "backgroundSound")) {
+    if (!CALL_BACKGROUND_SOUNDS.includes(body.backgroundSound as CallBackgroundSound)) throw new CallingSettingsError("Background sound must be 'none' or 'call_centre'");
+    next.backgroundSound = body.backgroundSound as CallBackgroundSound;
+  }
   if (has(body, "whatsappFollowUp")) next.whatsappFollowUp = bool("WhatsApp follow-up", body.whatsappFollowUp);
   if (has(body, "whatsappFollowUpTemplateId")) {
     const v = body.whatsappFollowUpTemplateId;

@@ -47,7 +47,7 @@ const EXAMPLES: Record<"en" | "hi_roman" | "hi_deva", string[]> = {
   hi_deva: [
     `Caller: "मोटर इंश्योरेंस के बारे में बताइए।" → जी, motor insurance की बात करें तो,`,
     `Caller: "उसमें कवरेज क्या-क्या मिलता है?" → हाँ, coverage की बात करें तो,`,
-    `Caller: "आपके पास कौन-कौन से इंश्योरेंस हैं?" → जी, हमारे insurance options की बात करें तो,`,
+    `Caller: "आपके पास कौन-कौन से इंश्योरेंस हैं?" → जी, insurance में तो,`,
     `Caller: "मेरा क्लेम रिजेक्ट हो गया, बहुत परेशान हूँ।" → अरे, sorry जी, claim reject हो गया…`,
   ],
 };
@@ -68,6 +68,8 @@ function systemPrompt(input: PhoneOpenerInput): string {
     "- 3 to 9 words.",
     languageRule,
     "- Echo what they told you (their need, product, family, situation, problem). For a question, name its TOPIC (\"on the premium,\" / \"premium ki baat karein toh,\") — never repeat the question and never use a question word (what, how, kya, kitna…).",
+    "- Never begin the answer itself (\"we have\", \"our\", \"hamare paas\", \"हमारे पास\") — the answer comes right after your words and would repeat them.",
+    "- If they say they don't know / aren't sure / have no idea, reply with exactly: NONE (never echo their uncertainty back).",
     "- NO facts, prices, numbers they did not say, yes/no, 'available', 'possible', promises, and NO time words (second, minute, moment, wait, ek second).",
     "- Never: 'Great question', 'I understand your concern', 'Bilkul', 'Zaroor', 'Hmm', 'Umm', and never start with 'Oh' before a question.",
     "- End with a comma (or '…' after a complaint) — never a full stop, '!' or '?'. The answer continues right after your words.",
@@ -86,6 +88,10 @@ function systemPrompt(input: PhoneOpenerInput): string {
 const QUESTION_WORDS = /\b(what|which|how|why|when|where|who|kya|kaun|kaunsa|kitna|kitne|kitni|kaise|kab|kahan|kyun|kyon)\b|क्या|कौन|कितना|कितने|कितनी|कैसे|कब|कहाँ|क्यों/i;
 const HINGLISH = /\b(hai|hain|ka|ki|ke|ko|se|mein|aap|aapko|aapka|chahiye|liye|toh|ji|achha|haan|nahi|bhi|aur|tha|thi)\b/gi;
 const TIME_WORDS = /\b(second|seconds|sec|minute|minutes|moment|wait|hold on|ek second|ek minute|ruko|rukiye)\b|सेकंड|मिनट|रुकिए/i;
+/** Starts the answer itself ("हमारे पास insurance options की बात करें तो," → "हमारे पास कई तरह के…", live call 2026-10-17). */
+const ANSWER_START = /^(?:[^,\s]+,\s*)?(?:we have|we offer|we've got|our\b|hamare paas|humare paas|hamare pas|हमारे पास|हमारे)/i;
+/** Repeats the caller's "don't know" back ("अरे, options का आईडिया नहीं है…"). */
+const NEGATION = /\b(not|don'?t|no idea|nahi|nahin|pata nahi|idea nahi)\b|नहीं|आइडिया नहीं|आईडिया नहीं|पता नहीं/i;
 const BANNED = /\b(great question|good question|i understand your concern|bilkul|zaroor|hmm+|umm+|available|possible|yes|no|haan ji bilkul|free|guarantee|definitely)\b|बिल्कुल|ज़रूर|जरूर/i;
 
 /** The model's opener, cleaned — or null when it breaks a rule. */
@@ -93,7 +99,7 @@ export function validOpener(raw: string, input: Pick<PhoneOpenerInput, "transcri
   let t = String(raw || "").trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").replace(/\s+/g, " ").trim();
   if (!t || /^none\b/i.test(t)) return null;
   if (t.includes("?") || t.includes("\n")) return null;
-  if (TIME_WORDS.test(t) || BANNED.test(t) || QUESTION_WORDS.test(t)) return null;
+  if (TIME_WORDS.test(t) || BANNED.test(t) || QUESTION_WORDS.test(t) || ANSWER_START.test(t) || NEGATION.test(t)) return null;
   // An English call gets an English opener (seen: "अच्छा, parents के लिए…" to an English caller).
   if (input.language === "en" && (/[ऀ-ॿ]/.test(t) || (t.match(HINGLISH) || []).length >= 2)) return null;
   // Numbers only if the caller said them ("a 2019 i20" after "2019 model").
@@ -171,16 +177,24 @@ export function dropEchoedClause(speech: string, opener: string): string {
     if (rest.length >= 3) return rest.charAt(0).toUpperCase() + rest.slice(1);
   }
   // 2) Its first clause mostly repeats the opener's words.
-  const m = /^([^,।.!?—]+)([,—]\s*)(.+)$/.exec(text);
+  // (a short first SENTENCE too: "A 2019 Swift. We can help…" — but not the "." inside "2.5")
+  const m = /^([^,:।.!?—]+)([,:—]\s*|[.।!]\s+)(.+)$/.exec(text);
   if (!m) return text;
   const clause = norm(m[1]).filter((w) => w.length > 1);
   if (!clause.length || clause.length > 8) return text;
   const said = new Set(openerWords);
   const overlap = clause.filter((w) => said.has(w)).length / clause.length;
-  if (overlap < 0.6) return text;
+  // …or it names everything the opener named, in a short clause ("Right, a 2019 Swift," →
+  // "For your 2019 Swift, we offer…", self-call 2026-10-17).
+  const content = openerWords.filter((w) => w.length > 1 && !OPENER_FILLER_WORDS.has(w));
+  const namesAll = content.length >= 2 && clause.length <= content.length + 3 && content.every((w) => clause.includes(w));
+  if (overlap < 0.6 && !namesAll) return text;
   const rest = m[3].trim();
   return rest.length >= 3 ? rest.charAt(0).toUpperCase() + rest.slice(1) : text;
 }
+
+/** Words of an opener that carry no topic of their own. */
+const OPENER_FILLER_WORDS = new Set(["the", "an", "for", "your", "on", "so", "of", "ki", "ka", "ke", "की", "का", "के", "बात", "करें", "तो", "toh", "baat", "karein", "में", "mein", "side"]);
 
 /** "Achha, motor insurance की बात करें तो," → "motor insurance की बात करें तो," */
 function stripReaction(opener: string): string {

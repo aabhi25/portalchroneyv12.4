@@ -1716,6 +1716,11 @@ export const aiCallingSettings = pgTable("ai_calling_settings", {
   callPurpose: text("call_purpose"),
   openingLine: text("opening_line"),
   inboundGreeting: text("inbound_greeting"),
+  // How the AI sounds on calls: its name, speaking speed (percent of normal) and a quiet background
+  // sound under the call ('none' | 'call_centre').
+  assistantName: text("assistant_name"),
+  speakingSpeed: integer("speaking_speed").notNull().default(90),
+  backgroundSound: varchar("background_sound", { length: 32 }).notNull().default("none"),
   whatsappFollowUp: boolean("whatsapp_follow_up").notNull().default(false),
   whatsappFollowUpTemplateId: varchar("whatsapp_follow_up_template_id"),
   updatedBy: varchar("updated_by"),

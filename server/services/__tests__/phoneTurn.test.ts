@@ -71,6 +71,68 @@ async function main() {
   const real = ['Motor.', 'A car.', 'Motor insurance.', 'What is the premium?', 'haan motor insurance batao', 'Hyundai i20, 2019 model.', 'that plan'];
   expect(real.every((t) => !isBareAcknowledgement(t)), 'anything naming a topic is not bare', real.filter(isBareAcknowledgement));
 
+  // ── live call 2026-10-17: "नहीं" to "is this a good time?", openers, repeated questions ──
+  const { declinedToTalk, isUnsureCaller, phoneTurnHints, questionsIn, buildOpeningLine, buildPhoneInstructions } = await import('../calling/phonePrompt');
+  const opening = "Hi there, I'm an AI assistant calling from ArhamSecure. You'd enquired with us — is this a good time to talk for a minute?";
+  expect(['नहीं।', 'No.', 'Nahi ji', 'abhi nahi', 'Not now.', 'busy'].every((t) => declinedToTalk(t, opening)), 'a no to "is this a good time?" is a decline');
+  expect(['नहीं, अभी नहीं।', 'Nahi, abhi nahi.', "No, I'm busy right now.", 'Abhi thoda busy hoon.'].every((t) => declinedToTalk(t, opening)), 'several no-words together are still a decline');
+  expect(dropEchoedClause('For your 2019 Swift, we offer comprehensive motor insurance.', 'Right, a 2019 Swift,') === 'We offer comprehensive motor insurance.', 'a short clause naming everything the opener named is dropped');
+  expect(dropEchoedClause('A 2019 Swift. We can help you compare plans.', 'Right, a 2019 Swift,') === 'We can help you compare plans.', 'a short first sentence that repeats the opener is dropped');
+  expect(dropEchoedClause('Premium 2.5 lakh tak ja sakta hai.', 'Ji, premium ki baat karein toh,') === 'Premium 2.5 lakh tak ja sakta hai.', 'a decimal point is not the end of a clause');
+  expect(dropEchoedClause('Health cover for your parents costs around twenty thousand a year, depending on age.', 'Okay, health cover for your parents,') === 'Health cover for your parents costs around twenty thousand a year, depending on age.', 'a long clause that uses the opener words as its subject is kept');
+  expect(!declinedToTalk('नहीं।', 'Do you have a car?') && !declinedToTalk('Haan, boliye', opening) && !declinedToTalk('नहीं, बताइए क्या है', opening), 'not a decline: another question, a yes, or "no, tell me"');
+  expect(isClosingTurn('नहीं।', opening) && !isClosingTurn('नहीं।', 'Do you have a car?'), 'the decline closes the turn (no opener, no pitch)');
+  expect(phoneToolsForTurn(phoneTools({ transferAvailable: true, leadCaptureOn: false }), 'नहीं।', opening).some((t: any) => t.function.name === 'end_call'), 'end_call is offered after the decline');
+  expect(/NOT a good time/.test(phoneTurnHints({ callerText: 'नहीं।', lastAssistantText: opening }) || ''), 'the reply is told not to pitch');
+  expect(['पता नहीं आईडिया नहीं है मेरे को।', "I don't know", 'aap hi batao', 'Not sure, honestly.'].every(isUnsureCaller) && !isUnsureCaller('Motor insurance chahiye'), 'unsure callers are recognised');
+  const hint = phoneTurnHints({ callerText: 'पता नहीं आईडिया नहीं है मेरे को।', askedQuestions: ['आपको किस प्रकार का insurance चाहिए?'] }) || '';
+  expect(/ALREADY asked/.test(hint) && /किस प्रकार का insurance/.test(hint) && /unsure/.test(hint), 'hints list the questions already asked and the unsure-caller rule', hint);
+  expect(phoneTurnHints({ callerText: 'Motor insurance ke baare mein bataiye' }) === null, 'no hints on an ordinary turn');
+  expect(JSON.stringify(questionsIn('हमारे पास Health और Motor हैं। आपको किस प्रकार का insurance चाहिए?')) === JSON.stringify(['आपको किस प्रकार का insurance चाहिए?']), 'questions are picked out of a reply');
+  expect(validOpener('जी, हमारे पास insurance options की बात करें तो,', ctx('कौन-कौन से हैं आपके पास?')) === null && validOpener('Right, we have a few plans,', ctx('What plans do you have?')) === null, 'an opener that starts the answer ("हमारे पास", "we have") is refused');
+  expect(validOpener('अरे, options का आईडिया नहीं है…', ctx('पता नहीं आईडिया नहीं है मेरे को।')) === null, 'an opener echoing "I don\'t know" is refused');
+  expect(dropEchoedClause('Health और Motor: दोनों मिलते हैं।', 'जी, health और motor,') === 'दोनों मिलते हैं।', 'a first clause ending in ":" that repeats the opener is dropped');
+  expect(/this is Anika, an AI assistant from ArhamSecure/.test(buildOpeningLine({ direction: 'outbound', businessName: 'ArhamSecure', assistantName: 'Anika' }).text), 'a named assistant still says it is an AI in the opening');
+  const named = buildPhoneInstructions({ direction: 'outbound', businessName: 'ArhamSecure', transferAvailable: false, maxCallMinutes: 5, timezone: 'Asia/Kolkata', leadCaptureOn: false, assistantName: 'Anika' });
+  expect(/your name is Anika/.test(named) && /is this a good time/.test(named), 'phone rules carry the name and the "not a good time" rule');
+
+  // ── spoken-answer guards (live call 2026-10-17) ──
+  const { repeatsAskedQuestion, isPromiseOnly, stripContinuationStart } = await import('../calling/phonePrompt');
+  const askedQ = ['Aapko kaunsa insurance plan chahiye?', 'Health, motor ya life insurance?'];
+  expect(repeatsAskedQuestion('Aapko kis type ka insurance chahiye?', askedQ) && repeatsAskedQuestion('What type of insurance are you considering?', askedQ) && repeatsAskedQuestion('Health, motor ya life insurance?', askedQ), 'the same question reworded / in English counts as asked');
+  expect(!repeatsAskedQuestion('Aapko kaunsa health plan chahiye — basic ya premium?', askedQ) && !repeatsAskedQuestion('Aapki family mein kitne log hain?', askedQ) && !repeatsAskedQuestion('Aapko kaunsa insurance plan chahiye.', askedQ), 'a new question (or no question) is not a repeat');
+  expect(['अच्छा, तो चलिए, मैं आपको बताती हूँ।', 'Let me explain.', "Sure, I'll tell you.", 'Main aapko batati hoon.'].every(isPromiseOnly), 'a bare promise is recognised');
+  expect(!isPromiseOnly('मैं आपको बताती हूँ, ज़्यादातर लोग family floater लेते हैं।') && !isPromiseOnly('Let me explain the premium: it depends on age.'), 'a promise with content is not');
+  expect(stripContinuationStart('...toh aapko kis type ka insurance pasand hai?') === 'Aapko kis type ka insurance pasand hai?' && stripContinuationStart('…what type of insurance?') === 'What type of insurance?' && stripContinuationStart('Theek hai.') === 'Theek hai.', 'replies never start with "…" / "…toh"');
+
+  // ── Hinglish in Roman letters → Devanagari before it is spoken ──
+  const { isRomanHinglish, hinglishToDevanagari } = await import('../voice/hinglishToDevanagari');
+  expect(['Koi baat nahi ji! Aapko jab bhi insurance ki zaroorat ho, hum yahan hain madad ke liye.', 'Haan, main yahan hoon! Aapko kya chahiye?', 'Achha, aapko insurance ke liye kya chahiye?'].every(isRomanHinglish), 'Roman-letter Hindi is recognised');
+  expect(!['Health insurance is essential.', 'Is this for yourself, or for your family?', 'कोई बात नहीं जी।', 'Thank you so much!', 'Okay.', 'Do you have a car?'].some(isRomanHinglish), 'English and Devanagari are left alone');
+  const conv = hinglishToDevanagari('Koi baat nahi ji! Aapko jab bhi insurance ki zaroorat ho, hum yahan hain madad ke liye.');
+  expect(conv === 'कोई बात नहीं जी! आपको जब भी insurance की ज़रूरत हो, हम यहाँ हैं मदद के लिए.' || conv === 'कोई बात नहीं जी! आपको जब भी insurance की ज़रूरत हो, हम यहाँ हैं मदद के लिए।', 'Hindi words go to Devanagari, English words stay', conv);
+  expect(hinglishToDevanagari('Theek hai ji, main kal shaam 6 baje call karungi.') === 'ठीक है जी, मैं कल शाम 6 बजे call करूँगी।', 'numbers and English words survive, the full stop becomes a danda', hinglishToDevanagari('Theek hai ji, main kal shaam 6 baje call karungi.'));
+  expect(hinglishToDevanagari('Health insurance is essential.') === 'Health insurance is essential.', 'English is unchanged');
+
+  // ── end of turn: unfinished-sounding turns hold the reply ──
+  const { soundsUnfinished } = await import('../calling/phonePrompt');
+  expect(['मुझे', 'मुझे वो', 'I want health insurance and', 'Matlab', 'हेल्थ इंश्योरेंस और…', 'So,', 'Mere parents ke'].every(soundsUnfinished), 'unfinished-sounding turns are recognised');
+  expect(!['हाँ बोलो।', 'Health insurance.', 'प्रीमियम कितना होगा?', 'Kal shaam ko call karna.', 'No, leave it. Thank you.', 'Just me and my wife.', 'Health insurance का बता दो आप।', 'Kya bataoge aap?'].some(soundsUnfinished), 'complete turns are not held');
+
+  // ── background sound ──
+  const { buildCallCentreLoop, CallAmbience, AMBIENCE_LOOP_SECONDS } = await import('../calling/ambience');
+  const loop = buildCallCentreLoop(8000);
+  let sq = 0; let pk = 0;
+  for (const v of loop) { sq += v * v; pk = Math.max(pk, Math.abs(v)); }
+  const rmsDb = 20 * Math.log10(Math.sqrt(sq / loop.length) / 32768), peakDb = 20 * Math.log10(pk / 32768);
+  expect(loop.length === AMBIENCE_LOOP_SECONDS * 8000 && rmsDb > -46 && rmsDb < -38 && peakDb < -20, 'the call-centre loop is quiet (about −42 dBFS, peaks under −20 dBFS)', { rmsDb, peakDb });
+  expect(buildCallCentreLoop(8000).every((v, i) => v === loop[i]), 'the loop is the same every time (seeded)');
+  const amb = new CallAmbience(8000, () => 0);
+  const voice = Buffer.alloc(640); for (let i = 0; i < 320; i++) voice.writeInt16LE(i % 2 ? 32000 : -32000, i * 2);
+  const mixed = amb.mix(voice);
+  expect(mixed.length === voice.length && voice.readInt16LE(0) === -32000 && mixed.readInt16LE(2) <= 32767, 'mixing keeps the length, never changes the input and never overflows');
+  expect(new CallAmbience(8000, () => 0).next(960).equals(Buffer.from(loop.buffer, loop.byteOffset, 960)), 'ambience-only chunks come straight from the loop');
+
   if (failed) { console.log(`\n${failed} check(s) failed`); process.exit(1); }
   console.log('\nAll phone turn checks passed.');
   process.exit(0);

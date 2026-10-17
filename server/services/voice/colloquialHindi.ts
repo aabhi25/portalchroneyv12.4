@@ -11,6 +11,15 @@
 const word = (w: string) => new RegExp(`(?<![\\u0900-\\u097F])(?:${w})(?![\\u0900-\\u097F])`, "g");
 
 const SWAPS: Array<[RegExp, string]> = [
+  // Live call 2026-10-17.
+  [/में रुचि रखते हैं/g, "देख रहे हैं"],
+  [/में रुचि रखती हैं/g, "देख रही हैं"],
+  [/स्वास्थ्य जांच/g, "health checkup"],
+  [/स्वास्थ्य जाँच/g, "health checkup"],
+  [/नियमित/g, "regular"],
+  [/विशेषज्ञ डॉक्टरों/g, "specialist doctors"],
+  [/विशेषज्ञ डॉक्टर/g, "specialist doctor"],
+  [/कई लाभ/g, "कई फायदे"],
   [/स्वास्थ्य बीमा/g, "health insurance"],
   [/मोटर बीमा/g, "motor insurance"],
   [/जीवन बीमा/g, "life insurance"],

@@ -41,7 +41,7 @@ import { matchesDeflectionPattern } from './services/chatContext/deflection';
 import { appliesToChannel } from '@shared/knowledgeChannels';
 import { embeddingService } from './services/embeddingService';
 import { isBareAcknowledgement, isConversationMeta, smallTalkKind } from './services/chatContext/smallTalk';
-import { phoneToolsForTurn } from './services/calling/phonePrompt';
+import { isUnsureCaller, phoneToolsForTurn } from './services/calling/phonePrompt';
 import { accountHasKnowledge } from './services/chatContext/knowledgePresence';
 import { embedQueryCached } from './services/chatContext/queryEmbeddingCache';
 import { ChatTurnTiming } from './services/chatContext/chatTiming';
@@ -222,7 +222,7 @@ export interface ChatContext {
      * always spoken before the answer, and the call's language. Also tells the call when the
      * answer was requested, so it can time its reaction to end just before the answer.
      */
-    prepareTurn?: () => Promise<{ spokenSoFar: string | null; callLanguage: 'en' | 'hi' | null }>;
+    prepareTurn?: () => Promise<{ spokenSoFar: string | null; callLanguage: 'en' | 'hi' | null; hints?: string | null }>;
     /** The call's language right now (what the caller speaks), for every model pass of a turn. */
     callLanguage?: () => 'en' | 'hi' | null;
   };
@@ -239,13 +239,27 @@ function isShortPhoneAnswer(msg: string): boolean {
   return words.length > 0 && words.length <= 5 && !PHONE_QUESTION_WORD.test(msg);
 }
 
+/** Phone calls: longest wait for the knowledge-search query embedding before keyword-only search. */
+const PHONE_EMBED_WAIT_MS = 800;
+
+/** `promise`, or a rejection once `ms` have passed (the promise itself keeps running). */
+function withinMs<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<T>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} slower than ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
 /** Phone rules + "you already said this" for a reply that a contextual opener has started. */
-function withSpokenOpener(instructions: string, opener: string | null, callLanguage: 'en' | 'hi' | null = null): string {
+function withSpokenOpener(instructions: string, opener: string | null, callLanguage: 'en' | 'hi' | null = null, hints: string | null = null): string {
   let out = instructions;
+  // This reply only: questions already asked, a "not now", an unsure caller (calling/phonePrompt.ts phoneTurnHints).
+  if (hints) out += `\n\n${hints}`;
   // One language for the whole call, from what the caller speaks (seen: Hindi replies to an
   // English caller after a one-word "Sure." / a misheard "मोटर").
   if (callLanguage === 'en') out += `\n\nLANGUAGE OF THIS CALL: English. Reply in ENGLISH words only — not Hindi, and not Hindi written in English letters (no "aap", "ji", "achha", "koi baat nahi") — even when their message is very short, written in Hindi script, or your own earlier replies slipped into Hindi. Switch only if they speak a full sentence in Hindi or ask you to.`;
-  if (callLanguage === 'hi') out += `\n\nLANGUAGE OF THIS CALL: Hindi. Reply in everyday spoken Hindi written in Devanagari, keeping business words (insurance, plan, cover, premium, claim) in English letters — switch to English only if they speak a full English sentence or ask you to.`;
+  if (callLanguage === 'hi') out += `\n\nLANGUAGE OF THIS CALL: Hindi. Reply in everyday spoken Hindi written in DEVANAGARI — never Hindi in English letters ("Koi baat nahi ji" ✗ → "कोई बात नहीं जी" ✓), even when their message was in English letters or English words ("No, leave it. Thank you.") — keeping business words (insurance, plan, cover, premium, claim) in English letters. Switch to English only if they speak full English sentences or ask you to.`;
   if (opener) out += `\n\nYOU HAVE ALREADY SAID ALOUD, as the start of this reply: "${opener}"\nYour reply is spoken right after those words, as the same breath — so it must begin with what comes AFTER them. Never write those words again, not even as the subject of your sentence — write only what follows them. No reaction, greeting or thanks either.`;
   return out;
 }
@@ -4305,8 +4319,9 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         otpBlock: otpTurnBlock || undefined,
         // AI Calling (A): a phone call gets the phone rules instead of the (student) voice style block
         // (plus the words already spoken as the start of this reply, if any).
+        phoneCompact: !!context.phoneCall || undefined,
         voiceStyleBlock: context.phoneCall
-          ? withSpokenOpener(context.phoneCall.instructions, phoneTurn?.spokenSoFar ?? null, phoneTurn?.callLanguage ?? null)
+          ? withSpokenOpener(context.phoneCall.instructions, phoneTurn?.spokenSoFar ?? null, phoneTurn?.callLanguage ?? null, phoneTurn?.hints ?? null)
           : (context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : undefined),
         skipFaqPrefetch: knowledge.skipFaqPrefetch || undefined,
         identityBlock: identityBlock || undefined,
@@ -4815,7 +4830,10 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         // call. Otherwise the AI tries to call another tool (e.g. get_faqs) instead of
         // synthesizing an answer from the K12 content already in the messages.
         const hasK12ToolResult = toolNames.some(n => n === 'fetch_k12_topic' || n === 'fetch_k12_questions');
-        const continuationTools = hasK12ToolResult ? [] : relevantTools;
+        // Phone: once a call-ending tool ran, the follow-up is only the goodbye — offering end_call again
+        // made the model call it a second time and say nothing ("How can I assist you today?" fallback, 2026-10-17).
+        const PHONE_ENDING_TOOLS = new Set(['end_call', 'do_not_call', 'transfer_to_human']);
+        const continuationTools = hasK12ToolResult ? [] : (context.phoneCall ? relevantTools.filter((t: any) => !PHONE_ENDING_TOOLS.has(t.function?.name)) : relevantTools);
 
         // Lead rules for the follow-up reply: re-planned when capture_lead changed what we know;
         // replaced by the OTP strict block when a code was just sent.
@@ -5156,6 +5174,13 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
             } else {
               finalContent = await this.fixedText(context, "I couldn't find specific curriculum content for that question. Could you try rephrasing it?");
             }
+          } else if (context.phoneCall) {
+            // A call reply that came back empty: a goodbye if the call is ending, else a short prompt — in the call's language.
+            const hindi = context.phoneCall.callLanguage?.() === 'hi';
+            const ending = toolCalls.some((tc: any) => PHONE_ENDING_TOOLS.has(tc.function?.name));
+            finalContent = ending
+              ? (hindi ? 'धन्यवाद जी, आपका दिन अच्छा हो!' : 'Thank you, have a great day!')
+              : (hindi ? 'जी, बताइए — मैं आपकी कैसे मदद करूँ?' : 'Sure — how can I help?');
           } else {
             finalContent = await this.fixedText(context, "How can I assist you today?");
           }
@@ -6344,7 +6369,10 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
       || /^(hi+|hey+|hello+|yo|sup|wassup|bye|goodbye|see you|cya|thanks?|thank you|thx|ty)[\s!.]*$/i.test(msg)
       || !!smallTalkKind(msg, lastAssistant)
       || isConversationMeta(msg)
-      || (!!context.phoneCall && (isBareAcknowledgement(msg) || isShortPhoneAnswer(msg)));
+      || (!!context.phoneCall && (isBareAcknowledgement(msg) || isShortPhoneAnswer(msg)))
+      // Phone: "मुझे आइडिया नहीं है, आप बताओ" builds on the call and the business profile; the
+      // search cost ~1 s before the model even started (live call 2026-10-17).
+      || (!!context.phoneCall && isUnsureCaller(msg));
     if (mode !== 'retrieval') {
       // Legacy: document-chunk RAG + the FAQ pre-fetch in llamaService. Accounts with no
       // knowledge at all and small talk skip both.
@@ -6405,11 +6433,18 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
         passages: bundle.profile?.passages || [],
         // Query embeddings are cached per account (10 min LRU) and shared while in flight.
         embedQuery: context.openaiApiKey
-          ? (text) => embedQueryCached(accountId, text, t => embeddingService.generateEmbedding(t, accountId))
+          ? (text) => {
+            const embedding = embedQueryCached(accountId, text, t => embeddingService.generateEmbedding(t, accountId));
+            if (!context.phoneCall) return embedding;
+            // Phone: the caller is waiting in silence. The query embedding took 0.4-1.9 s on calls (usually 0.4-0.65 s; 400 ms cut off nearly every one and the keyword search alone found nothing)
+            // (2026-10-17) — past PHONE_EMBED_WAIT_MS the keyword search answers alone (the
+            // embedding still finishes into the cache for the next turn).
+            return withinMs(embedding, PHONE_EMBED_WAIT_MS, 'query embedding (phone)');
+          }
           : undefined,
         channel: 'website',
       });
-      console.log(`[Knowledge] ${result.items.length} item(s) (${result.items.map(i => i.source).join(', ') || 'none'}), ${result.tokens} tokens, from ${result.candidates} candidates in ${Date.now() - started}ms${query.isFollowUp ? ' (follow-up query)' : ''}`);
+      console.log(`[Knowledge] ${result.items.length} item(s) (${result.items.map(i => i.source).join(', ') || 'none'}), ${result.tokens} tokens, from ${result.candidates} candidates in ${Date.now() - started}ms (embedding ${result.embedMs ?? '?'}ms, database ${result.dbMs ?? '?'}ms)${query.isFollowUp ? ' (follow-up query)' : ''}`);
       timing?.stage('knowledge', Date.now() - started, `${result.items.length} items`);
       // `searched`: every FAQ was already searched (semantic + keyword, history-aware) for this turn.
       return { text: result.text, itemCount: result.items.length, searched: true };
