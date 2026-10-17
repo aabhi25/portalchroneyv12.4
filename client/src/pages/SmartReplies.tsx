@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -161,7 +162,7 @@ export default function SmartReplies({ channel, headerContent }: SmartRepliesPro
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b px-4 py-3 flex items-center gap-4">
+      <HideInHub><header className="bg-white border-b px-4 py-3 flex items-center gap-4">
         <SidebarTrigger />
         <div className="flex items-center gap-2">
           <div className="p-1 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600">
@@ -169,7 +170,7 @@ export default function SmartReplies({ channel, headerContent }: SmartRepliesPro
           </div>
           <h1 className="text-lg font-semibold">Smart Replies — {channelLabel}</h1>
         </div>
-      </header>
+      </header></HideInHub>
 
       {headerContent}
 

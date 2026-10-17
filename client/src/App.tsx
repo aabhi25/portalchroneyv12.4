@@ -6,8 +6,10 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
-import { WhatsAppSectionPanel } from "@/components/whatsapp/WhatsAppSectionPanel";
-import { getWhatsappSections } from "@/components/whatsapp/sections";
+import { HubFrame } from "@/components/hub/HubFrame";
+import AreaSettingsPage from "@/pages/hub/AreaSettingsPage";
+import WhatsAppHub from "@/components/whatsapp/WhatsAppHub";
+import type { HubAreaId } from "@/navigation/hubAreas";
 import AdminProducts from "@/pages/AdminProducts";
 import WhatsAppCampaigns from "@/pages/WhatsAppCampaigns";
 import WhatsAppCampaignAutomations from "@/pages/WhatsAppCampaignAutomations";
@@ -99,18 +101,14 @@ import InstagramFlows from "@/pages/InstagramFlows";
 import InstagramLeads from "@/pages/InstagramLeads";
 import InstagramInsights from "@/pages/InstagramInsights";
 import InstagramComments from "@/pages/InstagramComments";
-import InstagramHome from "@/pages/InstagramHome";
-import FacebookHome from "@/pages/FacebookHome";
 import FacebookConversations from "@/pages/FacebookConversations";
 import FacebookLeads from "@/pages/FacebookLeads";
 import FacebookFlows from "@/pages/FacebookFlows";
 import FacebookInsights from "@/pages/FacebookInsights";
 import FacebookComments from "@/pages/FacebookComments";
 import TrainingHome from "@/pages/TrainingHome";
-import MoreFeatures from "@/pages/MoreFeatures";
 import MenuBuilder from "@/pages/MenuBuilder";
 import SmartReplies from "@/pages/SmartReplies";
-import WebsiteAgent from "@/pages/WebsiteAgent";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
 // AI Calling (C)
 import { RequireAiCalling } from "@/components/calling/RequireAiCalling";
@@ -135,6 +133,9 @@ import NotFound from "@/pages/not-found";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
 import { UsageLimitBanner } from "@/components/UsageLimitBanner";
 import type { MeResponseDto } from "@shared/dto";
+
+/** Areas whose Settings tab is /admin/<area>/settings (see navigation/hubAreas.ts). */
+const AREA_SETTINGS_IDS: HubAreaId[] = ["leads", "website", "whatsapp", "instagram", "facebook", "vista"];
 
 function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
   const [location, setLocation] = useLocation();
@@ -230,7 +231,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
           </div>
         </header>
         <div className="flex-1 overflow-auto">
-          <WhatsAppSectionPanel user={user}>
+          <HubFrame user={user}>
           <Switch>
             <Route path="/admin/content-sync">
               {() => canManageTopScholarContent ? <ContentSync /> : <Redirect to="/" />}
@@ -321,7 +322,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 </Route>
                 <Route path="/ai-insights" component={AIInsights} />
                 <Route path="/conversations" component={Conversations} />
-                <Route path="/train-chroney" component={TrainChroney} />
+                <Route path="/train-chroney">{() => <TrainChroney />}</Route>
                 <Route path="/admin/k12/content">
                   {() => isTopScholarAccount ? <Redirect to="/admin/topscholar/content" /> : <K12Content />}
                 </Route>
@@ -352,7 +353,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/uploads" component={Uploads} />
                 <Route path="/admin/jewelry-image-generator" component={JewelryImageGenerator} />
                 <Route path="/admin/faqs" component={AdminFaqs} />
-                <Route path="/admin/leads" component={AdminLeads} />
+                <Route path="/admin/leads">{() => <AdminLeads />}</Route>
                 <Route path="/question-bank" component={QuestionBank} />
                 <Route path="/conversation-journeys" component={ConversationJourneys} />
                 <Route path="/guidance-campaigns/:id/settings" component={GuidanceCampaignSettings} />
@@ -363,15 +364,13 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/tickets" component={SupportTickets} />
                 <Route path="/automation-analytics" component={AutomationAnalytics} />
                 <Route path="/admin/calendar" component={Calendar} />
-                <Route path="/admin/whatsapp">
-                  {() => {
-                    const wa = user?.businessAccount;
-                    const marketingEnabled = wa?.whatsappEnabled === true && wa?.whatsappMarketingEnabled === true;
-                    // Derive from the shared section definition so this redirect can't drift
-                    // when sections are reordered.
-                    const firstHref = getWhatsappSections({ marketingEnabled })[0].items[0].href;
-                    return <Redirect to={firstHref} />;
-                  }}
+                <Route path="/admin/whatsapp"><Redirect to="/admin/whatsapp/overview" /></Route>
+                <Route path="/admin/whatsapp/overview">
+                  {() => (
+                    <div className="mx-auto w-full max-w-[1400px] px-4 py-6 md:px-8">
+                      <WhatsAppHub marketingEnabled={user?.businessAccount?.whatsappEnabled === true && user?.businessAccount?.whatsappMarketingEnabled === true} />
+                    </div>
+                  )}
                 </Route>
                 <Route path="/admin/whatsapp-hub/:sectionId" component={WhatsAppSectionHub} />
                 <Route path="/admin/whatsapp-conversations">{() => <WhatsApp />}</Route>
@@ -405,14 +404,14 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/whatsapp-whitelist">{() => <WhatsApp />}</Route>
                 <Route path="/admin/wa-insights" component={WAInsights} />
                 <Route path="/admin/training" component={TrainingHome} />
-                <Route path="/admin/instagram" component={InstagramHome} />
+                <Route path="/admin/instagram"><Redirect to="/admin/instagram-conversations" /></Route>
                 <Route path="/admin/instagram-conversations" component={InstagramConversations} />
                 <Route path="/admin/instagram-flows" component={InstagramFlows} />
                 <Route path="/admin/instagram-leads">{() => <InstagramLeads />}</Route>
                 <Route path="/admin/instagram-insights" component={InstagramInsights} />
                 <Route path="/admin/instagram-comments" component={InstagramComments} />
                 <Route path="/admin/instagram-smart-replies">{() => <SmartReplies channel="instagram" />}</Route>
-                <Route path="/admin/facebook" component={FacebookHome} />
+                <Route path="/admin/facebook"><Redirect to="/admin/facebook-conversations" /></Route>
                 <Route path="/admin/facebook-conversations" component={FacebookConversations} />
                 <Route path="/admin/facebook-leads" component={FacebookLeads} />
                 <Route path="/admin/facebook-flows" component={FacebookFlows} />
@@ -428,23 +427,30 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/about" component={About} />
                 <Route path="/admin/scan-docs" component={ScanDocs} />
                 <Route path="/admin/url-training" component={UrlTraining} />
-                <Route path="/admin/website" component={WebsiteAgent} />
-                <Route path="/admin/more">{() => <MoreFeatures user={user} />}</Route>
+                <Route path="/admin/website"><Redirect to="/conversations" /></Route>
+                <Route path="/admin/website/leads">{() => <AdminLeads channel="website" />}</Route>
                 <Route path="/admin/menu-builder" component={MenuBuilder} />
                 <Route path="/admin/smart-replies">
                   <SmartReplies channel="website" headerContent={<TrainingNavTabs />} />
                 </Route>
-                {/* Settings hub. Old standalone settings routes redirect into it (query string kept). */}
-                <Route path={SETTINGS_PATHS.root}>{() => <SettingsHub user={user} />}</Route>
-                <Route path={`${SETTINGS_PATHS.root}/*`}>{() => <SettingsHub user={user} />}</Route>
+                {/* Each area's own Settings tab (Phone calls keeps its page above). */}
+                <Route path="/admin/:area/settings/:key?">
+                  {({ area, key }) => AREA_SETTINGS_IDS.includes(area as HubAreaId)
+                    ? <AreaSettingsPage areaId={area as HubAreaId} itemKey={key} user={user} />
+                    : <NotFound />}
+                </Route>
+                {/* Old addresses redirect to where those screens live now (query string kept). Before the hub's catch-all. */}
                 {Object.entries(LEGACY_SETTINGS_REDIRECTS).map(([from, to]) => (
                   <Route key={from} path={from}>{() => <Redirect to={`${to}${window.location.search}`} replace />}</Route>
                 ))}
+                {/* Account Settings hub: login, connected apps, AI usage. */}
+                <Route path={SETTINGS_PATHS.root}>{() => <SettingsHub user={user} />}</Route>
+                <Route path={`${SETTINGS_PATHS.root}/*`}>{() => <SettingsHub user={user} />}</Route>
               </>
             )}
             <Route component={NotFound} />
           </Switch>
-          </WhatsAppSectionPanel>
+          </HubFrame>
         </div>
       </SidebarInset>
     </>

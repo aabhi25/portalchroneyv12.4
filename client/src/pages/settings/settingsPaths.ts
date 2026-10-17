@@ -1,5 +1,6 @@
 /**
- * Every URL inside the Settings hub (/admin/settings/...), in one place.
+ * Every settings URL, in one place: the account Settings hub (/admin/settings/...) and the
+ * settings that now live inside their own area (/admin/<area>/settings/...).
  *
  * Kept free of React imports so any page can link into the hub without pulling the hub (and
  * every settings screen it embeds) into its own import graph.
@@ -9,33 +10,27 @@ export const SETTINGS_ROOT = "/admin/settings";
 export const SETTINGS_PATHS = {
   root: SETTINGS_ROOT,
 
-  // Account
+  // Account-wide (stay in the Settings hub)
   account: `${SETTINGS_ROOT}/account`,
   usage: `${SETTINGS_ROOT}/usage`,
-
-  // Channels
-  website: `${SETTINGS_ROOT}/channels/website`,
-  whatsappConnection: `${SETTINGS_ROOT}/channels/whatsapp/connection`,
-  whatsappAiReplies: `${SETTINGS_ROOT}/channels/whatsapp/ai-replies`,
-  whatsappFlowSettings: `${SETTINGS_ROOT}/channels/whatsapp/flow-settings`,
-  whatsappLeadCapture: `${SETTINGS_ROOT}/channels/whatsapp/lead-capture`,
-  instagramConnection: `${SETTINGS_ROOT}/channels/instagram/connection`,
-  instagramLeadCapture: `${SETTINGS_ROOT}/channels/instagram/lead-capture`,
-  instagramComments: `${SETTINGS_ROOT}/channels/instagram/comments`,
-  facebookConnection: `${SETTINGS_ROOT}/channels/facebook/connection`,
-  facebookComments: `${SETTINGS_ROOT}/channels/facebook/comments`,
-
-  // Integrations
   integrations: `${SETTINGS_ROOT}/integrations`,
 
-  // Lead privacy & data
-  leadPrivacy: `${SETTINGS_ROOT}/lead-privacy`,
-  dataRetention: `${SETTINGS_ROOT}/data-retention`,
-  otp: `${SETTINGS_ROOT}/otp`,
-
-  // Other
-  conversationCategories: `${SETTINGS_ROOT}/conversation-categories`,
-  visualSearch: `${SETTINGS_ROOT}/visual-search`,
+  // These belong to one area and live in that area's Settings tab (see navigation/hubAreas.ts).
+  website: "/admin/website/settings/appearance",
+  whatsappConnection: "/admin/whatsapp/settings/connection",
+  whatsappAiReplies: "/admin/whatsapp/settings/ai-replies",
+  whatsappFlowSettings: "/admin/whatsapp/settings/journey-settings",
+  whatsappLeadCapture: "/admin/whatsapp/settings/lead-capture",
+  instagramConnection: "/admin/instagram/settings/connection",
+  instagramLeadCapture: "/admin/instagram/settings/lead-capture",
+  instagramComments: "/admin/instagram/settings/comments",
+  facebookConnection: "/admin/facebook/settings/connection",
+  facebookComments: "/admin/facebook/settings/comments",
+  leadPrivacy: "/admin/leads/settings/export",
+  dataRetention: "/admin/leads/settings/auto-delete",
+  otp: "/admin/website/settings/verification",
+  conversationCategories: "/admin/website/settings/categories",
+  visualSearch: "/admin/vista/settings/visual-search",
 } as const;
 
 export type IntegrationTabId = "leadsquared" | "salesforce" | "custom-crm" | "shopify" | "erp";
@@ -73,4 +68,21 @@ export const LEGACY_SETTINGS_REDIRECTS: Record<string, string> = {
   "/admin/otp-settings": SETTINGS_PATHS.otp,
   "/admin/category-settings": SETTINGS_PATHS.conversationCategories,
   "/admin/visual-search-settings": SETTINGS_PATHS.visualSearch,
+  "/admin/more": "/admin/website/settings",
+  // Settings hub addresses from before settings moved into their areas (October 2026).
+  [`${SETTINGS_ROOT}/channels/website`]: SETTINGS_PATHS.website,
+  [`${SETTINGS_ROOT}/channels/whatsapp/connection`]: SETTINGS_PATHS.whatsappConnection,
+  [`${SETTINGS_ROOT}/channels/whatsapp/ai-replies`]: SETTINGS_PATHS.whatsappAiReplies,
+  [`${SETTINGS_ROOT}/channels/whatsapp/flow-settings`]: SETTINGS_PATHS.whatsappFlowSettings,
+  [`${SETTINGS_ROOT}/channels/whatsapp/lead-capture`]: SETTINGS_PATHS.whatsappLeadCapture,
+  [`${SETTINGS_ROOT}/channels/instagram/connection`]: SETTINGS_PATHS.instagramConnection,
+  [`${SETTINGS_ROOT}/channels/instagram/lead-capture`]: SETTINGS_PATHS.instagramLeadCapture,
+  [`${SETTINGS_ROOT}/channels/instagram/comments`]: SETTINGS_PATHS.instagramComments,
+  [`${SETTINGS_ROOT}/channels/facebook/connection`]: SETTINGS_PATHS.facebookConnection,
+  [`${SETTINGS_ROOT}/channels/facebook/comments`]: SETTINGS_PATHS.facebookComments,
+  [`${SETTINGS_ROOT}/lead-privacy`]: SETTINGS_PATHS.leadPrivacy,
+  [`${SETTINGS_ROOT}/data-retention`]: SETTINGS_PATHS.dataRetention,
+  [`${SETTINGS_ROOT}/otp`]: SETTINGS_PATHS.otp,
+  [`${SETTINGS_ROOT}/conversation-categories`]: SETTINGS_PATHS.conversationCategories,
+  [`${SETTINGS_ROOT}/visual-search`]: SETTINGS_PATHS.visualSearch,
 };

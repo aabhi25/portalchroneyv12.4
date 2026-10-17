@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -704,7 +705,7 @@ export default function ChannelFlows({ channel }: { channel: SocialChannel }) {
       {c.usesTabBar ? (
         <InstagramTabBar activeTab="flows" />
       ) : (
-        <header className="sticky top-0 z-50 flex items-center gap-4 border-b bg-gradient-to-r from-blue-600 to-blue-500 px-4 h-14 shrink-0">
+        <HideInHub><header className="sticky top-0 z-50 flex items-center gap-4 border-b bg-gradient-to-r from-blue-600 to-blue-500 px-4 h-14 shrink-0">
           <SidebarTrigger className="text-white hover:bg-blue-700/50" />
           <Button variant="ghost" size="sm" onClick={() => selectedFlow ? setSelectedFlow(null) : setLocation(c.homePath)} className="gap-1 text-white/80 hover:text-white hover:bg-blue-700/50">
             <ArrowLeft className="w-4 h-4" />
@@ -735,7 +736,7 @@ export default function ChannelFlows({ channel }: { channel: SocialChannel }) {
               <h1 className="text-lg font-semibold text-white">Facebook AI Flows</h1>
             </div>
           )}
-        </header>
+        </header></HideInHub>
       )}
 
       <div className={c.usesTabBar ? "p-6" : "flex-1 overflow-y-auto p-4 md:p-6"}>

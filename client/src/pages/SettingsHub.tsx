@@ -12,7 +12,7 @@ import { buildSettingsGroups, findSettingsItem, type SettingsGroup, type Setting
 import { SETTINGS_PATHS } from "./settings/settingsPaths";
 
 /** Keeps one broken settings screen from taking the whole app down. */
-class SettingsErrorBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
+export class SettingsErrorBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
   state = { error: null as Error | null };
   static getDerivedStateFromError(error: Error) {
     return { error };
@@ -157,9 +157,9 @@ function Overview({ groups, onNavigate }: { groups: SettingsGroup[]; onNavigate:
 }
 
 /**
- * The Settings hub (/admin/settings and /admin/settings/...): one place for every account,
- * channel, integration and privacy setting. Each entry renders the existing settings screen
- * inside this layout; the old standalone routes redirect here (see LEGACY_SETTINGS_REDIRECTS).
+ * The account Settings hub (/admin/settings and /admin/settings/...): only what applies to the
+ * whole account (login, connected apps, AI usage). Settings for one area live in that area's
+ * Settings tab (navigation/hubAreas.ts); old addresses redirect (see LEGACY_SETTINGS_REDIRECTS).
  */
 export default function SettingsHub({ user }: { user: MeResponseDto | null }) {
   const [location, setLocation] = useLocation();
@@ -205,7 +205,7 @@ export default function SettingsHub({ user }: { user: MeResponseDto | null }) {
       <>
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-gray-900">Settings</h2>
-          <p className="text-sm text-muted-foreground mt-1">Account, channels, integrations and privacy — all in one place.</p>
+          <p className="text-sm text-muted-foreground mt-1">Things that apply to your whole account. Settings for one AI agent are in that agent's Settings tab, and lead privacy is under Leads.</p>
         </div>
         <Overview groups={groups} onNavigate={setLocation} />
       </>

@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { useInHubFrame } from "@/components/hub/hubContext";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Users, MessagesSquare, Route, BarChart3, MessageSquareText, Camera } from "lucide-react";
 
@@ -15,7 +16,11 @@ interface InstagramTabBarProps {
 }
 
 export default function InstagramTabBar({ activeTab }: InstagramTabBarProps) {
+  const inHub = useInHubFrame();
   const [, setLocation] = useLocation();
+
+  // Inside an area frame the frame already shows these tabs.
+  if (inHub) return null;
 
   return (
     <>

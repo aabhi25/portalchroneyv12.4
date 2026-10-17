@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { MessageSquare, Users, MessageCircle, TrendingUp, ArrowLeft, BarChart3, Facebook } from "lucide-react";
@@ -44,7 +45,7 @@ export default function FacebookInsights() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50">
-        <header className="bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 flex items-center gap-4">
+        <HideInHub><header className="bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 flex items-center gap-4">
           <SidebarTrigger />
           <Button variant="ghost" size="sm" onClick={() => setLocation("/admin/facebook")} className="gap-1 text-white/80 hover:text-white hover:bg-white/10">
             <ArrowLeft className="w-4 h-4" />
@@ -56,7 +57,7 @@ export default function FacebookInsights() {
             </div>
             <h1 className="text-lg font-semibold text-white">Facebook Insights</h1>
           </div>
-        </header>
+        </header></HideInHub>
         <div className="p-6 space-y-6 max-w-7xl mx-auto">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {[1, 2, 3, 4].map((i) => (
@@ -76,7 +77,7 @@ export default function FacebookInsights() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 flex items-center gap-4">
+      <HideInHub><header className="bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 flex items-center gap-4">
         <SidebarTrigger />
         <Button variant="ghost" size="sm" onClick={() => setLocation("/admin/facebook")} className="gap-1 text-white/80 hover:text-white hover:bg-white/10">
           <ArrowLeft className="w-4 h-4" />
@@ -88,7 +89,7 @@ export default function FacebookInsights() {
           </div>
           <h1 className="text-lg font-semibold text-white">Facebook Insights</h1>
         </div>
-      </header>
+      </header></HideInHub>
 
       <div className="p-6 space-y-6 max-w-7xl mx-auto">
         <div>

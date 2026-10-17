@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useInHubFrame } from "@/components/hub/hubContext";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import type { MeResponseDto } from "@shared/dto";
@@ -48,9 +49,11 @@ export function RequireAiCalling({ children }: { children: ReactNode }) {
 /** Page title + the four Phone calls tabs (handy on phones where the sidebar is hidden). */
 export function CallingPageHeader({ title, description, actions }: { title: string; description?: string; actions?: ReactNode }) {
   const [location, setLocation] = useLocation();
+  // Inside the Phone calls area frame the tabs are already shown above the page.
+  const inHub = useInHubFrame();
   return (
     <div className="mb-4 space-y-3">
-      <div className="flex gap-1 overflow-x-auto -mx-1 px-1 pb-1" role="tablist" aria-label="Phone calls">
+      <div className={`flex gap-1 overflow-x-auto -mx-1 px-1 pb-1 ${inHub ? "hidden" : ""}`} role="tablist" aria-label="Phone calls">
         {CALLING_NAV_ITEMS.map(item => {
           const active = item.matches(location);
           return (

@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -15,7 +16,7 @@ export default function TrainingHome() {
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden="true">
         <GraduationCap className="w-[400px] h-[400px] text-purple-500/[0.04]" strokeWidth={1} />
       </div>
-      <header className="bg-white border-b px-4 py-3 flex items-center gap-4 relative z-10">
+      <HideInHub><header className="bg-white border-b px-4 py-3 flex items-center gap-4 relative z-10">
         <SidebarTrigger />
         <div className="flex items-center gap-2">
           <div className="p-1 rounded-lg bg-gradient-to-br from-purple-500 to-indigo-600">
@@ -23,7 +24,7 @@ export default function TrainingHome() {
           </div>
           <h1 className="text-lg font-semibold">Training</h1>
         </div>
-      </header>
+      </header></HideInHub>
 
       <div className="p-6 relative z-10">
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">

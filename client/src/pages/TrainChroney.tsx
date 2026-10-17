@@ -134,7 +134,8 @@ function withChannels(instr: Instruction, channels: readonly string[] | null | u
   return clean ? { ...rest, channels: clean } : rest;
 }
 
-export default function TrainChroney() {
+/** `only="lead-training"` shows just the lead training settings (used by Website chat › Settings). */
+export default function TrainChroney({ only }: { only?: "lead-training" } = {}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [instructions, setInstructions] = useState<Instruction[]>([]);
@@ -1192,11 +1193,11 @@ export default function TrainChroney() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <TrainingNavTabs />
-      <div className="p-6 md:p-8 lg:p-12 max-w-5xl mx-auto">
+    <div className={only ? "" : "min-h-screen bg-background"}>
+      {!only && <TrainingNavTabs />}
+      <div className={only ? "" : "p-6 md:p-8 lg:p-12 max-w-5xl mx-auto"}>
         {/* Header Section */}
-        <div className="mb-8">
+        <div className={only ? "hidden" : "mb-8"}>
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center shadow-lg">
@@ -1255,7 +1256,7 @@ export default function TrainChroney() {
         </div>
 
         {/* Legacy Data Migration Banner */}
-        {hasLegacyData && (
+        {hasLegacyData && !only && (
           <Card className="mb-6 border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20">
             <CardContent className="pt-6">
               <div className="flex items-start gap-3">
@@ -1294,9 +1295,9 @@ export default function TrainChroney() {
           </Card>
         )}
 
-        {!hasLegacyData && (
-          <Tabs defaultValue="instructions" className="w-full">
-            <TabsList className="w-full h-auto p-0 bg-transparent border-b border-gray-200 dark:border-gray-800 rounded-none gap-0 justify-start mb-6">
+        {(!hasLegacyData || only) && (
+          <Tabs defaultValue={only ?? "instructions"} className="w-full">
+            <TabsList className={`w-full h-auto p-0 bg-transparent border-b border-gray-200 dark:border-gray-800 rounded-none gap-0 justify-start mb-6 ${only ? "hidden" : ""}`}>
               <TabsTrigger 
                 value="instructions" 
                 className="gap-2 px-6 py-3 rounded-none border-b-2 border-transparent data-[state=active]:border-purple-600 data-[state=active]:bg-purple-50 dark:data-[state=active]:bg-purple-950/30 data-[state=active]:text-purple-700 dark:data-[state=active]:text-purple-400 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-all duration-200 data-[state=active]:shadow-none"

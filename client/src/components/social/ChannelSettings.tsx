@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -162,7 +163,7 @@ export default function ChannelSettings({ channel, embedded = false }: { channel
       {embedded ? null : c.usesTabBar ? (
         <InstagramTabBar activeTab="" />
       ) : (
-        <header className="sticky top-0 z-50 flex items-center gap-4 border-b bg-background px-4 h-14 shrink-0">
+        <HideInHub><header className="sticky top-0 z-50 flex items-center gap-4 border-b bg-background px-4 h-14 shrink-0">
           <SidebarTrigger />
           <Button variant="ghost" size="sm" onClick={() => setLocation(c.homePath)} className="gap-1 text-muted-foreground hover:text-foreground">
             <ArrowLeft className="w-4 h-4" />
@@ -172,7 +173,7 @@ export default function ChannelSettings({ channel, embedded = false }: { channel
             <Settings className="w-5 h-5 text-blue-500" />
             <h1 className="text-lg font-semibold">{c.label} AI Agent Settings</h1>
           </div>
-        </header>
+        </header></HideInHub>
       )}
 
       <div className={embedded ? "space-y-6 max-w-3xl" : c.usesTabBar ? "p-6 space-y-6" : "flex-1 overflow-y-auto p-4 md:p-6 space-y-6 max-w-3xl"}>

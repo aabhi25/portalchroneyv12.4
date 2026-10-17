@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { useInHubFrame } from "@/components/hub/hubContext";
 import { integrationPath } from "@/pages/settings/settingsPaths";
 import { Link2, Sparkles, ClipboardList, Percent, Lightbulb, LayoutGrid, MoreHorizontal } from "lucide-react";
 
@@ -13,7 +14,11 @@ const tabs = [
 ];
 
 export default function MoreFeaturesNavTabs() {
+  const inHub = useInHubFrame();
   const [location, setLocation] = useLocation();
+
+  // Inside an area frame the frame already shows these tabs.
+  if (inHub) return null;
 
   return (
     <div className="bg-white border-b px-4 py-2 flex items-center gap-1 overflow-x-auto">

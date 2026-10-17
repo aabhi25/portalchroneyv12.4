@@ -103,7 +103,8 @@ function safeExcelCell(value: unknown): string {
   return /^[=+\-@]/.test(text) ? `'${text}` : text;
 }
 
-export default function AdminLeads() {
+/** `channel` shows only that channel's leads (Website chat › Leads); without it, every channel. */
+export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) {
   const { toast } = useToast();
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
@@ -111,7 +112,7 @@ export default function AdminLeads() {
   const [fromDate, setFromDate] = useState<Date | undefined>(undefined);
   const [toDate, setToDate] = useState<Date | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState('');
-  const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all');
+  const [channelFilter, setChannelFilter] = useState<ChannelFilter>(channel ?? 'all');
   const prevFiltersRef = useRef({ datePreset, fromDate, toDate, searchQuery, channelFilter });
   const [, setLocation] = useLocation();
   const [channelDetailsRow, setChannelDetailsRow] = useState<UnifiedLeadRow | null>(null);
@@ -875,7 +876,7 @@ export default function AdminLeads() {
                 )}
               </div>
 
-              {hasOtherChannels && (
+              {hasOtherChannels && !channel && (
                 <Select value={channelFilter} onValueChange={(v) => setChannelFilter(v as ChannelFilter)}>
                   <SelectTrigger className="w-full sm:w-[160px]" data-testid="select-channel-filter" aria-label="Channel">
                     <SelectValue placeholder="All channels" />

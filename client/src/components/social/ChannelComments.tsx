@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
@@ -112,7 +113,7 @@ export default function ChannelComments({ channel }: { channel: SocialChannel })
           </div>
         </>
       ) : (
-        <header className="sticky top-0 z-50 flex items-center gap-4 border-b px-4 h-14 shrink-0 bg-gradient-to-r from-blue-600 to-blue-500 text-white">
+        <HideInHub><header className="sticky top-0 z-50 flex items-center gap-4 border-b px-4 h-14 shrink-0 bg-gradient-to-r from-blue-600 to-blue-500 text-white">
           <SidebarTrigger />
           <Button variant="ghost" size="sm" onClick={() => setLocation(c.homePath)} className="gap-1 text-white/80 hover:text-white hover:bg-white/10">
             <ArrowLeft className="w-4 h-4" />
@@ -123,7 +124,7 @@ export default function ChannelComments({ channel }: { channel: SocialChannel })
             <h1 className="text-lg font-semibold">{c.label} Comment Auto-Replies</h1>
           </div>
           {settingsButton("border-white/30 text-white hover:bg-white/10 hover:text-white")}
-        </header>
+        </header></HideInHub>
       )}
 
       <div className={c.usesTabBar ? "p-6 space-y-4" : "flex-1 overflow-y-auto p-4 md:p-6 space-y-4 max-w-4xl"}>

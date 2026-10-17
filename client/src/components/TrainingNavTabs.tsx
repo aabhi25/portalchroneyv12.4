@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { useInHubFrame } from "@/components/hub/hubContext";
 import { Brain, Route, HelpCircle, Building2, FileText, Globe, GraduationCap, Zap } from "lucide-react";
 
 const tabs = [
@@ -13,7 +14,11 @@ const tabs = [
 ];
 
 export default function TrainingNavTabs() {
+  const inHub = useInHubFrame();
   const [location, setLocation] = useLocation();
+
+  // Inside an area frame the frame already shows these tabs.
+  if (inHub) return null;
 
   return (
     <div className="bg-white border-b px-4 py-2 flex items-center gap-1 overflow-x-auto">

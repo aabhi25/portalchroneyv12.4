@@ -1,4 +1,5 @@
 import { useState, useEffect, KeyboardEvent } from "react";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -145,7 +146,7 @@ export default function ChannelCommentSettings({ channel, embedded = false }: { 
       {embedded ? null : c.usesTabBar ? (
         <InstagramTabBar activeTab="comments" />
       ) : (
-        <header className="sticky top-0 z-50 flex items-center gap-4 border-b bg-gradient-to-r from-blue-600 to-blue-500 px-4 h-14 shrink-0">
+        <HideInHub><header className="sticky top-0 z-50 flex items-center gap-4 border-b bg-gradient-to-r from-blue-600 to-blue-500 px-4 h-14 shrink-0">
           <SidebarTrigger className="text-white hover:text-white/80" />
           <Button variant="ghost" size="sm" onClick={() => setLocation(c.adminPath("comments"))} className="gap-1 text-white/80 hover:text-white hover:bg-white/10">
             <ArrowLeft className="w-4 h-4" />
@@ -155,7 +156,7 @@ export default function ChannelCommentSettings({ channel, embedded = false }: { 
             <Settings className="w-5 h-5 text-white" />
             <h1 className="text-lg font-semibold text-white">Comment Auto-Reply Settings</h1>
           </div>
-        </header>
+        </header></HideInHub>
       )}
 
       <div className={embedded ? "space-y-6 max-w-3xl" : c.usesTabBar ? "p-6 space-y-6" : "flex-1 overflow-y-auto p-4 md:p-6 space-y-6 max-w-3xl"}>

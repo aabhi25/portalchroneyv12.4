@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
 import { useQuery, useMutation, useInfiniteQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -1118,7 +1119,7 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
         </div>
       )}
       {!embeddedPage && (
-        <header className="bg-white border-b px-4 py-3 flex items-center gap-4 relative z-10">
+        <HideInHub><header className="bg-white border-b px-4 py-3 flex items-center gap-4 relative z-10">
           <SidebarTrigger />
           <div className="flex items-center gap-2">
             <div className="p-1 rounded-lg bg-green-500">
@@ -1126,7 +1127,7 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
             </div>
             <h1 className="text-lg font-semibold">WhatsApp</h1>
           </div>
-        </header>
+        </header></HideInHub>
       )}
 
 

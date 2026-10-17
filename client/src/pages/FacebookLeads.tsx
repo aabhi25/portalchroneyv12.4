@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { format } from "date-fns";
@@ -131,7 +132,7 @@ export default function FacebookLeads() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 flex items-center gap-4 shadow-sm">
+      <HideInHub><header className="bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 flex items-center gap-4 shadow-sm">
         <SidebarTrigger className="text-white hover:bg-blue-700/50" />
         <Button variant="ghost" size="sm" onClick={() => setLocation("/admin/facebook")} className="gap-1 text-white/80 hover:text-white hover:bg-blue-700/50">
           <ArrowLeft className="w-4 h-4" />
@@ -143,7 +144,7 @@ export default function FacebookLeads() {
           </div>
           <h1 className="text-lg font-semibold text-white">Facebook Leads</h1>
         </div>
-      </header>
+      </header></HideInHub>
 
       <div className="p-6">
         <Card className="shadow-lg border-0 rounded-xl overflow-hidden">

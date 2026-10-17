@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { MessageSquare, Users, FileText, CheckCircle, TrendingUp, ArrowUpRight, BarChart3, ArrowLeft, MessageCircle, MessagesSquare, Route, Settings, ShieldCheck, Activity } from "lucide-react";
@@ -61,13 +62,13 @@ export default function WAInsights() {
 
   const tabBar = (
     <>
-      <header className="bg-white border-b px-4 py-3 flex items-center gap-3">
+      <HideInHub><header className="bg-white border-b px-4 py-3 flex items-center gap-3">
         <SidebarTrigger />
         <div className="flex items-center gap-2">
           <MessageCircle className="h-6 w-6 text-green-600" />
           <h1 className="text-lg font-semibold">WhatsApp</h1>
         </div>
-      </header>
+      </header></HideInHub>
     </>
   );
 

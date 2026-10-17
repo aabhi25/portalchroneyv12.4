@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { HideInHub } from "@/components/hub/HideInHub";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -107,7 +108,7 @@ export default function FacebookConversations() {
 
   return (
     <div className="flex flex-col h-full">
-      <header className="sticky top-0 z-50 flex items-center gap-4 border-b bg-background px-4 h-14 shrink-0">
+      <HideInHub><header className="sticky top-0 z-50 flex items-center gap-4 border-b bg-background px-4 h-14 shrink-0">
         <SidebarTrigger />
         <Button variant="ghost" size="sm" onClick={() => selectedSenderId ? setSelectedSenderId(null) : setLocation("/admin/facebook")} className="gap-1 text-muted-foreground hover:text-foreground">
           <ArrowLeft className="w-4 h-4" />
@@ -129,7 +130,7 @@ export default function FacebookConversations() {
             <Badge variant="secondary" className="ml-2">{conversations.length}</Badge>
           </div>
         )}
-      </header>
+      </header></HideInHub>
 
       <div className="flex-1 overflow-y-auto p-4 md:p-6">
         {!selectedSenderId ? (

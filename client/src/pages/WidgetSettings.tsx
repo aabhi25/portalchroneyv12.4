@@ -297,7 +297,10 @@ function WhatsappNumberField({
 }
 
 
-export default function WidgetSettings() {
+export type WidgetSettingsTab = "appearance" | "behavior" | "nudges" | "voice" | "avatar" | "shopping" | "embed";
+
+/** `initialTab` opens the studio on one section (used by Website chat › Settings). */
+export default function WidgetSettings({ initialTab = "appearance" }: { initialTab?: WidgetSettingsTab } = {}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [chatColor, setChatColor] = useState("#9333ea");
@@ -424,7 +427,7 @@ export default function WidgetSettings() {
   const [newQuickBrowseAction, setNewQuickBrowseAction] = useState("");
   
   // Track active tab for Live Preview visibility
-  const [activeTab, setActiveTab] = useState("appearance");
+  const [activeTab, setActiveTab] = useState<string>(initialTab);
   
   // Collapsible section states for Nudges tab
   const [inactivitySectionOpen, setInactivitySectionOpen] = useState(true);

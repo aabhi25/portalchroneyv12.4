@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { useInHubFrame } from "@/components/hub/hubContext";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Globe, MessageSquare, Contact, BarChart3, LifeBuoy } from "lucide-react";
@@ -9,6 +10,7 @@ interface WebsiteNavTabsProps {
 }
 
 export default function WebsiteNavTabs({ hideHeader }: WebsiteNavTabsProps) {
+  const inHub = useInHubFrame();
   const [location, setLocation] = useLocation();
 
   const { data: user } = useQuery<MeResponseDto>({
@@ -42,6 +44,9 @@ export default function WebsiteNavTabs({ hideHeader }: WebsiteNavTabsProps) {
   };
 
   const activeKey = getActiveKey();
+
+  // Inside an area frame the frame already shows these tabs.
+  if (inHub) return null;
 
   return (
     <div className="relative z-10">
