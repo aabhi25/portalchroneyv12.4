@@ -6,7 +6,6 @@ import WebsiteNavTabs from "@/components/WebsiteNavTabs";
 import { type Lead } from "@shared/schema";
 import { RetentionBanner, RetentionCountdown, type AccountRetention } from "@/components/DataRetentionDialog";
 import { FormSubmissionDetails } from "@/components/FormSubmissionDetails";
-import { LeadCallsPanel } from "@/components/calling/LeadCallsPanel"; // AI Calling (C)
 import type { MeResponseDto } from "@shared/dto";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,7 +34,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Download, Contact, Mail, Phone, MessageSquare, Calendar, User, Eye, ChevronLeft, ChevronRight, Search, X, CheckCircle2, XCircle, RefreshCw, Loader2, Users, GitBranch, MoreVertical, MapPin, Trash2, Upload, Info, Copy, Bot, Sparkles, Image as ImageIcon, FileText, Filter, Ban, AlertTriangle, Clock } from "lucide-react";
+import { Download, Contact, Mail, Phone, MessageSquare, Calendar, User, Eye, ChevronLeft, ChevronRight, Search, X, CheckCircle2, RefreshCw, Loader2, Users, GitBranch, MoreVertical, MapPin, Trash2, Upload, Info, Bot, Sparkles, Image as ImageIcon, FileText, Filter } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -58,8 +57,6 @@ import {
   CHANNEL_META,
   CRM_LABEL,
   ChannelBadge,
-  ChannelLeadDetailsDialog,
-  CrmStatusIcon,
   canResync,
   type ChannelFilter,
   type CrmConfig,
@@ -69,6 +66,8 @@ import {
   type UnifiedLeadsResponse,
   ChannelTrail,
 } from "@/components/leads/UnifiedLeadParts";
+import { LeadCrmCell, type CrmTarget } from "@/components/leads/LeadCrm";
+import { LeadDetailsSheet, websiteRowFromLead } from "@/components/leads/LeadDetailsSheet";
 
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import * as XLSX from "xlsx";
@@ -115,7 +114,8 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>(channel ?? 'all');
   const prevFiltersRef = useRef({ datePreset, fromDate, toDate, searchQuery, channelFilter });
   const [, setLocation] = useLocation();
-  const [channelDetailsRow, setChannelDetailsRow] = useState<UnifiedLeadRow | null>(null);
+  // The lead whose details panel is open (any channel).
+  const [detailsRow, setDetailsRow] = useState<UnifiedLeadRow | null>(null);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
@@ -123,8 +123,6 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [deleteAllConfirmation, setDeleteAllConfirmation] = useState("");
   const [syncAllDialogOpen, setSyncAllDialogOpen] = useState(false);
-  const [selectedLeadDetails, setSelectedLeadDetails] = useState<Lead | null>(null);
-  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [chatDialogOpen, setChatDialogOpen] = useState(false);
   const [chatDialogConversationId, setChatDialogConversationId] = useState<string | null>(null);
   const [formDialogOpen, setFormDialogOpen] = useState(false);
@@ -154,8 +152,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
     apiRequest<Lead>("GET", `/api/leads/${encodeURIComponent(leadId)}`)
       .then(lead => {
         if (cancelled || !lead) return;
-        setSelectedLeadDetails(lead);
-        setDetailsDialogOpen(true);
+        setDetailsRow(websiteRowFromLead(lead));
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -312,31 +309,6 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
     }
   }, [data, totalPages, currentPage]);
 
-  // Sync lead to LeadSquared mutation
-  const syncLeadMutation = useMutation({
-    mutationFn: async (leadId: string) => {
-      return await apiRequest("POST", `/api/leadsquared/sync-lead/${leadId}`);
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/leads"], exact: false });
-      toast({
-        title: "Sync Successful",
-        description: data.message || "Lead synced to LeadSquared successfully",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Sync Failed",
-        description: error.message || "Failed to sync lead to LeadSquared",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const handleSyncLead = (leadId: string) => {
-    syncLeadMutation.mutate(leadId);
-  };
-
   const deleteLeadMutation = useMutation({
     mutationFn: async (leadId: string) => {
       return await apiRequest("DELETE", `/api/leads/${leadId}`);
@@ -433,20 +405,6 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
 
   const isSalesforceConfigured = salesforceSettings?.enabled && salesforceSettings?.hasCredentials;
 
-  // Sync lead to Salesforce mutation
-  const sfSyncLeadMutation = useMutation({
-    mutationFn: async (leadId: string) => {
-      return await apiRequest("POST", `/api/salesforce/sync-lead/${leadId}`);
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/leads"], exact: false });
-      toast({ title: "Synced to Salesforce", description: data.message || "Lead synced to Salesforce successfully" });
-    },
-    onError: (error: any) => {
-      toast({ title: "Salesforce Sync Failed", description: error.message || "Failed to sync lead to Salesforce", variant: "destructive" });
-    },
-  });
-
   // CRMs that Instagram / Facebook / WhatsApp rows can be pushed to (also covers the Custom CRM).
   const { data: crmConfig } = useQuery<CrmConfig | null>({
     queryKey: ["/api/social-leads/crm-config", currentUser?.activeBusinessAccountId || currentUser?.businessAccount?.id],
@@ -455,30 +413,38 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
       if (!res.ok) return null;
       return res.json();
     },
-    enabled: hasOtherChannels,
+    enabled: !!currentUser,
   });
   const configuredSocialCrms: SocialCrm[] = crmConfig
     ? (Object.keys(crmConfig) as SocialCrm[]).filter(c => crmConfig[c].configured)
     : [];
   const socialChannelsEnabled = availableChannels.filter((c): c is 'instagram' | 'facebook' => c === 'instagram' || c === 'facebook');
 
-  // Manual sync / retry for one non-website row.
-  const channelSyncMutation = useMutation({
+  // Manual sync / retry of one lead to one CRM, for any channel.
+  const rowSyncMutation = useMutation({
     mutationFn: async ({ row, crm }: { row: UnifiedLeadRow; crm: SocialCrm }) => {
+      if (row.channel === 'website') {
+        if (crm === 'leadsquared') return await apiRequest("POST", `/api/leadsquared/sync-lead/${row.id}`);
+        if (crm === 'salesforce') return await apiRequest("POST", `/api/salesforce/sync-lead/${row.id}`);
+        return await apiRequest("POST", `/api/custom-crm/sync-lead/${row.id}`, {});
+      }
       if (row.channel === 'whatsapp') {
         return await apiRequest("POST", `/api/custom-crm/sync-lead/${row.id}`, { leadType: 'whatsapp' });
       }
       return await apiRequest("POST", `/api/social-leads/${row.channel}/${row.id}/sync`, { crm });
     },
-    onSuccess: (res: any, { crm }) => {
+    onSuccess: (res: any, { row, crm }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/leads"], exact: false });
-      toast({ title: "Sync complete", description: res?.message || `Lead sent to ${CRM_LABEL[crm]}` });
+      toast({ title: `Sent to ${CRM_LABEL[crm]}`, description: res?.message || `${row.name || 'This lead'} was sent to ${CRM_LABEL[crm]}.` });
     },
     onError: (error: any, { crm }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/leads"], exact: false });
-      toast({ title: `${CRM_LABEL[crm]} sync failed`, description: error.message, variant: "destructive" });
+      toast({ title: `${CRM_LABEL[crm]} sync failed`, description: friendlySyncError(error.message), variant: "destructive" });
     },
   });
+  const isRowSyncing = (row: UnifiedLeadRow, crm: SocialCrm) =>
+    rowSyncMutation.isPending && rowSyncMutation.variables?.row.key === row.key && rowSyncMutation.variables?.crm === crm;
+  const syncRow = (row: UnifiedLeadRow, crm: SocialCrm) => rowSyncMutation.mutate({ row, crm });
 
   // Sync all: website leads to LeadSquared, plus Instagram / Facebook leads to every configured CRM.
   const syncAllMutation = useMutation({
@@ -689,6 +655,41 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
     }));
   };
 
+  /** Every CRM this lead can go to, with its state and whether "Sync now" / "Retry" applies. */
+  const crmTargetsForRow = (row: UnifiedLeadRow): CrmTarget[] => {
+    if (row.channel === 'website') {
+      const out: CrmTarget[] = [];
+      const lsq = row.crm.leadsquared;
+      if (isLeadsquaredConfigured || lsq?.status) {
+        out.push({ crm: 'leadsquared', label: 'LeadSquared', state: lsq, canSync: !!isLeadsquaredConfigured && lsq?.status !== 'synced' && lsq?.status !== 'disqualified' });
+      }
+      const sf = row.crm.salesforce;
+      if (isSalesforceConfigured || sf?.status) {
+        out.push({ crm: 'salesforce', label: 'Salesforce', state: sf, canSync: !!isSalesforceConfigured && (sf?.status === 'failed' || !sf?.status) });
+      }
+      const custom = row.crm.customCrm;
+      if (crmConfig?.custom_crm.configured || custom?.status) {
+        out.push({ crm: 'custom_crm', label: 'Custom CRM', state: custom, canSync: !!crmConfig?.custom_crm.configured && canResync(custom) });
+      }
+      return out;
+    }
+    // WhatsApp leads reach LeadSquared through their own flow; only the Custom CRM can be re-sent from here.
+    return crmTargetsFor(row).map(t => ({ ...t, canSync: canResync(t.state) && (row.channel !== 'whatsapp' || t.crm === 'custom_crm') }));
+  };
+
+  // The open panel follows fresh data after a sync (the row may also sit under another person's row).
+  const liveDetailsRow = detailsRow
+    ? rows.find(r => r.key === detailsRow.key) ?? rows.flatMap(r => r.linked ?? []).find(r => r.key === detailsRow.key) ?? detailsRow
+    : null;
+  const liveDetailsLead = liveDetailsRow?.channel === 'website' ? (liveDetailsRow.detail as Lead) : null;
+  const howLeadCame = (lead: Lead): 'form' | 'journey' | 'chat' | null => {
+    const topics = (lead.topicsOfInterest || []).map((t: string) => t.toLowerCase());
+    if (topics.some((t: string) => t.includes('journey'))) return 'journey';
+    if (topics.some((t: string) => t.includes('via form'))) return 'form';
+    return lead.conversationId ? 'chat' : null;
+  };
+  const detailsCame = liveDetailsLead ? howLeadCame(liveDetailsLead) : null;
+
   // WhatsApp / Instagram / Facebook row of the unified list.
   const renderChannelRow = (row: UnifiedLeadRow) => {
     const extracted: Record<string, any> = row.detail?.extractedData || {};
@@ -696,12 +697,11 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
     const extras = Object.entries(extracted)
       .filter(([k, v]) => !contactKeys.test(k) && v !== null && v !== undefined && typeof v !== 'object' && String(v).trim() !== '')
       .slice(0, 3);
-    const targets = crmTargetsFor(row);
-    const syncing = channelSyncMutation.isPending && channelSyncMutation.variables?.row.key === row.key;
+    const targets = crmTargetsForRow(row);
     const funnel = row.channel === 'whatsapp' ? 'Via WhatsApp' : row.detail?.flowSessionId ? 'Via Flow' : 'Via DM';
     const initials = (row.name || '?').split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
     return (
-      <TableRow key={row.key} className="group hover:bg-purple-50/50 transition-colors cursor-pointer" onClick={() => setChannelDetailsRow(row)} data-testid={`row-lead-${row.channel}`}>
+      <TableRow key={row.key} className="group hover:bg-purple-50/50 transition-colors cursor-pointer" onClick={() => setDetailsRow(row)} data-testid={`row-lead-${row.channel}`}>
         {isSuperAdminImpersonating && <TableCell className="px-3" />}
         <TableCell className="font-medium px-4 py-3">
           <div className="flex flex-col gap-1">
@@ -739,15 +739,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
           <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">{funnel}</span>
         </TableCell>
         <TableCell className="px-2 py-3">
-          <div className="flex items-center gap-1.5">
-            {syncing ? (
-              <div className="text-blue-600"><Loader2 className="h-3.5 w-3.5 animate-spin" /></div>
-            ) : targets.length === 0 ? (
-              <span className="text-gray-300 text-xs">—</span>
-            ) : (
-              targets.map(t => <CrmStatusIcon key={t.crm} label={t.label} state={t.state} />)
-            )}
-          </div>
+          <LeadCrmCell targets={targets} isSyncing={crm => isRowSyncing(row, crm)} onSync={crm => syncRow(row, crm)} />
         </TableCell>
         <TableCell className="text-center px-2 py-3" onClick={(e) => e.stopPropagation()}>
           <DropdownMenu>
@@ -757,7 +749,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem onClick={() => setChannelDetailsRow(row)} className="cursor-pointer">
+              <DropdownMenuItem onClick={() => setDetailsRow(row)} className="cursor-pointer">
                 <Info className="h-4 w-4 mr-2 text-blue-600" />
                 View Details
               </DropdownMenuItem>
@@ -768,15 +760,15 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                 </DropdownMenuItem>
               )}
               {targets
-                .filter(t => canResync(t.state) && (row.channel !== 'whatsapp' || t.crm === 'custom_crm'))
+                .filter(t => t.canSync)
                 .map(t => (
                   <DropdownMenuItem
                     key={t.crm}
-                    onClick={() => channelSyncMutation.mutate({ row, crm: t.crm })}
-                    disabled={channelSyncMutation.isPending}
+                    onClick={() => syncRow(row, t.crm)}
+                    disabled={rowSyncMutation.isPending}
                     className="cursor-pointer"
                   >
-                    <RefreshCw className={`h-4 w-4 mr-2 text-blue-600 ${syncing ? 'animate-spin' : ''}`} />
+                    <RefreshCw className={`h-4 w-4 mr-2 text-blue-600 ${isRowSyncing(row, t.crm) ? 'animate-spin' : ''}`} />
                     {t.state?.status ? `Retry ${t.label} Sync` : `Sync to ${t.label}`}
                   </DropdownMenuItem>
                 ))}
@@ -1044,7 +1036,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
               </p>
             </div>
           ) : (
-            <div className="rounded-xl border border-gray-200 overflow-hidden">
+            <div className="rounded-xl border border-gray-200 overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-gradient-to-r from-purple-50 to-blue-50 hover:from-purple-50 hover:to-blue-50">
@@ -1096,10 +1088,10 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                         Funnel
                       </div>
                     </TableHead>
-                    <TableHead className="font-semibold text-gray-900 w-[90px] px-2 py-3">
+                    <TableHead className="font-semibold text-gray-900 w-[150px] px-2 py-3">
                       <div className="flex items-center gap-2">
                         <Users className="h-4 w-4 text-blue-600" />
-                        {isSalesforceConfigured && <span className="text-xs font-normal text-muted-foreground">LSQ·SF</span>}
+                        CRM
                       </div>
                     </TableHead>
                     <TableHead className="text-center font-semibold text-gray-900 w-[50px] px-2 py-3"></TableHead>
@@ -1134,9 +1126,9 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                     };
 
                     return (
-                      <TableRow key={lead.id} className="group hover:bg-purple-50/50 transition-colors">
+                      <TableRow key={lead.id} className="group hover:bg-purple-50/50 transition-colors cursor-pointer" onClick={() => setDetailsRow(row)} data-testid="row-lead-website">
                         {isSuperAdminImpersonating && (
-                          <TableCell className="px-3">
+                          <TableCell className="px-3" onClick={(e) => e.stopPropagation()}>
                             <Checkbox
                               aria-label={`Select lead ${lead.name || lead.id}`}
                               checked={selectedLeadIds.has(lead.id)}
@@ -1242,38 +1234,9 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                           })()}
                         </TableCell>
                         <TableCell className="px-2 py-3">
-                          <div className="flex items-center gap-1.5">
-                            {/* LeadSquared sync status */}
-                            {lead.leadsquaredSyncStatus === 'synced' ? (
-                              <div className="text-green-600" title="Synced to LeadSquared"><CheckCircle2 className="h-3.5 w-3.5" /></div>
-                            ) : lead.leadsquaredSyncStatus === 'disqualified' ? (
-                              <div className="text-amber-600 cursor-help" title={`Not qualified for LeadSquared: ${lead.leadsquaredSyncError || 'answer did not match the configured qualifying values'}`}><Ban className="h-3.5 w-3.5" /></div>
-                            ) : syncLeadMutation.isPending && syncLeadMutation.variables === lead.id ? (
-                              <div className="text-blue-600"><Loader2 className="h-3.5 w-3.5 animate-spin" /></div>
-                            ) : lead.leadsquaredSyncStatus === 'needs_attention' ? (
-                              <div className="text-amber-600 cursor-help" title={`LeadSquared — needs attention (not retried automatically): ${friendlySyncError(lead.leadsquaredSyncError)}`}><AlertTriangle className="h-3.5 w-3.5" /></div>
-                            ) : lead.leadsquaredSyncStatus === 'failed' || lead.leadsquaredSyncStatus === 'permanently_failed' ? (
-                              <div className="text-red-600 cursor-help" title={`LeadSquared${lead.leadsquaredSyncStatus === 'failed' ? ' (retrying automatically)' : ' (gave up retrying)'}: ${friendlySyncError(lead.leadsquaredSyncError)}`}><XCircle className="h-3.5 w-3.5" /></div>
-                            ) : lead.leadsquaredSyncStatus === 'pending' ? (
-                              <div className="text-gray-400 cursor-help" title="LeadSquared sync in progress"><Clock className="h-3.5 w-3.5" /></div>
-                            ) : (
-                              <span className="text-gray-300 text-xs">—</span>
-                            )}
-                            {/* Salesforce sync status (only if configured) */}
-                            {isSalesforceConfigured && (
-                              lead.salesforceSyncStatus === 'synced' ? (
-                                <div className="text-blue-500" title="Synced to Salesforce"><CheckCircle2 className="h-3.5 w-3.5" /></div>
-                              ) : lead.salesforceSyncStatus === 'failed' ? (
-                                <div className="text-red-600 cursor-help" title={`Salesforce: ${lead.salesforceSyncError || 'Sync failed'}`}><XCircle className="h-3.5 w-3.5" /></div>
-                              ) : sfSyncLeadMutation.isPending && sfSyncLeadMutation.variables === lead.id ? (
-                                <div className="text-blue-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /></div>
-                              ) : (
-                                <span className="text-gray-300 text-xs">—</span>
-                              )
-                            )}
-                          </div>
+                          <LeadCrmCell targets={crmTargetsForRow(row)} isSyncing={crm => isRowSyncing(row, crm)} onSync={crm => syncRow(row, crm)} />
                         </TableCell>
-                        <TableCell className="text-center px-2 py-3">
+                        <TableCell className="text-center px-2 py-3" onClick={(e) => e.stopPropagation()}>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button
@@ -1286,10 +1249,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-40">
                               <DropdownMenuItem 
-                                onClick={() => {
-                                  setSelectedLeadDetails(lead);
-                                  setDetailsDialogOpen(true);
-                                }}
+                                onClick={() => setDetailsRow(row)}
                                 className="cursor-pointer"
                               >
                                 <Info className="h-4 w-4 mr-2 text-blue-600" />
@@ -1340,26 +1300,17 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                                 }
                                 return null;
                               })()}
-                              {isLeadsquaredConfigured && lead.leadsquaredSyncStatus !== 'synced' && lead.leadsquaredSyncStatus !== 'disqualified' && (
-                                <DropdownMenuItem 
-                                  onClick={() => handleSyncLead(lead.id)}
-                                  disabled={syncLeadMutation.isPending}
-                                  className="cursor-pointer"
-                                >
-                                  <RefreshCw className={`h-4 w-4 mr-2 text-blue-600 ${syncLeadMutation.isPending && syncLeadMutation.variables === lead.id ? 'animate-spin' : ''}`} />
-                                  {lead.leadsquaredSyncStatus && lead.leadsquaredSyncStatus !== 'pending' ? 'Retry LSQ Sync' : 'Sync to LeadSquared'}
-                                </DropdownMenuItem>
-                              )}
-                              {isSalesforceConfigured && (lead.salesforceSyncStatus === 'failed' || !lead.salesforceSyncStatus) && (
+                              {crmTargetsForRow(row).filter(t => t.canSync).map(t => (
                                 <DropdownMenuItem
-                                  onClick={() => sfSyncLeadMutation.mutate(lead.id)}
-                                  disabled={sfSyncLeadMutation.isPending}
+                                  key={t.crm}
+                                  onClick={() => syncRow(row, t.crm)}
+                                  disabled={rowSyncMutation.isPending}
                                   className="cursor-pointer"
                                 >
-                                  <RefreshCw className={`h-4 w-4 mr-2 text-blue-500 ${sfSyncLeadMutation.isPending && sfSyncLeadMutation.variables === lead.id ? 'animate-spin' : ''}`} />
-                                  {lead.salesforceSyncStatus === 'failed' ? 'Retry SF Sync' : 'Sync to Salesforce'}
+                                  <RefreshCw className={`h-4 w-4 mr-2 text-blue-600 ${isRowSyncing(row, t.crm) ? 'animate-spin' : ''}`} />
+                                  {t.state?.status && t.state.status !== 'pending' ? `Retry ${t.label} sync` : `Sync to ${t.label}`}
                                 </DropdownMenuItem>
-                              )}
+                              ))}
                               {isSuperAdminImpersonating && (
                                 <DropdownMenuItem 
                                   onClick={() => handleDeleteLead(lead)}
@@ -1555,203 +1506,20 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Lead Details Dialog */}
-      <Dialog open={detailsDialogOpen} onOpenChange={setDetailsDialogOpen}>
-        <DialogContent className="max-w-lg max-h-[60vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Info className="w-5 h-5 text-blue-600" />
-              Lead Details
-            </DialogTitle>
-            <DialogDescription>
-              Complete information about this lead
-            </DialogDescription>
-          </DialogHeader>
-          {selectedLeadDetails && (
-            <div className="space-y-4 py-2">
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-gray-700 border-b pb-1">Contact Information</h4>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <span className="text-gray-500">Name:</span>
-                    <p className="font-medium">{selectedLeadDetails.name || '—'}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Email:</span>
-                    <p className="font-medium">{selectedLeadDetails.email || '—'}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Phone:</span>
-                    <p className="font-medium">{selectedLeadDetails.phone || '—'}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">City:</span>
-                    <p className="font-medium">{selectedLeadDetails.city || '—'}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-gray-700 border-b pb-1">Source Information</h4>
-                <div className="space-y-2 text-sm">
-                  {selectedLeadDetails.sourceUrl && (
-                    <div>
-                      <span className="text-gray-500">Page URL:</span>
-                      <p className="font-medium text-xs break-all text-blue-600">{selectedLeadDetails.sourceUrl}</p>
-                    </div>
-                  )}
-                  <div>
-                    <span className="text-gray-500">Created:</span>
-                    <p className="font-medium">{format(new Date(selectedLeadDetails.createdAt), "PPpp")}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-gray-700 border-b pb-1">LeadSquared Sync</h4>
-                <div className="space-y-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="text-gray-500">Status:</span>
-                    {selectedLeadDetails.leadsquaredSyncStatus === 'synced' ? (
-                      <Badge className="bg-green-100 text-green-700">
-                        <CheckCircle2 className="h-3 w-3 mr-1" />
-                        Synced
-                      </Badge>
-                    ) : selectedLeadDetails.leadsquaredSyncStatus === 'disqualified' ? (
-                      <Badge className="bg-amber-100 text-amber-800">
-                        <Ban className="h-3 w-3 mr-1" />
-                        Not Qualified
-                      </Badge>
-                    ) : selectedLeadDetails.leadsquaredSyncStatus === 'failed' ? (
-                      <Badge className="bg-red-100 text-red-700">
-                        <XCircle className="h-3 w-3 mr-1" />
-                        Failed
-                      </Badge>
-                    ) : (
-                      <Badge className="bg-gray-100 text-gray-600">Not Synced</Badge>
-                    )}
-                  </div>
-                  {selectedLeadDetails.leadsquaredSyncStatus === 'disqualified' && (
-                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                      This lead was not sent to LeadSquared because{' '}
-                      {selectedLeadDetails.leadsquaredSyncError || 'its answer did not match the configured qualifying values'}.
-                    </p>
-                  )}
-                  {selectedLeadDetails.leadsquaredLeadId && (
-                    <div>
-                      <span className="text-gray-500">LeadSquared ID:</span>
-                      <div className="flex items-center gap-2 mt-1">
-                        <code className="text-xs bg-gray-100 px-2 py-1 rounded font-mono">
-                          {selectedLeadDetails.leadsquaredLeadId}
-                        </code>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 w-6 p-0"
-                          onClick={() => {
-                            navigator.clipboard.writeText(selectedLeadDetails.leadsquaredLeadId || '');
-                            toast({
-                              title: "Copied!",
-                              description: "LeadSquared ID copied to clipboard",
-                            });
-                          }}
-                        >
-                          <Copy className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                  {selectedLeadDetails.leadsquaredSyncedAt && (
-                    <div>
-                      <span className="text-gray-500">Synced At:</span>
-                      <p className="font-medium">{format(new Date(selectedLeadDetails.leadsquaredSyncedAt), "PPpp")}</p>
-                    </div>
-                  )}
-                  {selectedLeadDetails.leadsquaredSyncError && (
-                    <div>
-                      <span className="text-gray-500">Error:</span>
-                      <p className="text-red-600 text-sm mt-1 bg-red-50 p-3 rounded">{friendlySyncError(selectedLeadDetails.leadsquaredSyncError)}</p>
-                      {friendlySyncError(selectedLeadDetails.leadsquaredSyncError) !== selectedLeadDetails.leadsquaredSyncError && (
-                        <p className="text-gray-400 text-[10px] mt-1 italic">Technical: {selectedLeadDetails.leadsquaredSyncError}</p>
-                      )}
-                    </div>
-                  )}
-                  {(() => {
-                    const payload = selectedLeadDetails.leadsquaredSyncPayload;
-                    if (!payload || typeof payload !== 'object') return null;
-                    const entries = Object.entries(payload as Record<string, unknown>);
-                    if (entries.length === 0) return null;
-                    return (
-                      <div className="mt-3">
-                        <span className="text-gray-500 block mb-2">Synced Fields:</span>
-                        <div className="bg-gray-50 rounded-md p-3 space-y-1.5 max-h-48 overflow-y-auto">
-                          {entries.map(([key, value]) => {
-                            const strVal = value != null ? String(value) : '—';
-                            const isUrl = strVal.startsWith('http://') || strVal.startsWith('https://');
-                            return (
-                              <div key={key} className="flex text-xs">
-                                <span className="text-gray-600 font-mono min-w-[140px] flex-shrink-0">{key}:</span>
-                                {isUrl ? (
-                                  <a
-                                    href={strVal}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-blue-600 hover:underline break-all"
-                                  >
-                                    {strVal}
-                                  </a>
-                                ) : (
-                                  <span className="text-gray-800 break-all">{strVal}</span>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
-
-              {selectedLeadDetails.topicsOfInterest && selectedLeadDetails.topicsOfInterest.length > 0 && (
-                <div className="space-y-3">
-                  <h4 className="text-sm font-semibold text-gray-700 border-b pb-1">Topics of Interest</h4>
-                  <div className="flex flex-wrap gap-1">
-                    {selectedLeadDetails.topicsOfInterest.map((topic, idx) => (
-                      <Badge key={idx} variant="secondary" className="text-xs">{topic}</Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* AI Calling (C): "Call with AI" + this lead's calls (renders nothing unless enabled). */}
-              <LeadCallsPanel leadId={selectedLeadDetails.id} leadName={selectedLeadDetails.name} phone={selectedLeadDetails.phone} />
-
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-gray-700 border-b pb-1">Internal IDs</h4>
-                <div className="space-y-2 text-xs">
-                  <div>
-                    <span className="text-gray-500">Lead ID:</span>
-                    <code className="ml-2 bg-gray-100 px-2 py-0.5 rounded font-mono">{selectedLeadDetails.id}</code>
-                  </div>
-                  {selectedLeadDetails.conversationId && (
-                    <div>
-                      <span className="text-gray-500">Conversation ID:</span>
-                      <code className="ml-2 bg-gray-100 px-2 py-0.5 rounded font-mono">{selectedLeadDetails.conversationId}</code>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      <ChannelLeadDetailsDialog
-        row={channelDetailsRow}
-        open={!!channelDetailsRow}
-        onOpenChange={(open) => { if (!open) setChannelDetailsRow(null); }}
-        onOpenChannelPage={(path) => { setChannelDetailsRow(null); setLocation(path); }}
+      {/* Lead details panel (every channel) */}
+      <LeadDetailsSheet
+        row={liveDetailsRow}
+        onClose={() => setDetailsRow(null)}
+        targets={liveDetailsRow ? crmTargetsForRow(liveDetailsRow) : []}
+        isSyncing={crm => !!liveDetailsRow && isRowSyncing(liveDetailsRow, crm)}
+        onSync={crm => { if (liveDetailsRow) syncRow(liveDetailsRow, crm); }}
+        onSelectRow={setDetailsRow}
+        onViewChat={liveDetailsLead && detailsCame === 'chat' ? () => handleViewConversation(liveDetailsLead.conversationId!) : undefined}
+        onViewForm={liveDetailsLead && detailsCame === 'form' ? () => { setFormDialogLead(liveDetailsLead); setFormDialogOpen(true); } : undefined}
+        onViewJourney={liveDetailsLead && detailsCame === 'journey' ? () => { setJourneyDialogLeadId(liveDetailsLead.id); setJourneyDialogOpen(true); } : undefined}
+        onOpenChannelPage={liveDetailsRow && CHANNEL_META[liveDetailsRow.channel].page ? () => { const page = CHANNEL_META[liveDetailsRow.channel].page!; setDetailsRow(null); setLocation(page); } : undefined}
+        onDelete={liveDetailsLead && isSuperAdminImpersonating ? () => { const lead = liveDetailsLead; setDetailsRow(null); handleDeleteLead(lead); } : undefined}
+        showInternalIds
       />
 
       <Dialog open={chatDialogOpen} onOpenChange={(open) => { setChatDialogOpen(open); if (!open) setChatDialogConversationId(null); }}>

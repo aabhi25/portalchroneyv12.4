@@ -217,6 +217,7 @@ async function hydrate(accountId: string, page: { channel: LeadChannel; id: stri
         crm: {
           leadsquared: crmState(l.leadsquaredSyncStatus, l.leadsquaredSyncError, l.leadsquaredSyncedAt, l.leadsquaredLeadId),
           salesforce: crmState(l.salesforceSyncStatus, l.salesforceSyncError, l.salesforceSyncedAt, l.salesforceLeadId),
+          customCrm: crmState(l.customCrmSyncStatus, l.customCrmSyncError, l.customCrmSyncedAt, l.customCrmLeadId),
         },
         detail: protectWebsiteLead(l, mask),
       });
