@@ -21,7 +21,7 @@ async function leadAccount(req: Request, res: Response): Promise<string | null> 
 }
 
 /**
- * GET /api/leads/unified?channel=all|website|whatsapp|instagram|facebook&search=&from=&to=&page=&limit=
+ * GET /api/leads/unified?channel=all|website|whatsapp|instagram|facebook&status=&search=&from=&to=&page=&limit=
  * Leads from every channel enabled for the account, newest first, paged in SQL.
  */
 router.get("/api/leads/unified", requireAuth, requireBusinessAccount, async (req, res) => {

@@ -48,8 +48,8 @@ export type CrmConfig = Record<SocialCrm, { configured: boolean; autoSync: boole
 export const CHANNEL_META: Record<LeadChannel, { label: string; className: string; icon: typeof Globe; page: string | null }> = {
   website: { label: "Website", className: "bg-purple-100 text-purple-700", icon: Globe, page: null },
   whatsapp: { label: "WhatsApp", className: "bg-green-100 text-green-700", icon: MessageCircle, page: "/admin/whatsapp-leads" },
-  instagram: { label: "Instagram", className: "bg-pink-100 text-pink-700", icon: Instagram, page: "/admin/instagram-leads" },
-  facebook: { label: "Facebook", className: "bg-blue-100 text-blue-700", icon: Facebook, page: "/admin/facebook-leads" },
+  instagram: { label: "Instagram", className: "bg-pink-100 text-pink-700", icon: Instagram, page: "/admin/instagram/leads" },
+  facebook: { label: "Facebook", className: "bg-blue-100 text-blue-700", icon: Facebook, page: "/admin/facebook/leads" },
 };
 
 export const CRM_LABEL: Record<SocialCrm, string> = { leadsquared: "LeadSquared", salesforce: "Salesforce", custom_crm: "Custom CRM" };

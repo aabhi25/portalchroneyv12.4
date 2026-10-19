@@ -46,9 +46,15 @@ export function isLeadChannel(v: unknown): v is LeadChannel {
   return typeof v === "string" && (LEAD_CHANNELS as readonly string[]).includes(v);
 }
 
+/** Status of an Instagram / Facebook lead (website and WhatsApp leads have no such status). */
+export const SOCIAL_LEAD_STATUSES = ["new", "contacted", "qualified", "converted"] as const;
+export type SocialLeadStatus = (typeof SOCIAL_LEAD_STATUSES)[number];
+
 export interface UnifiedLeadFilters {
   channel?: LeadChannel | "all";
   search?: string;
+  /** Instagram / Facebook status; when set, only those channels' leads can match. */
+  status?: SocialLeadStatus;
   from?: Date;
   to?: Date;
   /** One row per person (linked website + WhatsApp leads merged); paging and total count persons. */
@@ -147,6 +153,7 @@ function branchSql(channel: LeadChannel, accountId: string, f: UnifiedLeadFilter
   switch (channel) {
     case "website": {
       const conds: SQL[] = [sql`l.business_account_id = ${accountId}`, ...dateConds(sql`l.created_at`, f)];
+      if (f.status) conds.push(sql`FALSE`); // website leads have no status
       if (search) conds.push(sql`(l.name ILIKE ${search} OR l.email ILIKE ${search} OR l.phone ILIKE ${search} OR l.message ILIKE ${search})`);
       const pk = opts.personKey ? sql`, ${websitePersonKeySql()} AS person_key` : sql``;
       return sql`SELECT 'website'::text AS channel, l.id AS id, l.created_at AS captured_at${pk} FROM leads l WHERE ${whereAll(conds)}`;
@@ -158,6 +165,7 @@ function branchSql(channel: LeadChannel, accountId: string, f: UnifiedLeadFilter
         ...dateConds(sql`w.received_at`, f),
       ];
       if (opts.excludeDrafts) conds.push(sql`w.qualified_at IS NOT NULL`);
+      if (f.status) conds.push(sql`FALSE`); // WhatsApp statuses mean something else (processing, rejected, …)
       if (search) {
         conds.push(sql`(w.sender_phone ILIKE ${search} OR w.sender_name ILIKE ${search} OR w.customer_name ILIKE ${search}
           OR w.customer_phone ILIKE ${search} OR w.customer_email ILIKE ${search} OR w.raw_message ILIKE ${search})`);
@@ -171,6 +179,7 @@ function branchSql(channel: LeadChannel, accountId: string, f: UnifiedLeadFilter
       const senderCol = sql.raw(channel === "instagram" ? "s.sender_username" : "s.sender_name");
       const conds: SQL[] = [sql`s.business_account_id = ${accountId}`, ...dateConds(sql`s.received_at`, f)];
       if (search) conds.push(sql`(s.extracted_data::text ILIKE ${search} OR ${senderCol} ILIKE ${search})`);
+      if (f.status) conds.push(sql`s.status = ${f.status}`);
       const pk = opts.personKey ? sql`, NULL::text AS person_key` : sql``;
       return sql`SELECT ${channel}::text AS channel, s.id AS id, s.received_at AS captured_at${pk} FROM ${table} s WHERE ${whereAll(conds)}`;
     }
@@ -452,5 +461,11 @@ export function parseUnifiedLeadFilters(q: Record<string, unknown>): UnifiedLead
   if (from === null || to === null) return { error: "Invalid date" };
   const search = typeof q.search === "string" ? q.search.slice(0, 200) : undefined;
   const groupByPerson = q.groupByPerson === "1" || q.groupByPerson === "true";
-  return { channel: channelRaw as LeadChannel | "all", search, from: from || undefined, to: to || undefined, ...(groupByPerson ? { groupByPerson } : {}) };
+  const statusRaw = typeof q.status === "string" && q.status && q.status !== "all" ? q.status : undefined;
+  if (statusRaw && !(SOCIAL_LEAD_STATUSES as readonly string[]).includes(statusRaw)) return { error: "Unknown status" };
+  return {
+    channel: channelRaw as LeadChannel | "all", search, from: from || undefined, to: to || undefined,
+    ...(statusRaw ? { status: statusRaw as SocialLeadStatus } : {}),
+    ...(groupByPerson ? { groupByPerson } : {}),
+  };
 }

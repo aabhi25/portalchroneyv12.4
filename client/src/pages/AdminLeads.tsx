@@ -110,6 +110,18 @@ const STICKY_ACTIONS = "md:sticky md:right-0 z-[1] w-[52px] min-w-[52px]";
 const STICKY_CRM = "md:sticky md:right-[52px] z-[1] md:shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.15)]";
 const STICKY_ROW_BG = "bg-white group-hover:bg-[#fcfaff]";
 
+// Instagram / Facebook leads carry a status (website and WhatsApp leads don't), shown and
+// filterable when the list is on one of those channels (e.g. Instagram › Leads).
+type SocialStatusFilter = 'all' | 'new' | 'contacted' | 'qualified' | 'converted';
+const SOCIAL_STATUS_LOOK: Record<Exclude<SocialStatusFilter, 'all'>, { label: string; className: string }> = {
+  new: { label: "New", className: "bg-blue-100 text-blue-700" },
+  contacted: { label: "Contacted", className: "bg-yellow-100 text-yellow-700" },
+  qualified: { label: "Qualified", className: "bg-green-100 text-green-700" },
+  converted: { label: "Converted", className: "bg-purple-100 text-purple-700" },
+};
+const isSocialChannel = (c: string): c is 'instagram' | 'facebook' => c === 'instagram' || c === 'facebook';
+const prettyFieldName = (key: string) => key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ').replace(/^./, ch => ch.toUpperCase());
+
 export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) {
   const { toast } = useToast();
   const [currentPage, setCurrentPage] = useState(1);
@@ -119,7 +131,12 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   const [toDate, setToDate] = useState<Date | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState('');
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>(channel ?? 'all');
-  const prevFiltersRef = useRef({ datePreset, fromDate, toDate, searchQuery, channelFilter });
+  const [statusFilter, setStatusFilter] = useState<SocialStatusFilter>('all');
+  // Status, the details column and per-lead delete belong to Instagram / Facebook leads.
+  const socialView = isSocialChannel(channelFilter);
+  const activeStatus: SocialStatusFilter = socialView ? statusFilter : 'all';
+  const [socialToDelete, setSocialToDelete] = useState<UnifiedLeadRow | null>(null);
+  const prevFiltersRef = useRef({ datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus });
   const [, setLocation] = useLocation();
   // The lead whose details panel is open (any channel).
   const [detailsRow, setDetailsRow] = useState<UnifiedLeadRow | null>(null);
@@ -204,13 +221,14 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
     const trimmedSearch = searchQuery.trim();
     if (trimmedSearch) params.append('search', trimmedSearch);
     if (channelFilter !== 'all') params.append('channel', channelFilter);
+    if (activeStatus !== 'all') params.append('status', activeStatus);
     // One row per person: a website visitor who continued on WhatsApp is listed once, with the trail.
     params.append('groupByPerson', '1');
     params.append('page', currentPage.toString());
     params.append('limit', itemsPerPage.toString());
 
     return params.toString() ? `?${params.toString()}` : '';
-  }, [datePreset, fromDate, toDate, searchQuery, channelFilter, currentPage]);
+  }, [datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus, currentPage]);
 
   // All channels the account has (Website, WhatsApp, Instagram, Facebook), merged and paged by the server.
   const { data, isLoading } = useQuery<UnifiedLeadsResponse>({
@@ -231,6 +249,9 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   const leads: Lead[] = rows.filter(r => r.channel === 'website').map(r => r.detail as Lead);
   const availableChannels: LeadChannel[] = data?.channels || ['website'];
   const hasOtherChannels = availableChannels.length > 1;
+  // On Instagram / Facebook › Leads every row has the same channel badge (those leads aren't linked
+  // across channels); Website › Leads keeps it for the Website → WhatsApp trail.
+  const showChannelColumn = hasOtherChannels && !(channel && isSocialChannel(channel));
   const totalPages = Math.ceil((data?.total || 0) / itemsPerPage);
 
   // Selection is limited to the visible page and never carries across accounts or filters.
@@ -297,13 +318,14 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
       prev.fromDate !== fromDate ||
       prev.toDate !== toDate ||
       prev.searchQuery !== searchQuery ||
-      prev.channelFilter !== channelFilter;
+      prev.channelFilter !== channelFilter ||
+      prev.activeStatus !== activeStatus;
 
     if (hasChanged) {
       setCurrentPage(1);
-      prevFiltersRef.current = { datePreset, fromDate, toDate, searchQuery, channelFilter };
+      prevFiltersRef.current = { datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus };
     }
-  }, [datePreset, fromDate, toDate, searchQuery, channelFilter]);
+  }, [datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus]);
 
   // Clamp currentPage to totalPages when results change, reset to page 1 if no results
   useEffect(() => {
@@ -348,6 +370,17 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
       deleteLeadMutation.mutate(leadToDelete.id);
     }
   };
+
+  // Instagram / Facebook leads can be deleted one at a time, as on the old channel pages.
+  const deleteSocialLeadMutation = useMutation({
+    mutationFn: (row: UnifiedLeadRow) => apiRequest("DELETE", `/api/${row.channel}/leads/${encodeURIComponent(row.id)}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"], exact: false });
+      setSocialToDelete(null);
+      toast({ title: "Lead deleted" });
+    },
+    onError: (error: Error) => toast({ title: "Delete failed", description: error.message, variant: "destructive" }),
+  });
 
   const bulkDeleteMutation = useMutation({
     mutationFn: (ids: string[]) => apiRequest<{ deletedCount: number }>("POST", "/api/leads/bulk-delete", { ids }),
@@ -542,6 +575,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
       const trimmedSearch = searchQuery.trim();
       if (trimmedSearch) exportParams.append('search', trimmedSearch);
       if (channelFilter !== 'all') exportParams.append('channel', channelFilter);
+      if (activeStatus !== 'all') exportParams.append('status', activeStatus);
 
       const exportQueryString = exportParams.toString() ? `?${exportParams.toString()}` : '';
 
@@ -701,9 +735,10 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   const renderChannelRow = (row: UnifiedLeadRow) => {
     const extracted: Record<string, any> = row.detail?.extractedData || {};
     const contactKeys = /name|phone|mobile|email|whatsapp/i;
-    const extras = Object.entries(extracted)
-      .filter(([k, v]) => !contactKeys.test(k) && v !== null && v !== undefined && typeof v !== 'object' && String(v).trim() !== '')
-      .slice(0, 3);
+    const allExtras = Object.entries(extracted)
+      .filter(([k, v]) => !contactKeys.test(k) && v !== null && v !== undefined && typeof v !== 'object' && String(v).trim() !== '');
+    const extras = allExtras.slice(0, 3);
+    const statusLook = SOCIAL_STATUS_LOOK[row.detail?.status as Exclude<SocialStatusFilter, 'all'>];
     const targets = crmTargetsForRow(row);
     const funnel = row.channel === 'whatsapp' ? 'Via WhatsApp' : row.detail?.flowSessionId ? 'Via Flow' : 'Via DM';
     const initials = (row.name || '?').split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
@@ -721,13 +756,36 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
             <span className="text-xs text-gray-400 pl-12">{format(new Date(row.capturedAt), "MMM d, h:mm a")}</span>
           </div>
         </TableCell>
-        {hasOtherChannels && <TableCell className="px-4 py-3"><ChannelTrail row={row} /></TableCell>}
+        {showChannelColumn && <TableCell className="px-4 py-3"><ChannelTrail row={row} /></TableCell>}
         <TableCell className="px-4 py-3">
           {row.phone ? <span className="text-sm text-green-600 font-mono">{row.phone}</span> : <span className="text-gray-400 text-sm">—</span>}
         </TableCell>
         <TableCell className="px-4 py-3">
           {row.email ? <span className="text-sm text-gray-700 truncate block max-w-[160px]" title={row.email}>{row.email}</span> : <span className="text-gray-400 text-sm">—</span>}
         </TableCell>
+        {socialView ? (
+          <>
+            <TableCell className="px-4 py-3" data-testid="cell-lead-details">
+              {allExtras.length > 0 ? (
+                <dl className="space-y-0.5 text-xs">
+                  {allExtras.slice(0, 6).map(([k, v]) => (
+                    <div key={k} className="flex gap-1.5 max-w-[320px]">
+                      <dt className="shrink-0 text-gray-400">{prettyFieldName(k)}:</dt>
+                      <dd className="truncate text-gray-700" title={String(v)}>{String(v)}</dd>
+                    </div>
+                  ))}
+                  {allExtras.length > 6 && <div className="text-gray-400">+{allExtras.length - 6} more in details</div>}
+                </dl>
+              ) : <span className="text-gray-400 italic text-xs">No details picked up</span>}
+            </TableCell>
+            <TableCell className="px-4 py-3" data-testid="cell-lead-status">
+              {statusLook
+                ? <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusLook.className}`}>{statusLook.label}</span>
+                : <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">{row.detail?.status || "—"}</span>}
+            </TableCell>
+          </>
+        ) : (
+          <>
         <TableCell className="px-4 py-3">
           {typeof extracted.city === 'string' && extracted.city ? <span className="text-sm text-gray-600">{extracted.city}</span> : <span className="text-gray-400 text-sm">—</span>}
         </TableCell>
@@ -742,6 +800,8 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
             </div>
           ) : <span className="text-gray-400 text-sm">—</span>}
         </TableCell>
+          </>
+        )}
         <TableCell className="px-4 py-3">
           <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">{funnel}</span>
         </TableCell>
@@ -760,7 +820,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                 <Info className="h-4 w-4 mr-2 text-blue-600" />
                 View Details
               </DropdownMenuItem>
-              {CHANNEL_META[row.channel].page && (
+              {CHANNEL_META[row.channel].page && channel !== row.channel && (
                 <DropdownMenuItem onClick={() => setLocation(CHANNEL_META[row.channel].page!)} className="cursor-pointer">
                   <Eye className="h-4 w-4 mr-2 text-purple-600" />
                   Open in {CHANNEL_META[row.channel].label}
@@ -779,6 +839,12 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                     {t.state?.status ? `Retry ${t.label} Sync` : `Sync to ${t.label}`}
                   </DropdownMenuItem>
                 ))}
+              {isSocialChannel(row.channel) && (
+                <DropdownMenuItem onClick={() => setSocialToDelete(row)} className="cursor-pointer text-red-600 focus:text-red-600" data-testid="menu-delete-social-lead">
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete lead
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </TableCell>
@@ -801,9 +867,11 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
               </CardTitle>
               </HideInHub>
               <CardDescription>
-                {hasOtherChannels
-                  ? `View and export leads from ${availableChannels.map(c => CHANNEL_META[c].label).join(', ')}`
-                  : 'View and export captured leads from conversations'}
+                {channel
+                  ? `View and export leads from ${CHANNEL_META[channel].label}`
+                  : hasOtherChannels
+                    ? `View and export leads from ${availableChannels.map(c => CHANNEL_META[c].label).join(', ')}`
+                    : 'View and export captured leads from conversations'}
               </CardDescription>
             </div>
               <div className="flex gap-2 flex-wrap justify-end">
@@ -886,6 +954,20 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                     <SelectItem value="all">All channels</SelectItem>
                     {availableChannels.map(c => (
                       <SelectItem key={c} value={c}>{CHANNEL_META[c].label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+
+              {socialView && (
+                <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as SocialStatusFilter)}>
+                  <SelectTrigger className="w-full sm:w-[150px]" data-testid="select-status-filter" aria-label="Status">
+                    <SelectValue placeholder="All statuses" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    {(Object.keys(SOCIAL_STATUS_LOOK) as Exclude<SocialStatusFilter, 'all'>[]).map(v => (
+                      <SelectItem key={v} value={v}>{SOCIAL_STATUS_LOOK[v].label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -988,6 +1070,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
               <div className="flex items-center gap-2 text-sm text-gray-600">
                 <span className="font-medium">Active filters:</span>
                 {channelFilter !== 'all' && <ChannelBadge channel={channelFilter} />}
+                {activeStatus !== 'all' && <Badge variant="secondary">{SOCIAL_STATUS_LOOK[activeStatus].label}</Badge>}
                 {searchQuery && (
                   <Badge variant="secondary" className="gap-1">
                     <Search className="h-3 w-3" />
@@ -1064,7 +1147,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                         Name
                       </div>
                     </TableHead>
-                    {hasOtherChannels && (
+                    {showChannelColumn && (
                       <TableHead className="font-semibold text-gray-900 w-[110px] px-4 py-3">Channel</TableHead>
                     )}
                     <TableHead className="font-semibold text-gray-900 w-[140px] px-4 py-3">
@@ -1079,6 +1162,18 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                         Email
                       </div>
                     </TableHead>
+                    {socialView ? (
+                      <>
+                        <TableHead className="font-semibold text-gray-900 w-[240px] px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <MessageSquare className="h-4 w-4 text-purple-600" />
+                            Details picked up
+                          </div>
+                        </TableHead>
+                        <TableHead className="font-semibold text-gray-900 w-[110px] px-4 py-3">Status</TableHead>
+                      </>
+                    ) : (
+                      <>
                     <TableHead className="font-semibold text-gray-900 w-[100px] px-4 py-3">
                       <div className="flex items-center gap-2">
                         <MapPin className="h-4 w-4 text-red-500" />
@@ -1091,6 +1186,8 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                         Topics
                       </div>
                     </TableHead>
+                      </>
+                    )}
                     <TableHead className="font-semibold text-gray-900 w-[120px] px-4 py-3">
                       <div className="flex items-center gap-2">
                         <Filter className="h-4 w-4 text-indigo-600" />
@@ -1172,7 +1269,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                             )}
                           </div>
                         </TableCell>
-                        {hasOtherChannels && (
+                        {showChannelColumn && (
                           <TableCell className="px-4 py-3"><ChannelTrail row={row} /></TableCell>
                         )}
                         <TableCell className="px-4 py-3">
@@ -1414,6 +1511,28 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog open={!!socialToDelete} onOpenChange={(open) => { if (!open && !deleteSocialLeadMutation.isPending) setSocialToDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this lead?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {socialToDelete?.name || "This lead"} from {socialToDelete ? CHANNEL_META[socialToDelete.channel].label : ""} will be removed for good. This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteSocialLeadMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); if (socialToDelete) deleteSocialLeadMutation.mutate(socialToDelete); }}
+              disabled={deleteSocialLeadMutation.isPending}
+              className="bg-red-600 hover:bg-red-700"
+              data-testid="button-confirm-delete-social-lead"
+            >
+              {deleteSocialLeadMutation.isPending ? "Deleting…" : "Delete lead"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={(open) => !bulkDeleteMutation.isPending && setBulkDeleteDialogOpen(open)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1526,7 +1645,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
         onViewChat={liveDetailsLead && detailsCame === 'chat' ? () => handleViewConversation(liveDetailsLead.conversationId!) : undefined}
         onViewForm={liveDetailsLead && detailsCame === 'form' ? () => { setFormDialogLead(liveDetailsLead); setFormDialogOpen(true); } : undefined}
         onViewJourney={liveDetailsLead && detailsCame === 'journey' ? () => { setJourneyDialogLeadId(liveDetailsLead.id); setJourneyDialogOpen(true); } : undefined}
-        onOpenChannelPage={liveDetailsRow && CHANNEL_META[liveDetailsRow.channel].page ? () => { const page = CHANNEL_META[liveDetailsRow.channel].page!; setDetailsRow(null); setLocation(page); } : undefined}
+        onOpenChannelPage={liveDetailsRow && CHANNEL_META[liveDetailsRow.channel].page && channel !== liveDetailsRow.channel ? () => { const page = CHANNEL_META[liveDetailsRow.channel].page!; setDetailsRow(null); setLocation(page); } : undefined}
         onDelete={liveDetailsLead && isSuperAdminImpersonating ? () => { const lead = liveDetailsLead; setDetailsRow(null); handleDeleteLead(lead); } : undefined}
         showInternalIds
       />

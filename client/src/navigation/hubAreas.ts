@@ -239,7 +239,7 @@ export const HUB_AREAS: HubArea[] = [
     tabs: [
       { key: "conversations", label: "Messages", href: "/admin/instagram-conversations", matches: exact("/admin/instagram-conversations") },
       { key: "comments", label: "Comments", href: "/admin/instagram-comments", matches: exact("/admin/instagram-comments") },
-      { key: "leads", label: "Leads", href: "/admin/instagram-leads", matches: exact("/admin/instagram-leads") },
+      { key: "leads", label: "Leads", href: "/admin/instagram/leads", matches: l => l === "/admin/instagram/leads" || l === "/admin/instagram-leads" },
       { key: "insights", label: "Insights", href: "/admin/instagram-insights", matches: exact("/admin/instagram-insights") },
       settingsTab("instagram"),
     ],
@@ -264,7 +264,7 @@ export const HUB_AREAS: HubArea[] = [
     tabs: [
       { key: "conversations", label: "Messages", href: "/admin/facebook-conversations", matches: exact("/admin/facebook-conversations") },
       { key: "comments", label: "Comments", href: "/admin/facebook-comments", matches: exact("/admin/facebook-comments") },
-      { key: "leads", label: "Leads", href: "/admin/facebook-leads", matches: exact("/admin/facebook-leads") },
+      { key: "leads", label: "Leads", href: "/admin/facebook/leads", matches: l => l === "/admin/facebook/leads" || l === "/admin/facebook-leads" },
       { key: "insights", label: "Insights", href: "/admin/facebook-insights", matches: exact("/admin/facebook-insights") },
       settingsTab("facebook"),
     ],

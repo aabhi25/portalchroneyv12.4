@@ -99,11 +99,9 @@ import DocumentTypeEditor from "@/pages/DocumentTypeEditor";
 import WAInsights from "@/pages/WAInsights";
 import InstagramConversations from "@/pages/InstagramConversations";
 import InstagramFlows from "@/pages/InstagramFlows";
-import InstagramLeads from "@/pages/InstagramLeads";
 import InstagramInsights from "@/pages/InstagramInsights";
 import InstagramComments from "@/pages/InstagramComments";
 import FacebookConversations from "@/pages/FacebookConversations";
-import FacebookLeads from "@/pages/FacebookLeads";
 import FacebookFlows from "@/pages/FacebookFlows";
 import FacebookInsights from "@/pages/FacebookInsights";
 import FacebookComments from "@/pages/FacebookComments";
@@ -410,13 +408,14 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/instagram"><Redirect to="/admin/instagram-conversations" /></Route>
                 <Route path="/admin/instagram-conversations" component={InstagramConversations} />
                 <Route path="/admin/instagram-flows" component={InstagramFlows} />
-                <Route path="/admin/instagram-leads">{() => <InstagramLeads />}</Route>
+                {/* Instagram / Facebook › Leads use the shared Leads list (old addresses forward there). */}
+                <Route path="/admin/instagram-leads"><Redirect to="/admin/instagram/leads" /></Route>
                 <Route path="/admin/instagram-insights" component={InstagramInsights} />
                 <Route path="/admin/instagram-comments" component={InstagramComments} />
                 <Route path="/admin/instagram-smart-replies">{() => <SmartReplies channel="instagram" />}</Route>
                 <Route path="/admin/facebook"><Redirect to="/admin/facebook-conversations" /></Route>
                 <Route path="/admin/facebook-conversations" component={FacebookConversations} />
-                <Route path="/admin/facebook-leads" component={FacebookLeads} />
+                <Route path="/admin/facebook-leads"><Redirect to="/admin/facebook/leads" /></Route>
                 <Route path="/admin/facebook-flows" component={FacebookFlows} />
                 <Route path="/admin/facebook-insights" component={FacebookInsights} />
                 <Route path="/admin/facebook-comments" component={FacebookComments} />
@@ -432,6 +431,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/url-training" component={UrlTraining} />
                 <Route path="/admin/website"><Redirect to="/conversations" /></Route>
                 <Route path="/admin/website/leads">{() => <AdminLeads channel="website" />}</Route>
+                <Route path="/admin/instagram/leads">{() => <AdminLeads channel="instagram" />}</Route>
+                <Route path="/admin/facebook/leads">{() => <AdminLeads channel="facebook" />}</Route>
                 <Route path="/admin/website/try" component={Home} />
                 <Route path="/admin/menu-builder" component={MenuBuilder} />
                 <Route path="/admin/smart-replies">
