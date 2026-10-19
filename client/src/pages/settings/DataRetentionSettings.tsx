@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ShieldCheck, Timer, AlertCircle, FileText, Pencil } from "lucide-react";
+import { Loader2, ShieldCheck, Timer, AlertCircle, FileText, Pencil, EyeOff } from "lucide-react";
 import {
   DataRetentionDialog,
   RetentionReportDialog,
@@ -96,6 +96,16 @@ export default function DataRetentionSettings({ user }: { user: MeResponseDto | 
                   </dd>
                 </div>
               </dl>
+            </div>
+          )}
+
+          {!isLoading && !isError && policy?.maskContactsAfterSync && (
+            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 text-sm" data-testid="retention-mask-summary">
+              <p className="font-medium flex items-center gap-1.5"><EyeOff className="w-4 h-4 text-emerald-700" /> Contact details are hidden after sync</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Once a lead reaches your CRM, its mobile numbers and emails are hidden here: on the lead, in its chat, form answers
+                and summary. Your CRM keeps the real details. Leads that haven't synced are not hidden.
+              </p>
             </div>
           )}
 

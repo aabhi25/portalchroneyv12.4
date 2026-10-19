@@ -11,9 +11,11 @@ import {
   dataRetentionAccountStatus,
   dataRetentionPolicies,
   jobApplicants,
+  journeyResponses,
   journeySessions,
   leads,
   messages,
+  questionBankEntries,
   supportTickets,
   topscholarVoiceSessions,
   type DataRetentionPolicy,
@@ -21,11 +23,15 @@ import {
 import {
   combineGroupPolicies,
   classifyLeadForCounts,
+  isPolicyActive,
+  MASK_FALLBACK_QUIET_MINUTES,
+  MASK_QUIET_MINUTES,
   RETENTION_IDLE_GUARD_MINUTES,
   type AccountCrmTargets,
   type EffectiveRetentionPolicy,
   type RetentionPolicySettings,
 } from "@shared/dataRetentionPolicy";
+import { maskContactsDeep, maskContactsInJsonText, maskContactsInText, maskEmailAddress, maskPhoneNumber, isMaskedValue } from "@shared/contactMasking";
 
 /**
  * Database side of data retention ("auto-delete"): policy lookup, the due-record
@@ -49,6 +55,7 @@ function toSettings(row: DataRetentionPolicy): RetentionPolicySettings & { scope
     deleteUnsyncedAfterMinutes: row.deleteUnsyncedAfterMinutes ?? null,
     deleteIdleChatsAfterMinutes: row.deleteIdleChatsAfterMinutes ?? null,
     keepAnonymousCounts: row.keepAnonymousCounts,
+    maskContactsAfterSync: row.maskContactsAfterSync === true,
   };
 }
 
@@ -73,6 +80,7 @@ export async function upsertRetentionPolicy(
     deleteUnsyncedAfterMinutes: settings.deleteUnsyncedAfterMinutes,
     deleteIdleChatsAfterMinutes: settings.deleteIdleChatsAfterMinutes,
     keepAnonymousCounts: settings.keepAnonymousCounts,
+    maskContactsAfterSync: settings.maskContactsAfterSync,
     updatedBy,
     updatedAt: new Date(),
   };
@@ -87,12 +95,15 @@ export async function deleteAccountOverride(accountId: string): Promise<void> {
     .where(and(eq(dataRetentionPolicies.scopeType, 'account'), eq(dataRetentionPolicies.scopeId, accountId)));
 }
 
-/** Account override wins; otherwise the strictest active policy of the account's groups; otherwise null (off). */
+/**
+ * Account override wins; otherwise the strictest active policy of the account's groups; otherwise
+ * null. A policy with mode 'off' is still returned when it hides contact details.
+ */
 export async function getEffectivePolicy(accountId: string): Promise<EffectiveRetentionPolicy | null> {
   const own = await getRetentionPolicy('account', accountId);
   if (own) {
     const s = toSettings(own);
-    return s.mode === 'off' ? null : { ...s, source: 'account', sourceIds: [accountId] };
+    return isPolicyActive(s) ? { ...s, source: 'account', sourceIds: [accountId] } : null;
   }
   const groupIds = (await db.select({ groupId: accountGroupMembers.groupId }).from(accountGroupMembers)
     .where(eq(accountGroupMembers.businessAccountId, accountId))).map(r => r.groupId);
@@ -102,9 +113,10 @@ export async function getEffectivePolicy(accountId: string): Promise<EffectiveRe
   return combineGroupPolicies(rows.map(toSettings));
 }
 
-/** Every account that currently has a non-off policy, directly or via a group. */
+/** Every account that currently has an active policy (deleting or hiding), directly or via a group. */
 export async function getAccountsWithActivePolicy(): Promise<string[]> {
-  const rows = await db.select().from(dataRetentionPolicies).where(sql`${dataRetentionPolicies.mode} <> 'off'`);
+  const rows = await db.select().from(dataRetentionPolicies)
+    .where(sql`${dataRetentionPolicies.mode} <> 'off' OR ${dataRetentionPolicies.maskContactsAfterSync} = true`);
   const ids = new Set<string>(rows.filter(r => r.scopeType === 'account').map(r => r.scopeId));
   const groupIds = rows.filter(r => r.scopeType === 'group').map(r => r.scopeId);
   if (groupIds.length) {
@@ -357,6 +369,127 @@ export async function purgeAccount(accountId: string, policy: EffectiveRetention
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Hide contact details after sync (separate from deleting)
+// ---------------------------------------------------------------------------
+
+/**
+ * Synced leads whose contact details are due to be hidden: never hidden yet, or changed / chatted
+ * since (a returning visitor may share details again). The chat must be quiet and its final
+ * summary already pushed to the CRM (or quiet long enough that no summary is coming), so the CRM
+ * always gets the real details and the full summary first.
+ */
+function dueMaskWhere(accountId: string, crm: AccountCrmTargets, now: Date) {
+  const quiet = ts(new Date(now.getTime() - MASK_QUIET_MINUTES * 60_000));
+  const fallback = ts(new Date(now.getTime() - MASK_FALLBACK_QUIET_MINUTES * 60_000));
+  return sql`${leads.businessAccountId} = ${accountId}
+    AND (${syncedSql(crm)})
+    AND (
+      ${leads.contactsMaskedAt} IS NULL
+      OR ${leads.updatedAt} > ${leads.contactsMaskedAt}
+      OR EXISTS (SELECT 1 FROM ${messages} m WHERE m.conversation_id = ${leads.conversationId} AND m.created_at > ${leads.contactsMaskedAt})
+    )
+    AND (${leads.conversationId} IS NULL OR (
+      NOT EXISTS (SELECT 1 FROM ${messages} m WHERE m.conversation_id = ${leads.conversationId} AND m.created_at > ${quiet})
+      AND (
+        NOT EXISTS (SELECT 1 FROM ${messages} m WHERE m.conversation_id = ${leads.conversationId} AND m.created_at > ${fallback})
+        OR EXISTS (SELECT 1 FROM ${conversations} c WHERE c.id = ${leads.conversationId} AND c.summarized_at IS NOT NULL AND c.summarized_at >= c.updated_at)
+        OR (SELECT count(*) FROM ${messages} m WHERE m.conversation_id = ${leads.conversationId}) < 3
+      )
+    ))`;
+}
+
+export async function countMaskDueForAccount(accountId: string, now = new Date()): Promise<number> {
+  const crm = await getAccountCrmTargets(accountId);
+  const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(leads).where(dueMaskWhere(accountId, crm, now));
+  return row?.n ?? 0;
+}
+
+const maskText = (v: string | null) => (v ? maskContactsInText(v) : v);
+const keepOrMask = (v: string | null, mask: (x: string) => string) => (!v || isMaskedValue(v) ? v : mask(v));
+
+/** Overwrites one lead's contact details, and those in its chat, answers and summary. */
+async function maskLeadContacts(accountId: string, lead: typeof leads.$inferSelect, at: Date) {
+  const convId = lead.conversationId;
+  const chat = convId
+    ? await db.select({ id: messages.id, content: messages.content, metadata: messages.metadata, createdAt: messages.createdAt }).from(messages).where(eq(messages.conversationId, convId))
+    : [];
+  const answers = convId
+    ? await db.select({ id: journeyResponses.id, response: journeyResponses.response }).from(journeyResponses).where(eq(journeyResponses.conversationId, convId))
+    : [];
+  const [conv] = convId
+    ? await db.select({ title: conversations.title, summary: conversations.summary, topicKeywords: conversations.topicKeywords })
+        .from(conversations).where(and(eq(conversations.id, convId), eq(conversations.businessAccountId, accountId)))
+    : [];
+  const questions = convId
+    ? await db.select({ id: questionBankEntries.id, question: questionBankEntries.question, aiResponse: questionBankEntries.aiResponse, userContext: questionBankEntries.userContext })
+        .from(questionBankEntries).where(and(eq(questionBankEntries.conversationId, convId), eq(questionBankEntries.businessAccountId, accountId)))
+    : [];
+
+  // Stamped no earlier than the newest message and lead change it covers, so the lead is not
+  // picked up again until something new arrives (even if the database clock runs ahead).
+  const stamp = new Date(Math.max(at.getTime(), lead.updatedAt?.getTime() ?? 0, ...chat.map(m => m.createdAt?.getTime() ?? 0)));
+
+  await db.transaction(async (tx) => {
+    // updatedAt is left alone so the lead/conversation does not look changed (no re-summary, no re-run).
+    await tx.update(leads).set({
+      phone: keepOrMask(lead.phone, maskPhoneNumber),
+      email: keepOrMask(lead.email, maskEmailAddress),
+      message: maskText(lead.message),
+      leadsquaredSyncPayload: lead.leadsquaredSyncPayload ? maskContactsDeep(lead.leadsquaredSyncPayload) : lead.leadsquaredSyncPayload,
+      customCrmSyncPayload: lead.customCrmSyncPayload ? maskContactsDeep(lead.customCrmSyncPayload) : lead.customCrmSyncPayload,
+      leadsquaredSyncError: maskText(lead.leadsquaredSyncError),
+      salesforceSyncError: maskText(lead.salesforceSyncError),
+      customCrmSyncError: maskText(lead.customCrmSyncError),
+      contactsMaskedAt: stamp,
+    }).where(and(eq(leads.id, lead.id), eq(leads.businessAccountId, accountId)));
+
+    for (const m of chat) {
+      const content = maskContactsInText(m.content);
+      const metadata = m.metadata ? maskContactsInJsonText(m.metadata) : m.metadata;
+      if (content !== m.content || metadata !== m.metadata) {
+        await tx.update(messages).set({ content, metadata }).where(eq(messages.id, m.id));
+      }
+    }
+    for (const a of answers) {
+      const response = maskContactsInText(a.response);
+      if (response !== a.response) await tx.update(journeyResponses).set({ response }).where(eq(journeyResponses.id, a.id));
+    }
+    if (convId && conv) {
+      const next = { title: maskContactsInText(conv.title), summary: maskText(conv.summary), topicKeywords: maskText(conv.topicKeywords) };
+      if (next.title !== conv.title || next.summary !== conv.summary || next.topicKeywords !== conv.topicKeywords) {
+        await tx.update(conversations).set(next).where(eq(conversations.id, convId));
+      }
+    }
+    for (const q of questions) {
+      const next = { question: maskContactsInText(q.question), aiResponse: maskText(q.aiResponse), userContext: q.userContext ? maskContactsInJsonText(q.userContext) : q.userContext };
+      if (next.question !== q.question || next.aiResponse !== q.aiResponse || next.userContext !== q.userContext) {
+        await tx.update(questionBankEntries).set(next).where(eq(questionBankEntries.id, q.id));
+      }
+    }
+  });
+  return { messages: chat.length };
+}
+
+/** Hides contact details on every due lead of one account, in batches. Returns how many leads were hidden. */
+export async function maskAccountContacts(accountId: string, maxBatches = 20): Promise<number> {
+  const crm = await getAccountCrmTargets(accountId);
+  if (!crm.leadsquared && !crm.salesforce) return 0; // nothing ever counts as synced
+  let masked = 0;
+  for (let batch = 0; batch < maxBatches; batch++) {
+    const due = await db.select().from(leads).where(dueMaskWhere(accountId, crm, new Date())).orderBy(leads.createdAt).limit(MASK_BATCH_SIZE);
+    if (due.length === 0) break;
+    for (const lead of due) {
+      await maskLeadContacts(accountId, lead, new Date());
+      masked++;
+    }
+    if (due.length < MASK_BATCH_SIZE) break;
+  }
+  return masked;
+}
+
+const MASK_BATCH_SIZE = 100;
+
 export async function recordAccountStatus(accountId: string, values: {
   mode: string; dueLeads: number; dueConversations: number; purgedLeads: number; purgedConversations: number; error?: string | null;
 }) {
@@ -435,6 +568,9 @@ export interface RetentionReportRow {
   syncedLeads: number;
   deletedLeads: number;
   deletedConversations: number;
+  /** Contact details hidden after sync (leads still held). */
+  hidesContacts: boolean;
+  hiddenLeads: number;
   leadsHeldNow: number;
   conversationsHeldNow: number;
   oldestLeadHeld: string | null;
@@ -456,6 +592,7 @@ export async function getRetentionReport(accountIds: string[], from: Date, to: D
       captured: sql<number>`count(*) FILTER (WHERE ${leads.createdAt} >= ${ts(from)} AND ${leads.createdAt} < ${ts(to)})::int`,
       syncedInPeriod: sql<number>`count(*) FILTER (WHERE ${leads.createdAt} >= ${ts(from)} AND ${leads.createdAt} < ${ts(to)} AND ${synced})::int`,
       heldNow: sql<number>`count(*)::int`,
+      hidden: sql<number>`count(*) FILTER (WHERE ${leads.contactsMaskedAt} >= ${ts(from)} AND ${leads.contactsMaskedAt} < ${ts(to)})::int`,
       oldest: sql<Date | null>`min(${leads.createdAt})`,
     }).from(leads).where(eq(leads.businessAccountId, accountId));
     const [convHeld] = await db.select({ n: sql<number>`count(*)::int` }).from(conversations).where(eq(conversations.businessAccountId, accountId));
@@ -475,6 +612,8 @@ export async function getRetentionReport(accountIds: string[], from: Date, to: D
       syncedLeads: (live?.syncedInPeriod ?? 0) + (purged?.syncedDeleted ?? 0),
       deletedLeads: purged?.deletedLeads ?? 0,
       deletedConversations: purged?.deletedConversations ?? 0,
+      hidesContacts: policy?.maskContactsAfterSync === true,
+      hiddenLeads: live?.hidden ?? 0,
       leadsHeldNow: live?.heldNow ?? 0,
       conversationsHeldNow: convHeld?.n ?? 0,
       oldestLeadHeld: live?.oldest ? new Date(live.oldest).toISOString() : null,

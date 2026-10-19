@@ -1,3 +1,4 @@
+import { contactsHidden, HIDDEN_CONTACTS_MESSAGE, isMaskedValue } from "@shared/contactMasking";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { SalesforceFieldMapping } from '@shared/schema';
 import { LeadDataContext, extractUtmCampaign, extractUtmSource, extractUtmMedium } from './leadsquaredService';
@@ -97,7 +98,8 @@ export class SalesforceService {
         value = this.extractValueFromContext(mapping.sourceField, context);
       }
 
-      if (value) {
+      // A value hidden after sync is never sent: it would overwrite the real one in the CRM.
+      if (value && !isMaskedValue(value)) {
         attributes[mapping.salesforceField] = trimToMaxLength(value);
       }
     }
@@ -145,6 +147,7 @@ export class SalesforceService {
     mappings: SalesforceFieldMapping[],
     context: LeadDataContext
   ): Promise<{ success: boolean; leadId?: string; message: string }> {
+    if (contactsHidden(context.lead)) return { success: false, message: HIDDEN_CONTACTS_MESSAGE };
     try {
       const { accessToken, instanceUrl } = await this.authenticate();
 

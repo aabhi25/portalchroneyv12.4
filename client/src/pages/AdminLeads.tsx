@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { isMaskedValue } from "@shared/contactMasking";
 import { HideInHub } from "@/components/hub/HideInHub";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -1273,7 +1274,9 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                           <TableCell className="px-4 py-3"><ChannelTrail row={row} /></TableCell>
                         )}
                         <TableCell className="px-4 py-3">
-                          {lead.phone ? (
+                          {lead.phone && isMaskedValue(lead.phone) ? (
+                            <span className="text-sm text-gray-500 font-mono" title="Hidden after sync. Your CRM has the full number.">{lead.phone}</span>
+                          ) : lead.phone ? (
                             <a 
                               href={`tel:${lead.phone}`}
                               className="text-sm text-green-600 hover:text-green-700 hover:underline transition-colors font-mono"

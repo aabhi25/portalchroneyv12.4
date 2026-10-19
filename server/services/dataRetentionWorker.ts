@@ -5,6 +5,7 @@ import {
   countDueForAccount,
   getAccountsWithActivePolicy,
   getEffectivePolicy,
+  maskAccountContacts,
   purgeAccount,
   recordAccountStatus,
 } from "./dataRetentionService";
@@ -13,9 +14,10 @@ const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const INITIAL_DELAY_MS = 2 * 60 * 1000;
 
 /**
- * Applies each account's data-retention policy every 5 minutes. Dry-run accounts
- * only get their due counts recorded; live accounts are purged in batches and
- * every purge is audit-logged.
+ * Applies each account's data-retention policy every 5 minutes. Contact details are
+ * hidden first where that is switched on (any mode). Then dry-run accounts only get
+ * their due counts recorded; live accounts are purged in batches. Every hide and
+ * purge is audit-logged.
  */
 export class DataRetentionWorker {
   private intervalId: NodeJS.Timeout | null = null;
@@ -49,10 +51,35 @@ export class DataRetentionWorker {
     }
   }
 
+  /** Hiding has its own error handling so a failure there never stops the deleting below. */
+  private async maskContacts(accountId: string, policySource: string) {
+    try {
+      const hidden = await maskAccountContacts(accountId);
+      if (hidden === 0) return;
+      console.log(`[Data Retention] Account ${accountId}: hid contact details on ${hidden} lead(s)`);
+      await recordSystemAuditEvent({
+        action: 'data_retention.contacts_masked',
+        outcome: 'success',
+        actorUsername: 'system:data-retention',
+        actorRole: 'system',
+        businessAccountId: accountId,
+        resourceType: 'business_account',
+        resourceId: accountId,
+        metadata: { maskedLeads: hidden, policySource },
+      }).catch(err => console.error('[Data Retention] Audit write failed:', err));
+    } catch (err) {
+      console.error(`[Data Retention] Account ${accountId}: hiding contact details failed:`, err);
+      reportError(err, { source: 'worker:data-retention-mask' });
+    }
+  }
+
   private async processAccount(accountId: string) {
     const policy = await getEffectivePolicy(accountId);
     if (!policy) return;
     try {
+      if (policy.maskContactsAfterSync) await this.maskContacts(accountId, policy.source);
+      if (policy.mode === 'off') return;
+
       if (policy.mode === 'dry_run') {
         const due = await countDueForAccount(accountId, policy);
         await recordAccountStatus(accountId, {

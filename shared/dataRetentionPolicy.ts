@@ -12,6 +12,11 @@ export interface RetentionPolicySettings {
   deleteUnsyncedAfterMinutes: number | null; // null = keep leads that never sync
   deleteIdleChatsAfterMinutes: number | null; // null = keep chats with no lead
   keepAnonymousCounts: boolean;
+  /**
+   * Separate from deleting: once a lead has synced, overwrite its phone numbers and emails
+   * (on the lead, in its chat, answers and summary) with masked versions. Works in any mode.
+   */
+  maskContactsAfterSync: boolean;
 }
 
 export interface EffectiveRetentionPolicy extends RetentionPolicySettings {
@@ -21,6 +26,19 @@ export interface EffectiveRetentionPolicy extends RetentionPolicySettings {
 
 /** A conversation must be idle this long before anything in it is deleted. */
 export const RETENTION_IDLE_GUARD_MINUTES = 30;
+
+/**
+ * Contact details are hidden once the chat has been quiet this long AND its final summary has
+ * gone to the CRM (the summary is pushed about a minute after the chat goes quiet)...
+ */
+export const MASK_QUIET_MINUTES = 5;
+/** ...or, when no summary arrives (short chats, AI errors), once it has been quiet this long. */
+export const MASK_FALLBACK_QUIET_MINUTES = 30;
+
+/** A policy that does something: deletes (live or dry run) and/or hides contact details. */
+export function isPolicyActive(p: Pick<RetentionPolicySettings, 'mode' | 'maskContactsAfterSync'>): boolean {
+  return p.mode !== 'off' || p.maskContactsAfterSync === true;
+}
 
 export const RETENTION_LIMITS = {
   minMinutes: 15,
@@ -35,18 +53,21 @@ const MODE_RANK: Record<RetentionMode, number> = { off: 0, dry_run: 1, live: 2 }
  * wherever any group sets one.
  */
 export function combineGroupPolicies(policies: (RetentionPolicySettings & { scopeId: string })[]): EffectiveRetentionPolicy | null {
-  const active = policies.filter(p => p.mode !== 'off');
+  const active = policies.filter(isPolicyActive);
   if (active.length === 0) return null;
+  // Delete timers come only from groups that delete; a group that only hides details has none.
+  const deleting = active.filter(p => p.mode !== 'off');
   const minOrNull = (values: (number | null)[]) => {
     const set = values.filter((v): v is number => v !== null && v !== undefined);
     return set.length ? Math.min(...set) : null;
   };
   return {
     mode: active.reduce<RetentionMode>((m, p) => (MODE_RANK[p.mode] > MODE_RANK[m] ? p.mode : m), 'off'),
-    deleteSyncedAfterMinutes: Math.min(...active.map(p => p.deleteSyncedAfterMinutes)),
-    deleteUnsyncedAfterMinutes: minOrNull(active.map(p => p.deleteUnsyncedAfterMinutes)),
-    deleteIdleChatsAfterMinutes: minOrNull(active.map(p => p.deleteIdleChatsAfterMinutes)),
-    keepAnonymousCounts: active.some(p => p.keepAnonymousCounts),
+    deleteSyncedAfterMinutes: deleting.length ? Math.min(...deleting.map(p => p.deleteSyncedAfterMinutes)) : active[0].deleteSyncedAfterMinutes,
+    deleteUnsyncedAfterMinutes: minOrNull(deleting.map(p => p.deleteUnsyncedAfterMinutes)),
+    deleteIdleChatsAfterMinutes: minOrNull(deleting.map(p => p.deleteIdleChatsAfterMinutes)),
+    keepAnonymousCounts: deleting.length ? deleting.some(p => p.keepAnonymousCounts) : true,
+    maskContactsAfterSync: active.some(p => p.maskContactsAfterSync === true),
     source: 'group',
     sourceIds: active.map(p => p.scopeId),
   };
@@ -123,6 +144,7 @@ export function decideLead(
 /** Validates settings coming from the API; returns an error message or null. */
 export function validateRetentionSettings(input: Partial<RetentionPolicySettings>): string | null {
   if (!input.mode || !['off', 'dry_run', 'live'].includes(input.mode)) return 'mode must be off, dry_run or live';
+  if (input.maskContactsAfterSync !== undefined && typeof input.maskContactsAfterSync !== 'boolean') return 'maskContactsAfterSync must be true or false';
   const inRange = (v: number) => Number.isInteger(v) && v >= RETENTION_LIMITS.minMinutes && v <= RETENTION_LIMITS.maxMinutes;
   if (typeof input.deleteSyncedAfterMinutes !== 'number' || !inRange(input.deleteSyncedAfterMinutes)) {
     return 'Delete-after-sync time must be between 15 minutes and 365 days';

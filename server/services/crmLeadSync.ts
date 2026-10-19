@@ -1,4 +1,5 @@
 import { storage } from "../storage";
+import { contactsHidden, HIDDEN_CONTACTS_MESSAGE } from "@shared/contactMasking";
 import type { WidgetSettings } from "@shared/schema";
 import { hasLeadSquaredCredentials } from "./leadsquaredService";
 
@@ -50,6 +51,7 @@ export async function syncLeadToLeadSquared(
   if (!lead) {
     return { status: 404, body: { error: "Lead not found" } };
   }
+  if (contactsHidden(lead)) return { status: 400, body: { error: HIDDEN_CONTACTS_MESSAGE } };
 
   // 'disqualified' is terminal: the lead form answer did not match the
   // qualifying values configured for this account, so it must not be pushed
@@ -162,6 +164,7 @@ export async function syncLeadToSalesforce(businessAccountId: string, leadId: st
 
   const lead = await storage.getLead(leadId, businessAccountId);
   if (!lead) return { status: 404, body: { error: "Lead not found" } };
+  if (contactsHidden(lead)) return { status: 400, body: { error: HIDDEN_CONTACTS_MESSAGE } };
 
   const businessAccount = await storage.getBusinessAccount(businessAccountId);
   const { decrypt } = await import('./encryptionService');

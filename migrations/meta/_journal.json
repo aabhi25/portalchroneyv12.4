@@ -162,6 +162,13 @@
       "when": 1792247088395,
       "tag": "0022_call_voice_selection",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792429716268,
+      "tag": "0023_mask_contacts_after_sync",
+      "breakpoints": true
     }
   ]
 }

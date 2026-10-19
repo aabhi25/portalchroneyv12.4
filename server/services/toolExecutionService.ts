@@ -1,4 +1,5 @@
 import { storage } from '../storage';
+import { isMaskedValue } from "@shared/contactMasking";
 import { db } from '../db';
 import { k12Topics, k12Questions } from '@shared/schema';
 import { ilike, or, eq, and, sql } from 'drizzle-orm';
@@ -1046,11 +1047,13 @@ Return JSON:
       if (isValidLeadName(rawName)) values.name = rawName;
       else rejected.push({ field: 'name', reason: 'that does not look like a person\'s name' });
     }
-    if (rawEmail) {
+    // Values hidden after sync (e.g. the AI repeating "ra***@gmail.com" from the chat history) are
+    // not details the visitor gave: ignore them rather than saving them over the lead.
+    if (rawEmail && !isMaskedValue(rawEmail)) {
       if (isValidEmail(rawEmail)) values.email = rawEmail;
       else rejected.push({ field: 'email', reason: 'that is not a valid email address' });
     }
-    if (rawPhone) {
+    if (rawPhone && !isMaskedValue(rawPhone)) {
       const r = validatePhoneNumber(rawPhone, phoneMode);
       if (r.isValid) values.phone = r.normalized;
       else {
@@ -1059,7 +1062,7 @@ Return JSON:
       }
     }
     let waNumber: string | null = null;
-    if (rawWhatsapp) {
+    if (rawWhatsapp && !isMaskedValue(rawWhatsapp)) {
       const r = validatePhoneNumber(rawWhatsapp, phoneMode);
       if (r.isValid) waNumber = r.normalized;
       else rejected.push({ field: 'whatsapp', reason: `${r.reasonMessage} — a valid number is ${describePhoneRule(phoneMode)}` });

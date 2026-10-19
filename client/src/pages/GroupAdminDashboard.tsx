@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { isMaskedValue } from "@shared/contactMasking";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
 import { FormSubmissionDetails } from "@/components/FormSubmissionDetails";
 import { useQuery, useInfiniteQuery, useMutation } from "@tanstack/react-query";
@@ -1320,7 +1321,12 @@ export default function GroupAdminDashboard() {
                             </div>
 
                             <div className="min-w-0">
-                              {lead.email ? (
+                              {lead.email && isMaskedValue(lead.email) ? (
+                                <span className="text-sm text-gray-500 flex items-center gap-1.5" title="Hidden after sync. The CRM has the full email.">
+                                  <Mail className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                                  <span className="truncate">{lead.email}</span>
+                                </span>
+                              ) : lead.email ? (
                                 <a href={`mailto:${lead.email}`} className="text-sm text-gray-600 hover:text-purple-600 truncate block transition-colors flex items-center gap-1.5">
                                   <Mail className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
                                   <span className="truncate">{lead.email}</span>
@@ -1331,7 +1337,12 @@ export default function GroupAdminDashboard() {
                             </div>
 
                             <div className="min-w-0">
-                              {lead.phone ? (
+                              {lead.phone && isMaskedValue(lead.phone) ? (
+                                <span className="text-sm text-gray-500 flex items-center gap-1.5" title="Hidden after sync. The CRM has the full number.">
+                                  <Phone className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                                  <span className="break-all">{lead.phone}</span>
+                                </span>
+                              ) : lead.phone ? (
                                 <a href={`tel:${lead.phone}`} className="text-sm text-gray-600 hover:text-purple-600 transition-colors flex items-center gap-1.5">
                                   <Phone className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
                                   <span className="break-all">{lead.phone}</span>

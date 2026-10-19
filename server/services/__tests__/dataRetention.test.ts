@@ -33,6 +33,7 @@ const policy: RetentionPolicySettings = {
   deleteUnsyncedAfterMinutes: null,
   deleteIdleChatsAfterMinutes: 24 * H,
   keepAnonymousCounts: true,
+  maskContactsAfterSync: false,
 };
 const lsqOnly = { leadsquared: true, salesforce: false };
 
@@ -97,6 +98,14 @@ for (const status of [null, 'failed', 'pending', 'needs_attention', 'permanently
   expect(c.deleteUnsyncedAfterMinutes === 7 * 24 * H, "any group's unsynced timer applies");
   expect(c.keepAnonymousCounts === true, "counts kept if any group keeps them");
   expect(combineGroupPolicies([off]) === null, "only 'off' groups → no policy");
+  expect(c.maskContactsAfterSync === false, "no group hides details → not hidden");
+
+  const hideOnly = { ...policy, scopeId: 'g4', mode: 'off' as const, deleteSyncedAfterMinutes: 15, maskContactsAfterSync: true };
+  const h = combineGroupPolicies([hideOnly])!;
+  expect(!!h && h.mode === 'off' && h.maskContactsAfterSync, "a group that only hides details still gives a policy (mode off)");
+  const mixed = combineGroupPolicies([b, hideOnly])!;
+  expect(mixed.mode === 'live' && mixed.maskContactsAfterSync, "hiding from one group, deleting from another");
+  expect(mixed.deleteSyncedAfterMinutes === 6 * H, "a hide-only group's delete time is ignored");
 }
 
 // ── Validation ───────────────────────────────────────────────────────────────
@@ -104,6 +113,8 @@ expect(validateRetentionSettings(policy) === null, "valid settings accepted");
 expect(validateRetentionSettings({ ...policy, deleteSyncedAfterMinutes: 5 }) !== null, "under 15 minutes rejected");
 expect(validateRetentionSettings({ ...policy, deleteUnsyncedAfterMinutes: 10 }) !== null, "unsynced timer under 15 minutes rejected");
 expect(validateRetentionSettings({ ...policy, mode: 'bogus' as any }) !== null, "unknown mode rejected");
+expect(validateRetentionSettings({ ...policy, mode: 'off', maskContactsAfterSync: true }) === null, "hide-only settings accepted");
+expect(validateRetentionSettings({ ...policy, maskContactsAfterSync: 'yes' as any }) !== null, "non-boolean hide setting rejected");
 
 // ── Anonymous classification ────────────────────────────────────────────────
 {

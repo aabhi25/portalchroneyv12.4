@@ -207,6 +207,7 @@ export const dataRetentionPolicies = pgTable("data_retention_policies", {
   deleteUnsyncedAfterMinutes: integer("delete_unsynced_after_minutes"), // null = keep leads that never sync
   deleteIdleChatsAfterMinutes: integer("delete_idle_chats_after_minutes").default(1440), // chats with no lead; null = keep
   keepAnonymousCounts: boolean("keep_anonymous_counts").notNull().default(true), // count deleted records in dashboards
+  maskContactsAfterSync: boolean("mask_contacts_after_sync").notNull().default(false), // hide phones/emails once synced (separate from deleting)
   updatedBy: varchar("updated_by"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -606,6 +607,10 @@ export const leads = pgTable("leads", {
   callConsent: text("call_consent"),
   callConsentAt: timestamp("call_consent_at"),
   callConsentSource: text("call_consent_source"), // 'chat' | 'form' | 'call' | 'staff' | 'import'
+
+  // Data retention "hide contact details after sync": when this lead's phone numbers and emails
+  // (on the lead, in its chat, answers and summary) were last overwritten with masked versions.
+  contactsMaskedAt: timestamp("contacts_masked_at"),
   
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

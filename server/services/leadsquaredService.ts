@@ -1,4 +1,5 @@
 import { formatPhoneWithCountryCode, normalizePhoneCodeStyle } from "@shared/phoneFormat";
+import { contactsHidden, HIDDEN_CONTACTS_MESSAGE, isMaskedValue } from "@shared/contactMasking";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { z } from 'zod';
 import { LeadsquaredFieldMapping } from '@shared/schema';
@@ -346,7 +347,7 @@ export class LeadSquaredService {
     attributes.push({ Attribute: 'Source', Value: trimToMaxLength(leadData.source || 'AI Chroney') });
     attributes.push({ Attribute: 'mx_Secondary_Lead_Source', Value: trimToMaxLength('AI Chroney') });
     
-    return attributes;
+    return attributes.filter(a => !isMaskedValue(a.Value));
   }
 
   // Build attributes from dynamic field mappings
@@ -363,6 +364,8 @@ export class LeadSquaredService {
         value = mapping.customValue || undefined;
       } else if (mapping.sourceType === 'dynamic' && mapping.sourceField) {
         value = this.extractValueFromContext(mapping.sourceField, context);
+        // A value hidden after sync is never sent: it would overwrite the real one in the CRM.
+        if (isMaskedValue(value)) continue;
         if (value) {
           // When configured, send a fixed static value whenever the dynamic
           // source resolves to a non-empty value (e.g. "PRChat" whenever a UTM
@@ -444,6 +447,7 @@ export class LeadSquaredService {
     mappings: LeadsquaredFieldMapping[],
     context: LeadDataContext
   ): Promise<{ success: boolean; leadId?: string; message: string; syncPayload?: Record<string, string>; alreadyExists?: boolean }> {
+    if (contactsHidden(context.lead)) return { success: false, message: HIDDEN_CONTACTS_MESSAGE };
     if (this.config.uds) {
       return this.sendToUds(this.buildAttributesFromMappings(mappings, context), 'create');
     }
@@ -539,6 +543,8 @@ export class LeadSquaredService {
    * Returns its ProspectID, or null when it can't be found / the lookup fails.
    */
   async findExistingLeadId(phone?: string | null, email?: string | null): Promise<string | null> {
+    if (isMaskedValue(phone)) phone = null;
+    if (isMaskedValue(email)) email = null;
     const auth = `accessKey=${this.config.accessKey}&secretKey=${this.config.secretKey}`;
     const lookups: string[] = [];
     const phoneRaw = (phone || '').trim();
@@ -726,6 +732,7 @@ export class LeadSquaredService {
   }
 
   async createLead(leadData: LeadSquaredLeadData): Promise<{ success: boolean; leadId?: string; message: string; alreadyExists?: boolean }> {
+    if (contactsHidden(leadData)) return { success: false, message: HIDDEN_CONTACTS_MESSAGE };
     try {
       const url = `${this.baseUrl}/v2/LeadManagement.svc/Lead.Capture?accessKey=${this.config.accessKey}&secretKey=${this.config.secretKey}`;
       

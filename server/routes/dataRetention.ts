@@ -15,6 +15,7 @@ import { recordAuditEventSafely } from "../services/auditService";
 import { validateRetentionSettings, type RetentionPolicySettings } from "@shared/dataRetentionPolicy";
 import {
   countDueForAccount,
+  countMaskDueForAccount,
   deleteAccountOverride,
   getAccountCrmTargets,
   getEffectivePolicy,
@@ -38,6 +39,7 @@ const DEFAULT_SETTINGS: RetentionPolicySettings = {
   deleteUnsyncedAfterMinutes: null,
   deleteIdleChatsAfterMinutes: 24 * 60,
   keepAnonymousCounts: true,
+  maskContactsAfterSync: false,
 };
 
 function parseScope(req: Request, res: Response): { scopeType: 'group' | 'account'; scopeId: string } | null {
@@ -67,6 +69,7 @@ function readSettings(body: any): RetentionPolicySettings {
     deleteUnsyncedAfterMinutes: numOrNull(body?.deleteUnsyncedAfterMinutes),
     deleteIdleChatsAfterMinutes: numOrNull(body?.deleteIdleChatsAfterMinutes),
     keepAnonymousCounts: body?.keepAnonymousCounts !== false,
+    maskContactsAfterSync: body?.maskContactsAfterSync === true,
   };
 }
 
@@ -92,7 +95,7 @@ function sendReport(res: Response, rows: RetentionReportRow[], label: string, fo
   if (format !== 'csv') {
     return res.json({ month: label, rows });
   }
-  const header = ['Account', 'Auto-delete', 'Leads captured', 'Leads synced', 'Leads deleted', 'Conversations deleted', 'Leads held now', 'Conversations held now', 'Oldest lead held', 'Due for deletion now', 'Last run'];
+  const header = ['Account', 'Auto-delete', 'Hide contact details', 'Leads captured', 'Leads synced', 'Leads deleted', 'Conversations deleted', 'Leads hidden', 'Leads held now', 'Conversations held now', 'Oldest lead held', 'Due for deletion now', 'Last run'];
   const esc = (v: unknown) => {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -101,7 +104,7 @@ function sendReport(res: Response, rows: RetentionReportRow[], label: string, fo
     `# Data retention report — ${title} — ${label} (IST)`,
     `# Generated ${new Date().toISOString()}. Deletion records hold no personal data.`,
     header.join(','),
-    ...rows.map(r => [r.accountName, r.policyMode, r.capturedLeads, r.syncedLeads, r.deletedLeads, r.deletedConversations, r.leadsHeldNow, r.conversationsHeldNow, r.oldestLeadHeld ?? '', r.dueNow ?? '', r.lastRunAt ?? ''].map(esc).join(',')),
+    ...rows.map(r => [r.accountName, r.policyMode, r.hidesContacts ? 'on' : 'off', r.capturedLeads, r.syncedLeads, r.deletedLeads, r.deletedConversations, r.hiddenLeads, r.leadsHeldNow, r.conversationsHeldNow, r.oldestLeadHeld ?? '', r.dueNow ?? '', r.lastRunAt ?? ''].map(esc).join(',')),
   ];
   const safeTitle = title.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -189,21 +192,25 @@ router.post("/api/super-admin/data-retention/:scopeType/:scopeId/preview", requi
     const accounts = [];
     let totalLeads = 0;
     let totalChats = 0;
+    let totalHidden = 0;
     for (const id of accountIds) {
       // Accounts with their own override ignore the group policy.
       const override = scope.scopeType === 'group' ? await getRetentionPolicy('account', id) : null;
       const account = await storage.getBusinessAccount(id);
       if (override) {
-        accounts.push({ businessAccountId: id, name: account?.name || id, overridden: true, leads: 0, idleChats: 0 });
+        accounts.push({ businessAccountId: id, name: account?.name || id, overridden: true, leads: 0, idleChats: 0, hide: 0 });
         continue;
       }
+      // Hiding is counted only when it is switched on in the proposed settings.
       const due = await countDueForAccount(id, settings);
+      const hide = settings.maskContactsAfterSync ? await countMaskDueForAccount(id) : 0;
       const crm = await getAccountCrmTargets(id);
       totalLeads += due.leads;
       totalChats += due.idleChats;
-      accounts.push({ businessAccountId: id, name: account?.name || id, overridden: false, crm, ...due });
+      totalHidden += hide;
+      accounts.push({ businessAccountId: id, name: account?.name || id, overridden: false, crm, ...due, hide });
     }
-    res.json({ totalLeads, totalIdleChats: totalChats, accounts });
+    res.json({ totalLeads, totalIdleChats: totalChats, totalHidden, hides: settings.maskContactsAfterSync, accounts });
   } catch (error: any) {
     console.error('[Data Retention] Preview error:', error);
     res.status(500).json({ error: error.message });
@@ -223,6 +230,9 @@ router.put("/api/super-admin/data-retention/:scopeType/:scopeId", requireAuth, r
     if (settings.mode === 'live' && previous?.mode !== 'live' && req.body?.confirmation !== 'CONFIRM') {
       return res.status(400).json({ error: "Type CONFIRM to switch auto-delete to live" });
     }
+    if (settings.maskContactsAfterSync && previous?.maskContactsAfterSync !== true && req.body?.confirmation !== 'CONFIRM') {
+      return res.status(400).json({ error: "Type CONFIRM to start hiding contact details" });
+    }
 
     const saved = await upsertRetentionPolicy(scope.scopeType, scope.scopeId, settings, req.user!.id);
     await recordAuditEventSafely(req, {
@@ -241,6 +251,8 @@ router.put("/api/super-admin/data-retention/:scopeType/:scopeId", requireAuth, r
         previousDeleteIdleChatsAfterMinutes: previous?.deleteIdleChatsAfterMinutes ?? null,
         deleteIdleChatsAfterMinutes: settings.deleteIdleChatsAfterMinutes,
         keepAnonymousCounts: settings.keepAnonymousCounts,
+        previousMaskContactsAfterSync: previous?.maskContactsAfterSync ?? false,
+        maskContactsAfterSync: settings.maskContactsAfterSync,
       },
     });
     res.json({ policy: saved });
