@@ -39,6 +39,7 @@ const FormStep = lazy(() => import("@/components/FormStep").then(m => ({ default
 import { ChatFormAnswerBar } from "@/components/ChatFormAnswerBar";
 import { hasOwnCard, isChoiceQuestion, isClosingStep } from "@/lib/formAnswer";
 import { ChatFormChoices } from "@/components/ChatFormChoices";
+import { scalePx, widgetUiScale } from "@/lib/widgetScale";
 const ProductCarousel = lazy(() => import("@/components/ProductCarousel").then(m => ({ default: m.ProductCarousel })));
 const ProductComparisonView = lazy(() => import("@/components/ProductComparisonView").then(m => ({ default: m.ProductComparisonView })));
 const ChatMenuNavigation = lazy(() => import("@/components/ChatMenuNavigation").then(m => ({ default: m.ChatMenuNavigation })));
@@ -233,6 +234,9 @@ interface WidgetSettings {
   whatsappWidgetMessage?: string;
   addToCartEnabled?: string;
   chatFontSize?: string;
+  sizePreset?: string;
+  widgetWidth?: string;
+  widgetHeight?: string;
   footerLabelEnabled?: string;
   footerLabelText?: string;
   poweredByEnabled?: string;
@@ -1476,8 +1480,17 @@ export default function EmbedChat() {
   // Use actual settings values
   const chatColor = settings?.chatColor || "#9333ea";
   const chatColorEnd = settings?.chatColorEnd || "#3b82f6";
-  const CHAT_FONT_SIZE_PX: Record<string, string> = { small: "13px", medium: "14px", large: "16px" };
-  const chatFontSize = CHAT_FONT_SIZE_PX[settings?.chatFontSize || "medium"] || CHAT_FONT_SIZE_PX.medium;
+  // Text, buttons and spacing follow the widget's size (Small / Medium / Large): the widget's
+  // styles are in rem, so the root font size of this (iframe) page sets them all at once.
+  const uiScale = widgetUiScale(settings, isMobileDevice);
+  useEffect(() => {
+    const root = document.documentElement;
+    const previous = root.style.fontSize;
+    root.style.fontSize = `${16 * uiScale}px`;
+    return () => { root.style.fontSize = previous; };
+  }, [uiScale]);
+  const CHAT_FONT_SIZE_PX: Record<string, number> = { small: 13, medium: 14, large: 16 };
+  const chatFontSize = scalePx(CHAT_FONT_SIZE_PX[settings?.chatFontSize || "medium"] || CHAT_FONT_SIZE_PX.medium, uiScale);
   const widgetHeaderText = settings?.widgetHeaderText || "Hi Chroney";
   const currency = settings?.currency || "USD";
   const voiceModeStyle = settings?.voiceModeStyle || "circular";
@@ -3898,10 +3911,15 @@ export default function EmbedChat() {
   useEffect(() => {
     const step = activeFormStep;
     if (!step) return;
-    // Keep the newest question (or the closing / booking card) in view.
+    // Keep the newest question (or the booking card) in view, with the conversation above it.
+    // The list has extra empty space at the bottom, so scroll to the end of the content, not
+    // to the end of the list.
     const scroll = () => requestAnimationFrame(() => setTimeout(() => {
       const container = messagesContainerRef.current;
-      if (container) container.scrollTop = container.scrollHeight;
+      const end = messagesEndRef.current;
+      if (!container || !end) return;
+      const target = end.offsetTop + 12 - container.clientHeight;
+      container.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
     }, 60));
     if (hasOwnCard(step) || !step.questionText) { scroll(); return; }
     scroll();
@@ -6362,7 +6380,7 @@ export default function EmbedChat() {
             <div data-testid="doubt-locked-composer">
               <div
                 className="w-full px-3 sm:px-4 py-2 sm:py-3 rounded-xl sm:rounded-2xl border border-gray-200 bg-gray-100 text-gray-400 text-sm sm:text-base flex items-center gap-2 cursor-not-allowed select-none"
-                style={{ minHeight: isMobileDevice ? '48px' : '44px' }}
+                style={{ minHeight: isMobileDevice ? '48px' : scalePx(44, uiScale) }}
                 aria-disabled="true"
               >
                 <Lock className="w-4 h-4 flex-shrink-0" />
@@ -6647,10 +6665,10 @@ export default function EmbedChat() {
                 rows={2}
                 className={`w-full px-3 sm:px-4 py-2 sm:py-3 ${avatarAvailable ? 'pr-24 sm:pr-28' : 'pr-12 sm:pr-14'} rounded-xl sm:rounded-2xl border border-gray-200 bg-white placeholder:text-gray-400 focus:outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-400 resize-none text-sm sm:text-base`}
                 style={{ 
-                  fontSize: isMobileDevice ? '16px' : '15px',
+                  fontSize: isMobileDevice ? '16px' : scalePx(15, uiScale),
                   WebkitAppearance: 'none',
                   appearance: 'none',
-                  minHeight: isMobileDevice ? '48px' : '44px',
+                  minHeight: isMobileDevice ? '48px' : scalePx(44, uiScale),
                   maxHeight: '120px',
                   lineHeight: '1.4'
                 }}

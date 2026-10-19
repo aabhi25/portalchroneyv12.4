@@ -90,7 +90,8 @@ export function ChatFormAnswerBar({ step, onSubmit, isSubmitting, chatColor, cha
           placeholder={placeholder}
           aria-label={step.questionText}
           className="w-full rounded-xl sm:rounded-2xl border border-gray-200 bg-white py-2 pl-3 pr-12 placeholder:text-gray-400 focus:border-purple-400 focus:outline-none focus:ring-1 focus:ring-purple-400 disabled:cursor-not-allowed disabled:bg-gray-50 sm:py-3 sm:pl-4 sm:pr-14"
-          style={{ fontSize: isMobile ? "16px" : "15px", minHeight: isMobile ? "48px" : "44px" }}
+          // rem, so it follows the widget's size (Small / Medium / Large); phones keep 16px.
+          style={{ fontSize: isMobile ? "16px" : "0.9375rem", minHeight: isMobile ? "48px" : "2.75rem" }}
           data-testid="input-form-answer"
         />
         {!choice && (
