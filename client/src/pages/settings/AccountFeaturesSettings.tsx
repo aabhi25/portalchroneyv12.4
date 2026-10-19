@@ -2,13 +2,14 @@ import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import type { LucideIcon } from "lucide-react";
-import { Calendar, Headphones, Loader2, Megaphone, Mic, PackageOpen, ShoppingBag, Video } from "lucide-react";
+import { Calendar, GraduationCap, Headphones, Loader2, Megaphone, Mic, PackageOpen, ShoppingBag, Video } from "lucide-react";
 import type { BusinessAccountDto, ProductTier } from "@shared/dto";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { LiveAvatarSettingsDialog } from "@/components/LiveAvatarSettingsDialog";
+import { TutorSettingsDialog, tutorKey, type TutorAdminView } from "@/components/TutorSettingsDialog";
 import { hubArea, type HubAreaId } from "@/navigation/hubAreas";
 import { callingApi, callingKeys, errorStatus, type SuperAdminCallingState } from "@/lib/aiCallingApi";
 
@@ -76,6 +77,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
   const [, setLocation] = useLocation();
   const [busy, setBusy] = useState<string | null>(null);
   const [avatarOpen, setAvatarOpen] = useState(false);
+  const [tutorOpen, setTutorOpen] = useState(false);
 
   const account = useQuery<BusinessAccountDto>({ queryKey: accountKey(businessAccountId), staleTime: 0 });
   const calling = useQuery<SuperAdminCallingState>({
@@ -85,6 +87,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
     retry: false,
   });
   const avatar = useQuery<{ settings: { enabled: boolean } }>({ queryKey: avatarKey(businessAccountId), retry: false });
+  const tutor = useQuery<TutorAdminView>({ queryKey: tutorKey(businessAccountId), retry: false });
 
   const refreshEverywhere = () => {
     // The portal's own menus, and the Business accounts list.
@@ -265,6 +268,20 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
             Set up
           </Button>
         </Row>
+        {tutor.data?.eligible && (
+          <Row
+            icon={GraduationCap} tint="bg-teal-600" label="AI tutor"
+            description="Teaches a chapter like a teacher, with a live board; video when the avatar is on"
+            hint={!ba.voiceModeEnabled ? "Needs Voice mode switched on to show up." : null}
+          >
+            <span className="text-[12.5px] text-gray-500" data-testid="text-tutor-status">
+              {tutor.data.enabled ? `On · ${tutor.data.dailyMinutesPerStudent} min/student/day` : "Off"}
+            </span>
+            <Button variant="outline" size="sm" className="h-7" onClick={() => setTutorOpen(true)} data-testid="button-feature-tutor">
+              Set up
+            </Button>
+          </Row>
+        )}
         <Row icon={Headphones} tint="bg-orange-500" label="Support tickets" description="A queue for the questions the AI hands over to people">
           {flagSwitch("supportTicketsEnabled", "Support tickets")}
         </Row>
@@ -291,6 +308,9 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
         These are the same switches as Super Admin › Business accounts. Changes apply straight away for everyone on this account.
       </p>
 
+      {tutorOpen && (
+        <TutorSettingsDialog open={tutorOpen} onOpenChange={setTutorOpen} businessAccountId={ba.id} businessName={ba.name} />
+      )}
       {avatarOpen && (
         <LiveAvatarSettingsDialog
           open={avatarOpen}

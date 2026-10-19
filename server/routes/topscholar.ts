@@ -1784,6 +1784,48 @@ router.get("/api/topscholar/scope-chapters", ...topscholarGuards, async (req: Re
 // ticket, escalation email) against the client's system. Admin-only, TopScholar
 // tenant only, and requires the launch-token secret to already be configured —
 // the token produced here is indistinguishable from one the client portal signs.
+// ---- AI tutor lesson preview (Widget Tester) ---------------------------------
+// Lets the team read the lesson the tutor would teach for a chapter (outline, then each
+// section's spoken lines and board) before switching the tutor on. Plans are cached and
+// shared with real tutor sessions.
+function tutorScopeFrom(body: any) {
+  const s = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const language = ["en", "hi", "hinglish"].includes(body?.language) ? body.language : "en";
+  return { scope: { board: s(body?.board), medium: s(body?.medium), grade: s(body?.grade), subject: s(body?.subject), chapter: s(body?.chapter) }, language };
+}
+
+router.post("/api/topscholar/tutor/preview-outline", ...topscholarGuards, async (req: Request, res: Response) => {
+  const businessAccountId = getBusinessAccountId(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+  const { scope, language } = tutorScopeFrom(req.body);
+  try {
+    const { lessonOutline, packSummary } = await import("../services/tutor/lessonService");
+    const { pack, outline } = await lessonOutline(businessAccountId, scope, language);
+    res.json({ pack: packSummary(pack), outline });
+  } catch (error: any) {
+    const status = typeof error?.status === "number" ? error.status : 500;
+    if (status === 500) console.error("[Tutor] preview outline failed:", error);
+    res.status(status).json({ error: error?.message || "Couldn't plan this lesson." });
+  }
+});
+
+router.post("/api/topscholar/tutor/preview-section", ...topscholarGuards, async (req: Request, res: Response) => {
+  const businessAccountId = getBusinessAccountId(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+  const { scope, language } = tutorScopeFrom(req.body);
+  const sectionIndex = Number.isInteger(req.body?.sectionIndex) ? req.body.sectionIndex : 0;
+  try {
+    const { lessonSection } = await import("../services/tutor/lessonService");
+    const { section } = await lessonSection(businessAccountId, scope, language, sectionIndex);
+    // The answer key stays on the server in real sessions; the preview shows it to the team.
+    res.json({ section });
+  } catch (error: any) {
+    const status = typeof error?.status === "number" ? error.status : 500;
+    if (status === 500) console.error("[Tutor] preview section failed:", error);
+    res.status(status).json({ error: error?.message || "Couldn't prepare this section." });
+  }
+});
+
 router.post("/api/topscholar/tester/mint-launch-token", ...topscholarGuards, async (req: Request, res: Response) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });

@@ -176,6 +176,13 @@
       "when": 1792432991814,
       "tag": "0024_topscholar_lms_embed_api",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792442511728,
+      "tag": "0025_ai_tutor",
+      "breakpoints": true
     }
   ]
 }

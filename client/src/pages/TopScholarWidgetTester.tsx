@@ -25,6 +25,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { LessonPreview } from "@/components/tutor/LessonPreview";
 
   // One distinct board/medium/grade combination physically present in the active
   // client content store, plus the content packs (cp_ids) it contains.
@@ -842,6 +843,9 @@ export default function TopScholarWidgetTester() {
             )}
           </CardContent>
         </Card>
+
+        {/* AI tutor: preview the lesson it would teach for this chapter */}
+        {hasFullSelection && <LessonPreview scope={{ board, medium, grade, subject, chapter }} />}
       </div>
     </div>
   );

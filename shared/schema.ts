@@ -1849,6 +1849,72 @@ export const avatarSessions = pgTable("avatar_sessions", {
 
 export type AvatarSession = typeof avatarSessions.$inferSelect;
 
+// ── AI Tutor (TopScholar / K12) ───────────────────────────────────────────────────────
+// A teacher-like tutor inside the chat widget: lessons from the chapter's own content with a
+// live board synced to speech (server/services/tutor). Super admins switch it on per account;
+// each student gets a daily allowance of tutor minutes. Video is governed by avatar settings.
+export const tutorBusinessSettings = pgTable("tutor_business_settings", {
+  businessAccountId: varchar("business_account_id").primaryKey().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").notNull().default(false),
+  dailyMinutesPerStudent: integer("daily_minutes_per_student").notNull().default(20),
+  updatedBy: varchar("updated_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+export type TutorBusinessSettings = typeof tutorBusinessSettings.$inferSelect;
+
+// Tutor seconds used per student per day (day = date in Asia/Kolkata, "YYYY-MM-DD").
+// student_key = the signed TopScholar studentId, else "visitor:<id>" (tester / anonymous).
+export const tutorUsageDaily = pgTable("tutor_usage_daily", {
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  studentKey: text("student_key").notNull(),
+  day: varchar("day", { length: 10 }).notNull(),
+  secondsUsed: integer("seconds_used").notNull().default(0),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  usageUnique: uniqueIndex("tutor_usage_daily_unique_idx").on(table.businessAccountId, table.studentKey, table.day),
+}));
+
+// One row per tutoring session (lesson or doubts), for reporting and "continue where you left off".
+export const tutorSessions = pgTable("tutor_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  conversationId: varchar("conversation_id"),
+  studentKey: text("student_key").notNull(),
+  cpIds: jsonb("cp_ids").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  chapter: text("chapter"),
+  mode: varchar("mode", { length: 10 }).notNull().default("voice"), // 'voice' | 'video'
+  kind: varchar("kind", { length: 10 }).notNull().default("lesson"), // 'lesson' | 'doubts'
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  endedAt: timestamp("ended_at"),
+  secondsActive: integer("seconds_active").notNull().default(0),
+  progress: jsonb("progress").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  checksCorrect: integer("checks_correct").notNull().default(0),
+  checksTotal: integer("checks_total").notNull().default(0),
+  endReason: varchar("end_reason", { length: 32 }),
+}, (table) => ({
+  studentIdx: index("tutor_sessions_student_idx").on(table.businessAccountId, table.studentKey, table.startedAt),
+}));
+export type TutorSession = typeof tutorSessions.$inferSelect;
+
+// Lesson plans built from a chapter's content, shared by every student on that chapter.
+// part = 'outline' or a section id. version_key = the content's live sync versions, so a
+// resync of the chapter makes old plans miss naturally.
+export const tutorLessonPlans = pgTable("tutor_lesson_plans", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  cpIdsHash: varchar("cp_ids_hash", { length: 64 }).notNull(),
+  chapterNorm: text("chapter_norm").notNull(),
+  language: varchar("language", { length: 16 }).notNull(),
+  versionKey: text("version_key").notNull(),
+  part: varchar("part", { length: 64 }).notNull(),
+  planJson: jsonb("plan_json").$type<Record<string, unknown>>().notNull(),
+  model: varchar("model", { length: 64 }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  planUnique: uniqueIndex("tutor_lesson_plans_unique_idx").on(table.businessAccountId, table.cpIdsHash, table.chapterNorm, table.language, table.versionKey, table.part),
+}));
+
 // Behavioral Discount System Tables
 
 // Intent Scores - Calculated purchase intent scores

@@ -98,6 +98,8 @@ import { resolveAuthorizedLeadAccountId, maskLeadPhone } from "./lib/leadAccess"
 import dataRetentionRoutes from "./routes/dataRetention";
 import aiUsageRoutes from "./routes/aiUsage";
 import avatarRoutes from "./routes/avatar";
+import tutorRoutes from "./routes/tutor";
+import { getPublicTutorConfig } from "./services/tutor/settings";
 import aiLanguageRoutes from "./routes/aiLanguage";
 import { registerCampaignInsightsRoutes } from "./routes/campaignInsights";
 import { registerCampaignSendRoutes } from "./routes/campaignSend";
@@ -630,6 +632,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Live AI avatar (super-admin settings, widget sessions). Close avatar sessions
   // a previous process left open (billed to their last heartbeat).
   app.use(avatarRoutes);
+  app.use(tutorRoutes);
   app.use(aiLanguageRoutes);
   app.use((await import("./routes/aiCalling")).default, (await import("./routes/callingWebhooks")).default, (await import("./routes/callingPlivo")).default); // AI Calling (B)
   avatarSessionManager.recoverOrphans(new Date()).catch((err) => {
@@ -28031,6 +28034,8 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         // Live AI avatar button: null unless a super admin enabled it and it can
         // actually start (key, consent, voice on). Never contains keys.
         liveAvatar: chatMode !== 'chat-only' ? await getPublicAvatarConfig(businessAccountId, businessAccount ?? null) : null,
+        // AI tutor (lessons with a live board); voice is needed, so not offered in chat-only widgets.
+        aiTutor: chatMode !== 'chat-only' ? await getPublicTutorConfig(businessAccountId) : { enabled: false },
         // Reply languages the business allows on the website (dropdown limited to them, default
         // pre-selected). null = any language (widget unchanged).
         replyLanguages: publicReplyLanguages(await getLanguagePolicy(businessAccountId, 'website')),
