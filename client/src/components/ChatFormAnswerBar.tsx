@@ -1,32 +1,50 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Send } from "lucide-react";
-import { isChoiceQuestion, validateFormAnswer, type FormQuestion } from "@/lib/formAnswer";
+import { hasManyChoices, isChoiceQuestion, pickChoice, validateFormAnswer, type FormQuestion } from "@/lib/formAnswer";
 
 /**
  * The answer box under a form question that's asked in the chat (journey forms). It sits where
  * the chat input normally is, so a form reads like a conversation: the question is a chat
  * bubble, the visitor types (or taps an option above) and the answer appears as their bubble.
  */
-export function ChatFormAnswerBar({ step, onSubmit, isSubmitting, chatColor, chatColorEnd, isMobile }: {
+export function ChatFormAnswerBar({ step, onSubmit, isSubmitting, chatColor, chatColorEnd, isMobile, onSearch }: {
   step: FormQuestion;
   onSubmit: (value: string) => void;
   isSubmitting: boolean;
   chatColor: string;
   chatColorEnd?: string;
   isMobile?: boolean;
+  /** Long option lists: what's typed here narrows the option buttons above. */
+  onSearch?: (text: string) => void;
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const choice = isChoiceQuestion(step);
+  // Short option lists are answered by tapping; long ones can also be searched here.
+  const searchable = hasManyChoices(step);
+  const choice = isChoiceQuestion(step) && !searchable;
 
   useEffect(() => {
     setValue("");
     setError(null);
+    onSearch?.("");
     if (!choice && !isMobile) inputRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step.stepId, choice, isMobile]);
 
   const submit = (answer: string) => {
+    if (searchable && answer.trim()) {
+      const picked = pickChoice(step.options ?? [], answer);
+      if (!picked) {
+        setError("Please pick one of the options");
+        return;
+      }
+      setError(null);
+      setValue("");
+      onSearch?.("");
+      onSubmit(picked);
+      return;
+    }
     const problem = validateFormAnswer(step, answer);
     if (problem) {
       setError(problem);
@@ -41,6 +59,8 @@ export function ChatFormAnswerBar({ step, onSubmit, isSubmitting, chatColor, cha
   const inputMode = step.questionType === "phone" ? "numeric" : step.questionType === "email" ? "email" : step.questionType === "number" ? "decimal" : undefined;
   const placeholder = choice
     ? "Choose one of the options above"
+    : searchable
+    ? `Type to search ${step.options?.length ?? 0} options`
     : step.placeholder || (step.questionType === "phone" ? "Enter 10-digit mobile number" : step.questionType === "email" ? "Enter your email" : "Type your answer...");
   const ready = !!value.trim() && !isSubmitting;
   const gradient = `linear-gradient(135deg, ${chatColor}, ${chatColorEnd || chatColor})`;
@@ -64,6 +84,7 @@ export function ChatFormAnswerBar({ step, onSubmit, isSubmitting, chatColor, cha
           onChange={(e) => {
             setError(null);
             setValue(step.questionType === "phone" ? e.target.value.replace(/\D/g, "").slice(0, 10) : e.target.value);
+            if (searchable) onSearch?.(e.target.value);
           }}
           onFocus={() => window.parent.postMessage({ type: "EXPAND_WIDGET" }, "*")}
           placeholder={placeholder}

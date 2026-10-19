@@ -38,6 +38,7 @@ const AppointmentCalendar = lazy(() => import("@/components/AppointmentCalendar"
 const FormStep = lazy(() => import("@/components/FormStep").then(m => ({ default: m.FormStep })));
 import { ChatFormAnswerBar } from "@/components/ChatFormAnswerBar";
 import { hasOwnCard, isChoiceQuestion, isClosingStep } from "@/lib/formAnswer";
+import { ChatFormChoices } from "@/components/ChatFormChoices";
 const ProductCarousel = lazy(() => import("@/components/ProductCarousel").then(m => ({ default: m.ProductCarousel })));
 const ProductComparisonView = lazy(() => import("@/components/ProductComparisonView").then(m => ({ default: m.ProductComparisonView })));
 const ChatMenuNavigation = lazy(() => import("@/components/ChatMenuNavigation").then(m => ({ default: m.ChatMenuNavigation })));
@@ -608,6 +609,8 @@ export default function EmbedChat() {
   const [conversationsList, setConversationsList] = useState<Array<{id: string; title: string; updatedAt: string; messageCount: number}>>([]);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
   const [activeFormStep, setActiveFormStep] = useState<FormStepData | null>(null);
+  // Text typed in the answer box to narrow a long list of form options.
+  const [formChoiceSearch, setFormChoiceSearch] = useState("");
   const [activeJourneyId, setActiveJourneyId] = useState<string | null>(null);
   const [isFormJourneyComplete, setIsFormJourneyComplete] = useState(false); // Track when form journey is complete - disables chat input
   const [introLoaded, setIntroLoaded] = useState(false); // Track when intro has been fetched
@@ -6127,21 +6130,24 @@ export default function EmbedChat() {
                 {msg.role === 'assistant' && msg.quickReplies && msg.quickReplies.length > 0 && msgIndex === messages.length - 1 && (
                   msg.formStepId ? (
                     // Options of the form question being asked: tapping one answers it.
-                    msg.formStepId === activeFormStep?.stepId && !isLoading && (
-                      <QuickBrowseButtons
-                        buttons={msg.quickReplies.map((opt) => ({ label: opt, action: opt }))}
-                        onSelect={(answer) => {
-                          if (activeFormStep && isClosingStep(activeFormStep)) {
-                            // "Continue exploring" on the closing message.
-                            setActiveFormStep(null);
-                            setActiveJourneyId(null);
-                          } else {
-                            submitFormAnswer(answer);
-                          }
-                        }}
-                        chatColor={chatColor}
-                        chatColorEnd={chatColorEnd}
-                      />
+                    activeFormStep && msg.formStepId === activeFormStep.stepId && !isLoading && (
+                      isClosingStep(activeFormStep) ? (
+                        // "Continue exploring" on the closing message.
+                        <QuickBrowseButtons
+                          buttons={msg.quickReplies.map((opt) => ({ label: opt, action: opt }))}
+                          onSelect={() => { setActiveFormStep(null); setActiveJourneyId(null); }}
+                          chatColor={chatColor}
+                          chatColorEnd={chatColorEnd}
+                        />
+                      ) : (
+                        <ChatFormChoices
+                          options={msg.quickReplies}
+                          filter={formChoiceSearch}
+                          onPick={(answer) => submitFormAnswer(answer)}
+                          chatColor={chatColor}
+                          chatColorEnd={chatColorEnd}
+                        />
+                      )
                     )
                   ) : (
                   <QuickBrowseButtons
@@ -6330,6 +6336,7 @@ export default function EmbedChat() {
             chatColor={chatColor}
             chatColorEnd={chatColorEnd}
             isMobile={isMobileDevice}
+            onSearch={setFormChoiceSearch}
           />
         </div>
       )}
