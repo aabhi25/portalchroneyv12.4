@@ -134,6 +134,7 @@ export async function queueCpRefreshes(params: {
       queued.push({ cpId, planId: run.planId, runId: run.id });
       activeRunByCpId.set(cpId, { runId: run.id, planId: run.planId });
     } catch (error: any) {
+      console.warn(`[TopScholar] could not queue CP ${cpId}:`, error?.message || error);
       rejected.push({ cpId, code: "queue_failed", error: error?.message || "Could not queue this CP ID." });
     }
   }

@@ -204,6 +204,18 @@ async function main() {
     expect(!topics.results.some((t: any) => String(t.revisionNotes).includes('UNFINISHED NEW VERSION TEXT')),
       'retrieval hides rows of a version that is not live yet');
 
+    // ── The admin "Ext. Content" page counts and lists only the live copy too ──
+    const { countLiveContent, savedCounts } = await import('../contentCounts');
+    const { getChapters, getChunks } = await import('../contentReader');
+    const cfgNow = getTopscholarConfig(await account());
+    const liveRows = (await countLiveContent(cfgNow, ACCOUNT_ID)).filter((r) => r.cp_id === CP);
+    const liveTotal = liveRows.reduce((n, r) => n + r.n, 0);
+    const allRows = (await chunkVersions()).reduce((n, r) => n + r.n, 0);
+    expect(liveTotal === allRows - 1, 'counts skip the half-written new version', { liveTotal, allRows });
+    expect(!(await getChapters(cfgNow, ACCOUNT_ID, CP)).some((c) => c.chapter === 'X'), 'chapter list skips the half-written version');
+    const listed = await getChunks(cfgNow, ACCOUNT_ID, { cpId: CP, pageSize: 100 });
+    expect(listed.total === liveTotal && !listed.items.some((i) => i.contentText.includes('UNFINISHED NEW VERSION TEXT')), 'content list skips it as well');
+
     // ── A later successful refresh swaps in and clears everything older ───────
     await refresh();
     sync = await syncRow();
@@ -211,6 +223,13 @@ async function main() {
     expect(sync.status === 'completed' && sync.activeSyncVersion && sync.activeSyncVersion !== v1, 'success -> new active version');
     expect(versions.length === 1 && versions[0].sync_version === sync.activeSyncVersion && versions[0].n === passages,
       'old version and leftovers are deleted after the switch');
+    // The page's saved totals are recounted from the store when a sync completes.
+    let saved = 0;
+    for (let i = 0; i < 20 && saved !== passages; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      saved = (await savedCounts(ACCOUNT_ID)).filter((r) => r.cp_id === CP).reduce((n, r) => n + r.n, 0);
+    }
+    expect(saved === passages && (await syncRow()).chunkCount === passages, 'saved totals match the live copy after the sync', { saved, passages });
 
     // ── Package moved: the remembered plan no longer has it, another known plan does ─
     await db.insert(schema.topscholarPlanCpResolutions).values({

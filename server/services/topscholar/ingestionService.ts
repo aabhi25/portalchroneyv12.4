@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { refreshSavedContentCounts } from './contentCounts';
 import { db } from '../../db';
 import { topscholarContentSync, topscholarEmbedJobs, topscholarEmbedStaging, topscholarCpMappings, topscholarPlanIds, topscholarPlanCpResolutions } from '@shared/schema';
 import { and, eq, ne, inArray } from 'drizzle-orm';
@@ -82,6 +83,8 @@ async function upsertSync(
   } else {
     await db.insert(topscholarContentSync).values({ businessAccountId, cpId, ...patch });
   }
+  // The admin "Ext. Content" page reads saved totals: recount the pack's live copy now.
+  if (patch.status === 'completed') void refreshSavedContentCounts(businessAccountId, cpId);
 }
 
 /** Subject label for a chunk: prefer the CMS-provided subject name, then cpName,

@@ -3,6 +3,7 @@ import { topscholarCpMappings, topscholarContentSync } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 import { getContentPool } from './contentDb';
 import type { TopscholarConfig } from './config';
+import { liveVersionFor } from './contentCounts';
 
 /**
  * Read-only reader for the extracted curriculum content store (pgvector). Powers the
@@ -157,38 +158,22 @@ export async function assemblePackOverview(
   return packs;
 }
 
-export async function getContentOverview(
-  cfg: TopscholarConfig,
-  businessAccountId: string,
-): Promise<ContentPackOverview[]> {
-  const pool = getContentPool(cfg.contentDbUrl);
-
-  const { rows } = await safeQuery(
-    pool,
-    `SELECT cp_id, content_type, count(*)::int AS n
-       FROM topscholar_content_chunks
-      WHERE business_account_id = $1
-      GROUP BY cp_id, content_type`,
-    [businessAccountId],
-  );
-
-  return assemblePackOverview(rows, businessAccountId);
-}
-
 export async function getChapters(
   cfg: TopscholarConfig,
   businessAccountId: string,
   cpId: string,
 ): Promise<ChapterBreakdown[]> {
   const pool = getContentPool(cfg.contentDbUrl);
+  // Only the live copy of the pack (a swap-in resync keeps the old one until it lands).
+  const live = await liveVersionFor(businessAccountId, cpId);
   const { rows } = await safeQuery(
     pool,
     `SELECT chapter, content_type, count(*)::int AS n
        FROM topscholar_content_chunks
-      WHERE business_account_id = $1 AND cp_id = $2
+      WHERE business_account_id = $1 AND cp_id = $2${live ? ' AND sync_version = $3' : ''}
       GROUP BY chapter, content_type
       ORDER BY chapter NULLS LAST`,
-    [businessAccountId, cpId],
+    live ? [businessAccountId, cpId, live] : [businessAccountId, cpId],
   );
   return rows.map((r) => ({
     chapter: r.chapter,
@@ -255,6 +240,11 @@ export async function getChunks(
   const conds: string[] = ['business_account_id = $1', 'cp_id = $2'];
   const params: unknown[] = [businessAccountId, opts.cpId];
   let i = 3;
+  const live = await liveVersionFor(businessAccountId, opts.cpId);
+  if (live) {
+    conds.push(`sync_version = $${i++}`);
+    params.push(live);
+  }
 
   if (opts.contentType) {
     conds.push(`content_type = $${i++}`);

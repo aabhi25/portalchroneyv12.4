@@ -24,8 +24,9 @@ import { encrypt } from "../services/encryptionService";
 import { generateEmbedApiKey } from "../services/topscholar/embedApiKey";
 import { ingestPlanIds, ingestSingleCp, resolvePlans, curriculumLabel, DEFAULT_SAMPLE_LIMIT } from "../services/topscholar/ingestionService";
 import { testMongoConnection } from "../services/topscholar/mongoContentDb";
-import { getContentOverview, getChapters, getChunks, getChapterNamesForCpIds, getCpIdsWithContent } from "../services/topscholar/contentReader";
-import { getMongoContentOverview, getMongoChapters, getMongoChunks } from "../services/topscholar/mongoContentReader";
+import { assemblePackOverview, getChapters, getChunks, getChapterNamesForCpIds, getCpIdsWithContent } from "../services/topscholar/contentReader";
+import { countLiveContent, saveCounts, savedCounts } from "../services/topscholar/contentCounts";
+import { getMongoChapters, getMongoChunks } from "../services/topscholar/mongoContentReader";
 import { getMongoChapterNames, getMongoCpIdsWithContent } from "../services/topscholar/mongoContentDb";
 import { fetchCurriculumImage } from "../services/topscholar/mediaProxy";
 import { resolveCpIdsForScope } from "../services/topscholar/scopeResolver";
@@ -1479,11 +1480,20 @@ router.get("/api/topscholar/content/overview", ...topscholarGuards, async (req: 
 
   const cfg = getTopscholarConfig(account);
 
+  // MongoDB stores: the totals saved at the end of each sync (no content-store query, so the
+  // page opens at once); ?live=1 ("Refresh counts") recounts the live copy and saves it.
+  // pgvector stores are counted live (a fast Postgres count). See topscholar/contentCounts.ts.
+  const live = req.query.live === "1" || cfg.storeType !== "mongodb";
   try {
-    const packs = cfg.storeType === "mongodb"
-      ? await getMongoContentOverview(cfg, businessAccountId)
-      : await getContentOverview(cfg, businessAccountId);
-    res.json({ packs });
+    let rows;
+    if (live) {
+      rows = await countLiveContent(cfg, businessAccountId);
+      await saveCounts(businessAccountId, rows);
+    } else {
+      rows = await savedCounts(businessAccountId);
+    }
+    const packs = await assemblePackOverview(rows, businessAccountId);
+    res.json({ packs, countedAt: live ? new Date().toISOString() : null });
   } catch (error: any) {
     console.error("[TopScholar Content] overview failed:", error);
     res.status(500).json({ error: error?.message || "Failed to load content overview." });

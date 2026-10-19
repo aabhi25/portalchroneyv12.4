@@ -9,6 +9,7 @@ import {
   type ChunkQueryOptions,
 } from './contentReader';
 import type { TopscholarConfig } from './config';
+import { liveVersionFor } from './contentCounts';
 
 /**
  * Read-only reader for MongoDB-backed curriculum content stores. Powers the
@@ -32,27 +33,15 @@ async function getCollection(cfg: TopscholarConfig): Promise<Collection<MongoChu
   return getMongoCollection(url, cfg.contentDbName, cfg.contentDbCollection);
 }
 
+/** Only the live copy of a pack (a swap-in resync keeps the old one until it lands). */
+async function liveMatch(businessAccountId: string, cpId: string): Promise<Document> {
+  const live = await liveVersionFor(businessAccountId, cpId);
+  return live ? { sync_version: live } : {};
+}
+
 /** Escapes user input for safe use inside a $regex search. */
 function escapeRegex(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-export async function getMongoContentOverview(
-  cfg: TopscholarConfig,
-  businessAccountId: string,
-): Promise<ContentPackOverview[]> {
-  const col = await getCollection(cfg);
-  const rows = await col
-    .aggregate<{ _id: { cp_id: string; content_type: string }; n: number }>([
-      { $match: { business_account_id: businessAccountId } },
-      { $group: { _id: { cp_id: '$cp_id', content_type: '$content_type' }, n: { $sum: 1 } } },
-    ])
-    .toArray();
-
-  return assemblePackOverview(
-    rows.map((r) => ({ cp_id: r._id.cp_id, content_type: r._id.content_type, n: r.n })),
-    businessAccountId,
-  );
 }
 
 export async function getMongoChapters(
@@ -63,7 +52,7 @@ export async function getMongoChapters(
   const col = await getCollection(cfg);
   const rows = await col
     .aggregate<{ _id: { chapter: string | null; content_type: string }; n: number }>([
-      { $match: { business_account_id: businessAccountId, cp_id: cpId } },
+      { $match: { business_account_id: businessAccountId, cp_id: cpId, ...(await liveMatch(businessAccountId, cpId)) } },
       { $group: { _id: { chapter: { $ifNull: ['$chapter', null] }, content_type: '$content_type' }, n: { $sum: 1 } } },
       // Sort named chapters alphabetically with null chapters last (pgvector NULLS LAST parity).
       { $addFields: { chapterIsNull: { $cond: [{ $eq: ['$_id.chapter', null] }, 1, 0] } } },
@@ -91,6 +80,7 @@ export async function getMongoChunks(
   const match: Document = {
     business_account_id: businessAccountId,
     cp_id: opts.cpId,
+    ...(await liveMatch(businessAccountId, opts.cpId)),
   };
   if (opts.contentType) match.content_type = opts.contentType;
   if (opts.chapter) {

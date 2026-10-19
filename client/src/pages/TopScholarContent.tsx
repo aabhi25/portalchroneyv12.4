@@ -320,8 +320,23 @@ export default function TopScholarContent() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data, isLoading, error, refetch, isFetching } = useQuery<{ packs: Pack[] }>({
+  const { data, isLoading, error, refetch, isFetching } = useQuery<{ packs: Pack[]; countedAt?: string | null }>({
     queryKey: ["/api/topscholar/content/overview"],
+  });
+
+  // The page opens with the totals saved at the end of each sync; this recounts the live
+  // content store (slower) and saves the result.
+  const recount = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/topscholar/content/overview?live=1", { credentials: "include" });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.error || "Recount failed");
+      return r.json() as Promise<{ packs: Pack[]; countedAt?: string | null }>;
+    },
+    onSuccess: (fresh) => {
+      queryClient.setQueryData(["/api/topscholar/content/overview"], fresh);
+      toast({ title: "Counts refreshed", description: "Recounted from the content store." });
+    },
+    onError: (e: any) => toast({ title: "Couldn't refresh counts", description: e?.message || "Try again in a moment.", variant: "destructive" }),
   });
 
   const packs = data?.packs || [];
@@ -531,8 +546,15 @@ export default function TopScholarContent() {
             Browse all extracted curriculum content synced from the TopScholar content store. Read-only.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
-          <RefreshCw className={`w-4 h-4 mr-2 ${isFetching ? "animate-spin" : ""}`} /> Refresh
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => recount.mutate()}
+          disabled={recount.isPending || isFetching}
+          title="Counts are saved after every sync. This recounts them now from the content store."
+          data-testid="button-refresh-counts"
+        >
+          <RefreshCw className={`w-4 h-4 mr-2 ${recount.isPending ? "animate-spin" : ""}`} /> Refresh counts
         </Button>
       </div>
 

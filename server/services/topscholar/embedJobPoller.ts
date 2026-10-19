@@ -1,4 +1,5 @@
 import { trackTimer } from "../../lib/lifecycle";
+import { refreshSavedContentCounts } from './contentCounts';
 import { reportError } from "../../lib/errorReporter";
 import { db } from '../../db';
 import {
@@ -225,6 +226,8 @@ async function completeJob(job: typeof topscholarEmbedJobs.$inferSelect): Promis
         eq(topscholarContentSync.embedJobId, job.id),
       ),
     );
+  // The admin "Ext. Content" page reads saved totals: recount the pack's live copy now.
+  void refreshSavedContentCounts(job.businessAccountId, job.cpId);
 
   // Best-effort cleanup (safe to leave behind if this crashes — job is already completed).
   await db.delete(topscholarEmbedStaging).where(eq(topscholarEmbedStaging.jobId, job.id));
