@@ -1,6 +1,7 @@
 import { getContentPool, ensureContentSchema, toVectorLiteral } from './contentDb';
 import {
   deleteMongoCpChunks,
+  deleteMongoCpChunksByVersion,
   insertMongoChunks,
   type MongoChunkDoc,
 } from './mongoContentDb';
@@ -28,6 +29,8 @@ export interface StoreChunk {
   metadata: Record<string, unknown>;
   contentHash: string | null;
   embedding: number[];
+  // Full-sync run that writes this chunk (swap-in resync). Omitted => unversioned.
+  syncVersion?: string | null;
 }
 
 /**
@@ -70,7 +73,7 @@ async function replacePgvector(
         `INSERT INTO topscholar_content_chunks
           (business_account_id, cp_id, board, medium, grade, content_type, subject, subject_id, chapter, title,
            content_html, content_text, source_ref, media_url, embedding, metadata, content_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::vector,$15::jsonb,$16)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::vector,$16::jsonb,$17)`,
         [
           businessAccountId, cpId, c.board, c.medium, c.grade, c.contentType, c.subject, c.subjectId, c.chapter, c.title,
           c.contentHtml, c.contentText, c.sourceRef, c.mediaUrl,
@@ -125,6 +128,41 @@ export async function deleteCpChunks(
   ]);
 }
 
+export type ChunkVersionSelector = { except: string } | { only: string } | { versionedOnly: true };
+
+/**
+ * Deletes chunks for (businessAccountId, cpId) chosen by sync_version. Used by the
+ * swap-in resync: { except: v } retires everything older once run v is complete,
+ * { only: v } rolls back a failed/cancelled run v, and { versionedOnly: true } clears
+ * leftovers of an interrupted run while unversioned rows are the live set.
+ */
+export async function deleteCpChunksByVersion(
+  cfg: TopscholarConfig,
+  businessAccountId: string,
+  cpId: string,
+  selector: ChunkVersionSelector,
+): Promise<number> {
+  if (cfg.storeType === 'mongodb') {
+    if (!cfg.contentDbUrl) throw new Error('MongoDB content DB URL is not configured.');
+    return deleteMongoCpChunksByVersion(
+      { connectionString: cfg.contentDbUrl, dbName: cfg.contentDbName, collection: cfg.contentDbCollection },
+      businessAccountId,
+      cpId,
+      selector,
+    );
+  }
+  const pool = getContentPool(cfg.contentDbUrl);
+  await ensureContentSchema(pool);
+  const base = 'DELETE FROM topscholar_content_chunks WHERE business_account_id = $1 AND cp_id = $2';
+  const res =
+    'except' in selector
+      ? await pool.query(`${base} AND sync_version IS DISTINCT FROM $3`, [businessAccountId, cpId, selector.except])
+      : 'only' in selector
+        ? await pool.query(`${base} AND sync_version = $3`, [businessAccountId, cpId, selector.only])
+        : await pool.query(`${base} AND sync_version IS NOT NULL`, [businessAccountId, cpId]);
+  return res.rowCount ?? 0;
+}
+
 /**
  * Appends chunks for (businessAccountId, cpId) WITHOUT deleting existing ones. Callers
  * that need replace semantics must call deleteCpChunks first. Returns rows written.
@@ -159,6 +197,7 @@ export async function appendCpChunks(
       embedding: c.embedding,
       metadata: c.metadata || {},
       content_hash: c.contentHash,
+      ...(c.syncVersion ? { sync_version: c.syncVersion } : {}),
       updated_at: now,
     }));
     return insertMongoChunks({ connectionString: cfg.contentDbUrl, dbName: cfg.contentDbName, collection: cfg.contentDbCollection }, docs);
@@ -174,12 +213,12 @@ export async function appendCpChunks(
       await client.query(
         `INSERT INTO topscholar_content_chunks
           (business_account_id, cp_id, board, medium, grade, content_type, subject, subject_id, chapter, title,
-           content_html, content_text, source_ref, media_url, embedding, metadata, content_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::vector,$15::jsonb,$16)`,
+           content_html, content_text, source_ref, media_url, embedding, metadata, content_hash, sync_version)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::vector,$16::jsonb,$17,$18)`,
         [
           businessAccountId, cpId, c.board, c.medium, c.grade, c.contentType, c.subject, c.subjectId, c.chapter, c.title,
           c.contentHtml, c.contentText, c.sourceRef, c.mediaUrl,
-          toVectorLiteral(c.embedding), JSON.stringify(c.metadata || {}), c.contentHash,
+          toVectorLiteral(c.embedding), JSON.stringify(c.metadata || {}), c.contentHash, c.syncVersion ?? null,
         ],
       );
       written++;

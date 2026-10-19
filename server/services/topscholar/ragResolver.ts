@@ -4,6 +4,9 @@ import type {
   TopicResult,
   QuestionResult,
 } from '../k12ContentResolver';
+import { and, eq, inArray, isNotNull } from 'drizzle-orm';
+import { db } from '../../db';
+import { topscholarContentSync } from '@shared/schema';
 import { embeddingService } from '../embeddingService';
 import { getContentPool, ensureContentSchema, toVectorLiteral } from './contentDb';
 import { isMongoConnectionString } from './config';
@@ -51,6 +54,36 @@ export class RagK12ContentResolver implements K12ContentResolver {
     return out;
   }
 
+  /**
+   * Swap-in resync: while a full refresh writes a new version of a package beside the
+   * live one, only rows of the package's active version may reach students. Rows of a
+   * package with no recorded active version are all kept (legacy / sample / batch).
+   * Never blocks an answer: if the lookup fails, the rows pass through unfiltered.
+   */
+  private async keepActiveVersions(businessAccountId: string, rows: any[]): Promise<any[]> {
+    const cpIds = Array.from(new Set(rows.map((r) => r.cp_id).filter((v): v is string => typeof v === 'string')));
+    if (cpIds.length === 0) return rows;
+    try {
+      const active = await db
+        .select({ cpId: topscholarContentSync.cpId, version: topscholarContentSync.activeSyncVersion })
+        .from(topscholarContentSync)
+        .where(and(
+          eq(topscholarContentSync.businessAccountId, businessAccountId),
+          inArray(topscholarContentSync.cpId, cpIds),
+          isNotNull(topscholarContentSync.activeSyncVersion),
+        ));
+      if (active.length === 0) return rows;
+      const activeByCp = new Map(active.map((a) => [a.cpId, a.version]));
+      return rows.filter((r) => {
+        const live = activeByCp.get(r.cp_id);
+        return !live || r.sync_version === live;
+      });
+    } catch (error: any) {
+      console.warn('[TopScholar RAG] active-version lookup failed; using unfiltered results:', error?.message || error);
+      return rows;
+    }
+  }
+
   private async vectorSearch(
     businessAccountId: string,
     query: string,
@@ -73,8 +106,9 @@ export class RagK12ContentResolver implements K12ContentResolver {
     const [embedding] = await embeddingService.generateBatchEmbeddings([query], businessAccountId);
     if (!embedding) return [];
 
-    // Over-fetch so cross-pack de-duplication still yields up to `limit` results.
-    const fetchLimit = limit * 2;
+    // Over-fetch so cross-pack de-duplication and the active-version filter (a package
+    // mid-refresh briefly holds two versions) still yield up to `limit` results.
+    const fetchLimit = limit * 3;
     let rows: any[];
 
     // MongoDB Atlas Vector Search branch.
@@ -93,6 +127,8 @@ export class RagK12ContentResolver implements K12ContentResolver {
       );
       // Normalize to the same shape the pgvector rows expose downstream.
       rows = docs.map((d) => ({
+        cp_id: d.cp_id,
+        sync_version: d.sync_version ?? null,
         content_type: d.content_type,
         subject: d.subject,
         chapter: d.chapter,
@@ -126,7 +162,7 @@ export class RagK12ContentResolver implements K12ContentResolver {
       }
 
       const result = await pool.query(
-        `SELECT content_type, subject, chapter, title, content_html, content_text, source_ref,
+        `SELECT cp_id, sync_version, content_type, subject, chapter, title, content_html, content_text, source_ref,
                 media_url, metadata, embedding <=> $2::vector AS distance
            FROM topscholar_content_chunks
           WHERE business_account_id = $1 AND content_type = ANY($3)
@@ -139,7 +175,8 @@ export class RagK12ContentResolver implements K12ContentResolver {
       rows = result.rows;
     }
 
-    return this.dedupeByContent(rows).slice(0, limit);
+    const live = await this.keepActiveVersions(businessAccountId, rows);
+    return this.dedupeByContent(live).slice(0, limit);
   }
 
   async searchTopics(

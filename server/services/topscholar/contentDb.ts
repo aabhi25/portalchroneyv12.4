@@ -88,6 +88,9 @@ export async function ensureContentSchema(pool: Pool): Promise<void> {
         ADD COLUMN IF NOT EXISTS grade text
     `);
     await client.query(`
+      ALTER TABLE topscholar_content_chunks ADD COLUMN IF NOT EXISTS sync_version text
+    `);
+    await client.query(`
       CREATE INDEX IF NOT EXISTS topscholar_chunks_account_cp_idx
         ON topscholar_content_chunks (business_account_id, cp_id)
     `);

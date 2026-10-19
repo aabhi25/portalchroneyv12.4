@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import TopScholarLmsApiCard from "@/components/TopScholarLmsApiCard";
 import { GraduationCap, Loader2, RefreshCw, Users, Database, CloudDownload, KeyRound, Power, Workflow, ArrowRight, MessageSquare, Sparkles, Copy } from "lucide-react";
 
 interface TopScholarConfig {
@@ -712,6 +713,8 @@ GET /api/topscholar/portal/students/:studentId/conversations/:id      # full tra
           </div>
         </CardContent>
       </Card>
+
+      <TopScholarLmsApiCard />
 
       {/* Students */}
       <Card>

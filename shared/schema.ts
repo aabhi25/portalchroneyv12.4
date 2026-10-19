@@ -113,6 +113,12 @@ export const businessAccounts = pgTable("business_accounts", {
   // stays idle after the AI answers before the widget asks "Did this resolve your doubt?".
   // Nullable/expand-only; null falls back to DEFAULT_DOUBT_RESOLUTION_COOLDOWN_SECONDS.
   topscholarDoubtResolutionCooldownSeconds: integer("topscholar_doubt_resolution_cooldown_seconds"),
+  // LMS embedding API (server-to-server, CP-ID-only refresh). Only a SHA-256 hash of
+  // the key is stored; the plaintext key is shown to the admin once when generated.
+  topscholarEmbedApiKeyHash: text("topscholar_embed_api_key_hash"),
+  topscholarEmbedApiKeyLast4: text("topscholar_embed_api_key_last4"),
+  topscholarEmbedApiKeyCreatedAt: timestamp("topscholar_embed_api_key_created_at"),
+  topscholarEmbedApiKeyLastUsedAt: timestamp("topscholar_embed_api_key_last_used_at"),
   // Content Bundle API (plan-and-promo service) — extraction source. Driven by Plan IDs.
   topscholarAutoSyncEnabled: text("topscholar_auto_sync_enabled").notNull().default("false"), // 'true' | 'false' - run the scheduled plan-ID auto-sync
   topscholarSyncMode: text("topscholar_sync_mode").notNull().default("full"), // 'sample' | 'full' - mode used by Sync now / auto-sync
@@ -5248,6 +5254,7 @@ export const topscholarContentChunks = pgTable("topscholar_content_chunks", {
   embedding: vector1536("embedding"),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
   contentHash: text("content_hash"), // hash of source content to skip re-embedding unchanged chunks
+  syncVersion: text("sync_version"), // full-sync run that wrote this row; NULL for sample/batch/legacy rows (see topscholarContentSync.activeSyncVersion)
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
@@ -5274,6 +5281,10 @@ export const topscholarContentSync = pgTable("topscholar_content_sync", {
   processedCount: integer("processed_count").notNull().default(0), // chunks embedded+stored so far (for live progress)
   totalCount: integer("total_count").notNull().default(0), // total chunks targeted this run
   embedJobId: varchar("embed_job_id"), // active topscholarEmbedJobs.id while a full (batch) sync is in flight; NULL when idle/completed
+  // Swap-in resync: the sync_version whose chunks are live for students. A direct full
+  // sync writes a new version beside the old one and only switches this (then deletes
+  // the old rows) once every chunk has landed. NULL => unversioned rows are live.
+  activeSyncVersion: text("active_sync_version"),
   lastError: text("last_error"),
   lastSyncedAt: timestamp("last_synced_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

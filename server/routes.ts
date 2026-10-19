@@ -89,6 +89,7 @@ import k12Routes from "./routes/k12";
 import jobPortalRoutes from "./routes/jobPortal";
 import topscholarRoutes from "./routes/topscholar";
 import topscholarAnalyticsRoutes from "./routes/topscholarAnalytics";
+import topscholarLmsApiRoutes from "./routes/topscholarLmsApi";
 import verificationRoutes from "./routes/verification";
 import unifiedLeadsRoutes from "./routes/unifiedLeads";
 import homeSummaryRoutes from "./routes/homeSummary";
@@ -617,6 +618,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(k12Routes);
   app.use(topscholarRoutes);
   app.use(topscholarAnalyticsRoutes);
+  app.use(topscholarLmsApiRoutes);
   // Job Portal routes
   app.use(jobPortalRoutes);
   app.use(verificationRoutes);

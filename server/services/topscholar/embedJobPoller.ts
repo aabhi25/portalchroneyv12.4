@@ -214,6 +214,8 @@ async function completeJob(job: typeof topscholarEmbedJobs.$inferSelect): Promis
       lastError: partialWarning,
       lastSyncedAt: new Date(),
       embedJobId: null,
+      // The landing deleted every row (versioned or not) and wrote unversioned ones.
+      activeSyncVersion: null,
       updatedAt: new Date(),
     })
     .where(

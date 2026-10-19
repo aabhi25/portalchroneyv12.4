@@ -51,6 +51,9 @@ export interface MongoChunkDoc {
   embedding: number[];
   metadata: Record<string, unknown>;
   content_hash: string | null;
+  // Full-sync run that wrote this document (swap-in resync). Absent/null on
+  // sample, batch-landed and legacy documents.
+  sync_version?: string | null;
   updated_at: Date;
 }
 
@@ -277,6 +280,29 @@ export async function deleteMongoCpChunks(
   return res.deletedCount ?? 0;
 }
 
+/**
+ * Deletes chunks for one (business_account_id, cp_id) selected by sync_version:
+ *  - { except: v }        -> everything NOT written by run v (incl. unversioned docs)
+ *  - { only: v }          -> only the docs written by run v (rollback of a failed run)
+ *  - { versionedOnly: true } -> every versioned doc (leftovers when unversioned docs are live)
+ */
+export async function deleteMongoCpChunksByVersion(
+  cfg: { connectionString: string; dbName: string | null; collection: string | null },
+  businessAccountId: string,
+  cpId: string,
+  selector: { except: string } | { only: string } | { versionedOnly: true },
+): Promise<number> {
+  const col = await getCollection(cfg.connectionString, cfg.dbName, cfg.collection);
+  const versionFilter =
+    'except' in selector
+      ? { sync_version: { $ne: selector.except } } // $ne also matches a missing field
+      : 'only' in selector
+        ? { sync_version: selector.only }
+        : { sync_version: { $exists: true, $ne: null } };
+  const res = await col.deleteMany({ business_account_id: businessAccountId, cp_id: cpId, ...versionFilter });
+  return res.deletedCount ?? 0;
+}
+
 /** Returns the set of content_hash values already stored for (business_account_id, cp_id). */
 export async function getMongoExistingHashes(
   cfg: { connectionString: string; dbName: string | null; collection: string | null },
@@ -397,6 +423,7 @@ export async function mongoVectorSearch(
         media_url: 1,
         metadata: 1,
         content_hash: 1,
+        sync_version: 1,
         score: { $meta: 'vectorSearchScore' },
       },
     },

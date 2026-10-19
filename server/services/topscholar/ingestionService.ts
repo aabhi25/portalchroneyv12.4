@@ -5,11 +5,12 @@ import { and, eq, ne, inArray } from 'drizzle-orm';
 import { embeddingService } from '../embeddingService';
 import { getContentBundles, type CpContentBundle } from './cmsConnector';
 import { htmlToText, chunkText, splitTextForEmbedding } from './htmlContent';
-import { replaceCpChunks, deleteCpChunks, appendCpChunks, type StoreChunk } from './chunkStore';
+import { replaceCpChunks, appendCpChunks, deleteCpChunksByVersion, type StoreChunk } from './chunkStore';
 import { submitEmbeddingBatches, cancelBatch } from './embeddingBatchService';
 import { withCpLock } from './cpLock';
 import type { TopscholarConfig } from './config';
 import { createMediaMetadata } from './mediaMetadata';
+import { findAllKnownPlanIdsForCp } from './cpPlanLookup';
 
 interface ChunkRecord {
   board?: string | null;
@@ -386,6 +387,7 @@ async function ingestBundle(
         lastError: null,
         lastSyncedAt: new Date(),
         embedJobId: null,
+        activeSyncVersion: null,
       }, true);
       // Clear the store so a now-empty cp_id doesn't keep stale chunks.
       await replaceCpChunks(cfg, businessAccountId, cpId, []);
@@ -744,8 +746,19 @@ export async function ingestSingleCp(params: {
   const mode = params.mode || 'full';
   const sampleLimit = params.sampleLimit && params.sampleLimit > 0 ? params.sampleLimit : DEFAULT_SAMPLE_LIMIT;
 
-  const bundles = await getContentBundles(cfg, [planId]);
-  const bundle = bundles.find((b) => b.cpId === cpId);
+  let bundle = (await getContentBundles(cfg, [planId])).find((b) => b.cpId === cpId);
+  if (!bundle) {
+    // The remembered plan may no longer hold this package (TopScholar moved it).
+    // Try the other plans it has been linked to, one plan per call so a package
+    // listed under several plans is never merged (and embedded) twice.
+    const otherPlanIds = (await findAllKnownPlanIdsForCp(businessAccountId, cpId))
+      .filter((candidate) => candidate !== planId)
+      .slice(0, MAX_FALLBACK_PLANS);
+    for (const otherPlanId of otherPlanIds) {
+      bundle = (await getContentBundles(cfg, [otherPlanId])).find((b) => b.cpId === cpId);
+      if (bundle) break;
+    }
+  }
   if (!bundle) {
     throw new Error(`cp_id ${cpId} was not found under Plan ID ${planId}. Re-resolve the plan and try again.`);
   }
@@ -756,6 +769,10 @@ export async function ingestSingleCp(params: {
     isCancelled: params.isCancelled,
   });
 }
+
+// Upper bound on extra Content Bundle calls when a package's remembered plan no
+// longer contains it.
+const MAX_FALLBACK_PLANS = 5;
 
 /** SAMPLE: synchronous embeddings + immediate store write. */
 async function ingestSampleSync(
@@ -790,18 +807,24 @@ async function ingestSampleSync(
     embedding: embeddings[i] || [],
   }));
 
-  const written = await replaceCpChunks(cfg, businessAccountId, cpId, chunks);
-
-  await upsertSync(businessAccountId, cpId, {
-    status: 'completed',
-    chunkCount: written,
-    totalCount: records.length,
-    processedCount: written,
-    ...counts,
-    lastError: null,
-    lastSyncedAt: new Date(),
-    embedJobId: null,
-  }, true);
+  // Same per-CP lock as full runs, so a sample can never interleave with a
+  // full refresh that is writing the same package.
+  const written = await withCpLock(businessAccountId, cpId, async () => {
+    const n = await replaceCpChunks(cfg, businessAccountId, cpId, chunks);
+    await upsertSync(businessAccountId, cpId, {
+      status: 'completed',
+      chunkCount: n,
+      totalCount: records.length,
+      processedCount: n,
+      ...counts,
+      lastError: null,
+      lastSyncedAt: new Date(),
+      embedJobId: null,
+      // replaceCpChunks removed every versioned row; the unversioned sample is live.
+      activeSyncVersion: null,
+    }, true);
+    return n;
+  });
 
   return {
     cpId, source, mode: 'sample', storeType: cfg.storeType,
@@ -948,17 +971,17 @@ const DIRECT_SYNC_PAGE = 50;
  * poller's landing, holding the lock means a concurrent cancel/delete waits until the run
  * releases it.
  *
- * Lazy delete (NOT atomic replace): prior chunks are dropped only right before the FIRST
- * confirmed append. So a failure BEFORE the first page lands leaves the existing content
- * fully intact; a failure AFTER it leaves old content gone + the new content partial. We
- * accept this — the run is marked 'failed', and the next full sync replaces everything
- * (lazy-delete again). A true atomic swap is impossible here without staging the corpus,
- * which would mean writing curriculum text into our DB — exactly what this path avoids.
+ * Swap-in replace: every chunk of this run is written with a fresh sync_version BESIDE
+ * the live rows. Students keep reading the previous version (retrieval drops rows whose
+ * version is not topscholarContentSync.activeSyncVersion) until every chunk has landed;
+ * only then is activeSyncVersion switched and the older rows deleted. A failure, a
+ * cancel or a short run (fewer chunks embedded than expected) deletes only this run's
+ * rows, so the previous content stays live and complete. Curriculum text still never
+ * touches our DB — the candidate version lives in the client's store.
  *
- * Tradeoff vs the Batch path: this is NOT restart-safe (a process restart mid-run leaves
- * the sync row 'syncing' and the run must be re-triggered; the next sync's unguarded
- * 'syncing' write self-heals the stuck row). That is the accepted cost of keeping
- * curriculum text out of our DB entirely — there is no staging to resume from.
+ * Restarts: a process restart mid-run leaves this run's rows behind as an inactive
+ * version (invisible to students). The Plan worker re-queues the item, and every run
+ * first clears such leftovers before writing its own version.
  */
 async function ingestFullDirect(
   businessAccountId: string,
@@ -978,11 +1001,12 @@ async function ingestFullDirect(
 
   // Mark syncing with the full totals up front (the run-initiating write stays unguarded so
   // a fresh sync can restart a previously-cancelled cp_id).
+  // chunkCount is deliberately left alone: it reports the passages students can
+  // currently read, which stay live until this run switches over.
   await upsertSync(businessAccountId, cpId, {
     status: 'syncing',
     syncMode: 'full',
     storeType: cfg.storeType,
-    chunkCount: 0,
     totalCount: records.length,
     processedCount: 0,
     ...counts,
@@ -1006,72 +1030,133 @@ async function ingestFullDirect(
     return !!(await isRunCancelled?.()) || row?.status === 'cancelled';
   };
 
+  const version = crypto.randomUUID();
+  const rollback = async (reason: string) => {
+    await deleteCpChunksByVersion(cfg, businessAccountId, cpId, { only: version }).catch((error) => {
+      console.error(`[TopScholar Sync] Could not remove unfinished version ${version} of ${cpId} (${reason}); it stays hidden and the next run clears it:`, error);
+    });
+  };
+  const markCancelled = async () => {
+    await upsertSync(businessAccountId, cpId, {
+      status: 'cancelled',
+      lastError: 'Cancelled. The previous content is still live.',
+      embedJobId: null,
+    });
+  };
+
   // Background worker — intentionally not awaited by the caller.
   const run = async (): Promise<boolean> => {
     return withCpLock(businessAccountId, cpId, async () => {
+      // Clear rows an interrupted earlier run left behind, so at most one candidate
+      // version exists beside the live one.
+      const [current] = await db
+        .select({ activeSyncVersion: topscholarContentSync.activeSyncVersion })
+        .from(topscholarContentSync)
+        .where(and(eq(topscholarContentSync.businessAccountId, businessAccountId), eq(topscholarContentSync.cpId, cpId)));
+      const liveVersion = current?.activeSyncVersion ?? null;
+      await deleteCpChunksByVersion(
+        cfg,
+        businessAccountId,
+        cpId,
+        liveVersion ? { except: liveVersion } : { versionedOnly: true },
+      );
+
       let written = 0;
-      let deleted = false;
-      for (let i = 0; i < records.length; i += DIRECT_SYNC_PAGE) {
-        if (await wasCancelled()) return false; // stop appending; leave partial content for re-sync
-        const page = records.slice(i, i + DIRECT_SYNC_PAGE);
-        const embeddings = await embeddingService.generateBatchEmbeddings(
-          page.map((r) => r.contentText),
-          businessAccountId,
-        );
-        const chunks: StoreChunk[] = page.map((r, idx) => ({
-          board: r.board ?? null,
-          medium: r.medium ?? null,
-          grade: r.grade ?? null,
-          contentType: r.contentType,
-          subject: r.subject,
-          subjectId: r.subjectId,
-          chapter: r.chapter,
-          title: r.title,
-          contentHtml: r.contentHtml,
-          contentText: r.contentText,
-          sourceRef: r.sourceRef,
-          mediaUrl: r.mediaUrl,
-          metadata: r.metadata,
-          contentHash: hashContent(r.contentText),
-          embedding: embeddings[idx] || [],
-        }));
+      try {
+        for (let i = 0; i < records.length; i += DIRECT_SYNC_PAGE) {
+          if (await wasCancelled()) {
+            await rollback('cancelled');
+            await markCancelled();
+            return false;
+          }
+          const page = records.slice(i, i + DIRECT_SYNC_PAGE);
+          const embeddings = await embeddingService.generateBatchEmbeddings(
+            page.map((r) => r.contentText),
+            businessAccountId,
+          );
+          const chunks: StoreChunk[] = page.map((r, idx) => ({
+            board: r.board ?? null,
+            medium: r.medium ?? null,
+            grade: r.grade ?? null,
+            contentType: r.contentType,
+            subject: r.subject,
+            subjectId: r.subjectId,
+            chapter: r.chapter,
+            title: r.title,
+            contentHtml: r.contentHtml,
+            contentText: r.contentText,
+            sourceRef: r.sourceRef,
+            mediaUrl: r.mediaUrl,
+            metadata: r.metadata,
+            contentHash: hashContent(r.contentText),
+            embedding: embeddings[idx] || [],
+            syncVersion: version,
+          }));
+          written += await appendCpChunks(cfg, businessAccountId, cpId, chunks);
 
-        // Lazy delete: only wipe prior chunks once, right before the first confirmed write.
-        if (!deleted) {
-          await deleteCpChunks(cfg, businessAccountId, cpId);
-          deleted = true;
+          // Advance progress (guarded so a mid-run cancel sticks).
+          await upsertSync(businessAccountId, cpId, { processedCount: written }, true);
         }
-        written += await appendCpChunks(cfg, businessAccountId, cpId, chunks);
 
-        // Advance progress (guarded so a mid-run cancel sticks).
-        await upsertSync(businessAccountId, cpId, { chunkCount: written, processedCount: written }, true);
+        // Switch over only when the new set is complete.
+        if (written < records.length) {
+          throw new Error(
+            `Only ${written} of ${records.length} passages could be embedded, so the previous content was kept.`,
+          );
+        }
+        if (await wasCancelled()) {
+          await rollback('cancelled');
+          await markCancelled();
+          return false;
+        }
+
+        // Point students at the new version first, then retire the older rows.
+        const switched = await db
+          .update(topscholarContentSync)
+          .set({
+            status: 'completed',
+            activeSyncVersion: version,
+            chunkCount: written,
+            totalCount: records.length,
+            processedCount: written,
+            lastError: null,
+            lastSyncedAt: new Date(),
+            embedJobId: null,
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(topscholarContentSync.businessAccountId, businessAccountId),
+            eq(topscholarContentSync.cpId, cpId),
+            ne(topscholarContentSync.status, 'cancelled'),
+          ))
+          .returning({ id: topscholarContentSync.id });
+        if (switched.length === 0) {
+          await rollback('cancelled');
+          return false;
+        }
+        await deleteCpChunksByVersion(cfg, businessAccountId, cpId, { except: version }).catch((error) => {
+          // Not fatal: retrieval already ignores the older rows, and the next run clears them.
+          console.error(`[TopScholar Sync] Could not delete superseded rows of ${cpId}:`, error);
+        });
+        return true;
+      } catch (error) {
+        await rollback('failed');
+        throw error;
       }
-
-      // If nothing was written at all (e.g. every chunk lacked text), still clear the store
-      // so a now-empty cp_id doesn't keep stale chunks.
-      if (!deleted) {
-        await deleteCpChunks(cfg, businessAccountId, cpId);
-      }
-
-      await upsertSync(businessAccountId, cpId, {
-        status: 'completed',
-        chunkCount: written,
-        totalCount: records.length,
-        processedCount: written,
-        lastError: null,
-        lastSyncedAt: new Date(),
-        embedJobId: null,
-      }, true);
-      return true;
     });
   };
 
   const completion = run().catch(async (error: any) => {
     console.error('[TopScholar Sync] Direct full sync failed:', error);
+    const message = error?.message || String(error);
     await upsertSync(
       businessAccountId,
       cpId,
-      { status: 'failed', lastError: error?.message || String(error), embedJobId: null },
+      {
+        status: 'failed',
+        lastError: /previous content/i.test(message) ? message : `${message} (The previous content is still live.)`,
+        embedJobId: null,
+      },
       true,
     ).catch(() => {});
     throw error;

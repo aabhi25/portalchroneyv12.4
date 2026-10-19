@@ -169,6 +169,13 @@
       "when": 1792429716268,
       "tag": "0023_mask_contacts_after_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792432991814,
+      "tag": "0024_topscholar_lms_embed_api",
+      "breakpoints": true
     }
   ]
 }

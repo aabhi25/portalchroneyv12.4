@@ -21,6 +21,7 @@ import {
   isMongoConnectionString,
 } from "../services/topscholar/config";
 import { encrypt } from "../services/encryptionService";
+import { generateEmbedApiKey } from "../services/topscholar/embedApiKey";
 import { ingestPlanIds, ingestSingleCp, resolvePlans, curriculumLabel, DEFAULT_SAMPLE_LIMIT } from "../services/topscholar/ingestionService";
 import { testMongoConnection } from "../services/topscholar/mongoContentDb";
 import { getContentOverview, getChapters, getChunks, getChapterNamesForCpIds, getCpIdsWithContent } from "../services/topscholar/contentReader";
@@ -44,6 +45,8 @@ import {
   listPlanSyncRuns,
   retryFailedPlanSyncItems,
 } from "../services/topscholar/planSyncWorker";
+import { findKnownPlanIdsForCpIds } from "../services/topscholar/cpPlanLookup";
+import { queueCpRefreshes } from "../services/topscholar/cpRefreshQueue";
 
 const router = Router();
 
@@ -318,6 +321,61 @@ router.put("/api/topscholar/config", ...topscholarGuards, async (req: Request, r
   const updated = await loadAccount(businessAccountId);
   const cfg = getTopscholarConfig(updated!);
   res.json({ ...configResponse(cfg), warning: saveWarning });
+});
+
+// ---- LMS embedding API key ------------------------------------------------
+// One server-to-server key for the client's LMS (see routes/topscholarLmsApi.ts).
+// Only its hash is stored, so the plaintext is returned once, on generation.
+
+function embedApiKeyStatus(account: Awaited<ReturnType<typeof loadAccount>>) {
+  return {
+    configured: !!account?.topscholarEmbedApiKeyHash,
+    last4: account?.topscholarEmbedApiKeyLast4 ?? null,
+    createdAt: account?.topscholarEmbedApiKeyCreatedAt ?? null,
+    lastUsedAt: account?.topscholarEmbedApiKeyLastUsedAt ?? null,
+  };
+}
+
+router.get("/api/topscholar/lms-api-key", ...topscholarGuards, async (req: Request, res: Response) => {
+  const businessAccountId = getBusinessAccountId(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+  res.json(embedApiKeyStatus(await loadAccount(businessAccountId)));
+});
+
+// Generates a new key (replacing any existing one immediately).
+router.post("/api/topscholar/lms-api-key", ...topscholarGuards, async (req: Request, res: Response) => {
+  const businessAccountId = getBusinessAccountId(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+  const { key, hash, last4 } = generateEmbedApiKey();
+  await db
+    .update(businessAccounts)
+    .set({
+      topscholarEmbedApiKeyHash: hash,
+      topscholarEmbedApiKeyLast4: last4,
+      topscholarEmbedApiKeyCreatedAt: new Date(),
+      topscholarEmbedApiKeyLastUsedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(businessAccounts.id, businessAccountId));
+  console.log(`[TopScholar LMS API] key generated for ${businessAccountId} (…${last4})`);
+  res.json({ key, ...embedApiKeyStatus(await loadAccount(businessAccountId)) });
+});
+
+router.delete("/api/topscholar/lms-api-key", ...topscholarGuards, async (req: Request, res: Response) => {
+  const businessAccountId = getBusinessAccountId(req);
+  if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
+  await db
+    .update(businessAccounts)
+    .set({
+      topscholarEmbedApiKeyHash: null,
+      topscholarEmbedApiKeyLast4: null,
+      topscholarEmbedApiKeyCreatedAt: null,
+      topscholarEmbedApiKeyLastUsedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(businessAccounts.id, businessAccountId));
+  console.log(`[TopScholar LMS API] key revoked for ${businessAccountId}`);
+  res.json(embedApiKeyStatus(await loadAccount(businessAccountId)));
 });
 
 // ---- Test MongoDB Atlas connection ---------------------------------------
@@ -603,67 +661,6 @@ router.get("/api/topscholar/sync/summary", ...topscholarGuards, async (req: Requ
   res.json({ overall, plans, noPlan: noPlan.total > 0 ? noPlan : null });
 });
 
-/**
- * Returns the most recently confirmed owning Plan ID for each requested CP ID.
- * The Content Bundle service accepts Plan IDs (not CP IDs), so every targeted
- * refresh must start from a mapping we previously received from that service.
- */
-async function findKnownPlanIdsForCpIds(
-  businessAccountId: string,
-  cpIds: string[],
-): Promise<Map<string, string>> {
-  const uniqueCpIds = Array.from(new Set(cpIds.map((cpId) => cpId.trim()).filter(Boolean)));
-  if (uniqueCpIds.length === 0) return new Map();
-
-  const [resolutions, mappings, legacyPlans] = await Promise.all([
-    db
-      .select({
-        cpId: topscholarPlanCpResolutions.cpId,
-        planId: topscholarPlanCpResolutions.planId,
-      })
-      .from(topscholarPlanCpResolutions)
-      .where(and(
-        eq(topscholarPlanCpResolutions.businessAccountId, businessAccountId),
-        inArray(topscholarPlanCpResolutions.cpId, uniqueCpIds),
-      ))
-      .orderBy(desc(topscholarPlanCpResolutions.lastResolvedAt), desc(topscholarPlanCpResolutions.updatedAt)),
-    db
-      .select({
-        cpId: topscholarCpMappings.cpId,
-        planId: topscholarCpMappings.planId,
-      })
-      .from(topscholarCpMappings)
-      .where(and(
-        eq(topscholarCpMappings.businessAccountId, businessAccountId),
-        inArray(topscholarCpMappings.cpId, uniqueCpIds),
-      ))
-      .orderBy(desc(topscholarCpMappings.updatedAt)),
-    db
-      .select({
-        cpId: topscholarPlanIds.lastCpId,
-        planId: topscholarPlanIds.planId,
-      })
-      .from(topscholarPlanIds)
-      .where(and(
-        eq(topscholarPlanIds.businessAccountId, businessAccountId),
-        inArray(topscholarPlanIds.lastCpId, uniqueCpIds),
-      ))
-      .orderBy(desc(topscholarPlanIds.updatedAt)),
-  ]);
-
-  const planByCpId = new Map<string, string>();
-  for (const row of resolutions) {
-    if (!planByCpId.has(row.cpId)) planByCpId.set(row.cpId, row.planId);
-  }
-  for (const row of mappings) {
-    if (row.planId && !planByCpId.has(row.cpId)) planByCpId.set(row.cpId, row.planId);
-  }
-  for (const row of legacyPlans) {
-    if (row.cpId && !planByCpId.has(row.cpId)) planByCpId.set(row.cpId, row.planId);
-  }
-  return planByCpId;
-}
-
 router.post("/api/topscholar/manual-cp-sync", ...topscholarGuards, async (req: Request, res: Response) => {
   const businessAccountId = getBusinessAccountId(req);
   if (!businessAccountId) return res.status(401).json({ error: "Unauthorized" });
@@ -698,106 +695,7 @@ router.post("/api/topscholar/manual-cp-sync", ...topscholarGuards, async (req: R
   }
 
   const planByCpId = await findKnownPlanIdsForCpIds(businessAccountId, cpIds);
-  const knownCpIds = cpIds.filter((cpId) => planByCpId.has(cpId));
-  const activeRuns = knownCpIds.length === 0
-    ? []
-    : await db
-      .select({
-        cpId: topscholarPlanRuns.requestedCpId,
-        planId: topscholarPlanRuns.planId,
-        runId: topscholarPlanRuns.id,
-      })
-      .from(topscholarPlanRuns)
-      .where(and(
-        eq(topscholarPlanRuns.businessAccountId, businessAccountId),
-        inArray(topscholarPlanRuns.requestedCpId, knownCpIds),
-        inArray(topscholarPlanRuns.status, ["queued", "resolving", "running"]),
-      ))
-      .orderBy(desc(topscholarPlanRuns.updatedAt));
-  const activePlanItems = knownCpIds.length === 0
-    ? []
-    : await db
-      .select({
-        cpId: topscholarPlanRunItems.cpId,
-        planId: topscholarPlanRuns.planId,
-        runId: topscholarPlanRuns.id,
-      })
-      .from(topscholarPlanRunItems)
-      .innerJoin(topscholarPlanRuns, eq(topscholarPlanRunItems.runId, topscholarPlanRuns.id))
-      .where(and(
-        eq(topscholarPlanRunItems.businessAccountId, businessAccountId),
-        inArray(topscholarPlanRunItems.cpId, knownCpIds),
-        inArray(topscholarPlanRunItems.status, ["queued", "running", "submitted"]),
-        inArray(topscholarPlanRuns.status, ["queued", "resolving", "running"]),
-      ))
-      .orderBy(desc(topscholarPlanRuns.updatedAt));
-  const activeFullPlanRuns = knownCpIds.length === 0
-    ? []
-    : await db
-      .select({
-        planId: topscholarPlanRuns.planId,
-        runId: topscholarPlanRuns.id,
-      })
-      .from(topscholarPlanRuns)
-      .where(and(
-        eq(topscholarPlanRuns.businessAccountId, businessAccountId),
-        inArray(topscholarPlanRuns.planId, Array.from(new Set(knownCpIds.map((cpId) => planByCpId.get(cpId)!)))),
-        isNull(topscholarPlanRuns.requestedCpId),
-        inArray(topscholarPlanRuns.status, ["queued", "resolving", "running"]),
-      ))
-      .orderBy(desc(topscholarPlanRuns.updatedAt));
-  const activeRunByCpId = new Map<string, { runId: string; planId: string }>();
-  const activeFullRunByPlanId = new Map<string, string>();
-  for (const run of activeRuns) {
-    if (run.cpId && !activeRunByCpId.has(run.cpId)) {
-      activeRunByCpId.set(run.cpId, { runId: run.runId, planId: run.planId });
-    }
-  }
-  for (const item of activePlanItems) {
-    if (!activeRunByCpId.has(item.cpId)) {
-      activeRunByCpId.set(item.cpId, { runId: item.runId, planId: item.planId });
-    }
-  }
-  for (const run of activeFullPlanRuns) {
-    if (!activeFullRunByPlanId.has(run.planId)) activeFullRunByPlanId.set(run.planId, run.runId);
-  }
-
-  const queued: Array<{ cpId: string; planId: string; runId: string }> = [];
-  const skipped: Array<{ cpId: string; planId: string; runId: string }> = [];
-  const rejected: Array<{ cpId: string; error: string }> = [];
-
-  for (const cpId of cpIds) {
-    const planId = planByCpId.get(cpId);
-    if (!planId) {
-      rejected.push({
-        cpId,
-        error: "This CP ID is not yet known to a resolved TopScholar Plan. Resolve its owning Plan first, then queue this package.",
-      });
-      continue;
-    }
-    const active = activeRunByCpId.get(cpId);
-    if (active) {
-      skipped.push({ cpId, planId: active.planId, runId: active.runId });
-      continue;
-    }
-    const activeFullRunId = activeFullRunByPlanId.get(planId);
-    if (activeFullRunId) {
-      skipped.push({ cpId, planId, runId: activeFullRunId });
-      continue;
-    }
-    try {
-      const run = await enqueueSingleCpSyncRun({ businessAccountId, planId, cpId });
-      if (!run.created) {
-        skipped.push({ cpId, planId: run.planId, runId: run.id });
-        activeRunByCpId.set(cpId, { runId: run.id, planId: run.planId });
-        continue;
-      }
-      queued.push({ cpId, planId: run.planId, runId: run.id });
-      activeRunByCpId.set(cpId, { runId: run.id, planId: run.planId });
-    } catch (error: any) {
-      rejected.push({ cpId, error: error?.message || "Could not queue this CP ID." });
-    }
-  }
+  const { queued, skipped, rejected } = await queueCpRefreshes({ businessAccountId, cpIds, planByCpId });
 
   res.status(202).json({
     requested: cpIds.length,
