@@ -5735,6 +5735,10 @@ export default function EmbedChat() {
           chatColor={chatColor}
           onResume={tutor.resume}
           onSkip={tutor.skip}
+          onSimpler={tutor.simpler}
+          onAnswer={tutor.answer}
+          onDontKnow={tutor.dontKnow}
+          onAsk={tutor.ask}
           onStop={tutor.stop}
           onRestart={startTutorLesson}
           onClose={() => { if (tutor.active) tutor.stop(); tutor.close(); }}

@@ -1,19 +1,26 @@
 /**
  * AI Tutor — one tutoring session on a voice connection. It teaches a chapter like a teacher:
- * a hello (while the lesson is prepared), the plan of the lesson on the board, each section line
- * by line with the board drawn as each line is said, then a recap.
+ * a hello (while the lesson is prepared), the plan of the lesson on the board, each part line by
+ * line with the board drawn as each line is said, a quick check from the chapter's question bank
+ * after a part, then a recap.
+ *
+ * The student can cut in at any time (speaking, typing, or the classroom buttons):
+ *  - a question → answered on a fresh page of the board from the chapter's content, then
+ *    "Okay, where were we…", the board as it was, and the lesson goes on from the line they heard;
+ *  - "I didn't get it" → the part's simpler explanation, then the lesson goes on;
+ *  - "repeat" / "continue" / "next part" / "stop", and answers to a quick check ("B", "the second
+ *    one", or a tap). A wrong answer gets a second try; then the right answer is explained.
  *
  * The voice service does the talking (TTS, interruptions, avatar audio) through TutorVoiceHost;
- * this class only decides what is said and drawn next. Each part of the lesson is one spoken
- * response. The widget reports which line it is playing (`tutor_heard`, on its audio clock), so
- * an interruption pauses the lesson at the line the student actually heard, and Resume starts
- * from that line with the board as it was.
+ * this class decides what is said and drawn next. The widget reports which line it is playing
+ * (`tutor_heard`, on its audio clock), so the lesson always resumes from what was actually heard.
  *
  * Minutes per student per day: refused at start when under a minute is left; time is counted
- * every 15 s and the lesson ends when the day's minutes run out.
+ * every 15 s; with a minute left the tutor says goodbye (what was covered today) and ends.
  */
 import { applyOps, emptyBoard, type BoardOp, type BoardState } from "@shared/tutorBoard";
-import type { LessonOutline, SectionScript, TutorLanguage, TutorLine } from "./lessonPlanner";
+import type { LessonOutline, SectionScript, TutorCheck, TutorLanguage, TutorLine } from "./lessonPlanner";
+import { classifyTutorIntent, type TutorIntent } from "./intent";
 import { tutorSpeech } from "./speech";
 
 export interface TutorSpokenLine { say: string; speech: string; ops: BoardOp[] }
@@ -33,16 +40,18 @@ export interface TutorVoiceHost {
 export interface TutorLessonSource {
   outline(): Promise<LessonOutline>;
   section(index: number): Promise<SectionScript>;
+  /** Lines answering the student's question (never throws). */
+  answerDoubt(question: string, ctx: { part: number; recentLines: string[] }): Promise<{ lines: TutorLine[]; onTopic: boolean }>;
 }
 
 export interface TutorStore {
   remainingSeconds(): Promise<number>;
   addUsage(seconds: number): Promise<void>;
   sessionStarted(): Promise<string | null>;
-  sessionEnded(id: string | null, info: { reason: string; secondsActive: number; progress: Record<string, unknown> }): Promise<void>;
+  sessionEnded(id: string | null, info: { reason: string; secondsActive: number; progress: Record<string, unknown>; checksCorrect: number; checksTotal: number }): Promise<void>;
 }
 
-export type TutorState = "idle" | "planning" | "teaching" | "paused" | "ended";
+export type TutorState = "idle" | "planning" | "teaching" | "checking" | "answering" | "paused" | "ended";
 export type TutorEndReason = "completed" | "stopped" | "daily_limit" | "disconnected" | "error" | "disabled";
 
 export interface TutorRunnerOptions {
@@ -55,28 +64,70 @@ export interface TutorRunnerOptions {
   tickMs?: number;
   /** A hello is spoken only when the lesson is not ready within this long (default 400 ms). */
   greetAfterMs?: number;
+  /** "Good question!" is said only when the answer is not ready within this long (default 700 ms). */
+  ackAfterMs?: number;
   /** Fallback when the widget never reports the end of playback (default audio + 8 s). */
   playbackSlackMs?: number;
   /** Clock (tests). */
   now?: () => number;
 }
 
-/** A part of the lesson: -1 = the plan, 0… = sections, sections.length = recap. */
-type Part = number;
+/** Where the lesson goes on from: a part (-1 = the plan … sections.length = recap) and a line, or that part's quick check. */
+interface Position { part: number; line: number; phase: "lesson" | "check" }
+/** lesson = the lesson's own lines; check = a quick check's question (cutting in keeps it open); aside = everything else. */
+type SpeechKind = "lesson" | "check" | "aside";
+type SayResult = "played" | "cut" | "gone";
+type CheckReply = { kind: "answer"; index: number } | { kind: "dontknow" };
 
-const GREETING: Record<TutorLanguage, (chapter: string) => string> = {
-  en: (c) => `Let's learn ${c} together! Give me a moment to get the board ready.`,
-  hinglish: (c) => `Chalo, aaj hum ${c} padhenge! Bas ek second, board ready ho raha hai.`,
-  hi: (c) => `चलो, आज हम ${c} पढ़ेंगे! बस एक सेकंड, बोर्ड तैयार हो रहा है।`,
-};
-const RESUME: Record<TutorLanguage, string> = {
-  en: "Okay, let's pick up where we left off.",
-  hinglish: "Chalo, wahin se aage badhte hain.",
-  hi: "चलो, वहीं से आगे बढ़ते हैं।",
-};
-const RECAP_TITLE: Record<TutorLanguage, string> = { en: "Quick recap", hinglish: "Quick recap", hi: "दोहराव" };
+const T = <V>(v: Record<TutorLanguage, V>) => v;
+const GREETING = T({
+  en: (c: string) => `Let's learn ${c} together! Give me a moment to get the board ready.`,
+  hinglish: (c: string) => `Chalo, aaj hum ${c} padhenge! Bas ek second, board ready ho raha hai.`,
+  hi: (c: string) => `चलो, आज हम ${c} पढ़ेंगे! बस एक सेकंड, बोर्ड तैयार हो रहा है।`,
+});
+const RESUME = T({ en: "Okay, let's pick up where we left off.", hinglish: "Chalo, wahin se aage badhte hain.", hi: "चलो, वहीं से आगे बढ़ते हैं।" });
+const ACK = T({ en: "Good question! Let me show you.", hinglish: "Achha sawaal hai! Dekho.", hi: "अच्छा सवाल है! देखो।" });
+const SIMPLER_INTRO = T({ en: "No problem, let me explain it another way.", hinglish: "Koi baat nahi, ise doosre tareeke se samajhte hain.", hi: "कोई बात नहीं, इसे दूसरे तरीके से समझते हैं।" });
+const QUICK = T({ en: "Quick check!", hinglish: "Ek quick check!", hi: "एक छोटा सा सवाल!" });
+const ASK_OPTIONS = T({
+  en: (opts: string) => `Is it ${opts}?`,
+  hinglish: (opts: string) => `Sahi jawab kaunsa hai: ${opts}?`,
+  hi: (opts: string) => `सही जवाब कौन सा है: ${opts}?`,
+});
+const OR = T({ en: "or", hinglish: "ya", hi: "या" });
+const CORRECT = T({ en: "That's right, well done!", hinglish: "Bilkul sahi, shabash!", hi: "बिल्कुल सही, शाबाश!" });
+const TRY_AGAIN = T({ en: "Not quite. Have another look and try again.", hinglish: "Nahi, ek baar phir dekho aur try karo.", hi: "नहीं, एक बार फिर देखो और कोशिश करो।" });
+const REVEAL = T({
+  en: (o: string) => `The right answer is ${o}.`,
+  hinglish: (o: string) => `Sahi jawab hai ${o}.`,
+  hi: (o: string) => `सही जवाब है ${o}।`,
+});
+const RECAP_TITLE = T({ en: "Quick recap", hinglish: "Quick recap", hi: "दोहराव" });
+const CHECK_TITLE = T({ en: "Quick check", hinglish: "Quick check", hi: "छोटा सा सवाल" });
+const BYE_TITLE = T({ en: "See you tomorrow!", hinglish: "Kal milte hain!", hi: "कल मिलते हैं!" });
+const BYE_TIME = T({
+  en: "We're almost out of tutor time for today, so let's stop here.",
+  hinglish: "Aaj ka tutor time lagbhag khatam ho gaya hai, toh yahin rukte hain.",
+  hi: "आज का ट्यूटर समय लगभग खत्म हो गया है, तो यहीं रुकते हैं।",
+});
+const BYE_COVERED = T({
+  en: (t: string) => `Today we covered ${t}.`,
+  hinglish: (t: string) => `Aaj humne padha: ${t}.`,
+  hi: (t: string) => `आज हमने पढ़ा: ${t}।`,
+});
+const BYE_END = T({ en: "Great work — see you tomorrow!", hinglish: "Bahut badhiya — kal milte hain!", hi: "बहुत बढ़िया — कल मिलते हैं!" });
 
+const LETTERS = ["A", "B", "C", "D", "E", "F"];
 const clip = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+/** Board text: no TeX dollars / Markdown marks. */
+const plain = (s: string) => String(s || "").replace(/\$+/g, "").replace(/[*_`#]/g, "").replace(/\s+/g, " ").trim();
+/** The first sentence or two of a solution, for saying out loud. */
+const shortSolution = (s: string | null) => {
+  const t = plain(s || "");
+  if (!t) return "";
+  const parts = t.match(/[^.!?।]+[.!?।]?/g) || [t];
+  return clip(parts.slice(0, 2).map((p) => p.trim()).join(" "), 260);
+};
 
 /** The plan of the lesson as board lines: the title, then the sections as a numbered list. */
 export function planLines(outline: LessonOutline): TutorLine[] {
@@ -102,6 +153,24 @@ export function recapLines(outline: LessonOutline, language: TutorLanguage): Tut
   });
 }
 
+/** A quick check on the board: the question and its options; said as the question, then the options. */
+export function checkLines(check: TutorCheck, language: TutorLanguage): TutorLine[] {
+  const opts = check.options.map((o, i) => `${LETTERS[i]}, ${plain(o)}`);
+  const said = opts.length > 1 ? `${opts.slice(0, -1).join("; ")}; ${OR[language]} ${opts[opts.length - 1]}` : opts.join("");
+  return [
+    {
+      say: `${QUICK[language]} ${clip(plain(check.prompt), 300)}`,
+      ops: [
+        { op: "clear" },
+        { op: "write", id: "chk_t", text: CHECK_TITLE[language], style: "title", color: "blue" },
+        { op: "write", id: "chk_q", text: clip(plain(check.prompt)), style: "body", color: "ink" },
+        ...check.options.map((o, i): BoardOp => ({ op: "write", id: `opt${i}`, text: clip(`${LETTERS[i]}) ${plain(o)}`), style: "body", color: "ink" })),
+      ],
+    },
+    { say: ASK_OPTIONS[language](said), ops: [] },
+  ];
+}
+
 /** Every section starts on a clean page, so the board at any line is known from the script alone. */
 export function withCleanPage(lines: TutorLine[]): TutorLine[] {
   if (!lines.length || lines[0].ops[0]?.op === "clear") return lines;
@@ -119,37 +188,44 @@ export class TutorRunner {
   state: TutorState = "idle";
   endReason: TutorEndReason | null = null;
   private outline: LessonOutline | null = null;
+  private outlineP: Promise<LessonOutline> | null = null;
   private readonly sections = new Map<number, Promise<SectionScript>>();
-  /** Bumped on pause / stop: a running lesson loop from an older generation quits. */
+  /** Bumped whenever the lesson is paused, redirected or stopped: older loops quit. */
   private gen = 0;
-  /** What is being said: part, the line it started from, and the latest line heard. */
-  private current: { responseId: string; part: Part; lines: TutorLine[]; from: number; heard: number } | null = null;
-  private resumeAt: { part: Part; line: number } | null = null;
-  /** Waiting for the widget to finish playing a response: true = played, false = interrupted. */
+  /** What is being said now. */
+  private current: { responseId: string; kind: SpeechKind; lines: TutorLine[]; from: number } | null = null;
+  /** Where the lesson goes on from (updated as lines are heard). */
+  private here: Position = { part: -1, line: 0, phase: "lesson" };
+  /** Set while paused: where Continue goes back to. */
+  private resumeAt: Position | null = null;
+  private check: { part: number; check: TutorCheck; tries: number; waiter: ((r: CheckReply | null) => void) | null; pending: CheckReply | null } | null = null;
+  private checksCorrect = 0;
+  private checksTotal = 0;
+  private readonly recent: string[] = [];
   private readonly playback = new Map<string, (played: boolean) => void>();
   private ticker: NodeJS.Timeout | null = null;
   private lastTickAt = 0;
   private startedAt = 0;
   private remaining = 0;
+  private wrapping = false;
+  private wrapped = false;
+  private wrapTimer: NodeJS.Timeout | null = null;
   private sessionId: Promise<string | null> = Promise.resolve(null);
   private readonly tickMs: number;
+  private now: () => number;
 
   constructor(private readonly o: TutorRunnerOptions) {
     this.tickMs = o.tickMs ?? 15_000;
     this.now = o.now ?? Date.now;
   }
-  private readonly now: () => number;
 
   /** (A method, so the check is re-read after awaits.) */
   private isEnded(): boolean { return this.state === "ended"; }
-
   get active(): boolean { return this.state !== "idle" && this.state !== "ended"; }
+  get progress(): { part: number; line: number } { const p = this.resumeAt ?? this.here; return { part: p.part, line: p.line }; }
+  private get L(): TutorLanguage { return this.o.language; }
 
-  /** The position the student has reached (part -1 = the plan, sections…, recap). */
-  get progress(): { part: number; line: number } {
-    if (this.current) return { part: this.current.part, line: this.current.heard };
-    return this.resumeAt ? { part: this.resumeAt.part, line: this.resumeAt.line } : { part: -1, line: 0 };
-  }
+  // ── start ──
 
   async start(): Promise<void> {
     if (this.state !== "idle") return;
@@ -163,32 +239,49 @@ export class TutorRunner {
     this.sendState();
 
     const gen = this.gen;
-    const outline = this.o.lessons.outline();
-    outline.catch(() => undefined);
+    const outline = this.loadOutline();
     // Cached plans are instant; a first-ever lesson takes a few seconds — say hello meanwhile.
     const quick = await Promise.race([outline.then(() => true, () => true), sleep(this.o.greetAfterMs ?? 400).then(() => false)]);
-    let greeting: Promise<boolean> | null = null;
-    if (!quick && gen === this.gen) greeting = this.say(-2, [{ say: GREETING[this.o.language](this.o.chapter), ops: [] }], 0);
+    let greeting: Promise<SayResult> | null = null;
+    if (!quick && gen === this.gen) greeting = this.say("aside", [{ say: GREETING[this.L](this.o.chapter), ops: [] }]);
     try {
-      this.outline = await outline;
+      await outline;
     } catch (error) {
-      if (gen !== this.gen) return;
+      if (this.isEnded()) return;
       this.o.host.send({ type: "tutor_error", message: error instanceof Error ? error.message : "The lesson could not be prepared." });
       await this.end("error");
       return;
     }
+    if (gen !== this.gen || this.isEnded()) return;
+    if (greeting && (await greeting) !== "played") return;
     if (gen !== this.gen) return;
-    this.prefetch(0);
-    this.o.host.send({ type: "tutor_outline", title: this.outline.title, sections: this.outline.sections.map((s) => ({ id: s.id, title: s.title })) });
-    if (greeting && !(await greeting)) return;
-    await this.teachFrom(-1, 0, gen);
+    await this.runFrom({ part: -1, line: 0, phase: "lesson" }, false);
   }
+
+  private loadOutline(): Promise<LessonOutline> {
+    if (!this.outlineP) {
+      this.outlineP = this.o.lessons.outline().then((o) => {
+        this.outline = o;
+        this.prefetch(0);
+        this.o.host.send({ type: "tutor_outline", title: o.title, sections: o.sections.map((s) => ({ id: s.id, title: s.title })) });
+        return o;
+      });
+      this.outlineP.catch(() => undefined);
+    }
+    return this.outlineP;
+  }
+
+  // ── what the widget reports ──
 
   /** The widget is playing line `index` of a response (its audio clock). */
   onHeard(responseId: string, index: number): void {
     const c = this.current;
     if (!c || c.responseId !== responseId || !Number.isInteger(index)) return;
-    c.heard = Math.max(c.heard, Math.min(c.lines.length - 1, c.from + index));
+    const line = c.lines[c.from + index];
+    if (line) { this.recent.push(line.say); if (this.recent.length > 6) this.recent.shift(); }
+    if (c.kind === "lesson") this.here = { ...this.here, line: Math.max(this.here.line, Math.min(c.lines.length - 1, c.from + index)) };
+    // Out of minutes: the goodbye starts at a line boundary.
+    if (this.wrapping && index > 0) void this.wrapUp();
   }
 
   onPlaybackComplete(responseId: string): void {
@@ -196,116 +289,289 @@ export class TutorRunner {
   }
 
   /**
-   * The voice service abandoned a response (the student spoke over it, or another answer took
-   * over). Its audio is usually all sent long before it is heard, so this is how an interruption
-   * during playback reaches the lesson.
+   * The voice service abandoned a response (the student spoke over it, tapped stop, or another
+   * answer took over). Its audio is usually all sent long before it is heard, so this is how an
+   * interruption during playback reaches the lesson. A quick check's question stays open;
+   * anything else pauses the lesson where the student was.
    */
   onResponseCancelled(responseId: string): void {
+    const c = this.current;
     this.playback.get(responseId)?.(false);
+    if (!c || c.responseId !== responseId) return;
+    this.current = null;
+    if (c.kind === "check" || this.wrapped) return;
+    this.pause();
+  }
+
+  // ── what the student does ──
+
+  /**
+   * Something the student said (voice) or typed during the lesson. Voice turns arrive after the
+   * voice service already stopped the tutor's speech; typed ones stop it here.
+   */
+  async handleStudentTurn(text: string, opts: { typed?: boolean } = {}): Promise<void> {
+    if (!this.active || this.wrapping) return;
+    const intent: TutorIntent = classifyTutorIntent(text, { checkOptions: this.check?.check.options ?? null });
+    if (this.check && (intent.kind === "answer" || intent.kind === "dontknow")) {
+      this.replyToCheck(intent.kind === "answer" ? { kind: "answer", index: intent.index } : { kind: "dontknow" });
+      return;
+    }
+    // Typing over the tutor stops it like speaking over it does (a quick check's question stays open).
+    if (opts.typed && this.current && this.current.kind !== "check") this.pause();
+    switch (intent.kind) {
+      case "continue":
+        if (this.state === "paused") await this.resumeLesson();
+        return;
+      case "repeat":
+        if (this.check && this.state === "checking") { await this.askCheckAgain(); return; }
+        if (this.state === "paused") await this.resumeLesson(false);
+        return;
+      case "simpler":
+        await this.explainSimpler();
+        return;
+      case "next":
+        await this.skip();
+        return;
+      case "stop":
+        await this.stop("stopped");
+        return;
+      case "pause":
+        this.pause();
+        return;
+      default:
+        await this.answerQuestion(text);
+    }
+  }
+
+  /** A tap on an option of the open quick check. */
+  answerCheck(checkId: string, index: number): void {
+    if (!this.check || this.check.check.id !== checkId || !Number.isInteger(index)) return;
+    this.replyToCheck({ kind: "answer", index });
+  }
+
+  /** "I don't know" on the open quick check. */
+  giveUpCheck(checkId: string): void {
+    if (!this.check || this.check.check.id !== checkId) return;
+    this.replyToCheck({ kind: "dontknow" });
   }
 
   /** Continue a paused lesson from the line that was interrupted. */
   async resume(): Promise<void> {
-    if (this.state !== "paused" || !this.resumeAt) return;
-    const at = this.resumeAt;
-    this.resumeAt = null;
-    await this.teachFrom(at.part, at.line, this.gen, true);
+    if (this.state === "paused") await this.resumeLesson();
   }
 
-  /** Jump to the next section (the student asked to move on). */
+  /** "I didn't get it": the part's simpler explanation, then on with the lesson. */
+  async explainSimpler(): Promise<void> {
+    if (!this.active || this.wrapping) return;
+    this.pause();
+    const gen = this.gen;
+    const at = this.resumeAt ?? this.here;
+    let lines: TutorLine[] = [];
+    if (this.outline && at.part >= 0 && at.part < this.outline.sections.length) {
+      lines = (await this.section(at.part).catch(() => null))?.simpler ?? [];
+    }
+    if (gen !== this.gen || this.isEnded()) return;
+    if (!lines.length) {
+      const title = this.outline && at.part >= 0 ? this.outline.sections[at.part]?.title : this.o.chapter;
+      await this.answerQuestion(`I didn't understand "${title}". Please explain it again more simply, with an everyday example.`);
+      return;
+    }
+    this.state = "teaching";
+    if ((await this.say("aside", [{ say: SIMPLER_INTRO[this.L], ops: [] }, ...lines])) !== "played") return;
+    await this.resumeLesson();
+  }
+
+  /** Jump to the next part (the student asked to move on). */
   async skip(): Promise<void> {
-    if (!this.active || !this.outline) return;
-    const part = this.current?.part ?? this.resumeAt?.part ?? -1;
-    this.interruptCurrent();
+    if (!this.active || this.wrapping) return;
+    await this.loadOutline().catch(() => undefined);
+    if (!this.outline) return;
+    this.pause();
+    const at = this.resumeAt ?? this.here;
     this.resumeAt = null;
-    await this.teachFrom(Math.min(part + 1, this.outline.sections.length), 0, this.gen);
+    await this.runFrom({ part: Math.min(at.part + 1, this.outline.sections.length), line: 0, phase: "lesson" }, false);
   }
 
   async stop(reason: TutorEndReason = "stopped"): Promise<void> {
-    if (this.state === "ended") return;
-    this.interruptCurrent();
+    if (this.isEnded()) return;
+    this.cutSpeech();
     await this.end(reason);
   }
 
-  // ── lesson loop ──
+  // ── lesson flow ──
 
-  private async teachFrom(part: Part, line: number, gen: number, resumed = false): Promise<void> {
+  private async resumeLesson(sayResume = true): Promise<void> {
+    const at = this.resumeAt ?? this.here;
+    this.resumeAt = null;
+    await this.loadOutline().catch(() => undefined);
+    if (!this.outline || this.isEnded()) return;
+    await this.runFrom(at, sayResume);
+  }
+
+  /** Teaches from a position to the end: each part's lines, its quick check, then the recap. */
+  private async runFrom(from: Position, resumed: boolean): Promise<void> {
+    const gen = ++this.gen;
     const outline = this.outline;
     if (!outline) return;
-    for (let p = part; p <= outline.sections.length; p++) {
+    for (let p = from.part; p <= outline.sections.length; p++) {
       if (gen !== this.gen || this.isEnded()) return;
-      let lines: TutorLine[];
-      if (p === -1) lines = planLines(outline);
-      else if (p === outline.sections.length) lines = recapLines(outline, this.o.language);
-      else {
+      const first = p === from.part;
+      const isSection = p >= 0 && p < outline.sections.length;
+      let script: SectionScript | null = null;
+      if (isSection) {
         this.prefetch(p + 1);
         if (!(await isSettled(this.section(p)))) this.o.host.send({ type: "tutor_state", state: "preparing", part: p });
-        try {
-          lines = withCleanPage((await this.section(p)).lines);
-        } catch {
-          this.sections.delete(p);
-          continue; // a section that cannot be prepared is skipped, not the lesson
-        }
+        script = await this.section(p).catch(() => null);
         if (gen !== this.gen || this.isEnded()) return;
+        if (!script) { this.sections.delete(p); continue; } // a part that cannot be prepared is skipped, not the lesson
       }
-      const from = p === part ? Math.min(line, lines.length - 1) : 0;
-      const resumeHere = resumed && p === part;
-      if (from > 0 || resumeHere) this.o.host.send({ type: "board_snapshot", board: boardAfter(lines, from) });
-      // Resuming: "Okay, where were we…" first — it counts as line from-1 of this part.
-      const body = lines.slice(from);
-      const toSay = resumeHere ? [{ say: RESUME[this.o.language], ops: [] as BoardOp[] }, ...body] : body;
-      if (!(await this.say(p, toSay, resumeHere ? from - 1 : from, lines))) return;
+      if (!(first && from.phase === "check")) {
+        const lines = p === -1 ? planLines(outline) : isSection ? withCleanPage(script!.lines) : recapLines(outline, this.L);
+        const start = first ? Math.min(from.line, lines.length - 1) : 0;
+        const resumeHere = resumed && first;
+        if (start > 0 || resumeHere) this.o.host.send({ type: "board_snapshot", board: boardAfter(lines, start) });
+        this.here = { part: p, line: start, phase: "lesson" };
+        this.state = "teaching";
+        // Resuming: "Okay, where were we…" first — it counts as line start-1 of this part.
+        const body = lines.slice(start);
+        const toSay = resumeHere ? [{ say: RESUME[this.L], ops: [] as BoardOp[] }, ...body] : body;
+        if ((await this.say("lesson", toSay, resumeHere ? start - 1 : start, lines)) !== "played") return;
+      }
+      if (isSection && script!.checks.length) {
+        if (!(await this.runCheck(p, script!.checks[0], gen, resumed && first && from.phase === "check"))) return;
+      }
     }
     await this.end("completed");
   }
 
-  /**
-   * Says `lines` as one response and waits until the widget has played them. Returns false when
-   * the lesson stopped or paused meanwhile (an interruption pauses at the line that was heard).
-   */
-  private async say(part: Part, lines: TutorLine[], from: number, fullLines?: TutorLine[]): Promise<boolean> {
-    const gen = this.gen;
-    if (this.state === "ended") return false;
-    const spoken = lines.map((l) => ({ say: l.say, speech: tutorSpeech(l.say, this.o.language) || l.say, ops: l.ops }));
-    const started = this.o.host.speak(spoken);
-    if (!started) { await this.end("disconnected"); return false; }
-    this.current = { responseId: started.responseId, part, lines: fullLines ?? lines, from, heard: Math.max(0, from) };
-    this.state = part === -2 ? "planning" : "teaching";
+  private async runCheck(part: number, check: TutorCheck, gen: number, resumed = false): Promise<boolean> {
+    this.here = { part, line: 0, phase: "check" };
+    this.state = "checking";
+    this.check = { part, check, tries: 0, waiter: null, pending: null };
+    // Never the answer key: the widget learns the right option only once it is answered.
+    this.o.host.send({ type: "tutor_check", id: check.id, prompt: plain(check.prompt), options: check.options.map(plain) });
     this.sendState();
-    const played = new Promise<boolean>((resolve) => this.playback.set(started.responseId, resolve));
-    const sent = await started.sent;
-    const audioMs = sent.audioMs;
-    let cancelled = sent.cancelled;
-    if (!cancelled) {
-      cancelled = !(await Promise.race([played, sleep(audioMs + (this.o.playbackSlackMs ?? 8000)).then(() => true)]));
+    const ask = checkLines(check, this.L);
+    if ((await this.say("check", resumed ? [{ say: RESUME[this.L], ops: [] }, ...ask] : ask)) === "gone") return false;
+    let feedback: TutorLine[] = [];
+    for (;;) {
+      if (gen !== this.gen || this.isEnded() || !this.check) return false;
+      const reply = await this.nextCheckReply();
+      if (!reply || gen !== this.gen || this.isEnded() || !this.check) return false;
+      const c = this.check;
+      c.tries++;
+      const chosen = reply.kind === "answer" ? reply.index : null;
+      if (chosen === check.correctIndex) {
+        this.checksCorrect++; this.checksTotal++;
+        this.o.host.send({ type: "tutor_check_result", id: check.id, correct: true, chosen, correctIndex: check.correctIndex });
+        feedback = [{ say: [CORRECT[this.L], shortSolution(check.solution)].filter(Boolean).join(" "), ops: [{ op: "highlight", target: `opt${check.correctIndex}`, mode: "circle" }] }];
+        break;
+      }
+      if (chosen != null && c.tries < 2) {
+        this.o.host.send({ type: "tutor_check_result", id: check.id, correct: false, chosen, retry: true });
+        if ((await this.say("check", [{ say: TRY_AGAIN[this.L], ops: [{ op: "highlight", target: `opt${chosen}`, mode: "underline" }] }])) === "gone") return false;
+        continue;
+      }
+      this.checksTotal++;
+      this.o.host.send({ type: "tutor_check_result", id: check.id, correct: false, chosen, correctIndex: check.correctIndex });
+      const right = `${LETTERS[check.correctIndex]}, ${plain(check.options[check.correctIndex])}`;
+      const sol = shortSolution(check.solution);
+      feedback = [
+        { say: REVEAL[this.L](right), ops: [{ op: "highlight", target: `opt${check.correctIndex}`, mode: "circle" }, ...(sol ? [{ op: "write", id: "chk_sol", text: clip(sol), style: "note", color: "green" } as BoardOp] : [])] },
+        ...(sol ? [{ say: sol, ops: [] as BoardOp[] }] : []),
+      ];
+      break;
     }
-    this.playback.delete(started.responseId);
-    const wasCurrent = this.current?.responseId === started.responseId;
-    if (gen !== this.gen || this.isEnded()) return false;
-    if (cancelled && wasCurrent) {
-      // Interrupted (the student spoke, or another answer took over): pause at the heard line.
-      this.gen++;
-      const c = this.current!;
-      this.current = null;
-      this.resumeAt = part >= -1 ? { part, line: Math.max(0, c.heard) } : { part: -1, line: 0 };
-      this.state = "paused";
-      this.sendState();
-      return false;
-    }
-    if (wasCurrent) this.current = null;
-    return true;
+    this.check = null;
+    this.here = { part: part + 1, line: 0, phase: "lesson" };
+    this.state = "teaching";
+    this.sendState();
+    return (await this.say("aside", feedback)) === "played";
   }
 
-  private interruptCurrent(): void {
-    this.gen++;
+  private nextCheckReply(): Promise<CheckReply | null> {
+    const c = this.check;
+    if (!c) return Promise.resolve(null);
+    if (c.pending) { const r = c.pending; c.pending = null; return Promise.resolve(r); }
+    return new Promise((resolve) => { c.waiter = resolve; });
+  }
+
+  private replyToCheck(reply: CheckReply): void {
+    const c = this.check;
+    if (!c) return;
+    // Answering over the question / "try again": stop that speech, keep the check.
+    if (this.current?.kind === "check") this.cutSpeech();
+    if (c.waiter) { const w = c.waiter; c.waiter = null; w(reply); } else c.pending = reply;
+  }
+
+  private async askCheckAgain(): Promise<void> {
+    const c = this.check;
+    if (!c) return;
+    await this.say("check", checkLines(c.check, this.L));
+  }
+
+  /** A question or remark: answered on a fresh page, then on with the lesson. */
+  private async answerQuestion(question: string): Promise<void> {
+    this.pause();
+    const gen = this.gen;
+    this.state = "answering";
+    this.sendState();
+    const at = this.resumeAt ?? this.here;
+    const answer = this.o.lessons.answerDoubt(question, { part: at.part, recentLines: [...this.recent] });
+    const quick = await Promise.race([answer.then(() => true, () => true), sleep(this.o.ackAfterMs ?? 700).then(() => false)]);
+    const ack = !quick && gen === this.gen ? this.say("aside", [{ say: ACK[this.L], ops: [] }]) : null;
+    const { lines } = await answer.catch(() => ({ lines: [] as TutorLine[], onTopic: false }));
+    if (ack && (await ack) !== "played") return;
+    if (gen !== this.gen || this.isEnded()) return;
+    if (lines.length && (await this.say("aside", lines)) !== "played") return;
+    if (gen !== this.gen || this.isEnded()) return;
+    await this.resumeLesson();
+  }
+
+  // ── speaking ──
+
+  /** Says `lines` as one response and waits until the widget has played them. */
+  private async say(kind: SpeechKind, lines: TutorLine[], from = 0, fullLines?: TutorLine[]): Promise<SayResult> {
+    const gen = this.gen;
+    if (this.isEnded()) return "gone";
+    if (!lines.length) return "played";
+    const spoken = lines.map((l) => ({ say: l.say, speech: tutorSpeech(l.say, this.L) || l.say, ops: l.ops }));
+    const started = this.o.host.speak(spoken);
+    if (!started) { await this.end("disconnected"); return "gone"; }
+    const rid = started.responseId;
+    this.current = { responseId: rid, kind, lines: fullLines ?? lines, from };
+    this.sendState();
+    const played = new Promise<boolean>((resolve) => this.playback.set(rid, resolve));
+    const sent = await started.sent;
+    let ok = !sent.cancelled;
+    if (ok) ok = await Promise.race([played, sleep(sent.audioMs + (this.o.playbackSlackMs ?? 8000)).then(() => true)]);
+    this.playback.delete(rid);
+    // Cancelled without the voice service telling us (e.g. the socket closed): same as a cut-in.
+    if (!ok && this.current?.responseId === rid) this.onResponseCancelled(rid);
+    if (this.current?.responseId === rid) this.current = null;
+    if (gen !== this.gen || this.isEnded()) return "gone";
+    return ok ? "played" : "cut";
+  }
+
+  /** Stop the tutor's speech now (the runner decides what happens next). */
+  private cutSpeech(): void {
     const c = this.current;
     this.current = null;
-    if (c) {
-      // Remember where the student was (Stop records it; Next part moves on from it).
-      this.resumeAt = { part: Math.max(-1, c.part), line: Math.max(0, c.heard) };
-      this.playback.get(c.responseId)?.(false);
-      this.o.host.cancelSpeech(c.responseId);
-    }
+    if (!c) return;
+    this.playback.get(c.responseId)?.(false);
+    this.o.host.cancelSpeech(c.responseId);
+  }
+
+  /** Pause where the student is (Continue goes back there). Any running flow quits. */
+  private pause(): void {
+    this.gen++;
+    this.cutSpeech();
+    if (this.check?.waiter) { const w = this.check.waiter; this.check.waiter = null; w(null); }
+    if (this.isEnded()) return;
+    if (this.state !== "paused" && this.state !== "answering") this.resumeAt = { ...this.here };
+    this.check = null; // asked again on Continue
+    this.state = "paused";
+    this.sendState();
   }
 
   private section(i: number): Promise<SectionScript> {
@@ -331,9 +597,12 @@ export class TutorRunner {
       line: p.line,
       sections: this.outline?.sections.length ?? 0,
       canResume: this.state === "paused" && !!this.resumeAt,
+      checkOpen: !!this.check,
       remainingSeconds: Math.max(0, Math.round(this.remaining)),
     });
   }
+
+  // ── minutes ──
 
   private async tick(): Promise<void> {
     if (!this.active) return;
@@ -342,27 +611,58 @@ export class TutorRunner {
     this.lastTickAt = now;
     this.remaining -= seconds;
     await this.o.store.addUsage(Math.round(seconds)).catch(() => undefined);
-    if (this.remaining <= 0) await this.stop("daily_limit");
+    if (this.remaining <= 0) { await this.stop("daily_limit"); return; }
+    if (this.remaining <= 60 && !this.wrapping) {
+      // A minute left: say goodbye at the next line boundary (or soon, if nothing is playing).
+      this.wrapping = true;
+      this.wrapTimer = setTimeout(() => void this.wrapUp(), this.current ? 8000 : 0);
+      this.wrapTimer.unref?.();
+    }
+  }
+
+  private async wrapUp(): Promise<void> {
+    if (this.wrapped || this.isEnded()) return;
+    this.wrapped = true;
+    if (this.wrapTimer) { clearTimeout(this.wrapTimer); this.wrapTimer = null; }
+    this.gen++;
+    this.cutSpeech();
+    if (this.check?.waiter) { const w = this.check.waiter; this.check.waiter = null; w(null); }
+    this.check = null;
+    const at = this.resumeAt ?? this.here;
+    const covered = (this.outline?.sections ?? []).filter((_, i) => i < at.part || (i === at.part && at.line > 0)).map((s) => s.title);
+    const lines: TutorLine[] = [
+      { say: BYE_TIME[this.L], ops: [{ op: "clear" }, { op: "write", id: "byetitle", text: BYE_TITLE[this.L], style: "title", color: "blue" }, ...covered.slice(0, 6).map((t, i): BoardOp => ({ op: "write", id: `bye${i}`, text: clip(`✓ ${t}`), style: "body", color: "green" }))] },
+      ...(covered.length ? [{ say: BYE_COVERED[this.L](covered.slice(0, 3).join(", ")), ops: [] as BoardOp[] }] : []),
+      { say: BYE_END[this.L], ops: [] },
+    ];
+    this.state = "teaching";
+    await this.say("aside", lines);
+    await this.end("daily_limit");
   }
 
   private async end(reason: TutorEndReason): Promise<void> {
-    if (this.state === "ended") return;
+    if (this.isEnded()) return;
     const progress = this.progress;
     this.gen++;
     this.state = "ended";
     this.endReason = reason;
     if (this.ticker) { clearInterval(this.ticker); this.ticker = null; }
+    if (this.wrapTimer) { clearTimeout(this.wrapTimer); this.wrapTimer = null; }
     for (const resolve of Array.from(this.playback.values())) resolve(false);
     this.playback.clear();
+    if (this.check?.waiter) this.check.waiter(null);
+    this.check = null;
     if (this.startedAt) {
       const left = Math.round((this.now() - this.lastTickAt) / 1000);
       if (left > 0) await this.o.store.addUsage(left).catch(() => undefined);
     }
-    this.o.host.send({ type: "tutor_ended", reason, part: progress.part, line: progress.line });
+    this.o.host.send({ type: "tutor_ended", reason, part: progress.part, line: progress.line, checksCorrect: this.checksCorrect, checksTotal: this.checksTotal });
     await this.o.store.sessionEnded(await this.sessionId, {
       reason,
       secondsActive: this.startedAt ? Math.round((this.now() - this.startedAt) / 1000) : 0,
       progress: { part: progress.part, line: progress.line, sections: this.outline?.sections.length ?? 0 },
+      checksCorrect: this.checksCorrect,
+      checksTotal: this.checksTotal,
     }).catch(() => undefined);
   }
 }

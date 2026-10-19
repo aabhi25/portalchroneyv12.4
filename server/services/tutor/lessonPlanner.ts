@@ -64,7 +64,7 @@ export type LessonOutline = {
   recap: string[];
 };
 
-const rawLine = z.object({ say: sayText, ops: z.array(z.unknown()).max(8).default([]) });
+export const rawLine = z.object({ say: sayText, ops: z.array(z.unknown()).max(8).default([]) });
 const sectionSchema = z.object({
   lines: z.array(rawLine).min(2).max(18),
   simpler: z.array(rawLine).min(1).max(8).default([]),
@@ -75,7 +75,7 @@ export interface SectionScript { lines: TutorLine[]; simpler: TutorLine[]; check
 
 // ── prompts ─────────────────────────────────────────────────────────────────────────
 
-function languageRule(language: TutorLanguage): string {
+export function languageRule(language: TutorLanguage): string {
   if (language === "hi") return 'Spoken text ("say", intro, recap) is everyday spoken Hindi in Devanagari, keeping school terms in English (theorem, triangle, equation, federalism). Board text stays short and may be English.';
   if (language === "hinglish") return 'Spoken text ("say", intro, recap) is natural Hinglish written in Devanagari for Hindi words and English letters for English words. Board text stays short and may be English.';
   return 'Spoken text ("say", intro, recap) is simple, warm Indian English for a school student. Board text is short English.';
@@ -92,14 +92,8 @@ Return JSON: {"title": string, "intro": [string], "sections": [{"title": string,
 - recap: 3 short spoken sentences, the three things to remember.
 ${languageRule(language)}`;
 
-const SECTION_SYSTEM = (language: TutorLanguage) => `You write what a great tutor says and writes on the board while teaching ONE section of a lesson to a school student. It must feel like a real teacher: warm, step by step, with an everyday example, writing key points as they speak, drawing when it helps, now and then asking "Can you guess…?" before revealing.
-Use ONLY the facts in SOURCES. If something is not there, do not teach it.
-Return JSON: {"lines": [{"say": string, "ops": [op]}], "simpler": [{"say": string, "ops": [op]}]}.
-- lines: 6 to 12. Each "say" is ONE spoken sentence (at most 30 words), said naturally out loud: no markdown, no TeX, formulas in words ("a squared plus b squared equals c squared").
-- ops are drawn on the board WHILE that sentence is said (0 to 4 per line). The first line starts with {"op":"clear"} and a title.
-- simpler: 3 to 6 lines that explain this section's hardest idea again in a much simpler way, with an everyday analogy. Its first line does not clear the board.
-${languageRule(language)}
-Board ops (give every drawn thing a short unique id, letters/digits/underscore):
+/** The board instructions the model may use (shared by lessons and doubt answers). */
+export const BOARD_OPS_DOC = `Board ops (give every drawn thing a short unique id, letters/digits/underscore):
 {"op":"write","id":"t1","text":"Pythagoras Theorem","style":"title"}   style: title | body | note; optional "color": ink | blue | red | green
 {"op":"math","id":"f1","tex":"a^2 + b^2 = c^2"}   one formula or one step of working per op (KaTeX TeX)
 {"op":"image","id":"img1","mediaId":"m2","caption":"Map of India"}   ONLY a FIGURE id listed for this section
@@ -107,7 +101,16 @@ Board ops (give every drawn thing a short unique id, letters/digits/underscore):
 {"op":"diagram","id":"d2","kind":"table","header":["Union List","State List"],"rows":[["Defence","Police"]]}
 {"op":"diagram","id":"g1","kind":"geometry","points":{"A":[1,6],"B":[1,1],"C":[7,1]},"segments":[["A","B"],["B","C"],["A","C"]],"sideLabels":[{"from":"A","to":"C","text":"c"}],"angles":[{"at":"B","mark":"right"}]}   points on a 0–10 grid
 {"op":"highlight","target":"g1","part":"A-C","mode":"circle"}   point at something already on the board while talking about it (part optional: a node id, a point, or a segment "A-C")
-{"op":"erase","target":"f1"}   {"op":"clear"}
+{"op":"erase","target":"f1"}   {"op":"clear"}`;
+
+const SECTION_SYSTEM = (language: TutorLanguage) => `You write what a great tutor says and writes on the board while teaching ONE section of a lesson to a school student. It must feel like a real teacher: warm, step by step, with an everyday example, writing key points as they speak, drawing when it helps, now and then asking "Can you guess…?" before revealing.
+Use ONLY the facts in SOURCES. If something is not there, do not teach it.
+Return JSON: {"lines": [{"say": string, "ops": [op]}], "simpler": [{"say": string, "ops": [op]}]}.
+- lines: 6 to 12. Each "say" is ONE spoken sentence (at most 30 words), said naturally out loud: no markdown, no TeX, formulas in words ("a squared plus b squared equals c squared").
+- ops are drawn on the board WHILE that sentence is said (0 to 4 per line). The first line starts with {"op":"clear"} and a title.
+- simpler: 3 to 6 lines that explain this section's hardest idea again in a much simpler way, with an everyday analogy. Its first line does not clear the board.
+${languageRule(language)}
+${BOARD_OPS_DOC}
 Use the board like a real teacher:
 - Most lines write or draw something; the section has at least 6 board ops in total.
 - Whenever the idea is visual (a shape, a process, a comparison, a list of categories), DRAW it: geometry for shapes (label the sides and mark right angles), flow for processes or levels, table for comparisons or lists — or show a listed FIGURE.
@@ -115,7 +118,7 @@ Use the board like a real teacher:
 - When you talk about one part of a drawing, highlight it in that line.
 - simpler lines use the board too (at least 2 ops in total): write the idea in simpler words or draw the analogy.`;
 
-function sourceBlock(pack: LessonPack, ids: string[], maxChars: number): string {
+export function sourceBlock(pack: LessonPack, ids: string[], maxChars: number): string {
   const want = new Set(ids);
   let left = maxChars;
   const out: string[] = [];
@@ -129,7 +132,7 @@ function sourceBlock(pack: LessonPack, ids: string[], maxChars: number): string 
   return out.join("\n");
 }
 
-function parseJson(text: string): unknown {
+export function parseJson(text: string): unknown {
   try { return JSON.parse(text); } catch {
     const m = /\{[\s\S]*\}/.exec(text);
     if (m) { try { return JSON.parse(m[0]); } catch { /* fall through */ } }

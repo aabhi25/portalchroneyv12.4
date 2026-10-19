@@ -110,7 +110,7 @@ interface InlineVoiceModeProps {
   listenRequest?: number;
   /**
    * AI tutor: classroom messages from the voice socket (tutor_state, tutor_outline, tutor_ended,
-   * board_snapshot) and `sentence_play` — a lesson line, delivered when its audio starts playing.
+   * tutor_check, tutor_check_result, board_snapshot) and `sentence_play` — a lesson line, delivered when its audio starts playing.
    */
   onTutorMessage?: (message: any) => void;
   /** AI tutor: a command for the voice socket (tutor_start, tutor_resume…), sent once per seq. */
@@ -917,6 +917,8 @@ export function InlineVoiceMode({
       case 'tutor_outline':
       case 'tutor_ended':
       case 'tutor_error':
+      case 'tutor_check':
+      case 'tutor_check_result':
       case 'board_snapshot':
         onTutorMessageRef.current?.(data);
         break;

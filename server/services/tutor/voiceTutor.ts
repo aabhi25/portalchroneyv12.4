@@ -8,6 +8,7 @@ import { db } from "../../db";
 import { tutorSessions } from "@shared/schema";
 import { lessonContext, TutorLessonError, type TutorScope } from "./lessonService";
 import { getOutline, getSection, type LessonOutline, type TutorLanguage } from "./lessonPlanner";
+import { answerDoubt } from "./doubtAnswerer";
 import { getTutorSettings } from "./settings";
 import { addUsage, remainingSeconds, secondsUsedToday, tutorStudentKey } from "./usage";
 import type { TutorLessonSource, TutorStore } from "./tutorRunner";
@@ -57,6 +58,11 @@ export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{ chapt
       if (index < 0 || index >= o.sections.length) throw new TutorLessonError("No such section.");
       return getSection(pack, o, index, language, complete);
     },
+    answerDoubt: async (question, { part, recentLines }) => {
+      const { pack, complete } = await context();
+      const o = await lessons.outline().catch(() => null);
+      return answerDoubt({ pack, outline: o, part, question, recentLines, language, complete });
+    },
   };
 
   const studentKey = tutorStudentKey(scope.studentId, req.visitorId);
@@ -83,6 +89,8 @@ export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{ chapt
         endedAt: new Date(),
         secondsActive: info.secondsActive,
         progress: info.progress,
+        checksCorrect: info.checksCorrect,
+        checksTotal: info.checksTotal,
         endReason: info.reason,
       }).where(eq(tutorSessions.id, id));
     },

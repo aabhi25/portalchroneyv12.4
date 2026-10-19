@@ -3910,6 +3910,16 @@ export class RealtimeVoiceService {
       this.clearBargeIn(conversation);
     }
 
+    // AI tutor lesson running: the student's words are for the tutor (a doubt, "I didn't get it",
+    // an answer to a quick check, "continue"…), not a new chat answer.
+    if (conversation.tutor?.active) {
+      conversation.k12TurnSeq = (conversation.k12TurnSeq ?? 0) + 1; // supersedes any answer still being written
+      this.sendToClient(conversation.clientWs, { type: 'transcript', text: userTranscript, isFinal: true });
+      this.logVoiceTiming(timing, 'tutor');
+      void conversation.tutor.handleStudentTurn(trimmedTranscript).catch((error) => console.error('[Tutor] Turn failed:', error));
+      return;
+    }
+
     // Only a real turn may supersede the previous one. (Bumping this before
     // the noise filter let an empty noise transcript orphan an in-flight
     // answer and leave the client on "Thinking…".)
@@ -5829,6 +5839,32 @@ Never infer intent from a single contained word. For example, "What is stop moti
       case 'tutor_stop':
         void conversation.tutor?.stop('stopped');
         break;
+
+      case 'tutor_answer':
+        // A tap on an option of the open quick check.
+        this.markUserActive(conversation);
+        if (typeof message.checkId === 'string') conversation.tutor?.answerCheck(message.checkId, Number(message.index));
+        break;
+
+      case 'tutor_dontknow':
+        this.markUserActive(conversation);
+        if (typeof message.checkId === 'string') conversation.tutor?.giveUpCheck(message.checkId);
+        break;
+
+      case 'tutor_simpler':
+        this.markUserActive(conversation);
+        void conversation.tutor?.explainSimpler();
+        break;
+
+      case 'tutor_text': {
+        // A question typed in the classroom.
+        const text = typeof message.text === 'string' ? message.text.trim().slice(0, 500) : '';
+        if (!text || !conversation.tutor?.active) break;
+        this.markUserActive(conversation);
+        this.sendToClient(conversation.clientWs, { type: 'transcript', text, isFinal: true });
+        void conversation.tutor.handleStudentTurn(text, { typed: true }).catch((error) => console.error('[Tutor] Typed turn failed:', error));
+        break;
+      }
 
       case 'tutor_heard':
         // The widget started playing line `index` of a tutor response (its audio clock).
