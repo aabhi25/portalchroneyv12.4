@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Redirect } from "wouter";
 import type { MeResponseDto } from "@shared/dto";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,16 +20,11 @@ import {
   Loader2,
   AlertTriangle,
   CheckCircle2,
-  Copy,
-  Check,
   RotateCcw,
   Radio,
   XCircle,
-  Plug,
-  Unplug,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { getPublicWidgetOrigin } from "@/lib/deploymentUrls";
 
   // One distinct board/medium/grade combination physically present in the active
   // client content store, plus the content packs (cp_ids) it contains.
@@ -50,7 +44,6 @@ interface ScopeOption {
 
 // Uses the current deployment host unless an explicit public widget origin is
 // configured for the build.
-const WIDGET_DOMAIN = getPublicWidgetOrigin();
 
 export default function TopScholarWidgetTester() {
   const { toast } = useToast();
@@ -59,7 +52,6 @@ export default function TopScholarWidgetTester() {
   const [grade, setGrade] = useState<string>("");
   const [subject, setSubject] = useState<string>("");
   const [chapter, setChapter] = useState<string>("");
-  const [copied, setCopied] = useState(false);
 
   const { data: me, isLoading: meLoading } = useQuery<MeResponseDto>({
     queryKey: ["/api/auth/me"],
@@ -86,35 +78,6 @@ export default function TopScholarWidgetTester() {
   const [liveToken, setLiveToken] = useState("");
   const [liveActiveDoubtId, setLiveActiveDoubtId] = useState("");
   const [isMinting, setIsMinting] = useState(false);
-
-  // Raw-token tester: paste any token from the client, load this deployment's widget
-  const [rawToken, setRawToken] = useState("");
-  const [widgetInjected, setWidgetInjected] = useState(false);
-  const widgetScriptRef = useRef<HTMLScriptElement | null>(null);
-
-  const handleLoadWidget = () => {
-    handleRemoveWidget();
-    const script = document.createElement("script");
-    script.src = `${WIDGET_DOMAIN}/widget-loader.js`;
-    script.setAttribute("data-business-id", businessAccountId || "1e80bae7-e219-4769-824d-ee027770cd7d");
-    script.setAttribute("data-token", rawToken.trim());
-    script.setAttribute("data-aichroney-tester", "1");
-    document.body.appendChild(script);
-    widgetScriptRef.current = script;
-    setWidgetInjected(true);
-  };
-
-  const handleRemoveWidget = () => {
-    if (widgetScriptRef.current) {
-      widgetScriptRef.current.remove();
-      widgetScriptRef.current = null;
-    }
-    // Remove any elements widget.js injected into the page
-    document.querySelectorAll(
-      '[id^="aichroney-"], [class*="aichroney-widget"], [data-aichroney-tester]'
-    ).forEach((el) => el.remove());
-    setWidgetInjected(false);
-  };
 
   const {
     data: options,
@@ -195,7 +158,7 @@ export default function TopScholarWidgetTester() {
   }, [opts, board, medium, grade]);
 
   // Subjects available for the chosen board/medium/grade. Subject is REQUIRED — a
-  // specific subject must be picked before the preview and embed snippet appear.
+  // specific subject must be picked before the preview appears.
   const subjects = useMemo(() => selectedCombo?.subjects ?? [], [selectedCombo]);
 
   // Board + medium + grade chosen — enough to populate the subject dropdown.
@@ -380,24 +343,6 @@ export default function TopScholarWidgetTester() {
     );
   };
 
-  // Exact subject-scoped embed snippet for the current selection (real values, not
-  // placeholders) so the admin can hand the right attributes to the client portal.
-  // data-business-id is required by widget-loader.js; the scope attributes narrow
-  // answers to this student's grade and chosen subject (all required).
-  const embedSnippet = hasFullSelection
-    ? `<!-- AI Chroney Widget (subject-scoped) -->
-<!-- data-student-id + data-name attribute chats to the student (history across -->
-<!-- devices, per-student reports). Have your portal fill these for each student. -->
-<script src="${WIDGET_DOMAIN}/widget-loader.js" data-business-id="${businessAccountId}"
-        data-board="${board}"
-        data-medium="${medium}"
-        data-grade="${grade}"
-        data-subject="${subject}"
-        data-chapter="${chapter}"
-        data-student-id="{{ student.id }}"
-        data-name="{{ student.name }}"></script>`
-    : "";
-
   // Any scope change invalidates a running live session — the minted token is
   // bound to the old scope, so we always end the session rather than carry it.
   const handleBoardChange = (v: string) => {
@@ -440,18 +385,6 @@ export default function TopScholarWidgetTester() {
     setChapter("");
   };
 
-  const handleCopy = async () => {
-    if (!embedSnippet) return;
-    try {
-      await navigator.clipboard.writeText(embedSnippet);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-      toast({ title: "Embed snippet copied" });
-    } catch {
-      toast({ title: "Couldn't copy to clipboard", variant: "destructive" });
-    }
-  };
-
   // Client hard-gate: this page is TopScholar-only. Until /api/auth/me resolves
   // we wait; once resolved, any non-TopScholar account is redirected away so the
   // page is never directly reachable by URL for other tenants.
@@ -484,55 +417,6 @@ export default function TopScholarWidgetTester() {
       </div>
 
       <div className="space-y-6">
-        {/* Raw token tester — paste a client-generated token and load the production widget */}
-        <Card className="border-blue-200 dark:border-blue-900">
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <Plug className="w-4 h-4 text-blue-600" />
-              Raw Token Test
-              {widgetInjected && (
-                <Badge className="bg-blue-600 hover:bg-blue-600 text-white gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" /> Widget active
-                </Badge>
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Paste a signed token from the client's portal and load the production widget directly on
-              this page. The chatbot will appear in the <strong>bottom-right corner</strong> exactly as
-              it does for their students — including any refusal message if the token is invalid.
-            </p>
-            <Textarea
-              value={rawToken}
-              onChange={(e) => setRawToken(e.target.value)}
-              placeholder="Paste token here… e.g. eyJpYXQiOi..."
-              className="font-mono text-xs h-20 resize-none"
-              disabled={widgetInjected}
-            />
-            <div className="flex items-center gap-2">
-              {!widgetInjected ? (
-                <Button
-                  onClick={handleLoadWidget}
-                  disabled={!rawToken.trim()}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
-                >
-                  <Plug className="w-4 h-4 mr-1" /> Load widget
-                </Button>
-              ) : (
-                <Button variant="outline" onClick={handleRemoveWidget}>
-                  <Unplug className="w-4 h-4 mr-1" /> Remove widget
-                </Button>
-              )}
-              {widgetInjected && (
-                <p className="text-xs text-muted-foreground">
-                  Look for the chat bubble in the bottom-right corner of this page.
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Top: curriculum scope (full width) */}
         <Card>
           <CardHeader>
@@ -958,39 +842,6 @@ export default function TopScholarWidgetTester() {
             )}
           </CardContent>
         </Card>
-
-        {/* Bottom: embed snippet (full width) */}
-        {hasFullSelection && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0">
-              <CardTitle className="text-base">Embed snippet</CardTitle>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleCopy}
-                data-testid="button-copy-snippet"
-              >
-                {copied ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 mr-1" /> Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5 mr-1" /> Copy
-                  </>
-                )}
-              </Button>
-            </CardHeader>
-            <CardContent>
-              <pre
-                className="text-xs bg-muted rounded-lg p-3 overflow-x-auto whitespace-pre-wrap break-all"
-                data-testid="text-embed-snippet"
-              >
-                {embedSnippet}
-              </pre>
-            </CardContent>
-          </Card>
-        )}
       </div>
     </div>
   );
