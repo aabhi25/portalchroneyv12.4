@@ -661,6 +661,8 @@ export default function EmbedChat() {
   const menuDropdownRef = useRef<HTMLDivElement>(null);
   const languageDropdownRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Phones: pulling the chat's handle or header down closes the sheet (see sheetDragHandlers).
+  const sheetDragStartRef = useRef<number | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   
@@ -4337,6 +4339,20 @@ export default function EmbedChat() {
   };
 
 
+  // On phones the chat is a sheet over the website: pulling down on its handle or header
+  // closes it, like other bottom sheets.
+  const sheetDragHandlers = {
+    onTouchStart: (e: React.TouchEvent) => { sheetDragStartRef.current = e.touches[0]?.clientY ?? null; },
+    onTouchMove: (e: React.TouchEvent) => {
+      const start = sheetDragStartRef.current;
+      if (start !== null && (e.touches[0]?.clientY ?? start) - start > 70) {
+        sheetDragStartRef.current = null;
+        window.parent.postMessage('CLOSE_WIDGET', '*');
+      }
+    },
+    onTouchEnd: () => { sheetDragStartRef.current = null; },
+  };
+
   const submitFormAnswer = async (value: string) => {
     if (!activeFormStep) return;
     // Submit directly to the journey endpoint - no AI involvement
@@ -4442,12 +4458,19 @@ export default function EmbedChat() {
       }}
     >
       {/* Drag handle indicator for mobile bottom sheet */}
-      <div className="w-full flex justify-center pt-2 pb-1 bg-transparent flex-shrink-0 md:hidden" style={{ background: `linear-gradient(to right, ${chatColor}, ${chatColorEnd})` }}>
-        <div className="w-10 h-1 bg-white/40 rounded-full"></div>
+      <div
+        {...sheetDragHandlers}
+        className="w-full flex justify-center pt-2 pb-1.5 bg-transparent flex-shrink-0 md:hidden touch-none"
+        style={{ background: `linear-gradient(to right, ${chatColor}, ${chatColorEnd})` }}
+        aria-label="Pull down to close"
+        data-testid="sheet-drag-handle"
+      >
+        <div className="w-10 h-1 bg-white/60 rounded-full"></div>
       </div>
       
       {/* Chat Header - Compact in partial mode (small viewport height) */}
       <div 
+        {...sheetDragHandlers}
         className="embed-chat-header flex items-center gap-2 px-3 py-2 text-white shadow-lg flex-shrink-0"
         style={{ background: `linear-gradient(to right, ${chatColor}, ${chatColorEnd})` }}
       >

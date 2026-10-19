@@ -2133,6 +2133,12 @@
       const bubbleSize = parseInt(this.config.bubbleSize, 10) || 60;
       const bottomOffset = parseInt(this.config.pillBottomOffset, 10) || 20;
       const sideOffset = parseInt(this.config.pillSideOffset, 10) || 20;
+
+      // Phones: the pill (a bar with a typing box) is too wide for a phone screen and covers the
+      // page, so phones get the small round button instead. Computers keep the chosen style.
+      if (window.innerWidth <= 480 && String(this.config.buttonStyle || '').toLowerCase().trim() === 'pill') {
+        this.config.buttonStyle = 'circular';
+      }
       
       // Set position styles based on configuration
       const positionStyles = {
@@ -2301,16 +2307,20 @@
           #hichroney-widget-iframe.mobile-open {
             display: block !important;
             width: 100vw !important;
-            /* 80% of viewport height for partial overlay */
-            height: 80vh !important;
-            min-height: 80vh !important;
-            max-height: 80vh !important;
+            /* Most of the screen; the page stays visible (dimmed) above. dvh follows the
+               browser's own bars where supported, vh is the fallback. */
+            height: 85vh !important;
+            min-height: 85vh !important;
+            max-height: 85vh !important;
+            height: 85dvh !important;
+            min-height: 85dvh !important;
+            max-height: 85dvh !important;
             max-width: 100vw !important;
             top: auto !important;
             left: 0 !important;
             right: 0 !important;
-            /* Position above browser chrome/safe area so input is fully visible */
-            bottom: calc(env(safe-area-inset-bottom, 0px) + 10px) !important;
+            /* Flush with the bottom edge (above the iPhone home bar), no strip of page below */
+            bottom: env(safe-area-inset-bottom, 0px) !important;
             transform: none !important;
             /* Rounded corners at top for bottom sheet appearance */
             border-radius: 20px 20px 0 0 !important;
@@ -2332,7 +2342,7 @@
           
           #hichroney-widget-container {
             ${horizontalPos === 'right' ? 'right: ' + Math.max(sideOffset, 10) + 'px !important;' : 'left: ' + Math.max(sideOffset, 10) + 'px !important;'}
-            ${verticalPos === 'bottom' ? 'bottom: ' + bottomOffset + 'px !important;' : 'top: ' + bottomOffset + 'px !important;'}
+            ${verticalPos === 'bottom' ? 'bottom: calc(' + bottomOffset + 'px + env(safe-area-inset-bottom, 0px)) !important;' : 'top: ' + bottomOffset + 'px !important;'}
             z-index: 2147483647 !important;
             position: fixed !important;
           }
@@ -4379,14 +4389,18 @@
         
         // Calculate position based on widget position
         const isMobileNudge = window.innerWidth <= 480;
-        const buttonHeight = (isMobileNudge && buttonStyle === 'pill') ? 64 : bubbleSize;
+        // Phones always show the 56px round button (see the mobile styles).
+        const buttonHeight = isMobileNudge ? 56 : bubbleSize;
         const nudgeGap = 10;
         const buttonBottomOffset = parseInt(this.config.pillBottomOffset, 10) || 20;
         const nudgeBottomOffset = buttonBottomOffset + buttonHeight + nudgeGap;
         const nudgeHorizontalOffset = parseInt(this.config.pillSideOffset, 10) || 20;
         
         let nudgePosition = '';
-        if (verticalPos === 'bottom') {
+        if (verticalPos === 'bottom' && isMobileNudge) {
+          // Above the button, which itself sits above the website's own bottom bars.
+          nudgePosition = `bottom: calc(${nudgeBottomOffset + (HiChroneyWidget._bottomLift || 0)}px + env(safe-area-inset-bottom, 0px));`;
+        } else if (verticalPos === 'bottom') {
           nudgePosition = `bottom: ${nudgeBottomOffset}px;`;
         } else {
           nudgePosition = `top: ${nudgeBottomOffset}px;`;
@@ -4467,6 +4481,9 @@
         `;
         proactiveNudgePopup.appendChild(styleEl);
         
+        if (verticalPos === 'bottom' && isMobileNudge) {
+          proactiveNudgePopup.dataset.baseBottom = String(nudgeBottomOffset);
+        }
         document.body.appendChild(proactiveNudgePopup);
         
         // Animate in
@@ -4531,8 +4548,61 @@
         });
       };
       
+      // Phones: one short greeting (the first message only), shown politely - not while the
+      // visitor is typing in the website's own form or has the keyboard open - and it hides
+      // itself after a few seconds, or as soon as they scroll or tap elsewhere. The repeating
+      // sequence below is for computers only.
+      const phoneGreeting = window.innerWidth <= 480;
+      if (phoneGreeting && this.config.proactiveNudgeEnabled === 'true' && !proactiveNudgeShown && !isOpen) {
+        const firstGreeting = allNudgeMessages[0];
+        const visitorIsBusy = () => {
+          const active = document.activeElement;
+          if (active && active !== document.body &&
+              (/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName) || active.isContentEditable)) return true;
+          const vv = window.visualViewport;
+          return !!(vv && vv.height < window.innerHeight * 0.75); // on-screen keyboard is open
+        };
+        let greetingScrollStart = 0;
+        let hidePhoneGreeting = () => {};
+        const onGreetingScroll = () => {
+          if (Math.abs(window.scrollY - greetingScrollStart) > 40) hidePhoneGreeting();
+        };
+        const onTouchElsewhere = (e) => {
+          if (!proactiveNudgePopup || !proactiveNudgePopup.contains(e.target)) hidePhoneGreeting();
+        };
+        hidePhoneGreeting = () => {
+          window.removeEventListener('scroll', onGreetingScroll);
+          document.removeEventListener('touchstart', onTouchElsewhere, true);
+          const popup = proactiveNudgePopup;
+          if (!popup) return;
+          proactiveNudgePopup = null;
+          popup.style.transform = 'translateY(20px)';
+          popup.style.opacity = '0';
+          setTimeout(() => { if (popup.parentNode) popup.parentNode.removeChild(popup); }, 300);
+        };
+        let busyChecks = 0;
+        const tryShowPhoneGreeting = () => {
+          if (isOpen || nudgeSequenceStopped) return;
+          if (visitorIsBusy()) {
+            // Ask again shortly; if they're still busy after about 30 seconds, skip this visit.
+            if (busyChecks++ < 10) proactiveNudgeTimers.push(setTimeout(tryShowPhoneGreeting, 3000));
+            return;
+          }
+          proactiveNudgeShown = true;
+          sessionStorage.setItem(proactiveNudgeSessionKey, 'true');
+          showNudgePopup(firstGreeting.message, this.config.chatColor, this.config.chatColorEnd);
+          greetingScrollStart = window.scrollY;
+          proactiveNudgeTimers.push(setTimeout(() => {
+            window.addEventListener('scroll', onGreetingScroll, { passive: true });
+            document.addEventListener('touchstart', onTouchElsewhere, true);
+          }, 400));
+          proactiveNudgeTimers.push(setTimeout(hidePhoneGreeting, 7000));
+          console.log('[Hi Chroney] Phone greeting shown');
+        };
+        proactiveNudgeTimers.push(setTimeout(tryShowPhoneGreeting, (parseInt(firstGreeting.delay, 10) || 15) * 1000));
+      } else
       // Start sequential nudge messages with repeat support
-      if (this.config.proactiveNudgeEnabled === 'true' && !proactiveNudgeShown && !isOpen) {
+      if (!phoneGreeting && this.config.proactiveNudgeEnabled === 'true' && !proactiveNudgeShown && !isOpen) {
         const chatColor = this.config.chatColor;
         const chatColorEnd = this.config.chatColorEnd;
         
@@ -5254,6 +5324,71 @@
         document.body.appendChild(widgetStartersContainer);
       }
       document.body.appendChild(iframe);
+
+      // Phones: sit above the website's own bars fixed to the bottom of the screen (e.g. a
+      // "Download our app" strip or a sticky "Apply now" button) so the chat button never
+      // covers them. Re-checked as the page loads, scrolls and resizes.
+      if (verticalPos === 'bottom') {
+        const isOwnElement = (el) => {
+          for (let n = el; n; n = n.parentElement) {
+            if (n.id && n.id.indexOf('hichroney-') === 0) return true;
+          }
+          return false;
+        };
+        const hostBottomBarHeight = () => {
+          if (window.innerWidth > 480 || !document.elementsFromPoint) return 0;
+          const vh = window.innerHeight;
+          let barTop = vh;
+          [0.1, 0.5, 0.9].forEach((f) => {
+            const els = document.elementsFromPoint(Math.round(window.innerWidth * f), vh - 3);
+            for (const el of els) {
+              if (isOwnElement(el)) continue;
+              // The topmost page element here: is it (inside) something fixed to the screen?
+              for (let n = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+                const cs = getComputedStyle(n);
+                if (cs.position === 'fixed' || cs.position === 'sticky') {
+                  const rect = n.getBoundingClientRect();
+                  if (rect.height > 0 && rect.height < vh * 0.35 && rect.bottom >= vh - 4 &&
+                      cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0) {
+                    barTop = Math.min(barTop, rect.top);
+                  }
+                  break;
+                }
+              }
+              break;
+            }
+          });
+          return Math.max(0, Math.round(vh - barTop));
+        };
+        let appliedLift = -1;
+        const applyBottomLift = () => {
+          if (isOpen) return;
+          const lift = window.innerWidth <= 480 ? hostBottomBarHeight() : 0;
+          if (lift === appliedLift) return;
+          appliedLift = lift;
+          HiChroneyWidget._bottomLift = lift;
+          if (lift > 0) {
+            container.style.setProperty('bottom', `calc(${bottomOffset + lift}px + env(safe-area-inset-bottom, 0px))`, 'important');
+          } else {
+            container.style.removeProperty('bottom');
+          }
+          // Move the greeting bubble along with the button.
+          const nudge = document.getElementById('hichroney-proactive-nudge');
+          if (nudge && nudge.dataset.baseBottom) {
+            nudge.style.bottom = `calc(${parseInt(nudge.dataset.baseBottom, 10) + lift}px + env(safe-area-inset-bottom, 0px))`;
+          }
+          console.log('[Hi Chroney] Bottom bar lift:', lift);
+        };
+        let liftTimer = null;
+        const scheduleBottomLift = () => {
+          if (liftTimer) return;
+          liftTimer = setTimeout(() => { liftTimer = null; applyBottomLift(); }, 250);
+        };
+        [300, 1500, 4000].forEach((t) => setTimeout(applyBottomLift, t));
+        window.addEventListener('scroll', scheduleBottomLift, { passive: true });
+        window.addEventListener('resize', scheduleBottomLift);
+        window.addEventListener('load', scheduleBottomLift);
+      }
       
       // CRITICAL: Force visibility immediately after appending to DOM
       // This ensures the button is visible even if host website CSS hides it
