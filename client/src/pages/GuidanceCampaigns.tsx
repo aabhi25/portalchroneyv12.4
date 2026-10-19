@@ -110,7 +110,7 @@ export default function GuidanceCampaigns() {
       <MoreFeaturesNavTabs />
       <div className="container mx-auto py-8 px-6 space-y-8 max-w-5xl">
         
-        <div className="flex items-start justify-between">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-purple-400 to-violet-500 flex items-center justify-center shadow-lg shadow-violet-500/20">
               <Sparkles className="w-6 h-6 text-white" />

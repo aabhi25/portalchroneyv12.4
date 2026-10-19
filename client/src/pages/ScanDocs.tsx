@@ -359,18 +359,16 @@ export default function ScanDocs() {
 
           <TabsContent value="overview" className="space-y-6 mt-6">
             {/* Hero Section */}
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-[#0B0F1A] via-[#1e3a8a] to-[#7c3aed] text-white overflow-hidden">
+            <Card className="border border-black/[0.07] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] overflow-hidden">
               <CardHeader className="relative pb-6">
-                <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-32 -mt-32"></div>
-                <div className="absolute bottom-0 left-0 w-48 h-48 bg-white/10 rounded-full -ml-24 -mb-24"></div>
                 <div className="relative">
                   <div className="flex items-center gap-3 mb-2">
-                    <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm">
-                      <FileText className="w-8 h-8" />
+                    <div className="p-2.5 bg-purple-50 rounded-xl">
+                      <FileText className="w-6 h-6 text-purple-600" />
                     </div>
                     <div>
-                      <CardTitle className="text-3xl font-bold">Training Documents</CardTitle>
-                      <CardDescription className="text-purple-100 mt-1">
+                      <CardTitle className="text-xl font-semibold text-gray-900">Training documents</CardTitle>
+                      <CardDescription className="mt-1">
                         Upload PDFs to train your AI assistant with custom knowledge
                       </CardDescription>
                     </div>

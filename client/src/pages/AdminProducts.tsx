@@ -517,7 +517,7 @@ export default function AdminProducts() {
         <CardHeader>
           <CardTitle className="text-2xl flex items-center gap-2">
             <Package className="w-6 h-6 text-purple-600" />
-            Product Catalog Management
+            Catalog
           </CardTitle>
           <CardDescription>Manage your products, categories, and tags</CardDescription>
         </CardHeader>

@@ -549,21 +549,21 @@ export default function About() {
       <div className="container mx-auto p-4 md:p-6 max-w-[1400px]">
         {/* Hero Section */}
         <div className="mb-6">
-          <div className="bg-gradient-to-br from-[#0B0F1A] via-[#1e3a8a] to-[#7c3aed] rounded-2xl shadow-xl p-5 text-white">
+          <div className="rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
             <div className="mb-4">
-              <h1 className="text-2xl font-bold flex items-center gap-2 mb-1">
-                <Globe className="w-6 h-6" />
-                Website Analysis
+              <h1 className="text-xl font-semibold text-gray-900 flex items-center gap-2 mb-1">
+                <Globe className="w-5 h-5 text-purple-600" />
+                Website scan
               </h1>
-              <p className="text-purple-100 text-xs max-w-2xl">
+              <p className="text-gray-500 text-sm max-w-2xl">
                 Empower Chroney AI to understand your business deeply and provide intelligent, context-aware responses
               </p>
             </div>
 
             {/* Website URL Card */}
-            <Card className="bg-white/95 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-gray-50 border-0 shadow-none">
               <CardContent className="p-4">
-                <div className="flex items-center justify-between gap-4">
+                <div className="flex flex-wrap items-center justify-between gap-4">
                   <div className="flex-1">
                     <p className="text-xs text-gray-500 mb-1 font-medium">Your Website</p>
                     <div className="flex items-center gap-2">

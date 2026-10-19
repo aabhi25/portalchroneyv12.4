@@ -332,7 +332,7 @@ export default function AdminFaqs() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
-              FAQs Management {totalCount > 0 && <span className="text-lg font-semibold text-gray-500">({totalCount})</span>}
+              FAQs {totalCount > 0 && <span className="text-lg font-semibold text-gray-500">({totalCount})</span>}
             </h1>
             <p className="text-muted-foreground mt-1">
               Manage your frequently asked questions

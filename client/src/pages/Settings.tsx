@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { SuperAdminBadge } from "@/components/hub/SuperAdminBadge";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -410,6 +411,7 @@ export default function Settings({ section, embedded = false }: { section?: "acc
               <CardTitle className="text-base flex items-center gap-2">
                 <Download className="w-4 h-4 text-purple-600" />
                 Leads Export Access
+                <SuperAdminBadge />
               </CardTitle>
               <CardDescription className="mt-1">
                 Control whether leads can be exported while viewing this business account
@@ -448,6 +450,7 @@ export default function Settings({ section, embedded = false }: { section?: "acc
                 <CardTitle className="text-base flex items-center gap-2">
                   <EyeOff className="w-4 h-4 text-purple-600" />
                   Lead Phone Privacy
+                  <SuperAdminBadge />
                 </CardTitle>
                 <CardDescription className="mt-1">
                   Control whether this business account's user sees masked lead phone numbers

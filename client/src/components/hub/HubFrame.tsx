@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { ChevronLeft, Settings } from "lucide-react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -22,6 +22,39 @@ export function usesHubLayout(user: MeResponseDto | null | undefined): boolean {
 export function useHubAccess(user: MeResponseDto | null | undefined): HubAccess {
   const { enabled } = useAiCallingAvailability(usesHubLayout(user) ? user : null);
   return getHubAccess(user, enabled);
+}
+
+/**
+ * A row that scrolls sideways (the tab bars on phones). Fades the edge where more tabs are
+ * hidden, so it's clear the row scrolls, and keeps the selected tab in view.
+ */
+function ScrollRow({ className, fadeFrom, selectedKey, children, ...rest }: {
+  className: string; fadeFrom: string; selectedKey?: string; children: ReactNode;
+  role?: string; "aria-label"?: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const update = () => {
+    const el = ref.current;
+    if (!el) return;
+    setEdges({ left: el.scrollLeft > 4, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4 });
+  };
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.querySelector<HTMLElement>('[aria-selected="true"],[aria-pressed="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [selectedKey]);
+  return (
+    <div className="relative">
+      <div ref={ref} onScroll={update} className={className} {...rest}>{children}</div>
+      {edges.left && <div className={`pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r ${fadeFrom} to-transparent`} />}
+      {edges.right && <div className={`pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l ${fadeFrom} to-transparent`} />}
+    </div>
+  );
 }
 
 /**
@@ -57,7 +90,8 @@ export function HubFrame({ user, children }: { user: MeResponseDto | null; child
             </div>
           </div>
           {tabs.length > 1 && (
-            <nav role="tablist" aria-label={area.label} className="-mb-px mt-4 flex gap-1 overflow-x-auto [scrollbar-width:none]">
+            <div className="-mb-px mt-4">
+            <ScrollRow role="tablist" aria-label={area.label} selectedKey={tab?.key} fadeFrom="from-white" className="flex gap-1 overflow-x-auto [scrollbar-width:none]">
               {tabs.map(t => {
                 const active = t.key === tab?.key;
                 const isSettings = t.key === "settings";
@@ -78,14 +112,15 @@ export function HubFrame({ user, children }: { user: MeResponseDto | null; child
                   </button>
                 );
               })}
-            </nav>
+            </ScrollRow>
+            </div>
           )}
         </div>
       </div>
 
       {sectionItems && (
         <div className="border-b border-black/[0.06] bg-white/70">
-          <div className="mx-auto flex w-full max-w-[1400px] gap-1.5 overflow-x-auto px-4 py-2.5 md:px-8 [scrollbar-width:none]" role="group" aria-label={`${tab?.label} sections`}>
+          <ScrollRow className="mx-auto flex w-full max-w-[1400px] gap-1.5 overflow-x-auto px-4 py-2.5 md:px-8 [scrollbar-width:none]" fadeFrom="from-white" selectedKey={location} role="group" aria-label={`${tab?.label} sections`}>
             {sectionItems.map(s => {
               const active = s.matches(location);
               return (
@@ -103,7 +138,7 @@ export function HubFrame({ user, children }: { user: MeResponseDto | null; child
                 </button>
               );
             })}
-          </div>
+          </ScrollRow>
         </div>
       )}
 

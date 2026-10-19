@@ -596,9 +596,9 @@ export default function JewelryImageGenerator() {
   };
 
   return (
-    <div className="p-6">
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
-        <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-6 mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-100 to-purple-50 flex items-center justify-center">
               <Camera className="w-5 h-5 text-purple-600" />
@@ -770,8 +770,8 @@ export default function JewelryImageGenerator() {
 
       {activeTab === 'create' && (
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-          <p className="text-gray-600 text-sm">
+        <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-gray-600 text-sm min-w-[12rem] flex-1">
             {stepDescriptions[currentStep]}
           </p>
           <div className="flex items-center gap-2">

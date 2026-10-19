@@ -777,24 +777,24 @@ export default function Calendar() {
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
       {/* Hero Header with Gradient */}
       <div className="mb-4">
-        <div className="bg-gradient-to-br from-[#0B0F1A] via-[#1e3a8a] to-[#7c3aed] rounded-xl p-4 shadow-xl">
-          <div className="flex items-center justify-between mb-3">
+        <div className="rounded-2xl border border-black/[0.07] bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
             <div className="flex items-center gap-2.5">
-              <div className="p-2 bg-white rounded-lg shadow-md">
+              <div className="p-2 bg-indigo-50 rounded-lg">
                 <CalendarIcon className="w-5 h-5 text-indigo-600" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-white drop-shadow-md">
-                  Appointment Calendar
+                <h1 className="text-xl font-semibold text-gray-900">
+                  Calendar
                 </h1>
-                <p className="text-white/80 text-sm font-medium">
+                <p className="text-gray-500 text-sm">
                   Manage your availability schedule and view upcoming appointments
                 </p>
               </div>
             </div>
             
             {/* Master Toggle for Appointment Booking */}
-            <div className="flex items-center gap-2.5 bg-white/95 backdrop-blur-md rounded-lg px-3 py-2 border border-white shadow-lg">
+            <div className="flex items-center gap-2.5 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
               <div className="flex items-center gap-1.5">
                 <Power className="w-4 h-4 text-indigo-600" />
                 <p className="font-semibold text-xs text-gray-800">Booking</p>
@@ -808,8 +808,8 @@ export default function Calendar() {
           </div>
           
           {/* KPI Metrics */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-white/95 backdrop-blur-lg rounded-lg p-3 border border-white shadow-lg">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
               <div className="flex items-center gap-2.5">
                 <div className="p-1.5 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-lg shadow-md">
                   <CalendarIcon className="w-4 h-4 text-white" />
@@ -821,7 +821,7 @@ export default function Calendar() {
               </div>
             </div>
             
-            <div className="bg-white/95 backdrop-blur-lg rounded-lg p-3 border border-white shadow-lg">
+            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
               <div className="flex items-center gap-2.5">
                 <div className="p-1.5 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg shadow-md">
                   <TrendingUp className="w-4 h-4 text-white" />
@@ -833,7 +833,7 @@ export default function Calendar() {
               </div>
             </div>
             
-            <div className="bg-white/95 backdrop-blur-lg rounded-lg p-3 border border-white shadow-lg">
+            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
               <div className="flex items-center gap-2.5">
                 <div className="p-1.5 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-lg shadow-md">
                   <Shield className="w-4 h-4 text-white" />
@@ -849,7 +849,7 @@ export default function Calendar() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full grid-cols-4 bg-gradient-to-r from-purple-50 to-white backdrop-blur-sm shadow-md h-auto p-1 rounded-xl">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 bg-gradient-to-r from-purple-50 to-white backdrop-blur-sm shadow-md h-auto p-1 rounded-xl">
           <TabsTrigger value="schedule" className="rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-200 data-[state=active]:to-blue-100 data-[state=active]:text-purple-900 data-[state=active]:font-semibold">
             <Clock className="w-4 h-4 mr-2" />
             Weekly Schedule

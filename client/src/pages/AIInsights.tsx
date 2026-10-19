@@ -198,11 +198,11 @@ export default function AIInsights() {
       <MoreFeaturesNavTabs />
       <div className="container mx-auto p-6 max-w-7xl">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
             <Sparkles className="h-8 w-8 text-purple-600" />
-            Chroney IQ
+            Suggestions
           </h1>
           <p className="text-muted-foreground mt-2">
             AI-powered suggestions to improve your chatbot based on conversation analysis

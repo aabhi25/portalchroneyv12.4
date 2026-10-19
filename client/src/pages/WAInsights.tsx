@@ -79,7 +79,7 @@ export default function WAInsights() {
         <div className="p-6 space-y-6 max-w-7xl mx-auto">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">WA Insights</h1>
+              <h1 className="text-2xl font-bold text-gray-900">WhatsApp insights</h1>
               <p className="text-sm text-gray-500 mt-1">WhatsApp performance overview</p>
             </div>
           </div>
@@ -104,7 +104,7 @@ export default function WAInsights() {
       <div className="min-h-screen bg-gray-50">
         {tabBar}
         <div className="p-6 max-w-7xl mx-auto">
-          <h1 className="text-2xl font-bold text-gray-900 mb-4">WA Insights</h1>
+          <h1 className="text-2xl font-bold text-gray-900 mb-4">WhatsApp insights</h1>
           <Card>
             <CardContent className="p-6 text-center text-gray-500">
               Unable to load insights. Please try again later.
@@ -121,7 +121,7 @@ export default function WAInsights() {
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">WA Insights</h1>
+          <h1 className="text-2xl font-bold text-gray-900">WhatsApp insights</h1>
           <p className="text-sm text-gray-500 mt-1">Incoming WhatsApp messages and leads</p>
         </div>
         <div className="flex gap-2 flex-wrap">

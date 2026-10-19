@@ -168,7 +168,7 @@ export default function SupportTickets() {
               <AlertCircle className="h-6 w-6 text-purple-600 dark:text-purple-400" />
             </div>
             <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent" data-testid="text-page-title">
-              {viewMode === "exceptions" ? "Exception Queue" : "Support Tickets"}
+              Support tickets
             </h1>
           </div>
           <p className="text-sm text-muted-foreground ml-14">
@@ -367,7 +367,7 @@ export default function SupportTickets() {
               <SelectItem value="exceptions">
                 <span className="flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 text-orange-500" />
-                  Exceptions Only
+                  Need a person
                 </span>
               </SelectItem>
               <SelectItem value="all">

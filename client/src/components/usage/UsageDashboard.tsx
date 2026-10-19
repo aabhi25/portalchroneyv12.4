@@ -93,7 +93,8 @@ export function LimitProgress({ limit, spentUsd, rate }: { limit: UsageLimit; sp
 }
 
 /** One account's AI usage for a month. `businessAccountId` is omitted for the user's own/active account. */
-export function UsageDashboard({ businessAccountId }: { businessAccountId?: string }) {
+/** `hideTitle`: the page around it (Settings › AI usage & limits) already shows a title. */
+export function UsageDashboard({ businessAccountId, hideTitle }: { businessAccountId?: string; hideTitle?: boolean }) {
   const [month, setMonth] = useState(currentIstMonth());
   const months = recentMonths(12);
 
@@ -117,7 +118,7 @@ export function UsageDashboard({ businessAccountId }: { businessAccountId?: stri
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">AI usage & spend</h2>
+          <h2 className={hideTitle ? "sr-only" : "text-2xl font-bold text-gray-900"}>AI usage & spend</h2>
           <p className="text-sm text-muted-foreground mt-1">
             {data?.businessName ? `${data.businessName} · ` : ""}Months follow India time (IST). ₹ amounts are approximate (1 USD ≈ ₹{rate}).
           </p>

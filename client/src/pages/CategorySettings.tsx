@@ -367,11 +367,13 @@ export default function CategorySettings({ embedded = false }: { embedded?: bool
             </CardContent>
           </Card>
 
-          <div className="flex items-center justify-between pt-2 pb-8">
-            <Button variant="outline" onClick={() => setLocation("/insights")}>
-              <ArrowLeft className="w-4 h-4 mr-1.5" />
-              Back to Insights
-            </Button>
+          <div className={`flex items-center pt-2 pb-8 ${embedded ? "justify-end" : "justify-between"}`}>
+            {!embedded && (
+              <Button variant="outline" onClick={() => setLocation("/insights")}>
+                <ArrowLeft className="w-4 h-4 mr-1.5" />
+                Back to Insights
+              </Button>
+            )}
             <Button
               onClick={() => saveMutation.mutate({ categories: editCategories, allowOtherCategory: editAllowOther })}
               disabled={saveMutation.isPending}

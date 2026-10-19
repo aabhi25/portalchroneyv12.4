@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { useInHubFrame } from "@/components/hub/hubContext";
 import { Plus, Pencil, Trash2, PackageOpen, RefreshCw, Truck, Package, ImageIcon } from "lucide-react";
 
 type DemoOrder = {
@@ -55,6 +56,7 @@ const emptyForm = (): Partial<DemoOrder> => ({
 });
 
 export default function DemoOrders() {
+  const inHub = useInHubFrame();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -150,18 +152,21 @@ export default function DemoOrders() {
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center">
-            <PackageOpen className="h-5 w-5 text-white" />
-          </div>
+          {/* Inside the Demo orders frame the area title is already shown above. */}
+          {!inHub && (
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center">
+              <PackageOpen className="h-5 w-5 text-white" />
+            </div>
+          )}
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Demo Orders</h1>
+            <h1 className={inHub ? "sr-only" : "text-2xl font-bold text-gray-900"}>Demo Orders</h1>
             <p className="text-sm text-gray-500">Manage demo orders for chatbot showcase</p>
           </div>
         </div>
-        <div className="flex gap-2 items-center">
+        <div className="flex flex-wrap gap-2 items-center">
           {orders.length === 0 && (
             <Button variant="outline" onClick={() => seedMutation.mutate()} disabled={seedMutation.isPending}>
               <RefreshCw className={`h-4 w-4 mr-2 ${seedMutation.isPending ? "animate-spin" : ""}`} />

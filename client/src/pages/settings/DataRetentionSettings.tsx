@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SuperAdminBadge } from "@/components/hub/SuperAdminBadge";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -112,7 +113,7 @@ export default function DataRetentionSettings({ user }: { user: MeResponseDto | 
               <Button variant="outline" size="sm" onClick={() => setReportOpen(true)} data-testid="button-retention-report">
                 <FileText className="w-4 h-4 mr-1.5" /> Retention report
               </Button>
-              <span className="text-xs text-muted-foreground self-center">Only visible to super admins.</span>
+              <span className="self-center"><SuperAdminBadge /></span>
             </div>
           )}
         </CardContent>

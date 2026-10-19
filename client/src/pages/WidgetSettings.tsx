@@ -300,7 +300,7 @@ function WhatsappNumberField({
 
 export type WidgetSettingsTab = "appearance" | "behavior" | "nudges" | "voice" | "avatar" | "shopping" | "embed";
 
-/** `initialTab` opens the studio on one section (used by Website chat › Settings). */
+/** `initialTab` picks the one section shown (each is its own item in Website chat › Settings). */
 export default function WidgetSettings({ initialTab = "appearance" }: { initialTab?: WidgetSettingsTab } = {}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -1580,9 +1580,10 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
           </div>
         </div>
 
-        {/* Tabs Component - TabsList always full width */}
+        {/* Each section is its own item in Website chat › Settings, which opens the studio on that
+            section; the studio's own section tabs stay hidden so there is one menu, not two. */}
         <Tabs defaultValue="appearance" className="w-full" value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-6 bg-gradient-to-r from-purple-50 to-white backdrop-blur-sm shadow-md h-auto p-1 rounded-xl mb-6">
+          <TabsList className="hidden">
             <TabsTrigger value="appearance" className="flex items-center gap-2 rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-200 data-[state=active]:to-blue-100 data-[state=active]:text-purple-900 data-[state=active]:font-semibold">
               <Palette className="w-4 h-4" />
               <span className="hidden sm:inline">Style</span>
@@ -2982,9 +2983,9 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                   {/* Inactivity Nudge Section */}
                   <Collapsible open={inactivitySectionOpen} onOpenChange={setInactivitySectionOpen}>
                     <Card className="border border-gray-200 bg-white shadow-sm">
-                      <CollapsibleTrigger className="w-full">
-                        <div className="flex items-center justify-between px-6 py-4 cursor-pointer hover:bg-gray-50/50 transition-colors">
-                          <div className="flex items-center gap-3">
+                      {/* The switch sits beside the open/close button, not inside it (a button can't hold a button). */}
+                      <div className="flex items-center justify-between gap-3 px-6 py-4 hover:bg-gray-50/50 transition-colors">
+                        <CollapsibleTrigger className="flex flex-1 items-center gap-3 text-left">
                             {inactivitySectionOpen ? (
                               <ChevronDown className="w-5 h-5 text-gray-400" />
                             ) : (
@@ -2995,15 +2996,14 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                               <h3 className="text-base font-semibold text-gray-900">Inactivity Nudge</h3>
                               <p className="text-sm font-normal text-gray-500">Re-engage visitors who stop responding</p>
                             </div>
-                          </div>
-                          <div onClick={(e) => e.stopPropagation()}>
+                        </CollapsibleTrigger>
+                          <div>
                             <Switch
                               checked={inactivityNudgeEnabled}
                               onCheckedChange={setInactivityNudgeEnabled}
                             />
                           </div>
-                        </div>
-                      </CollapsibleTrigger>
+                      </div>
                       <CollapsibleContent>
                         <div className="px-6 pb-6 border-t border-gray-100">
                           {inactivityNudgeEnabled ? (
@@ -3276,9 +3276,9 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                   {/* Proactive Engagement Section */}
                   <Collapsible open={proactiveSectionOpen} onOpenChange={setProactiveSectionOpen}>
                     <Card className="border border-gray-200 bg-white shadow-sm">
-                      <CollapsibleTrigger className="w-full">
-                        <div className="flex items-center justify-between px-6 py-4 cursor-pointer hover:bg-gray-50/50 transition-colors">
-                          <div className="flex items-center gap-3">
+                      {/* The switch sits beside the open/close button, not inside it (a button can't hold a button). */}
+                      <div className="flex items-center justify-between gap-3 px-6 py-4 hover:bg-gray-50/50 transition-colors">
+                        <CollapsibleTrigger className="flex flex-1 items-center gap-3 text-left">
                             {proactiveSectionOpen ? (
                               <ChevronDown className="w-5 h-5 text-gray-400" />
                             ) : (
@@ -3289,15 +3289,14 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                               <h3 className="text-base font-semibold text-gray-900">Proactive Engagement</h3>
                               <p className="text-sm font-normal text-gray-500">Pop up a message to visitors who haven't started chatting</p>
                             </div>
-                          </div>
-                          <div onClick={(e) => e.stopPropagation()}>
+                        </CollapsibleTrigger>
+                          <div>
                             <Switch
                               checked={proactiveNudgeEnabled}
                               onCheckedChange={setProactiveNudgeEnabled}
                             />
                           </div>
-                        </div>
-                      </CollapsibleTrigger>
+                      </div>
                       <CollapsibleContent>
                         <div className="px-6 pb-6 border-t border-gray-100">
                           {proactiveNudgeEnabled ? (
@@ -3630,9 +3629,9 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                   {/* Center Banner Section */}
                   <Collapsible open={centerBannerSectionOpen} onOpenChange={setCenterBannerSectionOpen}>
                     <Card className="border border-gray-200 bg-white shadow-sm">
-                      <CollapsibleTrigger className="w-full">
-                        <div className="flex items-center justify-between px-6 py-4 cursor-pointer hover:bg-gray-50/50 transition-colors">
-                          <div className="flex items-center gap-3">
+                      {/* The switch sits beside the open/close button, not inside it (a button can't hold a button). */}
+                      <div className="flex items-center justify-between gap-3 px-6 py-4 hover:bg-gray-50/50 transition-colors">
+                        <CollapsibleTrigger className="flex flex-1 items-center gap-3 text-left">
                             {centerBannerSectionOpen ? (
                               <ChevronDown className="w-5 h-5 text-gray-400" />
                             ) : (
@@ -3643,15 +3642,14 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                               <h3 className="text-base font-semibold text-gray-900">Center Banner</h3>
                               <p className="text-sm font-normal text-gray-500">Eye-catching popup in the center of the screen</p>
                             </div>
-                          </div>
-                          <div onClick={(e) => e.stopPropagation()}>
+                        </CollapsibleTrigger>
+                          <div>
                             <Switch
                               checked={centerBannerEnabled}
                               onCheckedChange={setCenterBannerEnabled}
                             />
                           </div>
-                        </div>
-                      </CollapsibleTrigger>
+                      </div>
                       <CollapsibleContent>
                         <div className="px-6 pb-6 border-t border-gray-100">
                           {centerBannerEnabled ? (
@@ -3899,9 +3897,9 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                   {/* Re-engagement Banner Section (Separate) */}
                   <Collapsible open={reengagementSectionOpen} onOpenChange={setReengagementSectionOpen}>
                     <Card className="border border-gray-200 bg-white shadow-sm">
-                      <CollapsibleTrigger className="w-full">
-                        <div className="flex items-center justify-between px-6 py-4 cursor-pointer hover:bg-gray-50/50 transition-colors">
-                          <div className="flex items-center gap-3">
+                      {/* The switch sits beside the open/close button, not inside it (a button can't hold a button). */}
+                      <div className="flex items-center justify-between gap-3 px-6 py-4 hover:bg-gray-50/50 transition-colors">
+                        <CollapsibleTrigger className="flex flex-1 items-center gap-3 text-left">
                             {reengagementSectionOpen ? (
                               <ChevronDown className="w-5 h-5 text-gray-400" />
                             ) : (
@@ -3912,15 +3910,14 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                               <h3 className="text-base font-semibold text-gray-900">Re-engagement Banner</h3>
                               <p className="text-sm font-normal text-gray-500">Show a second banner after the first is dismissed</p>
                             </div>
-                          </div>
-                          <div onClick={(e) => e.stopPropagation()}>
+                        </CollapsibleTrigger>
+                          <div>
                             <Switch
                               checked={reengagementBannerEnabled}
                               onCheckedChange={setReengagementBannerEnabled}
                             />
                           </div>
-                        </div>
-                      </CollapsibleTrigger>
+                      </div>
                       <CollapsibleContent>
                         <div className="px-6 pb-6 border-t border-gray-100">
                           {reengagementBannerEnabled ? (

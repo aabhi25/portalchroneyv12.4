@@ -47,6 +47,7 @@ import {
   ResponsiveContainer 
 } from "recharts";
 import { Link } from "wouter";
+import { useInHubFrame } from "@/components/hub/hubContext";
 import { motion } from "framer-motion";
 
 interface InsightsSummary {
@@ -101,6 +102,7 @@ interface VistaInsightsData {
 const COLORS = ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
 
 export default function VistaInsights() {
+  const inHub = useInHubFrame();
   const { data, isLoading, error } = useQuery<VistaInsightsData>({
     queryKey: ["/api/vista/insights"],
     queryFn: async () => {
@@ -152,11 +154,13 @@ export default function VistaInsights() {
       <div className="mb-8">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
-            <Link href="/jewelry-showcase">
-              <Button variant="ghost" size="icon" className="mr-2">
-                <ArrowLeft className="w-5 h-5" />
-              </Button>
-            </Link>
+            {!inHub && (
+              <Link href="/jewelry-showcase">
+                <Button variant="ghost" size="icon" className="mr-2">
+                  <ArrowLeft className="w-5 h-5" />
+                </Button>
+              </Link>
+            )}
             <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-indigo-500 rounded-lg flex items-center justify-center">
               <BarChart3 className="w-5 h-5 text-white" />
             </div>

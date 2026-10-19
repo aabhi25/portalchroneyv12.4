@@ -970,7 +970,7 @@ export default function ConversationJourneys() {
     <div>
       <TrainingNavTabs />
       <div className="container mx-auto p-6 max-w-7xl">
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-3">
             <Route className="w-7 h-7 text-blue-600" />
@@ -980,7 +980,7 @@ export default function ConversationJourneys() {
             Create guided conversation flows to systematically collect information
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <Button 
             onClick={() => setShowImportDialog(true)} 
             size="lg" 

@@ -120,7 +120,7 @@ export function buildSettingsGroups(user: MeResponseDto | null): SettingsGroup[]
           icon: Gauge,
           path: SETTINGS_PATHS.usage,
           superAdminOnly: true,
-          render: () => <UsageDashboard />,
+          render: () => <UsageDashboard hideTitle />,
         },
         {
           key: "features",
