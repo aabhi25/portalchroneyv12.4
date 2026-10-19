@@ -37,6 +37,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
 import {
+  PanelLeftClose,
+  PanelLeftOpen,
   Route,
   Plus,
   Trash2,
@@ -166,6 +168,14 @@ export default function ConversationJourneys() {
   const queryClient = useQueryClient();
 
   const [selectedJourneyId, setSelectedJourneyId] = useState<string | null>(null);
+  // The journey list can be folded into a thin strip on wide screens (remembered per browser).
+  const [listCollapsed, setListCollapsed] = useState(() => {
+    try { return localStorage.getItem("journeys:listCollapsed") === "1"; } catch { return false; }
+  });
+  const toggleList = () => setListCollapsed(c => {
+    try { localStorage.setItem("journeys:listCollapsed", c ? "0" : "1"); } catch { /* storage unavailable */ }
+    return !c;
+  });
   const [isEditing, setIsEditing] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -998,52 +1008,101 @@ export default function ConversationJourneys() {
         </div>
       </div>
 
-      {/* The journey list stays narrow so the builder (questions + live preview) gets the room. */}
-      <div className="grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] gap-6">
+      {/* The journey list stays narrow so the builder (questions + live preview) gets the room,
+          and on wide screens it can be folded into a strip of initials. */}
+      <div className={`grid grid-cols-1 gap-6 ${listCollapsed ? "lg:grid-cols-[56px_minmax(0,1fr)]" : "lg:grid-cols-[208px_minmax(0,1fr)]"}`}>
         <div className="min-w-0">
           <div className="sticky top-6">
-            <Card className="shadow-sm border-0 bg-gradient-to-br from-white to-gray-50/50 dark:from-gray-900 dark:to-gray-800/50">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-xl">Your Journeys</CardTitle>
-                <CardDescription className="text-base">
-                  {journeys?.length || 0} journey{journeys?.length !== 1 ? "s" : ""} created
-                </CardDescription>
+            {listCollapsed && (
+              <div className="hidden lg:flex flex-col items-center gap-2 rounded-xl bg-white dark:bg-gray-900 shadow-sm py-2" data-testid="journey-list-collapsed">
+                <button
+                  type="button"
+                  onClick={toggleList}
+                  className="p-2 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-gray-800"
+                  title="Show journeys"
+                  aria-label="Show journeys"
+                  data-testid="button-expand-journey-list"
+                >
+                  <PanelLeftOpen className="w-4 h-4" />
+                </button>
+                <div className="flex flex-col items-center gap-1.5 max-h-[calc(100vh-200px)] overflow-y-auto px-1 pb-1">
+                  {journeys?.map((journey) => (
+                    <button
+                      key={journey.id}
+                      type="button"
+                      onClick={() => loadJourneyWithSteps(journey.id)}
+                      onMouseEnter={() => handleJourneyHover(journey.id)}
+                      title={`${journey.name}${journey.status === 'active' ? "" : " (off)"}`}
+                      aria-label={journey.name}
+                      className={`relative grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[13px] font-semibold transition-colors ${
+                        selectedJourneyId === journey.id
+                          ? "bg-blue-600 text-white"
+                          : "bg-gray-100 text-gray-700 hover:bg-blue-50 hover:text-blue-700 dark:bg-gray-800 dark:text-gray-200"
+                      }`}
+                    >
+                      {(journey.name || "?").trim().charAt(0).toUpperCase()}
+                      <span className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white dark:border-gray-900 ${journey.status === 'active' ? "bg-green-500" : "bg-gray-300"}`} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <Card className={`shadow-sm border-0 bg-gradient-to-br from-white to-gray-50/50 dark:from-gray-900 dark:to-gray-800/50 ${listCollapsed ? "lg:hidden" : ""}`}>
+              <CardHeader className="px-4 pt-4 pb-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <CardTitle className="text-base">Your journeys</CardTitle>
+                    <CardDescription className="text-xs">
+                      {journeys?.length || 0} journey{journeys?.length !== 1 ? "s" : ""}
+                    </CardDescription>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={toggleList}
+                    className="hidden lg:inline-flex p-1.5 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-gray-800"
+                    title="Hide the list"
+                    aria-label="Hide the list"
+                    data-testid="button-collapse-journey-list"
+                  >
+                    <PanelLeftClose className="w-4 h-4" />
+                  </button>
+                </div>
               </CardHeader>
-              <CardContent className="space-y-2 max-h-[calc(100vh-280px)] overflow-y-auto pr-2">
+              <CardContent className="space-y-1 max-h-[calc(100vh-240px)] overflow-y-auto px-2 pb-3">
                 {journeys?.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground">
-                    <Route className="w-16 h-16 mx-auto mb-3 opacity-20" />
-                    <p className="text-base font-medium">No journeys yet</p>
-                    <p className="text-sm mt-1">Create one to get started</p>
+                  <div className="text-center py-10 text-muted-foreground">
+                    <Route className="w-10 h-10 mx-auto mb-2 opacity-20" />
+                    <p className="text-sm font-medium">No journeys yet</p>
+                    <p className="text-xs mt-1">Create one to get started</p>
                   </div>
                 ) : (
                   journeys?.map((journey) => (
                     <div
                       key={journey.id}
-                      className={`group relative p-4 rounded-xl cursor-pointer transition-all duration-300 ${
+                      className={`group relative px-2.5 py-2 rounded-lg cursor-pointer transition-colors border-l-[3px] ${
                         selectedJourneyId === journey.id
-                          ? "bg-blue-50 dark:bg-blue-950/30 shadow-md border-l-4 border-blue-500"
-                          : "bg-white dark:bg-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-800 hover:shadow-md border-l-4 border-transparent"
+                          ? "bg-blue-50 dark:bg-blue-950/30 border-blue-500"
+                          : "hover:bg-gray-100/70 dark:hover:bg-gray-800 border-transparent"
                       }`}
                       onClick={() => loadJourneyWithSteps(journey.id)}
                       onMouseEnter={() => handleJourneyHover(journey.id)}
                     >
-                      <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start justify-between gap-1.5">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3 className={`font-semibold text-base truncate ${
+                          <div className="flex items-center gap-1.5">
+                            <h3 className={`font-medium text-sm truncate ${
                               selectedJourneyId === journey.id ? "text-blue-700 dark:text-blue-300" : ""
-                            }`}>
+                            }`} title={journey.name}>
                               {journey.name}
                             </h3>
                             {journey.status === 'active' ? (
-                              <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
+                              <CheckCircle2 className="w-3.5 h-3.5 text-green-600 flex-shrink-0" aria-label="On" />
                             ) : (
-                              <AlertCircle className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                              <AlertCircle className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" aria-label="Off" />
                             )}
                           </div>
                           {journey.description && (
-                            <p className="text-sm text-muted-foreground line-clamp-2">
+                            <p className="text-xs text-muted-foreground truncate" title={journey.description}>
                               {journey.description}
                             </p>
                           )}
@@ -1054,13 +1113,13 @@ export default function ConversationJourneys() {
                             duplicateJourney(journey.id);
                           }}
                           disabled={duplicatingJourneyId === journey.id}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex-shrink-0"
+                          className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity p-1 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex-shrink-0"
                           title="Duplicate journey"
                         >
                           {duplicatingJourneyId === journey.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           ) : (
-                            <Copy className="w-4 h-4" />
+                            <Copy className="w-3.5 h-3.5" />
                           )}
                         </button>
                       </div>
