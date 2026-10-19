@@ -193,8 +193,15 @@ export function TutorBoard({ board, className, emptyText = "The board is ready."
   // Keep the newest writing (or what the tutor points at) in view.
   useEffect(() => {
     const box = scroller.current; if (!box) return;
-    const target = (highlight && box.querySelector(`[data-el="${highlight.target}"]`)) || box.lastElementChild;
-    if (target && "scrollIntoView" in target) (target as HTMLElement).scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const target = ((highlight && box.querySelector(`[data-el="${highlight.target}"]`)) || box.lastElementChild) as HTMLElement | null;
+    if (!target) return;
+    // Scroll the board only (scrollIntoView would also scroll the page / chat around it).
+    const b = box.getBoundingClientRect();
+    const r = target.getBoundingClientRect();
+    let by = 0;
+    if (r.top < b.top) by = r.top - b.top - 8;
+    else if (r.bottom > b.bottom) by = Math.min(r.bottom - b.bottom + 8, r.top - b.top - 8); // a tall item: keep its top in view
+    if (by) box.scrollBy({ top: by, behavior: "smooth" });
   }, [board, highlight]);
 
   return (
@@ -226,6 +233,10 @@ const BOARD_CSS = `
 .tutor-board .tb-figure figcaption{color:#2b2b2b;font-size:.95em;text-align:center}
 .tutor-board .tb-svg{width:100%;max-width:520px;height:auto;display:block}
 .tutor-board .tb-geo{max-width:300px}
+.tutor-board.tb-compact{border-width:6px}
+.tutor-board.tb-compact .tb-page{padding:10px 12px 14px;gap:6px}
+.tutor-board.tb-compact .tb-svg{max-height:150px;width:auto;max-width:100%}
+.tutor-board.tb-compact .tb-figure img{max-height:130px}
 .tutor-board .tb-dtitle{color:#ffd76a;font-size:1.05em}
 .tutor-board .tb-tablewrap{overflow-x:auto}
 .tutor-board .tb-table{border-collapse:collapse;font-family:Kalam,cursive;font-size:1.02em}

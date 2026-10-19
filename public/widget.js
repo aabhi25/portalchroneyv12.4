@@ -1974,7 +1974,7 @@
         // Create fullscreen iframe for voice mode
         const iframe = document.createElement('iframe');
         iframe.id = 'hichroney-voice-iframe';
-        iframe.setAttribute('allow', 'microphone; autoplay');
+        iframe.setAttribute('allow', 'microphone; autoplay; fullscreen');
         
         const iframeUrl = new URL(`${baseUrl}/embed/chat`);
         iframeUrl.searchParams.set('businessAccountId', this.config.businessAccountId);
@@ -2829,7 +2829,7 @@
       iframe.id = 'hichroney-widget-iframe';
       
       // Grant microphone and autoplay permissions for voice mode
-      iframe.setAttribute('allow', 'microphone; autoplay');
+      iframe.setAttribute('allow', 'microphone; autoplay; fullscreen');
       
       // Iframe readiness tracking for reliable message delivery
       // IMPORTANT: Set up listener BEFORE setting iframe.src to avoid race condition

@@ -831,6 +831,7 @@ export default function TopScholarWidgetTester() {
                   key={previewKey}
                   src={previewUrl}
                   title="Grade-scoped widget preview"
+                  allow="microphone; autoplay; fullscreen"
                   className="w-full h-full"
                   data-testid="iframe-widget-preview"
                 />

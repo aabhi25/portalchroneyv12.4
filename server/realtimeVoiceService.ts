@@ -44,6 +44,9 @@ import { decideChatReplyLanguage, pickAllowed, policyTranscriptionLanguage, type
 import { stickyTurnLanguage } from './services/language/turnLanguage';
 import { translateFixedText } from './services/language/languageText';
 import { DEFAULT_AI_LANGUAGE_SETTINGS, replyLanguage } from '@shared/replyLanguages';
+import { TutorRunner, type TutorSpokenLine } from './services/tutor/tutorRunner';
+import { prepareVoiceTutor, TutorUnavailableError, type VoiceTutorRequest } from './services/tutor/voiceTutor';
+import type { TutorLanguage } from './services/tutor/lessonPlanner';
 
 /**
  * OpenAI Realtime model backing voice mode.
@@ -113,6 +116,8 @@ export interface RealtimeVoiceDeps {
   prefetchK12Topic?: (query: string, context: ChatContext) => { query: string; result: Promise<any | null> } | null;
   /** Live AI avatar session bridge; defaults to avatarSessionManager. */
   avatar?: AvatarVoiceBridge;
+  /** AI tutor: lesson source + minute counter for a session; defaults to the database-backed one. */
+  prepareTutor?: (req: VoiceTutorRequest) => ReturnType<typeof prepareVoiceTutor>;
 }
 
 /**
@@ -446,6 +451,9 @@ interface VoiceConversation {
   // Ordered, pipelined sentence TTS for the canonical answer being spoken.
   ttsPipeline?: SentenceTtsPipeline;
   ttsPipelineResponseId?: string;
+  /** AI tutor session on this connection (services/tutor/tutorRunner.ts), and its lesson language. */
+  tutor?: TutorRunner;
+  tutorLanguage?: TutorLanguage;
   // PCM bytes sent for the current canonical answer, and — once ai_done is
   // sent — when the client should have finished playing it. Safety net so a
   // lost playback_complete can't leave the answer "active" forever.
@@ -1394,6 +1402,131 @@ export class RealtimeVoiceService {
     return responseId;
   }
 
+  // ---------------------------------------------------------------------------
+  // AI tutor (services/tutor): a lesson spoken line by line, the board drawn as each line starts.
+  // ---------------------------------------------------------------------------
+
+  private async startTutor(conversation: VoiceConversation, message: any): Promise<void> {
+    if (conversation.phone) return;
+    if (conversation.tutor?.active) { void conversation.tutor.stop('stopped'); }
+    const request: VoiceTutorRequest = {
+      businessAccountId: conversation.businessAccountId,
+      conversationId: conversation.conversationId,
+      visitorId: conversation.userId,
+      scope: conversation.topscholarScope
+        ? { ...conversation.topscholarScope, chapter: conversation.topscholarScope.chapter || conversation.topscholarChapter || '' }
+        : null,
+      cpIds: conversation.topscholarCpIds ?? null,
+      language: typeof message?.language === 'string' ? message.language : null,
+      voiceLanguage: conversation.turnLanguage || (conversation.selectedLanguage !== 'auto' ? conversation.selectedLanguage : conversation.detectedLanguage) || null,
+      mode: conversation.avatar ? 'video' : 'voice',
+    };
+    let prepared: Awaited<ReturnType<typeof prepareVoiceTutor>>;
+    try {
+      prepared = await (this.deps.prepareTutor ?? prepareVoiceTutor)(request);
+    } catch (error) {
+      const known = error instanceof TutorUnavailableError;
+      if (!known) console.error('[Tutor] Could not start:', error);
+      this.sendToClient(conversation.clientWs, { type: 'tutor_ended', reason: known ? 'unavailable' : 'error', message: known ? (error as Error).message : 'The tutor could not start. Please try again.' });
+      return;
+    }
+    if (!this.conversations.has(conversation.conversationId)) return;
+    // A normal answer still playing gives way to the lesson.
+    if (conversation.isProcessing || this.isAnswerActive(conversation)) this.cancelResponse(conversation, false);
+    conversation.tutorLanguage = prepared.language;
+    const runner = new TutorRunner({
+      host: {
+        speak: (lines) => this.speakTutorLines(conversation, lines),
+        cancelSpeech: (responseId) => {
+          // cancelResponse tells the widget (response_cancelled) and the avatar.
+          if (conversation.currentResponseId === responseId && this.isAnswerActive(conversation)) this.cancelResponse(conversation, false);
+        },
+        send: (msg) => this.sendToClient(conversation.clientWs, msg),
+      },
+      lessons: prepared.lessons,
+      store: prepared.store,
+      chapter: prepared.chapter,
+      language: prepared.language,
+    });
+    conversation.tutor = runner;
+    console.log(`[Tutor] Lesson started: "${prepared.chapter}" (${prepared.language}, ${request.mode})`);
+    void runner.start().catch((error) => {
+      console.error('[Tutor] Lesson failed:', error);
+      void runner.stop('error');
+    });
+  }
+
+  /**
+   * Speak tutor lines as one response, like speakPhoneLine: owned like an answer (the student
+   * can interrupt it; an interruption keeps what was shown). As each line starts — just before
+   * its first audio — the widget gets its caption (answer_delta) and `sentence_start` with the
+   * line's board ops, so it draws them when that audio plays.
+   */
+  private speakTutorLines(conversation: VoiceConversation, lines: TutorSpokenLine[]): { responseId: string; sent: Promise<{ cancelled: boolean; audioMs: number }> } | null {
+    if (conversation.clientWs.readyState !== WebSocket.OPEN || !lines.length) return null;
+    if (conversation.isProcessing || this.isAnswerActive(conversation)) this.cancelResponse(conversation, false);
+    const responseId = `voice_tutor_${conversation.conversationId}_${Date.now()}`;
+    conversation.currentResponseId = responseId;
+    conversation.currentResponseKind = 'canonical';
+    // Complete as soon as it is shown: an interruption only stops its audio (nothing to roll back).
+    conversation.canonicalDisplayReadyResponseId = responseId;
+    conversation.canonicalPersistedMessageId = undefined;
+    conversation.canonicalPersistedResponseId = undefined;
+    conversation.canonicalPersistedContent = undefined;
+    conversation.activeElevenLabsStartedAt = undefined;
+    conversation.answerAudioBytes = 0;
+    conversation.answerPlaybackEndsAt = undefined;
+    const abandoned = () =>
+      conversation.clientWs.readyState !== WebSocket.OPEN ||
+      conversation.cancelledResponseIds.has(responseId) ||
+      conversation.currentResponseId !== responseId;
+    this.sendToClient(conversation.clientWs, { type: 'voice_message_start', responseId });
+    const { primary, fallback } = this.createTtsProviders(conversation);
+    let shown = '';
+    const pipeline = new SentenceTtsPipeline({
+      primary,
+      fallback,
+      sendAudio: (pcm) => {
+        if (abandoned()) return;
+        conversation.answerAudioBytes = (conversation.answerAudioBytes || 0) + pcm.length;
+        this.sendAnswerAudio(conversation, pcm);
+      },
+      isCancelled: () => abandoned(),
+      onFirstAudio: () => { conversation.activeElevenLabsStartedAt ||= Date.now(); },
+      onItemStart: (index) => {
+        const line = lines[index];
+        if (!line || abandoned()) return;
+        const display = (shown ? ' ' : '') + line.say;
+        shown += display;
+        this.sendToClient(conversation.clientWs, { type: 'answer_delta', responseId, display, speech: (index ? ' ' : '') + line.speech, index });
+        this.sendToClient(conversation.clientWs, { type: 'sentence_start', responseId, index, say: line.say, ops: line.ops });
+        conversation.lastAssistantText = line.say;
+        conversation.recentAssistantSpeech = `${conversation.recentAssistantSpeech || ''} ${line.speech}`.slice(-800);
+      },
+      onProviderFailure: (provider, error) => {
+        console.warn(`[Tutor] TTS (${provider}) failed:`, error instanceof Error ? error.message : String(error));
+      },
+    });
+    conversation.ttsPipeline = pipeline;
+    conversation.ttsPipelineResponseId = responseId;
+    lines.forEach((line, index) => pipeline.enqueue(line.speech, { tag: index }));
+    pipeline.close();
+    const sent = pipeline.finished().then(() => {
+      if (conversation.ttsPipeline === pipeline) {
+        conversation.ttsPipeline = undefined;
+        conversation.ttsPipelineResponseId = undefined;
+      }
+      const audioMs = Math.round(((conversation.answerAudioBytes || 0) / 48000) * 1000);
+      if (abandoned()) return { cancelled: true, audioMs };
+      this.sendToClient(conversation.clientWs, { type: 'answer_ready', responseId, displayMarkdown: shown, speechText: lines.map((l) => l.speech).join(' '), streamed: true });
+      const playbackStart = conversation.activeElevenLabsStartedAt || Date.now();
+      conversation.answerPlaybackEndsAt = Math.max(Date.now(), playbackStart + audioMs) + 5000;
+      this.sendAiDone(conversation, responseId);
+      return { cancelled: false, audioMs };
+    }).catch(() => ({ cancelled: true, audioMs: 0 }));
+    return { responseId, sent };
+  }
+
   /**
    * A fixed phone line in the call's language: the business's reply-language rule first,
    * else the language the caller is speaking. Ready-made Hindi / Hinglish versions are used
@@ -1569,6 +1702,7 @@ export class RealtimeVoiceService {
         .catch((err) => console.warn('[RealtimeVoice] Failed to end avatar session:', err?.message || err));
     }
     this.closeTopscholarVoiceUsageSession(conversation, reason);
+    if (conversation.tutor?.active) void conversation.tutor.stop('disconnected').catch(() => undefined);
 
     try {
       // A canonical answer remains response-owned until browser playback
@@ -1697,6 +1831,7 @@ export class RealtimeVoiceService {
     if (!responseId) return;
     const alreadyCancelled = conversation.cancelledResponseIds.has(responseId);
     conversation.cancelledResponseIds.add(responseId);
+    if (!alreadyCancelled) conversation.tutor?.onResponseCancelled(responseId);
     if (conversation.cancelledResponseIds.size > 20) {
       const first = conversation.cancelledResponseIds.values().next().value;
       if (first) conversation.cancelledResponseIds.delete(first);
@@ -4164,6 +4299,8 @@ export class RealtimeVoiceService {
    * English-trained voice as a guess ("Anika" is an English voice; live call 2026-10-17).
    */
   private phoneSpeechLanguage(conversation: VoiceConversation, text: string): string | undefined {
+    // AI tutor lessons in Hindi / Hinglish are spoken as Hindi (their lines are in Devanagari by then).
+    if (conversation.tutor?.active && conversation.tutorLanguage && conversation.tutorLanguage !== 'en' && /[ऀ-ॿ]/.test(text)) return 'hi';
     if (!conversation.phone) return undefined;
     if (/[ऀ-ॿ]/.test(text) || conversation.lastFillerLang === 'hi') return 'hi';
     return undefined;
@@ -5670,6 +5807,32 @@ Never infer intent from a single contained word. For example, "What is stop moti
           console.log('[RealtimeVoice] Canonical playback completed:', message.responseId);
         }
         if (conversation.avatar) this.deps.avatar?.answerFinished(conversation.avatar.sessionId);
+        if (message.responseId) conversation.tutor?.onPlaybackComplete(String(message.responseId));
+        break;
+
+      // ── AI tutor (services/tutor) ──
+      case 'tutor_start':
+        this.markUserActive(conversation);
+        void this.startTutor(conversation, message);
+        break;
+
+      case 'tutor_resume':
+        this.markUserActive(conversation);
+        void conversation.tutor?.resume();
+        break;
+
+      case 'tutor_skip':
+        this.markUserActive(conversation);
+        void conversation.tutor?.skip();
+        break;
+
+      case 'tutor_stop':
+        void conversation.tutor?.stop('stopped');
+        break;
+
+      case 'tutor_heard':
+        // The widget started playing line `index` of a tutor response (its audio clock).
+        if (typeof message.responseId === 'string') conversation.tutor?.onHeard(message.responseId, Number(message.index));
         break;
 
       case 'set_input_mode':

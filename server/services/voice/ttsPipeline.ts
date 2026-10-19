@@ -58,6 +58,13 @@ export interface SentenceTtsPipelineOptions {
   firstChunkTimeoutMs?: number;
   onFirstAudio?: () => void;
   onProviderFailure?: (provider: string, error: unknown, text: string) => void;
+  /**
+   * A tagged sentence is about to start: called once per tagged item, just before its first
+   * audio is sent (or, for a sentence that produced no audio, when the pipeline moves past it),
+   * in sentence order and never after cancel(). The AI tutor turns it into `sentence_start`, so
+   * the board draws what is being said exactly when it is heard.
+   */
+  onItemStart?: (tag: number) => void;
 }
 
 interface PipelineItem {
@@ -79,6 +86,9 @@ interface PipelineItem {
   firstByteMs?: number;
   hedged?: boolean;
   failed?: boolean;
+  /** onItemStart tag, and whether it was reported. */
+  tag?: number;
+  startNotified?: boolean;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -124,14 +134,14 @@ export class SentenceTtsPipeline {
     }).join(',');
   }
 
-  /** Queue the next sentence (already converted to speech text). */
-  enqueue(text: string): void {
+  /** Queue the next sentence (already converted to speech text). `tag`: see onItemStart. */
+  enqueue(text: string, opts: { tag?: number } = {}): void {
     const t = (text || '').trim();
     if (!t || this.cancelled || this.closed) return;
     this.items.push({
       index: this.items.length, text: t, started: false, done: false,
       buffered: [], leftover: null, emittedBytes: 0, controller: null,
-      holdBytes: 0, flowing: false,
+      holdBytes: 0, flowing: false, tag: opts.tag,
     });
     this.pump();
   }
@@ -219,7 +229,15 @@ export class SentenceTtsPipeline {
     }
   }
 
+  private notifyStart(item: PipelineItem): void {
+    if (item.tag == null || item.startNotified || this.externallyCancelled()) return;
+    item.startNotified = true;
+    this.options.onItemStart?.(item.tag);
+  }
+
   private send(item: PipelineItem, chunk: Buffer): void {
+    this.notifyStart(item);
+    if (this.externallyCancelled()) return;
     if (!this.firstAudioSent) {
       this.firstAudioSent = true;
       this.options.onFirstAudio?.();
@@ -390,6 +408,8 @@ export class SentenceTtsPipeline {
     const current = this.items[this.head];
     if (current && current.done) this.releaseIfReady(current);
     while (this.head < this.items.length && this.items[this.head].done) {
+      // A tagged sentence that produced no audio still "starts" (its board ops must not be lost).
+      this.notifyStart(this.items[this.head]);
       this.head++;
       const next = this.items[this.head];
       if (next && next.buffered.length > 0) {

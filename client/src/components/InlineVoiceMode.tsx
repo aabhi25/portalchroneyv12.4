@@ -108,6 +108,13 @@ interface InlineVoiceModeProps {
   onStatusChange?: (status: InlineVoiceStatus) => void;
   /** Bump to start the microphone from a UI that covers this bar (a tap there). */
   listenRequest?: number;
+  /**
+   * AI tutor: classroom messages from the voice socket (tutor_state, tutor_outline, tutor_ended,
+   * board_snapshot) and `sentence_play` — a lesson line, delivered when its audio starts playing.
+   */
+  onTutorMessage?: (message: any) => void;
+  /** AI tutor: a command for the voice socket (tutor_start, tutor_resume…), sent once per seq. */
+  tutorCommand?: { seq: number; message: Record<string, unknown> } | null;
 }
 
 export interface InlineVoiceStatus {
@@ -147,7 +154,21 @@ export function InlineVoiceMode({
   autoListen = false,
   onStatusChange,
   listenRequest = 0,
+  onTutorMessage,
+  tutorCommand,
 }: InlineVoiceModeProps) {
+  // ---- AI tutor ---------------------------------------------------------------
+  const onTutorMessageRef = useRef(onTutorMessage);
+  onTutorMessageRef.current = onTutorMessage;
+  /** Lesson lines waiting for their audio to start playing. */
+  const tutorTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const tutorCommandSentRef = useRef(0);
+  const tutorCommandRef = useRef(tutorCommand);
+  tutorCommandRef.current = tutorCommand;
+  const clearTutorTimers = () => {
+    tutorTimersRef.current.forEach((t) => clearTimeout(t));
+    tutorTimersRef.current.clear();
+  };
   const autoListenRef = useRef(autoListen);
   autoListenRef.current = autoListen;
   // ---- Live AI avatar -------------------------------------------------------
@@ -488,6 +509,8 @@ export function InlineVoiceMode({
 
   const flushQueuedAudio = (reason = 'flush') => {
     if (avatarActive()) avatarRef.current?.adapter.interrupt(reason);
+    // Lesson lines whose audio was dropped are never drawn.
+    clearTutorTimers();
     clearDucks();
     activeSourcesRef.current.forEach((s) => { try { s.stop(); } catch {} });
     activeSourcesRef.current.clear();
@@ -498,6 +521,13 @@ export function InlineVoiceMode({
   };
 
   const { toast } = useToast();
+
+  const sendPendingTutorCommand = () => {
+    const cmd = tutorCommandRef.current;
+    if (!cmd || cmd.seq <= tutorCommandSentRef.current) return;
+    if (!hadReadySessionRef.current) return; // sent on 'ready'
+    if (safeSend(JSON.stringify(cmd.message))) tutorCommandSentRef.current = cmd.seq;
+  };
 
   const safeSend = useCallback((data: string | ArrayBuffer) => {
     try {
@@ -513,6 +543,14 @@ export function InlineVoiceMode({
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  // AI tutor: send a new command now if the session is up (else on 'ready').
+  useEffect(() => {
+    sendPendingTutorCommand();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tutorCommand?.seq]);
+
+  useEffect(() => () => clearTutorTimers(), []);
 
   // Attach a newly-live avatar to the running voice session, or detach it
   // (fallback / end): audio plays locally again from the next chunk.
@@ -720,6 +758,7 @@ export function InlineVoiceMode({
         // Tell the server how this student takes turns (server VAD vs held turns).
         safeSend(JSON.stringify({ type: 'set_input_mode', mode: inputModeRef.current }));
         if (avatarRef.current) sendAvatarAttach();
+        sendPendingTutorCommand();
         if (hasPermissionRef.current || (autoListenRef.current && inputModeRef.current !== 'hold_to_talk')) {
           try { await startRecording(); } catch (error) { setState('idle'); }
         } else {
@@ -873,6 +912,33 @@ export function InlineVoiceMode({
       case 'avatar_ending':
         onAvatarServerMessage?.(data);
         break;
+
+      case 'tutor_state':
+      case 'tutor_outline':
+      case 'tutor_ended':
+      case 'tutor_error':
+      case 'board_snapshot':
+        onTutorMessageRef.current?.(data);
+        break;
+
+      case 'sentence_start': {
+        // A lesson line starts: its audio follows right after this message and plays once
+        // everything already scheduled has played — draw its board ops then, not now.
+        if (data.responseId && interruptedResponseIdsRef.current.has(data.responseId)) break;
+        const ctx = audioContextRef.current;
+        const delayMs = ctx ? Math.max(0, (nextPlaybackTimeRef.current - ctx.currentTime) * 1000) : 0;
+        const play = () => {
+          if (data.responseId && interruptedResponseIdsRef.current.has(data.responseId)) return;
+          onTutorMessageRef.current?.({ ...data, type: 'sentence_play' });
+          safeSend(JSON.stringify({ type: 'tutor_heard', responseId: data.responseId, index: data.index }));
+        };
+        if (delayMs < 20) play();
+        else {
+          const timer = setTimeout(() => { tutorTimersRef.current.delete(timer); play(); }, delayMs);
+          tutorTimersRef.current.add(timer);
+        }
+        break;
+      }
 
       case 'avatar_audio':
         // Server-route avatar: the provider got this answer audio; keep a SILENT

@@ -1,4 +1,4 @@
-import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, GitCompare, Briefcase, Lock, Video } from "lucide-react";
+import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, GitCompare, Briefcase, Lock, Video, GraduationCap } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
@@ -26,6 +26,8 @@ import rehypeKatex from 'rehype-katex';
 import { convertLatexDelimiters } from '@/lib/convertLatexDelimiters';
 import { CurriculumMarkdownImage } from '@/components/CurriculumMarkdownImage';
 import { LiveAvatarPanel, type AvatarVoiceStatus } from '@/components/LiveAvatarPanel';
+import { TutorClassroom } from '@/components/tutor/TutorClassroom';
+import { useTutorClassroom } from '@/components/tutor/useTutorClassroom';
 import { useLiveAvatar } from '@/hooks/useLiveAvatar';
 import { captionAt } from '@/lib/liveAvatar/captions';
 import { isAvatarCallActive } from '@/lib/liveAvatar/stateMachine';
@@ -189,6 +191,8 @@ interface WidgetSettings {
   businessAccountId: string;
   /** Live AI avatar button (null unless a super admin enabled it and it can start). */
   liveAvatar?: { enabled: boolean; displayName: string; styleHint: string } | null;
+  /** AI tutor (TopScholar): on when a super admin enabled it for the account. */
+  aiTutor?: { enabled: boolean } | null;
   chatColor: string;
   chatColorEnd: string;
   widgetHeaderText: string;
@@ -1258,6 +1262,9 @@ export default function EmbedChat() {
   const [avatarVoiceStatus, setAvatarVoiceStatus] = useState<AvatarVoiceStatus | null>(null);
   const avatarCallStartedAtRef = useRef(0);
   const [avatarListenRequest, setAvatarListenRequest] = useState(0);
+  // AI tutor classroom (runs on the voice connection; see components/tutor).
+  const tutor = useTutorClassroom();
+  const tutorShown = tutor.state.status !== 'off';
 
   // Tell the page's widget script which conversation this is, so its WhatsApp launcher can hand the
   // visitor over with the topic (the script runs on the site's own origin and can't see this chat).
@@ -1574,7 +1581,19 @@ export default function EmbedChat() {
     setIsInlineVoiceActive(true);
     void liveAvatar.start();
   };
+  // AI tutor: a chapter lesson on the voice connection. Offered where voice can start and the
+  // student has a signed launch identity — the voice session's chapter comes from it (the server
+  // checks the chapter and the tutor switch, and says why when it can't start).
+  const tutorAvailable = voiceChatAvailable && !!settings?.aiTutor?.enabled && !!businessAccountId
+    && !!topscholarTokenRef.current;
+  const startTutorLesson = () => {
+    if (!tutorAvailable || activeFormStep || isFormJourneyComplete || avatarCallActive) return;
+    setIsMenuMode(false);
+    setIsInlineVoiceActive(true);
+    tutor.start();
+  };
   const closeInlineVoice = () => {
+    tutor.close();
     setIsInlineVoiceActive(false);
     setAvatarVoice(false);
     setAvatarVoiceStatus(null);
@@ -5707,6 +5726,21 @@ export default function EmbedChat() {
         />
       )}
 
+      {/* AI tutor classroom: the board and lesson controls; the transcript continues below. */}
+      {tutorShown && !isMenuMode && !anyPreChatGateActive && (
+        <TutorClassroom
+          state={tutor.state}
+          chapter={studentChapterRef.current || undefined}
+          voiceState={avatarVoiceStatus?.state ?? null}
+          chatColor={chatColor}
+          onResume={tutor.resume}
+          onSkip={tutor.skip}
+          onStop={tutor.stop}
+          onRestart={startTutorLesson}
+          onClose={() => { if (tutor.active) tutor.stop(); tutor.close(); }}
+        />
+      )}
+
       {/* Chat Messages - Takes remaining space with scroll containment */}
       {/* Task #23: hide the transcript while the pre-chat gate is active —
           there should be nothing to read or scroll until verification. */}
@@ -6394,6 +6428,19 @@ export default function EmbedChat() {
             zIndex: avatarCallActive ? 0 : 99999
           }}
         >
+          {tutorAvailable && !tutorShown && !doubtLock && !avatarCallActive && !(otpState.awaiting_otp || otpState.locked) && (
+            <div className="flex gap-2 pb-2 overflow-x-auto" data-testid="tutor-chips">
+              <button
+                type="button"
+                onClick={startTutorLesson}
+                className="flex-shrink-0 h-8 px-3 rounded-full bg-white border border-gray-200 text-[13px] font-medium flex items-center gap-1.5 hover:border-gray-300 transition-colors"
+                style={{ color: chatColor }}
+                data-testid="button-tutor-teach"
+              >
+                <GraduationCap className="w-4 h-4" /> Teach me this chapter
+              </button>
+            </div>
+          )}
           {doubtLock ? (
             // The doubt was resolved or escalated, so this session is finished.
             // Checked FIRST: this is terminal, and no later branch (OTP, voice,
@@ -6466,6 +6513,7 @@ export default function EmbedChat() {
                 }}
                 onClose={() => {
                   if (isAvatarCallActive(liveAvatar.state.phase)) liveAvatar.end('visitor_closed');
+                  tutor.close();
                   setIsInlineVoiceActive(false);
                   setAvatarVoice(false);
                   setAvatarVoiceStatus(null);
@@ -6487,9 +6535,11 @@ export default function EmbedChat() {
                 topscholarToken={topscholarTokenRef.current || undefined}
                 topscholarCpId={topscholarCpIdRef.current || undefined}
                 voiceInputMode={avatarVoice ? 'hands_free' : settings?.voiceInputMode}
-                autoListen={avatarVoice}
+                autoListen={avatarVoice || tutor.active}
                 listenRequest={avatarListenRequest}
-                onStatusChange={avatarVoice ? setAvatarVoiceStatus : undefined}
+                onStatusChange={avatarVoice || tutorShown ? setAvatarVoiceStatus : undefined}
+                onTutorMessage={tutor.handleMessage}
+                tutorCommand={tutor.command}
                 onUserMessage={(text) => {
                   const userMsg: ChatMessage = {
                     id: 'voice-user-' + Date.now(),
