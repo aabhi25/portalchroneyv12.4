@@ -36,6 +36,8 @@ const InlineVoiceMode = lazy(() => import("@/components/InlineVoiceMode").then(m
 
 const AppointmentCalendar = lazy(() => import("@/components/AppointmentCalendar").then(m => ({ default: m.AppointmentCalendar })));
 const FormStep = lazy(() => import("@/components/FormStep").then(m => ({ default: m.FormStep })));
+import { ChatFormAnswerBar } from "@/components/ChatFormAnswerBar";
+import { hasOwnCard, isChoiceQuestion, isClosingStep } from "@/lib/formAnswer";
 const ProductCarousel = lazy(() => import("@/components/ProductCarousel").then(m => ({ default: m.ProductCarousel })));
 const ProductComparisonView = lazy(() => import("@/components/ProductComparisonView").then(m => ({ default: m.ProductComparisonView })));
 const ChatMenuNavigation = lazy(() => import("@/components/ChatMenuNavigation").then(m => ({ default: m.ChatMenuNavigation })));
@@ -176,6 +178,8 @@ interface ChatMessage {
   lookupOptions?: boolean;
   lookupMode?: 'track' | 'return_exchange';
   quickReplies?: string[];
+  /** Set on a journey form question asked in the chat; its quickReplies answer that step. */
+  formStepId?: string;
 }
 
 interface WidgetSettings {
@@ -3884,6 +3888,35 @@ export default function EmbedChat() {
     };
   }, []);
 
+  // A journey form is asked in the chat: each question is an assistant bubble (options as
+  // buttons), the visitor answers in the box below or by tapping, and the answer shows as
+  // their bubble. The closing message is a last bubble (its button as a pill); the
+  // appointment calendar keeps its own card.
+  useEffect(() => {
+    const step = activeFormStep;
+    if (!step) return;
+    // Keep the newest question (or the closing / booking card) in view.
+    const scroll = () => requestAnimationFrame(() => setTimeout(() => {
+      const container = messagesContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+    }, 60));
+    if (hasOwnCard(step) || !step.questionText) { scroll(); return; }
+    scroll();
+    setMessages(prev => {
+      if (prev.at(-1)?.formStepId === step.stepId) return prev; // already asked, waiting for the answer
+      return [...prev, {
+        id: `form-${step.stepId}-${Date.now()}`,
+        role: 'assistant',
+        content: step.questionText,
+        timestamp: new Date(),
+        quickReplies: isClosingStep(step)
+          ? (step.completionButtonText ? [step.completionButtonText] : undefined)
+          : isChoiceQuestion(step) ? step.options : undefined,
+        formStepId: step.stepId,
+      }];
+    });
+  }, [activeFormStep]);
+
   if (!businessAccountId) {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-50">
@@ -4280,6 +4313,95 @@ export default function EmbedChat() {
     const current = lookupState as Extract<LookupPhase, { phase: 'otp' }>;
     const identifierType = current.type === 'mobile' ? 'phone' : current.type === 'email' ? 'email' : 'order_id';
     void performDirectOrderLookup(identifierType, current.value, lookupOtpValue);
+  };
+
+
+  const submitFormAnswer = async (value: string) => {
+    if (!activeFormStep) return;
+    // Submit directly to the journey endpoint - no AI involvement
+    const submittedStep = activeFormStep;
+    if (!hasOwnCard(submittedStep) && !isClosingStep(submittedStep)) {
+      setMessages(prev => [...prev, { id: `form-answer-${Date.now()}`, role: 'user', content: value || 'Skipped', timestamp: new Date() }]);
+    }
+    try {
+      setIsLoading(true);
+      setActiveFormStep(null);
+      
+      const response = await fetch(`/api/journey/submit-step`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          conversationId: conversationIdRef.current || null, 
+          answer: value, 
+          businessAccountId,
+          journeyId: activeJourneyId,
+          visitorToken: visitorSessionTokenRef.current || localStorage.getItem('chroney_visitor_token'),
+          pageUrl: parentPageUrl || (window.parent !== window ? document.referrer : window.location.href) || undefined
+        })
+      });
+      
+      const result = await response.json().catch(() => ({}));
+      
+      // Update conversationId if we got a new one from the server
+      if (result.conversationId && !conversationIdRef.current) {
+        conversationIdRef.current = result.conversationId;
+        setHasConversation(true);
+        console.log('[Form Journey] Got conversationId from server:', result.conversationId);
+      }
+
+      // Answer not accepted (e.g. not a valid mobile number): say why and ask again.
+      if (!response.ok) {
+        if (result.error) {
+          setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'assistant', content: result.error, timestamp: new Date() }]);
+        }
+        setActiveFormStep(result.nextStep || submittedStep);
+        return;
+      }
+
+      // A mobile number was just given and this business verifies it with a CAPTCHA.
+      if (result.captcha?.required) {
+        captchaWidgetIdRef.current = null;
+        setCaptchaToken(null);
+        setCaptchaError(null);
+        setMidChatCaptcha({
+          required: true,
+          siteKey: result.captcha.siteKey ?? null,
+          provider: result.captcha.provider ?? null,
+          misconfigured: !!result.captcha.misconfigured,
+        });
+      }
+      
+      if (result.completed && result.nextStep?.stepType === 'journey_complete') {
+        // Journey complete step - show the completion step UI (with optional button)
+        setActiveFormStep(result.nextStep);
+        setActiveJourneyId(null); // Clear journey state on server side
+        setIsFormJourneyComplete(true); // Disable chat input after form journey completes
+      } else if (result.completed) {
+        // Journey completed - show completion message as chat message
+        const completionMessage: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: result.completionMessage || 'Thank you for completing the form!',
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, completionMessage]);
+        setActiveFormStep(null);
+        setActiveJourneyId(null); // Clear journey state
+        setIsFormJourneyComplete(true); // Disable chat input after form journey completes
+      } else if (result.nextStep) {
+        // Show next form step
+        setActiveFormStep(result.nextStep);
+      }
+    } catch (error) {
+      console.error('[FormStep] Error submitting:', error);
+      // Couldn't reach the server: say so and ask the same question again.
+      if (!hasOwnCard(submittedStep)) {
+        setMessages(prev => [...prev, { id: `form-error-${Date.now()}`, role: 'assistant', content: "Sorry, that didn't go through. Please try again.", timestamp: new Date() }]);
+      }
+      setActiveFormStep(submittedStep);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -6003,6 +6125,25 @@ export default function EmbedChat() {
                 {/* Conversational journey dropdown/radio choices as tappable buttons.
                     Only show on the most recent message so old choices don't linger. */}
                 {msg.role === 'assistant' && msg.quickReplies && msg.quickReplies.length > 0 && msgIndex === messages.length - 1 && (
+                  msg.formStepId ? (
+                    // Options of the form question being asked: tapping one answers it.
+                    msg.formStepId === activeFormStep?.stepId && !isLoading && (
+                      <QuickBrowseButtons
+                        buttons={msg.quickReplies.map((opt) => ({ label: opt, action: opt }))}
+                        onSelect={(answer) => {
+                          if (activeFormStep && isClosingStep(activeFormStep)) {
+                            // "Continue exploring" on the closing message.
+                            setActiveFormStep(null);
+                            setActiveJourneyId(null);
+                          } else {
+                            submitFormAnswer(answer);
+                          }
+                        }}
+                        chatColor={chatColor}
+                        chatColorEnd={chatColorEnd}
+                      />
+                    )
+                  ) : (
                   <QuickBrowseButtons
                     buttons={msg.quickReplies.map((opt) => ({ label: opt, action: opt }))}
                     onSelect={handleQuickBrowse}
@@ -6011,6 +6152,7 @@ export default function EmbedChat() {
                     collapsible
                     collapsedCount={2}
                   />
+                  )
                 )}
               </div>
               <div className="text-xs text-gray-500 mt-1">
@@ -6087,91 +6229,14 @@ export default function EmbedChat() {
         )}
         
         {/* Form Step UI - Show visual form input at the end of messages when form journey step is active */}
-        {activeFormStep && (
+        {activeFormStep && hasOwnCard(activeFormStep) && (
           <div className="p-3 bg-white rounded-lg shadow-sm mx-2 mb-2 border border-gray-100">
             <Suspense fallback={<LazyLoadingFallback />}>
               <FormStep
                 step={activeFormStep}
                 businessAccountId={businessAccountId}
                 conversationId={conversationIdRef.current || undefined}
-              onSubmit={async (value) => {
-                // Submit directly to the journey endpoint - no AI involvement
-                const submittedStep = activeFormStep;
-                try {
-                  setIsLoading(true);
-                  setActiveFormStep(null);
-                  
-                  const response = await fetch(`/api/journey/submit-step`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                      conversationId: conversationIdRef.current || null, 
-                      answer: value, 
-                      businessAccountId,
-                      journeyId: activeJourneyId,
-                      visitorToken: visitorSessionTokenRef.current || localStorage.getItem('chroney_visitor_token'),
-                      pageUrl: parentPageUrl || (window.parent !== window ? document.referrer : window.location.href) || undefined
-                    })
-                  });
-                  
-                  const result = await response.json().catch(() => ({}));
-                  
-                  // Update conversationId if we got a new one from the server
-                  if (result.conversationId && !conversationIdRef.current) {
-                    conversationIdRef.current = result.conversationId;
-                    setHasConversation(true);
-                    console.log('[Form Journey] Got conversationId from server:', result.conversationId);
-                  }
-
-                  // Answer not accepted (e.g. not a valid mobile number): say why and ask again.
-                  if (!response.ok) {
-                    if (result.error) {
-                      setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'assistant', content: result.error, timestamp: new Date() }]);
-                    }
-                    setActiveFormStep(result.nextStep || submittedStep);
-                    return;
-                  }
-
-                  // A mobile number was just given and this business verifies it with a CAPTCHA.
-                  if (result.captcha?.required) {
-                    captchaWidgetIdRef.current = null;
-                    setCaptchaToken(null);
-                    setCaptchaError(null);
-                    setMidChatCaptcha({
-                      required: true,
-                      siteKey: result.captcha.siteKey ?? null,
-                      provider: result.captcha.provider ?? null,
-                      misconfigured: !!result.captcha.misconfigured,
-                    });
-                  }
-                  
-                  if (result.completed && result.nextStep?.stepType === 'journey_complete') {
-                    // Journey complete step - show the completion step UI (with optional button)
-                    setActiveFormStep(result.nextStep);
-                    setActiveJourneyId(null); // Clear journey state on server side
-                    setIsFormJourneyComplete(true); // Disable chat input after form journey completes
-                  } else if (result.completed) {
-                    // Journey completed - show completion message as chat message
-                    const completionMessage: ChatMessage = {
-                      id: (Date.now() + 1).toString(),
-                      role: 'assistant',
-                      content: result.completionMessage || 'Thank you for completing the form!',
-                      timestamp: new Date()
-                    };
-                    setMessages(prev => [...prev, completionMessage]);
-                    setActiveFormStep(null);
-                    setActiveJourneyId(null); // Clear journey state
-                    setIsFormJourneyComplete(true); // Disable chat input after form journey completes
-                  } else if (result.nextStep) {
-                    // Show next form step
-                    setActiveFormStep(result.nextStep);
-                  }
-                } catch (error) {
-                  console.error('[FormStep] Error submitting:', error);
-                } finally {
-                  setIsLoading(false);
-                }
-              }}
+              onSubmit={submitFormAnswer}
               isSubmitting={isLoading}
               primaryColor={chatColor}
               onContinueExploring={() => {
@@ -6250,6 +6315,23 @@ export default function EmbedChat() {
         )}
         <div ref={messagesEndRef} />
       </div>
+      )}
+
+      {/* Answer box for the form question asked in the chat (shown whatever the chat mode). */}
+      {activeFormStep && !hasOwnCard(activeFormStep) && !isClosingStep(activeFormStep) && (
+        <div
+          className="border-t border-gray-200 p-2 sm:p-3 md:p-4 bg-gray-100 flex-shrink-0"
+          style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))', position: 'relative', zIndex: avatarCallActive ? 0 : 99999 }}
+        >
+          <ChatFormAnswerBar
+            step={activeFormStep}
+            onSubmit={submitFormAnswer}
+            isSubmitting={isLoading}
+            chatColor={chatColor}
+            chatColorEnd={chatColorEnd}
+            isMobile={isMobileDevice}
+          />
+        </div>
       )}
 
       {/* Chat Input - Fixed at bottom with safe area padding - only show if mode allows it */}

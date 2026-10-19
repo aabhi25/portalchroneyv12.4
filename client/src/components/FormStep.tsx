@@ -4,9 +4,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Send, Loader2, Check, Calendar, Clock, ChevronLeft, ChevronRight, CheckCircle, User, Phone } from "lucide-react";
+import { validateFormAnswer } from "@/lib/formAnswer";
 import { validatePhoneNumber } from "@shared/validation/phone";
 
-interface FormStepData {
+export interface FormStepData {
   stepId: string;
   questionText: string;
   questionType: string;
@@ -302,30 +303,10 @@ export function FormStep({ step, onSubmit, isSubmitting = false, primaryColor = 
   };
 
   const handleSubmit = () => {
-    if (step.isRequired && !value.trim()) {
-      setError("This field is required");
+    const problem = validateFormAnswer(step, value);
+    if (problem) {
+      setError(problem);
       return;
-    }
-
-    if (step.questionType === "email" && value) {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(value)) {
-        setError("Please enter a valid email address");
-        return;
-      }
-    }
-
-    if (step.questionType === "phone" && value) {
-      const cleanPhone = value.replace(/\D/g, '');
-      if (cleanPhone.length !== 10) {
-        setError("Please enter a valid 10-digit mobile number");
-        return;
-      }
-      const phoneValidation = validatePhoneNumber(cleanPhone, '10');
-      if (!phoneValidation.isValid) {
-        setError(phoneValidation.reasonMessage);
-        return;
-      }
     }
 
     setError("");
