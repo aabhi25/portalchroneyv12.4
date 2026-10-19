@@ -34,6 +34,12 @@ interface LiveAvatarPanelProps {
   onEnd: () => void;
   onSwitchToText: () => void;
   onDismissNotice: () => void;
+  /**
+   * "call" (default): the video call covers the chat window. "tile": a small video tile over the
+   * AI tutor's board (the classroom has the controls). Same <video> element either way, so
+   * switching never drops the stream.
+   */
+  variant?: "call" | "tile";
 }
 
 function formatClock(total: number): string {
@@ -68,6 +74,7 @@ export function LiveAvatarPanel(props: LiveAvatarPanelProps) {
   const status = phase === "live" ? voiceLabel(voiceStatus, speaking, displayName) : null;
   const listening = phase === "live" && voiceStatus?.state === "listening" && !speaking;
   const micIdle = phase === "live" && !speaking && voiceStatus?.state === "idle" && !voiceStatus.connecting;
+  const tile = props.variant === "tile";
 
   return (
     <>
@@ -83,7 +90,9 @@ export function LiveAvatarPanel(props: LiveAvatarPanelProps) {
         aria-label={`Video call with ${displayName}, an AI avatar`}
         role="dialog"
         aria-modal={active}
-        className={active ? "absolute inset-0 z-40 flex flex-col overflow-hidden bg-gray-950" : "hidden"}
+        className={!active ? "hidden" : tile
+          ? "fixed right-5 top-[84px] z-[100002] flex h-[132px] w-[104px] flex-col overflow-hidden rounded-xl bg-gray-950 shadow-xl ring-2 ring-white sm:h-[176px] sm:w-[136px]"
+          : "absolute inset-0 z-40 flex flex-col overflow-hidden bg-gray-950"}
         data-testid="live-avatar-region"
       >
         {/* Video fills the call screen. */}
@@ -99,22 +108,35 @@ export function LiveAvatarPanel(props: LiveAvatarPanelProps) {
           />
           {connecting && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-white" style={{ background: `linear-gradient(160deg, ${chatColor}, ${chatColorEnd})` }} data-testid="live-avatar-connecting">
-              {avatarImageUrl ? (
+              {tile ? null : avatarImageUrl ? (
                 <img src={avatarImageUrl} alt="" className="h-24 w-24 animate-pulse rounded-full border-2 border-white/40 object-cover" />
               ) : (
                 <div className="flex h-24 w-24 animate-pulse items-center justify-center rounded-full bg-white/20">
                   <Video className="h-10 w-10" />
                 </div>
               )}
-              <div className="flex items-center gap-2 text-base">
-                <Loader2 className="h-5 w-5 animate-spin" />
-                <span>Connecting to {displayName}…</span>
+              <div className={`flex items-center gap-2 ${tile ? "text-[11px]" : "text-base"}`}>
+                <Loader2 className={tile ? "h-3.5 w-3.5 animate-spin" : "h-5 w-5 animate-spin"} />
+                <span>{tile ? "Connecting…" : `Connecting to ${displayName}…`}</span>
               </div>
             </div>
           )}
 
+          {/* Tile: just the AI disclosure badge and mute (the classroom has the other controls). */}
+          {tile && (
+            <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-1 p-1.5">
+              <div className="flex items-center gap-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white" data-testid="live-avatar-tile-badge">
+                <span className={`h-1.5 w-1.5 rounded-full ${speaking ? "bg-emerald-400" : "bg-white/70"}`} aria-hidden />
+                AI avatar
+              </div>
+              <button type="button" onClick={props.onToggleMute} className="flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white" aria-label={muted ? "Unmute avatar" : "Mute avatar"} aria-pressed={muted} data-testid="button-avatar-tile-mute">
+                {muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+          )}
+
           {/* Top bar: AI badge + name, timer, close. */}
-          <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-black/60 to-transparent px-3 pb-6 pt-3">
+          <div className={`absolute inset-x-0 top-0 items-center justify-between gap-2 bg-gradient-to-b from-black/60 to-transparent px-3 pb-6 pt-3 ${tile ? "hidden" : "flex"}`}>
             <div className="flex min-w-0 items-center gap-2">
               {/* Permanent AI disclosure badge (EU AI Act Art. 50 / India SGI labelling). */}
               <div className="flex flex-shrink-0 items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-medium text-white" data-testid="live-avatar-badge">
@@ -142,7 +164,7 @@ export function LiveAvatarPanel(props: LiveAvatarPanelProps) {
           </div>
 
           {/* Captions + what the call is doing (listening / thinking). */}
-          {phase === "live" && (caption || status) && (
+          {phase === "live" && !tile && (caption || status) && (
             <div className="absolute inset-x-3 bottom-3 flex flex-col items-center gap-1.5" aria-live="polite">
               {caption && (
                 <p className="max-w-full rounded-lg bg-black/65 px-3 py-1.5 text-center text-[14px] leading-snug text-white" data-testid="live-avatar-caption">{caption}</p>
@@ -163,7 +185,7 @@ export function LiveAvatarPanel(props: LiveAvatarPanelProps) {
         </div>
 
         {/* Products for the latest answer, "on screen" next to the avatar. */}
-        {phase === "live" && products && (
+        {phase === "live" && !tile && products && (
           productsOpen ? (
             <div className="flex-shrink-0 border-t border-white/10 bg-white px-3 pb-1 pt-2" data-testid="live-avatar-products">
               <div className="mb-1.5 flex items-center justify-between text-xs font-medium text-gray-700">
@@ -182,7 +204,7 @@ export function LiveAvatarPanel(props: LiveAvatarPanelProps) {
         )}
 
         {/* Call controls. */}
-        <div className="flex flex-shrink-0 items-center justify-center gap-3 bg-gray-950 px-3 py-3">
+        <div className={`flex-shrink-0 items-center justify-center gap-3 bg-gray-950 px-3 py-3 ${tile ? "hidden" : "flex"}`}>
           <button
             type="button"
             onClick={props.onToggleMute}

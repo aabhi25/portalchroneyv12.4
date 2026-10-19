@@ -3,7 +3,7 @@
  * account, which chapter (from the student's signed launch scope), which language, and the
  * database-backed lesson source and minute counter the runner uses.
  */
-import { eq } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../../db";
 import { tutorSessions } from "@shared/schema";
 import { lessonContext, TutorLessonError, type TutorScope } from "./lessonService";
@@ -23,7 +23,12 @@ export interface VoiceTutorRequest {
   language?: string | null;
   voiceLanguage?: string | null;
   mode: "voice" | "video";
+  /** Start from the plan even when this student stopped part-way last time. */
+  fromStart?: boolean;
 }
+
+/** A lesson this student left part-way within this many days is continued, not restarted. */
+const CONTINUE_WITHIN_DAYS = 14;
 
 export class TutorUnavailableError extends Error {}
 
@@ -37,7 +42,7 @@ export function tutorLanguageFor(req: Pick<VoiceTutorRequest, "language" | "voic
   return "en";
 }
 
-export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{ chapter: string; language: TutorLanguage; lessons: TutorLessonSource; store: TutorStore }> {
+export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{ chapter: string; language: TutorLanguage; lessons: TutorLessonSource; store: TutorStore; continueFrom: { part: number; title: string | null } | null }> {
   const settings = await getTutorSettings(req.businessAccountId);
   if (!settings.enabled) throw new TutorUnavailableError("The AI tutor is not switched on for this account.");
   const chapter = String(req.scope?.chapter || "").trim();
@@ -95,5 +100,25 @@ export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{ chapt
       }).where(eq(tutorSessions.id, id));
     },
   };
-  return { chapter, language, lessons, store };
+  // Where this student got to last time on this chapter (a lesson they did not finish).
+  let continueFrom: { part: number; title: string | null } | null = null;
+  if (!req.fromStart) {
+    const [last] = await db.select({ progress: tutorSessions.progress, endReason: tutorSessions.endReason })
+      .from(tutorSessions)
+      .where(and(
+        eq(tutorSessions.businessAccountId, req.businessAccountId),
+        eq(tutorSessions.studentKey, studentKey),
+        sql`lower(trim(${tutorSessions.chapter})) = ${chapter.toLowerCase()}`,
+        gte(tutorSessions.startedAt, new Date(Date.now() - CONTINUE_WITHIN_DAYS * 24 * 3600_000)),
+      ))
+      .orderBy(desc(tutorSessions.startedAt))
+      .limit(1)
+      .catch(() => []);
+    const part = Number((last?.progress as any)?.part);
+    if (last && last.endReason !== "completed" && Number.isInteger(part) && part >= 0) {
+      const title = (last.progress as any)?.title;
+      continueFrom = { part, title: typeof title === "string" ? title : null };
+    }
+  }
+  return { chapter, language, lessons, store, continueFrom };
 }

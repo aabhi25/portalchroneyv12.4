@@ -16,7 +16,12 @@ export type TutorAdminView = {
   limits: { dailyMinutesPerStudent: { min: number; max: number; default: number } };
   updatedAt: string | null;
 };
-type UsageView = { day: string; students: number; totalSeconds: number };
+type UsageView = {
+  day: string;
+  students: number;
+  totalSeconds: number;
+  week?: { lessons: number; seconds: number; completed: number; students: number; checksCorrect: number; checksTotal: number };
+};
 
 export const tutorKey = (id: string) => ["/api/super-admin/tutor/accounts", id];
 
@@ -97,6 +102,12 @@ export function TutorSettingsDialog({ open, onOpenChange, businessAccountId, bus
             <p className="text-xs text-gray-500" data-testid="text-tutor-usage">
               {usage.data ? `Today: ${usage.data.students} student${usage.data.students === 1 ? "" : "s"}, ${Math.round(usage.data.totalSeconds / 60)} min in total.` : "Today: —"}
             </p>
+            {usage.data?.week && usage.data.week.lessons > 0 && (
+              <p className="text-xs text-gray-500" data-testid="text-tutor-week">
+                Last 7 days: {usage.data.week.lessons} lesson{usage.data.week.lessons === 1 ? "" : "s"} by {usage.data.week.students} student{usage.data.week.students === 1 ? "" : "s"}, {Math.round(usage.data.week.seconds / 60)} min, {usage.data.week.completed} finished
+                {usage.data.week.checksTotal > 0 ? ` · quick checks ${Math.round((100 * usage.data.week.checksCorrect) / usage.data.week.checksTotal)}% right` : ""}.
+              </p>
+            )}
           </div>
         )}
         <DialogFooter>

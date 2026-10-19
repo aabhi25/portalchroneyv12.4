@@ -86,6 +86,23 @@ async function main() {
     const sec = await getSection(pack, o1, 0, "en", complete);
     await getSection(pack, o1, 0, "en", complete);
     expect(calls === 4 && sec.lines.length === 2 && sec.checks.length === 1 && sec.checks[0].correctIndex === 0, "a section is made once, with its check from the question bank", { calls, checks: sec.checks });
+
+    // ── carrying on from last time ──
+    const { prepareVoiceTutor } = await import("../voiceTutor");
+    const req = { businessAccountId: K12, conversationId: "c1", visitorId: "v1", scope: { chapter: "Triangles", studentId: "S-9" }, mode: "voice" as const };
+    let prep = await prepareVoiceTutor(req);
+    expect(prep.continueFrom === null, "a first lesson starts from the plan");
+    await db.insert(schema.tutorSessions).values({ businessAccountId: K12, studentKey: "student:S-9", chapter: "triangles ", endReason: "stopped", progress: { part: 2, line: 3, title: "Converse" } } as any);
+    prep = await prepareVoiceTutor(req);
+    expect(prep.continueFrom?.part === 2 && prep.continueFrom.title === "Converse", "a lesson left part-way is continued (chapter matched loosely)", prep.continueFrom);
+    expect((await prepareVoiceTutor({ ...req, fromStart: true })).continueFrom === null, "Start over ignores it");
+    expect((await prepareVoiceTutor({ ...req, scope: { chapter: "Triangles", studentId: "S-10" } })).continueFrom === null, "another student's progress is not used");
+    await db.insert(schema.tutorSessions).values({ businessAccountId: K12, studentKey: "student:S-9", chapter: "Triangles", endReason: "completed", progress: { part: 5, line: 0 } } as any);
+    expect((await prepareVoiceTutor(req)).continueFrom === null, "after finishing the chapter it starts afresh");
+    await updateTutorSettings(K12, { enabled: false }, "admin-1");
+    threw = "";
+    try { await prepareVoiceTutor(req); } catch (e: any) { threw = e.message; }
+    expect(/not switched on/.test(threw), "tutor off: a lesson can't start", threw);
   } finally {
     await db.delete(schema.businessAccounts).where(eq(schema.businessAccounts.id, K12)).catch(() => {});
     await db.delete(schema.businessAccounts).where(eq(schema.businessAccounts.id, SHOP)).catch(() => {});

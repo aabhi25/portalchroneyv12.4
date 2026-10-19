@@ -133,7 +133,8 @@ async function main() {
   ];
 
   const checkSaid = ["Quick check! The longest side of a right triangle is called?", "Is it A, base; B, hypotenuse; or C, height?"];
-  function harness(opts: { remaining?: number; tickMs?: number; outlineDelayMs?: number; failPrepare?: Error; autoPlay?: boolean; autoAnswer?: boolean; ttsDelayMs?: number } = {}) {
+  function harness(opts: { remaining?: number; tickMs?: number; outlineDelayMs?: number; failPrepare?: Error; autoPlay?: boolean; autoAnswer?: boolean; ttsDelayMs?: number; continueFrom?: { part: number; title: string | null } } = {}) {
+    const prepareCalls: any[] = [];
     const svc: any = new RealtimeVoiceService();
     const client = new FakeSocket();
     const openai = new FakeSocket();
@@ -161,11 +162,13 @@ async function main() {
       commitAssistantMessage: async (_c: any, _content: string, still: () => boolean) => (still() ? "msg-1" : null),
       rollbackAssistantMessage: async () => {},
       createTtsProviders: () => ({ primary: provider, fallback: null }),
-      prepareTutor: async () => {
+      prepareTutor: async (req: any) => {
+        prepareCalls.push(req);
         if (opts.failPrepare) throw opts.failPrepare;
         return {
           chapter: "Triangles",
           language: "en",
+          continueFrom: req.fromStart ? null : opts.continueFrom ?? null,
           lessons: {
             outline: async () => { if (opts.outlineDelayMs) await sleep(opts.outlineDelayMs); return outline; },
             section: async (i: number) => sec(i + 1),
@@ -221,7 +224,7 @@ async function main() {
     }, 5);
     const done = () => { clearInterval(player); svc.shutdown?.(); };
     return {
-      svc, client, conversation, streams, usage, ended, doubts, clientMessage, utter, done,
+      svc, client, conversation, streams, usage, ended, doubts, prepareCalls, clientMessage, utter, done,
       setPlaying: (v: boolean) => { playing = v; },
       advance: (ms: number) => { clock += ms; },
       clock: () => clock,
@@ -417,6 +420,24 @@ async function main() {
     const i = said.indexOf("We're almost out of tutor time for today, so let's stop here.");
     expect(i > 0 && said[i + 1] === "Today we covered The hypotenuse, Pythagoras." && said[i + 2] === "Great work — see you tomorrow!", "a minute left: goodbye with what was covered", said.slice(i));
     expect(h.client.ofType("tutor_ended")[0]?.reason === "daily_limit", "…then the lesson ends (daily limit)");
+    h.done();
+  }
+
+  // ── 4h. carrying on from last time; Start over; Slower ──
+  {
+    const h = harness({ continueFrom: { part: 0, title: "Pythagoras" } }); // re-planned since: matched by title
+    await h.clientMessage({ type: "tutor_start", slow: true });
+    await waitFor(() => spokenLines(h).includes("Section 2 line 0."), 4000, "continued");
+    const said = spokenLines(h);
+    expect(said[0] === 'Welcome back! Last time we got to "Pythagoras", so let\'s carry on from there.' && said[1] === "Section 2 line 0.", "a student who stopped part-way carries on from that part (the plan is skipped)", said.slice(0, 2));
+    expect(h.client.ofType("tutor_continued")[0]?.title === "Pythagoras", "the widget is told (it offers Start over)");
+    expect(h.conversation.tutorSlow === true && h.svc.phoneSpeed(h.conversation) === 85, "Slower: the tutor speaks at 85 %");
+    await h.clientMessage({ type: "tutor_speed", slow: false });
+    expect(h.svc.phoneSpeed(h.conversation) === 100, "…and back to normal");
+    await h.clientMessage({ type: "tutor_start", fromStart: true });
+    await waitFor(() => h.prepareCalls.length === 2 && spokenLines(h).filter((x) => x === outline.intro[0]).length > 0, 4000, "start over");
+    expect(h.prepareCalls[1]?.fromStart === true && spokenLines(h).includes(outline.intro[0]), "Start over begins with the plan again");
+    await h.clientMessage({ type: "tutor_stop" });
     h.done();
   }
 

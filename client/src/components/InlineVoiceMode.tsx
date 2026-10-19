@@ -39,6 +39,9 @@ export interface InlineVoiceAvatar {
   speakIntro: boolean;
 }
 
+/** How far the avatar's video runs behind the audio clock, per audio route (AI tutor board timing). */
+const AVATAR_BOARD_LAG_MS = { client: 300, server: 700 };
+
 interface InlineVoiceModeProps {
   isActive: boolean;
   onClose: () => void;
@@ -113,8 +116,8 @@ interface InlineVoiceModeProps {
    * tutor_check, tutor_check_result, board_snapshot) and `sentence_play` — a lesson line, delivered when its audio starts playing.
    */
   onTutorMessage?: (message: any) => void;
-  /** AI tutor: a command for the voice socket (tutor_start, tutor_resume…), sent once per seq. */
-  tutorCommand?: { seq: number; message: Record<string, unknown> } | null;
+  /** AI tutor: commands for the voice socket (tutor_start, tutor_resume…), in order; each sent once (by seq). */
+  tutorCommands?: Array<{ seq: number; message: Record<string, unknown> }>;
 }
 
 export interface InlineVoiceStatus {
@@ -155,7 +158,7 @@ export function InlineVoiceMode({
   onStatusChange,
   listenRequest = 0,
   onTutorMessage,
-  tutorCommand,
+  tutorCommands,
 }: InlineVoiceModeProps) {
   // ---- AI tutor ---------------------------------------------------------------
   const onTutorMessageRef = useRef(onTutorMessage);
@@ -163,8 +166,8 @@ export function InlineVoiceMode({
   /** Lesson lines waiting for their audio to start playing. */
   const tutorTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const tutorCommandSentRef = useRef(0);
-  const tutorCommandRef = useRef(tutorCommand);
-  tutorCommandRef.current = tutorCommand;
+  const tutorCommandsRef = useRef(tutorCommands);
+  tutorCommandsRef.current = tutorCommands;
   const clearTutorTimers = () => {
     tutorTimersRef.current.forEach((t) => clearTimeout(t));
     tutorTimersRef.current.clear();
@@ -523,10 +526,12 @@ export function InlineVoiceMode({
   const { toast } = useToast();
 
   const sendPendingTutorCommand = () => {
-    const cmd = tutorCommandRef.current;
-    if (!cmd || cmd.seq <= tutorCommandSentRef.current) return;
     if (!hadReadySessionRef.current) return; // sent on 'ready'
-    if (safeSend(JSON.stringify(cmd.message))) tutorCommandSentRef.current = cmd.seq;
+    for (const cmd of tutorCommandsRef.current ?? []) {
+      if (cmd.seq <= tutorCommandSentRef.current) continue;
+      if (!safeSend(JSON.stringify(cmd.message))) return;
+      tutorCommandSentRef.current = cmd.seq;
+    }
   };
 
   const safeSend = useCallback((data: string | ArrayBuffer) => {
@@ -548,7 +553,7 @@ export function InlineVoiceMode({
   useEffect(() => {
     sendPendingTutorCommand();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tutorCommand?.seq]);
+  }, [tutorCommands?.[tutorCommands.length - 1]?.seq]);
 
   useEffect(() => () => clearTutorTimers(), []);
 
@@ -919,6 +924,7 @@ export function InlineVoiceMode({
       case 'tutor_error':
       case 'tutor_check':
       case 'tutor_check_result':
+      case 'tutor_continued':
       case 'board_snapshot':
         onTutorMessageRef.current?.(data);
         break;
@@ -928,7 +934,10 @@ export function InlineVoiceMode({
         // everything already scheduled has played — draw its board ops then, not now.
         if (data.responseId && interruptedResponseIdsRef.current.has(data.responseId)) break;
         const ctx = audioContextRef.current;
-        const delayMs = ctx ? Math.max(0, (nextPlaybackTimeRef.current - ctx.currentTime) * 1000) : 0;
+        // Video tutor: the avatar's picture runs behind our audio clock (the provider renders the
+        // audio first), so the board waits for it — more for a server-route provider.
+        const videoLagMs = avatarActive() ? (avatarRef.current?.audioRoute === 'server' ? AVATAR_BOARD_LAG_MS.server : AVATAR_BOARD_LAG_MS.client) : 0;
+        const delayMs = (ctx ? Math.max(0, (nextPlaybackTimeRef.current - ctx.currentTime) * 1000) : 0) + videoLagMs;
         const play = () => {
           if (data.responseId && interruptedResponseIdsRef.current.has(data.responseId)) return;
           onTutorMessageRef.current?.({ ...data, type: 'sentence_play' });

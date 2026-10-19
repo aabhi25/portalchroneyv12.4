@@ -454,6 +454,8 @@ interface VoiceConversation {
   /** AI tutor session on this connection (services/tutor/tutorRunner.ts), and its lesson language. */
   tutor?: TutorRunner;
   tutorLanguage?: TutorLanguage;
+  /** The student asked the tutor to speak more slowly. */
+  tutorSlow?: boolean;
   // PCM bytes sent for the current canonical answer, and — once ai_done is
   // sent — when the client should have finished playing it. Safety net so a
   // lost playback_complete can't leave the answer "active" forever.
@@ -1420,6 +1422,7 @@ export class RealtimeVoiceService {
       language: typeof message?.language === 'string' ? message.language : null,
       voiceLanguage: conversation.turnLanguage || (conversation.selectedLanguage !== 'auto' ? conversation.selectedLanguage : conversation.detectedLanguage) || null,
       mode: conversation.avatar ? 'video' : 'voice',
+      fromStart: message?.fromStart === true,
     };
     let prepared: Awaited<ReturnType<typeof prepareVoiceTutor>>;
     try {
@@ -1434,6 +1437,7 @@ export class RealtimeVoiceService {
     // A normal answer still playing gives way to the lesson.
     if (conversation.isProcessing || this.isAnswerActive(conversation)) this.cancelResponse(conversation, false);
     conversation.tutorLanguage = prepared.language;
+    conversation.tutorSlow = message?.slow === true;
     const runner = new TutorRunner({
       host: {
         speak: (lines) => this.speakTutorLines(conversation, lines),
@@ -1447,6 +1451,7 @@ export class RealtimeVoiceService {
       store: prepared.store,
       chapter: prepared.chapter,
       language: prepared.language,
+      continueFrom: prepared.continueFrom,
     });
     conversation.tutor = runner;
     console.log(`[Tutor] Lesson started: "${prepared.chapter}" (${prepared.language}, ${request.mode})`);
@@ -4361,6 +4366,8 @@ export class RealtimeVoiceService {
 
   /** Phone calls: the business's speaking speed (percent; 100 elsewhere — website voice is unchanged). */
   private phoneSpeed(conversation: VoiceConversation): number {
+    // AI tutor "Slower": the lesson's lines (from the next one) at 85 % speed.
+    if (conversation.tutor?.active && conversation.tutorSlow) return 85;
     const s = Number(conversation.phone?.speakingSpeed);
     return conversation.phone && Number.isFinite(s) && s >= 70 && s <= 120 ? s : 100;
   }
@@ -5849,6 +5856,11 @@ Never infer intent from a single contained word. For example, "What is stop moti
       case 'tutor_dontknow':
         this.markUserActive(conversation);
         if (typeof message.checkId === 'string') conversation.tutor?.giveUpCheck(message.checkId);
+        break;
+
+      case 'tutor_speed':
+        // "Slower" in the classroom (applies from the tutor's next line).
+        conversation.tutorSlow = message.slow === true;
         break;
 
       case 'tutor_simpler':

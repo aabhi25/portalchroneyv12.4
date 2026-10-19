@@ -70,6 +70,8 @@ export interface TutorRunnerOptions {
   playbackSlackMs?: number;
   /** Clock (tests). */
   now?: () => number;
+  /** The part this student reached last time (matched by title when the plan changed since). */
+  continueFrom?: { part: number; title: string | null } | null;
 }
 
 /** Where the lesson goes on from: a part (-1 = the plan … sections.length = recap) and a line, or that part's quick check. */
@@ -84,6 +86,11 @@ const GREETING = T({
   en: (c: string) => `Let's learn ${c} together! Give me a moment to get the board ready.`,
   hinglish: (c: string) => `Chalo, aaj hum ${c} padhenge! Bas ek second, board ready ho raha hai.`,
   hi: (c: string) => `चलो, आज हम ${c} पढ़ेंगे! बस एक सेकंड, बोर्ड तैयार हो रहा है।`,
+});
+const WELCOME_BACK = T({
+  en: (t: string) => `Welcome back! Last time we got to "${t}", so let's carry on from there.`,
+  hinglish: (t: string) => `Welcome back! Pichhli baar hum "${t}" tak pahunche the, toh wahin se shuru karte hain.`,
+  hi: (t: string) => `फिर से स्वागत है! पिछली बार हम "${t}" तक पहुँचे थे, तो वहीं से शुरू करते हैं।`,
 });
 const RESUME = T({ en: "Okay, let's pick up where we left off.", hinglish: "Chalo, wahin se aage badhte hain.", hi: "चलो, वहीं से आगे बढ़ते हैं।" });
 const ACK = T({ en: "Good question! Let me show you.", hinglish: "Achha sawaal hai! Dekho.", hi: "अच्छा सवाल है! देखो।" });
@@ -255,7 +262,27 @@ export class TutorRunner {
     if (gen !== this.gen || this.isEnded()) return;
     if (greeting && (await greeting) !== "played") return;
     if (gen !== this.gen) return;
+    // Left part-way last time: carry on from that part (the plan is skipped).
+    const cont = this.continuePart();
+    if (cont != null && this.outline) {
+      const title = this.outline.sections[cont].title;
+      this.o.host.send({ type: "tutor_continued", part: cont, title });
+      if ((await this.say("aside", [{ say: WELCOME_BACK[this.L](title), ops: [] }])) !== "played") return;
+      if (gen !== this.gen) return;
+      await this.runFrom({ part: cont, line: 0, phase: "lesson" }, false);
+      return;
+    }
     await this.runFrom({ part: -1, line: 0, phase: "lesson" }, false);
+  }
+
+  /** The part to continue from, if the student left this chapter's lesson part-way. */
+  private continuePart(): number | null {
+    const c = this.o.continueFrom;
+    const sections = this.outline?.sections ?? [];
+    if (!c || !sections.length) return null;
+    const byTitle = c.title ? sections.findIndex((s) => s.title.trim().toLowerCase() === c.title!.trim().toLowerCase()) : -1;
+    const part = byTitle >= 0 ? byTitle : c.part;
+    return part > 0 && part < sections.length ? part : null;
   }
 
   private loadOutline(): Promise<LessonOutline> {
@@ -660,7 +687,7 @@ export class TutorRunner {
     await this.o.store.sessionEnded(await this.sessionId, {
       reason,
       secondsActive: this.startedAt ? Math.round((this.now() - this.startedAt) / 1000) : 0,
-      progress: { part: progress.part, line: progress.line, sections: this.outline?.sections.length ?? 0 },
+      progress: { part: progress.part, line: progress.line, sections: this.outline?.sections.length ?? 0, title: this.outline?.sections[progress.part]?.title ?? null },
       checksCorrect: this.checksCorrect,
       checksTotal: this.checksTotal,
     }).catch(() => undefined);

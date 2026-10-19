@@ -2,17 +2,26 @@
  * AI Tutor routes.
  *  - GET/PUT /api/super-admin/tutor/accounts/:businessAccountId — super admins switch the tutor
  *    on/off for an account and set minutes per student per day (audited).
- *  - GET /api/super-admin/tutor/accounts/:businessAccountId/usage — today's minutes per student.
+ *  - GET /api/super-admin/tutor/accounts/:businessAccountId/usage — today's minutes per student
+ *    and the last 7 days of lessons (count, minutes, finished, quick-check score).
+ *  - POST /api/topscholar/tutor/prewarm — the widget, when it offers "Teach me this chapter":
+ *    prepares that chapter's lesson plan in the background (signed launch token required), so a
+ *    first-ever lesson starts without the planning wait.
  */
 import { Router } from "express";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../db";
-import { businessAccounts, tutorUsageDaily } from "@shared/schema";
+import { businessAccounts, tutorSessions, tutorUsageDaily } from "@shared/schema";
 import { isChildrensAccount } from "../services/avatar/settingsService";
 import { requireAuth, requireRole } from "../auth";
 import { recordAuditEventSafely } from "../services/auditService";
 import { getTutorSettings, TutorSettingsError, TUTOR_LIMITS, updateTutorSettings } from "../services/tutor/settings";
 import { istDay } from "../services/tutor/usage";
+import { getTopscholarConfig, isTopscholarAccount } from "../services/topscholar/config";
+import { deriveHandoff } from "../services/topscholar/tokenService";
+import { lessonContext } from "../services/tutor/lessonService";
+import { getOutline, getSection } from "../services/tutor/lessonPlanner";
+import { tutorLanguageFor } from "../services/tutor/voiceTutor";
 
 const router = Router();
 
@@ -75,10 +84,52 @@ router.get("/api/super-admin/tutor/accounts/:businessAccountId/usage", requireAu
       .where(and(eq(tutorUsageDaily.businessAccountId, req.params.businessAccountId), eq(tutorUsageDaily.day, day)))
       .orderBy(desc(tutorUsageDaily.secondsUsed))
       .limit(50);
-    res.json({ day, students: rows.length, totalSeconds: rows.reduce((n, r) => n + r.secondsUsed, 0), top: rows });
+    const since = new Date(Date.now() - 7 * 24 * 3600_000);
+    const [week] = await db.select({
+      lessons: sql<number>`count(*)::int`,
+      seconds: sql<number>`coalesce(sum(${tutorSessions.secondsActive}), 0)::int`,
+      completed: sql<number>`count(*) filter (where ${tutorSessions.endReason} = 'completed')::int`,
+      students: sql<number>`count(distinct ${tutorSessions.studentKey})::int`,
+      checksCorrect: sql<number>`coalesce(sum(${tutorSessions.checksCorrect}), 0)::int`,
+      checksTotal: sql<number>`coalesce(sum(${tutorSessions.checksTotal}), 0)::int`,
+    }).from(tutorSessions)
+      .where(and(eq(tutorSessions.businessAccountId, req.params.businessAccountId), gte(tutorSessions.startedAt, since)));
+    res.json({ day, students: rows.length, totalSeconds: rows.reduce((n, r) => n + r.secondsUsed, 0), top: rows, week });
   } catch (error) {
     console.error("[Tutor] usage load failed:", error);
     res.status(500).json({ error: "Failed to load tutor usage" });
+  }
+});
+
+// Prepared plans are shared by every student on a chapter; one warm-up per chapter per half hour.
+const warmed = new Map<string, number>();
+const WARM_TTL_MS = 30 * 60_000;
+
+router.post("/api/topscholar/tutor/prewarm", async (req, res) => {
+  const businessAccountId = String(req.body?.businessAccountId || "");
+  const token = typeof req.body?.token === "string" ? req.body.token : "";
+  res.status(202).json({ ok: true }); // never makes the widget wait; nothing is returned
+  try {
+    if (!businessAccountId || !token || !isTopscholarAccount(businessAccountId)) return;
+    const settings = await getTutorSettings(businessAccountId);
+    if (!settings.enabled) return;
+    const [account] = await db.select().from(businessAccounts).where(eq(businessAccounts.id, businessAccountId)).limit(1);
+    if (!account) return;
+    const cfg = getTopscholarConfig(account as any);
+    const handoff = deriveHandoff({ tokenSecret: cfg.tokenSecret, uatPlainCpId: cfg.uatPlainCpId }, { token });
+    if (!handoff || handoff.source !== "signed" || !handoff.chapter) return;
+    const scope = { board: handoff.board, medium: handoff.medium, grade: handoff.grade, subject: handoff.subject, chapter: handoff.chapter };
+    const language = tutorLanguageFor({ language: null, voiceLanguage: null, scope });
+    const key = `${businessAccountId}|${JSON.stringify(scope)}|${handoff.cpId || ""}|${language}`;
+    const now = Date.now();
+    if ((warmed.get(key) ?? 0) > now - WARM_TTL_MS) return;
+    warmed.set(key, now);
+    if (warmed.size > 2000) warmed.delete(warmed.keys().next().value as string);
+    const { pack, complete } = await lessonContext(businessAccountId, scope, { cpIds: handoff.cpId ? [handoff.cpId] : undefined });
+    const outline = await getOutline(pack, language, complete);
+    if (outline.sections.length) await getSection(pack, outline, 0, language, complete);
+  } catch (error) {
+    console.warn("[Tutor] prewarm skipped:", error instanceof Error ? error.message : error);
   }
 });
 

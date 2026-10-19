@@ -1265,6 +1265,8 @@ export default function EmbedChat() {
   // AI tutor classroom (runs on the voice connection; see components/tutor).
   const tutor = useTutorClassroom();
   const tutorShown = tutor.state.status !== 'off';
+  // The lesson was started as a video tutor (the avatar call belongs to it and ends with it).
+  const tutorVideoRef = useRef(false);
 
   // Tell the page's widget script which conversation this is, so its WhatsApp launcher can hand the
   // visitor over with the topic (the script runs on the site's own origin and can't see this chat).
@@ -1586,14 +1588,43 @@ export default function EmbedChat() {
   // checks the chapter and the tutor switch, and says why when it can't start).
   const tutorAvailable = voiceChatAvailable && !!settings?.aiTutor?.enabled && !!businessAccountId
     && !!topscholarTokenRef.current;
-  const startTutorLesson = () => {
-    if (!tutorAvailable || activeFormStep || isFormJourneyComplete || avatarCallActive) return;
+  const startTutorLesson = (opts: { fromStart?: boolean } = {}) => {
+    if (!tutorAvailable || activeFormStep || isFormJourneyComplete) return;
     setIsMenuMode(false);
+    // Video tutor when the account has the live avatar (it joins when ready; voice starts now).
+    if (avatarAvailable && !avatarCallActive && !tutorVideoRef.current) {
+      tutorVideoRef.current = true;
+      avatarCallStartedAtRef.current = Date.now();
+      setAvatarVoice(true);
+      void liveAvatar.start();
+    }
     setIsInlineVoiceActive(true);
-    tutor.start();
+    tutor.start(opts);
   };
+  const closeTutor = () => {
+    if (tutor.active) tutor.stop();
+    tutor.close();
+    if (tutorVideoRef.current) {
+      tutorVideoRef.current = false;
+      if (isAvatarCallActive(liveAvatar.state.phase)) liveAvatar.end('visitor_closed');
+      setAvatarVoice(false);
+    }
+  };
+  // Prepare this chapter's lesson in the background as soon as the tutor is offered, so the
+  // first-ever lesson on it starts without the planning wait (plans are shared by all students).
+  const tutorPrewarmedRef = useRef(false);
+  useEffect(() => {
+    if (!tutorAvailable || tutorPrewarmedRef.current || !businessAccountId) return;
+    tutorPrewarmedRef.current = true;
+    void fetch('/api/topscholar/tutor/prewarm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ businessAccountId, token: topscholarTokenRef.current }),
+    }).catch(() => undefined);
+  }, [tutorAvailable, businessAccountId]);
   const closeInlineVoice = () => {
     tutor.close();
+    tutorVideoRef.current = false;
     setIsInlineVoiceActive(false);
     setAvatarVoice(false);
     setAvatarVoiceStatus(null);
@@ -5691,6 +5722,7 @@ export default function EmbedChat() {
       {/* Live AI avatar: video on top, transcript (with product cards) continues below. */}
       {avatarAvailable && !isMenuMode && !anyPreChatGateActive && (
         <LiveAvatarPanel
+          variant={tutorShown ? 'tile' : 'call'}
           phase={liveAvatar.state.phase}
           displayName={liveAvatar.session?.displayName || avatarDisplayName}
           styleHint={settings?.liveAvatar?.styleHint}
@@ -5735,13 +5767,16 @@ export default function EmbedChat() {
           chatColor={chatColor}
           onResume={tutor.resume}
           onSkip={tutor.skip}
+          slow={tutor.slow}
+          onSlowChange={tutor.setSlow}
+          onStartOver={() => startTutorLesson({ fromStart: true })}
           onSimpler={tutor.simpler}
           onAnswer={tutor.answer}
           onDontKnow={tutor.dontKnow}
           onAsk={tutor.ask}
           onStop={tutor.stop}
-          onRestart={startTutorLesson}
-          onClose={() => { if (tutor.active) tutor.stop(); tutor.close(); }}
+          onRestart={() => startTutorLesson()}
+          onClose={closeTutor}
         />
       )}
 
@@ -6429,14 +6464,14 @@ export default function EmbedChat() {
             paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))',
             position: 'relative',
             // Under the full-screen video call while one is on (the voice bar keeps running beneath it).
-            zIndex: avatarCallActive ? 0 : 99999
+            zIndex: avatarCallActive && !tutorShown ? 0 : 99999
           }}
         >
           {tutorAvailable && !tutorShown && !doubtLock && !avatarCallActive && !(otpState.awaiting_otp || otpState.locked) && (
             <div className="flex gap-2 pb-2 overflow-x-auto" data-testid="tutor-chips">
               <button
                 type="button"
-                onClick={startTutorLesson}
+                onClick={() => startTutorLesson()}
                 className="flex-shrink-0 h-8 px-3 rounded-full bg-white border border-gray-200 text-[13px] font-medium flex items-center gap-1.5 hover:border-gray-300 transition-colors"
                 style={{ color: chatColor }}
                 data-testid="button-tutor-teach"
@@ -6518,6 +6553,7 @@ export default function EmbedChat() {
                 onClose={() => {
                   if (isAvatarCallActive(liveAvatar.state.phase)) liveAvatar.end('visitor_closed');
                   tutor.close();
+                  tutorVideoRef.current = false;
                   setIsInlineVoiceActive(false);
                   setAvatarVoice(false);
                   setAvatarVoiceStatus(null);
@@ -6543,7 +6579,7 @@ export default function EmbedChat() {
                 listenRequest={avatarListenRequest}
                 onStatusChange={avatarVoice || tutorShown ? setAvatarVoiceStatus : undefined}
                 onTutorMessage={tutor.handleMessage}
-                tutorCommand={tutor.command}
+                tutorCommands={tutor.commands}
                 onUserMessage={(text) => {
                   const userMsg: ChatMessage = {
                     id: 'voice-user-' + Date.now(),

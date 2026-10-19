@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, GraduationCap, HelpCircle, Loader2, Maximize2, MessageCircleQuestion, Mic, Minimize2, Play, Send, SkipForward, Square, Volume2, X } from "lucide-react";
+import { Check, GraduationCap, HelpCircle, Loader2, Maximize2, MessageCircleQuestion, Mic, Minimize2, Play, RotateCcw, Send, SkipForward, Snail, Square, Volume2, X } from "lucide-react";
 import { TutorBoard } from "./TutorBoard";
 import type { ClassroomState } from "./useTutorClassroom";
 
@@ -15,6 +15,13 @@ interface Props {
   onAnswer: (checkId: string, index: number) => void;
   onDontKnow: (checkId: string) => void;
   onAsk: (text: string) => void;
+  /** "Slower" speech (from the tutor's next line). */
+  slow: boolean;
+  onSlowChange: (slow: boolean) => void;
+  /** Start the chapter from the beginning (offered when the lesson carried on from last time). */
+  onStartOver: () => void;
+  /** Told when Expand changes (a video tutor tile follows it). */
+  onExpandedChange?: (expanded: boolean) => void;
   onStop: () => void;
   onRestart: () => void;
   onClose: () => void;
@@ -35,9 +42,10 @@ const END_TEXT: Record<string, string> = {
  */
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 
-export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766e", onResume, onSkip, onSimpler, onAnswer, onDontKnow, onAsk, onStop, onRestart, onClose }: Props) {
+export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766e", onResume, onSkip, onSimpler, onAnswer, onDontKnow, onAsk, slow, onSlowChange, onStartOver, onExpandedChange, onStop, onRestart, onClose }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
+  useEffect(() => { onExpandedChange?.(expanded); }, [expanded, onExpandedChange]);
   const [askOpen, setAskOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const submitQuestion = (e: React.FormEvent) => {
@@ -54,7 +62,7 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
   useEffect(() => {
     // Leaving native full screen (Esc, the browser's own control) collapses the classroom.
     const sync = () => {
-      const on = !!root.current && document.fullscreenElement === root.current;
+      const on = !!document.fullscreenElement;
       if (nativeFullRef.current && !on) setExpanded(false);
       nativeFullRef.current = on;
       setNativeFull(on);
@@ -76,7 +84,9 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
       return;
     }
     setExpanded(true);
-    const el = root.current as (HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> }) | null;
+    // The whole widget page goes full screen and the classroom fills it, so anything layered over
+    // the classroom (the video tutor tile) stays visible.
+    const el = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> };
     try {
       if (el?.requestFullscreen) await el.requestFullscreen();
       else if (el?.webkitRequestFullscreen) await el.webkitRequestFullscreen();
@@ -105,7 +115,8 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
     <div
       ref={root}
       data-testid="tutor-classroom"
-      className={`${expanded ? (nativeFull ? "w-full h-full" : "fixed inset-0 z-[100001]") : "border-b border-gray-200"} flex flex-col bg-[#f6f4ee] text-gray-900 flex-shrink-0`}
+      className={`${expanded ? "fixed inset-0 z-[100001]" : "border-b border-gray-200"} flex flex-col bg-[#f6f4ee] text-gray-900 flex-shrink-0`}
+      data-native-fullscreen={nativeFull ? "true" : undefined}
       style={expanded ? { paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" } : undefined}
     >
       <div className="flex items-center gap-2 px-3 py-2 min-w-0">
@@ -209,6 +220,16 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
           {status === "ended" && state.endReason !== "daily_limit" && state.endReason !== "unavailable" && (
             <button type="button" onClick={onRestart} className="h-8 px-3 rounded-full text-white text-[13px] font-medium flex items-center gap-1.5" style={{ background: chatColor }} data-testid="button-tutor-restart">
               <Play className="w-3.5 h-3.5" /> {state.endReason === "completed" ? "Teach it again" : "Start the lesson"}
+            </button>
+          )}
+          {status !== "ended" && (
+            <button type="button" onClick={() => onSlowChange(!slow)} aria-pressed={slow} className={`h-8 px-3 rounded-full border text-[13px] flex items-center gap-1.5 ${slow ? "bg-gray-900 text-white border-gray-900" : "bg-white border-gray-200"}`} title="Speak more slowly" data-testid="button-tutor-slower">
+              <Snail className="w-3.5 h-3.5" /> Slower
+            </button>
+          )}
+          {state.continuedFrom && status !== "ended" && (
+            <button type="button" onClick={onStartOver} className="h-8 px-3 rounded-full bg-white border border-gray-200 text-[13px] flex items-center gap-1.5" data-testid="button-tutor-startover">
+              <RotateCcw className="w-3.5 h-3.5" /> Start over
             </button>
           )}
           {status !== "ended" && !expanded && (
