@@ -7,6 +7,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { JourneyBuilder } from "@/components/journeys/JourneyBuilder";
+import { NewJourneyDialog } from "@/components/journeys/NewJourneyDialog";
 import {
   Select,
   SelectContent,
@@ -265,6 +267,14 @@ export default function ConversationJourneys() {
       return [];
     }
   }, [selectedJourney?.triggerKeywords]);
+
+  // "When does it start?": keywords can be chosen before any keyword is typed, so it's kept here.
+  const [startMode, setStartMode] = useState<'open' | 'mentions' | 'menu'>('menu');
+  useEffect(() => {
+    if (!selectedJourney) return;
+    setStartMode(selectedJourney.startFromScratch === 'true' ? 'open' : parsedTriggerKeywords.length > 0 ? 'mentions' : 'menu');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedJourney?.id]);
 
   const loadJourneyWithSteps = useCallback((journeyId: string) => {
     setSelectedJourneyId(journeyId);
@@ -981,15 +991,6 @@ export default function ConversationJourneys() {
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <Button 
-            onClick={() => setShowImportDialog(true)} 
-            size="lg" 
-            variant="outline"
-            className="gap-2 shadow-sm hover:shadow-md transition-all border-purple-200 hover:border-purple-400 hover:bg-purple-50 dark:border-purple-800 dark:hover:border-purple-600 dark:hover:bg-purple-950/30"
-          >
-            <FileText className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-            Import from Script
-          </Button>
           <Button onClick={() => setShowTemplates(true)} size="lg" className="gap-2 shadow-md hover:shadow-lg transition-all">
             <Plus className="w-5 h-5" />
             New Journey
@@ -997,8 +998,9 @@ export default function ConversationJourneys() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-        <div className="lg:col-span-2">
+      {/* The journey list stays narrow so the builder (questions + live preview) gets the room. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] gap-6">
+        <div className="min-w-0">
           <div className="sticky top-6">
             <Card className="shadow-sm border-0 bg-gradient-to-br from-white to-gray-50/50 dark:from-gray-900 dark:to-gray-800/50">
               <CardHeader className="pb-4">
@@ -1070,7 +1072,7 @@ export default function ConversationJourneys() {
           </div>
         </div>
 
-        <div className="lg:col-span-3">
+        <div className="min-w-0">
           {isLoadingJourney ? (
             <div className="space-y-6 animate-fade-in">
               <Card className="shadow-sm">
@@ -1258,34 +1260,66 @@ export default function ConversationJourneys() {
                     </CardContent>
                   </Card>
 
-                  <Card className="bg-gradient-to-br from-orange-50/50 to-amber-50/30 dark:from-orange-950/20 dark:to-amber-950/10 border-orange-200/50 dark:border-orange-800/30 shadow-sm">
-                    <CardContent className="pt-4 pb-4">
-                      <div className="flex items-center justify-between p-3 bg-white/60 dark:bg-gray-800/30 rounded-lg">
-                        <div>
-                          <Label htmlFor="start-from-scratch" className="text-sm font-medium cursor-pointer">
-                            Start from Scratch
-                          </Label>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            Journey starts immediately - first step becomes the greeting message
-                          </p>
+                  <Card className="border-black/[0.08] shadow-sm" data-testid="journey-settings">
+                    <CardContent className="space-y-5 pb-5 pt-5">
+                      <div>
+                        <p className="text-sm font-medium">When does it start?</p>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                          {([
+                            ['open', 'As soon as the chat opens', 'The first question is the greeting. Use this for one journey only.'],
+                            ['mentions', 'When the visitor mentions…', 'Words you choose below, like "fees" or "admission".'],
+                            ['menu', 'From a menu button', 'Add it in Website chat › Settings › Chat menu & forms.'],
+                          ] as const).map(([mode, title, hint]) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => {
+                                setStartMode(mode);
+                                updateJourneyMutation.mutate({
+                                  id: selectedJourney.id,
+                                  data: mode === 'open'
+                                    ? { startFromScratch: 'true' }
+                                    : mode === 'mentions'
+                                      ? { startFromScratch: 'false' }
+                                      : { startFromScratch: 'false', triggerKeywords: null as unknown as string, triggerMode: 'manual' },
+                                });
+                              }}
+                              className={`rounded-xl border p-3 text-left transition-colors ${startMode === mode ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:bg-gray-50'}`}
+                              data-testid={`start-${mode}`}
+                            >
+                              <span className={`block text-sm font-medium ${startMode === mode ? 'text-purple-900' : 'text-gray-800'}`}>{title}</span>
+                              <span className="mt-0.5 block text-xs text-muted-foreground">{hint}</span>
+                            </button>
+                          ))}
                         </div>
-                        <Switch
-                          id="start-from-scratch"
-                          checked={selectedJourney.startFromScratch === 'true'}
-                          onCheckedChange={(checked) => {
-                            updateJourneyMutation.mutate({
-                              id: selectedJourney.id,
-                              data: { startFromScratch: checked ? 'true' : 'false' },
-                            });
-                            toast({ title: checked ? "Journey will start from scratch" : "Journey requires trigger keywords" });
-                          }}
-                          className="data-[state=checked]:bg-orange-600"
-                        />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">How are the questions asked?</p>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          {([
+                            ['form', 'Exactly as written', 'Your words, with buttons for options. Answers are checked (mobile, email).'],
+                            ['conversational', "In the AI's own words", 'Feels more natural, and the AI can answer side questions on the way.'],
+                          ] as const).map(([type, title, hint]) => {
+                            const active = (selectedJourney.journeyType === 'form' ? 'form' : 'conversational') === type;
+                            return (
+                              <button
+                                key={type}
+                                type="button"
+                                onClick={() => !active && updateJourneyMutation.mutate({ id: selectedJourney.id, data: { journeyType: type } })}
+                                className={`rounded-xl border p-3 text-left transition-colors ${active ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:bg-gray-50'}`}
+                                data-testid={`asks-${type}`}
+                              >
+                                <span className={`block text-sm font-medium ${active ? 'text-purple-900' : 'text-gray-800'}`}>{title}</span>
+                                <span className="mt-0.5 block text-xs text-muted-foreground">{hint}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
 
-                  {selectedJourney.startFromScratch !== 'true' && (
+                  {startMode === 'mentions' && (
                     <Card className="bg-gradient-to-br from-purple-50/50 to-pink-50/30 dark:from-purple-950/20 dark:to-pink-950/10 border-purple-200/50 dark:border-purple-800/30 shadow-sm">
                       <CardHeader className="pb-4">
                         <CardTitle className="text-base">Trigger Keywords</CardTitle>
@@ -1474,111 +1508,17 @@ export default function ConversationJourneys() {
                   )}
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xl font-semibold">Conversation Steps</h3>
-                    <div className="flex items-center gap-2">
-                      {sortedSteps.length > 0 && (
-                        <Button
-                          variant="outline"
-                          onClick={() => setJourneyMapOpen(true)}
-                          className="gap-2 shadow-sm hover:shadow-md transition-all"
-                        >
-                          <Route className="w-4 h-4" />
-                          View Journey Map
-                        </Button>
-                      )}
-                      <Button
-                        onClick={() => {
-                          setEditingStep(null);
-                          resetStepForm();
-                          setStepDialogOpen(true);
-                        }}
-                        className="gap-2 shadow-sm hover:shadow-md transition-all"
-                      >
-                        <Plus className="w-4 h-4" />
-                        Add Step
-                      </Button>
-                    </div>
+                  <div>
+                    <h3 className="text-xl font-semibold">Questions</h3>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Asked one after another, top to bottom. Click a question to change it, and try the journey on the right.
+                    </p>
                   </div>
-
-                  {!selectedJourney.steps || selectedJourney.steps.length === 0 ? (
-                    <div className="text-center py-16 border-2 border-dashed rounded-xl bg-gradient-to-br from-gray-50/50 to-white dark:from-gray-800/30 dark:to-gray-900/20">
-                      <MessageSquare className="w-16 h-16 mx-auto mb-4 opacity-20" />
-                      <p className="text-base font-medium text-muted-foreground mb-1">No steps yet</p>
-                      <p className="text-sm text-muted-foreground">Add questions to guide the conversation</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {sortedSteps.map((step, index) => (
-                        <div
-                          key={step.id}
-                          draggable
-                          onDragStart={() => handleDragStart(step.id)}
-                          onDragOver={(e) => handleDragOver(e, step.id)}
-                          onDragEnd={handleDragEnd}
-                          className="group flex items-start gap-4 p-5 border-0 rounded-xl bg-gradient-to-br from-white to-gray-50/50 dark:from-gray-800/50 dark:to-gray-900/30 hover:shadow-lg transition-all duration-300 cursor-move hover:scale-[1.02] shadow-sm"
-                        >
-                          <GripVertical className="w-5 h-5 text-gray-400 mt-1 flex-shrink-0 group-hover:text-blue-500 transition-colors" />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-3">
-                              <span className="text-xs font-semibold text-blue-600 bg-blue-100 dark:bg-blue-900/40 px-2.5 py-1 rounded-full">
-                                Step {index + 1}
-                              </span>
-                              {step.isRequired === 'true' && (
-                                <span className="text-xs font-semibold text-red-600 bg-red-100 dark:bg-red-900/40 px-2.5 py-1 rounded-full">
-                                  Required
-                                </span>
-                              )}
-                              {step.toolTrigger && step.toolTrigger !== 'none' && (
-                                <span className="text-xs font-semibold text-purple-600 bg-purple-100 dark:bg-purple-900/40 px-2.5 py-1 rounded-full">
-                                  {step.toolTrigger}
-                                </span>
-                              )}
-                              {step.branchingCondition && (() => {
-                                try {
-                                  const branchConfig = JSON.parse(step.branchingCondition);
-                                  const routeCount = branchConfig.routes?.length || 0;
-                                  if (routeCount > 0) {
-                                    return (
-                                      <span className="flex items-center gap-1 text-xs font-semibold text-orange-600 bg-orange-100 dark:bg-orange-900/40 px-2.5 py-1 rounded-full">
-                                        <GitBranch className="w-3 h-3" />
-                                        {routeCount} {routeCount === 1 ? 'route' : 'routes'}
-                                      </span>
-                                    );
-                                  }
-                                } catch (e) {
-                                  return null;
-                                }
-                                return null;
-                              })()}
-                            </div>
-                            <p className="text-base font-medium leading-relaxed">{step.questionText}</p>
-                            <p className="text-sm text-muted-foreground mt-2">
-                              Type: <span className="font-medium">{step.questionType}</span>
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => handleEditStep(step)}
-                              className="hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => handleDeleteStep(step.id)}
-                              className="hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
-                            >
-                              <Trash2 className="w-4 h-4 text-red-600" />
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <JourneyBuilder
+                    journeyId={selectedJourney.id}
+                    steps={selectedJourney.steps ?? []}
+                    aiWords={selectedJourney.journeyType !== 'form'}
+                  />
                 </CardContent>
               </Card>
 
@@ -1624,893 +1564,15 @@ export default function ConversationJourneys() {
         </div>
       </div>
 
-      <Dialog open={showTemplates} onOpenChange={setShowTemplates}>
-        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Choose Journey Type</DialogTitle>
-            <DialogDescription>
-              Choose a journey type to get started
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-            {JOURNEY_TYPES.map((type) => {
-              const Icon = type.icon;
-              const isConversational = type.journeyType === "conversational";
-              return (
-                <Card
-                  key={type.id}
-                  className={`cursor-pointer transition-colors ${isConversational ? 'hover:border-blue-500' : 'hover:border-purple-500'}`}
-                  onClick={() => handleCreateFromTemplate(type)}
-                >
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Icon className={`w-5 h-5 ${isConversational ? 'text-blue-600' : 'text-purple-600'}`} />
-                      {type.name}
-                    </CardTitle>
-                    <CardDescription>{type.description}</CardDescription>
-                  </CardHeader>
-                </Card>
-              );
-            })}
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={stepDialogOpen} onOpenChange={setStepDialogOpen}>
-        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col p-0">
-          <DialogHeader className="px-6 pt-6 pb-4 border-b">
-            <DialogTitle>{editingStep ? "Edit Step" : "Add Step"}</DialogTitle>
-            <DialogDescription>
-              Configure the question and response handling
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex-1 overflow-y-auto px-6 py-4">
-          <div className="space-y-4">
-            {/* Tool Trigger - shown first */}
-            <div>
-              <Label htmlFor="toolTrigger">Step Type</Label>
-              <Select
-                value={stepForm.toolTrigger}
-                onValueChange={(value) => setStepForm({ ...stepForm, toolTrigger: value })}
-              >
-                <SelectTrigger id="toolTrigger" className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {TOOL_TRIGGERS
-                    .filter((trigger) => {
-                      // For form journeys, only show none, book_appointment, and journey_complete
-                      if (selectedJourney?.journeyType === 'form') {
-                        return ['none', 'book_appointment', 'journey_complete'].includes(trigger.value);
-                      }
-                      // For conversational journeys, hide journey_complete
-                      return trigger.value !== 'journey_complete';
-                    })
-                    .map((trigger) => (
-                    <SelectItem key={trigger.value} value={trigger.value}>
-                      {trigger.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground mt-1">
-                {stepForm.toolTrigger === 'none' 
-                  ? 'Ask a question and collect user response'
-                  : stepForm.toolTrigger === 'journey_complete'
-                  ? 'Show a completion message and optionally let users continue chatting'
-                  : 'This step will trigger an action (no question needed)'}
-              </p>
-            </div>
-
-            {/* Journey Complete configuration */}
-            {stepForm.toolTrigger === 'journey_complete' && (
-              <div className="space-y-4 p-4 bg-green-50 dark:bg-green-950/20 rounded-lg border border-green-200 dark:border-green-800">
-                <div className="flex items-center gap-2 mb-2">
-                  <CheckCircle2 className="w-5 h-5 text-green-600" />
-                  <Label className="text-sm font-semibold">Journey Complete Settings</Label>
-                </div>
-                
-                <div>
-                  <Label htmlFor="completionMessage">Completion Message *</Label>
-                  <Textarea
-                    id="completionMessage"
-                    value={stepForm.questionText}
-                    onChange={(e) => setStepForm({ ...stepForm, questionText: e.target.value })}
-                    placeholder="Thank you for completing the form! We'll be in touch soon."
-                    className="mt-1"
-                    rows={3}
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    This message is shown when the journey ends
-                  </p>
-                </div>
-
-                <div>
-                  <Label htmlFor="completionButtonText">Continue Button (Optional)</Label>
-                  <Input
-                    id="completionButtonText"
-                    value={stepForm.completionButtonText}
-                    onChange={(e) => setStepForm({ ...stepForm, completionButtonText: e.target.value })}
-                    placeholder="Continue Exploring"
-                    className="mt-1"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    If set, shows a button that opens normal AI chat
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Question configuration - only shown when no tool is selected */}
-            {stepForm.toolTrigger === 'none' && (
-              <>
-                <div>
-                  <Label htmlFor="questionText">Question Text *</Label>
-                  <Textarea
-                    id="questionText"
-                    value={stepForm.questionText}
-                    onChange={(e) => setStepForm({ ...stepForm, questionText: e.target.value })}
-                    placeholder="What would you like to ask the user?"
-                    className="mt-1"
-                    rows={3}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="questionType">Field Type</Label>
-                  <Select
-                    value={stepForm.questionType}
-                    onValueChange={(value) => setStepForm({ ...stepForm, questionType: value, multipleChoiceOptions: (value !== 'dropdown' && value !== 'radio') ? [] : stepForm.multipleChoiceOptions })}
-                  >
-                    <SelectTrigger id="questionType" className="mt-1">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {FIELD_TYPES.map((type) => (
-                        <SelectItem key={type.value} value={type.value}>
-                          {type.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Answer Options - shown when Dropdown or Radio is selected */}
-                {(stepForm.questionType === 'dropdown' || stepForm.questionType === 'radio') && (
-                  <div className="border rounded-lg p-4 bg-purple-50/50 dark:bg-purple-950/20">
-                    <Label className="mb-2 block">Answer Options</Label>
-                    <p className="text-xs text-muted-foreground mb-3">
-                      Add the choices users can select from (e.g., Yes, No, Maybe)
-                    </p>
-                    <div className="space-y-2">
-                      {stepForm.multipleChoiceOptions.map((option, index) => (
-                        <div key={index} className="flex items-center gap-2">
-                          <Input
-                            value={option}
-                            onChange={(e) => {
-                              const newOptions = [...stepForm.multipleChoiceOptions];
-                              newOptions[index] = e.target.value;
-                              setStepForm({ ...stepForm, multipleChoiceOptions: newOptions });
-                            }}
-                            placeholder={`Option ${index + 1}`}
-                            className="flex-1"
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              const newOptions = stepForm.multipleChoiceOptions.filter((_, i) => i !== index);
-                              setStepForm({ ...stepForm, multipleChoiceOptions: newOptions });
-                            }}
-                            className="h-9 w-9 p-0 hover:bg-red-100 dark:hover:bg-red-900/30"
-                          >
-                            <X className="w-4 h-4 text-red-500" />
-                          </Button>
-                        </div>
-                      ))}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setStepForm({ ...stepForm, multipleChoiceOptions: [...stepForm.multipleChoiceOptions, ''] })}
-                        className="w-full mt-2"
-                      >
-                        <Plus className="w-4 h-4 mr-1" />
-                        Add Option
-                      </Button>
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="isRequired"
-                    checked={stepForm.isRequired === 'true'}
-                    onCheckedChange={(checked) => setStepForm({ ...stepForm, isRequired: checked ? 'true' : 'false' })}
-                  />
-                  <Label htmlFor="isRequired" className="cursor-pointer">
-                    This field is required
-                  </Label>
-                </div>
-
-                {/* CRM Field Key - maps this step's answer into LeadSquared */}
-                <div className="space-y-2">
-                  <Label htmlFor="crmFieldKey">CRM Field Key (Optional)</Label>
-                  <Input
-                    id="crmFieldKey"
-                    data-testid="input-crm-field-key"
-                    placeholder="e.g., Course, Budget, mx_Interest"
-                    value={stepForm.crmFieldKey}
-                    onChange={(e) => setStepForm({ ...stepForm, crmFieldKey: e.target.value })}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Tag this answer with a key, then map it to a LeadSquared field in CRM settings using <span className="font-mono">journey.{stepForm.crmFieldKey.trim() || "yourKey"}</span>.
-                  </p>
-                </div>
-
-                {/* Exit on Answer - only for dropdown/radio in form journeys */}
-                {selectedJourney?.journeyType === 'form' && (stepForm.questionType === 'dropdown' || stepForm.questionType === 'radio') && stepForm.multipleChoiceOptions.length > 0 && (
-                  <div className="border-t pt-4 mt-4">
-                    <div className="flex items-center gap-2 mb-3">
-                      <X className="w-4 h-4 text-orange-500" />
-                      <Label className="text-sm font-semibold">Exit on Answer (Optional)</Label>
-                    </div>
-                    <p className="text-xs text-muted-foreground mb-3">
-                      End the journey when a specific answer is selected
-                    </p>
-                    
-                    <div className="space-y-3">
-                      <div>
-                        <Label htmlFor="exitOnValue" className="text-sm">Exit when answer is</Label>
-                        <Select
-                          value={stepForm.exitOnValue || "none"}
-                          onValueChange={(value) => setStepForm({ ...stepForm, exitOnValue: value === "none" ? "" : value })}
-                        >
-                          <SelectTrigger id="exitOnValue" className="mt-1">
-                            <SelectValue placeholder="Select an option..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">No exit condition</SelectItem>
-                            {stepForm.multipleChoiceOptions.filter(opt => opt.trim()).map((option, index) => (
-                              <SelectItem key={index} value={option}>{option}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      
-                      {stepForm.exitOnValue && (
-                        <div>
-                          <Label htmlFor="exitMessage" className="text-sm">Exit message</Label>
-                          <Textarea
-                            id="exitMessage"
-                            value={stepForm.exitMessage}
-                            onChange={(e) => setStepForm({ ...stepForm, exitMessage: e.target.value })}
-                            placeholder="Thank you for your time! We'll be in touch if anything changes."
-                            className="mt-1"
-                            rows={2}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Skip to Step - only for dropdown/radio in form journeys */}
-                {selectedJourney?.journeyType === 'form' && (stepForm.questionType === 'dropdown' || stepForm.questionType === 'radio') && stepForm.multipleChoiceOptions.length > 0 && (
-                  <div className="border-t pt-4 mt-4">
-                    <div className="flex items-center gap-2 mb-3">
-                      <SkipForward className="w-4 h-4 text-blue-500" />
-                      <Label className="text-sm font-semibold">Skip to Step (Optional)</Label>
-                    </div>
-                    <p className="text-xs text-muted-foreground mb-3">
-                      Jump to a specific step when a certain answer is selected
-                    </p>
-                    
-                    <div className="space-y-3">
-                      <div>
-                        <Label htmlFor="skipOnValue" className="text-sm">Skip when answer is</Label>
-                        <Select
-                          value={stepForm.skipOnValue || "none"}
-                          onValueChange={(value) => setStepForm({ ...stepForm, skipOnValue: value === "none" ? "" : value, skipToStepIndex: value === "none" ? null : stepForm.skipToStepIndex })}
-                        >
-                          <SelectTrigger id="skipOnValue" className="mt-1">
-                            <SelectValue placeholder="Select an option..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">No skip condition</SelectItem>
-                            {stepForm.multipleChoiceOptions.filter(opt => opt.trim()).map((option, index) => (
-                              <SelectItem key={index} value={option}>{option}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      
-                      {stepForm.skipOnValue && (
-                        <div>
-                          <Label htmlFor="skipToStepIndex" className="text-sm">Skip to step</Label>
-                          <Select
-                            value={stepForm.skipToStepIndex !== null ? String(stepForm.skipToStepIndex) : "none"}
-                            onValueChange={(value) => setStepForm({ ...stepForm, skipToStepIndex: value === "none" ? null : Number(value) })}
-                          >
-                            <SelectTrigger id="skipToStepIndex" className="mt-1">
-                              <SelectValue placeholder="Select a step..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="none">Select a step</SelectItem>
-                              {selectedJourney?.steps?.filter((s) => {
-                                const currentStepOrder = editingStep ? Number(editingStep.stepOrder) : (selectedJourney.steps?.length || 0);
-                                return Number(s.stepOrder) > currentStepOrder;
-                              }).map((s) => {
-                                const label = s.questionText?.trim() || (s.toolTrigger && s.toolTrigger !== 'none' ? `[${s.toolTrigger}]` : '[No label]');
-                                return (
-                                  <SelectItem key={s.id} value={String(s.stepOrder)}>
-                                    Step {Number(s.stepOrder) + 1}: {label.substring(0, 40)}{label.length > 40 ? '...' : ''}
-                                  </SelectItem>
-                                );
-                              })}
-                            </SelectContent>
-                          </Select>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            All steps between this one and the target will be skipped
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-                
-                {/* Conditional Step Checkbox */}
-                <div className="border-t pt-4 mt-4">
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id="isConditional"
-                      checked={stepForm.isConditional}
-                      onChange={(e) => setStepForm({ ...stepForm, isConditional: e.target.checked })}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                    />
-                    <Label htmlFor="isConditional" className="text-sm font-medium cursor-pointer">
-                      Conditional step (only shown when skipped to)
-                    </Label>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1 ml-6">
-                    When enabled, this step will only appear if explicitly jumped to via a "Skip to Step" condition. It will be skipped during normal journey progression.
-                  </p>
-                </div>
-              </>
-            )}
-            
-            {/* Conditional Branching Section - hidden for form journeys */}
-            {selectedJourney?.journeyType !== 'form' && (
-            <div className="border-t pt-4 mt-6">
-              <div className="flex items-center gap-2 mb-4">
-                <GitBranch className="w-5 h-5 text-purple-600" />
-                <Label className="text-base font-semibold">Conditional Branching (Optional)</Label>
-              </div>
-              <p className="text-sm text-muted-foreground mb-4">
-                Route users to different steps based on their response
-              </p>
-              
-              {/* Existing Branch Routes */}
-              {branchRoutes.length > 0 && (
-                <div className="space-y-2 mb-4">
-                  {branchRoutes.map((route, index) => (
-                    <div key={index} className="flex items-center gap-2 p-3 bg-purple-50 dark:bg-purple-950/20 rounded-lg border border-purple-200 dark:border-purple-800">
-                      <ArrowRight className="w-4 h-4 text-purple-600 flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">
-                          {route.label || `If response ${route.matchType} "${route.matchValue}"`}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Go to step: {sortedSteps.find(s => s.id === route.targetStepId)?.questionText.substring(0, 40) || 'Unknown'}
-                        </p>
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setBranchRoutes(branchRoutes.filter((_, i) => i !== index))}
-                        className="hover:bg-red-100 dark:hover:bg-red-900/40 flex-shrink-0"
-                      >
-                        <X className="w-4 h-4 text-red-600" />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              
-              {/* Add New Route Form */}
-              <Card className="bg-gray-50/50 dark:bg-gray-800/30">
-                <CardContent className="p-4 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <Label htmlFor="matchType" className="text-xs">Match Type</Label>
-                      <Select
-                        value={newRoute.matchType}
-                        onValueChange={(value) => setNewRoute({ ...newRoute, matchType: value as any })}
-                      >
-                        <SelectTrigger id="matchType" className="mt-1 h-9">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="contains">Contains</SelectItem>
-                          <SelectItem value="exact">Exact Match</SelectItem>
-                          <SelectItem value="regex">Regex</SelectItem>
-                          <SelectItem value="any">Any (Default)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label htmlFor="matchValue" className="text-xs">Match Value</Label>
-                      <Input
-                        id="matchValue"
-                        value={newRoute.matchValue}
-                        onChange={(e) => setNewRoute({ ...newRoute, matchValue: e.target.value })}
-                        placeholder="e.g., MBA, yes, engineering"
-                        className="mt-1 h-9"
-                        disabled={newRoute.matchType === 'any'}
-                      />
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <Label htmlFor="targetStep" className="text-xs">Go to Step</Label>
-                    <Select
-                      value={newRoute.targetStepId}
-                      onValueChange={(value) => setNewRoute({ ...newRoute, targetStepId: value })}
-                    >
-                      <SelectTrigger id="targetStep" className="mt-1 h-9">
-                        <SelectValue placeholder="Select target step" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {sortedSteps
-                          .filter(s => {
-                            if (!editingStep) return true;
-                            // Only show steps that come AFTER the current step (prevent loops)
-                            return s.stepOrder > editingStep.stepOrder;
-                          })
-                          .map((step, index) => {
-                            // Find actual position in full sorted list for correct numbering
-                            const actualPosition = sortedSteps.findIndex(s => s.id === step.id) + 1;
-                            return (
-                              <SelectItem key={step.id} value={step.id}>
-                                Step {actualPosition}: {step.questionText.substring(0, 50)}
-                              </SelectItem>
-                            );
-                          })}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  
-                  <div>
-                    <Label htmlFor="routeLabel" className="text-xs">Label (Optional)</Label>
-                    <Input
-                      id="routeLabel"
-                      value={newRoute.label}
-                      onChange={(e) => setNewRoute({ ...newRoute, label: e.target.value })}
-                      placeholder="e.g., If user is interested in MBA"
-                      className="mt-1 h-9"
-                    />
-                  </div>
-                  
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => {
-                      if (!newRoute.targetStepId) {
-                        toast({ title: "Please select a target step", variant: "destructive" });
-                        return;
-                      }
-                      if (newRoute.matchType !== 'any' && !newRoute.matchValue) {
-                        toast({ title: "Please enter a match value", variant: "destructive" });
-                        return;
-                      }
-                      
-                      setBranchRoutes([...branchRoutes, { ...newRoute }]);
-                      setNewRoute({
-                        matchType: 'contains',
-                        matchValue: '',
-                        targetStepId: '',
-                        label: '',
-                      });
-                      toast({ title: "Branch route added" });
-                    }}
-                    className="w-full"
-                    variant="outline"
-                  >
-                    <Plus className="w-4 h-4 mr-2" />
-                    Add Branch Route
-                  </Button>
-                </CardContent>
-              </Card>
-              
-              {/* Default Fallback Step */}
-              {branchRoutes.length > 0 && (
-                <div className="mt-4 p-4 bg-blue-50/50 dark:bg-blue-950/20 rounded-lg border border-blue-200/50 dark:border-blue-800/30">
-                  <Label htmlFor="defaultNextStep" className="text-sm font-medium">Default Fallback Step (Optional)</Label>
-                  <p className="text-xs text-muted-foreground mb-2 mt-1">
-                    If no conditions match, jump to this step instead of the next sequential one
-                  </p>
-                  <Select
-                    value={defaultNextStepId || undefined}
-                    onValueChange={(value) => setDefaultNextStepId(value || null)}
-                  >
-                    <SelectTrigger id="defaultNextStep" className="mt-1 h-9">
-                      <SelectValue placeholder="Next sequential step (default)" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {sortedSteps
-                        .filter(s => {
-                          if (!editingStep) return true;
-                          return s.stepOrder > editingStep.stepOrder;
-                        })
-                        .map((step) => {
-                          // Find actual position in full sorted list for correct numbering
-                          const actualPosition = sortedSteps.findIndex(s => s.id === step.id) + 1;
-                          return (
-                            <SelectItem key={step.id} value={step.id}>
-                              Step {actualPosition}: {step.questionText.substring(0, 50)}
-                            </SelectItem>
-                          );
-                        })}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-            </div>
-            )}
-          </div>
-          </div>
-          <DialogFooter className="px-6 py-4 border-t bg-gray-50/50 dark:bg-gray-900/50">
-            <Button variant="outline" onClick={() => setStepDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleSaveStep} disabled={(stepForm.toolTrigger === 'none' || stepForm.toolTrigger === 'journey_complete') && !stepForm.questionText}>
-              <Save className="w-4 h-4 mr-2" />
-              {editingStep ? "Update" : "Add"} Step
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Journey Map Dialog - True Flowchart View */}
-      <Dialog open={journeyMapOpen} onOpenChange={setJourneyMapOpen}>
-        <DialogContent className="max-w-6xl max-h-[90vh] flex flex-col p-0">
-          <DialogHeader className="px-6 py-4 border-b flex-shrink-0">
-            <DialogTitle className="flex items-center gap-2">
-              <Route className="w-5 h-5 text-blue-600" />
-              Journey Flow: {selectedJourney?.name}
-            </DialogTitle>
-            <DialogDescription>
-              Visual process flow showing all paths and decision branches
-            </DialogDescription>
-          </DialogHeader>
-          <div className="overflow-auto px-6 py-6 flex-1 min-h-0">
-            {sortedSteps.length === 0 ? (
-              <div className="text-center py-12">
-                <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                <p className="text-sm text-muted-foreground">No steps in this journey yet</p>
-              </div>
-            ) : (
-              (() => {
-                // Build flow analysis data - include both skipToStepIndex and branchingCondition
-                type BranchTarget = {
-                  label: string;
-                  targetStepNum: number;
-                  type: 'skip' | 'branch';
-                };
-                
-                type FlowNode = {
-                  step: typeof sortedSteps[0];
-                  index: number;
-                  stepNumber: number;
-                  branches: BranchTarget[];
-                  normalPathLabel: string;
-                  isConditional: boolean;
-                  isEndStep: boolean;
-                  hasBranching: boolean;
-                };
-
-                const flowNodes: FlowNode[] = sortedSteps.map((step, idx) => {
-                  const branches: BranchTarget[] = [];
-                  let normalPathLabel = '';
-                  
-                  // 1. Check skipToStepIndex in multipleChoiceOptions
-                  try {
-                    if (step.multipleChoiceOptions) {
-                      const opts = typeof step.multipleChoiceOptions === 'string' 
-                        ? JSON.parse(step.multipleChoiceOptions) 
-                        : step.multipleChoiceOptions;
-                      if (Array.isArray(opts)) {
-                        opts.forEach((opt: string | { label?: string; value?: string; skipToStepIndex?: number }) => {
-                          if (typeof opt === 'object' && opt.skipToStepIndex !== undefined) {
-                            branches.push({
-                              label: opt.label || opt.value || 'Skip',
-                              targetStepNum: opt.skipToStepIndex + 1,
-                              type: 'skip'
-                            });
-                          } else {
-                            const lbl = typeof opt === 'string' ? opt : (opt.label || opt.value || '');
-                            if (!normalPathLabel) normalPathLabel = lbl;
-                          }
-                        });
-                      }
-                    }
-                  } catch (e) {}
-                  
-                  // 2. Check branchingCondition routes
-                  try {
-                    if (step.branchingCondition) {
-                      const branchConfig = JSON.parse(step.branchingCondition) as { routes?: BranchRoute[], defaultNextStepId?: string | null };
-                      if (branchConfig.routes && Array.isArray(branchConfig.routes)) {
-                        branchConfig.routes.forEach((route: BranchRoute) => {
-                          const targetStep = sortedSteps.find(s => s.id === route.targetStepId);
-                          if (targetStep) {
-                            const targetIdx = sortedSteps.findIndex(s => s.id === route.targetStepId);
-                            branches.push({
-                              label: route.label || route.matchValue || 'Branch',
-                              targetStepNum: targetIdx + 1,
-                              type: 'branch'
-                            });
-                          }
-                        });
-                      }
-                    }
-                  } catch (e) {}
-                  
-                  // Fallback label for normal path
-                  if (!normalPathLabel) normalPathLabel = 'Continue';
-
-                  // Normalize isConditional to handle both string and boolean values
-                  const isConditionalNormalized = step.isConditional === 'true' || 
-                    (step.isConditional as unknown) === true;
-                  
-                  return {
-                    step,
-                    index: idx,
-                    stepNumber: idx + 1,
-                    branches,
-                    normalPathLabel,
-                    isConditional: isConditionalNormalized,
-                    isEndStep: step.toolTrigger === 'journey_complete',
-                    hasBranching: branches.length > 0
-                  };
-                });
-
-                // Find which steps are branch targets
-                const branchTargetSteps = new Set<number>();
-                flowNodes.forEach(fn => fn.branches.forEach(b => branchTargetSteps.add(b.targetStepNum)));
-
-                // Build the two-lane flowchart: Main path (left) and Skip path (right)
-                const renderStepNode = (node: FlowNode, lane: 'main' | 'skip') => {
-                  const { step, stepNumber, isConditional, isEndStep } = node;
-                  
-                  return (
-                    <div 
-                      className={`flex items-center gap-3 px-4 py-3 rounded-xl shadow-md w-[240px]
-                        ${isConditional 
-                          ? 'border-2 border-dashed border-purple-400 bg-purple-50/50 dark:bg-purple-950/30' 
-                          : isEndStep 
-                            ? 'border-2 border-green-400 bg-green-50 dark:bg-green-950/30'
-                            : lane === 'skip'
-                              ? 'border-2 border-orange-300 bg-orange-50 dark:bg-orange-950/30'
-                              : 'border border-blue-200 bg-white dark:bg-gray-800 dark:border-blue-800'
-                        }`}
-                    >
-                      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm text-white
-                        ${isConditional ? 'bg-purple-500' : isEndStep ? 'bg-green-500' : lane === 'skip' ? 'bg-orange-500' : 'bg-blue-600'}`}>
-                        {stepNumber}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-xs text-gray-900 dark:text-gray-100 line-clamp-2">
-                          {step.questionText || step.toolTrigger}
-                        </div>
-                        <div className="flex items-center gap-1 mt-1 flex-wrap">
-                          {step.toolTrigger && step.toolTrigger !== 'none' && (
-                            <span className="text-[9px] bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 px-1 py-0.5 rounded">
-                              {step.toolTrigger}
-                            </span>
-                          )}
-                          {isConditional && (
-                            <span className="text-[9px] bg-purple-200 dark:bg-purple-800 text-purple-700 dark:text-purple-200 px-1 py-0.5 rounded">
-                              conditional
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                };
-
-                // Build paths for visualization
-                // Main path: steps that are not conditional (normal flow)
-                // Skip path: conditional steps that are only reached via skip
-
-                return (
-                  <div className="flex flex-col items-center min-w-fit">
-                    {/* Start Node */}
-                    <div className="flex flex-col items-center mb-3">
-                      <div className="w-12 h-12 rounded-full bg-green-500 text-white flex items-center justify-center shadow-lg">
-                        <CircleDot className="w-6 h-6" />
-                      </div>
-                      <span className="text-xs font-medium text-green-600 mt-1">START</span>
-                    </div>
-
-                    {/* Two-lane flow */}
-                    <div className="flex gap-16 relative">
-                      {/* Left Lane: Main Path */}
-                      <div className="flex flex-col items-center">
-                        <div className="text-xs font-semibold text-blue-600 mb-3 px-3 py-1 bg-blue-50 rounded-full border border-blue-200">
-                          Main Path
-                        </div>
-                        
-                        {flowNodes.map((node, nodeIdx) => {
-                          // Skip conditional steps in main path
-                          if (node.isConditional) return null;
-                          
-                          const isLast = nodeIdx === flowNodes.length - 1 || 
-                            flowNodes.slice(nodeIdx + 1).every(n => n.isConditional);
-                          
-                          return (
-                            <div key={node.step.id} className="flex flex-col items-center">
-                              {/* Arrow connector from previous */}
-                              {nodeIdx > 0 && !flowNodes[nodeIdx - 1]?.isConditional && (
-                                <div className="flex flex-col items-center mb-2">
-                                  <div className="w-0.5 h-4 bg-blue-300 dark:bg-blue-600" />
-                                  <ArrowDown className="w-4 h-4 text-blue-400 -mt-1" />
-                                </div>
-                              )}
-                              
-                              {/* Step Node */}
-                              {renderStepNode(node, 'main')}
-                              
-                              {/* Branching indicator - shows when step has branches */}
-                              {node.hasBranching && (
-                                <div className="flex flex-col items-center mt-3">
-                                  <div className="w-8 h-8 bg-orange-100 dark:bg-orange-900/50 border-2 border-orange-400 rotate-45 flex items-center justify-center shadow">
-                                    <span className="text-orange-600 dark:text-orange-300 text-xs font-bold -rotate-45">?</span>
-                                  </div>
-                                  
-                                  {/* Branch labels */}
-                                  <div className="flex gap-8 mt-3 items-start flex-wrap justify-center">
-                                    {/* Continue/Normal path */}
-                                    <div className="flex flex-col items-center">
-                                      <div className="px-2 py-1 bg-blue-100 dark:bg-blue-900/40 rounded-full border border-blue-300 text-[10px] font-semibold text-blue-700">
-                                        "{node.normalPathLabel}"
-                                      </div>
-                                      <div className="w-0.5 h-4 bg-blue-300 mt-1" />
-                                      <ArrowDown className="w-3 h-3 text-blue-400 -mt-0.5" />
-                                      <span className="text-[9px] text-blue-600">Next step</span>
-                                    </div>
-                                    
-                                    {/* Branch paths (skip + branchingCondition) */}
-                                    {node.branches.map((branch, bIdx) => (
-                                      <div key={bIdx} className="flex flex-col items-center">
-                                        <div className={`px-2 py-1 rounded-full border text-[10px] font-semibold
-                                          ${branch.type === 'skip' 
-                                            ? 'bg-orange-100 dark:bg-orange-900/40 border-orange-300 text-orange-700' 
-                                            : 'bg-purple-100 dark:bg-purple-900/40 border-purple-300 text-purple-700'
-                                          }`}>
-                                          "{branch.label}"
-                                        </div>
-                                        <div className="flex items-center gap-1 mt-1">
-                                          <ArrowRight className={`w-3 h-3 ${branch.type === 'skip' ? 'text-orange-500' : 'text-purple-500'}`} />
-                                          <span className={`text-[10px] font-medium ${branch.type === 'skip' ? 'text-orange-600' : 'text-purple-600'}`}>
-                                            Step {branch.targetStepNum}
-                                          </span>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                              
-                              {/* End indicator */}
-                              {node.isEndStep && (
-                                <div className="flex flex-col items-center mt-3">
-                                  <div className="w-0.5 h-4 bg-green-300" />
-                                  <div className="w-10 h-10 rounded-full bg-red-500 text-white flex items-center justify-center shadow-lg">
-                                    <CheckCircle2 className="w-5 h-5" />
-                                  </div>
-                                  <span className="text-xs font-medium text-red-600 mt-1">END</span>
-                                </div>
-                              )}
-                              
-                              {/* Spacer */}
-                              {!isLast && !node.isEndStep && !node.hasBranching && (
-                                <div className="h-2" />
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      {/* Right Lane: Skip/Conditional Path */}
-                      {flowNodes.some(n => n.isConditional) && (
-                        <div className="flex flex-col items-center">
-                          <div className="text-xs font-semibold text-orange-600 mb-3 px-3 py-1 bg-orange-50 rounded-full border border-orange-200">
-                            Skip Path
-                          </div>
-                          
-                          {flowNodes.map((node, nodeIdx) => {
-                            // Only show conditional steps in skip path
-                            if (!node.isConditional) return null;
-                            
-                            return (
-                              <div key={node.step.id} className="flex flex-col items-center">
-                                {/* Show which step skips to this */}
-                                <div className="text-[10px] text-muted-foreground mb-2 italic">
-                                  (jumped from decision)
-                                </div>
-                                
-                                {/* Step Node */}
-                                {renderStepNode(node, 'skip')}
-                                
-                                {/* Arrow to continue/end */}
-                                <div className="flex flex-col items-center mt-2">
-                                  <div className="w-0.5 h-4 bg-orange-300" />
-                                  <ArrowDown className="w-4 h-4 text-orange-400 -mt-1" />
-                                  <div className="text-[10px] text-muted-foreground mt-1">
-                                    continues to Step {node.index + 2}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* End node if needed */}
-                    {!flowNodes.some(n => n.isEndStep) && (
-                      <div className="flex flex-col items-center mt-4">
-                        <div className="w-0.5 h-4 bg-gray-300" />
-                        <div className="w-10 h-10 rounded-full bg-red-500 text-white flex items-center justify-center shadow-lg">
-                          <CheckCircle2 className="w-5 h-5" />
-                        </div>
-                        <span className="text-xs font-medium text-red-600 mt-1">END</span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()
-            )}
-          </div>
-          
-          {/* Legend */}
-          <div className="px-6 py-3 border-t bg-gray-50/80 dark:bg-gray-900/50">
-            <div className="flex items-center gap-6 text-xs text-muted-foreground flex-wrap">
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 rounded bg-blue-600" />
-                <span>Main Path Step</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 rounded border-2 border-dashed border-purple-400 bg-purple-50" />
-                <span>Conditional (skip-to only)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 bg-orange-400 rounded-full rotate-45 border border-orange-500" />
-                <span>Decision Point</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 rounded-full bg-green-500" />
-                <span>Start</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 rounded-full bg-red-500" />
-                <span>End</span>
-              </div>
-            </div>
-          </div>
-          
-          <DialogFooter className="px-6 py-4 border-t flex-shrink-0">
-            <Button variant="outline" onClick={() => setJourneyMapOpen(false)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <NewJourneyDialog
+        open={showTemplates}
+        onOpenChange={setShowTemplates}
+        onCreated={(id) => {
+          queryClient.invalidateQueries({ queryKey: ["/api/journeys"] });
+          loadJourneyWithSteps(id);
+        }}
+        onDescribe={() => setShowImportDialog(true)}
+      />
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
