@@ -1817,8 +1817,10 @@ router.post("/api/topscholar/tutor/preview-section", ...topscholarGuards, async 
   try {
     const { lessonSection } = await import("../services/tutor/lessonService");
     const { section } = await lessonSection(businessAccountId, scope, language, sectionIndex);
+    const { upgradeFormulaOps } = await import("../services/tutor/boardOps");
+    const fix = (lines: Array<{ say: string; ops: any[] }>) => lines.map((l) => ({ ...l, ops: upgradeFormulaOps(l.ops) }));
     // The answer key stays on the server in real sessions; the preview shows it to the team.
-    res.json({ section });
+    res.json({ section: { ...section, lines: fix(section.lines), simpler: fix(section.simpler) } });
   } catch (error: any) {
     const status = typeof error?.status === "number" ? error.status : 500;
     if (status === 500) console.error("[Tutor] preview section failed:", error);

@@ -546,6 +546,25 @@ async function main() {
     slow.done();
   }
 
+  // ── 4m. formulas: drawn as maths (even from older plans), shown in the chat transcript ──
+  {
+    const h = harness({
+      ttsDelayMs: 100,
+      doubt: async () => ({ lines: [{ say: "So the distance is the square root of forty five.", ops: [{ op: "clear" }, { op: "write", id: "f1", text: "d = sqrt(9 + 36)", style: "body", color: "ink" }] }], onTopic: true }),
+    });
+    await h.clientMessage({ type: "tutor_start" });
+    await waitFor(() => spokenLines(h).includes("Section 1 line 0."), 4000, "s1");
+    await h.clientMessage({ type: "tutor_text", text: "What is the distance?" });
+    await waitFor(() => spokenLines(h).includes("So the distance is the square root of forty five."), 4000, "answered");
+    const ss = h.client.ofType("sentence_start").find((m) => m.say === "So the distance is the square root of forty five.");
+    expect(ss?.ops?.some((o: any) => o.op === "math" && o.id === "f1" && o.tex === "d = \\sqrt{9 + 36}"), "a formula written as text reaches the board as maths", ss?.ops);
+    const delta = h.client.ofType("answer_delta").find((m) => m.responseId === ss?.responseId && /distance/.test(m.display));
+    expect(/\$\$d = \\sqrt\{9 \+ 36\}\$\$/.test(delta?.display || ""), "the chat transcript shows the formula (rendered by KaTeX)", delta?.display);
+    expect(!/\$/.test(delta?.speech || ""), "…but nothing of it is spoken as symbols");
+    await h.clientMessage({ type: "tutor_stop" });
+    h.done();
+  }
+
   // ── 5. stop ──
   {
     const h = harness({ autoPlay: false });

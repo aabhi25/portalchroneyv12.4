@@ -114,7 +114,7 @@ ${BOARD_OPS_DOC}
 Use the board like a real teacher:
 - Most lines write or draw something; the section has at least 6 board ops in total.
 - Whenever the idea is visual (a shape, a process, a comparison, a list of categories), DRAW it: geometry for shapes (label the sides and mark right angles), flow for processes or levels, table for comparisons or lists — or show a listed FIGURE.
-- Key terms and definitions as write; every maths step as its own math op.
+- Key terms and definitions as write; every formula, equation and maths step as its own math op in TeX (\\sqrt{45}, a^{2}, x_{1}, \\frac{1}{2}) — never a write op with "sqrt(", "^" or "x1" in it.
 - When you talk about one part of a drawing, highlight it in that line.
 - simpler lines use the board too (at least 2 ops in total): write the idea in simpler words or draw the analogy.`;
 

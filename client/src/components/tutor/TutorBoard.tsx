@@ -226,7 +226,9 @@ const BOARD_CSS = `
 .tutor-board .tb-title{font-size:1.6em;font-weight:700;color:#ffd76a !important;line-height:1.2}
 .tutor-board .tb-body{font-size:1.2em;line-height:1.35}
 .tutor-board .tb-note{font-size:1em;opacity:.85}
-.tutor-board .tb-math{font-size:1.15em;overflow-x:auto;overflow-y:hidden}
+.tutor-board .tb-math{font-size:1.3em;overflow-x:auto;overflow-y:hidden}
+.tutor-board .tb-math .katex-display{margin:.1em 0;text-align:left}
+.tutor-board .tb-math .katex-display>.katex{text-align:left}
 .tutor-board .tb-math .katex{color:#f3f1e9}
 .tutor-board .tb-figure{margin:0;display:inline-flex;flex-direction:column;gap:4px;align-self:flex-start;background:#f7f5ee;border-radius:8px;padding:6px}
 .tutor-board .tb-figure img{max-height:220px;max-width:100%;object-fit:contain;border-radius:4px}

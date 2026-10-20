@@ -22,6 +22,7 @@ import { applyOps, emptyBoard, type BoardOp, type BoardState } from "@shared/tut
 import type { LessonOutline, SectionScript, TutorCheck, TutorLanguage, TutorLine } from "./lessonPlanner";
 import { classifyTutorIntent, type TutorIntent } from "./intent";
 import { tutorSpeech } from "./speech";
+import { upgradeFormulaOps } from "./boardOps";
 
 export interface TutorSpokenLine { say: string; speech: string; ops: BoardOp[] }
 
@@ -209,7 +210,7 @@ export function withCleanPage(lines: TutorLine[]): TutorLine[] {
 /** The board after the first `count` lines. */
 export function boardAfter(lines: TutorLine[], count: number): BoardState {
   let b = emptyBoard();
-  for (const l of lines.slice(0, count)) b = applyOps(b, l.ops);
+  for (const l of lines.slice(0, count)) b = applyOps(b, upgradeFormulaOps(l.ops));
   return b;
 }
 
@@ -660,7 +661,8 @@ export class TutorRunner {
     const gen = this.gen;
     if (this.isEnded()) return "gone";
     if (!lines.length) return "played";
-    const spoken = lines.map((l) => ({ say: l.say, speech: tutorSpeech(l.say, this.L) || l.say, ops: l.ops }));
+    // (Formulas written as text in plans cached before that check are drawn as maths too.)
+    const spoken = lines.map((l) => ({ say: l.say, speech: tutorSpeech(l.say, this.L) || l.say, ops: upgradeFormulaOps(l.ops) }));
     const started = this.o.host.speak(spoken);
     if (!started) { await this.end("disconnected"); return "gone"; }
     const rid = started.responseId;

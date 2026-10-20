@@ -1506,7 +1506,9 @@ export class RealtimeVoiceService {
       onItemStart: (index) => {
         const line = lines[index];
         if (!line || abandoned()) return;
-        const display = (shown ? ' ' : '') + line.say;
+        // The chat transcript shows the line's formulas too (rendered by the widget's KaTeX).
+        const formulas = line.ops.filter((o) => o.op === 'math').map((o) => `\n\n$$${(o as { tex: string }).tex}$$\n\n`).join('');
+        const display = (shown ? ' ' : '') + line.say + formulas;
         shown += display;
         this.sendToClient(conversation.clientWs, { type: 'answer_delta', responseId, display, speech: (index ? ' ' : '') + line.speech, index });
         this.sendToClient(conversation.clientWs, { type: 'sentence_start', responseId, index, say: line.say, ops: line.ops });

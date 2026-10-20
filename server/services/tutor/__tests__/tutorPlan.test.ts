@@ -125,6 +125,21 @@ async function main() {
   expect(section!.script.simpler[0].ops.length === 0, "a figure not chosen for this section is dropped");
   expect(validateSection({ lines: [{ say: "only one", ops: [] }] }, pack, []) === null, "a section needs at least two lines");
 
+  // ── formulas written as handwriting become maths ──
+  {
+    const { formulaToTex, upgradeFormulaOps } = await import("../boardOps");
+    const w = (text: string, style = "body") => ({ op: "write", id: "f", text, style, color: "ink" }) as any;
+    const up = (text: string, style?: string) => upgradeFormulaOps([w(text, style)])[0] as any;
+    expect(up("Distance d = sqrt((x2 - x1)^2 + (y2 - y1)^2)").tex === "\\text{Distance } d = \\sqrt{(x_{2} - x_{1})^{2} + (y_{2} - y_{1})^{2}}", "sqrt( … ), powers and x1 → TeX (words kept upright)", up("Distance d = sqrt((x2 - x1)^2 + (y2 - y1)^2)").tex);
+    expect(up("d = 3√5").tex === "d = 3\\sqrt{5}" && up("a² + b² = c²").tex === "a^{2} + b^{2} = c^{2}", "√ and ² become TeX");
+    expect(up("A(x1, y1), B(x2, y2)").tex === "A(x_{1}, y_{1}), B(x_{2}, y_{2})", "point names get subscripts");
+    expect(up("Hypotenuse is the longest side").op === "write" && up("Class 10 notes").op === "write", "sentences stay handwriting");
+    expect(up("a² + b² = c²", "title").op === "write", "titles stay handwriting");
+    expect(up("sqrt((1 + 2)").op === "write" && formulaToTex("sqrt((1 + 2)") === null, "an unbalanced bracket is left as written");
+    const cleaned = sanitizeOps([{ op: "write", id: "z", text: "d = sqrt(9 + 36)", style: "body" }], emptyBoard(), () => null);
+    expect(cleaned.ops[0]?.op === "math" && cleaned.board.elements[0]?.id === "z", "new plans: formula text is stored as a math op (same id, so highlights still work)", cleaned.ops);
+  }
+
   // ── checks come from the question bank ──
   const checks = checksFor(pack.questions, ["q1", "q2", "q3"]);
   expect(checks.length === 1 && checks[0].correctIndex === 0 && checks[0].options.join() === "5,6,7", "checks: only usable MCQs, answer key from the bank", checks);

@@ -32,6 +32,7 @@ Return JSON: {"onTopic": boolean, "expectsReply": boolean, "lines": [{"say": str
 - Begin the way a real teacher would and vary it; do not start with "Good question" or any stock phrase, and never praise a question twice in a row.
 - Never say you will continue or ask whether to continue — the lesson resumes by itself right after (except when you asked the student a question).
 - Each "say" is ONE spoken sentence (at most 30 words): no markdown, no TeX, formulas in words.
+- On the board, every formula or maths step is a math op in TeX (\\sqrt{45}, a^{2}, x_{1}) — never a write op with "sqrt(", "^" or "x1".
 ${languageRule(language)}
 ${BOARD_OPS_DOC}`;
 
