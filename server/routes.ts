@@ -2401,8 +2401,10 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
           INTRO_CACHE_TTL_MS,
         );
 
-      // Handle Welcome Back greeting for returning visitors (after 30+ minutes)
-      if (welcomeBack === 'true' && businessAccount.openaiApiKey) {
+      // Handle Welcome Back greeting for returning visitors (after 30+ minutes) — unless a journey
+      // starts every chat (its first question is the greeting; a returning visitor got no form).
+      const hasStartupJourney = journeysForIntro.some((j) => j.status === 'active' && j.startFromScratch === 'true');
+      if (welcomeBack === 'true' && businessAccount.openaiApiKey && !hasStartupJourney) {
         try {
           const intro = await cachedIntro(
             introVariantKey('welcome_back', String(introLanguage || ''), businessAccount.description, businessAccount.name),
@@ -17204,12 +17206,24 @@ Important:
         return res.status(404).json({ error: 'Journey not found' });
       }
 
+      // This chat already has this form in progress (Back to Menu, then the form again): carry on.
+      const resumeConversationId = typeof req.query.conversationId === 'string' ? req.query.conversationId : '';
+      if (resumeConversationId) {
+        const conv = await storage.getConversation(resumeConversationId, businessAccountId as string).catch(() => undefined);
+        if (conv && conv.businessAccountId === businessAccountId) {
+          const inProgress = await journeyService.getActiveFormStep(resumeConversationId);
+          if (inProgress && inProgress.journeyId === journey.id) {
+            return res.json({ journeyId: journey.id, journeyName: journey.name, journeyType: journey.journeyType, resumed: true, formStep: { ...inProgress.step, journeyId: journey.id } });
+          }
+        }
+      }
+
       const steps = await storage.getJourneySteps(journeyId);
       if (!steps || steps.length === 0) {
         return res.status(404).json({ error: 'No steps found for this journey' });
       }
 
-      const sortedSteps = steps.sort((a: any, b: any) => (a.stepOrder || 0) - (b.stepOrder || 0));
+      const sortedSteps = steps.sort((a: any, b: any) => Number(a.stepOrder || 0) - Number(b.stepOrder || 0));
       const firstStep = sortedSteps[0];
 
       // Parse choice options for dropdown/radio steps (stored as JSON in multipleChoiceOptions)
@@ -17233,13 +17247,33 @@ Important:
         formStep: {
           stepId: firstStep.id,
           questionText: firstStep.questionText,
-          questionType: firstStep.questionType,
-          isRequired: firstStep.isRequired,
+          questionType: firstStep.questionType || 'text',
+          isRequired: firstStep.isRequired === 'true',
           options,
-          stepType: firstStep.toolTrigger || 'none',
+          placeholder: firstStep.placeholderText || undefined,
+          stepType: firstStep.toolTrigger || undefined,
           journeyId: journey.id,
         }
       });
+    } catch (error: any) {
+      console.error('[Journey] Error getting first step:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // The form a chat is in the middle of (to show it again after a page reload).
+  app.get("/api/journey/current-step", async (req, res) => {
+    try {
+      const businessAccountId = typeof req.query.businessAccountId === 'string' ? req.query.businessAccountId : '';
+      const conversationId = typeof req.query.conversationId === 'string' ? req.query.conversationId : '';
+      if (!businessAccountId || !conversationId) return res.status(400).json({ error: 'Missing businessAccountId or conversationId' });
+      const conv = await storage.getConversation(conversationId, businessAccountId).catch(() => undefined);
+      if (!conv || conv.businessAccountId !== businessAccountId) return res.json({ formStep: null });
+      const inProgress = await journeyService.getActiveFormStep(conversationId);
+      if (!inProgress) return res.json({ formStep: null });
+      const journey = await storage.getJourney(inProgress.journeyId, businessAccountId);
+      if (!journey || journey.journeyType !== 'form') return res.json({ formStep: null });
+      res.json({ journeyId: journey.id, formStep: { ...inProgress.step, journeyId: journey.id } });
     } catch (error: any) {
       console.error('[Journey] Error getting first step:', error);
       res.status(500).json({ error: error.message });
@@ -17313,15 +17347,20 @@ Important:
         return res.status(400).json({ error: 'Missing conversationId or journeyId' });
       }
 
-      // If conversationId exists but no active journey session, start the journey explicitly
+      // The form the visitor is answering must be the one in progress for this chat: none in
+      // progress (or lost by a restart: it is loaded back from the database) → start it; another
+      // form in progress (a different one started from the menu) → that one is abandoned.
       // Skip this if we just started the journey above
       if (journeyId && !journeyJustStarted) {
-        const existingStep = await journeyService.getFormStepData(activeConversationId, true);
-        if (!existingStep) {
-          console.log('[Form Journey] No active journey session found - starting journey explicitly:', journeyId);
-          const conversation = await storage.getConversation(activeConversationId);
-          const userId = conversation?.userId || `widget_${crypto.randomUUID()}`;
-          const journeyState = await journeyService.startJourney(activeConversationId, userId, businessAccountId, journeyId, true);
+        const inProgress = await journeyService.getActiveFormStep(activeConversationId);
+        if (!inProgress || inProgress.journeyId !== journeyId) {
+          console.log('[Form Journey] Starting journey explicitly:', journeyId, inProgress ? `(abandoning ${inProgress.journeyId})` : '');
+          const conversation = await storage.getConversation(activeConversationId, businessAccountId);
+          // (Conversations don't keep a user id: one per chat, stable across its answers.)
+          const userId = inProgress?.userId || `widget_${activeConversationId}`;
+          const journeyState = inProgress
+            ? await journeyService.restartJourney(activeConversationId, userId, businessAccountId, journeyId)
+            : await journeyService.startJourney(activeConversationId, userId, businessAccountId, journeyId, true);
           if (!journeyState) {
             return res.status(400).json({ error: 'Journey not found' });
           }
@@ -17336,12 +17375,29 @@ Important:
       // For existing conversations (not just-created), update title to journey name if still default
       if (journeyName && !journeyJustStarted && activeConversationId) {
         try {
-          const existingConv = await storage.getConversation(activeConversationId);
+          const existingConv = await storage.getConversation(activeConversationId, businessAccountId);
           if (existingConv && (existingConv.title === 'New Chat' || !existingConv.title)) {
             await storage.updateConversationTitle(activeConversationId, businessAccountId, journeyName);
             console.log('[Form Journey] Updated conversation title to journey name:', journeyName);
           }
         } catch {}
+      }
+
+      // The answer must be for the question in progress. The widget showing another one (an old
+      // tab, a reload, the form opened again from the menu): its first question → start the form
+      // over; any other → the widget is moved to the question in progress, nothing is saved.
+      const answeredStepId = typeof req.body.stepId === 'string' && req.body.stepId ? req.body.stepId : null;
+      if (answeredStepId && journeyId) {
+        const inProgress = await journeyService.getActiveFormStep(activeConversationId);
+        if (inProgress && inProgress.step.stepId !== answeredStepId) {
+          const steps = await storage.getJourneySteps(journeyId);
+          const first = steps.sort((a, b) => Number(a.stepOrder) - Number(b.stepOrder))[0];
+          if (first?.id === answeredStepId) {
+            await journeyService.restartJourney(activeConversationId, inProgress.userId, businessAccountId, journeyId);
+          } else {
+            return res.json({ success: true, completed: false, resync: true, conversationId: activeConversationId, nextStep: inProgress.step });
+          }
+        }
       }
 
       // Get current form step data BEFORE submitting (to capture the question)

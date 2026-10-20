@@ -1241,7 +1241,9 @@ export default function EmbedChat() {
       // effect re-runs once preChatGateActive flips).
       if (anyPreChatGateActive) return;
       menuModeDecidedRef.current = true;
-      if (menuEnabled && messages.length === 0 && !pendingMessage) {
+      // Menu first unless the visitor already talked (a start-up form's first question is not a
+      // conversation: whether it had arrived yet used to decide menu vs form at random).
+      if (menuEnabled && !messages.some((m) => m.role === 'user') && !pendingMessage) {
         setIsMenuMode(true);
       }
     }
@@ -1249,6 +1251,26 @@ export default function EmbedChat() {
   
   // Track conversationId for persistence (stored in localStorage after first message)
   const conversationIdRef = useRef<string>('');
+  // A form this chat was in the middle of, shown again after a reload (checked once per chat).
+  const formRestoreCheckedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const convId = conversationIdRef.current;
+    if (!businessAccountId || isRestoringHistory || !convId || activeFormStep || isFormJourneyComplete || isLoading) return;
+    if (formRestoreCheckedRef.current === convId) return;
+    formRestoreCheckedRef.current = convId;
+    let cancelled = false;
+    fetch(`/api/journey/current-step?businessAccountId=${encodeURIComponent(businessAccountId)}&conversationId=${encodeURIComponent(convId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.formStep || conversationIdRef.current !== convId) return;
+        console.log('[Form Journey] Restoring the form in progress:', data.formStep.stepId);
+        setActiveJourneyId(data.journeyId || null);
+        setActiveFormStep((current) => current ?? data.formStep);
+        setIsMenuMode(false);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [businessAccountId, isRestoringHistory, hasConversation, activeFormStep, isFormJourneyComplete, isLoading]);
 
   // Live AI avatar (opt-in add-on; starts only on the visitor's tap).
   const liveAvatar = useLiveAvatar({
@@ -1943,6 +1965,12 @@ export default function EmbedChat() {
         const response = await fetch(`/api/chat/widget/intro?businessAccountId=${encodeURIComponent(businessAccountId)}${langParam}${welcomeBackParam}${studentMediumRef.current ? `&medium=${encodeURIComponent(studentMediumRef.current)}` : ''}`);
         if (response.ok) {
           const data = await response.json();
+          // A start-up form shows even when its greeting text is empty.
+          if (data.formStep && !data.intro) {
+            setActiveFormStep(data.formStep);
+            if (data.journeyId) setActiveJourneyId(data.journeyId);
+            setIsOnline(true);
+          }
           if (data.intro) {
             // For conversational journeys with a dropdown/radio first step, render the
             // choices as tappable quick-reply buttons on the greeting.
@@ -3986,7 +4014,15 @@ export default function EmbedChat() {
     if (hasOwnCard(step) || !step.questionText) { scroll(); return; }
     scroll();
     setMessages(prev => {
-      if (prev.at(-1)?.formStepId === step.stepId) return prev; // already asked, waiting for the answer
+      const last = prev.at(-1);
+      if (last?.formStepId === step.stepId) return prev; // already asked, waiting for the answer
+      const quickReplies = isClosingStep(step)
+        ? (step.completionButtonText ? [step.completionButtonText] : undefined)
+        : isChoiceQuestion(step) ? step.options : undefined;
+      // A chat restored after a reload already shows this question as text: make it the live one.
+      if (last && last.role === 'assistant' && !last.formStepId && (last.content || '').trim() === step.questionText.trim()) {
+        return [...prev.slice(0, -1), { ...last, quickReplies, formStepId: step.stepId }];
+      }
       return [...prev, {
         id: `form-${step.stepId}-${Date.now()}`,
         role: 'assistant',
@@ -4432,6 +4468,7 @@ export default function EmbedChat() {
           answer: value, 
           businessAccountId,
           journeyId: activeJourneyId,
+          stepId: submittedStep.stepId,
           visitorToken: visitorSessionTokenRef.current || localStorage.getItem('chroney_visitor_token'),
           pageUrl: parentPageUrl || (window.parent !== window ? document.referrer : window.location.href) || undefined
         })
@@ -4442,6 +4479,9 @@ export default function EmbedChat() {
       // Update conversationId if we got a new one from the server
       if (result.conversationId && !conversationIdRef.current) {
         conversationIdRef.current = result.conversationId;
+        // Kept like a typed chat's, so a reload brings the chat (and the form in progress) back.
+        try { localStorage.setItem(getConvKey(), result.conversationId); stampConvCreatedIfNeeded(); } catch { /* storage blocked */ }
+        formRestoreCheckedRef.current = result.conversationId; // this tab already shows the form
         setHasConversation(true);
         console.log('[Form Journey] Got conversationId from server:', result.conversationId);
       }
@@ -4452,6 +4492,15 @@ export default function EmbedChat() {
           setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'assistant', content: result.error, timestamp: new Date() }]);
         }
         setActiveFormStep(result.nextStep || submittedStep);
+        return;
+      }
+
+      // The server is on another question of this form (a reload, another tab): show that one.
+      if (result.resync && result.nextStep) {
+        if (!hasOwnCard(submittedStep) && !isClosingStep(submittedStep)) {
+          setMessages(prev => prev.filter((m) => !(m.role === 'user' && m.id.startsWith('form-answer-') && m === prev[prev.length - 1])));
+        }
+        setActiveFormStep(result.nextStep);
         return;
       }
 
@@ -4743,23 +4792,31 @@ export default function EmbedChat() {
               }, 100);
             }}
             onStartJourney={async (journeyId) => {
+              const cantStart = () => {
+                setIsMenuMode(false);
+                setIntroLoaded(true);
+                setMessages(prev => [...prev, { id: `form-unavailable-${Date.now()}`, role: 'assistant', content: "Sorry, this form isn't available right now. You can ask me here instead.", timestamp: new Date() }]);
+              };
               try {
-                const response = await fetch(`/api/journey/${journeyId}/first-step?businessAccountId=${businessAccountId}`);
+                // This chat already has the form in progress: the server returns where it got to.
+                const conv = conversationIdRef.current ? `&conversationId=${encodeURIComponent(conversationIdRef.current)}` : '';
+                const response = await fetch(`/api/journey/${encodeURIComponent(journeyId)}/first-step?businessAccountId=${encodeURIComponent(businessAccountId)}${conv}`);
                 if (!response.ok) {
                   console.error('[Menu] Failed to get journey first step');
+                  cantStart();
                   return;
                 }
                 const data = await response.json();
-                if (data.formStep) {
-                  setMessages([]);
-                  setIntroLoaded(true);
-                  setIsMenuMode(false);
-                  setActiveJourneyId(journeyId);
-                  setActiveFormStep(data.formStep);
-                  setIsFormJourneyComplete(false);
-                }
+                if (!data.formStep) { cantStart(); return; }
+                // The chat so far stays; the form's questions follow it.
+                setIntroLoaded(true);
+                setIsMenuMode(false);
+                setActiveJourneyId(journeyId);
+                setActiveFormStep(data.formStep);
+                setIsFormJourneyComplete(false);
               } catch (error) {
                 console.error('[Menu] Error starting journey:', error);
+                cantStart();
               }
             }}
           />
@@ -4775,9 +4832,13 @@ export default function EmbedChat() {
           <button
             onClick={() => {
               setIsMenuMode(true);
-              setActiveFormStep(null);
+              // A form in progress stays: it carries on when they come back to the chat (another
+              // form started from the menu replaces it).
+              if (isFormJourneyComplete) {
+                setActiveFormStep(null);
+                setActiveJourneyId(null);
+              }
               setIsFormJourneyComplete(false);
-              setActiveJourneyId(null);
               if (messages.length === 0) {
                 setIntroLoaded(false);
               }
@@ -6468,8 +6529,10 @@ export default function EmbedChat() {
       </div>
       )}
 
-      {/* Answer box for the form question asked in the chat (shown whatever the chat mode). */}
-      {activeFormStep && !hasOwnCard(activeFormStep) && !isClosingStep(activeFormStep) && (
+      {/* Answer box for the form question asked in the chat (shown whatever the chat mode; not
+          on the welcome menu, where the question itself is hidden — it read "Choose one of the
+          options above" under the menu). */}
+      {activeFormStep && !isMenuMode && !hasOwnCard(activeFormStep) && !isClosingStep(activeFormStep) && (
         <div
           className="border-t border-gray-200 p-2 sm:p-3 md:p-4 bg-gray-100 flex-shrink-0"
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))', position: 'relative', zIndex: avatarCallActive ? 0 : 99999 }}

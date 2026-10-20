@@ -859,9 +859,10 @@ export function ChatMenuNavigation({
                   : chatColor,
               }}
             >
-              {config.persistentCtaIcon === "phone" && <Phone className="w-5 h-5" />}
-              {config.persistentCtaIcon === "chat" && <MessageCircle className="w-5 h-5" />}
-              {config.persistentCtaAction === "lead_form" && <FileText className="w-5 h-5" />}
+              {/* One icon: the form icon for a contact form, else the chosen icon (it showed both). */}
+              {config.persistentCtaAction === "lead_form" ? <FileText className="w-5 h-5" />
+                : config.persistentCtaIcon === "phone" ? <Phone className="w-5 h-5" />
+                : config.persistentCtaIcon === "chat" ? <MessageCircle className="w-5 h-5" /> : null}
               {t(config.persistentCtaLabel) || "Contact Us"}
             </button>
           ) : (
@@ -869,9 +870,10 @@ export function ChatMenuNavigation({
               onClick={handlePersistentCta}
               className="w-full py-3 px-4 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
             >
-              {config.persistentCtaIcon === "phone" && <Phone className="w-5 h-5" />}
-              {config.persistentCtaIcon === "chat" && <MessageCircle className="w-5 h-5" />}
-              {config.persistentCtaAction === "lead_form" && <FileText className="w-5 h-5" />}
+              {/* One icon: the form icon for a contact form, else the chosen icon (it showed both). */}
+              {config.persistentCtaAction === "lead_form" ? <FileText className="w-5 h-5" />
+                : config.persistentCtaIcon === "phone" ? <Phone className="w-5 h-5" />
+                : config.persistentCtaIcon === "chat" ? <MessageCircle className="w-5 h-5" /> : null}
               {t(config.persistentCtaLabel) || "Contact Us"}
             </button>
           )}

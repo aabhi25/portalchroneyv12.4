@@ -193,6 +193,27 @@ class JourneyService {
     };
   }
 
+  /**
+   * The form this chat is in the middle of (journey + current step), loading it back from the
+   * database after a restart. null when no form is in progress.
+   */
+  async getActiveFormStep(conversationId: string): Promise<{ journeyId: string; userId: string; step: NonNullable<Awaited<ReturnType<JourneyService["getFormStepData"]>>> } | null> {
+    const state = await this.getJourneyState(conversationId);
+    if (!state || state.completed) return null;
+    const step = await this.getFormStepData(conversationId, true);
+    return step ? { journeyId: state.journeyId, userId: state.userId, step } : null;
+  }
+
+  /** Start a journey again from its first step (the one in progress for this chat is abandoned). */
+  async restartJourney(conversationId: string, userId: string, businessAccountId: string, journeyId: string): Promise<JourneyState | null> {
+    const existing = await storage.getJourneySessionByConversationId(conversationId);
+    if (existing) {
+      await storage.updateJourneySession(existing.id, { completed: 'abandoned', completedAt: new Date() });
+    }
+    await this.resetJourney(conversationId);
+    return this.startJourney(conversationId, userId, businessAccountId, journeyId, true);
+  }
+
   isFormJourney(conversationId: string): boolean {
     const state = this.activeJourneys.get(conversationId);
     return state?.journeyType === 'form';
@@ -327,11 +348,9 @@ class JourneyService {
     // If next step is journey_complete, mark journey as completed but return the step for display
     if (nextStep.stepType === 'journey_complete') {
       console.log('[Journey] Next step is journey_complete - marking journey finished');
-      const state = this.activeJourneys.get(conversationId);
-      if (state) {
-        state.completed = true;
-        this.activeJourneys.set(conversationId, state);
-      }
+      // In the database too: only in memory, a restart (or opening the form again) brought the
+      // finished form back at its closing message instead of starting it fresh.
+      await this.completeJourney(conversationId);
       return {
         success: true,
         completed: true,
