@@ -99,6 +99,31 @@ async function main() {
     expect((await prepareVoiceTutor({ ...req, scope: { chapter: "Triangles", studentId: "S-10" } })).continueFrom === null, "another student's progress is not used");
     await db.insert(schema.tutorSessions).values({ businessAccountId: K12, studentKey: "student:S-9", chapter: "Triangles", endReason: "completed", progress: { part: 5, line: 0 } } as any);
     expect((await prepareVoiceTutor(req)).continueFrom === null, "after finishing the chapter it starts afresh");
+    // ── the teacher: name, a voice per language, video ──
+    const { tutorVoiceFor } = await import("../settings");
+    const bad = async (body: any) => { try { await updateTutorSettings(K12, body, "admin-1"); return ""; } catch (e: any) { return e.message; } };
+    expect(/Unknown lesson language/.test(await bad({ voiceByLanguage: { fr: "nova" } })), "a voice for an unknown language is refused");
+    expect(/from the list/.test(await bad({ voiceByLanguage: { en: "https://evil.example/voice" } })), "a voice that is not from the list is refused");
+    expect(/letters, spaces/.test(await bad({ teacherName: "<script>" })), "a teacher name with markup is refused");
+    expect(/avatar id/.test(await bad({ avatarId: "bad id!" })), "a malformed avatar id is refused");
+    expect(!!(await bad({ avatarMode: "hologram" })), "an unknown video mode is refused");
+    const t = await updateTutorSettings(K12, { teacherName: "  Priya   Ma'am ", voiceByLanguage: { en: "nova", hi: "el:AbCdEfGhIjKlMnOp", hinglish: "" }, avatarMode: "voice", avatarId: "tutor-1" }, "admin-1");
+    expect(t.settings.teacherName === "Priya Ma'am" && JSON.stringify(t.settings.voiceByLanguage) === JSON.stringify({ en: "nova", hi: "el:AbCdEfGhIjKlMnOp" }) && t.settings.avatarMode === "voice" && t.settings.avatarId === "tutor-1", "teacher name, voices (empty = default), video mode and avatar are saved", t.settings);
+    expect(t.changed.sort().join() === "avatarId,avatarMode,teacherName,voiceByLanguage", "…and audited as changes", t.changed);
+    expect((await updateTutorSettings(K12, { voiceByLanguage: { en: "nova", hi: "el:AbCdEfGhIjKlMnOp" } }, "admin-1")).changed.length === 0, "the same voices again change nothing");
+    expect(tutorVoiceFor(t.settings, "en") === "nova" && tutorVoiceFor(t.settings, "hinglish") === "el:AbCdEfGhIjKlMnOp" && tutorVoiceFor({ voiceByLanguage: {} }, "hi") === null, "Hinglish falls back to the Hindi voice; none = the widget's voice");
+    expect((await getPublicTutorConfig(K12)).video === false, "voice-only: the widget won't start video for lessons");
+    // The voice a lesson actually uses.
+    let p2 = await prepareVoiceTutor({ ...req, language: "en" });
+    expect(p2.voice?.openaiVoice === "nova" && p2.teacherName === "Priya Ma'am", "an English lesson uses the English voice and the teacher's name", p2.voice);
+    p2 = await prepareVoiceTutor({ ...req, language: "hinglish" });
+    expect(p2.voice === null, "an ElevenLabs voice without the account's ElevenLabs key → the widget's voice", p2.voice);
+    await db.update(schema.businessAccounts).set({ elevenlabsApiKey: "el-test-key" } as any).where(eq(schema.businessAccounts.id, K12));
+    p2 = await prepareVoiceTutor({ ...req, language: "hinglish" });
+    expect(p2.voice?.elevenlabsVoiceId === "AbCdEfGhIjKlMnOp" && p2.voice.elevenlabsApiKey === "el-test-key", "a Hinglish lesson uses the Hindi ElevenLabs voice with the account's key", { id: p2.voice?.elevenlabsVoiceId });
+    await updateTutorSettings(K12, { avatarMode: "auto" }, "admin-1");
+    expect((await getPublicTutorConfig(K12)).video === true, "video mode back on");
+
     await updateTutorSettings(K12, { enabled: false }, "admin-1");
     threw = "";
     try { await prepareVoiceTutor(req); } catch (e: any) { threw = e.message; }

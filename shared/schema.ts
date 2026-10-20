@@ -1857,6 +1857,13 @@ export const tutorBusinessSettings = pgTable("tutor_business_settings", {
   businessAccountId: varchar("business_account_id").primaryKey().references(() => businessAccounts.id, { onDelete: "cascade" }),
   enabled: boolean("enabled").notNull().default(false),
   dailyMinutesPerStudent: integer("daily_minutes_per_student").notNull().default(20),
+  // The teacher: a name it introduces itself with, a voice per lesson language (accent matters:
+  // an English voice reads Hindi badly), and how video is used. null / missing = defaults
+  // (the widget's voice, the account's Live AI avatar).
+  teacherName: text("teacher_name"),
+  voiceByLanguage: jsonb("voice_by_language").$type<Record<string, string>>().notNull().default(sql`'{}'::jsonb`),
+  avatarMode: varchar("avatar_mode", { length: 16 }).notNull().default("auto"), // 'auto' | 'voice'
+  avatarId: varchar("avatar_id", { length: 200 }),
   updatedBy: varchar("updated_by"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

@@ -12,7 +12,9 @@ import { Router } from "express";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../db";
 import { businessAccounts, tutorSessions, tutorUsageDaily } from "@shared/schema";
-import { isChildrensAccount } from "../services/avatar/settingsService";
+import { getEffectiveSettings as getAvatarSettings, isChildrensAccount, isProviderSelectable, providerLabel } from "../services/avatar/settingsService";
+import { keyAvailability } from "../services/avatar/credentials";
+import type { AvatarProviderId } from "../services/avatar/types";
 import { requireAuth, requireRole } from "../auth";
 import { recordAuditEventSafely } from "../services/auditService";
 import { getTutorSettings, TutorSettingsError, TUTOR_LIMITS, updateTutorSettings } from "../services/tutor/settings";
@@ -31,11 +33,39 @@ async function isEligible(businessAccountId: string): Promise<boolean> {
   return isChildrensAccount(account ?? null);
 }
 
-function adminView(s: Awaited<ReturnType<typeof getTutorSettings>>, eligible: boolean) {
+/** The account's Live AI avatar, as far as the tutor's video depends on it. */
+async function avatarStatus(businessAccountId: string) {
+  try {
+    const a = await getAvatarSettings(businessAccountId);
+    const providerOk = isProviderSelectable(a.provider);
+    const keyOk = providerOk && !!(await keyAvailability(a.provider as AvatarProviderId, a as any));
+    const [account] = await db.select({ id: businessAccounts.id, k12EducationEnabled: businessAccounts.k12EducationEnabled })
+      .from(businessAccounts).where(eq(businessAccounts.id, businessAccountId)).limit(1);
+    const consentOk = !isChildrensAccount(account ?? null) || !!a.parentalConsentConfirmed;
+    return {
+      enabled: !!a.enabled,
+      provider: a.provider,
+      providerLabel: providerLabel(a.provider),
+      avatarId: a.avatarId ?? null,
+      displayName: a.displayName ?? null,
+      ready: !!a.enabled && providerOk && keyOk && consentOk && (a.provider === "fake" || !!a.avatarId),
+      missing: [!a.enabled && "switched off", !keyOk && "no API key", !consentOk && "parental consent not confirmed"].filter(Boolean) as string[],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function adminView(s: Awaited<ReturnType<typeof getTutorSettings>>, eligible: boolean) {
   return {
     eligible,
     enabled: s.enabled,
     dailyMinutesPerStudent: s.dailyMinutesPerStudent,
+    teacherName: s.teacherName ?? null,
+    voiceByLanguage: s.voiceByLanguage || {},
+    avatarMode: s.avatarMode,
+    avatarId: s.avatarId ?? null,
+    avatar: await avatarStatus(s.businessAccountId),
     limits: TUTOR_LIMITS,
     updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null,
   };
@@ -43,7 +73,7 @@ function adminView(s: Awaited<ReturnType<typeof getTutorSettings>>, eligible: bo
 
 router.get("/api/super-admin/tutor/accounts/:businessAccountId", requireAuth, requireRole("super_admin"), async (req, res) => {
   try {
-    res.json(adminView(await getTutorSettings(req.params.businessAccountId), await isEligible(req.params.businessAccountId)));
+    res.json(await adminView(await getTutorSettings(req.params.businessAccountId), await isEligible(req.params.businessAccountId)));
   } catch (error) {
     console.error("[Tutor] settings load failed:", error);
     res.status(500).json({ error: "Failed to load tutor settings" });
@@ -68,7 +98,7 @@ router.put("/api/super-admin/tutor/accounts/:businessAccountId", requireAuth, re
         },
       });
     }
-    res.json(adminView(result.settings, await isEligible(businessAccountId)));
+    res.json(await adminView(result.settings, await isEligible(businessAccountId)));
   } catch (error) {
     if (error instanceof TutorSettingsError) return res.status(error.status).json({ error: error.message });
     console.error("[Tutor] settings save failed:", error);

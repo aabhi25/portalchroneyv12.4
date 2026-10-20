@@ -192,7 +192,7 @@ interface WidgetSettings {
   /** Live AI avatar button (null unless a super admin enabled it and it can start). */
   liveAvatar?: { enabled: boolean; displayName: string; styleHint: string } | null;
   /** AI tutor (TopScholar): on when a super admin enabled it for the account. */
-  aiTutor?: { enabled: boolean } | null;
+  aiTutor?: { enabled: boolean; video?: boolean } | null;
   chatColor: string;
   chatColorEnd: string;
   widgetHeaderText: string;
@@ -1592,11 +1592,11 @@ export default function EmbedChat() {
     if (!tutorAvailable || activeFormStep || isFormJourneyComplete) return;
     setIsMenuMode(false);
     // Video tutor when the account has the live avatar (it joins when ready; voice starts now).
-    if (avatarAvailable && !avatarCallActive && !tutorVideoRef.current) {
+    if (avatarAvailable && settings?.aiTutor?.video !== false && !avatarCallActive && !tutorVideoRef.current) {
       tutorVideoRef.current = true;
       avatarCallStartedAtRef.current = Date.now();
       setAvatarVoice(true);
-      void liveAvatar.start();
+      void liveAvatar.start({ purpose: 'tutor' });
     }
     setIsInlineVoiceActive(true);
     tutor.start(opts);

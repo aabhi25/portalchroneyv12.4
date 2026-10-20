@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { CheckCircle2, ChevronDown, Loader2, TriangleAlert } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -8,14 +8,60 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { CallVoicePicker, useVoiceName } from "@/components/voice/CallVoicePicker";
+
+/** Lesson languages a teacher voice can be set for. */
+const VOICE_LANGS = [
+  { id: "en", label: "English lessons", hint: "An Indian-English voice reads English lessons best." },
+  { id: "hi", label: "Hindi lessons", hint: "A native Hindi voice (ElevenLabs has several) — English voices read Hindi with an accent." },
+  { id: "hinglish", label: "Hinglish lessons", hint: "Hindi with English school words. Uses the Hindi voice unless you pick one." },
+] as const;
+type VoiceLang = typeof VOICE_LANGS[number]["id"];
 
 export type TutorAdminView = {
   eligible: boolean;
   enabled: boolean;
   dailyMinutesPerStudent: number;
+  teacherName: string | null;
+  voiceByLanguage: Partial<Record<VoiceLang, string>>;
+  avatarMode: "auto" | "voice";
+  avatarId: string | null;
+  /** The account's Live AI avatar (provider, key, consent…), which video lessons use. */
+  avatar: { enabled: boolean; provider: string; providerLabel: string; avatarId: string | null; displayName: string | null; ready: boolean; missing: string[] } | null;
   limits: { dailyMinutesPerStudent: { min: number; max: number; default: number } };
   updatedAt: string | null;
 };
+
+/** One lesson language's voice: what is chosen, and the picker when "Change" is open. */
+function VoiceRow({ lang, value, open, onToggle, onChange }: {
+  lang: typeof VOICE_LANGS[number]; value: string | null; open: boolean; onToggle: () => void; onChange: (v: string | null) => void;
+}) {
+  const name = useVoiceName(value);
+  const fallback = lang.id === "hinglish" ? "Same as the Hindi voice" : "Same as the chat widget's voice";
+  return (
+    <div className="rounded-lg border border-gray-200" data-testid={`tutor-voice-${lang.id}`}>
+      <button type="button" onClick={onToggle} className="flex w-full items-center gap-3 px-3 py-2.5 text-left">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium">{lang.label}</p>
+          <p className="truncate text-xs text-gray-500">{value ? name : fallback}</p>
+        </div>
+        <span className="text-xs font-medium text-purple-700">{open ? "Done" : "Change"}</span>
+        <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="space-y-2 border-t px-3 pb-3 pt-2">
+          <p className="text-xs text-gray-500">{lang.hint}</p>
+          <CallVoicePicker
+            value={value}
+            onChange={onChange}
+            defaultOption={lang.id === "hinglish" ? { label: "Same as the Hindi voice", description: "Hinglish lessons use the voice chosen for Hindi (or the chat widget's voice)." } : undefined}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 type UsageView = {
   day: string;
   students: number;
@@ -37,12 +83,39 @@ export function TutorSettingsDialog({ open, onOpenChange, businessAccountId, bus
   const usage = useQuery<UsageView>({ queryKey: [`/api/super-admin/tutor/accounts/${businessAccountId}/usage`], enabled: open });
   const [enabled, setEnabled] = useState(false);
   const [minutes, setMinutes] = useState("20");
+  const [teacherName, setTeacherName] = useState("");
+  const [voices, setVoices] = useState<Partial<Record<VoiceLang, string | null>>>({});
+  const [openVoice, setOpenVoice] = useState<VoiceLang | null>(null);
+  const [avatarMode, setAvatarMode] = useState<"auto" | "voice">("auto");
+  const [avatarId, setAvatarId] = useState("");
+  const [avatarCheck, setAvatarCheck] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     if (!settings.data) return;
     setEnabled(settings.data.enabled);
     setMinutes(String(settings.data.dailyMinutesPerStudent));
+    setTeacherName(settings.data.teacherName ?? "");
+    setVoices({ ...settings.data.voiceByLanguage });
+    setAvatarMode(settings.data.avatarMode ?? "auto");
+    setAvatarId(settings.data.avatarId ?? "");
+    setAvatarCheck(null);
   }, [settings.data]);
+  useEffect(() => { if (!open) setOpenVoice(null); }, [open]);
+
+  const avatar = settings.data?.avatar ?? null;
+  const checkAvatar = useMutation({
+    mutationFn: () => apiRequest<{ status: "found" | "not_found" | "unchecked"; name?: string; reason?: string; message?: string; resolvedAvatarId?: string; resolvedFrom?: string }>(
+      "POST", `/api/super-admin/avatar/accounts/${businessAccountId}/check-avatar`, { provider: avatar?.provider, avatarId: avatarId.trim() }),
+    onSuccess: (r) => {
+      // A persona id: use its avatar id (what a session needs).
+      if (r.status === "found" && r.resolvedFrom === "persona" && r.resolvedAvatarId) setAvatarId(r.resolvedAvatarId);
+      setAvatarCheck(
+        r.status === "found" ? { ok: true, text: `Found at ${avatar?.providerLabel}${r.name ? `: ${r.name}` : ""}.` }
+          : r.status === "not_found" ? { ok: false, text: r.message || `Not found at ${avatar?.providerLabel}.` }
+            : { ok: true, text: r.reason || "Couldn't check right now — it will be tried when a lesson starts." });
+    },
+    onError: (e: any) => setAvatarCheck({ ok: false, text: e?.message || "Couldn't check the avatar id." }),
+  });
 
   const lim = settings.data?.limits.dailyMinutesPerStudent ?? { min: 5, max: 240, default: 20 };
   const minutesNum = Number(minutes);
@@ -51,7 +124,12 @@ export function TutorSettingsDialog({ open, onOpenChange, businessAccountId, bus
 
   const save = useMutation({
     mutationFn: () => apiRequest<TutorAdminView>("PUT", `/api/super-admin/tutor/accounts/${businessAccountId}`, {
-      enabled, dailyMinutesPerStudent: minutesNum,
+      enabled,
+      dailyMinutesPerStudent: minutesNum,
+      teacherName: teacherName.trim() || null,
+      voiceByLanguage: Object.fromEntries(VOICE_LANGS.map((l) => [l.id, voices[l.id] || null])),
+      avatarMode,
+      avatarId: avatarId.trim() || null,
     }),
     onSuccess: (data) => {
       queryClient.setQueryData(tutorKey(businessAccountId), data);
@@ -63,12 +141,12 @@ export function TutorSettingsDialog({ open, onOpenChange, businessAccountId, bus
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg max-h-[88vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>AI tutor · {businessName}</DialogTitle>
           <DialogDescription>
             A teacher-like tutor in the chat widget that teaches a chapter from your synced content, with a live board.
-            It uses the video avatar when that is on for this account, otherwise voice with the board.
+            Set the teacher's name, voices and video below.
           </DialogDescription>
         </DialogHeader>
         {settings.isLoading ? (
@@ -108,6 +186,91 @@ export function TutorSettingsDialog({ open, onOpenChange, businessAccountId, bus
                 {usage.data.week.checksTotal > 0 ? ` · quick checks ${Math.round((100 * usage.data.week.checksCorrect) / usage.data.week.checksTotal)}% right` : ""}.
               </p>
             )}
+
+            {/* ── The teacher ── */}
+            <div className="space-y-3 border-t pt-4">
+              <div>
+                <p className="text-sm font-semibold">Teacher</p>
+                <p className="text-xs text-gray-500">Who students learn with: a name and a voice per lesson language, so the accent fits.</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="tutor-teacher-name">Teacher's name</Label>
+                <Input id="tutor-teacher-name" value={teacherName} maxLength={40} onChange={(e) => setTeacherName(e.target.value)} placeholder="e.g. Priya Ma'am" data-testid="input-tutor-teacher-name" />
+                <p className="text-xs text-gray-500">The tutor introduces itself with it ("Hi! I'm Priya Ma'am, your tutor."). Leave empty for no introduction.</p>
+              </div>
+              <div className="space-y-2">
+                <Label>Voices</Label>
+                {VOICE_LANGS.map((l) => (
+                  <VoiceRow
+                    key={l.id}
+                    lang={l}
+                    value={voices[l.id] ?? null}
+                    open={openVoice === l.id}
+                    onToggle={() => setOpenVoice((v) => (v === l.id ? null : l.id))}
+                    onChange={(v) => setVoices((prev) => ({ ...prev, [l.id]: v }))}
+                  />
+                ))}
+                <p className="text-xs text-gray-500">A lesson's language follows the chapter's medium (Hindi medium → Hindi) and the student's voice language.</p>
+              </div>
+            </div>
+
+            {/* ── Video ── */}
+            <div className="space-y-3 border-t pt-4">
+              <div>
+                <p className="text-sm font-semibold">Video</p>
+                <p className="text-xs text-gray-500">The video tutor uses this account's Live AI avatar: its provider, key, parental consent and monthly minutes.</p>
+              </div>
+              <RadioGroup value={avatarMode} onValueChange={(v) => setAvatarMode(v as "auto" | "voice")} className="space-y-2">
+                <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border p-3" data-testid="option-tutor-video-auto">
+                  <RadioGroupItem value="auto" className="mt-0.5" />
+                  <span>
+                    <span className="block text-sm font-medium">Video tutor when the avatar can start</span>
+                    <span className="block text-xs text-gray-500">The teacher appears on video next to the board; if video can't start, the lesson carries on with voice.</span>
+                  </span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border p-3" data-testid="option-tutor-video-off">
+                  <RadioGroupItem value="voice" className="mt-0.5" />
+                  <span>
+                    <span className="block text-sm font-medium">Voice and board only</span>
+                    <span className="block text-xs text-gray-500">No video in lessons (the Live AI avatar stays available in normal chat).</span>
+                  </span>
+                </label>
+              </RadioGroup>
+              {avatarMode === "auto" && (
+                <>
+                  {avatar?.ready ? (
+                    <p className="flex items-start gap-1.5 text-xs text-emerald-700" data-testid="text-tutor-avatar-status">
+                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> Live AI avatar is ready ({avatar.providerLabel}{avatar.avatarId ? `, avatar ${avatar.avatarId}` : ""}).
+                    </p>
+                  ) : (
+                    <p className="flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-800" data-testid="text-tutor-avatar-status">
+                      <TriangleAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                      <span>Lessons will be voice-only until the Live AI avatar is set up for this account{avatar?.missing?.length ? ` (${avatar.missing.join(", ")})` : ""}. Use "Live AI avatar → Set up" on this page.</span>
+                    </p>
+                  )}
+                  <div className="space-y-1.5">
+                    <Label htmlFor="tutor-avatar-id">Teacher's avatar (optional)</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="tutor-avatar-id"
+                        value={avatarId}
+                        onChange={(e) => { setAvatarCheck(null); setAvatarId(e.target.value); }}
+                        placeholder={avatar?.avatarId ? `Same as the account's (${avatar.avatarId})` : "avatar id"}
+                        data-testid="input-tutor-avatar-id"
+                      />
+                      <Button type="button" variant="outline" size="sm" className="h-10" disabled={!avatarId.trim() || !avatar || checkAvatar.isPending} onClick={() => checkAvatar.mutate()} data-testid="button-check-tutor-avatar">
+                        {checkAvatar.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Check"}
+                      </Button>
+                    </div>
+                    {avatarCheck ? (
+                      <p className={`text-xs ${avatarCheck.ok ? "text-emerald-700" : "text-red-600"}`}>{avatarCheck.text}</p>
+                    ) : (
+                      <p className="text-xs text-gray-500">A different {avatar?.providerLabel || "avatar"} look for teaching, e.g. a teacher in a classroom. Leave empty to use the account's avatar.</p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         )}
         <DialogFooter>

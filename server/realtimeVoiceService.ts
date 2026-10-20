@@ -456,6 +456,8 @@ interface VoiceConversation {
   tutorLanguage?: TutorLanguage;
   /** The student asked the tutor to speak more slowly. */
   tutorSlow?: boolean;
+  /** The teacher's voice for this lesson's language (AI tutor settings); unset = the widget's voice. */
+  tutorVoice?: { elevenlabsApiKey?: string; elevenlabsVoiceId?: string; openaiVoice?: string } | null;
   // PCM bytes sent for the current canonical answer, and — once ai_done is
   // sent — when the client should have finished playing it. Safety net so a
   // lost playback_complete can't leave the answer "active" forever.
@@ -1437,6 +1439,7 @@ export class RealtimeVoiceService {
     // A normal answer still playing gives way to the lesson.
     if (conversation.isProcessing || this.isAnswerActive(conversation)) this.cancelResponse(conversation, false);
     conversation.tutorLanguage = prepared.language;
+    conversation.tutorVoice = prepared.voice;
     conversation.tutorSlow = message?.slow === true;
     const runner = new TutorRunner({
       host: {
@@ -1452,6 +1455,8 @@ export class RealtimeVoiceService {
       chapter: prepared.chapter,
       language: prepared.language,
       continueFrom: prepared.continueFrom,
+      // The video avatar introduces the teacher itself (its AI-avatar notice).
+      teacherName: conversation.avatar ? null : prepared.teacherName,
     });
     conversation.tutor = runner;
     console.log(`[Tutor] Lesson started: "${prepared.chapter}" (${prepared.language}, ${request.mode})`);
@@ -4275,10 +4280,14 @@ export class RealtimeVoiceService {
   /** Primary/fallback TTS: ElevenLabs then OpenAI, or OpenAI alone. */
   private createTtsProviders(conversation: VoiceConversation): { primary: TtsProvider | null; fallback: TtsProvider | null } {
     if (this.deps.createTtsProviders) return this.deps.createTtsProviders(conversation);
-    const openaiProvider = this.withPhoneHindiScript(conversation, this.createOpenAITtsProvider(conversation));
-    if (conversation.elevenlabsApiKey && conversation.elevenlabsVoiceId) {
-      const apiKey = conversation.elevenlabsApiKey;
-      const voiceId = conversation.elevenlabsVoiceId;
+    // AI tutor lesson: the teacher's voice for the lesson's language, when one is set.
+    const teacher = conversation.tutor?.active ? conversation.tutorVoice : null;
+    const openaiProvider = this.withPhoneHindiScript(conversation, this.createOpenAITtsProvider(conversation, teacher?.openaiVoice));
+    const elKey = teacher?.elevenlabsVoiceId ? teacher.elevenlabsApiKey : teacher?.openaiVoice ? undefined : conversation.elevenlabsApiKey;
+    const elVoice = teacher?.elevenlabsVoiceId ? teacher.elevenlabsVoiceId : teacher?.openaiVoice ? undefined : conversation.elevenlabsVoiceId;
+    if (elKey && elVoice) {
+      const apiKey = elKey;
+      const voiceId = elVoice;
       return {
         primary: this.withPhoneHindiScript(conversation, {
           name: 'elevenlabs',
@@ -4298,11 +4307,11 @@ export class RealtimeVoiceService {
    * flight, one retry and speaking instructions — see services/voice/openaiTts.ts. One client
    * per conversation so the HTTPS connection is reused between sentences.
    */
-  private createOpenAITtsProvider(conversation: VoiceConversation): TtsProvider {
+  private createOpenAITtsProvider(conversation: VoiceConversation, voice?: string): TtsProvider {
     conversation.openaiTtsClient ||= createOpenAI({ apiKey: conversation.openaiApiKey }) as unknown as OpenAiSpeechClient;
     return createOpenAiTtsProvider({
       client: conversation.openaiTtsClient,
-      voice: conversation.selectedVoice,
+      voice: voice || conversation.selectedVoice,
       tutor: conversation.k12EducationEnabled === true || isTopscholarAccount(conversation.businessAccountId),
       speedPercent: this.phoneSpeed(conversation),
     });

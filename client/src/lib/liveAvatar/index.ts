@@ -31,7 +31,7 @@ const json = (body: unknown) => ({
 });
 
 /** Visitor tapped "Talk to …": the server checks limits and mints a provider session. */
-export async function startAvatarSession(input: { businessAccountId: string; userId: string; conversationId?: string | null }, fetchImpl: typeof fetch = fetch): Promise<{ ok: true; session: AvatarSessionInfo } | { ok: false; error: AvatarApiError }> {
+export async function startAvatarSession(input: { businessAccountId: string; userId: string; conversationId?: string | null; purpose?: "tutor" }, fetchImpl: typeof fetch = fetch): Promise<{ ok: true; session: AvatarSessionInfo } | { ok: false; error: AvatarApiError }> {
   try {
     const res = await fetchImpl("/api/chat/widget/avatar/session", json(input));
     const data = await res.json().catch(() => ({}));

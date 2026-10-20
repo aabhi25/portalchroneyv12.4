@@ -61,7 +61,7 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
   }, [auth]);
 
   /** Must be called directly from the visitor's tap/click handler. */
-  const start = useCallback(async () => {
+  const start = useCallback(async (startOpts: { purpose?: "tutor" } = {}) => {
     if (isAvatarCallActive(stateRef.current.phase)) return;
     const attempt = ++attemptRef.current;
     const tappedAt = Date.now();
@@ -73,7 +73,7 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
       video.muted = false;
       void video.play().catch(() => undefined);
     }
-    const result = await startAvatarSession({ ...auth(), conversationId: opts.getConversationId() || null });
+    const result = await startAvatarSession({ ...auth(), conversationId: opts.getConversationId() || null, purpose: startOpts.purpose });
     if (attempt !== attemptRef.current) return;
     if (!result.ok) {
       dispatch({ type: "session_refused", code: result.error.code, message: result.error.message });

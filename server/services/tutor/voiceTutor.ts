@@ -5,11 +5,11 @@
  */
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../../db";
-import { tutorSessions } from "@shared/schema";
+import { businessAccounts, tutorSessions } from "@shared/schema";
 import { lessonContext, TutorLessonError, type TutorScope } from "./lessonService";
 import { getOutline, getSection, type LessonOutline, type TutorLanguage } from "./lessonPlanner";
 import { answerDoubt } from "./doubtAnswerer";
-import { getTutorSettings } from "./settings";
+import { getTutorSettings, tutorVoiceFor } from "./settings";
 import { addUsage, remainingSeconds, secondsUsedToday, tutorStudentKey } from "./usage";
 import type { TutorLessonSource, TutorStore } from "./tutorRunner";
 
@@ -42,7 +42,16 @@ export function tutorLanguageFor(req: Pick<VoiceTutorRequest, "language" | "voic
   return "en";
 }
 
-export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{ chapter: string; language: TutorLanguage; lessons: TutorLessonSource; store: TutorStore; continueFrom: { part: number; title: string | null } | null }> {
+/** The teacher's voice for a lesson: an ElevenLabs voice (with the account's key) or an OpenAI one. */
+export interface TutorVoice { elevenlabsApiKey?: string; elevenlabsVoiceId?: string; openaiVoice?: string }
+
+export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{
+  chapter: string; language: TutorLanguage; lessons: TutorLessonSource; store: TutorStore;
+  continueFrom: { part: number; title: string | null } | null;
+  /** null = the widget's voice. */
+  voice: TutorVoice | null;
+  teacherName: string | null;
+}> {
   const settings = await getTutorSettings(req.businessAccountId);
   if (!settings.enabled) throw new TutorUnavailableError("The AI tutor is not switched on for this account.");
   const chapter = String(req.scope?.chapter || "").trim();
@@ -120,5 +129,15 @@ export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{ chapt
       continueFrom = { part, title: typeof title === "string" ? title : null };
     }
   }
-  return { chapter, language, lessons, store, continueFrom };
+  // The voice set for this lesson's language (accent), if any.
+  let voice: TutorVoice | null = null;
+  const selection = tutorVoiceFor(settings, language);
+  if (selection?.startsWith("el:")) {
+    const [acc] = await db.select({ key: businessAccounts.elevenlabsApiKey }).from(businessAccounts).where(eq(businessAccounts.id, req.businessAccountId)).limit(1);
+    // Without an ElevenLabs key the widget's voice is used (the dialog says the key is needed).
+    if (acc?.key) voice = { elevenlabsApiKey: acc.key, elevenlabsVoiceId: selection.slice(3) };
+  } else if (selection) {
+    voice = { openaiVoice: selection };
+  }
+  return { chapter, language, lessons, store, continueFrom, voice, teacherName: settings.teacherName?.trim() || null };
 }

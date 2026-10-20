@@ -25,6 +25,10 @@ import { storage } from "../../storage";
 import { aiBudgetService, istMonthKey, istMonthRange } from "../aiBudgetService";
 import { aiUsageLogger } from "../aiUsageLogger";
 import { getRates, resolveApiKey } from "./credentials";
+import { getTutorSettings } from "../tutor/settings";
+
+/** The AI tutor's spoken AI-avatar notice (when the account has no custom notice text). */
+const TUTOR_DISCLOSURE = "Hi, I'm {name}, your AI tutor. You're talking to an AI avatar, so you can switch to text at any time.";
 import { getAvatarProvider } from "./registry";
 import {
   DEFAULT_DISPLAY_NAME,
@@ -258,13 +262,25 @@ export class AvatarSessionManager {
 
   // ── start ──────────────────────────────────────────────────────────────────
 
-  async startSession(input: { businessAccountId: string; visitorId: string; conversationId?: string | null }): Promise<StartSessionResult> {
+  async startSession(input: { businessAccountId: string; visitorId: string; conversationId?: string | null; purpose?: "tutor" }): Promise<StartSessionResult> {
     const { businessAccountId, visitorId } = input;
     const account = await storage.getBusinessAccount(businessAccountId);
     if (!account) throw new AvatarGateError("not_found", 404, "Business account not found");
     if (account.status === "suspended") throw new AvatarGateError("avatar_disabled", 403, "This assistant is unavailable");
-    const settings = await getEffectiveSettings(businessAccountId, account);
+    let settings = await getEffectiveSettings(businessAccountId, account);
     if (!settings.enabled) throw new AvatarGateError("avatar_disabled", 403, "The AI avatar is not enabled for this account");
+    // AI tutor lesson: the tutor's own avatar (if one is set) and the teacher's name. Everything
+    // else — provider, key, consent, monthly cap, concurrency — stays the account's.
+    if (input.purpose === "tutor") {
+      const tutor = await getTutorSettings(businessAccountId);
+      if (!tutor.enabled || tutor.avatarMode === "voice") throw new AvatarGateError("avatar_disabled", 403, "Video is not used for the AI tutor on this account");
+      settings = {
+        ...settings,
+        avatarId: tutor.avatarId || settings.avatarId,
+        displayName: tutor.teacherName || settings.displayName,
+        disclosureText: settings.disclosureText?.trim() ? settings.disclosureText : TUTOR_DISCLOSURE,
+      };
+    }
     if (account.voiceModeEnabled !== "true") throw new AvatarGateError("avatar_disabled", 403, "Voice mode is not enabled for this account");
     if (isChildrensAccount(account) && !settings.parentalConsentConfirmed) {
       throw new AvatarGateError("consent_required", 403, "Parental consent has not been confirmed for this account");

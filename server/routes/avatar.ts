@@ -512,7 +512,8 @@ router.post("/api/chat/widget/avatar/session", async (req, res) => {
   }
   try {
     const conversationId = typeof body.conversationId === "string" && body.conversationId ? body.conversationId.slice(0, 64) : null;
-    const result = await avatarSessionManager.startSession({ ...auth, conversationId });
+    const purpose = body.purpose === "tutor" ? "tutor" as const : undefined;
+    const result = await avatarSessionManager.startSession({ ...auth, conversationId, purpose });
     res.json(result);
   } catch (error) {
     sendGateError(res, error);

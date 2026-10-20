@@ -183,6 +183,13 @@
       "when": 1792442511728,
       "tag": "0025_ai_tutor",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792480956697,
+      "tag": "0026_tutor_teacher",
+      "breakpoints": true
     }
   ]
 }

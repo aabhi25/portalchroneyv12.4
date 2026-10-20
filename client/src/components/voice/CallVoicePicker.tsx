@@ -26,7 +26,7 @@ export const OPENAI_VOICES: Array<{ id: string; label: string; desc: string; gen
 const WIDGET = "__widget__";
 
 /** "el:abc…" → the ElevenLabs voice's name; "shimmer" → "Shimmer". */
-function useVoiceName(selection: string | null | undefined): string | null {
+export function useVoiceName(selection: string | null | undefined): string | null {
   const elId = selection?.startsWith("el:") ? selection.slice(3) : null;
   const q = useQuery({
     queryKey: ["elevenlabs-voice", elId],
@@ -44,8 +44,14 @@ function useVoiceName(selection: string | null | undefined): string | null {
 
 /**
  * The voice used on phone calls. `value` null = the website chat widget's voice (the default).
+ * `defaultOption` relabels that first choice for other uses (e.g. the AI tutor's Hinglish voice,
+ * whose default is the Hindi voice).
  */
-export function CallVoicePicker({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
+export function CallVoicePicker({ value, onChange, defaultOption }: {
+  value: string | null;
+  onChange: (v: string | null) => void;
+  defaultOption?: { label: string; description: string };
+}) {
   const { toast } = useToast();
   const [playingVoice, setPlayingVoice] = useState<string | null>(null);
   const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
@@ -103,9 +109,9 @@ export function CallVoicePicker({ value, onChange }: { value: string | null; onC
       >
         <RadioGroupItem value={WIDGET} id="call-voice-widget" className="mt-1" />
         <div className="flex-1 min-w-0">
-          <Label htmlFor="call-voice-widget" className="font-semibold cursor-pointer text-sm">Same as the website chat widget</Label>
+          <Label htmlFor="call-voice-widget" className="font-semibold cursor-pointer text-sm">{defaultOption?.label ?? "Same as the website chat widget"}</Label>
           <p className="text-xs text-gray-500 mt-0.5">
-            {widget.isLoading ? "Loading…" : <>Currently <strong className="text-gray-700">{widgetVoiceName}</strong> — changes when the widget's voice changes.</>}
+            {defaultOption ? defaultOption.description : widget.isLoading ? "Loading…" : <>Currently <strong className="text-gray-700">{widgetVoiceName}</strong> — changes when the widget's voice changes.</>}
           </p>
         </div>
       </div>

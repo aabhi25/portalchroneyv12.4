@@ -133,7 +133,7 @@ async function main() {
   ];
 
   const checkSaid = ["Quick check! The longest side of a right triangle is called?", "Is it A, base; B, hypotenuse; or C, height?"];
-  function harness(opts: { remaining?: number; tickMs?: number; outlineDelayMs?: number; failPrepare?: Error; autoPlay?: boolean; autoAnswer?: boolean; ttsDelayMs?: number; continueFrom?: { part: number; title: string | null } } = {}) {
+  function harness(opts: { remaining?: number; tickMs?: number; outlineDelayMs?: number; failPrepare?: Error; autoPlay?: boolean; autoAnswer?: boolean; ttsDelayMs?: number; continueFrom?: { part: number; title: string | null }; teacherName?: string; voice?: any } = {}) {
     const prepareCalls: any[] = [];
     const svc: any = new RealtimeVoiceService();
     const client = new FakeSocket();
@@ -169,6 +169,8 @@ async function main() {
           chapter: "Triangles",
           language: "en",
           continueFrom: req.fromStart ? null : opts.continueFrom ?? null,
+          teacherName: opts.teacherName ?? null,
+          voice: opts.voice ?? null,
           lessons: {
             outline: async () => { if (opts.outlineDelayMs) await sleep(opts.outlineDelayMs); return outline; },
             section: async (i: number) => sec(i + 1),
@@ -439,6 +441,31 @@ async function main() {
     expect(h.prepareCalls[1]?.fromStart === true && spokenLines(h).includes(outline.intro[0]), "Start over begins with the plan again");
     await h.clientMessage({ type: "tutor_stop" });
     h.done();
+  }
+
+  // ── 4i. the teacher: introduces itself; the lesson speaks with the teacher's voice ──
+  {
+    const h = harness({ teacherName: "Priya Ma'am", voice: { elevenlabsApiKey: "el-teacher", elevenlabsVoiceId: "TeacherVoice123" } });
+    await h.clientMessage({ type: "tutor_start" });
+    await waitFor(() => spokenLines(h).includes(outline.intro[0]), 3000, "intro");
+    const said = spokenLines(h);
+    expect(said[0] === "Hi! I'm Priya Ma'am, your tutor." && said[1] === outline.intro[0], "the teacher says who they are, then the plan", said.slice(0, 2));
+    expect(h.conversation.tutorVoice?.elevenlabsVoiceId === "TeacherVoice123", "the lesson's voice is set on the session");
+    await h.clientMessage({ type: "tutor_stop" });
+    h.done();
+    // The real TTS set-up (no network: providers are only built).
+    const svc: any = new RealtimeVoiceService();
+    const conv: any = { openaiApiKey: "sk-x", selectedVoice: "shimmer", elevenlabsApiKey: "el-widget", elevenlabsVoiceId: "WidgetVoice", tutor: { active: true }, tutorVoice: { openaiVoice: "nova" } };
+    let pv = svc.createTtsProviders(conv);
+    expect(pv.primary?.name !== "elevenlabs" && pv.fallback === null, "teacher voice = an OpenAI voice → OpenAI speaks (not the widget's ElevenLabs voice)", pv.primary?.name);
+    conv.tutorVoice = { elevenlabsApiKey: "el-teacher", elevenlabsVoiceId: "TeacherVoice123" };
+    conv.elevenlabsApiKey = undefined; conv.elevenlabsVoiceId = undefined;
+    pv = svc.createTtsProviders(conv);
+    expect(pv.primary?.name === "elevenlabs", "teacher voice = ElevenLabs → ElevenLabs speaks even when the widget uses OpenAI", pv.primary?.name);
+    conv.tutor = { active: false };
+    pv = svc.createTtsProviders(conv);
+    expect(pv.primary?.name !== "elevenlabs", "outside a lesson, the widget's own voice again");
+    svc.shutdown?.();
   }
 
   // ── 5. stop ──

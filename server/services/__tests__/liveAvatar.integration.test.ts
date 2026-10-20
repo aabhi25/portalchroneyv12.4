@@ -406,6 +406,20 @@ async function main() {
     r = await call("PUT", `/api/super-admin/avatar/accounts/${K}`, cSup, { parentalConsentConfirmed: false });
     expect(r.status === 400, "unticking consent while enabled is refused", r.json);
 
+    // ── 8b. the AI tutor's video: its own avatar and the teacher's name ─────
+    await call("PUT", `/api/super-admin/avatar/accounts/${K}/keys/fake`, cSup, { apiKey: "fake-key-for-tests" });
+    await db.insert(schema.tutorBusinessSettings).values({ businessAccountId: K, enabled: true, teacherName: "Priya Ma'am", avatarMode: "auto", avatarId: "tutor-avatar-7" } as any);
+    const tutorStart = await avatarSessionManager.startSession({ businessAccountId: K, visitorId: "widget_tutor_1", purpose: "tutor" });
+    expect(tutorStart.displayName === "Priya Ma'am" && /Hi, I'm Priya Ma'am, your AI tutor/.test(tutorStart.disclosure || "") && /AI avatar/.test(tutorStart.disclosure || ""), "tutor video: the teacher's name, still disclosed as an AI avatar", { name: tutorStart.displayName, disclosure: tutorStart.disclosure });
+    await avatarSessionManager.endSession(tutorStart.sessionId, "visitor_closed");
+    const plainStart = await avatarSessionManager.startSession({ businessAccountId: K, visitorId: "widget_tutor_2" });
+    expect(plainStart.displayName !== "Priya Ma'am", "a normal avatar call keeps the account's own name");
+    await avatarSessionManager.endSession(plainStart.sessionId, "visitor_closed");
+    await db.update(schema.tutorBusinessSettings).set({ avatarMode: "voice" }).where(eq(schema.tutorBusinessSettings.businessAccountId, K));
+    let tutorGate = "";
+    try { await avatarSessionManager.startSession({ businessAccountId: K, visitorId: "widget_tutor_3", purpose: "tutor" }); } catch (e: any) { tutorGate = e?.code || String(e); }
+    expect(tutorGate === "avatar_disabled", "tutor set to voice-only: no video session for lessons", tutorGate);
+
     // ── 9. watchdog: idle, max length, cap mid-session, heartbeat, provider drop ─
     let clock = Date.now();
     avatarSessionManager.setClockForTesting(() => clock);

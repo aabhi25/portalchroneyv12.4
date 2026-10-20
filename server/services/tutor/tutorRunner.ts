@@ -72,6 +72,8 @@ export interface TutorRunnerOptions {
   now?: () => number;
   /** The part this student reached last time (matched by title when the plan changed since). */
   continueFrom?: { part: number; title: string | null } | null;
+  /** The teacher introduces itself by this name at the start of a lesson. */
+  teacherName?: string | null;
 }
 
 /** Where the lesson goes on from: a part (-1 = the plan … sections.length = recap) and a line, or that part's quick check. */
@@ -91,6 +93,11 @@ const WELCOME_BACK = T({
   en: (t: string) => `Welcome back! Last time we got to "${t}", so let's carry on from there.`,
   hinglish: (t: string) => `Welcome back! Pichhli baar hum "${t}" tak pahunche the, toh wahin se shuru karte hain.`,
   hi: (t: string) => `फिर से स्वागत है! पिछली बार हम "${t}" तक पहुँचे थे, तो वहीं से शुरू करते हैं।`,
+});
+const HELLO = T({
+  en: (n: string) => `Hi! I'm ${n}, your tutor.`,
+  hinglish: (n: string) => `Namaste! Main ${n} hoon, aapka tutor.`,
+  hi: (n: string) => `नमस्ते! मेरा नाम ${n} है।`,
 });
 const RESUME = T({ en: "Okay, let's pick up where we left off.", hinglish: "Chalo, wahin se aage badhte hain.", hi: "चलो, वहीं से आगे बढ़ते हैं।" });
 const ACK = T({ en: "Good question! Let me show you.", hinglish: "Achha sawaal hai! Dekho.", hi: "अच्छा सवाल है! देखो।" });
@@ -215,6 +222,7 @@ export class TutorRunner {
   private startedAt = 0;
   private remaining = 0;
   private wrapping = false;
+  private introduced = false;
   private wrapped = false;
   private wrapTimer: NodeJS.Timeout | null = null;
   private sessionId: Promise<string | null> = Promise.resolve(null);
@@ -459,10 +467,16 @@ export class TutorRunner {
         if (start > 0 || resumeHere) this.o.host.send({ type: "board_snapshot", board: boardAfter(lines, start) });
         this.here = { part: p, line: start, phase: "lesson" };
         this.state = "teaching";
-        // Resuming: "Okay, where were we…" first — it counts as line start-1 of this part.
-        const body = lines.slice(start);
-        const toSay = resumeHere ? [{ say: RESUME[this.L], ops: [] as BoardOp[] }, ...body] : body;
-        if ((await this.say("lesson", toSay, resumeHere ? start - 1 : start, lines)) !== "played") return;
+        // Resuming: "Okay, where were we…" first; a new lesson: the teacher says who they are.
+        // A spoken prefix counts as the line(s) before `start` of this part.
+        const prefix: TutorLine[] = [];
+        if (resumeHere) prefix.push({ say: RESUME[this.L], ops: [] });
+        else if (p === -1 && start === 0 && this.o.teacherName && !this.introduced) {
+          this.introduced = true;
+          prefix.push({ say: HELLO[this.L](this.o.teacherName), ops: [] });
+        }
+        const toSay = [...prefix, ...lines.slice(start)];
+        if ((await this.say("lesson", toSay, start - prefix.length, lines)) !== "played") return;
       }
       if (isSection && script!.checks.length) {
         if (!(await this.runCheck(p, script!.checks[0], gen, resumed && first && from.phase === "check"))) return;
