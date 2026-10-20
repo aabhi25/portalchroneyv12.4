@@ -109,7 +109,8 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
   const check = state.check?.shown || state.check?.result ? state.check : null;
   const checkOpen = !!check && (check.result === null || check.result === "retry");
   const inPart = state.part >= 0 && state.part < total;
-  const showAsk = status !== "ended" && (expanded || askOpen);
+  const yourTurn = status === "paused" && state.awaitingReply;
+  const showAsk = status !== "ended" && (expanded || askOpen || yourTurn);
 
   return (
     <div
@@ -193,7 +194,8 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
           <p className="text-[13px] text-gray-600 flex items-center gap-1.5 min-h-[2.4em]"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Thinking about your question…</p>
         ) : (
           <p className={`text-[13px] leading-snug min-h-[2.4em] ${expanded ? "sm:text-base" : ""}`} aria-live="polite" data-testid="text-tutor-caption">
-            {status === "paused" ? <span className="text-gray-600">Paused — ask your question, or continue the lesson.</span> : state.caption}
+            {yourTurn ? <span className="font-medium" style={{ color: chatColor }} data-testid="text-tutor-your-turn">Your turn — say your answer, or type it below.</span>
+              : status === "paused" ? <span className="text-gray-600">Paused — ask your question, or continue the lesson.</span> : state.caption}
           </p>
         )}
         <div className="flex items-center gap-2 flex-wrap">
@@ -247,7 +249,7 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               maxLength={500}
-              placeholder="Type a question about this chapter…"
+              placeholder={yourTurn ? "Type your answer…" : "Type a question about this chapter…"}
               className="flex-1 min-w-0 h-9 px-3 rounded-full border border-gray-200 bg-white text-[14px] focus:outline-none focus:border-gray-400"
               autoFocus={!expanded}
               data-testid="input-tutor-question"

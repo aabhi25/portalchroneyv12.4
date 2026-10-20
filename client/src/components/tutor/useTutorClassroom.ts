@@ -31,13 +31,15 @@ export interface ClassroomState {
   check: ClassroomCheck | null;
   checksCorrect: number;
   checksTotal: number;
+  /** The tutor asked the student a question and waits for the answer (spoken or typed). */
+  awaitingReply: boolean;
   /** Carrying on from where the student stopped last time (Start over is offered). */
   continuedFrom: { part: number; title: string } | null;
 }
 
 export const initialClassroom = (): ClassroomState => ({
   status: "off", board: emptyBoard(), caption: "", title: "", sections: [], part: -1, canResume: false, endReason: null, message: null,
-  check: null, checksCorrect: 0, checksTotal: 0, continuedFrom: null,
+  check: null, checksCorrect: 0, checksTotal: 0, continuedFrom: null, awaitingReply: false,
 });
 
 /** The classroom after one message from the voice socket (InlineVoiceMode onTutorMessage). */
@@ -51,7 +53,7 @@ export function reduceClassroom(state: ClassroomState, m: any): ClassroomState {
       // An open check stays; an answered one stays until the next page (its feedback is being said).
       const answered = state.check?.result === "right" || state.check?.result === "wrong";
       const check = m.checkOpen || answered ? state.check : null;
-      return { ...state, status, part: typeof m.part === "number" ? m.part : state.part, canResume: !!m.canResume, check };
+      return { ...state, status, part: typeof m.part === "number" ? m.part : state.part, canResume: !!m.canResume, check, awaitingReply: !!m.awaitingReply };
     }
     case "tutor_check":
       return {

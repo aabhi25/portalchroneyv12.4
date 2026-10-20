@@ -40,8 +40,11 @@ export interface TutorVoiceHost {
 export interface TutorLessonSource {
   outline(): Promise<LessonOutline>;
   section(index: number): Promise<SectionScript>;
-  /** Lines answering the student's question (never throws). */
-  answerDoubt(question: string, ctx: { part: number; recentLines: string[] }): Promise<{ lines: TutorLine[]; onTopic: boolean }>;
+  /**
+   * Lines answering what the student said (never throws). `replyTo`: the question the tutor asked,
+   * when the student is answering it. expectsReply: the lines end with a question for the student.
+   */
+  answerDoubt(question: string, ctx: { part: number; recentLines: string[]; replyTo?: string | null }): Promise<{ lines: TutorLine[]; onTopic: boolean; expectsReply?: boolean }>;
 }
 
 export interface TutorStore {
@@ -64,8 +67,10 @@ export interface TutorRunnerOptions {
   tickMs?: number;
   /** A hello is spoken only when the lesson is not ready within this long (default 400 ms). */
   greetAfterMs?: number;
-  /** "Good question!" is said only when the answer is not ready within this long (default 700 ms). */
+  /** A short "let me think" is said only when an answer is not ready within this long (default 1.5 s). */
   ackAfterMs?: number;
+  /** Silence after an answer before the lesson goes on (default 700 ms; the student may say more). */
+  settleMs?: number;
   /** Fallback when the widget never reports the end of playback (default audio + 8 s). */
   playbackSlackMs?: number;
   /** Clock (tests). */
@@ -99,8 +104,18 @@ const HELLO = T({
   hinglish: (n: string) => `Namaste! Main ${n} hoon, aapka tutor.`,
   hi: (n: string) => `नमस्ते! मेरा नाम ${n} है।`,
 });
-const RESUME = T({ en: "Okay, let's pick up where we left off.", hinglish: "Chalo, wahin se aage badhte hain.", hi: "चलो, वहीं से आगे बढ़ते हैं।" });
-const ACK = T({ en: "Good question! Let me show you.", hinglish: "Achha sawaal hai! Dekho.", hi: "अच्छा सवाल है! देखो।" });
+// Phrases said often come in a few versions, used in turn (a teacher doesn't repeat one line).
+const RESUME = T({
+  en: ["Okay, let's pick up where we left off.", "Right, back to where we were.", "Alright, let's carry on.", "Now, let's continue from there."],
+  hinglish: ["Chalo, wahin se aage badhte hain.", "Theek hai, ab wapas lesson par.", "Achha, ab aage chalte hain.", "Chalo, jahan ruke the wahin se."],
+  hi: ["चलो, वहीं से आगे बढ़ते हैं।", "ठीक है, अब वापस पाठ पर।", "अच्छा, अब आगे चलते हैं।", "चलो, जहाँ रुके थे वहीं से।"],
+});
+/** Said only when an answer takes a while (no "Good question!" every time). */
+const THINKING = T({
+  en: ["Hmm, let me think.", "Okay, one moment.", "Let me see.", "Right, give me a second."],
+  hinglish: ["Hmm, ek second.", "Achha, dekhte hain.", "Ruko, sochne do.", "Theek hai, ek minute."],
+  hi: ["हम्म, एक सेकंड।", "अच्छा, देखते हैं।", "रुको, सोचने दो।", "ठीक है, एक मिनट।"],
+});
 const SIMPLER_INTRO = T({ en: "No problem, let me explain it another way.", hinglish: "Koi baat nahi, ise doosre tareeke se samajhte hain.", hi: "कोई बात नहीं, इसे दूसरे तरीके से समझते हैं।" });
 const QUICK = T({ en: "Quick check!", hinglish: "Ek quick check!", hi: "एक छोटा सा सवाल!" });
 const ASK_OPTIONS = T({
@@ -223,6 +238,11 @@ export class TutorRunner {
   private remaining = 0;
   private wrapping = false;
   private introduced = false;
+  /** The tutor asked the student something and is waiting for the answer. */
+  private awaiting: { question: string; lines: TutorLine[] } | null = null;
+  private readonly askedChecks = new Set<string>();
+  private lastCheckId: string | null = null;
+  private readonly phraseTurn = new Map<string, number>();
   private wrapped = false;
   private wrapTimer: NodeJS.Timeout | null = null;
   private sessionId: Promise<string | null> = Promise.resolve(null);
@@ -353,7 +373,21 @@ export class TutorRunner {
     }
     // Typing over the tutor stops it like speaking over it does (a quick check's question stays open).
     if (opts.typed && this.current && this.current.kind !== "check") this.pause();
+    // The tutor asked them something: what they say now is their answer (unless it's a command).
+    const awaiting = this.awaiting;
+    if (awaiting && (intent.kind === "doubt" || intent.kind === "answer" || intent.kind === "dontknow")) {
+      this.awaiting = null;
+      await this.answerQuestion(text, { replyTo: awaiting.question });
+      return;
+    }
+    if (awaiting && intent.kind === "repeat") { await this.say("aside", awaiting.lines); return; }
+    this.awaiting = null;
     switch (intent.kind) {
+      case "quiz":
+        // A quick check is already open: that is their question.
+        if (this.check && this.state === "checking") { await this.askCheckAgain(); return; }
+        await this.quizMe(text);
+        return;
       case "continue":
         if (this.state === "paused") await this.resumeLesson();
         return;
@@ -446,6 +480,7 @@ export class TutorRunner {
   /** Teaches from a position to the end: each part's lines, its quick check, then the recap. */
   private async runFrom(from: Position, resumed: boolean): Promise<void> {
     const gen = ++this.gen;
+    this.awaiting = null; // moving on: a question the tutor asked is no longer waiting
     const outline = this.outline;
     if (!outline) return;
     for (let p = from.part; p <= outline.sections.length; p++) {
@@ -470,7 +505,7 @@ export class TutorRunner {
         // Resuming: "Okay, where were we…" first; a new lesson: the teacher says who they are.
         // A spoken prefix counts as the line(s) before `start` of this part.
         const prefix: TutorLine[] = [];
-        if (resumeHere) prefix.push({ say: RESUME[this.L], ops: [] });
+        if (resumeHere) prefix.push({ say: this.phrase("resume", RESUME[this.L]), ops: [] });
         else if (p === -1 && start === 0 && this.o.teacherName && !this.introduced) {
           this.introduced = true;
           prefix.push({ say: HELLO[this.L](this.o.teacherName), ops: [] });
@@ -478,22 +513,30 @@ export class TutorRunner {
         const toSay = [...prefix, ...lines.slice(start)];
         if ((await this.say("lesson", toSay, start - prefix.length, lines)) !== "played") return;
       }
-      if (isSection && script!.checks.length) {
-        if (!(await this.runCheck(p, script!.checks[0], gen, resumed && first && from.phase === "check"))) return;
+      const resumingCheck = resumed && first && from.phase === "check";
+      const check = isSection ? (resumingCheck ? script!.checks.find((c) => c.id === this.lastCheckId) : undefined) ?? script!.checks.find((c) => !this.askedChecks.has(c.id)) : undefined;
+      if (check) {
+        if (!(await this.runCheck(p, check, gen, resumingCheck))) return;
       }
     }
     await this.end("completed");
   }
 
-  private async runCheck(part: number, check: TutorCheck, gen: number, resumed = false): Promise<boolean> {
-    this.here = { part, line: 0, phase: "check" };
+  /**
+   * A quick check. `returnTo`: asked on request in the middle of the lesson ("quiz me") — the
+   * lesson then goes on from there instead of from the next part.
+   */
+  private async runCheck(part: number, check: TutorCheck, gen: number, resumed = false, returnTo?: Position): Promise<boolean> {
+    if (!returnTo) this.here = { part, line: 0, phase: "check" };
+    this.askedChecks.add(check.id);
+    this.lastCheckId = check.id;
     this.state = "checking";
     this.check = { part, check, tries: 0, waiter: null, pending: null };
     // Never the answer key: the widget learns the right option only once it is answered.
     this.o.host.send({ type: "tutor_check", id: check.id, prompt: plain(check.prompt), options: check.options.map(plain) });
     this.sendState();
     const ask = checkLines(check, this.L);
-    if ((await this.say("check", resumed ? [{ say: RESUME[this.L], ops: [] }, ...ask] : ask)) === "gone") return false;
+    if ((await this.say("check", resumed ? [{ say: this.phrase("resume", RESUME[this.L]), ops: [] }, ...ask] : ask)) === "gone") return false;
     let feedback: TutorLine[] = [];
     for (;;) {
       if (gen !== this.gen || this.isEnded() || !this.check) return false;
@@ -524,7 +567,7 @@ export class TutorRunner {
       break;
     }
     this.check = null;
-    this.here = { part: part + 1, line: 0, phase: "lesson" };
+    this.here = returnTo ?? { part: part + 1, line: 0, phase: "lesson" };
     this.state = "teaching";
     this.sendState();
     return (await this.say("aside", feedback)) === "played";
@@ -551,22 +594,63 @@ export class TutorRunner {
     await this.say("check", checkLines(c.check, this.L));
   }
 
-  /** A question or remark: answered on a fresh page, then on with the lesson. */
-  private async answerQuestion(question: string): Promise<void> {
+  /**
+   * A question or remark: answered on a fresh page, then — after a moment, in case they say more —
+   * on with the lesson. When the answer asks the student something ("quiz me"), the tutor waits.
+   */
+  private async answerQuestion(question: string, opts: { replyTo?: string | null } = {}): Promise<void> {
     this.pause();
     const gen = this.gen;
     this.state = "answering";
+    this.awaiting = null;
     this.sendState();
     const at = this.resumeAt ?? this.here;
-    const answer = this.o.lessons.answerDoubt(question, { part: at.part, recentLines: [...this.recent] });
-    const quick = await Promise.race([answer.then(() => true, () => true), sleep(this.o.ackAfterMs ?? 700).then(() => false)]);
-    const ack = !quick && gen === this.gen ? this.say("aside", [{ say: ACK[this.L], ops: [] }]) : null;
-    const { lines } = await answer.catch(() => ({ lines: [] as TutorLine[], onTopic: false }));
+    const answer = this.o.lessons.answerDoubt(question, { part: at.part, recentLines: [...this.recent], replyTo: opts.replyTo ?? null });
+    const quick = await Promise.race([answer.then(() => true, () => true), sleep(this.o.ackAfterMs ?? 1500).then(() => false)]);
+    const ack = !quick && gen === this.gen ? this.say("aside", [{ say: this.phrase("thinking", THINKING[this.L]), ops: [] }]) : null;
+    const { lines, expectsReply } = await answer.catch(() => ({ lines: [] as TutorLine[], onTopic: false, expectsReply: false }));
     if (ack && (await ack) !== "played") return;
     if (gen !== this.gen || this.isEnded()) return;
     if (lines.length && (await this.say("aside", lines)) !== "played") return;
     if (gen !== this.gen || this.isEnded()) return;
+    if (expectsReply && lines.length) {
+      // The tutor asked the student something: wait for their answer (spoken or typed).
+      this.awaiting = { question: lines[lines.length - 1].say, lines };
+      this.state = "paused";
+      this.sendState();
+      return;
+    }
+    await sleep(this.o.settleMs ?? 700);
+    if (gen !== this.gen || this.isEnded()) return;
     await this.resumeLesson();
+  }
+
+  /** "Ask me a question": a quick check from the question bank on what was taught, else an open question. */
+  private async quizMe(text: string): Promise<void> {
+    this.pause();
+    const gen = this.gen;
+    const at = { ...(this.resumeAt ?? this.here) };
+    await this.loadOutline().catch(() => undefined);
+    let found: { part: number; check: TutorCheck } | null = null;
+    // The part being taught first, then the ones before it.
+    for (let p = Math.min(at.part, (this.outline?.sections.length ?? 0) - 1); p >= 0 && !found; p--) {
+      const script = await this.section(p).catch(() => null);
+      const c = script?.checks.find((x) => !this.askedChecks.has(x.id));
+      if (c) found = { part: p, check: c };
+    }
+    if (gen !== this.gen || this.isEnded()) return;
+    if (!found) { await this.answerQuestion(text); return; }
+    if (!(await this.runCheck(found.part, found.check, gen, false, at))) return;
+    await sleep(this.o.settleMs ?? 700);
+    if (gen !== this.gen || this.isEnded()) return;
+    await this.resumeLesson();
+  }
+
+  /** The next of a few versions of a phrase. */
+  private phrase(key: string, pool: string[]): string {
+    const i = this.phraseTurn.get(key) ?? 0;
+    this.phraseTurn.set(key, i + 1);
+    return pool[i % pool.length];
   }
 
   // ── speaking ──
@@ -639,6 +723,7 @@ export class TutorRunner {
       sections: this.outline?.sections.length ?? 0,
       canResume: this.state === "paused" && !!this.resumeAt,
       checkOpen: !!this.check,
+      awaitingReply: !!this.awaiting,
       remainingSeconds: Math.max(0, Math.round(this.remaining)),
     });
   }

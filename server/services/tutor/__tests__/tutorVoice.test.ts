@@ -133,7 +133,7 @@ async function main() {
   ];
 
   const checkSaid = ["Quick check! The longest side of a right triangle is called?", "Is it A, base; B, hypotenuse; or C, height?"];
-  function harness(opts: { remaining?: number; tickMs?: number; outlineDelayMs?: number; failPrepare?: Error; autoPlay?: boolean; autoAnswer?: boolean; ttsDelayMs?: number; continueFrom?: { part: number; title: string | null }; teacherName?: string; voice?: any } = {}) {
+  function harness(opts: { remaining?: number; tickMs?: number; outlineDelayMs?: number; failPrepare?: Error; autoPlay?: boolean; autoAnswer?: boolean; ttsDelayMs?: number; continueFrom?: { part: number; title: string | null }; teacherName?: string; voice?: any; doubt?: (question: string, ctx: any) => Promise<any> } = {}) {
     const prepareCalls: any[] = [];
     const svc: any = new RealtimeVoiceService();
     const client = new FakeSocket();
@@ -174,7 +174,7 @@ async function main() {
           lessons: {
             outline: async () => { if (opts.outlineDelayMs) await sleep(opts.outlineDelayMs); return outline; },
             section: async (i: number) => sec(i + 1),
-            answerDoubt: async (question: string, ctx: any) => { doubts.push({ question, ...ctx }); return { lines: DOUBT_LINES, onTopic: true }; },
+            answerDoubt: async (question: string, ctx: any) => { doubts.push({ question, ...ctx }); return opts.doubt ? opts.doubt(question, ctx) : { lines: DOUBT_LINES, onTopic: true }; },
           },
           store: {
             remainingSeconds: async () => opts.remaining ?? 1200,
@@ -468,6 +468,84 @@ async function main() {
     svc.shutdown?.();
   }
 
+  // ── 4j. "ask me a question": a quick check from the bank, then back to the same line ──
+  {
+    const h = harness({ ttsDelayMs: 150, autoAnswer: false });
+    await h.clientMessage({ type: "tutor_start" });
+    await waitFor(() => spokenLines(h).includes("Section 1 line 1."), 4000, "section 1 line 1");
+    // The student is still hearing line 1 (the server has sent ahead).
+    h.setPlaying(false);
+    const rid = h.client.ofType("sentence_start").find((m) => m.say === "Section 1 line 1.").responseId;
+    h.clientMessage({ type: "tutor_heard", responseId: rid, index: 1 });
+    await sleep(700);
+    h.setPlaying(true);
+    await h.utter("Can you ask me some question?", 1500);
+    await waitFor(() => h.client.ofType("tutor_check").length > 0 && spokenLines(h).includes(checkSaid[1]), 5000, "quiz asked");
+    expect(h.doubts.length === 0, "'ask me a question' → a quick check from the question bank (no model call)");
+    const id = h.client.ofType("tutor_check")[0].id;
+    h.clientMessage({ type: "tutor_answer", checkId: id, index: CHECK.correctIndex });
+    await waitFor(() => { const x = spokenLines(h); const k = x.indexOf("Okay, let's pick up where we left off."); return k >= 0 && x.length > k + 1; }, 5000, "resumed");
+    const said = spokenLines(h);
+    const i = said.indexOf("Okay, let's pick up where we left off.");
+    expect(said[i + 1] === "Section 1 line 1.", "…then the lesson goes on from the line they were on (not the next part)", said.slice(i, i + 2));
+    await waitFor(() => spokenLines(h).includes("Section 2 line 0."), 6000, "section 2");
+    expect(h.client.ofType("tutor_check").length === 1, "the same check is not asked again at the end of the part");
+    await h.clientMessage({ type: "tutor_stop" });
+    h.done();
+  }
+
+  // ── 4k. an open question from the tutor waits for the student's answer ──
+  {
+    const h = harness({
+      ttsDelayMs: 150,
+      doubt: async (_q: string, ctx: any) => ctx.replyTo
+        ? { lines: [{ say: "Yes! A coin toss is a random experiment.", ops: [] }], onTopic: true }
+        : { lines: [{ say: "Here's one for you.", ops: [{ op: "clear" }] }, { say: "Can you give an example of a random experiment?", ops: [] }], onTopic: true, expectsReply: true },
+    });
+    await h.clientMessage({ type: "tutor_start" });
+    await waitFor(() => spokenLines(h).includes(outline.intro[0]), 3000, "plan");
+    h.setPlaying(false); // still on the plan: nothing taught yet, so no question-bank check fits
+    await sleep(700);
+    h.setPlaying(true);
+    await h.utter("Quiz me please", 1200);
+    await waitFor(() => spokenLines(h).includes("Can you give an example of a random experiment?"), 4000, "asked");
+    await waitFor(() => h.client.ofType("tutor_state").some((m) => m.awaitingReply === true), 2000, "waiting");
+    await sleep(1200);
+    const after = spokenLines(h);
+    expect(after[after.length - 1] === "Can you give an example of a random experiment?", "no question in the bank yet → an open question, and the tutor waits (no rushing back to the lesson)", after.slice(-2));
+    await h.utter("Tossing a coin", 1200);
+    await waitFor(() => spokenLines(h).includes("Okay, let's pick up where we left off."), 5000, "resumed after feedback");
+    const fb = h.doubts.find((d) => d.replyTo);
+    expect(fb?.question === "Tossing a coin" && fb.replyTo === "Can you give an example of a random experiment?", "their answer is checked against the question asked", fb);
+    const said = spokenLines(h);
+    expect(said.indexOf("Yes! A coin toss is a random experiment.") < said.indexOf("Okay, let's pick up where we left off."), "feedback first, then back to the lesson");
+    await h.clientMessage({ type: "tutor_stop" });
+    h.done();
+  }
+
+  // ── 4l. no stock "Good question!": a short "let me think" only when the answer is slow ──
+  {
+    const fast = harness({ ttsDelayMs: 150 });
+    await fast.clientMessage({ type: "tutor_start" });
+    await waitFor(() => spokenLines(fast).includes("Section 1 line 0."), 4000, "s1");
+    await sleep(700);
+    await fast.utter("Why is it the longest side?", 1500);
+    await waitFor(() => spokenLines(fast).includes(DOUBT_LINES[0].say), 4000, "answered");
+    expect(!spokenLines(fast).some((x) => /Good question|let me think|one moment/i.test(x)), "a quick answer starts straight away (no filler)");
+    await fast.clientMessage({ type: "tutor_stop" });
+    fast.done();
+    const slow = harness({ ttsDelayMs: 150, doubt: async () => { await sleep(1800); return { lines: DOUBT_LINES, onTopic: true }; } });
+    await slow.clientMessage({ type: "tutor_start" });
+    await waitFor(() => spokenLines(slow).includes("Section 1 line 0."), 4000, "s1");
+    await sleep(700);
+    await slow.utter("Why is it the longest side?", 1500);
+    await waitFor(() => spokenLines(slow).includes(DOUBT_LINES[0].say), 5000, "answered");
+    const said = spokenLines(slow);
+    expect(said.includes("Hmm, let me think.") && !said.some((x) => /Good question/.test(x)), "a slow answer gets a short 'Hmm, let me think.'", said.slice(-4));
+    await slow.clientMessage({ type: "tutor_stop" });
+    slow.done();
+  }
+
   // ── 5. stop ──
   {
     const h = harness({ autoPlay: false });
@@ -554,6 +632,8 @@ async function main() {
       ["next part", "next"], ["skip", "next"], ["agla topic", "next"],
       ["stop the lesson", "stop"], ["bas karo", "stop"],
       ["wait", "pause"], ["ruko", "pause"], ["एक मिनट", "pause"],
+      ["Can you ask me some question?", "quiz"], ["quiz me", "quiz"], ["test me on this", "quiz"], ["mujhse sawaal pucho", "quiz"], ["मुझसे सवाल पूछो", "quiz"], ["give me a question", "quiz"],
+      ["what questions come in the exam", "doubt"],
       ["why is the hypotenuse the longest side", "doubt"], ["what is a right angle", "doubt"], ["okay but why is it called hypotenuse", "doubt"],
       ["B", "answer", ["x", "y", "z"]], ["option c", "answer", ["x", "y", "z"]], ["the second one", "answer", ["x", "y", "z"]], ["doosra", "answer", ["x", "y", "z"]], ["hypotenuse", "answer", ["base", "hypotenuse", "height"]],
       ["I don't know", "dontknow", ["x", "y"]], ["पता नहीं", "dontknow", ["x", "y"]],
@@ -583,6 +663,27 @@ async function main() {
     });
     expect(res.lines[0].ops[0]?.op === "clear" && !res.lines[0].ops.some((o: any) => o.op === "image"), "drawing starts a fresh page; figures not in the chapter are dropped", res.lines[0].ops);
     expect(/STUDENT SAID: When are triangles similar\?/.test(seenUser) && /\[c2\]/.test(seenUser), "the model sees the question and the matching passage");
+    const plainRes = await answerDoubt({ pack, outline: null, part: -1, question: "Ask me a question", recentLines: [], language: "en",
+      complete: async () => JSON.stringify({ expectsReply: true, lines: [{ say: "Sure!", ops: [] }, { say: "When are two triangles similar?", ops: [] }] }) });
+    const texts = plainRes.lines.flatMap((l) => l.ops.map((o: any) => o.text).filter(Boolean));
+    expect(plainRes.expectsReply && plainRes.lines[0].ops[0]?.op === "clear" && texts.join("|") === "Your turn|When are two triangles similar?", "no board ops from the model → the question still goes on the board", texts);
+    const boardOnly = await answerDoubt({ pack, outline: null, part: -1, question: "Ask me a question", recentLines: [], language: "en",
+      complete: async () => JSON.stringify({ expectsReply: true, lines: [{ say: "Let's see how well you remember.", ops: [{ op: "clear" }, { op: "write", id: "q1", text: "Question: In a right-angled triangle, if one leg is 6 cm and the hypotenuse is 10 cm, what is the length of the other leg in centimetres?", style: "body" }] }] }) });
+    const last = boardOnly.lines[boardOnly.lines.length - 1];
+    expect(boardOnly.expectsReply && /what is the length of the other leg/.test(last.say) && boardOnly.lines[0].ops.some((o: any) => o.op === "write" && o.id === "q1" && o.text.length <= 120), "a question only on the board is also said (and its long board line is shortened, not dropped)", boardOnly.lines);
+    const filler = await answerDoubt({ pack, outline: null, part: -1, question: "Ask me a question", recentLines: [], language: "en",
+      complete: async () => JSON.stringify({ expectsReply: false, lines: [{ say: "Here's one.", ops: [] }, { say: "What is a hypotenuse?", ops: [] }, { say: "Write your answer on the board.", ops: [] }] }) });
+    expect(filler.lines.length === 3, "expectsReply false: lines kept as they are");
+    const filler2 = await answerDoubt({ pack, outline: null, part: -1, question: "Ask me a question", recentLines: [], language: "en",
+      complete: async () => JSON.stringify({ expectsReply: true, lines: [{ say: "Here's one.", ops: [] }, { say: "What is a hypotenuse?", ops: [] }, { say: "Write your answer on the board.", ops: [] }] }) });
+    expect(filler2.expectsReply && filler2.lines.length === 2 && filler2.lines[1].say === "What is a hypotenuse?", "the question is the last thing said (filler after it is dropped)", filler2.lines.map((l) => l.say));
+    const noQ = await answerDoubt({ pack, outline: null, part: -1, question: "Ask me a question", recentLines: [], language: "en",
+      complete: async () => JSON.stringify({ expectsReply: true, lines: [{ say: "Let's see how well you remember the theorem.", ops: [] }] }) });
+    expect(noQ.expectsReply === false, "no actual question in the reply → the tutor doesn't sit waiting");
+    let replyUser = "";
+    const fb = await answerDoubt({ pack, outline: null, part: -1, question: "same angles", recentLines: [], language: "en", replyTo: "When are two triangles similar?",
+      complete: async (_s, user) => { replyUser = user; return JSON.stringify({ expectsReply: true, lines: [{ say: "Yes, exactly right.", ops: [] }] }); } });
+    expect(/YOU ASKED THE STUDENT: When are two triangles similar\?/.test(replyUser) && /STUDENT IS ANSWERING: same angles/.test(replyUser) && fb.expectsReply === false, "an answer to the tutor's question is checked against it (and never asks again in a loop)");
     const bad = await answerDoubt({ pack, outline: null, part: -1, question: "x", recentLines: [], language: "en", complete: async () => "not json" });
     expect(bad.lines.length === 1 && bad.onTopic === false, "a broken model reply falls back to one polite line");
   }

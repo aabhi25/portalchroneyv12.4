@@ -10,6 +10,7 @@ export type TutorIntent =
   | { kind: "next" }
   | { kind: "stop" }
   | { kind: "pause" }
+  | { kind: "quiz" }
   | { kind: "answer"; index: number }
   | { kind: "dontknow" }
   | { kind: "doubt" };
@@ -27,6 +28,8 @@ const STOP = /^(stop|end|finish|close) (the )?(lesson|class|tutor|teaching)\b|^(
 const PAUSE = new RegExp(`^(wait|hold on|one (sec|second|minute)|ruko|ruk jao|ek (minute|min|second|sec)|रुको|ठहरो|एक मिनट)${E}`);
 const CONTINUE_WORDS = "ok|okay|okk|okie|continue|go on|carry on|keep going|go ahead|yes|yeah|yep|sure|got it|i got it|understood|i understand|makes sense|right|alright|all right|fine|cool|nice|great|haan|han|ha|haa|ji|ji haan|theek hai|thik hai|thik h|achha|acha|accha|aage|aage badho|aage chalo|chalo|samajh gaya|samajh gayi|samajh aa gaya|samjh gaya|samjh gayi|हाँ|हां|जी|ठीक है|अच्छा|आगे|आगे बढ़ो|चलो|समझ गया|समझ गई|समझ आ गया|please|sir|maam|ji|now|then|next";
 const CONTINUE = new RegExp(`^(${CONTINUE_WORDS})( (${CONTINUE_WORDS}))*$`);
+// "Ask me a question" / "quiz me" / "mujhse sawaal pucho".
+const QUIZ = new RegExp(`${B}((ask|quiz|test) me|ask (me )?(a |an |some |one |few |a few )?(question|questions|quiz)|give me (a |an |some )?(question|questions|quiz|test)|(mujhse|mujhe) (koi |ek |kuch )?(sawal|sawaal|savaal|question|questions|prashn) (pucho|poocho|puchho|puchiye|poochiye|do)|(sawal|sawaal|question|questions) (pucho|poocho|puchho|puchiye)|मुझसे (कोई |एक )?सवाल|सवाल पूछ)${E}`);
 const DONT_KNOW = new RegExp(`${B}(dont know|do not know|no idea|not sure|pata nahi|pata nahin|nahi pata|nahin pata|maloom nahi|मालूम नहीं|पता नहीं|नहीं पता)${E}|^(skip|pass)$`);
 
 const LETTERS = ["a", "b", "c", "d", "e", "f"];
@@ -70,6 +73,7 @@ export function classifyTutorIntent(text: string, opts: { checkOptions?: string[
     if (i != null) return { kind: "answer", index: i };
     if (DONT_KNOW.test(t)) return { kind: "dontknow" };
   }
+  if (words <= 12 && QUIZ.test(t)) return { kind: "quiz" };
   if (SIMPLER.test(t)) return { kind: "simpler" };
   if (words <= 8 && STOP.test(t)) return { kind: "stop" };
   if (words <= 6 && NEXT.test(t)) return { kind: "next" };

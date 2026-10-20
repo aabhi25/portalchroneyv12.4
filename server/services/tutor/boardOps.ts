@@ -37,6 +37,10 @@ function katexOk(tex: string): boolean {
 const clamp = (n: number) => Math.min(10, Math.max(0, Math.round(n * 100) / 100));
 
 function cleanOne(raw: unknown, media: MediaResolver): BoardOp | null {
+  // A board line that is too long is shortened, not lost (models overshoot the limit).
+  if (raw && typeof raw === "object" && (raw as any).op === "write" && typeof (raw as any).text === "string" && (raw as any).text.length > 120) {
+    raw = { ...(raw as any), text: `${(raw as any).text.slice(0, 119).trimEnd()}…` };
+  }
   const parsed = boardOpSchema.safeParse(raw);
   if (!parsed.success) return null;
   const op = parsed.data;
