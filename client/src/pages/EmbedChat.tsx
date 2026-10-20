@@ -5777,8 +5777,8 @@ export default function EmbedChat() {
           chatColor={chatColor}
           onResume={tutor.resume}
           onSkip={tutor.skip}
-          slow={tutor.slow}
-          onSlowChange={tutor.setSlow}
+          speed={tutor.speed}
+          onSpeedChange={tutor.setSpeed}
           onStartOver={() => startTutorLesson({ fromStart: true })}
           onSimpler={tutor.simpler}
           onAnswer={tutor.answer}

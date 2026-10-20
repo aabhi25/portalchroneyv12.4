@@ -98,6 +98,20 @@ async function main() {
     p2.cancel();
     await sleep(120);
     expect(!ev2.includes("start:1"), "nothing is reported after cancel", ev2);
+
+    // Keep up to a line, drop the rest (re-voicing at a new speed).
+    const ev3: string[] = [];
+    const p3 = new SentenceTtsPipeline({ primary: provider("p"), sendAudio: (pcm) => ev3.push(`audio:${pcm.toString().slice(0, 4)}`), onItemStart: (t) => ev3.push(`start:${t}`) });
+    p3.enqueue("slow a", { tag: 0 });
+    p3.enqueue("slow b", { tag: 1 });
+    p3.enqueue("slow c", { tag: 2 });
+    p3.enqueue("slow d", { tag: 3 });
+    p3.close();
+    await waitFor(() => ev3.includes("start:0"), 1000, "first");
+    await p3.truncateAfter(1);
+    await sleep(150);
+    const starts3 = ev3.filter((e) => e.startsWith("start"));
+    expect(starts3.join() === "start:0,start:1" && ev3.filter((e) => e.startsWith("audio")).length === 4, "truncateAfter(1): lines 0–1 finish, 2–3 are never sent", ev3);
   }
 
   // ── 2. spoken text ──
@@ -450,8 +464,10 @@ async function main() {
     const said = spokenLines(h);
     expect(said[0] === 'Welcome back! Last time we got to "Pythagoras", so let\'s carry on from there.' && said[1] === "Section 2 line 0.", "a student who stopped part-way carries on from that part (the plan is skipped)", said.slice(0, 2));
     expect(h.client.ofType("tutor_continued")[0]?.title === "Pythagoras", "the widget is told (it offers Start over)");
-    expect(h.conversation.tutorSlow === true && h.svc.phoneSpeed(h.conversation) === 85, "Slower: the tutor speaks at 85 %");
-    await h.clientMessage({ type: "tutor_speed", slow: false });
+    expect(h.conversation.tutorSpeed === 85 && h.svc.phoneSpeed(h.conversation) === 85, "an older widget's Slower still works (85 %)");
+    await h.clientMessage({ type: "tutor_speed", speed: 1.5 });
+    expect(h.svc.phoneSpeed(h.conversation) === 120, "speed is capped at 1.2× (ElevenLabs' range)");
+    await h.clientMessage({ type: "tutor_speed", speed: 1 });
     expect(h.svc.phoneSpeed(h.conversation) === 100, "…and back to normal");
     await h.clientMessage({ type: "tutor_start", fromStart: true });
     await waitFor(() => h.prepareCalls.length === 2 && spokenLines(h).filter((x) => x === outline.intro[0]).length > 0, 4000, "start over");
@@ -603,6 +619,35 @@ async function main() {
     await waitFor(() => h.client.ofType("tutor_ended").length > 0, 2000, "refused");
     const e = h.client.ofType("tutor_ended")[0];
     expect(e?.reason === "unavailable" && h.prepareCalls.length === 0 && spokenLines(h).length === 0, "outside a doubt session the doubt explanation is refused", e);
+    h.done();
+  }
+
+  // ── 4o. speed changed mid-part: the heard line finishes, the rest is re-voiced right after it ──
+  {
+    const h = harness({ ttsDelayMs: 60 });
+    await h.clientMessage({ type: "tutor_start" });
+    await waitFor(() => spokenLines(h).includes("Section 1 line 0."), 4000, "s1");
+    h.setPlaying(false); // the student is hearing line 1 (the server has sent more)
+    const rid = h.client.ofType("sentence_start").find((m) => m.say === "Section 1 line 0.").responseId;
+    await waitFor(() => h.client.ofType("sentence_start").filter((m) => m.responseId === rid).length >= 2, 3000, "line 1 sent");
+    h.clientMessage({ type: "tutor_heard", responseId: rid, index: 1 });
+    const before = h.client.log.length;
+    h.setPlaying(true);
+    await h.clientMessage({ type: "tutor_speed", speed: 0.8, keep: { responseId: rid, index: 1 } });
+    await waitFor(() => h.client.json.slice(0).some((m, i) => m.type === "sentence_start" && m.responseId !== rid && m.say === "Section 1 line 2."), 4000, "re-voiced");
+    const after = h.client.log.slice(before).filter((e) => e.kind === "json").map((e: any) => e.msg);
+    expect(h.conversation.tutorSpeed === 80, "the new speed is set");
+    expect(!after.some((m) => m.type === "response_cancelled") && !after.some((m) => m.type === "tutor_state" && m.state === "paused"), "no flush and no pause (the line being heard plays on)", after.map((m) => m.type));
+    expect(!after.some((m) => m.type === "ai_done" && m.responseId === rid), "the old response ends quietly (no ai_done)");
+    const next = after.find((m) => m.type === "sentence_start" && m.responseId !== rid);
+    expect(next?.say === "Section 1 line 2." && !after.some((m) => m.type === "sentence_start" && /pick up|back to/i.test(m.say)), "it carries on from the next line (no 'where were we')", next?.say);
+    const snap = after.find((m) => m.type === "board_snapshot");
+    expect(snap && JSON.stringify(snap.board) === JSON.stringify(boardAfter(withCleanPage(sec(1).lines as any), 2)), "the board stays as it was");
+    const oldLines = h.client.ofType("sentence_start").filter((m) => m.responseId === rid).map((m) => m.say);
+    expect(!oldLines.includes("Section 1 line 3."), "the old-speed rest of the part is not sent", oldLines);
+    await waitFor(() => h.client.ofType("tutor_ended").length > 0 || spokenLines(h).includes("Section 2 line 0."), 6000, "goes on");
+    expect(spokenLines(h).includes("Section 2 line 0."), "and the lesson goes on");
+    await h.clientMessage({ type: "tutor_stop" });
     h.done();
   }
 

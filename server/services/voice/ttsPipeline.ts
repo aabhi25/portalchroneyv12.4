@@ -89,6 +89,8 @@ interface PipelineItem {
   /** onItemStart tag, and whether it was reported. */
   tag?: number;
   startNotified?: boolean;
+  /** Removed by truncateAfter(): never sent. */
+  dropped?: boolean;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -185,6 +187,27 @@ export class SentenceTtsPipeline {
     this.finishedResolve?.();
   }
 
+  /**
+   * Keep the sentences up to and including tag `lastTag` (they finish as normal) and drop every
+   * later one: in-flight requests are aborted and none of their audio is sent. No more sentences
+   * can be enqueued. Resolves like finished() — once the kept sentences have all been sent.
+   * (The AI tutor uses it to re-voice the rest of a part at a new speed.)
+   */
+  truncateAfter(lastTag: number): Promise<void> {
+    if (this.cancelled) return this.finishedPromise;
+    const keep = this.items.findIndex((it) => it.tag != null && it.tag > lastTag);
+    if (keep >= 0) {
+      for (const item of this.items.slice(keep)) {
+        item.dropped = true;
+        item.buffered = [];
+        try { item.controller?.abort(); } catch { /* ignore */ }
+      }
+      this.items.length = Math.max(keep, this.head);
+    }
+    this.close();
+    return this.finishedPromise;
+  }
+
   get isCancelled(): boolean {
     return this.cancelled;
   }
@@ -215,7 +238,7 @@ export class SentenceTtsPipeline {
   }
 
   private emit(item: PipelineItem, chunk: Buffer): void {
-    if (this.externallyCancelled()) return;
+    if (this.externallyCancelled() || item.dropped) return;
     const merged = item.leftover ? Buffer.concat([item.leftover, chunk]) : chunk;
     const evenLen = merged.length & ~1;
     item.leftover = evenLen < merged.length ? Buffer.from(merged.subarray(evenLen)) : null;
@@ -230,7 +253,7 @@ export class SentenceTtsPipeline {
   }
 
   private notifyStart(item: PipelineItem): void {
-    if (item.tag == null || item.startNotified || this.externallyCancelled()) return;
+    if (item.tag == null || item.startNotified || item.dropped || this.externallyCancelled()) return;
     item.startNotified = true;
     this.options.onItemStart?.(item.tag);
   }

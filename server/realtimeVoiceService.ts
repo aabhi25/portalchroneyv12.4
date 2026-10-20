@@ -454,8 +454,8 @@ interface VoiceConversation {
   /** AI tutor session on this connection (services/tutor/tutorRunner.ts), and its lesson language. */
   tutor?: TutorRunner;
   tutorLanguage?: TutorLanguage;
-  /** The student asked the tutor to speak more slowly. */
-  tutorSlow?: boolean;
+  /** The tutor's speaking speed (percent, 70–120) the student picked; unset = normal. */
+  tutorSpeed?: number;
   /** The teacher's voice for this lesson's language (AI tutor settings); unset = the widget's voice. */
   tutorVoice?: { elevenlabsApiKey?: string; elevenlabsVoiceId?: string; openaiVoice?: string } | null;
   // PCM bytes sent for the current canonical answer, and — once ai_done is
@@ -1410,6 +1410,13 @@ export class RealtimeVoiceService {
   // AI tutor (services/tutor): a lesson spoken line by line, the board drawn as each line starts.
   // ---------------------------------------------------------------------------
 
+  /** A speed from the widget (0.7–1.2) as a percent, or undefined. */
+  private tutorSpeedFrom(message: any): number | undefined {
+    const v = Number(message?.speed);
+    if (!Number.isFinite(v) || v <= 0) return undefined;
+    return Math.round(Math.min(1.2, Math.max(0.7, v)) * 100);
+  }
+
   private async startTutor(conversation: VoiceConversation, message: any): Promise<void> {
     if (conversation.phone) return;
     if (conversation.tutor?.active) { void conversation.tutor.stop('stopped'); }
@@ -1449,7 +1456,7 @@ export class RealtimeVoiceService {
     if (conversation.isProcessing || this.isAnswerActive(conversation)) this.cancelResponse(conversation, false);
     conversation.tutorLanguage = prepared.language;
     conversation.tutorVoice = prepared.voice;
-    conversation.tutorSlow = message?.slow === true;
+    conversation.tutorSpeed = this.tutorSpeedFrom(message) ?? (message?.slow === true ? 85 : undefined);
     const runner = new TutorRunner({
       host: {
         speak: (lines) => this.speakTutorLines(conversation, lines),
@@ -1482,7 +1489,7 @@ export class RealtimeVoiceService {
    * its first audio — the widget gets its caption (answer_delta) and `sentence_start` with the
    * line's board ops, so it draws them when that audio plays.
    */
-  private speakTutorLines(conversation: VoiceConversation, lines: TutorSpokenLine[]): { responseId: string; sent: Promise<{ cancelled: boolean; audioMs: number }> } | null {
+  private speakTutorLines(conversation: VoiceConversation, lines: TutorSpokenLine[]): { responseId: string; sent: Promise<{ cancelled: boolean; audioMs: number }>; truncate: (lastIndex: number) => Promise<void> } | null {
     if (conversation.clientWs.readyState !== WebSocket.OPEN || !lines.length) return null;
     if (conversation.isProcessing || this.isAnswerActive(conversation)) this.cancelResponse(conversation, false);
     const responseId = `voice_tutor_${conversation.conversationId}_${Date.now()}`;
@@ -1533,12 +1540,20 @@ export class RealtimeVoiceService {
     conversation.ttsPipelineResponseId = responseId;
     lines.forEach((line, index) => pipeline.enqueue(line.speech, { tag: index }));
     pipeline.close();
+    // Re-voicing at a new speed: the lines up to `lastIndex` finish; this response then ends
+    // quietly (no ai_done) and the tutor's next response carries on after it.
+    let truncated = false;
+    const truncate = (lastIndex: number) => { truncated = true; return pipeline.truncateAfter(lastIndex); };
     const sent = pipeline.finished().then(() => {
       if (conversation.ttsPipeline === pipeline) {
         conversation.ttsPipeline = undefined;
         conversation.ttsPipelineResponseId = undefined;
       }
       const audioMs = Math.round(((conversation.answerAudioBytes || 0) / 48000) * 1000);
+      if (truncated) {
+        conversation.cancelledResponseIds.add(responseId); // not "current" any more, without a flush
+        return { cancelled: true, audioMs };
+      }
       if (abandoned()) return { cancelled: true, audioMs };
       this.sendToClient(conversation.clientWs, { type: 'answer_ready', responseId, displayMarkdown: shown, speechText: lines.map((l) => l.speech).join(' '), streamed: true });
       const playbackStart = conversation.activeElevenLabsStartedAt || Date.now();
@@ -1546,7 +1561,7 @@ export class RealtimeVoiceService {
       this.sendAiDone(conversation, responseId);
       return { cancelled: false, audioMs };
     }).catch(() => ({ cancelled: true, audioMs: 0 }));
-    return { responseId, sent };
+    return { responseId, sent, truncate };
   }
 
   /**
@@ -4387,8 +4402,8 @@ export class RealtimeVoiceService {
 
   /** Phone calls: the business's speaking speed (percent; 100 elsewhere — website voice is unchanged). */
   private phoneSpeed(conversation: VoiceConversation): number {
-    // AI tutor "Slower": the lesson's lines (from the next one) at 85 % speed.
-    if (conversation.tutor?.active && conversation.tutorSlow) return 85;
+    // AI tutor speaking speed (the classroom's Speed control).
+    if (conversation.tutor?.active && conversation.tutorSpeed) return conversation.tutorSpeed;
     const s = Number(conversation.phone?.speakingSpeed);
     return conversation.phone && Number.isFinite(s) && s >= 70 && s <= 120 ? s : 100;
   }
@@ -5879,10 +5894,16 @@ Never infer intent from a single contained word. For example, "What is stop moti
         if (typeof message.checkId === 'string') conversation.tutor?.giveUpCheck(message.checkId);
         break;
 
-      case 'tutor_speed':
-        // "Slower" in the classroom (applies from the tutor's next line).
-        conversation.tutorSlow = message.slow === true;
+      case 'tutor_speed': {
+        // The classroom's Speed control. With `keep` (the line the student is hearing), the rest of
+        // the part is re-voiced at the new speed right after that line; otherwise from the next part.
+        const speed = this.tutorSpeedFrom(message);
+        conversation.tutorSpeed = speed ?? (message.slow === true ? 85 : undefined);
+        if (message.keep && typeof message.keep.responseId === 'string' && Number.isInteger(message.keep.index)) {
+          void conversation.tutor?.respeed(message.keep.responseId, message.keep.index).catch((error) => console.error('[Tutor] Re-voicing failed:', error));
+        }
         break;
+      }
 
       case 'tutor_simpler':
         this.markUserActive(conversation);

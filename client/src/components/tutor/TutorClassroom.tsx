@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, GraduationCap, HelpCircle, Loader2, Maximize2, MessageCircleQuestion, Mic, Minimize2, Play, RotateCcw, Send, SkipForward, Snail, Square, Volume2, X } from "lucide-react";
+import { Check, Gauge, GraduationCap, HelpCircle, Loader2, Maximize2, MessageCircleQuestion, Mic, Minimize2, Play, RotateCcw, Send, SkipForward, Square, Volume2, X } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Slider } from "@/components/ui/slider";
 import { TutorBoard } from "./TutorBoard";
 import type { ClassroomState } from "./useTutorClassroom";
 
@@ -15,9 +17,9 @@ interface Props {
   onAnswer: (checkId: string, index: number) => void;
   onDontKnow: (checkId: string) => void;
   onAsk: (text: string) => void;
-  /** "Slower" speech (from the tutor's next line). */
-  slow: boolean;
-  onSlowChange: (slow: boolean) => void;
+  /** Speaking speed (0.7–1.2); a change applies right after the line being heard. */
+  speed: number;
+  onSpeedChange: (speed: number) => void;
   /** Start the chapter from the beginning (offered when the lesson carried on from last time). */
   onStartOver: () => void;
   /** Told when Expand changes (a video tutor tile follows it). */
@@ -44,11 +46,14 @@ const END_TEXT: Record<string, string> = {
  */
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 
-export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766e", onResume, onSkip, onSimpler, onAnswer, onDontKnow, onAsk, slow, onSlowChange, onStartOver, onExpandedChange, onBackToChat, onStop, onRestart, onClose }: Props) {
+export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766e", onResume, onSkip, onSimpler, onAnswer, onDontKnow, onAsk, speed, onSpeedChange, onStartOver, onExpandedChange, onBackToChat, onStop, onRestart, onClose }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   useEffect(() => { onExpandedChange?.(expanded); }, [expanded, onExpandedChange]);
   const [askOpen, setAskOpen] = useState(false);
+  const [speedDraft, setSpeedDraft] = useState(speed);
+  useEffect(() => setSpeedDraft(speed), [speed]);
+  const speedLabel = (v: number) => `${Number(v.toFixed(2))}×`;
   const [question, setQuestion] = useState("");
   const submitQuestion = (e: React.FormEvent) => {
     e.preventDefault();
@@ -235,9 +240,39 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
             </button>
           )}
           {status !== "ended" && (
-            <button type="button" onClick={() => onSlowChange(!slow)} aria-pressed={slow} className={`h-8 px-3 rounded-full border text-[13px] flex items-center gap-1.5 ${slow ? "bg-gray-900 text-white border-gray-900" : "bg-white border-gray-200"}`} title="Speak more slowly" data-testid="button-tutor-slower">
-              <Snail className="w-3.5 h-3.5" /> Slower
-            </button>
+            <Popover>
+              <PopoverTrigger asChild>
+                <button type="button" className={`h-8 px-3 rounded-full border text-[13px] flex items-center gap-1.5 ${speed !== 1 ? "bg-gray-900 text-white border-gray-900" : "bg-white border-gray-200"}`} title="Speaking speed" data-testid="button-tutor-speed">
+                  <Gauge className="w-3.5 h-3.5" /> Speed {speedLabel(speed)}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent side="top" align="start" className="w-64 z-[100003]" data-testid="popover-tutor-speed">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium">Speaking speed</span>
+                  <span className="tabular-nums text-gray-600" data-testid="text-tutor-speed">{speedLabel(speedDraft)}</span>
+                </div>
+                <Slider
+                  className="mt-3"
+                  min={0.7}
+                  max={1.2}
+                  step={0.05}
+                  value={[speedDraft]}
+                  onValueChange={(v) => setSpeedDraft(v[0])}
+                  onValueCommit={(v) => onSpeedChange(v[0])}
+                  aria-label="Speaking speed"
+                  data-testid="slider-tutor-speed"
+                />
+                <div className="mt-2 flex justify-between text-[11px] text-gray-500"><span>Slower</span><span>Normal</span><span>Faster</span></div>
+                <div className="mt-3 flex gap-1.5">
+                  {[0.8, 0.9, 1, 1.1].map((v) => (
+                    <button key={v} type="button" onClick={() => { setSpeedDraft(v); onSpeedChange(v); }} className={`flex-1 h-7 rounded-md border text-xs ${Math.abs(speed - v) < 0.01 ? "bg-gray-900 text-white border-gray-900" : "bg-white border-gray-200 hover:border-gray-400"}`} data-testid={`button-tutor-speed-${v}`}>
+                      {speedLabel(v)}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] text-gray-500">Changes right after the sentence being spoken.</p>
+              </PopoverContent>
+            </Popover>
           )}
           {!doubt && state.continuedFrom && status !== "ended" && (
             <button type="button" onClick={onStartOver} className="h-8 px-3 rounded-full bg-white border border-gray-200 text-[13px] flex items-center gap-1.5" data-testid="button-tutor-startover">

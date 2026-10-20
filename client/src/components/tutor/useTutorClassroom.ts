@@ -111,17 +111,20 @@ export function useTutorClassroom() {
   const seq = useRef(0);
   const send = useCallback((message: Record<string, unknown>) => setCommands((list) => [...list.slice(-19), { seq: ++seq.current, message }]), []);
   const handleMessage = useCallback((m: any) => setState((s) => reduceClassroom(s, m)), []);
-  const [slow, setSlowState] = useState(false);
+  // Speaking speed (0.7–1.2), remembered on this device.
+  const [speed, setSpeedState] = useState<number>(() => {
+    try { const v = Number(localStorage.getItem("tutorSpeed")); return v >= 0.7 && v <= 1.2 ? v : 1; } catch { return 1; }
+  });
   const start = useCallback((opts: { language?: string; fromStart?: boolean; doubt?: { question: string; answer: string } } = {}) => {
     setState({ ...initialClassroom(), status: "starting", mode: opts.doubt ? "doubt" : "lesson" });
     setCommands([{ seq: ++seq.current, message: {
       type: "tutor_start",
-      slow,
+      speed,
       ...(opts.language ? { language: opts.language } : {}),
       ...(opts.fromStart ? { fromStart: true } : {}),
       ...(opts.doubt ? { kind: "doubt", question: opts.doubt.question.slice(0, 2000), answer: opts.doubt.answer.slice(0, 8000) } : {}),
     } }]);
-  }, [slow]);
+  }, [speed]);
   return {
     state,
     commands,
@@ -134,8 +137,14 @@ export function useTutorClassroom() {
     dontKnow: useCallback((checkId: string) => send({ type: "tutor_dontknow", checkId }), [send]),
     ask: useCallback((text: string) => { const t = text.trim(); if (t) send({ type: "tutor_text", text: t }); }, [send]),
     stop: useCallback(() => send({ type: "tutor_stop" }), [send]),
-    slow,
-    setSlow: useCallback((v: boolean) => { setSlowState(v); send({ type: "tutor_speed", slow: v }); }, [send]),
+    speed,
+    /** Change the speed now: the line being heard finishes, the rest is re-voiced at the new speed. */
+    setSpeed: useCallback((v: number) => {
+      const next = Math.round(Math.min(1.2, Math.max(0.7, v)) * 100) / 100;
+      setSpeedState(next);
+      try { localStorage.setItem("tutorSpeed", String(next)); } catch { /* private mode */ }
+      send({ type: "tutor_speed", speed: next });
+    }, [send]),
     /** Hide the classroom (after the lesson ended, or the voice session closed). */
     close: useCallback(() => setState(initialClassroom()), []),
     active: state.status !== "off" && state.status !== "ended",

@@ -164,12 +164,20 @@ export function InlineVoiceMode({
   const onTutorMessageRef = useRef(onTutorMessage);
   onTutorMessageRef.current = onTutorMessage;
   /** Lesson lines waiting for their audio to start playing. */
-  const tutorTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const tutorTimersRef = useRef<Map<ReturnType<typeof setTimeout>, { responseId: string; index: number }>>(new Map());
+  /** When each lesson line's audio starts (AudioContext time), per response — for re-voicing. */
+  const tutorLineStartsRef = useRef<Map<string, Map<number, number>>>(new Map());
+  /** The lesson line playing now. */
+  const tutorPlayingRef = useRef<{ responseId: string; index: number } | null>(null);
+  /** After a speed change: audio of this response from `cutoff` on is old-speed and is dropped. */
+  const tutorTrimRef = useRef<{ responseId: string; cutoff: number } | null>(null);
+  /** Start time of every scheduled audio source (to drop the ones after a cut-off). */
+  const sourceStartsRef = useRef<Map<AudioBufferSourceNode, number>>(new Map());
   const tutorCommandSentRef = useRef(0);
   const tutorCommandsRef = useRef(tutorCommands);
   tutorCommandsRef.current = tutorCommands;
   const clearTutorTimers = () => {
-    tutorTimersRef.current.forEach((t) => clearTimeout(t));
+    tutorTimersRef.current.forEach((_, t) => clearTimeout(t));
     tutorTimersRef.current.clear();
   };
   const autoListenRef = useRef(autoListen);
@@ -514,9 +522,12 @@ export function InlineVoiceMode({
     if (avatarActive()) avatarRef.current?.adapter.interrupt(reason);
     // Lesson lines whose audio was dropped are never drawn.
     clearTutorTimers();
+    tutorTrimRef.current = null;
+    tutorPlayingRef.current = null;
     clearDucks();
     activeSourcesRef.current.forEach((s) => { try { s.stop(); } catch {} });
     activeSourcesRef.current.clear();
+    sourceStartsRef.current.clear();
     audioQueueRef.current = [];
     isPlayingRef.current = false;
     nextPlaybackTimeRef.current = 0;
@@ -525,11 +536,43 @@ export function InlineVoiceMode({
 
   const { toast } = useToast();
 
+  /**
+   * Speed changed mid-line: the line playing now finishes; the queued rest of that response (old
+   * speed) is dropped here, and the server re-voices it from the next line at the new speed. With
+   * a video avatar the audio is already with the provider: the new speed starts with the next part.
+   */
+  const keepCurrentTutorLine = (): { responseId: string; index: number } | null => {
+    const p = tutorPlayingRef.current;
+    const ctx = audioContextRef.current;
+    if (!p || !ctx || avatarActive() || currentResponseIdRef.current !== p.responseId || !isPlayingRef.current) return null;
+    const cutoff = tutorLineStartsRef.current.get(p.responseId)?.get(p.index + 1);
+    tutorTimersRef.current.forEach((meta, t) => {
+      if (meta.responseId === p.responseId && meta.index > p.index) { clearTimeout(t); tutorTimersRef.current.delete(t); }
+    });
+    if (cutoff != null) {
+      sourceStartsRef.current.forEach((start, source) => {
+        if (start >= cutoff - 0.01) {
+          try { source.stop(); } catch {}
+          activeSourcesRef.current.delete(source);
+          sourceStartsRef.current.delete(source);
+        }
+      });
+      nextPlaybackTimeRef.current = Math.min(nextPlaybackTimeRef.current, cutoff);
+    }
+    tutorTrimRef.current = { responseId: p.responseId, cutoff: cutoff ?? Number.POSITIVE_INFINITY };
+    return p;
+  };
+
   const sendPendingTutorCommand = () => {
     if (!hadReadySessionRef.current) return; // sent on 'ready'
     for (const cmd of tutorCommandsRef.current ?? []) {
       if (cmd.seq <= tutorCommandSentRef.current) continue;
-      if (!safeSend(JSON.stringify(cmd.message))) return;
+      let message = cmd.message;
+      if (message.type === 'tutor_speed') {
+        const keep = keepCurrentTutorLine();
+        if (keep) message = { ...message, keep };
+      }
+      if (!safeSend(JSON.stringify(message))) return;
       tutorCommandSentRef.current = cmd.seq;
     }
   };
@@ -943,10 +986,17 @@ export function InlineVoiceMode({
           onTutorMessageRef.current?.({ ...data, type: 'sentence_play' });
           safeSend(JSON.stringify({ type: 'tutor_heard', responseId: data.responseId, index: data.index }));
         };
-        if (delayMs < 20) play();
+        if (data.responseId && ctx) {
+          const starts = tutorLineStartsRef.current.get(data.responseId) ?? new Map<number, number>();
+          starts.set(data.index, Math.max(ctx.currentTime, nextPlaybackTimeRef.current));
+          tutorLineStartsRef.current.set(data.responseId, starts);
+          if (tutorLineStartsRef.current.size > 6) tutorLineStartsRef.current.delete(tutorLineStartsRef.current.keys().next().value as string);
+        }
+        const playing = () => { tutorPlayingRef.current = { responseId: data.responseId, index: data.index }; play(); };
+        if (delayMs < 20) playing();
         else {
-          const timer = setTimeout(() => { tutorTimersRef.current.delete(timer); play(); }, delayMs);
-          tutorTimersRef.current.add(timer);
+          const timer = setTimeout(() => { tutorTimersRef.current.delete(timer); playing(); }, delayMs);
+          tutorTimersRef.current.set(timer, { responseId: data.responseId, index: data.index });
         }
         break;
       }
@@ -1206,6 +1256,7 @@ export function InlineVoiceMode({
           // timeline resets only when the bubble changes (first ai_chunk of a
           // new bubble) or playback ends (finishKaraoke on done/interrupt).
           currentResponseIdRef.current = data.responseId;
+          if (tutorTrimRef.current && tutorTrimRef.current.responseId !== data.responseId) tutorTrimRef.current = null;
         }
         break;
 
@@ -1419,8 +1470,12 @@ export function InlineVoiceMode({
       // Avatar mode: never play our own copy — the visitor hears the avatar.
       source.connect(avatarMode ? getSilentSink(ctx) : (duckGainRef.current || playbackAnalyserRef.current));
       const scheduleTime = Math.max(ctx.currentTime, nextPlaybackTimeRef.current);
+      // Re-voicing at a new speed: old-speed audio still arriving after the kept line is dropped.
+      const trim = tutorTrimRef.current;
+      if (trim && trim.responseId === currentResponseIdRef.current && scheduleTime >= trim.cutoff - 0.01) return;
       source.onended = () => {
         activeSourcesRef.current.delete(source);
+        sourceStartsRef.current.delete(source);
         if (activeSourcesRef.current.size === 0) {
           isPlayingRef.current = false;
           // No more scheduled audio — tear down the analyser chain so the
@@ -1442,6 +1497,7 @@ export function InlineVoiceMode({
         }
       };
       activeSourcesRef.current.add(source);
+      sourceStartsRef.current.set(source, scheduleTime);
       isPlayingRef.current = true;
       source.start(scheduleTime);
       nextPlaybackTimeRef.current = scheduleTime + audioBuffer.duration;
@@ -1581,6 +1637,7 @@ export function InlineVoiceMode({
     stopVolumeMonitoring();
     activeSourcesRef.current.forEach((s) => { try { s.stop(); } catch {} });
     activeSourcesRef.current.clear();
+    sourceStartsRef.current.clear();
     audioQueueRef.current = [];
     isPlayingRef.current = false;
     nextPlaybackTimeRef.current = 0;
@@ -1994,6 +2051,7 @@ export function InlineVoiceMode({
       stopVolumeMonitoring();
       activeSourcesRef.current.forEach((s) => { try { s.stop(); } catch {} });
       activeSourcesRef.current.clear();
+      sourceStartsRef.current.clear();
       if (playbackAnalyserRef.current) { try { playbackAnalyserRef.current.disconnect(); } catch {} playbackAnalyserRef.current = null; }
       audioQueueRef.current = [];
       outboundAudioQueueRef.current = [];

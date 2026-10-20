@@ -32,7 +32,12 @@ export interface TutorVoiceHost {
    * line starts. `sent` resolves once every line's audio has been sent, or the response was
    * interrupted / replaced (cancelled: true).
    */
-  speak(lines: TutorSpokenLine[]): { responseId: string; sent: Promise<{ cancelled: boolean; audioMs: number }> } | null;
+  speak(lines: TutorSpokenLine[]): {
+    responseId: string;
+    sent: Promise<{ cancelled: boolean; audioMs: number }>;
+    /** Keep lines up to `lastIndex`, drop the rest; resolves once the kept lines are sent. */
+    truncate?: (lastIndex: number) => Promise<void>;
+  } | null;
   /** Stop the tutor's response that is playing (if it is still the current one). */
   cancelSpeech(responseId: string): void;
   send(message: Record<string, unknown>): void;
@@ -235,7 +240,7 @@ export class TutorRunner {
   /** Bumped whenever the lesson is paused, redirected or stopped: older loops quit. */
   private gen = 0;
   /** What is being said now. */
-  private current: { responseId: string; kind: SpeechKind; lines: TutorLine[]; from: number } | null = null;
+  private current: { responseId: string; kind: SpeechKind; lines: TutorLine[]; from: number; truncate?: (lastIndex: number) => Promise<void> } | null = null;
   /** Where the lesson goes on from (updated as lines are heard). */
   private here: Position = { part: -1, line: 0, phase: "lesson" };
   /** Set while paused: where Continue goes back to. */
@@ -437,6 +442,25 @@ export class TutorRunner {
       default:
         await this.answerQuestion(text);
     }
+  }
+
+  /**
+   * The speed changed while the student hears line `keepIndex` of a response: that line plays to
+   * its end, the rest of the part is said again at the new speed straight after it (no "where were
+   * we", no pause). Other kinds of speech just use the new speed from their next response.
+   */
+  async respeed(responseId: string, keepIndex: number): Promise<void> {
+    const c = this.current;
+    if (!c || c.responseId !== responseId || c.kind !== "lesson" || !c.truncate || this.wrapping) return;
+    const nextLine = c.from + keepIndex + 1;
+    if (nextLine < 0 || nextLine >= c.lines.length) return; // the part ends with this line anyway
+    const part = this.here.part;
+    this.gen++; // the running lesson loop stops here …
+    this.current = null;
+    await c.truncate(keepIndex);
+    this.playback.get(responseId)?.(false);
+    if (this.isEnded() || this.state === "paused") return;
+    await this.runFrom({ part, line: nextLine, phase: "lesson" }, false); // … and picks up from the next line
   }
 
   /** A tap on an option of the open quick check. */
@@ -693,7 +717,7 @@ export class TutorRunner {
     const started = this.o.host.speak(spoken);
     if (!started) { await this.end("disconnected"); return "gone"; }
     const rid = started.responseId;
-    this.current = { responseId: rid, kind, lines: fullLines ?? lines, from };
+    this.current = { responseId: rid, kind, lines: fullLines ?? lines, from, truncate: started.truncate };
     this.sendState();
     const played = new Promise<boolean>((resolve) => this.playback.set(rid, resolve));
     const sent = await started.sent;
