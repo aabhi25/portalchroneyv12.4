@@ -1425,7 +1425,16 @@ export class RealtimeVoiceService {
       voiceLanguage: conversation.turnLanguage || (conversation.selectedLanguage !== 'auto' ? conversation.selectedLanguage : conversation.detectedLanguage) || null,
       mode: conversation.avatar ? 'video' : 'voice',
       fromStart: message?.fromStart === true,
+      // "Teach me this on the board" for a doubt: only in a doubt session (signed doubt id).
+      kind: message?.kind === 'doubt' ? 'doubt' : 'lesson',
+      doubt: message?.kind === 'doubt'
+        ? { question: String(message?.question || '').slice(0, 2000), answer: String(message?.answer || '').slice(0, 8000) }
+        : null,
     };
+    if (request.kind === 'doubt' && !conversation.topscholarDoubtId) {
+      this.sendToClient(conversation.clientWs, { type: 'tutor_ended', reason: 'unavailable', mode: 'doubt', message: 'Doubts can be explained on the board in a doubt session.' });
+      return;
+    }
     let prepared: Awaited<ReturnType<typeof prepareVoiceTutor>>;
     try {
       prepared = await (this.deps.prepareTutor ?? prepareVoiceTutor)(request);
@@ -1455,11 +1464,12 @@ export class RealtimeVoiceService {
       chapter: prepared.chapter,
       language: prepared.language,
       continueFrom: prepared.continueFrom,
+      mode: request.kind === 'doubt' ? 'doubt' : 'lesson',
       // The video avatar introduces the teacher itself (its AI-avatar notice).
       teacherName: conversation.avatar ? null : prepared.teacherName,
     });
     conversation.tutor = runner;
-    console.log(`[Tutor] Lesson started: "${prepared.chapter}" (${prepared.language}, ${request.mode})`);
+    console.log(`[Tutor] ${request.kind === 'doubt' ? 'Doubt explanation' : 'Lesson'} started: "${prepared.chapter}" (${prepared.language}, ${request.mode})`);
     void runner.start().catch((error) => {
       console.error('[Tutor] Lesson failed:', error);
       void runner.stop('error');

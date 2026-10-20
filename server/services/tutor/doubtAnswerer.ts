@@ -38,7 +38,7 @@ ${BOARD_OPS_DOC}`;
 
 const STOP = new Set("the a an is are was were of to in on for and or but what why how which who when where does do did can could would should will i me my you your it this that these those with from by as at be about please explain tell sir maam ma'am".split(" "));
 const WORD = new RegExp("[\\p{L}\\p{M}\\p{N}]{3,}", "gu");
-const words = (s: string) => (s.toLowerCase().match(WORD) || []).filter((w) => !STOP.has(w));
+export const words = (s: string) => (s.toLowerCase().match(WORD) || []).filter((w) => !STOP.has(w));
 
 /** The sources most likely to answer the question: the part's own, then the best word matches. */
 export function doubtSourceIds(pack: LessonPack, question: string, partSourceIds: string[], extra = 3): string[] {

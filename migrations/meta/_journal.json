@@ -190,6 +190,13 @@
       "when": 1792480956697,
       "tag": "0026_tutor_teacher",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792486259766,
+      "tag": "0027_tutor_doubt_teaching",
+      "breakpoints": true
     }
   ]
 }

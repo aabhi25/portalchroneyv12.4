@@ -192,7 +192,7 @@ interface WidgetSettings {
   /** Live AI avatar button (null unless a super admin enabled it and it can start). */
   liveAvatar?: { enabled: boolean; displayName: string; styleHint: string } | null;
   /** AI tutor (TopScholar): on when a super admin enabled it for the account. */
-  aiTutor?: { enabled: boolean; video?: boolean } | null;
+  aiTutor?: { enabled: boolean; video?: boolean; doubts?: boolean } | null;
   chatColor: string;
   chatColorEnd: string;
   widgetHeaderText: string;
@@ -1588,7 +1588,17 @@ export default function EmbedChat() {
   // checks the chapter and the tutor switch, and says why when it can't start).
   const tutorAvailable = voiceChatAvailable && !!settings?.aiTutor?.enabled && !!businessAccountId
     && !!topscholarTokenRef.current;
-  const startTutorLesson = (opts: { fromStart?: boolean } = {}) => {
+  // "Teach me this on the board": only in a doubt session (a raised doubt), when the account has it
+  // switched on, under the latest answer to the student's question.
+  const isDoubtSession = !!getDoubtIdFromToken(topscholarTokenRef.current);
+  const lastChatMessage = messages[messages.length - 1];
+  const lastQuestionIndex = messages.map((m) => m.role).lastIndexOf('user');
+  const teachDoubt = tutorAvailable && !!settings?.aiTutor?.doubts && isDoubtSession && !doubtLock && !tutorShown
+    && !isLoading && !streamingMessageId && lastChatMessage?.role === 'assistant' && lastQuestionIndex >= 0
+    && lastQuestionIndex < messages.length - 1 && (lastChatMessage.content || '').trim().length > 40
+    ? { question: messages[lastQuestionIndex].content || '', answer: lastChatMessage.content || '' }
+    : null;
+  const startTutorLesson = (opts: { fromStart?: boolean; doubt?: { question: string; answer: string } } = {}) => {
     if (!tutorAvailable || activeFormStep || isFormJourneyComplete) return;
     setIsMenuMode(false);
     // Video tutor when the account has the live avatar (it joins when ready; voice starts now).
@@ -5777,6 +5787,13 @@ export default function EmbedChat() {
           onStop={tutor.stop}
           onRestart={() => startTutorLesson()}
           onClose={closeTutor}
+          onBackToChat={() => {
+            // The explanation is done: close the classroom and the voice session, back to typing.
+            closeTutor();
+            if (isAvatarCallActive(liveAvatar.state.phase)) liveAvatar.end('switched_to_text');
+            closeInlineVoice();
+            setTimeout(() => inputRef.current?.focus(), 50);
+          }}
         />
       )}
 
@@ -6431,6 +6448,20 @@ export default function EmbedChat() {
                 )}
               </div>
             </div>
+          </div>
+        )}
+        {/* AI tutor: teach the doubt's answer on the board (doubt sessions, when switched on). */}
+        {teachDoubt && (
+          <div className="flex justify-start pl-10" data-testid="tutor-teach-doubt">
+            <button
+              type="button"
+              onClick={() => startTutorLesson({ doubt: teachDoubt })}
+              className="h-8 px-3 rounded-full bg-white border border-gray-200 text-[13px] font-medium flex items-center gap-1.5 hover:border-gray-300 transition-colors"
+              style={{ color: chatColor }}
+              data-testid="button-tutor-teach-doubt"
+            >
+              <GraduationCap className="w-4 h-4" /> Teach me this on the board
+            </button>
           </div>
         )}
         <div ref={messagesEndRef} />

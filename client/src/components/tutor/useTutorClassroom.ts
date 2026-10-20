@@ -18,6 +18,8 @@ export interface ClassroomCheck {
 
 export interface ClassroomState {
   status: ClassroomStatus;
+  /** "doubt": explaining one doubt from the chat (ends with just "Back to chat"). */
+  mode: "lesson" | "doubt";
   board: BoardState;
   /** The line being said right now. */
   caption: string;
@@ -38,7 +40,7 @@ export interface ClassroomState {
 }
 
 export const initialClassroom = (): ClassroomState => ({
-  status: "off", board: emptyBoard(), caption: "", title: "", sections: [], part: -1, canResume: false, endReason: null, message: null,
+  status: "off", mode: "lesson", board: emptyBoard(), caption: "", title: "", sections: [], part: -1, canResume: false, endReason: null, message: null,
   check: null, checksCorrect: 0, checksTotal: 0, continuedFrom: null, awaitingReply: false,
 });
 
@@ -110,9 +112,15 @@ export function useTutorClassroom() {
   const send = useCallback((message: Record<string, unknown>) => setCommands((list) => [...list.slice(-19), { seq: ++seq.current, message }]), []);
   const handleMessage = useCallback((m: any) => setState((s) => reduceClassroom(s, m)), []);
   const [slow, setSlowState] = useState(false);
-  const start = useCallback((opts: { language?: string; fromStart?: boolean } = {}) => {
-    setState({ ...initialClassroom(), status: "starting" });
-    setCommands([{ seq: ++seq.current, message: { type: "tutor_start", slow, ...(opts.language ? { language: opts.language } : {}), ...(opts.fromStart ? { fromStart: true } : {}) } }]);
+  const start = useCallback((opts: { language?: string; fromStart?: boolean; doubt?: { question: string; answer: string } } = {}) => {
+    setState({ ...initialClassroom(), status: "starting", mode: opts.doubt ? "doubt" : "lesson" });
+    setCommands([{ seq: ++seq.current, message: {
+      type: "tutor_start",
+      slow,
+      ...(opts.language ? { language: opts.language } : {}),
+      ...(opts.fromStart ? { fromStart: true } : {}),
+      ...(opts.doubt ? { kind: "doubt", question: opts.doubt.question.slice(0, 2000), answer: opts.doubt.answer.slice(0, 8000) } : {}),
+    } }]);
   }, [slow]);
   return {
     state,

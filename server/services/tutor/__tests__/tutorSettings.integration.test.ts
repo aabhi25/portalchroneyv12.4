@@ -121,6 +121,21 @@ async function main() {
     await db.update(schema.businessAccounts).set({ elevenlabsApiKey: "el-test-key" } as any).where(eq(schema.businessAccounts.id, K12));
     p2 = await prepareVoiceTutor({ ...req, language: "hinglish" });
     expect(p2.voice?.elevenlabsVoiceId === "AbCdEfGhIjKlMnOp" && p2.voice.elevenlabsApiKey === "el-test-key", "a Hinglish lesson uses the Hindi ElevenLabs voice with the account's key", { id: p2.voice?.elevenlabsVoiceId });
+    // ── doubts on the board ──
+    const dreq = { ...req, kind: "doubt" as const, doubt: { question: "Why is the hypotenuse the longest?", answer: "Because it is opposite the right angle." } };
+    threw = "";
+    try { await prepareVoiceTutor(dreq); } catch (e: any) { threw = e.message; }
+    expect(/not switched on/.test(threw) && (await getPublicTutorConfig(K12)).doubts === false, "teaching doubts is off until switched on", threw);
+    const d1 = await updateTutorSettings(K12, { doubtTeachingEnabled: true }, "admin-1");
+    expect(d1.changed.includes("doubtTeachingEnabled") && (await getPublicTutorConfig(K12)).doubts === true, "switched on (audited) → the widget offers it");
+    const dprep = await prepareVoiceTutor({ ...dreq, scope: { chapter: "", studentId: "S-9" } });
+    expect(dprep.continueFrom === null, "a doubt never 'continues' a chapter lesson (and needs no chapter)");
+    const dsid = await dprep.store.sessionStarted();
+    const [drow] = await db.select().from(schema.tutorSessions).where(eq(schema.tutorSessions.id, dsid!));
+    expect(drow?.kind === "doubts", "it is recorded as a doubt session", drow?.kind);
+    threw = "";
+    try { await prepareVoiceTutor({ ...dreq, doubt: { question: "", answer: "" } }); } catch (e: any) { threw = e.message; }
+    expect(/no doubt/.test(threw), "nothing to explain → refused", threw);
     await updateTutorSettings(K12, { avatarMode: "auto" }, "admin-1");
     expect((await getPublicTutorConfig(K12)).video === true, "video mode back on");
 

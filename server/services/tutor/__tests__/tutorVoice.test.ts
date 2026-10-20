@@ -165,6 +165,23 @@ async function main() {
       prepareTutor: async (req: any) => {
         prepareCalls.push(req);
         if (opts.failPrepare) throw opts.failPrepare;
+        if (req.kind === "doubt") {
+          const dOutline = { title: "Why the hypotenuse is longest", intro: [], sections: [{ id: "d1", title: "Why the hypotenuse is longest", goal: "", sourceIds: ["ans"], questionIds: [], mediaIds: [] }], recap: [] };
+          return {
+            chapter: "", language: "en", continueFrom: null, teacherName: null, voice: null,
+            lessons: {
+              outline: async () => dOutline,
+              section: async () => ({ lines: [{ say: "Look at the right angle first.", ops: [{ op: "clear" }, { op: "write", id: "dt", text: "Why the hypotenuse is longest", style: "title", color: "blue" }] }, { say: "The side facing it is the longest.", ops: [] }], simpler: [], checks: [CHECK] }),
+              answerDoubt: async (question: string, ctx: any) => { doubts.push({ question, ...ctx }); return { lines: DOUBT_LINES, onTopic: true }; },
+            },
+            store: {
+              remainingSeconds: async () => 1200,
+              addUsage: async (sec: number) => { usage.push(sec); },
+              sessionStarted: async () => "session-d",
+              sessionEnded: async (id: string | null, info: any) => { ended.push({ id, ...info }); },
+            },
+          };
+        }
         return {
           chapter: "Triangles",
           language: "en",
@@ -565,6 +582,30 @@ async function main() {
     h.done();
   }
 
+  // ── 4n. a doubt from the chat, explained on the board, then the end ──
+  {
+    const h = harness();
+    h.conversation.topscholarDoubtId = "doubt-123";
+    await h.clientMessage({ type: "tutor_start", kind: "doubt", question: "Why is the hypotenuse the longest side?", answer: "Because it is opposite the largest angle, the right angle, in a right triangle." });
+    await waitFor(() => h.client.ofType("tutor_ended").length > 0, 6000, "doubt explained");
+    const req = h.prepareCalls[0];
+    expect(req?.kind === "doubt" && req.doubt?.question === "Why is the hypotenuse the longest side?" && /opposite the largest angle/.test(req.doubt?.answer || ""), "the doubt and the chat's answer reach the tutor", req?.doubt);
+    const said = spokenLines(h);
+    expect(said[0] === "Sure, let me explain that on the board." && said[1] === "Look at the right angle first." && said[2] === "The side facing it is the longest.", "it says what's coming, then teaches the doubt on the board (no lesson plan)", said.slice(0, 3));
+    expect(said.includes(checkSaid[0]) && said.includes(praise), "a quick check from the question bank when one fits");
+    expect(said[said.length - 1] === "I hope that's clear now. If anything is still confusing, just ask me.", "it wraps up (no chapter recap)", said.slice(-1));
+    expect(h.client.ofType("tutor_ended")[0]?.reason === "completed" && h.ended[0]?.id === "session-d", "then it ends");
+    h.done();
+  }
+  {
+    const h = harness();
+    await h.clientMessage({ type: "tutor_start", kind: "doubt", question: "Why?", answer: "Because of the right angle, which is the largest angle in the triangle." });
+    await waitFor(() => h.client.ofType("tutor_ended").length > 0, 2000, "refused");
+    const e = h.client.ofType("tutor_ended")[0];
+    expect(e?.reason === "unavailable" && h.prepareCalls.length === 0 && spokenLines(h).length === 0, "outside a doubt session the doubt explanation is refused", e);
+    h.done();
+  }
+
   // ── 5. stop ──
   {
     const h = harness({ autoPlay: false });
@@ -705,6 +746,29 @@ async function main() {
     expect(/YOU ASKED THE STUDENT: When are two triangles similar\?/.test(replyUser) && /STUDENT IS ANSWERING: same angles/.test(replyUser) && fb.expectsReply === false, "an answer to the tutor's question is checked against it (and never asks again in a loop)");
     const bad = await answerDoubt({ pack, outline: null, part: -1, question: "x", recentLines: [], language: "en", complete: async () => "not json" });
     expect(bad.lines.length === 1 && bad.onTopic === false, "a broken model reply falls back to one polite line");
+  }
+
+  // ── 8d. the doubt lesson planner ──
+  {
+    const { planDoubtLesson, doubtPack, bestCheckFor } = await import("../doubtLesson");
+    const base: any = {
+      businessAccountId: "b", cpIds: ["cp"], chapter: "Triangles", chapterNorm: "triangles", versionKey: "v", cpIdsHash: "h", media: [],
+      sources: [{ id: "c1", title: "Right triangles", concept: null, text: "The side opposite the right angle is the hypotenuse, the longest side." }],
+      questions: [
+        { id: "q1", text: "Which side of a right triangle is the longest side?", options: [{ text: "hypotenuse", isCorrect: true }, { text: "base", isCorrect: false }], solution: null, difficulty: null, concept: null, questionType: null },
+        { id: "q2", text: "What is a polygon?", options: [{ text: "x", isCorrect: true }, { text: "y", isCorrect: false }], solution: null, difficulty: null, concept: null, questionType: null },
+      ],
+    };
+    const pack = doubtPack(base, "**Because** it faces the right angle, the largest angle.", "b");
+    expect(pack.sources[0].id === "ans" && !/\*/.test(pack.sources[0].text) && pack.sources.length === 2, "the chat's answer is the first source (as plain text), with the chapter's passages");
+    expect(bestCheckFor(pack, "Why is the hypotenuse the longest side of a right triangle?") === "q1" && bestCheckFor(pack, "hello there") === null, "the quick check is the bank question that matches the doubt (or none)");
+    let user = "";
+    const planned = await planDoubtLesson({ pack, question: "Why is the hypotenuse the longest side of a right triangle?", language: "en", complete: async (_s, u) => { user = u; return JSON.stringify({ title: "Why the hypotenuse is longest", lines: [{ say: "Look at the right angle.", ops: [{ op: "clear" }, { op: "write", id: "t", text: "d = sqrt(9 + 16)" }] }, { say: "The side facing it is longest.", ops: [] }], simpler: [{ say: "Think of a door.", ops: [] }] }); } });
+    expect(/STUDENT'S DOUBT: Why is the hypotenuse/.test(user) && /\[ans\] The answer the student read/.test(user), "the model sees the doubt and the answer the student read");
+    expect(planned.title === "Why the hypotenuse is longest" && planned.script.lines.length === 2 && planned.script.checks[0]?.questionId === "q1" && planned.script.lines[0].ops.some((o: any) => o.op === "math"), "a short lesson with its check (formulas as maths)", planned);
+    let threw = false;
+    try { await planDoubtLesson({ pack, question: "x", language: "en", complete: async () => "{}" }); } catch { threw = true; }
+    expect(threw, "no usable plan → an error the widget shows (not a silent lesson)");
   }
 
   // ── 9. the widget's classroom state ──

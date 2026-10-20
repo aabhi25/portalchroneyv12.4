@@ -35,6 +35,7 @@ export function defaultTutorSettings(businessAccountId: string): EffectiveTutorS
     voiceByLanguage: {},
     avatarMode: "auto",
     avatarId: null,
+    doubtTeachingEnabled: false,
     updatedBy: null,
     updatedAt: null,
   };
@@ -47,13 +48,16 @@ export async function getTutorSettings(businessAccountId: string): Promise<Effec
   return { ...rest, exists: true };
 }
 
-/** What the widget may know: whether the tutor is offered, and whether it may start video. */
-export async function getPublicTutorConfig(businessAccountId: string): Promise<{ enabled: boolean; video: boolean }> {
+/**
+ * What the widget may know: whether the tutor is offered, whether it may start video, and whether
+ * answers in a doubt session offer "Teach me this on the board".
+ */
+export async function getPublicTutorConfig(businessAccountId: string): Promise<{ enabled: boolean; video: boolean; doubts: boolean }> {
   try {
     const s = await getTutorSettings(businessAccountId);
-    return { enabled: s.enabled, video: s.avatarMode !== "voice" };
+    return { enabled: s.enabled, video: s.avatarMode !== "voice", doubts: s.enabled && s.doubtTeachingEnabled };
   } catch {
-    return { enabled: false, video: false };
+    return { enabled: false, video: false, doubts: false };
   }
 }
 
@@ -83,9 +87,10 @@ const updateSchema = z.object({
   voiceByLanguage: z.record(z.string(), z.union([z.string(), z.null()])).optional(),
   avatarMode: z.enum(TUTOR_AVATAR_MODES).optional(),
   avatarId: z.union([z.string().trim().max(200), z.null()]).optional(),
+  doubtTeachingEnabled: z.boolean().optional(),
 }).strict();
 
-const AUDITED: Array<keyof z.infer<typeof updateSchema>> = ["enabled", "dailyMinutesPerStudent", "teacherName", "voiceByLanguage", "avatarMode", "avatarId"];
+const AUDITED: Array<keyof z.infer<typeof updateSchema>> = ["enabled", "dailyMinutesPerStudent", "teacherName", "voiceByLanguage", "avatarMode", "avatarId", "doubtTeachingEnabled"];
 
 /** Voices: known languages only, each a voice from the list (el:… or an OpenAI voice); empty = default. */
 function cleanVoices(raw: Record<string, string | null>): Record<string, string> {
@@ -131,6 +136,7 @@ export async function updateTutorSettings(businessAccountId: string, body: unkno
     voiceByLanguage: next.voiceByLanguage || {},
     avatarMode: next.avatarMode,
     avatarId: next.avatarId,
+    doubtTeachingEnabled: next.doubtTeachingEnabled,
     updatedBy: actorUserId,
     updatedAt: now,
   };

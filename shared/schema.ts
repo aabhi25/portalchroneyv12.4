@@ -1864,6 +1864,8 @@ export const tutorBusinessSettings = pgTable("tutor_business_settings", {
   voiceByLanguage: jsonb("voice_by_language").$type<Record<string, string>>().notNull().default(sql`'{}'::jsonb`),
   avatarMode: varchar("avatar_mode", { length: 16 }).notNull().default("auto"), // 'auto' | 'voice'
   avatarId: varchar("avatar_id", { length: 200 }),
+  // "Teach me this on the board" on answers in a doubt session (TopScholar raised doubts).
+  doubtTeachingEnabled: boolean("doubt_teaching_enabled").notNull().default(false),
   updatedBy: varchar("updated_by"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

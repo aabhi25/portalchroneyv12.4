@@ -65,6 +65,7 @@ async function adminView(s: Awaited<ReturnType<typeof getTutorSettings>>, eligib
     voiceByLanguage: s.voiceByLanguage || {},
     avatarMode: s.avatarMode,
     avatarId: s.avatarId ?? null,
+    doubtTeachingEnabled: s.doubtTeachingEnabled,
     avatar: await avatarStatus(s.businessAccountId),
     limits: TUTOR_LIMITS,
     updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null,

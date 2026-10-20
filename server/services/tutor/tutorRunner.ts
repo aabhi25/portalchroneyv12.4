@@ -80,6 +80,8 @@ export interface TutorRunnerOptions {
   continueFrom?: { part: number; title: string | null } | null;
   /** The teacher introduces itself by this name at the start of a lesson. */
   teacherName?: string | null;
+  /** "doubt": one short lesson on a doubt from the chat (no plan, no recap, no next part). */
+  mode?: "lesson" | "doubt";
 }
 
 /** Where the lesson goes on from: a part (-1 = the plan … sections.length = recap) and a line, or that part's quick check. */
@@ -99,6 +101,16 @@ const WELCOME_BACK = T({
   en: (t: string) => `Welcome back! Last time we got to "${t}", so let's carry on from there.`,
   hinglish: (t: string) => `Welcome back! Pichhli baar hum "${t}" tak pahunche the, toh wahin se shuru karte hain.`,
   hi: (t: string) => `फिर से स्वागत है! पिछली बार हम "${t}" तक पहुँचे थे, तो वहीं से शुरू करते हैं।`,
+});
+const DOUBT_START = T({
+  en: ["Sure, let me explain that on the board.", "Okay, let's work through this on the board.", "Right, let me show you on the board."],
+  hinglish: ["Theek hai, board pe samjhate hain.", "Chalo, ise board pe dekhte hain.", "Achha, board pe step by step dekhte hain."],
+  hi: ["ठीक है, इसे बोर्ड पर समझते हैं।", "चलो, इसे बोर्ड पर देखते हैं।", "अच्छा, बोर्ड पर कदम-दर-कदम देखते हैं।"],
+});
+const DOUBT_DONE = T({
+  en: "I hope that's clear now. If anything is still confusing, just ask me.",
+  hinglish: "Umeed hai ab clear ho gaya. Kuch bhi confusing lage toh mujhse poochna.",
+  hi: "उम्मीद है अब साफ़ हो गया। कुछ भी उलझन हो तो मुझसे पूछना।",
 });
 const HELLO = T({
   en: (n: string) => `Hi! I'm ${n}, your tutor.`,
@@ -260,6 +272,7 @@ export class TutorRunner {
   get active(): boolean { return this.state !== "idle" && this.state !== "ended"; }
   get progress(): { part: number; line: number } { const p = this.resumeAt ?? this.here; return { part: p.part, line: p.line }; }
   private get L(): TutorLanguage { return this.o.language; }
+  private get doubtMode(): boolean { return this.o.mode === "doubt"; }
 
   // ── start ──
 
@@ -276,6 +289,19 @@ export class TutorRunner {
 
     const gen = this.gen;
     const outline = this.loadOutline();
+    if (this.doubtMode) {
+      // A doubt is planned fresh (a few seconds): say what's coming meanwhile.
+      const intro = this.say("aside", [{ say: this.phrase("doubtStart", DOUBT_START[this.L]), ops: [] }]);
+      try { await outline; } catch (error) {
+        if (this.isEnded()) return;
+        this.o.host.send({ type: "tutor_error", message: error instanceof Error ? error.message : "The explanation could not be prepared." });
+        await this.end("error");
+        return;
+      }
+      if ((await intro) !== "played" || gen !== this.gen || this.isEnded()) return;
+      await this.runFrom({ part: 0, line: 0, phase: "lesson" }, false);
+      return;
+    }
     // Cached plans are instant; a first-ever lesson takes a few seconds — say hello meanwhile.
     const quick = await Promise.race([outline.then(() => true, () => true), sleep(this.o.greetAfterMs ?? 400).then(() => false)]);
     let greeting: Promise<SayResult> | null = null;
@@ -497,7 +523,8 @@ export class TutorRunner {
         if (!script) { this.sections.delete(p); continue; } // a part that cannot be prepared is skipped, not the lesson
       }
       if (!(first && from.phase === "check")) {
-        const lines = p === -1 ? planLines(outline) : isSection ? withCleanPage(script!.lines) : recapLines(outline, this.L);
+        const lines = p === -1 ? planLines(outline) : isSection ? withCleanPage(script!.lines)
+          : this.doubtMode ? [{ say: DOUBT_DONE[this.L], ops: [] as BoardOp[] }] : recapLines(outline, this.L);
         const start = first ? Math.min(from.line, lines.length - 1) : 0;
         const resumeHere = resumed && first;
         if (start > 0 || resumeHere) this.o.host.send({ type: "board_snapshot", board: boardAfter(lines, start) });

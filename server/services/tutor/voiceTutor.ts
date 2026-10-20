@@ -7,8 +7,10 @@ import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../../db";
 import { businessAccounts, tutorSessions } from "@shared/schema";
 import { lessonContext, TutorLessonError, type TutorScope } from "./lessonService";
-import { getOutline, getSection, type LessonOutline, type TutorLanguage } from "./lessonPlanner";
+import { getOutline, getSection, openAiComplete, type Complete, type LessonOutline, type SectionScript, type TutorLanguage } from "./lessonPlanner";
 import { answerDoubt } from "./doubtAnswerer";
+import { doubtPack, planDoubtLesson } from "./doubtLesson";
+import type { LessonPack } from "./lessonPack";
 import { getTutorSettings, tutorVoiceFor } from "./settings";
 import { addUsage, remainingSeconds, secondsUsedToday, tutorStudentKey } from "./usage";
 import type { TutorLessonSource, TutorStore } from "./tutorRunner";
@@ -25,6 +27,9 @@ export interface VoiceTutorRequest {
   mode: "voice" | "video";
   /** Start from the plan even when this student stopped part-way last time. */
   fromStart?: boolean;
+  /** "doubt": teach one doubt from a doubt session (the question and the chat answer it got). */
+  kind?: "lesson" | "doubt";
+  doubt?: { question: string; answer: string } | null;
 }
 
 /** A lesson this student left part-way within this many days is continued, not restarted. */
@@ -54,10 +59,15 @@ export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{
 }> {
   const settings = await getTutorSettings(req.businessAccountId);
   if (!settings.enabled) throw new TutorUnavailableError("The AI tutor is not switched on for this account.");
+  const doubtMode = req.kind === "doubt";
+  if (doubtMode) {
+    if (!settings.doubtTeachingEnabled) throw new TutorUnavailableError("Explaining doubts on the board is not switched on for this account.");
+    if (!req.doubt?.question?.trim() || !req.doubt?.answer?.trim()) throw new TutorUnavailableError("There is no doubt to explain yet.");
+  }
   const chapter = String(req.scope?.chapter || "").trim();
-  if (!req.scope || !chapter) throw new TutorUnavailableError("Open a chapter first — the tutor teaches one chapter at a time.");
+  if (!doubtMode && (!req.scope || !chapter)) throw new TutorUnavailableError("Open a chapter first — the tutor teaches one chapter at a time.");
   const language = tutorLanguageFor(req);
-  const scope = req.scope;
+  const scope = req.scope ?? { chapter: "" };
   const cpIds = req.cpIds?.length ? req.cpIds : undefined;
 
   // The pack is built lazily (the runner says hello meanwhile); later calls reuse it.
@@ -72,12 +82,36 @@ export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{
       if (index < 0 || index >= o.sections.length) throw new TutorLessonError("No such section.");
       return getSection(pack, o, index, language, complete);
     },
-    answerDoubt: async (question, { part, recentLines }) => {
+    answerDoubt: async (question, { part, recentLines, replyTo }) => {
       const { pack, complete } = await context();
       const o = await lessons.outline().catch(() => null);
-      return answerDoubt({ pack, outline: o, part, question, recentLines, language, complete });
+      return answerDoubt({ pack, outline: o, part, question, recentLines, replyTo, language, complete });
     },
   };
+
+  // A doubt: one short lesson planned from the doubt + the chat answer (+ the chapter, if known).
+  if (doubtMode) {
+    let plan: Promise<{ title: string; script: SectionScript; pack: LessonPack; complete: Complete }> | null = null;
+    const doubtPlan = () => (plan ||= (async () => {
+      const base = chapter ? await context().then((c) => c.pack).catch(() => null) : null;
+      const [acc] = await db.select({ key: businessAccounts.openaiApiKey }).from(businessAccounts).where(eq(businessAccounts.id, req.businessAccountId)).limit(1);
+      if (!acc?.key) throw new TutorLessonError("This account has no OpenAI key, which the tutor needs.");
+      const complete = openAiComplete(acc.key, req.businessAccountId);
+      const pack = doubtPack(base, req.doubt!.answer, req.businessAccountId);
+      const planned = await planDoubtLesson({ pack, question: req.doubt!.question, language, complete });
+      return { ...planned, pack, complete };
+    })());
+    const outlineOf = (title: string): LessonOutline => ({ title, intro: [], sections: [{ id: "d1", title, goal: "", sourceIds: ["ans"], questionIds: [], mediaIds: [] }], recap: [] });
+    lessons.outline = async () => outlineOf((await doubtPlan()).title);
+    lessons.section = async (index) => {
+      if (index !== 0) throw new TutorLessonError("No such section.");
+      return (await doubtPlan()).script;
+    };
+    lessons.answerDoubt = async (question, { recentLines, replyTo }) => {
+      const p = await doubtPlan();
+      return answerDoubt({ pack: p.pack, outline: outlineOf(p.title), part: 0, question, recentLines, replyTo, language, complete: p.complete });
+    };
+  }
 
   const studentKey = tutorStudentKey(scope.studentId, req.visitorId);
   let packCpIds: string[] = cpIds ?? [];
@@ -93,7 +127,7 @@ export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{
         cpIds: packCpIds,
         chapter,
         mode: req.mode,
-        kind: "lesson",
+        kind: doubtMode ? "doubts" : "lesson",
       }).returning({ id: tutorSessions.id });
       return row?.id ?? null;
     },
@@ -111,7 +145,7 @@ export async function prepareVoiceTutor(req: VoiceTutorRequest): Promise<{
   };
   // Where this student got to last time on this chapter (a lesson they did not finish).
   let continueFrom: { part: number; title: string | null } | null = null;
-  if (!req.fromStart) {
+  if (!req.fromStart && !doubtMode) {
     const [last] = await db.select({ progress: tutorSessions.progress, endReason: tutorSessions.endReason })
       .from(tutorSessions)
       .where(and(

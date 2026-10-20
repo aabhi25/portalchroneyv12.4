@@ -22,6 +22,8 @@ interface Props {
   onStartOver: () => void;
   /** Told when Expand changes (a video tutor tile follows it). */
   onExpandedChange?: (expanded: boolean) => void;
+  /** Explaining a doubt: when it ends, the only way on is back to the chat. */
+  onBackToChat?: () => void;
   onStop: () => void;
   onRestart: () => void;
   onClose: () => void;
@@ -42,7 +44,7 @@ const END_TEXT: Record<string, string> = {
  */
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 
-export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766e", onResume, onSkip, onSimpler, onAnswer, onDontKnow, onAsk, slow, onSlowChange, onStartOver, onExpandedChange, onStop, onRestart, onClose }: Props) {
+export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766e", onResume, onSkip, onSimpler, onAnswer, onDontKnow, onAsk, slow, onSlowChange, onStartOver, onExpandedChange, onBackToChat, onStop, onRestart, onClose }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   useEffect(() => { onExpandedChange?.(expanded); }, [expanded, onExpandedChange]);
@@ -103,13 +105,14 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
   const { status } = state;
   const busy = status === "starting" || status === "planning" || status === "preparing";
   const total = state.sections.length;
-  const partLabel = state.part < 0 ? "Plan" : total && state.part >= total ? "Recap" : total ? `Part ${state.part + 1} of ${total}` : "";
+  const partLabel = state.mode === "doubt" ? "Explaining your doubt" : state.part < 0 ? "Plan" : total && state.part >= total ? "Recap" : total ? `Part ${state.part + 1} of ${total}` : "";
   const sectionTitle = state.part >= 0 && state.part < total ? state.sections[state.part]?.title : "";
   const emptyText = status === "ended" ? "" : busy ? "Getting the board ready…" : "Listen — the board fills in as I explain.";
   const check = state.check?.shown || state.check?.result ? state.check : null;
   const checkOpen = !!check && (check.result === null || check.result === "retry");
   const inPart = state.part >= 0 && state.part < total;
   const yourTurn = status === "paused" && state.awaitingReply;
+  const doubt = state.mode === "doubt";
   const showAsk = status !== "ended" && (expanded || askOpen || yourTurn);
 
   return (
@@ -125,9 +128,9 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
           <GraduationCap className="w-4 h-4" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-semibold leading-tight truncate" data-testid="text-tutor-title">{state.title || chapter || "AI tutor"}</p>
+          <p className="text-[13px] font-semibold leading-tight truncate" data-testid="text-tutor-title">{state.title || (state.mode === "doubt" ? "Your doubt" : chapter) || "AI tutor"}</p>
           <p className="text-[11px] text-gray-500 leading-tight truncate">
-            {partLabel}{sectionTitle ? ` · ${sectionTitle}` : ""}
+            {partLabel}{sectionTitle && state.mode !== "doubt" ? ` · ${sectionTitle}` : ""}
             {!partLabel && busy ? "Preparing the lesson…" : ""}
           </p>
         </div>
@@ -137,12 +140,14 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
         {voiceState === "speaking" && status === "teaching" && (
           <span className="hidden sm:flex items-center gap-1 text-[11px] text-gray-600 bg-white rounded-full px-2 py-0.5"><Volume2 className="w-3 h-3" /> Teaching</span>
         )}
+        {!(doubt && status === "ended") && (<>
         <button type="button" onClick={toggleExpand} className="h-8 w-8 rounded-full hover:bg-black/5 flex items-center justify-center" aria-label={expanded ? "Exit full screen" : "Expand the classroom"} title={expanded ? "Exit full screen (Esc)" : "Expand"} data-testid="button-tutor-expand">
           {expanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
         </button>
         <button type="button" onClick={close} className="h-8 w-8 rounded-full hover:bg-black/5 flex items-center justify-center" aria-label="Close the classroom" data-testid="button-tutor-close">
           <X className="w-4 h-4" />
         </button>
+        </>)}
       </div>
 
       <div className={`px-3 ${expanded ? "flex-1 min-h-0 flex" : ""}`}>
@@ -187,7 +192,7 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
         )}
         {status === "ended" ? (
           <p className="text-[13px] text-gray-700" data-testid="text-tutor-ended">
-            {state.message || END_TEXT[state.endReason || "stopped"] || END_TEXT.stopped}
+            {state.message || (doubt && state.endReason === "completed" ? "Hope that helped! You can carry on in the chat." : END_TEXT[state.endReason || "stopped"] || END_TEXT.stopped)}
             {state.checksTotal > 0 && <span className="block text-gray-500 mt-0.5">Quick checks: {state.checksCorrect} of {state.checksTotal} right.</span>}
           </p>
         ) : status === "answering" && !state.caption ? (
@@ -209,7 +214,7 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
               <HelpCircle className="w-3.5 h-3.5" /> I didn't get it
             </button>
           )}
-          {(status === "teaching" || status === "paused") && state.part < total && (
+          {!doubt && (status === "teaching" || status === "paused") && state.part < total && (
             <button type="button" onClick={onSkip} className="h-8 px-3 rounded-full bg-white border border-gray-200 text-[13px] flex items-center gap-1.5" data-testid="button-tutor-skip">
               <SkipForward className="w-3.5 h-3.5" /> Next part
             </button>
@@ -219,7 +224,12 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
               <Square className="w-3 h-3" /> Stop
             </button>
           )}
-          {status === "ended" && state.endReason !== "daily_limit" && state.endReason !== "unavailable" && (
+          {status === "ended" && doubt && (
+            <button type="button" onClick={() => { if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined); setExpanded(false); (onBackToChat ?? onClose)(); }} className="h-8 px-3 rounded-full text-white text-[13px] font-medium flex items-center gap-1.5" style={{ background: chatColor }} data-testid="button-tutor-back-to-chat">
+              Back to chat
+            </button>
+          )}
+          {status === "ended" && !doubt && state.endReason !== "daily_limit" && state.endReason !== "unavailable" && (
             <button type="button" onClick={onRestart} className="h-8 px-3 rounded-full text-white text-[13px] font-medium flex items-center gap-1.5" style={{ background: chatColor }} data-testid="button-tutor-restart">
               <Play className="w-3.5 h-3.5" /> {state.endReason === "completed" ? "Teach it again" : "Start the lesson"}
             </button>
@@ -229,7 +239,7 @@ export function TutorClassroom({ state, chapter, voiceState, chatColor = "#0f766
               <Snail className="w-3.5 h-3.5" /> Slower
             </button>
           )}
-          {state.continuedFrom && status !== "ended" && (
+          {!doubt && state.continuedFrom && status !== "ended" && (
             <button type="button" onClick={onStartOver} className="h-8 px-3 rounded-full bg-white border border-gray-200 text-[13px] flex items-center gap-1.5" data-testid="button-tutor-startover">
               <RotateCcw className="w-3.5 h-3.5" /> Start over
             </button>

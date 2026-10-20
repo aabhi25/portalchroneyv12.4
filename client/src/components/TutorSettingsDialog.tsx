@@ -27,6 +27,7 @@ export type TutorAdminView = {
   voiceByLanguage: Partial<Record<VoiceLang, string>>;
   avatarMode: "auto" | "voice";
   avatarId: string | null;
+  doubtTeachingEnabled: boolean;
   /** The account's Live AI avatar (provider, key, consent…), which video lessons use. */
   avatar: { enabled: boolean; provider: string; providerLabel: string; avatarId: string | null; displayName: string | null; ready: boolean; missing: string[] } | null;
   limits: { dailyMinutesPerStudent: { min: number; max: number; default: number } };
@@ -88,6 +89,7 @@ export function TutorSettingsDialog({ open, onOpenChange, businessAccountId, bus
   const [openVoice, setOpenVoice] = useState<VoiceLang | null>(null);
   const [avatarMode, setAvatarMode] = useState<"auto" | "voice">("auto");
   const [avatarId, setAvatarId] = useState("");
+  const [doubtTeaching, setDoubtTeaching] = useState(false);
   const [avatarCheck, setAvatarCheck] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
@@ -98,6 +100,7 @@ export function TutorSettingsDialog({ open, onOpenChange, businessAccountId, bus
     setVoices({ ...settings.data.voiceByLanguage });
     setAvatarMode(settings.data.avatarMode ?? "auto");
     setAvatarId(settings.data.avatarId ?? "");
+    setDoubtTeaching(!!settings.data.doubtTeachingEnabled);
     setAvatarCheck(null);
   }, [settings.data]);
   useEffect(() => { if (!open) setOpenVoice(null); }, [open]);
@@ -130,6 +133,7 @@ export function TutorSettingsDialog({ open, onOpenChange, businessAccountId, bus
       voiceByLanguage: Object.fromEntries(VOICE_LANGS.map((l) => [l.id, voices[l.id] || null])),
       avatarMode,
       avatarId: avatarId.trim() || null,
+      doubtTeachingEnabled: doubtTeaching,
     }),
     onSuccess: (data) => {
       queryClient.setQueryData(tutorKey(businessAccountId), data);
@@ -168,6 +172,13 @@ export function TutorSettingsDialog({ open, onOpenChange, businessAccountId, bus
                 <p className="text-xs text-gray-500">Students see "Teach me this chapter" in the chat.</p>
               </div>
               <Switch id="tutor-enabled" checked={enabled} onCheckedChange={setEnabled} disabled={!settings.data?.eligible} data-testid="switch-tutor-enabled" />
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="tutor-doubts" className="text-sm font-medium">Teach doubts on the board</Label>
+                <p className="text-xs text-gray-500">In a raised doubt, students see "Teach me this on the board" under the answer; the tutor explains it step by step, then they go back to the chat.</p>
+              </div>
+              <Switch id="tutor-doubts" checked={doubtTeaching} onCheckedChange={setDoubtTeaching} disabled={!settings.data?.eligible || !enabled} data-testid="switch-tutor-doubts" />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="tutor-minutes">Minutes per student per day</Label>

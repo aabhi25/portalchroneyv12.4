@@ -1,0 +1,1 @@
+ALTER TABLE "tutor_business_settings" ADD COLUMN IF NOT EXISTS "doubt_teaching_enabled" boolean DEFAULT false NOT NULL;
