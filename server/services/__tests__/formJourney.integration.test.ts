@@ -133,8 +133,18 @@ async function main() {
     await journeyService.resetJourney(conv); // a restart
     r = await get(`/api/journey/current-step?businessAccountId=${biz}&conversationId=${conv}`);
     expect(r.json.formStep === null, "…and it stays finished after a restart", r.json);
+    const [afterForm] = await db.select().from(schema.conversations).where(eq(schema.conversations.id, conv));
+    expect(afterForm && !afterForm.closedAt, "finishing a form leaves the chat open, so the visitor can carry on in it", afterForm?.closedAt);
     r = await get(`/api/journey/${C.id}/first-step?businessAccountId=${biz}&conversationId=${conv}`);
     expect(r.json.formStep?.stepId === C.steps[0] && !r.json.resumed, "opening it again starts it fresh (not at its closing message)", r.json);
+
+    // ── chatting after the forms ──
+    await journeyService.resetJourney(conv);
+    const after = await journeyService.getOrStartJourney(conv, "visitor-x", biz, "What is the fee for MBA?");
+    expect(after === null, "typing in a chat that has been through a form goes to the AI (the start-up form is not started again)", after?.journeyId);
+    const [fresh] = await db.insert(schema.conversations).values({ businessAccountId: biz, title: "New Chat" } as any).returning();
+    const started = await journeyService.getOrStartJourney(fresh.id, "visitor-y", biz, "Hi");
+    expect(started?.journeyId === A.id, "a brand-new chat still starts with the start-up form", started?.journeyId);
 
     const [c] = await db.select().from(schema.conversations).where(eq(schema.conversations.id, conv));
     expect(c?.title === "Counselling", "the chat is titled after its form", c?.title);

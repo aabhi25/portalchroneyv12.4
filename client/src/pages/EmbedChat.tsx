@@ -3334,6 +3334,8 @@ export default function EmbedChat() {
           message: userMessage.content, 
           businessAccountId,
           sessionId: sessionIdRef.current,
+          // This chat (e.g. the one a form started): the server carries on in it.
+          conversationId: conversationIdRef.current || undefined,
           language: selectedLanguage !== 'auto' ? selectedLanguage : undefined,
           // Starting point when the first messages don't show a clear language (e.g. "5 lakh?").
           browserLanguage: typeof navigator !== 'undefined' ? navigator.language : undefined,
@@ -4023,7 +4025,10 @@ export default function EmbedChat() {
       if (last && last.role === 'assistant' && !last.formStepId && (last.content || '').trim() === step.questionText.trim()) {
         return [...prev.slice(0, -1), { ...last, quickReplies, formStepId: step.stepId }];
       }
-      return [...prev, {
+      // A question left unanswered (e.g. the start-up form's, when another form is opened from
+      // the menu) gives way to the new one instead of staying in the chat unanswered.
+      const base = last?.role === 'assistant' && last.formStepId ? prev.slice(0, -1) : prev;
+      return [...base, {
         id: `form-${step.stepId}-${Date.now()}`,
         role: 'assistant',
         content: step.questionText,
@@ -4447,6 +4452,17 @@ export default function EmbedChat() {
       }
     },
     onTouchEnd: () => { sheetDragStartRef.current = null; },
+  };
+
+  /**
+   * After a form is finished: carry on in this same chat with the AI. ("Chat Now" used to start a
+   * new chat — which, on an account with a start-up form, opened that form again.)
+   */
+  const continueChatAfterForm = () => {
+    setActiveFormStep(null);
+    setActiveJourneyId(null);
+    setIsFormJourneyComplete(false);
+    setTimeout(() => inputRef.current?.focus(), 50);
   };
 
   const submitFormAnswer = async (value: string) => {
@@ -6327,7 +6343,7 @@ export default function EmbedChat() {
                         // "Continue exploring" on the closing message.
                         <QuickBrowseButtons
                           buttons={msg.quickReplies.map((opt) => ({ label: opt, action: opt }))}
-                          onSelect={() => { setActiveFormStep(null); setActiveJourneyId(null); }}
+                          onSelect={continueChatAfterForm}
                           chatColor={chatColor}
                           chatColorEnd={chatColorEnd}
                         />
@@ -6372,11 +6388,12 @@ export default function EmbedChat() {
           />
         )}
 
-        {/* Chat Now button - shown after journey form completion */}
-        {isFormJourneyComplete && !activeFormStep && (
+        {/* Chat Now button - shown after journey form completion (also under a closing message
+            that has no button of its own: it used to leave the visitor with no way to go on). */}
+        {isFormJourneyComplete && (!activeFormStep || (isClosingStep(activeFormStep) && !activeFormStep.completionButtonText)) && (
           <div className="flex justify-center py-4 px-4">
             <button
-              onClick={() => handleNewChat()}
+              onClick={continueChatAfterForm}
               className="flex items-center gap-2 px-6 py-3 rounded-full text-white font-medium shadow-md hover:shadow-lg transition-all"
               style={{ background: chatColorEnd ? `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})` : chatColor }}
             >

@@ -1847,7 +1847,22 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         console.log(`[Widget Stream] Reply language: ${replyLanguage.language} (${replyLanguage.source}${replyLanguage.outsideAllowed ? ', outside allowed' : ''})`);
       }
 
+      // The widget's own chat (e.g. one a form started): carry on in it when it is this visitor's
+      // (same visitor token). Reuse by visitor token alone depends on a 30-minute "last active"
+      // window, which missed form chats — the next message then opened a new chat, which started
+      // the start-up form again. TopScholar keeps its own subject / doubt keyed sessions.
+      let widgetExistingConversationId: string | undefined;
+      const hintedConversationId = typeof req.body.conversationId === 'string' ? req.body.conversationId.trim() : '';
+      if (hintedConversationId && typeof sessionToken === 'string' && sessionToken.trim()
+        && !(await import('./services/topscholar/config')).isTopscholarAccount(businessAccountId)) {
+        const hinted = await storage.getConversation(hintedConversationId, businessAccountId).catch(() => undefined);
+        if (hinted && hinted.visitorToken === sessionToken.trim() && !hinted.closedAt && !(hinted as any).awaitingVerification) {
+          widgetExistingConversationId = hinted.id;
+        }
+      }
+
       for await (const chunk of chatService.streamMessage(message, {
+        existingConversationId: widgetExistingConversationId,
         userId: widgetUserId,
         businessAccountId,
         personality,
@@ -17533,7 +17548,9 @@ Important:
             content: result.completionMessage,
             interactionSource: 'journey'
           });
-          await storage.closeConversation(activeConversationId);
+          // The chat stays open: the visitor usually carries on chatting after a form
+          // ("Back to chat"), and a closed chat can't be continued — the next message
+          // would open a new chat, which starts the start-up form again.
         }
         await storage.updateConversationTimestamp(activeConversationId);
       } catch (msgError) {

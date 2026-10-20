@@ -619,18 +619,16 @@ class JourneyService {
     if (startFromScratchJourney) {
       console.log('[Journey] Found startFromScratch journey:', startFromScratchJourney.name);
       
-      // Check if journey was already completed in this conversation
-      const completedSession = await db
-        .select()
+      // Only a chat that hasn't been through any form yet starts with it. A chat that finished or
+      // left a form (e.g. went to "Check Eligibility" from the menu, then "Chat Now") is talking
+      // to the AI: re-starting the start-up form there pulled the visitor back into it.
+      const earlierSession = await db
+        .select({ id: journeySessions.id })
         .from(journeySessions)
-        .where(and(
-          eq(journeySessions.conversationId, conversationId),
-          eq(journeySessions.journeyId, startFromScratchJourney.id),
-          eq(journeySessions.completed, 'true')
-        ))
+        .where(eq(journeySessions.conversationId, conversationId))
         .limit(1);
       
-      if (completedSession.length === 0) {
+      if (earlierSession.length === 0) {
         console.log('[Journey] ✓ Auto-starting startFromScratch journey:', startFromScratchJourney.id);
         const newState = await this.startJourney(conversationId, userId, businessAccountId, startFromScratchJourney.id);
         if (newState) {
@@ -641,7 +639,7 @@ class JourneyService {
         }
         return newState;
       } else {
-        console.log('[Journey] ⚠️ startFromScratch journey already completed in this conversation');
+        console.log('[Journey] startFromScratch journey not started: this chat has already been through a form');
       }
     }
 
