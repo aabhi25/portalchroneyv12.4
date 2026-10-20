@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckCircle2, ChevronDown, Loader2, TriangleAlert } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -140,15 +140,17 @@ export function TutorSettingsDialog({ open, onOpenChange, businessAccountId, bus
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[88vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>AI tutor · {businessName}</DialogTitle>
-          <DialogDescription>
+    // A side panel: room for the voice lists, and the page stays visible beside it.
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-xl" data-testid="panel-tutor-settings">
+        <SheetHeader className="border-b px-6 py-4 pr-12 text-left">
+          <SheetTitle>AI tutor · {businessName}</SheetTitle>
+          <SheetDescription>
             A teacher-like tutor in the chat widget that teaches a chapter from your synced content, with a live board.
             Set the teacher's name, voices and video below.
-          </DialogDescription>
-        </DialogHeader>
+          </SheetDescription>
+        </SheetHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         {settings.isLoading ? (
           <div className="py-8 text-center"><Loader2 className="inline h-5 w-5 animate-spin text-gray-400" /></div>
         ) : settings.isError ? (
@@ -273,13 +275,14 @@ export function TutorSettingsDialog({ open, onOpenChange, businessAccountId, bus
             </div>
           </div>
         )}
-        <DialogFooter>
+        </div>
+        <SheetFooter className="flex-row justify-end gap-2 border-t px-6 py-3">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={() => save.mutate()} disabled={!!minutesError || save.isPending || settings.isLoading || settings.isError} data-testid="button-save-tutor">
             {save.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 }

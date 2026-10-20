@@ -288,14 +288,26 @@ export async function searchElevenLabsVoices(
 
 const voiceDetailsCache = new Map<string, { data: ElevenLabsVoice | null; expiresAt: number }>();
 
-/** One voice by id (its name and sample for the "selected voice" card); null when not found. */
+/**
+ * One voice by id (its name and sample for the "selected voice" card); null when not found.
+ * /v1/voices/{id} only knows the account's own voices; a voice picked from the public Voice
+ * Library is found by searching the library for its id (the search matches ids exactly).
+ */
 export async function getElevenLabsVoice(apiKey: string, voiceId: string): Promise<ElevenLabsVoice | null> {
   if (!/^[A-Za-z0-9]{10,40}$/.test(voiceId)) return null;
   const key = `${apiKey.slice(-8)}|${voiceId}`;
   const cached = voiceDetailsCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
   const response = await fetchWithTimeout(`https://api.elevenlabs.io/v1/voices/${voiceId}`, { method: 'GET', headers: { 'xi-api-key': apiKey } });
-  const data = response.ok ? toVoice(await response.json()) : null;
+  let data = response.ok ? toVoice(await response.json()) : null;
+  if (!data) {
+    const shared = await fetchWithTimeout(`https://api.elevenlabs.io/v1/shared-voices?search=${encodeURIComponent(voiceId)}&page_size=5`, { method: 'GET', headers: { 'xi-api-key': apiKey } });
+    if (shared.ok) {
+      const body = await shared.json() as { voices?: any[] };
+      const match = (body.voices || []).find((v) => v?.voice_id === voiceId);
+      data = match ? toVoice(match) : null;
+    }
+  }
   if (voiceDetailsCache.size > 500) voiceDetailsCache.clear();
   voiceDetailsCache.set(key, { data, expiresAt: Date.now() + 60 * 60 * 1000 });
   return data;
