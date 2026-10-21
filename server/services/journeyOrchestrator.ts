@@ -2,7 +2,7 @@ import { journeyService, type JourneyState } from './journeyService';
 import { conversationMemory } from '../conversationMemory';
 import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 import { validatePhoneNumber } from '../../shared/validation/phone';
-import { autoFillKnownSteps, contactSlot, describeFilled, loadKnownAnswers } from './journeyKnownAnswers';
+import { autoFillKnownSteps, contactSlot, describeFilled, loadKnownAnswers, type KnownAnswer } from './journeyKnownAnswers';
 import { emailInMessage, extractPhoneCandidates, isDecline, isValidEmail, isValidLeadName, nameInMessage } from './leadCapture/detectors';
 import { phoneModeFor } from './leadCapture/fields';
 import { upsertConversationLead } from './leadCapture/leadStore';
@@ -672,7 +672,7 @@ export class JourneyOrchestrator {
     // contextual reply to what the visitor asked before the questions (not to their last answer).
     console.log('[Engine] Conversational journey complete - handing off to AI for a contextual response');
     const { previousAnswers } = await this.buildResponseContext(conversationId, journeyState, businessAccountId);
-    const known = await loadKnownAnswers(conversationId, businessAccountId).catch(() => new Map<string, string>());
+    const known = await loadKnownAnswers(conversationId, businessAccountId).catch(() => new Map<string, KnownAnswer>());
     const question = journeyState.triggerMessage?.trim() || '';
     const handoffNote = [
       '=== QUESTIONS JUST FINISHED ===',

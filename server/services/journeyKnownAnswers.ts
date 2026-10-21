@@ -8,7 +8,10 @@
  *
  * A step is matched by what it asks for (stepKeys): its configured field name / CRM key, a
  * recognised topic (phone, email, name, qualification, course, city, experience), and its exact
- * question wording.
+ * question wording. A topic is only a guess, so it is used carefully (knownAnswerFor): never from
+ * another question of the same journey (its questions are different on purpose: "completed your
+ * degree?" then "percentage in your degree?"), never for a step with its own field name, and a
+ * "pick one" question only takes an answer that is one of its options.
  */
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db';
@@ -23,7 +26,12 @@ type StepLike = {
   fieldName?: string | null;
   crmFieldKey?: string | null;
   toolTrigger?: string | null;
+  journeyId?: string | null;
+  multipleChoiceOptions?: string | string[] | null;
 };
+
+/** A remembered answer and the journey it was given in (null: the chat's lead). */
+export type KnownAnswer = { answer: string; journeyId: string | null };
 
 export type ContactSlot = 'phone' | 'email' | 'name';
 
@@ -77,7 +85,9 @@ export function stepKeys(step: StepLike): string[] {
   const contact = contactSlot(step);
   if (contact) keys.push(contact);
   else {
-    const topic = TOPICS.find(([, re]) => re.test(askText(step))) ?? TOPICS.find(([, re]) => re.test(text(step)));
+    // Only what the question actually asks ("...explore the programme. How would you like the
+    // details?" is not a course question).
+    const topic = TOPICS.find(([, re]) => re.test(askText(step)));
     if (topic) keys.push(`topic:${topic[0]}`);
   }
   const normalized = text(step).replace(new RegExp(String.raw`[^\p{L}\p{N} ]`, 'gu'), '').trim();
@@ -86,12 +96,12 @@ export function stepKeys(step: StepLike): string[] {
 }
 
 /** What this conversation already knows, keyed like stepKeys. */
-export async function loadKnownAnswers(conversationId: string, businessAccountId: string): Promise<Map<string, string>> {
-  const known = new Map<string, string>();
+export async function loadKnownAnswers(conversationId: string, businessAccountId: string): Promise<Map<string, KnownAnswer>> {
+  const known = new Map<string, KnownAnswer>();
   const lead = await getConversationLead(conversationId, businessAccountId).catch(() => undefined);
-  if (lead?.phone?.trim()) known.set('phone', lead.phone.trim());
-  if (lead?.email?.trim()) known.set('email', lead.email.trim());
-  if (lead?.name && isValidLeadName(lead.name)) known.set('name', lead.name.trim());
+  if (lead?.phone?.trim()) known.set('phone', { answer: lead.phone.trim(), journeyId: null });
+  if (lead?.email?.trim()) known.set('email', { answer: lead.email.trim(), journeyId: null });
+  if (lead?.name && isValidLeadName(lead.name)) known.set('name', { answer: lead.name.trim(), journeyId: null });
   const rows = await db
     .select({
       response: journeyResponses.response,
@@ -99,6 +109,7 @@ export async function loadKnownAnswers(conversationId: string, businessAccountId
       questionType: journeySteps.questionType,
       fieldName: journeySteps.fieldName,
       crmFieldKey: journeySteps.crmFieldKey,
+      journeyId: journeyResponses.journeyId,
     })
     .from(journeyResponses)
     .innerJoin(journeySteps, eq(journeyResponses.stepId, journeySteps.id))
@@ -107,15 +118,37 @@ export async function loadKnownAnswers(conversationId: string, businessAccountId
   for (const r of rows) {
     const answer = (r.response || '').trim();
     if (!answer || answer.startsWith('[SKIPPED')) continue;
-    for (const key of stepKeys(r)) if (!known.has(key)) known.set(key, answer);
+    for (const key of stepKeys(r)) if (!known.has(key)) known.set(key, { answer, journeyId: r.journeyId });
   }
   return known;
 }
 
-export function knownAnswerFor(step: StepLike, known: Map<string, string>): { key: string; answer: string } | null {
+function choiceOptions(step: StepLike): string[] | null {
+  const raw = step.multipleChoiceOptions;
+  if (!raw) return null;
+  try {
+    const list = Array.isArray(raw) ? raw : JSON.parse(raw);
+    return Array.isArray(list) && list.length ? list.map(o => String(o).trim().toLowerCase()).filter(Boolean) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function knownAnswerFor(step: StepLike, known: Map<string, KnownAnswer>): { key: string; answer: string } | null {
+  const options = choiceOptions(step);
+  const hasOwnKey = !!String(step.crmFieldKey || step.fieldName || '').trim();
   for (const key of stepKeys(step)) {
     const v = known.get(key);
-    if (v) return { key, answer: v };
+    if (!v) continue;
+    if (key.startsWith('topic:')) {
+      // A topic is a guess: not for a step that says exactly what it saves, and never from
+      // another question of this same journey.
+      if (hasOwnKey) continue;
+      if (step.journeyId && v.journeyId === step.journeyId) continue;
+    }
+    // A "pick one" question is only answered with one of its own options.
+    if (options && !options.includes(v.answer.trim().toLowerCase())) continue;
+    return { key, answer: v.answer };
   }
   return null;
 }
@@ -133,7 +166,7 @@ export interface AutoFillResult {
  */
 export async function autoFillKnownSteps(conversationId: string, businessAccountId: string): Promise<AutoFillResult> {
   const filled: AutoFillResult['filled'] = [];
-  let known: Map<string, string> | null = null;
+  let known: Map<string, KnownAnswer> | null = null;
   for (let i = 0; i < 25; i++) {
     const step = await journeyService.getCurrentStep(conversationId);
     if (!step) return { filled, completed: true };

@@ -91,6 +91,22 @@ async function main() {
     const q2 = known.stepKeys({ questionText: "What is your highest educational qualification? 🧑‍🎓 This helps us tailor your fee details." });
     expect(q1.includes("topic:qualification") && q2.includes("topic:qualification"), "two different qualification questions share the same topic", { q1, q2 });
     expect(known.stepKeys({ questionText: "x", crmFieldKey: "mx_Course" })[0] === "key:mx_course", "an explicit CRM key is the most specific key");
+
+    // One journey asking related questions: earlier answers must not skip the later ones.
+    const J = "journey-mba";
+    const answered = new Map<string, { answer: string; journeyId: string | null }>();
+    const remember = (step: any, answer: string) => { for (const k of known.stepKeys(step)) if (!answered.has(k)) answered.set(k, { answer, journeyId: step.journeyId }); };
+    remember({ journeyId: J, questionText: "Let's explore your options! Which MBA specialisation are you interested in?", questionType: "multiple_choice", multipleChoiceOptions: JSON.stringify(["Marketing", "Finance"]) }, "Marketing");
+    remember({ journeyId: J, questionText: "Let's quickly check your eligibility. Have you completed your bachelor's degree?", questionType: "multiple_choice", crmFieldKey: "graduation_status", multipleChoiceOptions: JSON.stringify(["Yes, I've graduated", "Not yet"]) }, "Yes, I've graduated");
+    const percentage = { journeyId: J, questionText: "Great! What percentage did you score in your bachelor's degree? This will help us guide you on the eligibility criteria.", questionType: "multiple_choice", multipleChoiceOptions: JSON.stringify(["Below 45%", "60% or above"]) };
+    const preference = { journeyId: J, questionText: "Based on what you've shared, I can help you explore the Symbiosis Online MBA programme. How would you prefer to get more details?", questionType: "multiple_choice", multipleChoiceOptions: JSON.stringify(["Call me", "WhatsApp"]) };
+    expect(known.knownAnswerFor(percentage, answered) === null, "\"percentage in your degree\" is not skipped by \"completed your degree?\" (same journey)", known.knownAnswerFor(percentage, answered));
+    expect(known.knownAnswerFor(preference, answered) === null, "\"how would you prefer the details\" is not skipped by the specialisation answer", known.knownAnswerFor(preference, answered));
+    expect(known.knownAnswerFor({ ...percentage, journeyId: "other-journey" }, answered) === null, "a pick-one question only takes one of its own options", known.knownAnswerFor({ ...percentage, journeyId: "other-journey" }, answered));
+    const otherQual = { journeyId: "other-journey", questionText: "What is your highest educational qualification?" };
+    const fromOther = new Map([["topic:qualification", { answer: "BBA", journeyId: "fees-journey" }]]);
+    expect(known.knownAnswerFor(otherQual, fromOther)?.answer === "BBA", "a qualification given in another journey is still reused");
+    expect(known.knownAnswerFor({ ...otherQual, crmFieldKey: "mx_percentage" }, fromOther) === null, "a step with its own field name is not matched by a topic guess");
   }
 
   // ═══ 2. names typed as answers ═════════════════════════════════════════════
