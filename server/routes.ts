@@ -13878,7 +13878,7 @@ Return ONLY the refined instruction, nothing else.`
         openingSoundEnabled: "true",
         openingSoundStyle: "chime",
         inactivityNudgeEnabled: "true",
-        inactivityNudgeDelay: "45",
+        inactivityNudgeDelay: "90",
         inactivityNudgeMessage: "Still there? Let me know if you need any help!",
         smartNudgeEnabled: "false",
       });

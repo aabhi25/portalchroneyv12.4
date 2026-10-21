@@ -435,7 +435,7 @@ export default function GroupTrainingEditor() {
   const [extraOpeningSoundEnabled, setExtraOpeningSoundEnabled] = useState(true);
   const [extraOpeningSoundStyle, setExtraOpeningSoundStyle] = useState("chime");
   const [extraInactivityNudgeEnabled, setExtraInactivityNudgeEnabled] = useState(true);
-  const [extraInactivityNudgeDelay, setExtraInactivityNudgeDelay] = useState("45");
+  const [extraInactivityNudgeDelay, setExtraInactivityNudgeDelay] = useState("90");
   const [extraInactivityNudgeMessage, setExtraInactivityNudgeMessage] = useState("Still there? Let me know if you need any help!");
   const [extraSmartNudgeEnabled, setExtraSmartNudgeEnabled] = useState(false);
   const [savingExtra, setSavingExtra] = useState(false);
@@ -991,7 +991,7 @@ export default function GroupTrainingEditor() {
       setExtraOpeningSoundEnabled(data.openingSoundEnabled !== "false");
       setExtraOpeningSoundStyle(data.openingSoundStyle || "chime");
       setExtraInactivityNudgeEnabled(data.inactivityNudgeEnabled !== "false");
-      setExtraInactivityNudgeDelay(data.inactivityNudgeDelay || "45");
+      setExtraInactivityNudgeDelay(data.inactivityNudgeDelay || "90");
       setExtraInactivityNudgeMessage(data.inactivityNudgeMessage || "Still there? Let me know if you need any help!");
       setExtraSmartNudgeEnabled(data.smartNudgeEnabled === "true");
       setExtraLoaded(true);

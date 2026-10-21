@@ -358,12 +358,12 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
   
   // Nudge settings
   const [inactivityNudgeEnabled, setInactivityNudgeEnabled] = useState(true);
-  const [inactivityNudgeDelay, setInactivityNudgeDelay] = useState("45");
+  const [inactivityNudgeDelay, setInactivityNudgeDelay] = useState("90");
   const [inactivityNudgeMessage, setInactivityNudgeMessage] = useState("Still there? Let me know if you need any help!");
   const [inactivityNudgeMessages, setInactivityNudgeMessages] = useState<{ message: string; delay: number }[]>([]);
   const [smartNudgeEnabled, setSmartNudgeEnabled] = useState(false);
   const [proactiveNudgeEnabled, setProactiveNudgeEnabled] = useState(true);
-  const [proactiveNudgeDelay, setProactiveNudgeDelay] = useState("15");
+  const [proactiveNudgeDelay, setProactiveNudgeDelay] = useState("30");
   const [proactiveNudgeMessage, setProactiveNudgeMessage] = useState("Need help finding something? I'm here to assist!");
   const [proactiveNudgeMessages, setProactiveNudgeMessages] = useState<{ message: string; delay: number }[]>([]);
   const [proactiveNudgeRepeat, setProactiveNudgeRepeat] = useState(false);
@@ -532,12 +532,12 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
       
       // Load nudge settings
       setInactivityNudgeEnabled(settings.inactivityNudgeEnabled !== 'false');
-      setInactivityNudgeDelay(settings.inactivityNudgeDelay || "45");
+      setInactivityNudgeDelay(settings.inactivityNudgeDelay || "90");
       setInactivityNudgeMessage(settings.inactivityNudgeMessage || "Still there? Let me know if you need any help!");
       setInactivityNudgeMessages(settings.inactivityNudgeMessages || []);
       setSmartNudgeEnabled(settings.smartNudgeEnabled === 'true');
       setProactiveNudgeEnabled(settings.proactiveNudgeEnabled !== 'false');
-      setProactiveNudgeDelay(settings.proactiveNudgeDelay || "15");
+      setProactiveNudgeDelay(settings.proactiveNudgeDelay || "30");
       setProactiveNudgeMessage(settings.proactiveNudgeMessage || "Need help finding something? I'm here to assist!");
       setProactiveNudgeMessages(settings.proactiveNudgeMessages || []);
       setProactiveNudgeRepeat(settings.proactiveNudgeRepeat === 'true');
@@ -737,12 +737,12 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
     
     const hasNudgeChanges = 
       (inactivityNudgeEnabled ? "true" : "false") !== (settings.inactivityNudgeEnabled || "true") ||
-      inactivityNudgeDelay !== (settings.inactivityNudgeDelay || "45") ||
+      inactivityNudgeDelay !== (settings.inactivityNudgeDelay || "90") ||
       inactivityNudgeMessage !== (settings.inactivityNudgeMessage || "Still there? Let me know if you need any help!") ||
       JSON.stringify(inactivityNudgeMessages) !== JSON.stringify(settings.inactivityNudgeMessages || []) ||
       (smartNudgeEnabled ? "true" : "false") !== (settings.smartNudgeEnabled || "false") ||
       (proactiveNudgeEnabled ? "true" : "false") !== (settings.proactiveNudgeEnabled || "true") ||
-      proactiveNudgeDelay !== (settings.proactiveNudgeDelay || "15") ||
+      proactiveNudgeDelay !== (settings.proactiveNudgeDelay || "30") ||
       proactiveNudgeMessage !== (settings.proactiveNudgeMessage || "Need help finding something? I'm here to assist!") ||
       JSON.stringify(proactiveNudgeMessages) !== JSON.stringify(settings.proactiveNudgeMessages || []) ||
       (proactiveNudgeRepeat ? "true" : "false") !== (settings.proactiveNudgeRepeat || "false") ||
@@ -2963,358 +2963,73 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
               {/* Nudges Tab - Redesigned */}
               <TabsContent value="nudges" className="mt-4">
                 <div className="space-y-6">
-                  {/* Overview Summary Banner */}
+                  {/* What visitors see: every pop-up, where and when it appears, with its own switch */}
                   <Card className="border border-gray-200 bg-white shadow-sm">
                     <CardContent className="py-4 px-6">
-                      <div className="flex flex-wrap items-center gap-4">
-                        <span className="text-sm font-semibold text-gray-700">Nudge Status:</span>
-                        <div className="flex flex-wrap gap-3">
-                          <button
-                            onClick={() => setInactivityNudgeEnabled(!inactivityNudgeEnabled)}
-                            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-                              inactivityNudgeEnabled 
-                                ? "bg-purple-100 text-purple-700 border border-purple-200" 
-                                : "bg-gray-100 text-gray-500 border border-gray-200"
-                            }`}
-                          >
-                            <Bell className="w-3.5 h-3.5" />
-                            Inactivity
-                            <span className={`w-2 h-2 rounded-full ${inactivityNudgeEnabled ? "bg-green-500" : "bg-gray-300"}`} />
-                          </button>
-                          <button
-                            onClick={() => setProactiveNudgeEnabled(!proactiveNudgeEnabled)}
-                            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-                              proactiveNudgeEnabled 
-                                ? "bg-purple-100 text-purple-700 border border-purple-200" 
-                                : "bg-gray-100 text-gray-500 border border-gray-200"
-                            }`}
-                          >
-                            <MessageCircle className="w-3.5 h-3.5" />
-                            Proactive
-                            <span className={`w-2 h-2 rounded-full ${proactiveNudgeEnabled ? "bg-green-500" : "bg-gray-300"}`} />
-                          </button>
-                          <button
-                            onClick={() => setCenterBannerEnabled(!centerBannerEnabled)}
-                            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-                              centerBannerEnabled 
-                                ? "bg-purple-100 text-purple-700 border border-purple-200" 
-                                : "bg-gray-100 text-gray-500 border border-gray-200"
-                            }`}
-                          >
-                            <Sparkles className="w-3.5 h-3.5" />
-                            Center Banner
-                            <span className={`w-2 h-2 rounded-full ${centerBannerEnabled ? "bg-green-500" : "bg-gray-300"}`} />
-                          </button>
-                          <button
-                            onClick={() => setReengagementBannerEnabled(!reengagementBannerEnabled)}
-                            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-                              reengagementBannerEnabled 
-                                ? "bg-purple-100 text-purple-700 border border-purple-200" 
-                                : "bg-gray-100 text-gray-500 border border-gray-200"
-                            }`}
-                          >
-                            <RefreshCw className="w-3.5 h-3.5" />
-                            Re-engagement
-                            <span className={`w-2 h-2 rounded-full ${reengagementBannerEnabled ? "bg-green-500" : "bg-gray-300"}`} />
-                          </button>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-800">What visitors see</p>
+                          <p className="text-xs text-gray-500">Each pop-up has its own switch and stops as soon as you turn it off.</p>
                         </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!inactivityNudgeEnabled && !proactiveNudgeEnabled && !centerBannerEnabled && !reengagementBannerEnabled}
+                          onClick={() => {
+                            setInactivityNudgeEnabled(false);
+                            setProactiveNudgeEnabled(false);
+                            setCenterBannerEnabled(false);
+                            setReengagementBannerEnabled(false);
+                          }}
+                        >
+                          Turn all off
+                        </Button>
+                      </div>
+                      <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        {[
+                          {
+                            group: "Pop-ups on your website",
+                            items: [
+                              { label: "Proactive bubble", icon: MessageCircle, on: proactiveNudgeEnabled, set: setProactiveNudgeEnabled,
+                                when: `Next to the chat button, ${proactiveNudgeDelay}s after a visitor starts browsing · once per visit` },
+                              { label: "Center banner", icon: Sparkles, on: centerBannerEnabled, set: setCenterBannerEnabled,
+                                when: `Middle of the page, ${centerBannerDelay}s after the page opens` },
+                              { label: "Re-engagement banner", icon: RefreshCw, on: reengagementBannerEnabled, set: setReengagementBannerEnabled,
+                                when: `${reengagementBannerDelay}s after the center banner is closed` },
+                            ],
+                          },
+                          {
+                            group: "Inside the chat",
+                            items: [
+                              { label: "Inactivity nudge", icon: Bell, on: inactivityNudgeEnabled, set: setInactivityNudgeEnabled,
+                                when: `A quiet "Still there?" ${inactivityNudgeDelay}s after a question goes unanswered · once per chat` },
+                            ],
+                          },
+                        ].map((block) => (
+                          <div key={block.group}>
+                            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">{block.group}</p>
+                            <div className="space-y-2">
+                              {block.items.map(({ label, icon: Icon, on, set, when }) => (
+                                <div key={label} className="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-2.5">
+                                  <Icon className={`h-4 w-4 shrink-0 ${on ? "text-purple-600" : "text-gray-400"}`} />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium text-gray-800">{label}</p>
+                                    <p className="text-xs text-gray-500">{on ? when : "Off"}</p>
+                                  </div>
+                                  <Switch checked={on} onCheckedChange={set} aria-label={label} />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </CardContent>
                   </Card>
 
-                  {/* Inactivity Nudge Section */}
-                  <Collapsible open={inactivitySectionOpen} onOpenChange={setInactivitySectionOpen}>
-                    <Card className="border border-gray-200 bg-white shadow-sm">
-                      {/* The switch sits beside the open/close button, not inside it (a button can't hold a button). */}
-                      <div className="flex items-center justify-between gap-3 px-6 py-4 hover:bg-gray-50/50 transition-colors">
-                        <CollapsibleTrigger className="flex flex-1 items-center gap-3 text-left">
-                            {inactivitySectionOpen ? (
-                              <ChevronDown className="w-5 h-5 text-gray-400" />
-                            ) : (
-                              <ChevronRight className="w-5 h-5 text-gray-400" />
-                            )}
-                            <Bell className="w-5 h-5 text-purple-600" />
-                            <div className="text-left">
-                              <h3 className="text-base font-semibold text-gray-900">Inactivity Nudge</h3>
-                              <p className="text-sm font-normal text-gray-500">Re-engage visitors who stop responding</p>
-                            </div>
-                        </CollapsibleTrigger>
-                          <div>
-                            <Switch
-                              checked={inactivityNudgeEnabled}
-                              onCheckedChange={setInactivityNudgeEnabled}
-                            />
-                          </div>
-                      </div>
-                      <CollapsibleContent>
-                        <div className="px-6 pb-6 border-t border-gray-100">
-                          {inactivityNudgeEnabled ? (
-                            <div className="pt-4 flex flex-col md:flex-row gap-4">
-                              {/* Left Column - Settings */}
-                              <div className="md:w-3/5 space-y-4">
-                                {/* Initial Delay Setting */}
-                                <div className="flex items-center justify-between py-3 px-4 bg-gray-50 rounded-lg border border-gray-200">
-                                  <div className="flex items-center gap-2">
-                                    <Clock className="w-4 h-4 text-purple-600" />
-                                    <span className="text-sm font-medium text-gray-700">Initial delay</span>
-                                  </div>
-                                  <div className="flex items-center gap-3">
-                                    <Slider
-                                      value={[parseInt(inactivityNudgeDelay) || 45]}
-                                      onValueChange={(value) => setInactivityNudgeDelay(value[0].toString())}
-                                      min={5}
-                                      max={120}
-                                      step={5}
-                                      className="w-32"
-                                    />
-                                    <span className="text-sm font-semibold text-purple-700 min-w-[50px] text-right">
-                                      {inactivityNudgeDelay}s
-                                    </span>
-                                  </div>
-                                </div>
-
-                                {/* Use AI Toggle */}
-                                <div className="flex items-center justify-between py-3 px-4 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">
-                                  <div className="flex items-center gap-2">
-                                    <Sparkles className="w-4 h-4 text-purple-600" />
-                                    <div>
-                                      <span className="text-sm font-medium text-gray-700">Use AI</span>
-                                      <p className="text-xs text-gray-500">AI generates contextual follow-ups based on conversation</p>
-                                    </div>
-                                  </div>
-                                  <Switch
-                                    checked={smartNudgeEnabled}
-                                    onCheckedChange={setSmartNudgeEnabled}
-                                  />
-                                </div>
-
-                                {/* Show AI indicator or manual message sequence */}
-                                {smartNudgeEnabled ? (
-                                  <div className="p-4 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">
-                                    <div className="flex items-center gap-3">
-                                      <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center">
-                                        <Sparkles className="w-5 h-5 text-purple-600" />
-                                      </div>
-                                      <div>
-                                        <p className="text-sm font-medium text-gray-800">AI-Powered Nudges Active</p>
-                                        <p className="text-xs text-gray-500">Chroney will analyze the conversation and generate contextual follow-up questions</p>
-                                      </div>
-                                    </div>
-                                    <div className="mt-3 text-xs text-gray-500 bg-white/60 rounded p-2">
-                                      <span className="font-medium">Fallback message:</span> {inactivityNudgeMessage}
-                                    </div>
-                                  </div>
-                                ) : (
-                                <div className="space-y-2">
-                                  <Label className="text-sm font-semibold text-gray-700">Message Sequence</Label>
-                                  <div className="space-y-0">
-                                    {/* First Message (always present) */}
-                                    <div 
-                                      className={`border border-gray-200 rounded-lg bg-white transition-all ${expandedInactivityMsg === 0 ? 'ring-2 ring-purple-200' : ''}`}
-                                    >
-                                      <div 
-                                        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
-                                        onClick={() => setExpandedInactivityMsg(expandedInactivityMsg === 0 ? null : 0)}
-                                      >
-                                        <span className="flex-shrink-0 w-6 h-6 rounded-full bg-purple-600 text-white text-xs flex items-center justify-center font-bold">1</span>
-                                        <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded font-medium">after {inactivityNudgeDelay}s</span>
-                                        <span className="flex-1 text-sm text-gray-600 truncate">
-                                          {inactivityNudgeMessage.substring(0, 40)}{inactivityNudgeMessage.length > 40 ? '...' : ''}
-                                        </span>
-                                        {expandedInactivityMsg === 0 ? (
-                                          <ChevronDown className="w-4 h-4 text-gray-400" />
-                                        ) : (
-                                          <ChevronRight className="w-4 h-4 text-gray-400" />
-                                        )}
-                                      </div>
-                                      {expandedInactivityMsg === 0 && (
-                                        <div className="px-4 pb-4 pt-2 border-t border-gray-100 space-y-3">
-                                          <Textarea
-                                            value={inactivityNudgeMessage}
-                                            onChange={(e) => setInactivityNudgeMessage(e.target.value)}
-                                            placeholder="Still there? Let me know if you need any help!"
-                                            maxLength={150}
-                                            className="min-h-[80px] resize-none"
-                                          />
-                                          <div className="flex items-center justify-between">
-                                            <span className="text-xs text-gray-500">{inactivityNudgeMessage.length}/150</span>
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    {/* Additional Messages */}
-                                    {inactivityNudgeMessages.map((msg, index) => (
-                                      <div 
-                                        key={index}
-                                        className={`border border-gray-200 rounded-lg bg-white mt-2 transition-all ${expandedInactivityMsg === index + 1 ? 'ring-2 ring-purple-200' : ''}`}
-                                      >
-                                        <div 
-                                          className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
-                                          onClick={() => setExpandedInactivityMsg(expandedInactivityMsg === index + 1 ? null : index + 1)}
-                                        >
-                                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-purple-600 text-white text-xs flex items-center justify-center font-bold">{index + 2}</span>
-                                          <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded font-medium">+{msg.delay}s</span>
-                                          <span className="flex-1 text-sm text-gray-600 truncate">
-                                            {msg.message.substring(0, 40)}{msg.message.length > 40 ? '...' : ''}
-                                          </span>
-                                          <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              setInactivityNudgeMessages(inactivityNudgeMessages.filter((_, i) => i !== index));
-                                            }}
-                                            className="h-7 w-7 p-0 text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                                          >
-                                            <Trash2 className="h-3.5 w-3.5" />
-                                          </Button>
-                                          {expandedInactivityMsg === index + 1 ? (
-                                            <ChevronDown className="w-4 h-4 text-gray-400" />
-                                          ) : (
-                                            <ChevronRight className="w-4 h-4 text-gray-400" />
-                                          )}
-                                        </div>
-                                        {expandedInactivityMsg === index + 1 && (
-                                          <div className="px-4 pb-4 pt-2 border-t border-gray-100 space-y-3">
-                                            <div className="flex items-center gap-3">
-                                              <Label className="text-xs text-gray-500">Delay after previous:</Label>
-                                              <Slider
-                                                value={[msg.delay]}
-                                                onValueChange={(value) => {
-                                                  const newMessages = [...inactivityNudgeMessages];
-                                                  newMessages[index] = { ...msg, delay: value[0] };
-                                                  setInactivityNudgeMessages(newMessages);
-                                                }}
-                                                min={5}
-                                                max={120}
-                                                step={5}
-                                                className="w-32"
-                                              />
-                                              <span className="text-sm font-semibold text-purple-700">{msg.delay}s</span>
-                                            </div>
-                                            <Textarea
-                                              value={msg.message}
-                                              onChange={(e) => {
-                                                const newMessages = [...inactivityNudgeMessages];
-                                                newMessages[index] = { ...msg, message: e.target.value };
-                                                setInactivityNudgeMessages(newMessages);
-                                              }}
-                                              placeholder="Follow-up nudge message..."
-                                              maxLength={150}
-                                              className="min-h-[80px] resize-none"
-                                            />
-                                            <span className="text-xs text-gray-500">{msg.message.length}/150</span>
-                                          </div>
-                                        )}
-                                      </div>
-                                    ))}
-
-                                    {/* Add Message Button */}
-                                    {inactivityNudgeMessages.length < 4 && (
-                                      <button
-                                        onClick={() => {
-                                          setInactivityNudgeMessages([
-                                            ...inactivityNudgeMessages,
-                                            { message: "", delay: 30 }
-                                          ]);
-                                          setExpandedInactivityMsg(inactivityNudgeMessages.length + 1);
-                                        }}
-                                        className="w-full mt-2 py-3 border-2 border-dashed border-gray-200 rounded-lg text-sm text-gray-500 hover:border-purple-300 hover:text-purple-600 hover:bg-purple-50/50 transition-all flex items-center justify-center gap-2"
-                                      >
-                                        <Plus className="w-4 h-4" />
-                                        Add follow-up message ({inactivityNudgeMessages.length + 1}/5)
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                                )}
-                              </div>
-
-                              {/* Right Column - Live Preview */}
-                              <div className="md:w-2/5">
-                                <div 
-                                  className="border border-gray-200 rounded-lg bg-gray-50 p-3 h-full"
-                                  aria-label="Inactivity nudge preview"
-                                >
-                                  <Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 block">Preview</Label>
-                                  <div className="flex justify-center">
-                                    <div className="w-[200px] h-[280px] bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden flex flex-col">
-                                      {/* Mini Chat Header */}
-                                      <div 
-                                        className="h-10 flex items-center px-3 gap-2"
-                                        style={{ background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})` }}
-                                      >
-                                        <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
-                                          <MessageCircle className="w-3.5 h-3.5 text-white" />
-                                        </div>
-                                        <span className="text-xs font-medium text-white truncate">Chat Assistant</span>
-                                      </div>
-                                      
-                                      {/* Chat Content Area */}
-                                      <div className="flex-1 p-3 flex flex-col justify-end bg-gray-50/50">
-                                        {/* Previous message placeholder */}
-                                        <div className="flex justify-end mb-2">
-                                          <div className="bg-gray-200 rounded-xl rounded-br-sm px-2.5 py-1.5 max-w-[140px]">
-                                            <p className="text-[10px] text-gray-600">...</p>
-                                          </div>
-                                        </div>
-                                        
-                                        {/* Delay indicator */}
-                                        <div className="flex items-center justify-center gap-1.5 my-2">
-                                          <Clock className="w-3 h-3 text-purple-500" />
-                                          <span className="text-[9px] text-purple-600 font-medium">After {inactivityNudgeDelay}s of inactivity</span>
-                                        </div>
-                                        
-                                        {/* Nudge message bubble */}
-                                        <div className="flex justify-start">
-                                          <div 
-                                            className="rounded-xl rounded-bl-sm px-2.5 py-1.5 max-w-[160px] shadow-sm"
-                                            style={{ background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})` }}
-                                          >
-                                            {smartNudgeEnabled ? (
-                                              <div className="flex items-start gap-1">
-                                                <Sparkles className="w-2.5 h-2.5 text-white/80 mt-0.5 flex-shrink-0" />
-                                                <p className="text-[10px] text-white leading-tight break-words italic">
-                                                  AI-generated contextual follow-up...
-                                                </p>
-                                              </div>
-                                            ) : (
-                                              <p className="text-[10px] text-white leading-tight break-words">
-                                                {inactivityNudgeMessage || "Still there? Let me know if you need any help!"}
-                                              </p>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </div>
-
-                                      {/* Mini Input Bar */}
-                                      <div className="h-8 border-t border-gray-200 bg-white flex items-center px-2 gap-1.5">
-                                        <div className="flex-1 h-5 bg-gray-100 rounded-full px-2 flex items-center">
-                                          <span className="text-[8px] text-gray-400">Type a message...</span>
-                                        </div>
-                                        <div 
-                                          className="w-5 h-5 rounded-full flex items-center justify-center"
-                                          style={{ background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})` }}
-                                        >
-                                          <Send className="w-2.5 h-2.5 text-white" />
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="pt-4 text-center py-8">
-                              <p className="text-sm text-gray-500">Enable this nudge to configure message sequence</p>
-                            </div>
-                          )}
-                        </div>
-                      </CollapsibleContent>
-                    </Card>
-                  </Collapsible>
-
+                  <div className="pt-2">
+                    <h3 className="text-sm font-semibold text-gray-800">Pop-ups on your website</h3>
+                    <p className="text-xs text-gray-500">Shown on your site before a visitor starts chatting</p>
+                  </div>
                   {/* Proactive Engagement Section */}
                   <Collapsible open={proactiveSectionOpen} onOpenChange={setProactiveSectionOpen}>
                     <Card className="border border-gray-200 bg-white shadow-sm">
@@ -4089,6 +3804,303 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                       </CollapsibleContent>
                     </Card>
                   </Collapsible>
+                  <div className="pt-2">
+                    <h3 className="text-sm font-semibold text-gray-800">Inside the chat</h3>
+                    <p className="text-xs text-gray-500">Shown in the chat window while a visitor is chatting</p>
+                  </div>
+                  {/* Inactivity Nudge Section */}
+                  <Collapsible open={inactivitySectionOpen} onOpenChange={setInactivitySectionOpen}>
+                    <Card className="border border-gray-200 bg-white shadow-sm">
+                      {/* The switch sits beside the open/close button, not inside it (a button can't hold a button). */}
+                      <div className="flex items-center justify-between gap-3 px-6 py-4 hover:bg-gray-50/50 transition-colors">
+                        <CollapsibleTrigger className="flex flex-1 items-center gap-3 text-left">
+                            {inactivitySectionOpen ? (
+                              <ChevronDown className="w-5 h-5 text-gray-400" />
+                            ) : (
+                              <ChevronRight className="w-5 h-5 text-gray-400" />
+                            )}
+                            <Bell className="w-5 h-5 text-purple-600" />
+                            <div className="text-left">
+                              <h3 className="text-base font-semibold text-gray-900">Inactivity Nudge</h3>
+                              <p className="text-sm font-normal text-gray-500">Re-engage visitors who stop responding</p>
+                            </div>
+                        </CollapsibleTrigger>
+                          <div>
+                            <Switch
+                              checked={inactivityNudgeEnabled}
+                              onCheckedChange={setInactivityNudgeEnabled}
+                            />
+                          </div>
+                      </div>
+                      <CollapsibleContent>
+                        <div className="px-6 pb-6 border-t border-gray-100">
+                          {inactivityNudgeEnabled ? (
+                            <div className="pt-4 flex flex-col md:flex-row gap-4">
+                              {/* Left Column - Settings */}
+                              <div className="md:w-3/5 space-y-4">
+                                {/* Initial Delay Setting */}
+                                <div className="flex items-center justify-between py-3 px-4 bg-gray-50 rounded-lg border border-gray-200">
+                                  <div className="flex items-center gap-2">
+                                    <Clock className="w-4 h-4 text-purple-600" />
+                                    <span className="text-sm font-medium text-gray-700">Initial delay</span>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <Slider
+                                      value={[parseInt(inactivityNudgeDelay) || 45]}
+                                      onValueChange={(value) => setInactivityNudgeDelay(value[0].toString())}
+                                      min={5}
+                                      max={120}
+                                      step={5}
+                                      className="w-32"
+                                    />
+                                    <span className="text-sm font-semibold text-purple-700 min-w-[50px] text-right">
+                                      {inactivityNudgeDelay}s
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Use AI Toggle */}
+                                <div className="flex items-center justify-between py-3 px-4 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">
+                                  <div className="flex items-center gap-2">
+                                    <Sparkles className="w-4 h-4 text-purple-600" />
+                                    <div>
+                                      <span className="text-sm font-medium text-gray-700">Use AI</span>
+                                      <p className="text-xs text-gray-500">AI generates contextual follow-ups based on conversation</p>
+                                    </div>
+                                  </div>
+                                  <Switch
+                                    checked={smartNudgeEnabled}
+                                    onCheckedChange={setSmartNudgeEnabled}
+                                  />
+                                </div>
+
+                                {/* Show AI indicator or manual message sequence */}
+                                {smartNudgeEnabled ? (
+                                  <div className="p-4 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">
+                                    <div className="flex items-center gap-3">
+                                      <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center">
+                                        <Sparkles className="w-5 h-5 text-purple-600" />
+                                      </div>
+                                      <div>
+                                        <p className="text-sm font-medium text-gray-800">AI-Powered Nudges Active</p>
+                                        <p className="text-xs text-gray-500">Chroney will analyze the conversation and generate contextual follow-up questions</p>
+                                      </div>
+                                    </div>
+                                    <div className="mt-3 text-xs text-gray-500 bg-white/60 rounded p-2">
+                                      <span className="font-medium">Fallback message:</span> {inactivityNudgeMessage}
+                                    </div>
+                                  </div>
+                                ) : (
+                                <div className="space-y-2">
+                                  <Label className="text-sm font-semibold text-gray-700">Message Sequence</Label>
+                                  <div className="space-y-0">
+                                    {/* First Message (always present) */}
+                                    <div 
+                                      className={`border border-gray-200 rounded-lg bg-white transition-all ${expandedInactivityMsg === 0 ? 'ring-2 ring-purple-200' : ''}`}
+                                    >
+                                      <div 
+                                        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
+                                        onClick={() => setExpandedInactivityMsg(expandedInactivityMsg === 0 ? null : 0)}
+                                      >
+                                        <span className="flex-shrink-0 w-6 h-6 rounded-full bg-purple-600 text-white text-xs flex items-center justify-center font-bold">1</span>
+                                        <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded font-medium">after {inactivityNudgeDelay}s</span>
+                                        <span className="flex-1 text-sm text-gray-600 truncate">
+                                          {inactivityNudgeMessage.substring(0, 40)}{inactivityNudgeMessage.length > 40 ? '...' : ''}
+                                        </span>
+                                        {expandedInactivityMsg === 0 ? (
+                                          <ChevronDown className="w-4 h-4 text-gray-400" />
+                                        ) : (
+                                          <ChevronRight className="w-4 h-4 text-gray-400" />
+                                        )}
+                                      </div>
+                                      {expandedInactivityMsg === 0 && (
+                                        <div className="px-4 pb-4 pt-2 border-t border-gray-100 space-y-3">
+                                          <Textarea
+                                            value={inactivityNudgeMessage}
+                                            onChange={(e) => setInactivityNudgeMessage(e.target.value)}
+                                            placeholder="Still there? Let me know if you need any help!"
+                                            maxLength={150}
+                                            className="min-h-[80px] resize-none"
+                                          />
+                                          <div className="flex items-center justify-between">
+                                            <span className="text-xs text-gray-500">{inactivityNudgeMessage.length}/150</span>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Additional Messages */}
+                                    {inactivityNudgeMessages.map((msg, index) => (
+                                      <div 
+                                        key={index}
+                                        className={`border border-gray-200 rounded-lg bg-white mt-2 transition-all ${expandedInactivityMsg === index + 1 ? 'ring-2 ring-purple-200' : ''}`}
+                                      >
+                                        <div 
+                                          className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
+                                          onClick={() => setExpandedInactivityMsg(expandedInactivityMsg === index + 1 ? null : index + 1)}
+                                        >
+                                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-purple-600 text-white text-xs flex items-center justify-center font-bold">{index + 2}</span>
+                                          <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded font-medium">+{msg.delay}s</span>
+                                          <span className="flex-1 text-sm text-gray-600 truncate">
+                                            {msg.message.substring(0, 40)}{msg.message.length > 40 ? '...' : ''}
+                                          </span>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setInactivityNudgeMessages(inactivityNudgeMessages.filter((_, i) => i !== index));
+                                            }}
+                                            className="h-7 w-7 p-0 text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </Button>
+                                          {expandedInactivityMsg === index + 1 ? (
+                                            <ChevronDown className="w-4 h-4 text-gray-400" />
+                                          ) : (
+                                            <ChevronRight className="w-4 h-4 text-gray-400" />
+                                          )}
+                                        </div>
+                                        {expandedInactivityMsg === index + 1 && (
+                                          <div className="px-4 pb-4 pt-2 border-t border-gray-100 space-y-3">
+                                            <div className="flex items-center gap-3">
+                                              <Label className="text-xs text-gray-500">Delay after previous:</Label>
+                                              <Slider
+                                                value={[msg.delay]}
+                                                onValueChange={(value) => {
+                                                  const newMessages = [...inactivityNudgeMessages];
+                                                  newMessages[index] = { ...msg, delay: value[0] };
+                                                  setInactivityNudgeMessages(newMessages);
+                                                }}
+                                                min={5}
+                                                max={120}
+                                                step={5}
+                                                className="w-32"
+                                              />
+                                              <span className="text-sm font-semibold text-purple-700">{msg.delay}s</span>
+                                            </div>
+                                            <Textarea
+                                              value={msg.message}
+                                              onChange={(e) => {
+                                                const newMessages = [...inactivityNudgeMessages];
+                                                newMessages[index] = { ...msg, message: e.target.value };
+                                                setInactivityNudgeMessages(newMessages);
+                                              }}
+                                              placeholder="Follow-up nudge message..."
+                                              maxLength={150}
+                                              className="min-h-[80px] resize-none"
+                                            />
+                                            <span className="text-xs text-gray-500">{msg.message.length}/150</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+
+                                    {/* Add Message Button */}
+                                    {inactivityNudgeMessages.length < 4 && (
+                                      <button
+                                        onClick={() => {
+                                          setInactivityNudgeMessages([
+                                            ...inactivityNudgeMessages,
+                                            { message: "", delay: 30 }
+                                          ]);
+                                          setExpandedInactivityMsg(inactivityNudgeMessages.length + 1);
+                                        }}
+                                        className="w-full mt-2 py-3 border-2 border-dashed border-gray-200 rounded-lg text-sm text-gray-500 hover:border-purple-300 hover:text-purple-600 hover:bg-purple-50/50 transition-all flex items-center justify-center gap-2"
+                                      >
+                                        <Plus className="w-4 h-4" />
+                                        Add follow-up message ({inactivityNudgeMessages.length + 1}/5)
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                                )}
+                              </div>
+
+                              {/* Right Column - Live Preview */}
+                              <div className="md:w-2/5">
+                                <div 
+                                  className="border border-gray-200 rounded-lg bg-gray-50 p-3 h-full"
+                                  aria-label="Inactivity nudge preview"
+                                >
+                                  <Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 block">Preview</Label>
+                                  <div className="flex justify-center">
+                                    <div className="w-[200px] h-[280px] bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden flex flex-col">
+                                      {/* Mini Chat Header */}
+                                      <div 
+                                        className="h-10 flex items-center px-3 gap-2"
+                                        style={{ background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})` }}
+                                      >
+                                        <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
+                                          <MessageCircle className="w-3.5 h-3.5 text-white" />
+                                        </div>
+                                        <span className="text-xs font-medium text-white truncate">Chat Assistant</span>
+                                      </div>
+                                      
+                                      {/* Chat Content Area */}
+                                      <div className="flex-1 p-3 flex flex-col justify-end bg-gray-50/50">
+                                        {/* Previous message placeholder */}
+                                        <div className="flex justify-end mb-2">
+                                          <div className="bg-gray-200 rounded-xl rounded-br-sm px-2.5 py-1.5 max-w-[140px]">
+                                            <p className="text-[10px] text-gray-600">...</p>
+                                          </div>
+                                        </div>
+                                        
+                                        {/* Delay indicator */}
+                                        <div className="flex items-center justify-center gap-1.5 my-2">
+                                          <Clock className="w-3 h-3 text-purple-500" />
+                                          <span className="text-[9px] text-purple-600 font-medium">After {inactivityNudgeDelay}s of inactivity</span>
+                                        </div>
+                                        
+                                        {/* Nudge message bubble */}
+                                        <div className="flex justify-start">
+                                          <div 
+                                            className="rounded-xl rounded-bl-sm px-2.5 py-1.5 max-w-[160px] shadow-sm"
+                                            style={{ background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})` }}
+                                          >
+                                            {smartNudgeEnabled ? (
+                                              <div className="flex items-start gap-1">
+                                                <Sparkles className="w-2.5 h-2.5 text-white/80 mt-0.5 flex-shrink-0" />
+                                                <p className="text-[10px] text-white leading-tight break-words italic">
+                                                  AI-generated contextual follow-up...
+                                                </p>
+                                              </div>
+                                            ) : (
+                                              <p className="text-[10px] text-white leading-tight break-words">
+                                                {inactivityNudgeMessage || "Still there? Let me know if you need any help!"}
+                                              </p>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Mini Input Bar */}
+                                      <div className="h-8 border-t border-gray-200 bg-white flex items-center px-2 gap-1.5">
+                                        <div className="flex-1 h-5 bg-gray-100 rounded-full px-2 flex items-center">
+                                          <span className="text-[8px] text-gray-400">Type a message...</span>
+                                        </div>
+                                        <div 
+                                          className="w-5 h-5 rounded-full flex items-center justify-center"
+                                          style={{ background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})` }}
+                                        >
+                                          <Send className="w-2.5 h-2.5 text-white" />
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="pt-4 text-center py-8">
+                              <p className="text-sm text-gray-500">Enable this nudge to configure message sequence</p>
+                            </div>
+                          )}
+                        </div>
+                      </CollapsibleContent>
+                    </Card>
+                  </Collapsible>
+
                 </div>
               </TabsContent>
 

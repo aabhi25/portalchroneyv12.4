@@ -736,12 +736,12 @@ export const widgetSettings = pgTable("widget_settings", {
   
   // Nudge settings
   inactivityNudgeEnabled: text("inactivity_nudge_enabled").notNull().default("true"), // 'true' | 'false' - Show nudge if visitor is inactive during conversation
-  inactivityNudgeDelay: numeric("inactivity_nudge_delay", { precision: 5, scale: 0 }).notNull().default("45"), // Delay in seconds before showing inactivity nudge
+  inactivityNudgeDelay: numeric("inactivity_nudge_delay", { precision: 5, scale: 0 }).notNull().default("90"), // Delay in seconds before showing inactivity nudge
   inactivityNudgeMessage: text("inactivity_nudge_message").notNull().default("Still there? Let me know if you need any help!"), // Message to show for inactivity nudge (legacy, single message)
   inactivityNudgeMessages: jsonb("inactivity_nudge_messages"), // Array of sequential messages: [{message: string, delay: number}] - delay is seconds to wait before showing this message
   smartNudgeEnabled: text("smart_nudge_enabled").notNull().default("false"), // 'true' | 'false' - Use AI to generate contextual follow-up questions instead of static messages
   proactiveNudgeEnabled: text("proactive_nudge_enabled").notNull().default("true"), // 'true' | 'false' - Show nudge to visitors who haven't started chatting
-  proactiveNudgeDelay: numeric("proactive_nudge_delay", { precision: 5, scale: 0 }).notNull().default("15"), // Delay in seconds before showing first proactive nudge
+  proactiveNudgeDelay: numeric("proactive_nudge_delay", { precision: 5, scale: 0 }).notNull().default("30"), // Delay in seconds before showing first proactive nudge
   proactiveNudgeMessage: text("proactive_nudge_message").notNull().default("Need help finding something? I'm here to assist!"), // Message to show for proactive nudge (legacy, single message)
   proactiveNudgeMessages: jsonb("proactive_nudge_messages"), // Array of sequential messages: [{message: string, delay: number}] - delay is seconds to wait before showing this message
   proactiveNudgeRepeat: text("proactive_nudge_repeat").notNull().default("false"), // 'true' | 'false' - Show popup on every page load vs once per session
@@ -1581,7 +1581,7 @@ export const accountGroupExtraSettings = pgTable("account_group_extra_settings",
   openingSoundStyle: text("opening_sound_style").notNull().default("chime"),
 
   inactivityNudgeEnabled: text("inactivity_nudge_enabled").notNull().default("true"),
-  inactivityNudgeDelay: numeric("inactivity_nudge_delay", { precision: 5, scale: 0 }).notNull().default("45"),
+  inactivityNudgeDelay: numeric("inactivity_nudge_delay", { precision: 5, scale: 0 }).notNull().default("90"),
   inactivityNudgeMessage: text("inactivity_nudge_message").notNull().default("Still there? Let me know if you need any help!"),
   smartNudgeEnabled: text("smart_nudge_enabled").notNull().default("false"),
 

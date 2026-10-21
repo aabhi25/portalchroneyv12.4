@@ -757,7 +757,7 @@
             showConversationStarters: settings.showConversationStarters !== false,
             showStartersOnPill: settings.showStartersOnPill === 'true',
             proactiveNudgeEnabled: settings.proactiveNudgeEnabled || 'true',
-            proactiveNudgeDelay: settings.proactiveNudgeDelay || '15',
+            proactiveNudgeDelay: settings.proactiveNudgeDelay || '30',
             proactiveNudgeMessage: settings.proactiveNudgeMessage || "Need help finding something? I'm here to assist!",
             proactiveNudgeMessages: settings.proactiveNudgeMessages || [],
             proactiveNudgeRepeat: settings.proactiveNudgeRepeat || 'false',
@@ -2932,6 +2932,20 @@
       // Create iframe for the chat widget
       const iframe = document.createElement('iframe');
       iframe.id = 'hichroney-widget-iframe';
+      // The chat's "Still there?" nudge runs only while the chat is on screen: tell it whenever
+      // the chat window is shown or hidden (every open/close path changes the iframe's style).
+      let lastReportedVisibility = null;
+      const reportChatVisibility = (force) => {
+        const visible = iframe.style.display !== 'none' && getComputedStyle(iframe).display !== 'none';
+        if (!force && visible === lastReportedVisibility) return;
+        lastReportedVisibility = visible;
+        try {
+          if (iframe.contentWindow) iframe.contentWindow.postMessage({ type: 'HICHRONEY_WIDGET_VISIBILITY', visible }, '*');
+        } catch (e) {}
+      };
+      if (typeof MutationObserver !== 'undefined') {
+        new MutationObserver(() => reportChatVisibility(false)).observe(iframe, { attributes: true, attributeFilter: ['style', 'class'] });
+      }
       if (isFullPanel) {
         iframe.classList.add('hichroney-full-panel');
         this.trackPanelTop(iframe);
@@ -2979,6 +2993,7 @@
           console.log('[Hi Chroney Widget] ✅ Iframe is ready to receive messages');
           isIframeReady = true;
           HiChroneyWidget._iframeReady = true;
+          reportChatVisibility(true);
           
           if (window.VisitorSession && window.VisitorSession.sessionId) {
             console.log('[Hi Chroney Widget] Sending visitor session ID to iframe:', window.VisitorSession.sessionId);
@@ -4454,11 +4469,38 @@
       let closedMessageIndices = new Set(); // Track which messages have been closed by user
       let nudgeSequenceStopped = false; // Stop entire sequence when user engages with chat
       const proactiveNudgeSessionKey = `hichroney-nudge-shown-${this.config.businessAccountId}`;
+      const proactiveNudgeDismissedKey = `hichroney-nudge-dismissed-${this.config.businessAccountId}`;
       const shouldRepeatNudge = this.config.proactiveNudgeRepeat === 'true';
+
+      // Closed with ✕: don't show the bubble again for a day.
+      const dismissedRecently = (() => {
+        try {
+          const at = parseInt(localStorage.getItem(proactiveNudgeDismissedKey) || '0', 10);
+          return at > 0 && Date.now() - at < 24 * 60 * 60 * 1000;
+        } catch (e) { return false; }
+      })();
+
+      // Only greet a visitor who is actually there: the bubble waits for a scroll, mouse move,
+      // tap or key press (a tab left open in the background never gets one).
+      let visitorActive = false;
+      let pendingUntilActive = [];
+      const onVisitorActive = () => {
+        if (visitorActive) return;
+        visitorActive = true;
+        ['scroll', 'mousemove', 'touchstart', 'keydown'].forEach((ev) => window.removeEventListener(ev, onVisitorActive, true));
+        const waiting = pendingUntilActive;
+        pendingUntilActive = [];
+        waiting.forEach((fn) => proactiveNudgeTimers.push(setTimeout(fn, 1500)));
+      };
+      ['scroll', 'mousemove', 'touchstart', 'keydown'].forEach((ev) => window.addEventListener(ev, onVisitorActive, { passive: true, capture: true }));
+      const whenVisitorActive = (fn) => {
+        if (visitorActive) fn();
+        else pendingUntilActive.push(fn);
+      };
       
       // Build full message sequence: first message + additional messages
       const allNudgeMessages = [
-        { message: this.config.proactiveNudgeMessage || "Need help finding something? I'm here to assist!", delay: parseInt(this.config.proactiveNudgeDelay) || 15 }
+        { message: this.config.proactiveNudgeMessage || "Need help finding something? I'm here to assist!", delay: parseInt(this.config.proactiveNudgeDelay) || 30 }
       ];
       if (this.config.proactiveNudgeMessages && Array.isArray(this.config.proactiveNudgeMessages)) {
         allNudgeMessages.push(...this.config.proactiveNudgeMessages);
@@ -4467,7 +4509,7 @@
       console.log('[Hi Chroney] Proactive nudge sequence:', allNudgeMessages.length, 'messages');
       
       // Check if nudge was already shown this session (skip if repeat is enabled)
-      if (!shouldRepeatNudge && sessionStorage.getItem(proactiveNudgeSessionKey) === 'true') {
+      if ((!shouldRepeatNudge && sessionStorage.getItem(proactiveNudgeSessionKey) === 'true') || dismissedRecently) {
         proactiveNudgeShown = true;
       }
       
@@ -4625,12 +4667,13 @@
         });
         closeBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          // Mark the current message as closed (won't show again until page refresh)
+          // Closed: no more bubbles this visit, and none for a day.
           closedMessageIndices.add(currentMessageIndex);
-          console.log('[Hi Chroney] Message', currentMessageIndex + 1, 'closed by user, won\'t show again');
+          nudgeSequenceStopped = true;
+          clearAllNudgeTimers();
+          try { localStorage.setItem(proactiveNudgeDismissedKey, String(Date.now())); } catch (err) {}
+          console.log('[Hi Chroney] Proactive bubble closed - not shown again for a day');
           
-          // DON'T clear timers - allow next messages in sequence to show
-          // Just hide the current popup
           if (proactiveNudgePopup) {
             proactiveNudgePopup.style.transform = 'translateY(20px)';
             proactiveNudgePopup.style.opacity = '0';
@@ -4720,85 +4763,37 @@
           proactiveNudgeTimers.push(setTimeout(hidePhoneGreeting, 7000));
           console.log('[Hi Chroney] Phone greeting shown');
         };
-        proactiveNudgeTimers.push(setTimeout(tryShowPhoneGreeting, (parseInt(firstGreeting.delay, 10) || 15) * 1000));
+        proactiveNudgeTimers.push(setTimeout(() => whenVisitorActive(tryShowPhoneGreeting), (parseInt(firstGreeting.delay, 10) || 30) * 1000));
       } else
       // Start sequential nudge messages with repeat support
       if (!phoneGreeting && this.config.proactiveNudgeEnabled === 'true' && !proactiveNudgeShown && !isOpen) {
         const chatColor = this.config.chatColor;
         const chatColorEnd = this.config.chatColorEnd;
         
-        // Function to schedule the nudge sequence (can be called again for repeating)
-        const scheduleNudgeSequence = (startFromIndex = 0, initialDelay = 0) => {
-          if (nudgeSequenceStopped || isOpen) return;
-          
-          // Check if all messages have been closed
-          const remainingMessages = allNudgeMessages.filter((_, idx) => !closedMessageIndices.has(idx));
-          if (remainingMessages.length === 0) {
-            console.log('[Hi Chroney] All messages closed by user, stopping sequence');
-            return;
-          }
-          
-          let cumulativeDelay = initialDelay;
-          let lastScheduledIndex = -1;
-          
-          allNudgeMessages.forEach((msg, index) => {
-            if (index < startFromIndex) return; // Skip already shown messages in this cycle
-            
-            cumulativeDelay += msg.delay;
-            lastScheduledIndex = index;
-            
-            const timer = setTimeout(() => {
-              if (nudgeSequenceStopped || isOpen) return;
-              
-              // Skip if this message was closed by user
-              if (closedMessageIndices.has(index)) {
-                console.log('[Hi Chroney] Skipping message', index + 1, '(closed by user)');
-                return;
-              }
-              
-              // Update current message index for close tracking
-              currentMessageIndex = index;
-              
-              if (index === 0 && !proactiveNudgeShown) {
-                // First message ever - mark as shown and create popup
-                proactiveNudgeShown = true;
-                sessionStorage.setItem(proactiveNudgeSessionKey, 'true');
-                showNudgePopup(msg.message, chatColor, chatColorEnd);
-                console.log('[Hi Chroney] Proactive nudge message 1 shown');
-              } else {
-                // Subsequent messages or repeat cycles
-                if (!proactiveNudgePopup) {
-                  showNudgePopup(msg.message, chatColor, chatColorEnd);
-                  console.log('[Hi Chroney] Proactive nudge message', index + 1, 'shown (created)');
-                } else {
-                  updateNudgeMessage(msg.message);
-                  console.log('[Hi Chroney] Proactive nudge message', index + 1, 'shown (updated)');
-                }
-              }
-              
-              // If this is the last message, schedule the sequence to repeat
-              if (index === allNudgeMessages.length - 1) {
-                // Get delay of first non-closed message for restart
-                const firstAvailableMsg = allNudgeMessages.find((_, idx) => !closedMessageIndices.has(idx));
-                if (firstAvailableMsg) {
-                  const restartDelay = firstAvailableMsg.delay * 1000;
-                  const restartTimer = setTimeout(() => {
-                    if (!nudgeSequenceStopped && !isOpen) {
-                      console.log('[Hi Chroney] Restarting nudge sequence');
-                      scheduleNudgeSequence(0, 0);
-                    }
-                  }, restartDelay);
-                  proactiveNudgeTimers.push(restartTimer);
-                }
-              }
-            }, cumulativeDelay * 1000);
-            proactiveNudgeTimers.push(timer);
-          });
+        // The messages one after another (each after its own delay, once the visitor is active),
+        // once per visit. Closing the bubble stops the rest; opening the chat stops everything.
+        const showFromIndex = (index) => {
+          if (index >= allNudgeMessages.length) return;
+          const msg = allNudgeMessages[index];
+          const delaySec = parseInt(msg.delay, 10) || 30;
+          proactiveNudgeTimers.push(setTimeout(() => whenVisitorActive(() => {
+            if (nudgeSequenceStopped || isOpen || closedMessageIndices.has(index)) return;
+            currentMessageIndex = index;
+            if (!proactiveNudgeShown) {
+              proactiveNudgeShown = true;
+              sessionStorage.setItem(proactiveNudgeSessionKey, 'true');
+            }
+            if (!proactiveNudgePopup) {
+              showNudgePopup(msg.message, chatColor, chatColorEnd);
+            } else {
+              updateNudgeMessage(msg.message);
+            }
+            console.log('[Hi Chroney] Proactive nudge message', index + 1, 'shown');
+            showFromIndex(index + 1);
+          }), delaySec * 1000));
         };
-        
-        // Start the initial sequence
-        scheduleNudgeSequence(0, 0);
-        console.log('[Hi Chroney] Scheduled', allNudgeMessages.length, 'nudge messages with repeat');
+        showFromIndex(0);
+        console.log('[Hi Chroney] Scheduled', allNudgeMessages.length, 'proactive nudge message(s)');
       }
       
       // Hide proactive nudge when chat opens - stops entire sequence

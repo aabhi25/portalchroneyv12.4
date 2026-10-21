@@ -169,6 +169,8 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  /** "Still there?" nudge: shown as a soft line, never saved or sent to the AI. */
+  isNudge?: boolean;
   products?: any[];
   productPagination?: ProductPagination;
   productSearchQuery?: string;
@@ -905,6 +907,24 @@ export default function EmbedChat() {
   const inactivityNudgeSentRef = useRef<boolean>(false);
   const inactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
   const inactivityNudgeIndexRef = useRef<number>(0); // Track which message in sequence we're on
+  // The nudge only runs while the chat is on screen: the website script reports when the chat
+  // window is shown or hidden (true when there is no website script, e.g. a direct chat link),
+  // and the browser tab must be visible.
+  const [chatOnScreen, setChatOnScreen] = useState(true);
+  const [tabVisible, setTabVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden');
+  const messageDraftRef = useRef('');
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'HICHRONEY_WIDGET_VISIBILITY') setChatOnScreen(!!event.data.visible);
+    };
+    const onVisibility = () => setTabVisible(document.visibilityState !== 'hidden');
+    window.addEventListener('message', onMessage);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('message', onMessage);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   // Booking cards: what each card (by message id) booked. Only the newest card in the chat is open.
   const [bookedAppointments, setBookedAppointments] = useState<Record<string, BookedAppointment>>({});
@@ -3767,7 +3787,10 @@ export default function EmbedChat() {
     }
   }, [businessAccountId, settings, isLoadingSettings, isLoading, pendingMessage, introLoaded, activeFormStep]);
 
-  // Inactivity nudge effect - sends sequential reminders if user stops responding
+  // Inactivity nudge ("Still there?"): one quiet nudge (plus any follow-ups the business set) per
+  // conversation, only while the chat is on screen, never while the visitor is typing, filling in a
+  // form or the booking card, and only after a message that asked them something.
+  useEffect(() => { messageDraftRef.current = message; }, [message]);
   useEffect(() => {
     if (!settings?.inactivityNudgeEnabled || settings.inactivityNudgeEnabled === 'false') return;
     if (cleanModeEnabled) return; // Skip nudges in clean mode
@@ -3776,19 +3799,38 @@ export default function EmbedChat() {
     // a hard gate — pinging "still there?" mid-verification is jarring and
     // collides with the lockout/resend countdowns.
     if (otpState.awaiting_otp || otpState.locked) return;
+    if (!chatOnScreen || !tabVisible) return; // closed chat / background tab: wait until they're back
+    if (activeFormStep) return; // a form question is waiting for an answer
     if (!lastAIMessageTimeRef.current) return;
     if (messages.length < 1) return; // Need at least the intro message
+    if (message.trim()) return; // they're writing a reply
     
     const lastMessage = messages[messages.length - 1];
     if (lastMessage?.role !== 'assistant') return; // Only trigger after AI responds
     if (isLoading) return; // Don't trigger while AI is thinking
     // The visitor is picking a time / filling in the booking card: don't interrupt.
     if (lastMessage.id === latestBookingCardId && !bookedAppointments[lastMessage.id]) return;
+
+    // Once per conversation: after the visitor answered a nudge (or a reload of a chat that
+    // already had one), no more nudges in this chat.
+    const convKey = conversationIdRef.current ? `chroney-nudged-${conversationIdRef.current}` : '';
+    const firstNudgeIndex = messages.findIndex(m => m.isNudge);
+    if (firstNudgeIndex >= 0 && messages.slice(firstNudgeIndex).some(m => m.role === 'user')) return;
+    if (firstNudgeIndex < 0 && convKey) {
+      try { if (sessionStorage.getItem(convKey)) return; } catch {}
+    }
+
+    // Only after a message that invited a reply (a question or options), not after a closing
+    // line such as "Your appointment is confirmed".
+    const lastReal = [...messages].reverse().find(m => m.role === 'assistant' && !m.isNudge);
+    const lastText = (lastReal?.content || '').replace(/[*_`~>#\s]+$/g, '').replace(/(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF\uFE0F\s])+$/, '');
+    const invitesReply = !!lastReal && (/[?？؟]$/.test(lastText) || (lastReal.quickReplies?.length ?? 0) > 0);
+    if (!invitesReply) return;
     
     // Build full message sequence: first message + additional messages
     // When Smart Nudge is enabled, we support 2 nudges: AI-generated first, then "Are you there?"
     const isSmartNudgeEnabled = settings.smartNudgeEnabled === 'true';
-    const baseDelay = parseInt(settings.inactivityNudgeDelay || "45");
+    const baseDelay = parseInt(settings.inactivityNudgeDelay || "90");
     
     const allNudgeMessages: { message: string; delay: number }[] = [
       { 
@@ -3808,13 +3850,15 @@ export default function EmbedChat() {
       allNudgeMessages.push(...settings.inactivityNudgeMessages);
     }
     
-    const currentIndex = inactivityNudgeIndexRef.current;
+    // Where we are in the sequence = nudges already shown in this quiet spell.
+    const currentIndex = messages.filter(m => m.isNudge).length;
+    inactivityNudgeIndexRef.current = currentIndex;
     
     // Check if we've sent all messages (stop the sequence)
     if (currentIndex >= allNudgeMessages.length) return;
     
     const currentNudge = allNudgeMessages[currentIndex];
-    const nudgeDelaySeconds = currentNudge.delay;
+    const nudgeDelaySeconds = Math.max(10, Number(currentNudge.delay) || baseDelay);
     const nudgeMessage = currentNudge.message;
     
     // Clear any existing timer
@@ -3824,6 +3868,8 @@ export default function EmbedChat() {
     
     // Set new timer for current message in sequence
     inactivityTimerRef.current = setTimeout(async () => {
+      // Still quiet? (typing started, or the chat/tab went away, since the timer was set)
+      if (messageDraftRef.current.trim() || document.visibilityState === 'hidden') return;
       // Check if user hasn't sent a message since last AI response
       const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
       const lastAIMessage = [...messages].reverse().find(m => m.role === 'assistant');
@@ -3841,7 +3887,7 @@ export default function EmbedChat() {
             
             // Prepare conversation history for smart nudge
             const conversationHistory = messages
-              .filter(m => m.role === 'user' || m.role === 'assistant')
+              .filter(m => (m.role === 'user' || m.role === 'assistant') && !m.isNudge)
               .slice(-6)
               .map(m => ({ role: m.role, content: m.content }));
 
@@ -3943,19 +3989,13 @@ export default function EmbedChat() {
           id: `nudge-${Date.now()}`,
           role: 'assistant',
           content: finalNudgeMessage,
-          timestamp: new Date()
+          timestamp: new Date(),
+          isNudge: true,
         }]);
-        
-        // Save nudge to conversation history in database (if we have a conversationId)
+        // Not saved to the conversation (inbox / AI memory); remembered for this chat so a reload
+        // doesn't nudge again.
         if (conversationIdRef.current) {
-          fetch('/api/chat/widget/save-nudge', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              conversationId: conversationIdRef.current,
-              message: finalNudgeMessage
-            })
-          }).catch(err => console.error('[Inactivity Nudge] Failed to save nudge:', err));
+          try { sessionStorage.setItem(`chroney-nudged-${conversationIdRef.current}`, '1'); } catch {}
         }
         
         // Update the last AI message time to trigger the next nudge in sequence
@@ -3969,7 +4009,7 @@ export default function EmbedChat() {
         clearTimeout(inactivityTimerRef.current);
       }
     };
-  }, [messages, settings, isLoading, selectedLanguage, businessAccountId, isFormJourneyComplete, otpState.awaiting_otp, otpState.locked, latestBookingCardId, bookedAppointments]);
+  }, [messages, settings, isLoading, selectedLanguage, businessAccountId, isFormJourneyComplete, otpState.awaiting_otp, otpState.locked, latestBookingCardId, bookedAppointments, chatOnScreen, tabVisible, activeFormStep, message === '']);
   
   // Clear inactivity timer when form journey completes
   useEffect(() => {
@@ -6024,6 +6064,14 @@ export default function EmbedChat() {
         }}
       >
         {messages.map((msg, msgIndex) => {
+          if (msg.isNudge) {
+            // "Still there?" as a quiet line, not a full AI message
+            return (
+              <div key={msg.id} data-message-id={msg.id} className="flex justify-center px-6 animate-in fade-in duration-500">
+                <p className="max-w-[85%] text-center text-[12.5px] leading-snug text-gray-400">{msg.content}</p>
+              </div>
+            );
+          }
           const lastUserMsg = messages.slice(0, msgIndex).filter(m => m.role === 'user').at(-1)?.content || '';
           return (
           <div 
