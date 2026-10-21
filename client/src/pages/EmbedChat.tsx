@@ -148,6 +148,7 @@ interface ProductPagination {
 interface AppointmentSlotsData {
   slots: Record<string, string[]>;
   durationMinutes: number;
+  requestedDate?: string; // the day the visitor asked for ("book for Saturday")
 }
 
 interface FormStepData {
@@ -6381,6 +6382,7 @@ export default function EmbedChat() {
                       <AppointmentCalendar
                         slots={msg.appointmentSlots.slots}
                         durationMinutes={msg.appointmentSlots.durationMinutes}
+                        requestedDate={msg.appointmentSlots.requestedDate}
                         chatColor={chatColor}
                         chatColorEnd={chatColorEnd}
                         businessAccountId={businessAccountId || ''}

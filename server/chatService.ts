@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { llamaService, LlamaService, contactInfoSaidInChat, type StreamPromptOptions, type StreamTurnOptions } from './llamaService';
 import { aiTools, selectRelevantTools, classifyOrderLookupIntent, classifyReturnExchangeIntent } from './aiTools';
 import { ToolExecutionService } from './services/toolExecutionService';
+import { requestedBookingDay } from './services/bookingDay';
 import { conversationMemory } from './conversationMemory';
 import { storage } from './storage';
 import { businessContextCache, BusinessContextCache } from './services/businessContextCache';
@@ -4572,7 +4573,9 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         let productPagination: any = null;
         let productSearchQuery: string | null = null;
         let faqData: any = null;
-        let appointmentSlotsData: { slots: Record<string, string[]>; durationMinutes: number } | null = null;
+        let appointmentSlotsData: { slots: Record<string, string[]>; durationMinutes: number; requestedDate?: string } | null = null;
+        // The day the visitor asked for ("book for Saturday"): the booking card opens on it.
+        let requestedSlotDay: string | null = null;
         let captureLeadHadRealData = false;
         let jobsData: any[] | null = null;
         let jobsApplicantId: string | null = null;
@@ -4588,6 +4591,27 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
               history,
               context.studentChapter,
             );
+          }
+
+          if (toolName === 'list_available_slots') {
+            requestedSlotDay = requestedBookingDay(userMessage);
+            // Make sure the slots fetched include the asked-for day (the model often starts from today).
+            if (requestedSlotDay) {
+              const start = typeof toolParams.start_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(toolParams.start_date)
+                ? toolParams.start_date
+                : requestedBookingDay('today')!;
+              const end = typeof toolParams.end_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(toolParams.end_date)
+                ? toolParams.end_date
+                : new Date(Date.parse(`${start}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10);
+              if (requestedSlotDay < start || requestedSlotDay > end) {
+                toolParams.start_date = requestedSlotDay;
+                delete toolParams.end_date; // a week from the asked-for day
+              } else {
+                // Also a few days after it, so a full day still leaves other times to pick.
+                const weekAfter = new Date(Date.parse(`${requestedSlotDay}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10);
+                if (end < weekAfter) toolParams.end_date = weekAfter;
+              }
+            }
           }
 
           if (toolName === 'parse_resume_and_match') {
@@ -4723,7 +4747,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
             if (data.slots && Object.keys(data.slots).length > 0) {
               appointmentSlotsData = {
                 slots: data.slots,
-                durationMinutes: data.duration_minutes || 30
+                durationMinutes: data.duration_minutes || 30,
+                ...(requestedSlotDay ? { requestedDate: requestedSlotDay } : {}),
               };
               console.log('[Appointments] Captured slots for calendar UI:', Object.keys(data.slots).length, 'days');
             }
@@ -4801,6 +4826,9 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
             const enhancedResult = {
               ...result,
               _ui_note: `IMPORTANT: A booking card will automatically display these time slots to the user. In that card the user picks a time, enters their name and mobile number, and confirms - the card books the appointment itself. DO NOT list the individual time slots in your text response, and do NOT ask for their name or phone number now. Just give one brief friendly line like "Here are the available times - pick one that suits you and confirm below." CRITICAL: Do NOT include any bracketed placeholder text like "[Calendar will show]" or "[Visual Calendar UI will display the options]" - the card renders automatically, so your response should be clean natural text only.`
+                + (requestedSlotDay && !appointmentSlotsData.slots[requestedSlotDay]
+                  ? ` NOTE: the user asked for ${requestedSlotDay}, which has NO open times - say so briefly (e.g. "We have no openings that day - here are the next available times."); the card opens on the next open day.`
+                  : ''),
             };
             toolResultContent = JSON.stringify(enhancedResult);
             console.log('[Chat Stream] Enhanced list_available_slots result with calendar UI note');

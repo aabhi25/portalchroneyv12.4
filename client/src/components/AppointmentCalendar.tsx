@@ -12,6 +12,8 @@ export interface BookedAppointment {
 interface AppointmentCalendarProps {
   slots: Record<string, string[]>;
   durationMinutes?: number;
+  /** The day the visitor asked for (YYYY-MM-DD): the card opens on it, or the next day with times. */
+  requestedDate?: string;
   chatColor: string;
   chatColorEnd?: string;
   businessAccountId: string;
@@ -88,6 +90,7 @@ function revealInChat(el: HTMLElement | null, smooth = true) {
 export function AppointmentCalendar({
   slots,
   durationMinutes = 30,
+  requestedDate,
   chatColor,
   chatColorEnd,
   businessAccountId,
@@ -112,11 +115,21 @@ export function AppointmentCalendar({
   }, [slots, takenSlots]);
   const days = useMemo(() => Object.keys(availableSlots), [availableSlots]);
 
+  // Open on the asked-for day, or the next day that has times (with a short note saying so).
+  const [initialPick] = useState(() => {
+    if (!requestedDate || !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) return { date: days[0] ?? null, notice: null as string | null };
+    if (availableSlots[requestedDate]) return { date: requestedDate, notice: null };
+    const next = days.find(d => d > requestedDate);
+    return {
+      date: next ?? days[0] ?? null,
+      notice: next ? `No open times on ${formatLongDate(requestedDate)} — showing the next open day.` : null,
+    };
+  });
   const [step, setStep] = useState<Step>('pick');
-  const [selectedDate, setSelectedDate] = useState<string | null>(() => days[0] ?? null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(initialPick.date);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [showAllTimes, setShowAllTimes] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(initialPick.notice);
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -173,6 +186,17 @@ export function AppointmentCalendar({
     if (!el) return;
     setStripEdges({ start: el.scrollLeft <= 2, end: el.scrollLeft + el.clientWidth >= el.scrollWidth - 2 });
   };
+  // Show the selected day in the strip when the card opens (it may be further along than the first days).
+  useEffect(() => {
+    const strip = stripRef.current;
+    const chip = strip?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (strip && chip && chip.offsetLeft + chip.offsetWidth > strip.clientWidth) {
+      strip.scrollLeft = Math.max(0, chip.offsetLeft - chip.offsetWidth - 24); // keep the day before it in view
+      updateStripEdges();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     updateStripEdges();
     const el = stripRef.current;

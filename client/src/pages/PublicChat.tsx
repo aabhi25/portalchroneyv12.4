@@ -79,6 +79,7 @@ interface ProductPagination {
 interface AppointmentSlotsData {
   slots: Record<string, string[]>;
   durationMinutes: number;
+  requestedDate?: string;
 }
 
 interface FormStepData {
@@ -1541,6 +1542,7 @@ export default function PublicChat() {
                           <AppointmentCalendar
                             slots={msg.appointmentSlots.slots}
                             durationMinutes={msg.appointmentSlots.durationMinutes}
+                            requestedDate={msg.appointmentSlots.requestedDate}
                             chatColor={chatColor}
                             businessAccountId={businessAccountId || ''}
                           />
