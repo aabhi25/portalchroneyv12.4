@@ -1260,6 +1260,7 @@ export const conversationJourneys = pgTable("conversation_journeys", {
   triggerMode: text("trigger_mode").notNull().default("manual"), // 'manual' | 'auto' | 'conditional'
   triggerKeywords: text("trigger_keywords"), // JSON array of keywords that trigger this journey (e.g., ["book appointment", "schedule meeting"])
   startFromScratch: text("start_from_scratch").notNull().default("false"), // 'true' | 'false' - If true, journey starts immediately (first step is the greeting), no keywords needed
+  endMode: text("end_mode").notNull().default("chat"), // after the last question: 'chat' (the visitor can carry on with the AI) | 'end' (the chat ends there, no AI)
   
   // Journey-specific AI training
   conversationalGuidelines: text("conversational_guidelines"), // Optional instructions for AI tone, acknowledgments, and conversational style specific to this journey

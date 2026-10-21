@@ -1,0 +1,1 @@
+ALTER TABLE "conversation_journeys" ADD COLUMN "end_mode" text DEFAULT 'chat' NOT NULL;

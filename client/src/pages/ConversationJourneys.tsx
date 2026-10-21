@@ -82,6 +82,7 @@ interface Journey {
   triggerMode: string;
   triggerKeywords?: string;
   startFromScratch?: string;
+  endMode?: string; // 'chat' | 'end' - after the last question: carry on with the AI, or end the chat
   conversationalGuidelines?: string;
   createdAt: string;
   updatedAt: string;
@@ -1367,6 +1368,29 @@ export default function ConversationJourneys() {
                                 onClick={() => !active && updateJourneyMutation.mutate({ id: selectedJourney.id, data: { journeyType: type } })}
                                 className={`rounded-xl border p-3 text-left transition-colors ${active ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:bg-gray-50'}`}
                                 data-testid={`asks-${type}`}
+                              >
+                                <span className={`block text-sm font-medium ${active ? 'text-purple-900' : 'text-gray-800'}`}>{title}</span>
+                                <span className="mt-0.5 block text-xs text-muted-foreground">{hint}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">When the journey ends</p>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          {([
+                            ['chat', 'The visitor can keep chatting', 'After the closing message, a "Chat Now" button lets them ask the AI anything.'],
+                            ['end', 'End the chat here (no AI)', 'No "Chat Now" and no typing after the closing message. Only "Start a new chat".'],
+                          ] as const).map(([mode, title, hint]) => {
+                            const active = (selectedJourney.endMode === 'end' ? 'end' : 'chat') === mode;
+                            return (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={() => !active && updateJourneyMutation.mutate({ id: selectedJourney.id, data: { endMode: mode } })}
+                                className={`rounded-xl border p-3 text-left transition-colors ${active ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:bg-gray-50'}`}
+                                data-testid={`ends-${mode}`}
                               >
                                 <span className={`block text-sm font-medium ${active ? 'text-purple-900' : 'text-gray-800'}`}>{title}</span>
                                 <span className="mt-0.5 block text-xs text-muted-foreground">{hint}</span>

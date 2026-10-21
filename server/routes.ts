@@ -17285,7 +17285,8 @@ Important:
       const conv = await storage.getConversation(conversationId, businessAccountId).catch(() => undefined);
       if (!conv || conv.businessAccountId !== businessAccountId) return res.json({ formStep: null });
       const inProgress = await journeyService.getActiveFormStep(conversationId);
-      if (!inProgress) return res.json({ formStep: null });
+      // A chat a journey ended ("End the chat here"): the widget keeps it closed after a reload.
+      if (!inProgress) return res.json({ formStep: null, chatEnded: !!(await journeyService.chatEndedByJourney(conversationId)) });
       const journey = await storage.getJourney(inProgress.journeyId, businessAccountId);
       if (!journey || journey.journeyType !== 'form') return res.json({ formStep: null });
       res.json({ journeyId: journey.id, formStep: { ...inProgress.step, journeyId: journey.id } });
@@ -17738,8 +17739,11 @@ Important:
         }
       }
 
+      // A journey set to "End the chat here": the widget closes the chat (no "Chat Now", no typing).
+      const chatEnded = result.completed ? !!(await journeyService.chatEndedByJourney(activeConversationId)) : false;
+
       // Include the conversationId in response so frontend can track it
-      res.json({ ...result, conversationId: activeConversationId, ...(captcha ? { captcha } : {}) });
+      res.json({ ...result, conversationId: activeConversationId, ...(captcha ? { captcha } : {}), ...(chatEnded ? { chatEnded: true } : {}) });
     } catch (error: any) {
       console.error('[Form Journey] Error submitting step:', error);
       res.status(500).json({ error: error.message });

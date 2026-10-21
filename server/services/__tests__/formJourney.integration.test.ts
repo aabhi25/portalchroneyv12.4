@@ -170,6 +170,23 @@ async function main() {
     expect(b.json.resync === true && b.json.nextStep?.stepId === A.steps[1], "a widget on an old question is moved to the current one, nothing undone", b.json);
     b = await back({ conversationId: bc, businessAccountId: `not-${biz}`, journeyId: A.id, stepId: A.steps[1] });
     expect(b.status === 404, "another account can't touch this chat", b.status);
+
+    // ── "End the chat here (no AI)" ──
+    expect(s.json.chatEnded === undefined, "a normal journey doesn't end the chat");
+    const E = await mkJourney("Rule based", false, [{ text: "Pick a course", type: "radio", options: ["MBA", "BBA"] }]);
+    await db.update(schema.conversationJourneys).set({ endMode: "end" } as any).where(eq(schema.conversationJourneys.id, E.id));
+    await db.insert(schema.journeySteps).values({ journeyId: E.id, stepOrder: "1", questionText: "Thanks, we'll call you.", questionType: "text", isRequired: "false", toolTrigger: "journey_complete" } as any);
+    journeyService.invalidateJourneyCache(biz);
+    s = await submit({ conversationId: null, journeyId: E.id, stepId: E.steps[0], answer: "MBA", visitorToken: `vt-${crypto.randomUUID()}` });
+    const ec = s.json.conversationId as string;
+    expect(s.json.completed === true && s.json.chatEnded === true && s.json.nextStep?.stepType === "journey_complete", "the journey's last answer ends the chat (closing message shown)", s.json);
+    r = await get(`/api/journey/current-step?businessAccountId=${biz}&conversationId=${ec}`);
+    expect(r.json.formStep === null && r.json.chatEnded === true, "after a reload the chat stays ended", r.json);
+    const { chatService } = await import("../../chatService");
+    const chunks: any[] = [];
+    for await (const ch of chatService.streamMessage("hi, what are the fees?", { existingConversationId: ec, userId: `widget_session_${ec}`, businessAccountId: biz, openaiApiKey: "sk-test-not-real", channel: "widget" } as any)) chunks.push(ch);
+    expect(chunks.some((c) => c.type === "chat_ended") && chunks.some((c) => c.type === "final" && /has ended/.test(c.data)), "typing in the ended chat gets a fixed line, no AI", chunks.map((c) => c.type));
+    expect(await journeyService.chatEndedByJourney(conv) === null, "a chat whose journey lets it carry on is not ended");
   } finally {
     await db.delete(schema.businessAccounts).where(eq(schema.businessAccounts.id, biz)).catch(() => {});
     server.close();

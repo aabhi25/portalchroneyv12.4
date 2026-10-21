@@ -623,6 +623,9 @@ export default function EmbedChat() {
   // The form question in progress has an earlier answer the visitor can go back and change.
   const [formCanGoBack, setFormCanGoBack] = useState(false);
   useEffect(() => { setFormCanGoBack(false); }, [activeJourneyId]);
+  // A journey set to "End the chat here" finished: no AI, no typing, only a new chat.
+  const [chatEnded, setChatEnded] = useState(false);
+  useEffect(() => { if (activeJourneyId) setChatEnded(false); }, [activeJourneyId]);
   const [isFormJourneyComplete, setIsFormJourneyComplete] = useState(false); // Track when form journey is complete - disables chat input
   const [introLoaded, setIntroLoaded] = useState(false); // Track when intro has been fetched
   const [compareProducts, setCompareProducts] = useState<Set<string>>(new Set());
@@ -1265,6 +1268,7 @@ export default function EmbedChat() {
     fetch(`/api/journey/current-step?businessAccountId=${encodeURIComponent(businessAccountId)}&conversationId=${encodeURIComponent(convId)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
+        if (!cancelled && data?.chatEnded && conversationIdRef.current === convId) setChatEnded(true);
         if (cancelled || !data?.formStep || conversationIdRef.current !== convId) return;
         console.log('[Form Journey] Restoring the form in progress:', data.formStep.stepId);
         setActiveJourneyId(data.journeyId || null);
@@ -1801,6 +1805,7 @@ export default function EmbedChat() {
     setActiveFormStep(null);
     setActiveJourneyId(null);
     setIsFormJourneyComplete(false); // Reset journey complete state for new conversation
+    setChatEnded(false);
     
     // Reset inactivity nudge state to prevent old nudges from appearing
     inactivityNudgeSentRef.current = false;
@@ -3604,6 +3609,8 @@ export default function EmbedChat() {
                   console.log('[Form Journey] Journey complete - disabling chat input');
                   setIsFormJourneyComplete(true);
                 }
+              } else if (data.type === 'chat_ended') {
+                setChatEnded(true);
               } else if (data.type === 'final') {
                 const finalText = typeof data.data === 'string' ? data.data : '';
                 if (!finalText.trim() && !streamedContent) {
@@ -4585,6 +4592,7 @@ export default function EmbedChat() {
         });
       }
       
+      if (result.chatEnded) setChatEnded(true);
       if (result.completed && result.nextStep?.stepType === 'journey_complete') {
         // Journey complete step - show the completion step UI (with optional button)
         setActiveFormStep(result.nextStep);
@@ -6393,8 +6401,8 @@ export default function EmbedChat() {
                     // Options of the form question being asked: tapping one answers it.
                     activeFormStep && msg.formStepId === activeFormStep.stepId && !isLoading && (
                       isClosingStep(activeFormStep) ? (
-                        // "Continue exploring" on the closing message.
-                        <QuickBrowseButtons
+                        // "Continue exploring" on the closing message (not when the journey ends the chat).
+                        !chatEnded && <QuickBrowseButtons
                           buttons={msg.quickReplies.map((opt) => ({ label: opt, action: opt }))}
                           onSelect={continueChatAfterForm}
                           chatColor={chatColor}
@@ -6456,7 +6464,23 @@ export default function EmbedChat() {
 
         {/* Chat Now button - shown after journey form completion (also under a closing message
             that has no button of its own: it used to leave the visitor with no way to go on). */}
-        {isFormJourneyComplete && (!activeFormStep || (isClosingStep(activeFormStep) && !activeFormStep.completionButtonText)) && (
+        {/* The journey ended the chat ("End the chat here"): no AI, only a new chat. */}
+        {chatEnded && (
+          <div className="flex flex-col items-center gap-2 py-4 px-4" data-testid="chat-ended">
+            <p className="text-xs text-gray-500">This chat has ended.</p>
+            <button
+              onClick={handleNewChat}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-full text-white text-sm font-medium shadow-md hover:shadow-lg transition-all"
+              style={{ background: chatColorEnd ? `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})` : chatColor }}
+              data-testid="button-start-new-chat"
+            >
+              <MessageSquarePlus className="w-4 h-4" />
+              Start a new chat
+            </button>
+          </div>
+        )}
+
+        {isFormJourneyComplete && !chatEnded && (!activeFormStep || (isClosingStep(activeFormStep) && !activeFormStep.completionButtonText)) && (
           <div className="flex justify-center py-4 px-4">
             <button
               onClick={continueChatAfterForm}
@@ -6634,7 +6658,7 @@ export default function EmbedChat() {
 
       {/* Chat Input - Fixed at bottom with safe area padding - only show if mode allows it */}
       {/* Also hide when form journey is complete - user cannot continue chatting after completing form journey */}
-      {!isMenuMode && (settings?.chatMode === 'both' || settings?.chatMode === 'chat-only' || !settings?.chatMode) && !activeFormStep && !isFormJourneyComplete && (
+      {!isMenuMode && (settings?.chatMode === 'both' || settings?.chatMode === 'chat-only' || !settings?.chatMode) && !activeFormStep && !isFormJourneyComplete && !chatEnded && (
         <div 
           className="border-t border-gray-200 p-2 sm:p-3 md:p-4 bg-gray-100 flex-shrink-0 mobile-input-debug" 
           style={{ 

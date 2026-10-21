@@ -1653,6 +1653,19 @@ Response:`;
     }
   }
 
+  /**
+   * A chat a journey ended ("End the chat here"): the AI is not used; the visitor only gets this
+   * line (the widget normally keeps the chat closed, so this is a safety net). null otherwise.
+   */
+  private async endedChatReply(context: ChatContext): Promise<string | null> {
+    if (!(await journeyService.hasEndingJourneys(context.businessAccountId).catch(() => false))) return null;
+    const conversationId = await this.peekExistingConversationId(context).catch(() => undefined);
+    if (!conversationId) return null;
+    return (await journeyService.chatEndedByJourney(conversationId).catch(() => null))
+      ? "This chat has ended. Please start a new chat if you'd like to begin again."
+      : null;
+  }
+
   /** The conversation this session would resume, without creating one (used before the spam check). */
   private async peekExistingConversationId(context: ChatContext): Promise<string | undefined> {
     if (context.existingConversationId) return context.existingConversationId;
@@ -2092,6 +2105,9 @@ Response:`;
         context = { ...context, skipLeadTraining: true };
         console.log('[TopScholar] Lead capture and verification flow disabled for tutoring conversation');
       }
+
+      const endedReply = await this.endedChatReply(context);
+      if (endedReply) return endedReply;
 
       // Get conversation history to check if this is a new conversation (reloaded from the DB
       // first when the memory cache is empty for a conversation this session would resume).
@@ -3323,6 +3339,15 @@ Response:`;
       if (isTopscholarAccount(context.businessAccountId) && !context.skipLeadTraining) {
         context = { ...context, skipLeadTraining: true };
         console.log('[TopScholar] Lead capture and verification flow disabled for tutoring conversation');
+      }
+
+      const endedReply = await this.endedChatReply(context);
+      if (endedReply) {
+        yield { type: 'content' as const, data: endedReply };
+        yield { type: 'final' as const, data: endedReply };
+        yield { type: 'chat_ended' as const, data: '' };
+        yield { type: 'done' as const, data: '' };
+        return;
       }
 
       // SPEED: start the read-only lookups this turn will need right away, so they run while

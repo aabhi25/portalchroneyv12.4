@@ -1,5 +1,5 @@
 import { storage } from '../storage';
-import { journeyResponses, journeySessions } from '@shared/schema';
+import { conversationJourneys, journeyResponses, journeySessions } from '@shared/schema';
 import { db } from '../db';
 import { eq, and, desc } from 'drizzle-orm';
 
@@ -34,6 +34,18 @@ class JourneyService {
   // This allows early-exit optimization to skip journey processing entirely
   private hasActiveJourneysCache = new Map<string, { hasJourneys: boolean; timestamp: number }>();
   private readonly JOURNEY_CACHE_TTL_MS = 60 * 1000; // 60 seconds cache TTL
+  // Whether the account has a journey set to "End the chat here" (so ordinary chats skip that check).
+  private endingJourneysCache = new Map<string, { has: boolean; timestamp: number }>();
+
+  async hasEndingJourneys(businessAccountId: string): Promise<boolean> {
+    const cached = this.endingJourneysCache.get(businessAccountId);
+    if (cached && Date.now() - cached.timestamp < this.JOURNEY_CACHE_TTL_MS) return cached.has;
+    const [row] = await db.select({ id: conversationJourneys.id }).from(conversationJourneys)
+      .where(and(eq(conversationJourneys.businessAccountId, businessAccountId), eq(conversationJourneys.endMode, 'end')))
+      .limit(1);
+    this.endingJourneysCache.set(businessAccountId, { has: !!row, timestamp: Date.now() });
+    return !!row;
+  }
 
   /**
    * PERFORMANCE OPTIMIZATION: Check if business account has any active journeys
@@ -69,6 +81,7 @@ class JourneyService {
    */
   invalidateJourneyCache(businessAccountId: string): void {
     this.hasActiveJourneysCache.delete(businessAccountId);
+    this.endingJourneysCache.delete(businessAccountId);
     console.log(`[Journey Cache] Invalidated cache for business ${businessAccountId.substring(0, 8)}...`);
   }
 
@@ -263,6 +276,24 @@ class JourneyService {
     if (!step) return null;
     console.log('[Journey] Went back to step', target, 'for conversation', conversationId);
     return { step, canGoBack: removed < answered.length };
+  }
+
+  /**
+   * The chat was ended by a journey set to "End the chat here" (its last journey finished and no
+   * other one started since): nothing more goes to the AI. Returns that journey's id, else null.
+   */
+  async chatEndedByJourney(conversationId: string): Promise<string | null> {
+    const [latest] = await db.select({ journeyId: journeySessions.journeyId, completed: journeySessions.completed })
+      .from(journeySessions)
+      .where(eq(journeySessions.conversationId, conversationId))
+      .orderBy(desc(journeySessions.createdAt))
+      .limit(1);
+    if (!latest || latest.completed !== 'true') return null;
+    const [journey] = await db.select({ endMode: conversationJourneys.endMode })
+      .from(conversationJourneys)
+      .where(eq(conversationJourneys.id, latest.journeyId))
+      .limit(1);
+    return journey?.endMode === 'end' ? latest.journeyId : null;
   }
 
   isFormJourney(conversationId: string): boolean {

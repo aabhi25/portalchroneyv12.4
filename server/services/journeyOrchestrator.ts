@@ -668,6 +668,19 @@ export class JourneyOrchestrator {
       };
     }
 
+    // "End the chat here": the journey's closing message, and the chat stays with no AI.
+    const { storage } = await import('../storage');
+    const journey = await storage.getJourney(journeyState.journeyId, businessAccountId).catch(() => undefined);
+    if (journey?.endMode === 'end') {
+      const steps = await storage.getJourneySteps(journeyState.journeyId).catch(() => []);
+      const closing = steps.find((st: any) => st.toolTrigger === 'journey_complete')?.questionText?.trim();
+      return {
+        shouldBypassAI: true,
+        response: closing || "Thank you! Our team will get in touch with you soon.",
+        isComplete: true,
+      };
+    }
+
     // CONVERSATIONAL journeys hand control back to the AI so it gives a genuinely helpful,
     // contextual reply to what the visitor asked before the questions (not to their last answer).
     console.log('[Engine] Conversational journey complete - handing off to AI for a contextual response');
