@@ -1,7 +1,7 @@
 import { storage } from '../storage';
 import { journeyResponses, journeySessions } from '@shared/schema';
 import { db } from '../db';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 
 export interface JourneyState {
   sessionId: string; // Database session ID for linking responses
@@ -212,6 +212,57 @@ class JourneyService {
     }
     await this.resetJourney(conversationId);
     return this.startJourney(conversationId, userId, businessAccountId, journeyId, true);
+  }
+
+  /**
+   * "Change my last answer" in a form: go back to the question the visitor answered last in this
+   * run of the journey and forget that answer, so they can answer it again. Questions the chat
+   * filled in by itself (already known, e.g. the mobile number) are passed over. Returns the
+   * question to show and whether there is an earlier one, or null when there is nothing to go
+   * back to.
+   */
+  async stepBack(conversationId: string): Promise<{
+    step: NonNullable<Awaited<ReturnType<JourneyService["getFormStepData"]>>>;
+    canGoBack: boolean;
+  } | null> {
+    const state = await this.getJourneyState(conversationId);
+    if (!state || state.completed) return null;
+    const steps = (await storage.getJourneySteps(state.journeyId)).sort((a, b) => Number(a.stepOrder) - Number(b.stepOrder));
+    const answered = await db.select({ id: journeyResponses.id, stepId: journeyResponses.stepId })
+      .from(journeyResponses)
+      .where(eq(journeyResponses.sessionId, state.sessionId))
+      .orderBy(desc(journeyResponses.createdAt));
+    if (answered.length === 0) return null;
+
+    const { loadKnownAnswers, knownAnswerFor } = await import('./journeyKnownAnswers');
+    let target = -1;
+    let removed = 0;
+    for (const row of answered) {
+      await db.delete(journeyResponses).where(eq(journeyResponses.id, row.id));
+      state.responses.delete(row.stepId);
+      removed++;
+      const index = steps.findIndex(st => st.id === row.stepId);
+      if (index < 0) continue; // a question deleted since
+      target = index;
+      if (removed === answered.length) break;
+      // Answered by the chat itself? Then the visitor never saw it: keep going back.
+      const known = await loadKnownAnswers(conversationId, state.businessAccountId);
+      if (!knownAnswerFor(steps[index], known)) break;
+    }
+    if (target < 0) return null;
+
+    state.currentStepIndex = target;
+    this.activeJourneys.set(conversationId, state);
+    try {
+      const dbSession = await storage.getJourneySessionByConversationId(conversationId);
+      if (dbSession) await storage.updateJourneySession(dbSession.id, { currentStepIndex: target });
+    } catch (error) {
+      console.error('[Journey] Error saving the step after going back:', error);
+    }
+    const step = await this.getFormStepData(conversationId, true);
+    if (!step) return null;
+    console.log('[Journey] Went back to step', target, 'for conversation', conversationId);
+    return { step, canGoBack: removed < answered.length };
   }
 
   isFormJourney(conversationId: string): boolean {

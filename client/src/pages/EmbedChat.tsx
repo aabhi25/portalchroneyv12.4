@@ -1,4 +1,4 @@
-import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, GitCompare, Briefcase, Lock, Video, GraduationCap } from "lucide-react";
+import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, GitCompare, Briefcase, Lock, Video, GraduationCap, Undo2 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
@@ -620,6 +620,9 @@ export default function EmbedChat() {
   // Text typed in the answer box to narrow a long list of form options.
   const [formChoiceSearch, setFormChoiceSearch] = useState("");
   const [activeJourneyId, setActiveJourneyId] = useState<string | null>(null);
+  // The form question in progress has an earlier answer the visitor can go back and change.
+  const [formCanGoBack, setFormCanGoBack] = useState(false);
+  useEffect(() => { setFormCanGoBack(false); }, [activeJourneyId]);
   const [isFormJourneyComplete, setIsFormJourneyComplete] = useState(false); // Track when form journey is complete - disables chat input
   const [introLoaded, setIntroLoaded] = useState(false); // Track when intro has been fetched
   const [compareProducts, setCompareProducts] = useState<Set<string>>(new Set());
@@ -4465,6 +4468,55 @@ export default function EmbedChat() {
     setTimeout(() => inputRef.current?.focus(), 50);
   };
 
+  /**
+   * "Change my last answer": the server goes back to the question answered last; the chat drops
+   * everything after that question, which becomes the live one again.
+   */
+  const goBackInForm = async () => {
+    const current = activeFormStep;
+    if (!current || !conversationIdRef.current || !activeJourneyId) return;
+    setIsLoading(true);
+    try {
+      const response = await fetch(`/api/journey/step-back`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: conversationIdRef.current,
+          businessAccountId,
+          journeyId: activeJourneyId,
+          stepId: current.stepId,
+          language: selectedLanguage !== 'auto' ? selectedLanguage : undefined,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success || !result.nextStep) {
+        setFormCanGoBack(false);
+        if (result.nextStep) setActiveFormStep(result.nextStep);
+        return;
+      }
+      if (!result.resync) {
+        const target: FormStepData = result.nextStep;
+        setMessages(prev => {
+          // That question's bubble (still marked with its step) → keep the chat up to it.
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].formStepId === target.stepId) return prev.slice(0, i + 1);
+          }
+          // A chat restored after a reload (plain text bubbles): drop the last answer and what follows.
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].role === 'user') return prev.slice(0, i);
+          }
+          return prev.filter(m => m.formStepId !== current.stepId);
+        });
+      }
+      setFormCanGoBack(!!result.canGoBack);
+      setActiveFormStep(result.nextStep);
+    } catch (error) {
+      console.error('[FormStep] Error going back:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const submitFormAnswer = async (value: string) => {
     if (!activeFormStep) return;
     // Submit directly to the journey endpoint - no AI involvement
@@ -4552,6 +4604,7 @@ export default function EmbedChat() {
         setIsFormJourneyComplete(true); // Disable chat input after form journey completes
       } else if (result.nextStep) {
         // Show next form step
+        setFormCanGoBack(true);
         setActiveFormStep(result.nextStep);
       }
     } catch (error) {
@@ -6367,6 +6420,19 @@ export default function EmbedChat() {
                     collapsedCount={2}
                   />
                   )
+                )}
+
+                {/* Picked the wrong option? Back to the previous question of the form. */}
+                {msg.formStepId && activeFormStep && msg.formStepId === activeFormStep.stepId && msgIndex === messages.length - 1
+                  && formCanGoBack && !isLoading && !isClosingStep(activeFormStep) && (
+                  <button
+                    type="button"
+                    onClick={goBackInForm}
+                    className="mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                    data-testid="button-form-back"
+                  >
+                    <Undo2 className="w-3.5 h-3.5" /> Change my last answer
+                  </button>
                 )}
               </div>
               <div className="text-xs text-gray-500 mt-1">

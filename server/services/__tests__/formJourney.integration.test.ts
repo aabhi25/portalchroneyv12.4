@@ -148,6 +148,28 @@ async function main() {
 
     const [c] = await db.select().from(schema.conversations).where(eq(schema.conversations.id, conv));
     expect(c?.title === "Counselling", "the chat is titled after its form", c?.title);
+
+    // ── "Change my last answer" ──
+    const back = async (body: any) => { const r = await fetch(`${base}/api/journey/step-back`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ businessAccountId: biz, ...body }) }); return { status: r.status, json: await r.json().catch(() => ({})) as any }; };
+    s = await submit({ conversationId: null, journeyId: A.id, stepId: A.steps[0], answer: "MBA", visitorToken: `vt-${crypto.randomUUID()}` });
+    const bc = s.json.conversationId as string;
+    s = await submit({ conversationId: bc, journeyId: A.id, stepId: A.steps[1], answer: "Pune" });
+    expect(s.json.nextStep?.stepId === A.steps[2], "back flow: two answers given, on question 3", s.json);
+    let b = await back({ conversationId: bc, journeyId: A.id, stepId: A.steps[2] });
+    expect(b.json.success && b.json.nextStep?.stepId === A.steps[1] && b.json.canGoBack === true, "going back shows question 2 again (question 1 is still behind it)", b.json);
+    const answersA = async () => (await db.select().from(schema.journeyResponses).where(eq(schema.journeyResponses.conversationId, bc))).map((x: any) => x.response);
+    expect(JSON.stringify(await answersA()) === JSON.stringify(["MBA"]), "the changed answer is forgotten", await answersA());
+    await journeyService.resetJourney(bc); // a restart in between
+    b = await back({ conversationId: bc, journeyId: A.id, stepId: A.steps[1] });
+    expect(b.json.success && b.json.nextStep?.stepId === A.steps[0] && Array.isArray(b.json.nextStep.options) && b.json.canGoBack === false, "going back again (after a restart) reaches the first question, with its options; nothing before it", b.json);
+    b = await back({ conversationId: bc, journeyId: A.id, stepId: A.steps[0] });
+    expect(b.json.success === false && b.json.nextStep?.stepId === A.steps[0], "nothing to go back to on the first question", b.json);
+    s = await submit({ conversationId: bc, journeyId: A.id, stepId: A.steps[0], answer: "BBA" });
+    expect(s.json.nextStep?.stepId === A.steps[1] && JSON.stringify(await answersA()) === JSON.stringify(["BBA"]), "a new pick is saved and the form carries on", { next: s.json.nextStep?.stepId, answers: await answersA() });
+    b = await back({ conversationId: bc, journeyId: A.id, stepId: A.steps[2] });
+    expect(b.json.resync === true && b.json.nextStep?.stepId === A.steps[1], "a widget on an old question is moved to the current one, nothing undone", b.json);
+    b = await back({ conversationId: bc, businessAccountId: `not-${biz}`, journeyId: A.id, stepId: A.steps[1] });
+    expect(b.status === 404, "another account can't touch this chat", b.status);
   } finally {
     await db.delete(schema.businessAccounts).where(eq(schema.businessAccounts.id, biz)).catch(() => {});
     server.close();

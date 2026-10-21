@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CalendarDays, RotateCcw, Send, ShoppingBag } from "lucide-react";
+import { CalendarDays, RotateCcw, Send, ShoppingBag, Undo2 } from "lucide-react";
 import { DEFAULT_ENDING_TEXT, type JourneyModel } from "./journeyModel";
 
 interface Line {
@@ -17,6 +17,8 @@ export function JourneyPreview({ model, aiWords }: { model: JourneyModel; aiWord
   const [current, setCurrent] = useState<number | null>(null);
   const [done, setDone] = useState(false);
   const [typed, setTyped] = useState("");
+  // Questions answered so far (and how long the chat was when each was asked), for "Change my last answer".
+  const [history, setHistory] = useState<{ index: number; lines: number }[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
   const { questions } = model;
 
@@ -39,7 +41,18 @@ export function JourneyPreview({ model, aiWords }: { model: JourneyModel; aiWord
 
   const restart = () => {
     setTyped("");
+    setHistory([]);
     ask(firstFrom(0), []);
+  };
+
+  const goBack = () => {
+    const last = history[history.length - 1];
+    if (!last) return;
+    setHistory(history.slice(0, -1));
+    setLines(lines.slice(0, last.lines));
+    setCurrent(last.index);
+    setDone(false);
+    setTyped("");
   };
 
   // Start over whenever the journey changes.
@@ -54,6 +67,7 @@ export function JourneyPreview({ model, aiWords }: { model: JourneyModel; aiWord
   const answer = (text: string) => {
     if (current === null) return;
     const q = questions[current];
+    setHistory([...history, { index: current, lines: lines.length }]);
     const withAnswer: Line[] = [...lines, { from: "you", text: text || "Skipped" }];
     const option = q.kind === "choice" ? q.options.find(o => o.label === text) : undefined;
     if (option?.then.kind === "end") {
@@ -113,6 +127,13 @@ export function JourneyPreview({ model, aiWords }: { model: JourneyModel; aiWord
                 Continue
               </button>
             </div>
+          </div>
+        )}
+        {!done && history.length > 0 && q && (
+          <div className="pl-1">
+            <button type="button" onClick={goBack} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11.5px] text-gray-500 hover:bg-gray-100 hover:text-gray-800" data-testid="button-preview-back">
+              <Undo2 className="h-3 w-3" /> Change my last answer
+            </button>
           </div>
         )}
         {done && <p className="pt-1 text-center text-[11px] text-gray-400">End of the journey</p>}

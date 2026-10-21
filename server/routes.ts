@@ -17746,6 +17746,46 @@ Important:
     }
   });
 
+  // "Change my last answer" in a form: back to the question answered last (that answer is forgotten).
+  app.post("/api/journey/step-back", async (req, res) => {
+    try {
+      const { conversationId, businessAccountId, journeyId, stepId } = req.body || {};
+      if (!conversationId || !businessAccountId || !journeyId) {
+        return res.status(400).json({ error: 'Missing conversationId, businessAccountId or journeyId' });
+      }
+      const conversation = await storage.getConversation(conversationId, businessAccountId);
+      if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+      const inProgress = await journeyService.getActiveFormStep(conversationId);
+      if (!inProgress || inProgress.journeyId !== journeyId) {
+        return res.status(409).json({ error: 'This form is no longer in progress' });
+      }
+      // The widget must be on the question in progress (another tab may have moved on).
+      if (stepId && inProgress.step.stepId !== stepId) {
+        return res.json({ success: true, resync: true, nextStep: inProgress.step, canGoBack: true });
+      }
+      const back = await journeyService.stepBack(conversationId);
+      if (!back) return res.json({ success: false, nextStep: inProgress.step, canGoBack: false });
+
+      let nextStep = back.step;
+      try {
+        const formLanguage = await websiteReplyLanguage({
+          businessAccountId,
+          picked: typeof req.body.language === 'string' ? req.body.language : undefined,
+          conversationKey: null,
+        });
+        if (formLanguage.reply.rule && nextStep.questionText) {
+          nextStep = { ...nextStep, questionText: await localizeFixedText(businessAccountId, formLanguage.reply, nextStep.questionText) };
+        }
+      } catch (langErr) {
+        console.warn('[Form Journey] Reply-language translation skipped:', (langErr as Error)?.message);
+      }
+      res.json({ success: true, nextStep, canGoBack: back.canGoBack });
+    } catch (error: any) {
+      console.error('[Form Journey] Error going back a step:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Stop/reset current journey
   app.post("/api/journeys/stop", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
