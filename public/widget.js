@@ -3490,8 +3490,15 @@
                 // Form journey is active - disable the input field
                 const pillInput = document.getElementById('hichroney-pill-input');
                 if (pillInput) {
-                  pillInput.disabled = true;
+                  // Read-only and click-through, not disabled: browsers drop clicks on a disabled
+                  // box, so the white part of the pill did nothing. Now a click anywhere on the
+                  // pill reaches the button and opens the chat.
+                  pillInput.readOnly = true;
+                  pillInput.tabIndex = -1;
                   pillInput.style.cursor = 'pointer';
+                  pillInput.style.pointerEvents = 'none';
+                  const inputBox = pillInput.closest('.pill-input-container');
+                  if (inputBox) inputBox.style.cursor = 'pointer';
                   // Mark that form journey is active so click handler knows to open chat
                   pillInput.dataset.formJourneyActive = 'true';
                   console.log('[Hi Chroney Pill] Form journey active - input disabled');
@@ -3877,7 +3884,7 @@
       // Store starters container reference for later use
       let widgetStartersContainer = null;
       
-      button.addEventListener('click', () => {
+      button.addEventListener('click', (ev) => {
         // For pill style with input, clicks should only close (not toggle)
         // Opening happens when user sends a message
         if (buttonStyle === 'pill') {
@@ -3919,14 +3926,19 @@
               lockBodyScroll(false); // Unlock parent page scroll
             }
           } else {
-            // Pill is closed - check if form journey is active
+            // Pill is closed. A form journey: a click anywhere opens the chat. Otherwise a click on
+            // the typing box is for typing; anywhere else on the pill (avatar, edges) opens the chat.
             const pillInput = document.getElementById('hichroney-pill-input');
+            const clicked = ev && ev.target;
+            const onTypingBox = !!(clicked && clicked.closest && clicked.closest('.pill-input-container'));
             if (pillInput && pillInput.dataset.formJourneyActive === 'true') {
-              // Form journey active - open chat on any click
               console.log('[Hi Chroney Pill] Form journey active - opening chat on click');
               handlePillSendMessage(); // This opens the chat (and won't send message since input is empty)
+            } else if (!onTypingBox) {
+              handlePillSendMessage(); // opens the chat; sends what was typed, if anything
+            } else if (pillInput) {
+              pillInput.focus();
             }
-            // Otherwise do nothing - user should type and send to open
           }
           return;
         }
