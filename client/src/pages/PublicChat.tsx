@@ -1432,7 +1432,7 @@ export default function PublicChat() {
               style={{ color: chatColor }}
             >
               <span aria-hidden="true">←</span>
-              Back to Menu
+              Home
             </button>
           </div>
         )}
