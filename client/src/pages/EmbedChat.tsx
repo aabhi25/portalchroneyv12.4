@@ -1,4 +1,4 @@
-import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, GitCompare, Briefcase, Lock, Video, GraduationCap, Undo2 } from "lucide-react";
+import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, GitCompare, Briefcase, Lock, Video, GraduationCap, Undo2, Globe, ChevronRight, Check } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
@@ -584,6 +584,9 @@ export default function EmbedChat() {
   const [parentPageUrl, setParentPageUrl] = useState<string | null>(null);
   const [isUserAtBottom, setIsUserAtBottom] = useState(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  // The ⋮ menu's own pages: the main list, or the language list (opened from its "Language" row).
+  const [menuView, setMenuView] = useState<'main' | 'language'>('main');
+  useEffect(() => { if (!isMenuOpen) setMenuView('main'); }, [isMenuOpen]);
   // The header WhatsApp icon folds into the ⋮ menu when it would squeeze the chat title:
   // measured on the title box, so it adapts to the widget size, the title and the other buttons.
   const [waHeaderFolded, setWaHeaderFolded] = useState(false);
@@ -4706,8 +4709,9 @@ export default function EmbedChat() {
             <WhatsAppGlyph className="w-4 h-4" />
           </a>
         )}
-        {/* Language selector - show if enabled and has multiple languages */}
-        {languageSelectorEnabled && dropdownLanguages.length > 1 && (
+        {/* Language selector - show if enabled and has multiple languages. It lives in the ⋮ menu;
+            only embeds without that menu (K12 / TopScholar) keep it in the header. */}
+        {hideHeaderMenu && languageSelectorEnabled && dropdownLanguages.length > 1 && (
           <div className="relative" ref={languageDropdownRef}>
             <button
               onClick={() => setIsLanguageDropdownOpen(!isLanguageDropdownOpen)}
@@ -4802,8 +4806,57 @@ export default function EmbedChat() {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -10, scale: 0.95 }}
                 transition={{ duration: 0.15 }}
-                className="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-50 min-w-[160px]"
+                className="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-50 min-w-[200px]"
+                style={{ maxWidth: 'calc(100vw - 40px)' }}
               >
+                {menuView === 'language' ? (
+                  <>
+                    <button
+                      onClick={() => setMenuView('main')}
+                      className="w-full px-3 py-2 text-left text-xs font-semibold text-gray-500 hover:bg-gray-50 flex items-center gap-1.5 border-b border-gray-100 transition-colors"
+                      aria-label="Back to menu"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span>Language</span>
+                    </button>
+                    <div className="max-h-[260px] overflow-y-auto py-0.5">
+                      {dropdownLanguages.map((langCode) => {
+                        const lang = LANGUAGE_CONFIG[langCode];
+                        if (!lang) return null;
+                        const isCurrent = displayLanguage === langCode;
+                        return (
+                          <button
+                            key={langCode}
+                            onClick={() => {
+                              setSelectedLanguage(langCode);
+                              setIsMenuOpen(false);
+                            }}
+                            className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-100 flex items-center justify-between gap-3 transition-colors ${
+                              isCurrent ? 'text-gray-900 font-medium' : 'text-gray-700'
+                            }`}
+                            aria-current={isCurrent ? 'true' : undefined}
+                          >
+                            <span>{lang.nativeName}</span>
+                            {isCurrent && <Check className="w-4 h-4 flex-shrink-0" style={{ color: chatColor }} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                {!hideHeaderMenu && languageSelectorEnabled && dropdownLanguages.length > 1 && (
+                  <button
+                    onClick={() => setMenuView('language')}
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2 text-gray-700 transition-colors"
+                    aria-label={`Language: ${LANGUAGE_CONFIG[displayLanguage]?.name || 'Auto-detect'}`}
+                  >
+                    <Globe className="w-4 h-4" />
+                    <span className="flex-1">Language</span>
+                    <span className="text-xs text-gray-400">{LANGUAGE_CONFIG[displayLanguage]?.nativeName || 'Auto'}</span>
+                    <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
+                  </button>
+                )}
                 <button
                   onClick={handleNewChat}
                   className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2 text-gray-700 transition-colors"
@@ -4834,6 +4887,8 @@ export default function EmbedChat() {
                     <WhatsAppGlyph className="w-4 h-4 text-[#25D366]" />
                     <span>Chat on WhatsApp</span>
                   </a>
+                )}
+                  </>
                 )}
               </motion.div>
             )}
