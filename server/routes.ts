@@ -96,6 +96,7 @@ import homeSummaryRoutes from "./routes/homeSummary";
 import whatsappHandoffRoutes from "./routes/whatsappHandoff";
 import { resolveAuthorizedLeadAccountId, maskLeadPhone } from "./lib/leadAccess";
 import dataRetentionRoutes from "./routes/dataRetention";
+import merittoRoutes from "./routes/meritto";
 import aiUsageRoutes from "./routes/aiUsage";
 import avatarRoutes from "./routes/avatar";
 import tutorRoutes from "./routes/tutor";
@@ -628,6 +629,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(homeSummaryRoutes);
   app.use(whatsappHandoffRoutes);
   app.use(dataRetentionRoutes);
+  app.use(merittoRoutes);
   app.use(aiUsageRoutes);
   // Live AI avatar (super-admin settings, widget sessions). Close avatar sessions
   // a previous process left open (billed to their last heartbeat).
@@ -19745,6 +19747,19 @@ Important:
           ],
           available: true,
           route: '/admin/salesforce',
+        },
+        {
+          id: 'meritto',
+          name: 'Meritto',
+          description: 'Send website chat leads to Meritto (NoPaperForms) and keep them updated',
+          features: [
+            'Lead created when it is ready, updated when it changes',
+            'Configurable field mappings (course, campus, journey answers)',
+            'Encrypted access and secret keys',
+            'Retries and sync status on every lead',
+          ],
+          available: true,
+          route: '/admin/meritto',
         },
         customCrmEntry,
       ];

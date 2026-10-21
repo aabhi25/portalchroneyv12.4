@@ -81,6 +81,7 @@ export function combineGroupPolicies(policies: (RetentionPolicySettings & { scop
 export interface AccountCrmTargets {
   leadsquared: boolean;
   salesforce: boolean;
+  meritto?: boolean;
 }
 
 export interface LeadSyncFields {
@@ -88,6 +89,8 @@ export interface LeadSyncFields {
   leadsquaredSyncedAt?: Date | string | null;
   salesforceSyncStatus?: string | null;
   salesforceSyncedAt?: Date | string | null;
+  merittoSyncStatus?: string | null;
+  merittoSyncedAt?: Date | string | null;
 }
 
 const toDate = (v: Date | string | null | undefined) => (v ? new Date(v) : null);
@@ -96,6 +99,7 @@ export function leadSyncState(lead: LeadSyncFields, crm: AccountCrmTargets): { s
   const targets: { status?: string | null; at?: Date | string | null }[] = [];
   if (crm.leadsquared) targets.push({ status: lead.leadsquaredSyncStatus, at: lead.leadsquaredSyncedAt });
   if (crm.salesforce) targets.push({ status: lead.salesforceSyncStatus, at: lead.salesforceSyncedAt });
+  if (crm.meritto) targets.push({ status: lead.merittoSyncStatus, at: lead.merittoSyncedAt });
   if (targets.length === 0) return { synced: false, syncedAt: null };
   if (!targets.every(t => t.status === 'synced')) return { synced: false, syncedAt: null };
   const times = targets.map(t => toDate(t.at)).filter((d): d is Date => !!d);

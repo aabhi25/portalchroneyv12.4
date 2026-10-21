@@ -148,6 +148,60 @@ function isDuplicateLeadError(exceptionType?: string, message?: string): boolean
   return false;
 }
 
+/**
+ * The value of a mapping's dynamic source (lead.name, session.utmSource, journey.<key>,
+ * conversation.summary, ...) in a lead's CRM context. Shared by the CRM integrations.
+ */
+export function resolveCrmContextValue(sourceField: string, context: LeadDataContext): string | undefined {
+  const [category, ...fieldParts] = sourceField.split('.');
+  const field = fieldParts.join('.'); // CRM field keys may contain dots; preserve the full remainder
+  
+  if (category === 'lead') {
+    const lead = context.lead;
+    switch (field) {
+      case 'name': return lead.name || undefined;
+      case 'email': return lead.email || undefined;
+      case 'phone': return lead.phone || undefined;
+      case 'whatsapp': return lead.whatsapp || undefined;
+      case 'createdAt': return lead.createdAt ? lead.createdAt.toISOString() : undefined;
+      case 'sourceUrl': return lead.sourceUrl || undefined;
+      case 'captchaStatus': return lead.captchaStatus || undefined;
+      case 'channel': return lead.channel || 'Website';
+    }
+  } else if (category === 'session') {
+    const session = context.session;
+    switch (field) {
+      case 'city': return session.city || undefined;
+      case 'utmCampaign': return session.utmCampaign || extractUtmCampaign(session.pageUrl);
+      case 'utmSource': return session.utmSource || undefined;
+      case 'utmMedium': return session.utmMedium || undefined;
+      case 'pageUrl': return session.pageUrl || undefined;
+    }
+  } else if (category === 'business') {
+    const business = context.business;
+    switch (field) {
+      case 'name': return business.name || undefined;
+      case 'website': return business.website || undefined;
+    }
+  } else if (category === 'urlLookup') {
+    const extraction = context.urlExtraction;
+    switch (field) {
+      case 'university': return extraction?.university || undefined;
+      case 'product': return extraction?.product || undefined;
+    }
+  } else if (category === 'journey') {
+    return context.journey?.[field] || undefined;
+  } else if (category === 'conversation') {
+    const conversation = context.conversation;
+    switch (field) {
+      case 'summary': return conversation?.summary || undefined;
+      case 'topics': return conversation?.topics || undefined;
+    }
+  }
+  
+  return undefined;
+}
+
 export class LeadSquaredService {
   private config: LeadSquaredConfig;
   private baseUrl: string;
@@ -393,53 +447,7 @@ export class LeadSquaredService {
   }
 
   private extractValueFromContext(sourceField: string, context: LeadDataContext): string | undefined {
-    const [category, ...fieldParts] = sourceField.split('.');
-    const field = fieldParts.join('.'); // CRM field keys may contain dots; preserve the full remainder
-    
-    if (category === 'lead') {
-      const lead = context.lead;
-      switch (field) {
-        case 'name': return lead.name || undefined;
-        case 'email': return lead.email || undefined;
-        case 'phone': return lead.phone || undefined;
-        case 'whatsapp': return lead.whatsapp || undefined;
-        case 'createdAt': return lead.createdAt ? lead.createdAt.toISOString() : undefined;
-        case 'sourceUrl': return lead.sourceUrl || undefined;
-        case 'captchaStatus': return lead.captchaStatus || undefined;
-        case 'channel': return lead.channel || 'Website';
-      }
-    } else if (category === 'session') {
-      const session = context.session;
-      switch (field) {
-        case 'city': return session.city || undefined;
-        case 'utmCampaign': return session.utmCampaign || extractUtmCampaign(session.pageUrl);
-        case 'utmSource': return session.utmSource || undefined;
-        case 'utmMedium': return session.utmMedium || undefined;
-        case 'pageUrl': return session.pageUrl || undefined;
-      }
-    } else if (category === 'business') {
-      const business = context.business;
-      switch (field) {
-        case 'name': return business.name || undefined;
-        case 'website': return business.website || undefined;
-      }
-    } else if (category === 'urlLookup') {
-      const extraction = context.urlExtraction;
-      switch (field) {
-        case 'university': return extraction?.university || undefined;
-        case 'product': return extraction?.product || undefined;
-      }
-    } else if (category === 'journey') {
-      return context.journey?.[field] || undefined;
-    } else if (category === 'conversation') {
-      const conversation = context.conversation;
-      switch (field) {
-        case 'summary': return conversation?.summary || undefined;
-        case 'topics': return conversation?.topics || undefined;
-      }
-    }
-    
-    return undefined;
+    return resolveCrmContextValue(sourceField, context);
   }
 
   // Create lead using dynamic mappings

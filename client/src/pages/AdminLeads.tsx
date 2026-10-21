@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { isMaskedValue } from "@shared/contactMasking";
+import { contactsHidden, isMaskedValue } from "@shared/contactMasking";
 import { HideInHub } from "@/components/hub/HideInHub";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -446,6 +446,16 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
 
   const isSalesforceConfigured = salesforceSettings?.enabled && salesforceSettings?.hasCredentials;
 
+  const { data: merittoSettings } = useQuery<{ enabled: boolean; hasAccessKey: boolean; hasSecretKey: boolean }>({
+    queryKey: ["/api/meritto/settings"],
+    queryFn: async () => {
+      const response = await fetch("/api/meritto/settings", { credentials: "include" });
+      if (!response.ok) return { enabled: false, hasAccessKey: false, hasSecretKey: false };
+      return response.json();
+    },
+  });
+  const isMerittoConfigured = merittoSettings?.enabled && merittoSettings?.hasAccessKey && merittoSettings?.hasSecretKey;
+
   // CRMs that Instagram / Facebook / WhatsApp rows can be pushed to (also covers the Custom CRM).
   const { data: crmConfig } = useQuery<CrmConfig | null>({
     queryKey: ["/api/social-leads/crm-config", currentUser?.activeBusinessAccountId || currentUser?.businessAccount?.id],
@@ -457,7 +467,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
     enabled: !!currentUser,
   });
   const configuredSocialCrms: SocialCrm[] = crmConfig
-    ? (Object.keys(crmConfig) as SocialCrm[]).filter(c => crmConfig[c].configured)
+    ? (Object.keys(crmConfig) as Array<keyof CrmConfig>).filter(c => crmConfig[c].configured)
     : [];
   const socialChannelsEnabled = availableChannels.filter((c): c is 'instagram' | 'facebook' => c === 'instagram' || c === 'facebook');
 
@@ -467,6 +477,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
       if (row.channel === 'website') {
         if (crm === 'leadsquared') return await apiRequest("POST", `/api/leadsquared/sync-lead/${row.id}`);
         if (crm === 'salesforce') return await apiRequest("POST", `/api/salesforce/sync-lead/${row.id}`);
+        if (crm === 'meritto') return await apiRequest("POST", `/api/meritto/sync-lead/${row.id}`);
         return await apiRequest("POST", `/api/custom-crm/sync-lead/${row.id}`, {});
       }
       if (row.channel === 'whatsapp') {
@@ -708,6 +719,10 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
       const sf = row.crm.salesforce;
       if (isSalesforceConfigured || sf?.status) {
         out.push({ crm: 'salesforce', label: 'Salesforce', state: sf, canSync: !!isSalesforceConfigured && (sf?.status === 'failed' || !sf?.status) });
+      }
+      const mer = row.crm.meritto;
+      if (isMerittoConfigured || mer?.status) {
+        out.push({ crm: 'meritto', label: 'Meritto', state: mer, canSync: !!isMerittoConfigured && mer?.status !== 'synced' && !contactsHidden({ phone: row.phone, email: row.email }) });
       }
       const custom = row.crm.customCrm;
       if (crmConfig?.custom_crm.configured || custom?.status) {
@@ -1262,7 +1277,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                             {accountRetention && (
                               <div className="pl-12">
                                 <RetentionCountdown
-                                  lead={{ ...lead, createdAt: String(lead.createdAt), leadsquaredSyncedAt: lead.leadsquaredSyncedAt ? String(lead.leadsquaredSyncedAt) : null, salesforceSyncedAt: lead.salesforceSyncedAt ? String(lead.salesforceSyncedAt) : null }}
+                                  lead={{ ...lead, createdAt: String(lead.createdAt), leadsquaredSyncedAt: lead.leadsquaredSyncedAt ? String(lead.leadsquaredSyncedAt) : null, salesforceSyncedAt: lead.salesforceSyncedAt ? String(lead.salesforceSyncedAt) : null, merittoSyncedAt: lead.merittoSyncedAt ? String(lead.merittoSyncedAt) : null }}
                                   retention={accountRetention}
                                   align="left"
                                 />

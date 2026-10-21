@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import CRMIntegrations from "@/pages/CRMIntegrations";
 import LeadSquaredSettings from "@/pages/LeadSquaredSettings";
 import SalesforceSettings from "@/pages/SalesforceSettings";
+import MerittoSettings from "@/pages/MerittoSettings";
 import CustomCrmSettings from "@/pages/CustomCrmSettings";
 import Shopify from "@/pages/Shopify";
 import ErpSettings from "@/pages/ErpSettings";
@@ -41,6 +42,16 @@ const ALL_TABS: IntegrationTab[] = [
     statusUrl: "/api/salesforce/settings",
     toStatus: (d) => (d?.enabled && d?.hasCredentials ? "connected" : d?.hasCredentials ? "setup" : "none"),
     render: () => <SalesforceSettings embedded />,
+  },
+  {
+    id: "meritto",
+    label: "Meritto",
+    statusUrl: "/api/meritto/settings",
+    toStatus: (d) => {
+      const hasKeys = !!(d?.hasAccessKey && d?.hasSecretKey);
+      return d?.enabled && hasKeys ? "connected" : hasKeys ? "setup" : "none";
+    },
+    render: () => <MerittoSettings />,
   },
   {
     id: "custom-crm",

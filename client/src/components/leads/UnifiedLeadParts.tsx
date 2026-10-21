@@ -7,7 +7,7 @@ import { formatCrmSyncError } from "@/lib/crmSyncError";
 
 export type LeadChannel = "website" | "whatsapp" | "instagram" | "facebook";
 export type ChannelFilter = LeadChannel | "all";
-export type SocialCrm = "leadsquared" | "salesforce" | "custom_crm";
+export type SocialCrm = "leadsquared" | "salesforce" | "custom_crm" | "meritto";
 
 export interface CrmSyncState {
   status: string | null;
@@ -25,7 +25,7 @@ export interface UnifiedLeadRow {
   phone: string | null;
   email: string | null;
   capturedAt: string;
-  crm: { leadsquared?: CrmSyncState; salesforce?: CrmSyncState; customCrm?: CrmSyncState };
+  crm: { leadsquared?: CrmSyncState; salesforce?: CrmSyncState; customCrm?: CrmSyncState; meritto?: CrmSyncState };
   detail: Record<string, any>;
   /** Same person on several channels (website → WhatsApp hand-off / verified phone). */
   personId?: string | null;
@@ -43,7 +43,7 @@ export interface UnifiedLeadsResponse {
   groupedByPerson?: boolean;
 }
 
-export type CrmConfig = Record<SocialCrm, { configured: boolean; autoSync: boolean }>;
+export type CrmConfig = Record<Exclude<SocialCrm, "meritto">, { configured: boolean; autoSync: boolean }>;
 
 export const CHANNEL_META: Record<LeadChannel, { label: string; className: string; icon: typeof Globe; page: string | null }> = {
   website: { label: "Website", className: "bg-purple-100 text-purple-700", icon: Globe, page: null },
@@ -52,7 +52,7 @@ export const CHANNEL_META: Record<LeadChannel, { label: string; className: strin
   facebook: { label: "Facebook", className: "bg-blue-100 text-blue-700", icon: Facebook, page: "/admin/facebook/leads" },
 };
 
-export const CRM_LABEL: Record<SocialCrm, string> = { leadsquared: "LeadSquared", salesforce: "Salesforce", custom_crm: "Custom CRM" };
+export const CRM_LABEL: Record<SocialCrm, string> = { leadsquared: "LeadSquared", salesforce: "Salesforce", custom_crm: "Custom CRM", meritto: "Meritto" };
 
 export function ChannelBadge({ channel }: { channel: LeadChannel }) {
   const meta = CHANNEL_META[channel];

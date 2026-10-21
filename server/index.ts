@@ -27,6 +27,7 @@ import { leadsquaredRetryWorker } from "./services/leadsquaredRetryWorker";
 import { crmSyncRecoveryWorker } from "./services/crmSyncRecoveryWorker";
 import { startLeadQualificationSweep } from "./services/leadQualificationService";
 import { dataRetentionWorker } from "./services/dataRetentionWorker";
+import { merittoSyncWorker } from "./services/merittoSync";
 import { aiUsageLogger } from "./services/aiUsageLogger";
 import { backupScheduler } from "./services/backupScheduler";
 import { awaitingVerificationSweepWorker } from "./services/awaitingVerificationSweepWorker";
@@ -55,6 +56,7 @@ onShutdown("background-workers", () => {
   leadsquaredRetryWorker.stop();
   crmSyncRecoveryWorker.stop();
   dataRetentionWorker.stop();
+  merittoSyncWorker.stop();
   backupScheduler.stop();
   awaitingVerificationSweepWorker.stop();
   conversationSummarySweepWorker.stop();
@@ -377,6 +379,8 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     crmSyncRecoveryWorker.start();
     startLeadQualificationSweep();
     dataRetentionWorker.start();
+    // Website leads → Meritto, for accounts that switched it on
+    merittoSyncWorker.start();
     
     // Start daily database backup scheduler (4:00 AM IST)
     backupScheduler.start();

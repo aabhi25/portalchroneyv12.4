@@ -231,7 +231,7 @@ interface PreviewResponse {
   totalIdleChats: number;
   totalHidden?: number;
   hides?: boolean;
-  accounts: { businessAccountId: string; name: string; overridden: boolean; leads: number; idleChats: number; hide?: number; crm?: { leadsquared: boolean; salesforce: boolean } }[];
+  accounts: { businessAccountId: string; name: string; overridden: boolean; leads: number; idleChats: number; hide?: number; crm?: { leadsquared: boolean; salesforce: boolean; meritto?: boolean } }[];
 }
 
 export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, scopeName }: {
@@ -523,7 +523,7 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
 function PreviewSummary({ preview, showDeletes = true }: { preview: PreviewResponse; showDeletes?: boolean }) {
   const affected = preview.accounts.filter(a => (showDeletes ? a.leads + a.idleChats : 0) + (a.hide ?? 0) > 0);
   const overridden = preview.accounts.filter(a => a.overridden).length;
-  const noCrm = preview.accounts.filter(a => a.crm && !a.crm.leadsquared && !a.crm.salesforce).length;
+  const noCrm = preview.accounts.filter(a => a.crm && !a.crm.leadsquared && !a.crm.salesforce && !a.crm.meritto).length;
   return (
     <div className="rounded-md border p-3 text-sm space-y-2">
       {showDeletes && (
@@ -582,7 +582,7 @@ function shortDuration(ms: number): string {
 
 /** Small line under a lead's date: when it will be deleted, or why it is kept. */
 export function RetentionCountdown({ lead, retention, align = "right" }: {
-  lead: { createdAt: string; leadsquaredSyncStatus?: string | null; leadsquaredSyncedAt?: string | null; salesforceSyncStatus?: string | null; salesforceSyncedAt?: string | null };
+  lead: { createdAt: string; leadsquaredSyncStatus?: string | null; leadsquaredSyncedAt?: string | null; salesforceSyncStatus?: string | null; salesforceSyncedAt?: string | null; merittoSyncStatus?: string | null; merittoSyncedAt?: string | null };
   retention: AccountRetention | null | undefined;
   align?: "left" | "right";
 }) {

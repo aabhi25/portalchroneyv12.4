@@ -602,6 +602,15 @@ export const leads = pgTable("leads", {
   salesforceLeadId: text("salesforce_lead_id"),
   salesforceSyncError: text("salesforce_sync_error"),
 
+  // Meritto CRM sync tracking (updated by the Meritto sync worker without touching updatedAt)
+  merittoSyncStatus: text("meritto_sync_status"), // null | 'synced' | 'failed' | 'needs_attention'
+  merittoSyncedAt: timestamp("meritto_synced_at"),
+  merittoLeadId: text("meritto_lead_id"),
+  merittoSyncError: text("meritto_sync_error"),
+  merittoSyncPayload: jsonb("meritto_sync_payload"), // what was last sent (an update is sent only when it changes)
+  merittoRetryCount: integer("meritto_retry_count").notNull().default(0),
+  merittoNextRetryAt: timestamp("meritto_next_retry_at"),
+
   // Custom CRM sync tracking
   customCrmSyncStatus: text("custom_crm_sync_status"),
   customCrmSyncedAt: timestamp("custom_crm_synced_at"),
@@ -780,6 +789,14 @@ export const widgetSettings = pgTable("widget_settings", {
   salesforcePassword: text("salesforce_password"), // Password + Security Token (encrypted)
   salesforceEnvironment: text("salesforce_environment").default("production"), // 'production' | 'sandbox'
   salesforceInstanceUrl: text("salesforce_instance_url"), // Stored after successful auth
+
+  // Meritto (NoPaperForms) CRM Integration - website leads are sent by the Meritto sync worker
+  merittoEnabled: text("meritto_enabled").notNull().default("false"), // 'true' | 'false' (auto-sync)
+  merittoAccessKey: text("meritto_access_key"), // encrypted
+  merittoSecretKey: text("meritto_secret_key"), // encrypted
+  merittoCreateUrl: text("meritto_create_url"), // null = https://api.nopaperforms.io/lead/v1/create
+  merittoUpdateUrl: text("meritto_update_url"), // null = https://api.nopaperforms.io/lead/v1/update
+  merittoEnabledAt: timestamp("meritto_enabled_at"), // leads captured from this moment on are sent
 
   // LeadSquared AI URL Extraction Config
   lsqExtractionDomain: text("lsq_extraction_domain"), // Domain to restrict extraction to, e.g. "jaroeducation.com"
@@ -2786,6 +2803,26 @@ export const insertSalesforceFieldMappingSchema = createInsertSchema(salesforceF
   createdAt: true,
   updatedAt: true,
 });
+
+// Meritto (NoPaperForms) field mappings: which Meritto API field gets which value.
+export const merittoFieldMappings = pgTable("meritto_field_mappings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  merittoField: text("meritto_field").notNull(), // Meritto API field, e.g. "name", "mobile", "course"
+  sourceType: text("source_type").notNull(), // 'dynamic' | 'custom'
+  sourceField: text("source_field"), // For dynamic: 'lead.name', 'session.utmSource', 'journey.course', ...
+  customValue: text("custom_value"), // For custom: a fixed value
+  fallbackValue: text("fallback_value"), // For dynamic: sent when the value is empty
+  displayName: text("display_name").notNull(),
+  isEnabled: text("is_enabled").notNull().default("true"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  businessIdx: index("meritto_field_mappings_business_idx").on(table.businessAccountId),
+}));
+
+export type MerittoFieldMapping = typeof merittoFieldMappings.$inferSelect;
 
 // ERP Integration insert schemas
 export const insertErpConfigurationSchema = createInsertSchema(erpConfigurations).omit({

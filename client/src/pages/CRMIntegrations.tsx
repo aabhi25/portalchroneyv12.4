@@ -7,7 +7,7 @@ import { useLocation } from "wouter";
 import { integrationPath, type IntegrationTabId } from "@/pages/settings/settingsPaths";
 
 const isIntegrationTab = (id: string): id is IntegrationTabId =>
-  id === "leadsquared" || id === "salesforce" || id === "custom-crm";
+  id === "leadsquared" || id === "salesforce" || id === "meritto" || id === "custom-crm";
 
 interface CrmIntegration {
   id: string;

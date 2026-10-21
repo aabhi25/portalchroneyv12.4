@@ -80,6 +80,7 @@ export interface UnifiedLeadRow {
     leadsquared?: CrmSyncState;
     salesforce?: CrmSyncState;
     customCrm?: CrmSyncState;
+    meritto?: CrmSyncState;
   };
   /**
    * Channel-specific record for the detail view. website: the Lead row (as /api/leads returns it);
@@ -227,6 +228,7 @@ async function hydrate(accountId: string, page: { channel: LeadChannel; id: stri
           leadsquared: crmState(l.leadsquaredSyncStatus, l.leadsquaredSyncError, l.leadsquaredSyncedAt, l.leadsquaredLeadId),
           salesforce: crmState(l.salesforceSyncStatus, l.salesforceSyncError, l.salesforceSyncedAt, l.salesforceLeadId),
           customCrm: crmState(l.customCrmSyncStatus, l.customCrmSyncError, l.customCrmSyncedAt, l.customCrmLeadId),
+          meritto: crmState(l.merittoSyncStatus, l.merittoSyncError, l.merittoSyncedAt, l.merittoLeadId),
         },
         detail: protectWebsiteLead(l, mask),
       });

@@ -50,6 +50,15 @@ export function whatsappForCrm(config: any, phone: string | null | undefined, wa
 export async function evaluateCrmGate(input: CrmGateInput): Promise<{ ok: boolean; result: CrmGateResult; lead?: any; whatsapp?: string | null; missing?: string[] }> {
   const settings: any = await storage.getWidgetSettings(input.businessAccountId);
   if (!settings?.leadsquaredEnabled || settings.leadsquaredEnabled !== 'true') return { ok: false, result: 'skipped:disabled' };
+  return evaluateLeadReadiness(input, settings);
+}
+
+/**
+ * The rules above without the LeadSquared switch: whether a lead is ready for any CRM (contact,
+ * mandatory fields, OTP/CAPTCHA). Shared with the Meritto sync.
+ */
+export async function evaluateLeadReadiness(input: CrmGateInput, settingsIn?: any): Promise<{ ok: boolean; result: CrmGateResult; lead?: any; whatsapp?: string | null; missing?: string[] }> {
+  const settings: any = settingsIn ?? await storage.getWidgetSettings(input.businessAccountId);
   const lead = await storage.getLead(input.leadId, input.businessAccountId);
   if (!lead) return { ok: false, result: 'skipped:not_found' };
   if (!lead.phone && !lead.email) return { ok: false, result: 'skipped:no_contact' };

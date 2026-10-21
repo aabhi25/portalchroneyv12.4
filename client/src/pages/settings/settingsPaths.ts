@@ -34,7 +34,7 @@ export const SETTINGS_PATHS = {
   visualSearch: "/admin/vista/settings/visual-search",
 } as const;
 
-export type IntegrationTabId = "leadsquared" | "salesforce" | "custom-crm" | "shopify" | "erp";
+export type IntegrationTabId = "leadsquared" | "salesforce" | "meritto" | "custom-crm" | "shopify" | "erp";
 
 export function integrationPath(tab?: IntegrationTabId): string {
   return tab ? `${SETTINGS_PATHS.integrations}/${tab}` : SETTINGS_PATHS.integrations;
@@ -64,6 +64,7 @@ export const LEGACY_SETTINGS_REDIRECTS: Record<string, string> = {
   "/admin/crm": integrationPath(),
   "/admin/leadsquared": integrationPath("leadsquared"),
   "/admin/salesforce": integrationPath("salesforce"),
+  "/admin/meritto": integrationPath("meritto"),
   "/admin/custom-crm": integrationPath("custom-crm"),
   "/admin/erp": integrationPath("erp"),
   "/admin/otp-settings": SETTINGS_PATHS.otp,

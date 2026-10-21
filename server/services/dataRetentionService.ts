@@ -129,8 +129,9 @@ export async function getAccountsWithActivePolicy(): Promise<string[]> {
 
 export async function getAccountCrmTargets(accountId: string): Promise<AccountCrmTargets> {
   const { isLeadSquaredConfigured, isSalesforceConfigured } = await import('./crmLeadSync');
+  const { isMerittoConfigured } = await import('./merittoSync');
   const settings = await storage.getWidgetSettings(accountId);
-  return { leadsquared: isLeadSquaredConfigured(settings), salesforce: isSalesforceConfigured(settings) };
+  return { leadsquared: isLeadSquaredConfigured(settings), salesforce: isSalesforceConfigured(settings), meritto: isMerittoConfigured(settings) };
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +142,7 @@ function syncedSql(crm: AccountCrmTargets) {
   const parts = [];
   if (crm.leadsquared) parts.push(sql`COALESCE(${leads.leadsquaredSyncStatus}, '') = 'synced'`);
   if (crm.salesforce) parts.push(sql`COALESCE(${leads.salesforceSyncStatus}, '') = 'synced'`);
+  if (crm.meritto) parts.push(sql`COALESCE(${leads.merittoSyncStatus}, '') = 'synced'`);
   if (parts.length === 0) return sql`false`;
   return sql.join(parts, sql` AND `);
 }
@@ -149,6 +151,7 @@ function syncedAtSql(crm: AccountCrmTargets) {
   const cols = [];
   if (crm.leadsquared) cols.push(sql`${leads.leadsquaredSyncedAt}`);
   if (crm.salesforce) cols.push(sql`${leads.salesforceSyncedAt}`);
+  if (crm.meritto) cols.push(sql`${leads.merittoSyncedAt}`);
   if (cols.length === 0) return sql`${leads.createdAt}`;
   return sql`COALESCE(GREATEST(${sql.join(cols, sql`, `)}), ${leads.createdAt})`;
 }
@@ -279,6 +282,9 @@ export async function purgeAccount(accountId: string, policy: EffectiveRetention
       sfStatus: leads.salesforceSyncStatus,
       sfId: leads.salesforceLeadId,
       sfAt: leads.salesforceSyncedAt,
+      merStatus: leads.merittoSyncStatus,
+      merId: leads.merittoLeadId,
+      merAt: leads.merittoSyncedAt,
     }).from(leads).where(dueLeadsWhere(accountId, policy, crm, now)).orderBy(leads.createdAt).limit(BATCH_SIZE);
     if (due.length === 0) break;
 
@@ -298,6 +304,7 @@ export async function purgeAccount(accountId: string, policy: EffectiveRetention
       const state = leadSyncState({
         leadsquaredSyncStatus: l.lsqStatus, leadsquaredSyncedAt: l.lsqAt,
         salesforceSyncStatus: l.sfStatus, salesforceSyncedAt: l.sfAt,
+        merittoSyncStatus: l.merStatus, merittoSyncedAt: l.merAt,
       }, crm);
       const cls = classifyLeadForCounts(l, !!(l.conversationId && journeyIds.has(l.conversationId)));
       return {
@@ -309,7 +316,7 @@ export async function purgeAccount(accountId: string, policy: EffectiveRetention
         reason: state.synced ? 'synced_retention' : 'unsynced_retention',
         synced: state.synced,
         syncedAt: state.syncedAt,
-        crmLeadId: l.lsqId || l.sfId || null,
+        crmLeadId: l.lsqId || l.sfId || l.merId || null,
         source: cls.source,
         isDiscount: cls.isDiscount,
         isPaid: cls.isPaid,
@@ -474,7 +481,7 @@ async function maskLeadContacts(accountId: string, lead: typeof leads.$inferSele
 /** Hides contact details on every due lead of one account, in batches. Returns how many leads were hidden. */
 export async function maskAccountContacts(accountId: string, maxBatches = 20): Promise<number> {
   const crm = await getAccountCrmTargets(accountId);
-  if (!crm.leadsquared && !crm.salesforce) return 0; // nothing ever counts as synced
+  if (!crm.leadsquared && !crm.salesforce && !crm.meritto) return 0; // nothing ever counts as synced
   let masked = 0;
   for (let batch = 0; batch < maxBatches; batch++) {
     const due = await db.select().from(leads).where(dueMaskWhere(accountId, crm, new Date())).orderBy(leads.createdAt).limit(MASK_BATCH_SIZE);

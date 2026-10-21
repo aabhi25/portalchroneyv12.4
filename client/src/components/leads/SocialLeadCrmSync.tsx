@@ -40,7 +40,7 @@ export function useSocialCrmConfig() {
       return res.json();
     },
   });
-  const configured: SocialCrm[] = data ? (Object.keys(data) as SocialCrm[]).filter(c => data[c].configured) : [];
+  const configured: SocialCrm[] = data ? (Object.keys(data) as Array<keyof CrmConfig>).filter(c => data[c].configured) : [];
   return { config: data, configured };
 }
 
