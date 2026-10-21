@@ -675,9 +675,10 @@ export const widgetSettings = pgTable("widget_settings", {
   widgetHeight: numeric("widget_height", { precision: 5, scale: 0 }).notNull().default("600"), // Widget height in pixels
   widgetPosition: text("widget_position").notNull().default("bottom-right"), // 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
   bubbleSize: numeric("bubble_size", { precision: 3, scale: 0 }).notNull().default("60"), // Chat bubble button size in pixels
-  sizePreset: text("size_preset").notNull().default("medium"), // 'small' | 'medium' | 'large' | 'custom'
+  sizePreset: text("size_preset").notNull().default("medium"), // 'small' | 'medium' | 'large' | 'full' (docked full-height panel) | 'custom'
   pillBottomOffset: numeric("pill_bottom_offset", { precision: 4, scale: 0 }).notNull().default("20"), // Bottom offset in pixels for pill/launcher
   pillSideOffset: numeric("pill_side_offset", { precision: 4, scale: 0 }).notNull().default("20"), // Side offset in pixels for pill/launcher
+  panelTopOffset: text("panel_top_offset").notNull().default("auto"), // 'full' size preset: space above the docked panel ('auto' = below the site's fixed header, or pixels)
   
   // AI Response Length
   responseLength: text("response_length").notNull().default("balanced"), // 'concise' | 'balanced' | 'detailed' - Controls AI response verbosity

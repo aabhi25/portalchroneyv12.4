@@ -1,0 +1,1 @@
+ALTER TABLE "widget_settings" ADD COLUMN IF NOT EXISTS "panel_top_offset" text DEFAULT 'auto' NOT NULL;

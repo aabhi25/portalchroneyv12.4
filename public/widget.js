@@ -739,6 +739,8 @@
             widgetHeaderText: settings.widgetHeaderText || 'Hi Chroney',
             widgetWidth: settings.widgetWidth || '400',
             widgetHeight: settings.widgetHeight || '600',
+            sizePreset: settings.sizePreset || 'medium',
+            panelTopOffset: settings.panelTopOffset || 'auto',
             widgetPosition: settings.widgetPosition || 'bottom-right',
             bubbleSize: settings.bubbleSize || '60',
             pillBottomOffset: settings.pillBottomOffset || '20',
@@ -2124,6 +2126,78 @@
       console.log('[Hi Chroney] WhatsApp launcher rendered (' + (aiAlsoShown ? 'both' : 'whatsapp-only') + ' mode)');
     },
 
+    /**
+     * "Full height" panel: keep its top just below the website's header. 'auto' finds a header
+     * fixed/sticky at the top of the screen (or the page's <header> while it is still in view, so the
+     * panel follows it as the page scrolls); a number is a fixed gap in pixels.
+     */
+    trackPanelTop: function(iframe) {
+      const setting = String(this.config.panelTopOffset || 'auto').trim();
+      const manual = setting === 'auto' ? null : Math.max(0, Math.min(300, parseInt(setting, 10) || 0));
+      const isOwn = (el) => {
+        for (let n = el; n; n = n.parentElement) {
+          if (n.id && n.id.indexOf('hichroney-') === 0) return true;
+        }
+        return false;
+      };
+      const visible = (el, cs) => cs.visibility !== 'hidden' && cs.display !== 'none' && parseFloat(cs.opacity || '1') > 0;
+      const headerBottom = () => {
+        if (manual !== null) return manual;
+        const vh = window.innerHeight;
+        const vw = window.innerWidth;
+        let bottom = 0;
+        const consider = (el) => {
+          const rect = el.getBoundingClientRect();
+          if (rect.height > 0 && rect.height < vh * 0.4 && rect.top <= 4 && rect.bottom > 0 && rect.width >= vw * 0.5) {
+            bottom = Math.max(bottom, rect.bottom);
+          }
+        };
+        // Bars fixed or sticky at the top of the screen
+        if (document.elementsFromPoint) {
+          [0.2, 0.5, 0.8].forEach((f) => {
+            const els = document.elementsFromPoint(Math.round(vw * f), 2);
+            for (const el of els) {
+              if (isOwn(el)) continue;
+              for (let n = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+                const cs = getComputedStyle(n);
+                if ((cs.position === 'fixed' || cs.position === 'sticky') && visible(n, cs)) { consider(n); break; }
+              }
+              break;
+            }
+          });
+        }
+        // The page's own header while it is still on screen (scrolls away with the page)
+        const header = document.querySelector('header, [role="banner"]');
+        if (header && !isOwn(header)) {
+          const cs = getComputedStyle(header);
+          if (visible(header, cs)) consider(header);
+        }
+        return Math.round(Math.min(bottom, vh * 0.4));
+      };
+      let lastTop = -1;
+      const apply = () => {
+        const top = headerBottom();
+        if (top !== lastTop) {
+          lastTop = top;
+          iframe.style.setProperty('--hichroney-panel-top', top + 'px');
+        }
+      };
+      apply();
+      if (manual !== null) return;
+      let queued = false;
+      const queue = () => {
+        if (queued) return;
+        queued = true;
+        setTimeout(() => { queued = false; apply(); }, 50);
+      };
+      window.addEventListener('scroll', queue, { passive: true });
+      window.addEventListener('resize', queue);
+      window.addEventListener('load', queue);
+      // Headers that appear or change size after load (cookie bars, shrinking headers)
+      setTimeout(queue, 1000);
+      setTimeout(queue, 3000);
+    },
+
     createWidget: function() {
       const baseUrl = this.getBaseUrl();
       
@@ -2133,6 +2207,10 @@
       const bubbleSize = parseInt(this.config.bubbleSize, 10) || 60;
       const bottomOffset = parseInt(this.config.pillBottomOffset, 10) || 20;
       const sideOffset = parseInt(this.config.pillSideOffset, 10) || 20;
+      // "Full height" size: on computers and tablets the chat opens as a panel docked to the side,
+      // from just below the website's header to the bottom of the screen. Phones stay full screen.
+      const isFullPanel = this.config.sizePreset === 'full' && !this.config.container;
+      const panelWidth = parseInt(this.config.widgetWidth, 10) || 420;
 
       // Phones: the pill (a bar with a typing box) is too wide for a phone screen and covers the
       // page, so phones get the small round button instead. Computers keep the chosen style.
@@ -2780,6 +2858,33 @@
             margin: 0 !important;
           }
         }
+      ${isFullPanel ? `
+        /* "Full height" docked side panel (computers and tablets) */
+        @keyframes hichroney-panel-in {
+          from { opacity: 0; transform: translateX(${horizontalPos === 'left' ? '-28px' : '28px'}); }
+          to { opacity: 1; transform: none; }
+        }
+        @media (min-width: 481px) {
+          #hichroney-widget-iframe.hichroney-full-panel:not(.partial-mode) {
+            top: var(--hichroney-panel-top, 0px) !important;
+            bottom: auto !important;
+            ${horizontalPos === 'left' ? 'left: 0 !important; right: auto !important;' : 'right: 0 !important; left: auto !important;'}
+            width: min(${panelWidth}px, 100vw) !important;
+            max-width: 100vw !important;
+            height: calc(100vh - var(--hichroney-panel-top, 0px)) !important;
+            height: calc(100dvh - var(--hichroney-panel-top, 0px)) !important;
+            max-height: none !important;
+            border-radius: ${horizontalPos === 'left' ? '0 18px 0 0' : '18px 0 0 0'} !important;
+            box-shadow: ${horizontalPos === 'left' ? '10px' : '-10px'} 0 40px rgba(15, 23, 42, 0.18) !important;
+          }
+          #hichroney-widget-iframe.hichroney-full-panel.chat-opening {
+            animation: hichroney-panel-in 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) forwards !important;
+          }
+          #hichroney-widget-iframe.hichroney-full-panel.chat-open-glow {
+            animation: none !important;
+          }
+        }
+      ` : ''}
       `;
       document.head.appendChild(responsiveStyles);
       
@@ -2827,6 +2932,10 @@
       // Create iframe for the chat widget
       const iframe = document.createElement('iframe');
       iframe.id = 'hichroney-widget-iframe';
+      if (isFullPanel) {
+        iframe.classList.add('hichroney-full-panel');
+        this.trackPanelTop(iframe);
+      }
       
       // Grant microphone and autoplay permissions for voice mode
       iframe.setAttribute('allow', 'microphone; autoplay; fullscreen');

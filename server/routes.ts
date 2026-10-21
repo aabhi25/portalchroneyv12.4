@@ -28337,7 +28337,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         appointmentSuggestRules,
         enableCartRecovery, recoveryTriggerMinutes, recoveryDiscountType, recoveryDiscountValue,
         recoveryEmailEnabled, recoveryWhatsappEnabled, twilioAccountSid, twilioAuthToken, twilioWhatsappFrom,
-        widgetWidth, widgetHeight, widgetPosition, bubbleSize, sizePreset, pillBottomOffset, pillSideOffset, autoOpenChat, autoOpenFrequency, openingSoundEnabled, openingSoundStyle, voiceSelection, voiceModeStyle, chatMode,
+        widgetWidth, widgetHeight, widgetPosition, bubbleSize, sizePreset, pillBottomOffset, pillSideOffset, panelTopOffset, autoOpenChat, autoOpenFrequency, openingSoundEnabled, openingSoundStyle, voiceSelection, voiceModeStyle, chatMode,
         conversationStarters, conversationStartersEnabled, showStartersOnPill,
         inactivityNudgeEnabled, inactivityNudgeDelay, inactivityNudgeMessage, inactivityNudgeMessages, smartNudgeEnabled,
         proactiveNudgeEnabled, proactiveNudgeDelay, proactiveNudgeMessage, proactiveNudgeMessages, proactiveNudgeRepeat,
@@ -28389,7 +28389,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         recoveryEmailEnabled: string; recoveryWhatsappEnabled: string;
         twilioAccountSid: string; twilioAuthToken: string; twilioWhatsappFrom: string;
         widgetWidth: string; widgetHeight: string; widgetPosition: string;
-        bubbleSize: string; sizePreset: string; pillBottomOffset: string; pillSideOffset: string; autoOpenChat: string; autoOpenFrequency: string; openingSoundEnabled: string; openingSoundStyle: string; voiceSelection: string;
+        bubbleSize: string; sizePreset: string; pillBottomOffset: string; pillSideOffset: string; panelTopOffset: string; autoOpenChat: string; autoOpenFrequency: string; openingSoundEnabled: string; openingSoundStyle: string; voiceSelection: string;
         voiceModeStyle: string; chatMode: string;
         conversationStarters: string; conversationStartersEnabled: string; showStartersOnPill: string;
         inactivityNudgeEnabled: string; inactivityNudgeDelay: string; inactivityNudgeMessage: string;
@@ -28454,6 +28454,11 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       if (sizePreset !== undefined) updateData.sizePreset = sizePreset;
       if (pillBottomOffset !== undefined) updateData.pillBottomOffset = pillBottomOffset;
       if (pillSideOffset !== undefined) updateData.pillSideOffset = pillSideOffset;
+      // "Full height" panel: 'auto' (below the site's fixed header) or 0–300 px
+      if (panelTopOffset !== undefined) {
+        const v = String(panelTopOffset).trim();
+        updateData.panelTopOffset = v === 'auto' ? 'auto' : String(Math.max(0, Math.min(300, parseInt(v, 10) || 0)));
+      }
       
       // Widget behavior settings
       if (autoOpenChat !== undefined) updateData.autoOpenChat = autoOpenChat;

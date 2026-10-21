@@ -90,6 +90,7 @@ interface WidgetSettings {
   sizePreset: string;
   pillBottomOffset?: string;
   pillSideOffset?: string;
+  panelTopOffset?: string;
   autoOpenChat: string;
   autoOpenFrequency?: string;
   openingSoundEnabled?: string;
@@ -324,6 +325,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
   const [sizePreset, setSizePreset] = useState("medium");
   const [pillBottomOffset, setPillBottomOffset] = useState("20");
   const [pillSideOffset, setPillSideOffset] = useState("20");
+  const [panelTopOffset, setPanelTopOffset] = useState("auto"); // "Full height" panel: 'auto' or px
   const [autoOpenChat, setAutoOpenChat] = useState("false");
   const [autoOpenFrequency, setAutoOpenFrequency] = useState("once");
   const [openingSoundEnabled, setOpeningSoundEnabled] = useState(true);
@@ -504,6 +506,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
       setSizePreset(settings.sizePreset || "medium");
       setPillBottomOffset(settings.pillBottomOffset || "20");
       setPillSideOffset(settings.pillSideOffset || "20");
+      setPanelTopOffset(settings.panelTopOffset || "auto");
       setAutoOpenChat(settings.autoOpenChat || "false");
       setAutoOpenFrequency(settings.autoOpenFrequency || "once");
       setOpeningSoundEnabled(settings.openingSoundEnabled !== 'false');
@@ -674,6 +677,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
       sizePreset !== settings.sizePreset ||
       pillBottomOffset !== (settings.pillBottomOffset || "20") ||
       pillSideOffset !== (settings.pillSideOffset || "20") ||
+      panelTopOffset !== (settings.panelTopOffset || "auto") ||
       autoOpenChat !== settings.autoOpenChat ||
       autoOpenFrequency !== (settings.autoOpenFrequency || "once") ||
       (openingSoundEnabled ? "true" : "false") !== (settings.openingSoundEnabled || "true") ||
@@ -713,6 +717,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
         sizePreset,
         pillBottomOffset,
         pillSideOffset,
+        panelTopOffset,
         autoOpenChat,
         autoOpenFrequency,
         openingSoundEnabled: openingSoundEnabled ? "true" : "false",
@@ -724,7 +729,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
     }, 1500);
 
     return () => clearTimeout(timeoutId);
-  }, [settings, chatColor, chatColorEnd, widgetHeaderText, welcomeMessageType, welcomeMessage, buttonStyle, buttonAnimation, personality, responseLength, chatFontSize, footerLabelEnabled, footerLabelText, poweredByEnabled, widgetWidth, widgetHeight, widgetPosition, bubbleSize, sizePreset, pillBottomOffset, pillSideOffset, autoOpenChat, autoOpenFrequency, openingSoundEnabled, openingSoundStyle, voiceSelection, voiceModeStyle, chatMode]);
+  }, [settings, chatColor, chatColorEnd, widgetHeaderText, welcomeMessageType, welcomeMessage, buttonStyle, buttonAnimation, personality, responseLength, chatFontSize, footerLabelEnabled, footerLabelText, poweredByEnabled, widgetWidth, widgetHeight, widgetPosition, bubbleSize, sizePreset, pillBottomOffset, pillSideOffset, panelTopOffset, autoOpenChat, autoOpenFrequency, openingSoundEnabled, openingSoundStyle, voiceSelection, voiceModeStyle, chatMode]);
 
   // Auto-save effect for nudge settings
   useEffect(() => {
@@ -873,6 +878,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
       widgetPosition?: string;
       bubbleSize?: string;
       sizePreset?: string;
+      panelTopOffset?: string;
       autoOpenChat?: string;
       autoOpenFrequency?: string;
       openingSoundEnabled?: string;
@@ -1860,19 +1866,21 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                     {/* Size Presets */}
                     <div className="space-y-3">
                       <Label className="text-sm font-semibold text-gray-700">Size Preset</Label>
-                      <div className="grid grid-cols-4 gap-2">
+                      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
                         {[
-                          { id: "small", label: "Small", width: "350", height: "500" },
-                          { id: "medium", label: "Medium", width: "400", height: "600" },
-                          { id: "large", label: "Large", width: "450", height: "700" },
-                          { id: "custom", label: "Custom", width: widgetWidth, height: widgetHeight },
+                          { id: "small", label: "Small", width: "350", height: "500", hint: "350×500" },
+                          { id: "medium", label: "Medium", width: "400", height: "600", hint: "400×600" },
+                          { id: "large", label: "Large", width: "450", height: "700", hint: "450×700" },
+                          { id: "full", label: "Full height", width: "420", height: widgetHeight, hint: "Side panel" },
+                          { id: "custom", label: "Custom", width: widgetWidth, height: widgetHeight, hint: "" },
                         ].map((preset) => (
                           <button
                             key={preset.id}
                             onClick={() => {
                               setSizePreset(preset.id);
                               if (preset.id !== "custom") {
-                                setWidgetWidth(preset.width);
+                                // Full height keeps a width the business already tuned; the others reset it.
+                                if (preset.id !== "full" || sizePreset !== "full") setWidgetWidth(preset.width);
                                 setWidgetHeight(preset.height);
                               }
                             }}
@@ -1884,8 +1892,8 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                           >
                             <div className="flex flex-col items-center gap-1">
                               <span className="text-xs font-semibold text-gray-700">{preset.label}</span>
-                              {preset.id !== "custom" && (
-                                <span className="text-[10px] text-gray-500">{preset.width}×{preset.height}</span>
+                              {preset.hint && (
+                                <span className="text-[10px] text-gray-500">{preset.hint}</span>
                               )}
                             </div>
                           </button>
@@ -1903,7 +1911,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                         value={[parseInt(widgetWidth)]}
                         onValueChange={(value) => {
                           setWidgetWidth(value[0].toString());
-                          setSizePreset("custom");
+                          if (sizePreset !== "full") setSizePreset("custom"); // the full-height panel's width is adjustable
                         }}
                         min={300}
                         max={600}
@@ -1912,7 +1920,40 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                       />
                     </div>
 
-                    {/* Height Control */}
+                    {sizePreset === "full" ? (
+                      /* Full height: the panel runs from below the site's header to the bottom of the screen */
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-sm font-semibold text-gray-700">Space at top</Label>
+                          <span className="text-xs font-mono text-gray-600 bg-gray-100 px-2 py-1 rounded">
+                            {panelTopOffset === "auto" ? "Auto" : `${panelTopOffset}px`}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPanelTopOffset(panelTopOffset === "auto" ? "80" : "auto")}
+                            className={`shrink-0 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
+                              panelTopOffset === "auto" ? "border-purple-600 bg-purple-50 text-purple-700" : "border-gray-200 text-gray-600 hover:border-purple-300"
+                            }`}
+                          >
+                            Auto
+                          </button>
+                          <Slider
+                            value={[panelTopOffset === "auto" ? 0 : parseInt(panelTopOffset) || 0]}
+                            onValueChange={(value) => setPanelTopOffset(value[0].toString())}
+                            min={0}
+                            max={300}
+                            step={4}
+                            className="w-full"
+                          />
+                        </div>
+                        <p className="text-xs text-gray-500">
+                          Auto starts the chat just below your website's header (when it stays fixed at the top). Or set the space yourself.
+                          The panel docks to the right or left edge of the screen; on phones the chat opens full screen as usual.
+                        </p>
+                      </div>
+                    ) : (
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
                         <Label className="text-sm font-semibold text-gray-700">Height</Label>
@@ -1930,6 +1971,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                         className="w-full"
                       />
                     </div>
+                    )}
 
                     {/* Bubble Size Control */}
                     <div className="space-y-3">
