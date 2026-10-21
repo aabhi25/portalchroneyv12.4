@@ -2936,6 +2936,103 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
     }
   });
 
+  // Chat booking card: the visitor's conversation, only when it is theirs (same visitor token).
+  const visitorOwnedConversation = async (businessAccountId: string, conversationId: unknown, sessionToken: unknown) => {
+    if (typeof conversationId !== 'string' || !conversationId.trim() || conversationId.startsWith('temp_')) return undefined;
+    if (typeof sessionToken !== 'string' || !sessionToken.trim()) return undefined;
+    const conversation = await storage.getConversation(conversationId.trim(), businessAccountId).catch(() => undefined);
+    return conversation && conversation.visitorToken === sessionToken.trim() ? conversation : undefined;
+  };
+
+  // Chat booking card: name + mobile the visitor already gave in this chat (to fill in the form)
+  app.get("/api/chat/widget/appointment-contact", async (req, res) => {
+    try {
+      const { businessAccountId, conversationId, sessionToken } = req.query;
+      if (typeof businessAccountId !== 'string' || !businessAccountId) {
+        return res.status(400).json({ error: "businessAccountId required" });
+      }
+      const conversation = await visitorOwnedConversation(businessAccountId, conversationId, sessionToken);
+      if (!conversation) return res.json({ name: null, phone: null });
+      const lead = await storage.getLeadByConversation(conversation.id, businessAccountId);
+      const phone = lead?.phone && validatePhoneNumber(lead.phone, '10').isValid ? lead.phone : null;
+      res.json({ name: lead?.name || null, phone });
+    } catch (error: any) {
+      console.error('[Widget Appointment Contact] Error:', error);
+      res.json({ name: null, phone: null });
+    }
+  });
+
+  // Chat booking card: book the picked slot with the visitor's name + mobile, using the same
+  // checks as the AI's book_appointment tool (slot free, within hours, valid mobile, one lead per chat).
+  app.post("/api/chat/widget/confirm-appointment", async (req, res) => {
+    try {
+      const { businessAccountId, conversationId, sessionId, sessionToken, date, time, name, phone, durationMinutes } = req.body ?? {};
+      if (typeof businessAccountId !== 'string' || !businessAccountId) {
+        return res.status(400).json({ success: false, error: "businessAccountId required" });
+      }
+      if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) || typeof time !== 'string' || !/^\d{2}:\d{2}$/.test(time)) {
+        return res.status(400).json({ success: false, error: "Please pick a date and time." });
+      }
+      const patientName = typeof name === 'string' ? name.trim().slice(0, 120) : '';
+      if (patientName.length < 2) {
+        return res.status(400).json({ success: false, field: 'name', error: "Please enter your name." });
+      }
+      const phoneCheck = validatePhoneNumber(typeof phone === 'string' ? phone : '', '10');
+      if (!phoneCheck.isValid) {
+        return res.status(400).json({ success: false, field: 'phone', error: phoneCheck.reasonMessage });
+      }
+
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      if (!businessAccount || businessAccount.appointmentsEnabled !== 'true') {
+        return res.status(400).json({ success: false, error: 'Appointments are not available right now.' });
+      }
+
+      const conversation = await visitorOwnedConversation(businessAccountId, conversationId, sessionToken);
+      const { ToolExecutionService } = await import('./services/toolExecutionService');
+      const result = await ToolExecutionService.executeTool(
+        'book_appointment',
+        {
+          patient_name: patientName,
+          patient_phone: phoneCheck.normalized,
+          appointment_date: date,
+          appointment_time: time,
+          duration_minutes: Number(durationMinutes) > 0 ? Number(durationMinutes) : 30,
+        },
+        {
+          businessAccountId,
+          userId: typeof sessionId === 'string' && sessionId ? `widget_session_${sessionId}` : 'widget-user',
+          conversationId: conversation?.id,
+          channel: 'widget',
+        }
+      );
+
+      if (!result.success) {
+        const slotGone = /already booked|not available|outside business hours|past/i.test(result.error || '');
+        return res.status(409).json({ success: false, slotUnavailable: slotGone, error: result.message || result.error || 'Could not book this time.' });
+      }
+
+      // Put the confirmation in the chat history (inbox + the AI's memory), so the AI knows the
+      // booking is done and the line is still there after a reload.
+      if (conversation && result.message) {
+        try {
+          await storage.createMessage({ conversationId: conversation.id, role: 'assistant', content: result.message });
+          await storage.updateConversationTimestamp(conversation.id);
+          const memoryKey = typeof sessionId === 'string' && sessionId ? `widget_session_${sessionId}` : '';
+          if (memoryKey && conversationMemory.getBoundConversationId(memoryKey) === conversation.id) {
+            conversationMemory.storeMessage(memoryKey, 'assistant', result.message);
+          }
+        } catch (msgError) {
+          console.error('[Widget Confirm Appointment] Could not save the confirmation message:', msgError);
+        }
+      }
+
+      res.json({ success: true, appointmentId: result.data?.appointmentId, name: patientName, message: result.message });
+    } catch (error: any) {
+      console.error('[Widget Confirm Appointment] Error:', error);
+      res.status(500).json({ success: false, error: 'Something went wrong. Please try again.' });
+    }
+  });
+
   // Widget featured products endpoint - returns products for welcome carousel
   app.get("/api/chat/widget/featured-products", async (req, res) => {
     try {

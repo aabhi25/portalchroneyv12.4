@@ -307,6 +307,17 @@ function k12ContextWords(value: string): string[] {
   ));
 }
 
+/** "Book an appointment", "can I schedule a visit?", "I need an appointment" (not "cancel / reschedule my appointment" or a typed-in time). */
+export function isClearBookingRequest(message: string): boolean {
+  const m = (message || '').toLowerCase();
+  // A time typed in ("…Thursday at 12:30 PM") is a pick, not a request to browse: the AI handles it.
+  if (/\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\b\d{1,2}:\d{2}\b/.test(m)) return false;
+  if (m.length > 160 || /\b(cancel\w*|reschedul\w*|postpone\w*|chang\w*|move|status|confirm\w*|cost|price|fee\w*|charges?)\b/.test(m)) return false;
+  return /\b(book\w*|schedul\w*|fix|reserve|get|need|want)\b[^.?!]{0,30}\b(appointment|slot|consultation)s?\b/.test(m)
+    || /\b(book\w*|schedul\w*|reserve)\b[^.?!]{0,20}\b(visit|meeting|demo|session|call)\b/.test(m)
+    || /^\s*(appointment|book(ing)?|book an? appointment)\s*[?!.]*\s*$/.test(m);
+}
+
 export class ChatService {
   // Track last escalation check per conversation to prevent repeated expensive checks
   private lastEscalationCheck = new Map<string, number>();
@@ -4385,7 +4396,13 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         otpState.awaiting_otp === true || otpState.locked === true,
         // Top Scholar content-only K12: force fetch_k12_topic on the first
         // streaming turn so academic answers are always curriculum-grounded.
-        this.shouldForceK12Fetch(context) ? 'fetch_k12_topic' : undefined,
+        this.shouldForceK12Fetch(context)
+          ? 'fetch_k12_topic'
+          // Chat booking card: a clear "book an appointment" opens the card (which collects name +
+          // mobile) instead of the model asking for a name first.
+          : (context.supportsCalendarUI && !context.phoneCall && !otpState.awaiting_otp && !otpState.locked && isClearBookingRequest(userMessage))
+            ? 'list_available_slots'
+            : undefined,
         firstCallPromptOptions,
         turnOptions,
       )) {
@@ -4783,7 +4800,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           if (toolName === 'list_available_slots' && appointmentSlotsData && context.supportsCalendarUI) {
             const enhancedResult = {
               ...result,
-              _ui_note: `IMPORTANT: A visual calendar UI will automatically display these time slots to the user. DO NOT list the individual time slots in your text response. Just give a brief friendly intro like "Here are the available appointment slots - please select a date and time that works for you!" CRITICAL: Do NOT include any bracketed placeholder text like "[Calendar will show]" or "[Visual Calendar UI will display the options]" - the calendar renders automatically, so your response should be clean natural text only.`
+              _ui_note: `IMPORTANT: A booking card will automatically display these time slots to the user. In that card the user picks a time, enters their name and mobile number, and confirms - the card books the appointment itself. DO NOT list the individual time slots in your text response, and do NOT ask for their name or phone number now. Just give one brief friendly line like "Here are the available times - pick one that suits you and confirm below." CRITICAL: Do NOT include any bracketed placeholder text like "[Calendar will show]" or "[Visual Calendar UI will display the options]" - the card renders automatically, so your response should be clean natural text only.`
             };
             toolResultContent = JSON.stringify(enhancedResult);
             console.log('[Chat Stream] Enhanced list_available_slots result with calendar UI note');

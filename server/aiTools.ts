@@ -702,7 +702,7 @@ export const aiTools = [
     type: 'function',
     function: {
       name: 'list_available_slots',
-      description: 'Show visual calendar for BROWSING availability. IMPORTANT: Always start from TODAY (the current date) - do NOT skip to tomorrow. A visual calendar will be displayed showing the full month with available dates highlighted. Use when: user says "book appointment", "show me slots", "what times are available", "when can I come in". DO NOT CALL THIS if user already selected/mentioned a specific date AND time (e.g., "I want to book Wednesday at 9:30 AM") - in that case, ask for their name and phone, then call book_appointment. This tool is ONLY for initial browsing, not for confirming selections.',
+      description: 'Show visual calendar for BROWSING availability. IMPORTANT: Always start from TODAY (the current date) - do NOT skip to tomorrow. A booking card will be displayed where the user picks a day and time, enters their name and mobile number, and confirms the booking themselves. Use when: user says "book appointment", "show me slots", "what times are available", "when can I come in". DO NOT CALL THIS if user already selected/mentioned a specific date AND time (e.g., "I want to book Wednesday at 9:30 AM") - in that case, ask for their name and phone, then call book_appointment. This tool is ONLY for initial browsing, not for confirming selections. Also DO NOT CALL THIS to check or confirm a booking already made in this chat (the history shows it, e.g. "I\'ve booked your appointment for…") - just answer from the history.',
       parameters: {
         type: 'object',
         properties: {

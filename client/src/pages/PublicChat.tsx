@@ -75,15 +75,10 @@ interface ProductPagination {
   hasMore: boolean;
 }
 
+// What the chat stream sends with an "appointment_slots" event.
 interface AppointmentSlotsData {
-  slots: Array<{
-    date: string;
-    time: string;
-    available: boolean;
-  }>;
-  timezone: string;
-  duration: number;
-  serviceType?: string;
+  slots: Record<string, string[]>;
+  durationMinutes: number;
 }
 
 interface FormStepData {
@@ -1187,11 +1182,6 @@ export default function PublicChat() {
     sendMessage(question);
   };
 
-  const handleAppointmentSelect = async (slot: { date: string; time: string }) => {
-    const confirmMessage = `I'd like to book the appointment on ${slot.date} at ${slot.time}`;
-    await sendMessage(confirmMessage);
-  };
-
   if (dataLoading) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-purple-50 via-white to-blue-50 p-4">
@@ -1550,10 +1540,9 @@ export default function PublicChat() {
                         <Suspense fallback={<div className="h-48 animate-pulse bg-gray-100 rounded-lg" />}>
                           <AppointmentCalendar
                             slots={msg.appointmentSlots.slots}
-                            timezone={msg.appointmentSlots.timezone}
-                            duration={msg.appointmentSlots.duration}
-                            onSelect={handleAppointmentSelect}
+                            durationMinutes={msg.appointmentSlots.durationMinutes}
                             chatColor={chatColor}
+                            businessAccountId={businessAccountId || ''}
                           />
                         </Suspense>
                       )}

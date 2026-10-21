@@ -1,5 +1,5 @@
 import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, GitCompare, Briefcase, Lock, Video, GraduationCap, Undo2 } from "lucide-react";
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,7 @@ const VoiceMode = lazy(() => import("@/components/VoiceMode").then(m => ({ defau
 const InlineVoiceMode = lazy(() => import("@/components/InlineVoiceMode").then(m => ({ default: m.InlineVoiceMode })));
 
 const AppointmentCalendar = lazy(() => import("@/components/AppointmentCalendar").then(m => ({ default: m.AppointmentCalendar })));
+import type { BookedAppointment } from "@/components/AppointmentCalendar";
 const FormStep = lazy(() => import("@/components/FormStep").then(m => ({ default: m.FormStep })));
 import { ChatFormAnswerBar } from "@/components/ChatFormAnswerBar";
 import { hasOwnCard, isChoiceQuestion, isClosingStep } from "@/lib/formAnswer";
@@ -900,6 +901,16 @@ export default function EmbedChat() {
   const inactivityNudgeSentRef = useRef<boolean>(false);
   const inactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
   const inactivityNudgeIndexRef = useRef<number>(0); // Track which message in sequence we're on
+
+  // Booking cards: what each card (by message id) booked. Only the newest card in the chat is open.
+  const [bookedAppointments, setBookedAppointments] = useState<Record<string, BookedAppointment>>({});
+  const latestBookingCardId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const slots = messages[i].appointmentSlots?.slots;
+      if (slots && Object.keys(slots).length > 0) return messages[i].id;
+    }
+    return null;
+  }, [messages]);
   
   // Conversion tracking (Google Ads): dedupe set keyed by conversationId so the
   // hidden conversion iframe fires at most once per conversation in this browser
@@ -3767,6 +3778,8 @@ export default function EmbedChat() {
     const lastMessage = messages[messages.length - 1];
     if (lastMessage?.role !== 'assistant') return; // Only trigger after AI responds
     if (isLoading) return; // Don't trigger while AI is thinking
+    // The visitor is picking a time / filling in the booking card: don't interrupt.
+    if (lastMessage.id === latestBookingCardId && !bookedAppointments[lastMessage.id]) return;
     
     // Build full message sequence: first message + additional messages
     // When Smart Nudge is enabled, we support 2 nudges: AI-generated first, then "Are you there?"
@@ -3952,7 +3965,7 @@ export default function EmbedChat() {
         clearTimeout(inactivityTimerRef.current);
       }
     };
-  }, [messages, settings, isLoading, selectedLanguage, businessAccountId, isFormJourneyComplete, otpState.awaiting_otp, otpState.locked]);
+  }, [messages, settings, isLoading, selectedLanguage, businessAccountId, isFormJourneyComplete, otpState.awaiting_otp, otpState.locked, latestBookingCardId, bookedAppointments]);
   
   // Clear inactivity timer when form journey completes
   useEffect(() => {
@@ -6371,23 +6384,17 @@ export default function EmbedChat() {
                         chatColor={chatColor}
                         chatColorEnd={chatColorEnd}
                         businessAccountId={businessAccountId || ''}
-                        onSelectSlot={(date, time) => {
-                          const formattedDate = new Date(date + 'T00:00:00').toLocaleDateString('en-US', { 
-                            weekday: 'long', 
-                            month: 'long', 
-                            day: 'numeric' 
-                          });
-                          const [hours, minutes] = time.split(':').map(Number);
-                          const period = hours >= 12 ? 'PM' : 'AM';
-                          const displayHours = hours % 12 || 12;
-                          const formattedTime = `${displayHours}:${minutes.toString().padStart(2, '0')} ${period}`;
-                          
-                          const bookingMessage = `I'd like to book an appointment on ${formattedDate} at ${formattedTime}`;
-                          setMessage(bookingMessage);
-                          setTimeout(() => {
-                            const sendBtn = document.querySelector('[data-send-button]') as HTMLButtonElement;
-                            if (sendBtn) sendBtn.click();
-                          }, 100);
+                        conversationId={conversationIdRef.current || undefined}
+                        sessionId={sessionIdRef.current || undefined}
+                        sessionToken={visitorSessionTokenRef.current || undefined}
+                        booked={bookedAppointments[msg.id] || null}
+                        superseded={!bookedAppointments[msg.id] && msg.id !== latestBookingCardId}
+                        onBooked={(booking) => {
+                          setBookedAppointments(prev => ({ ...prev, [msg.id]: booking }));
+                          // Start the idle-nudge sequence afresh from the booking.
+                          lastAIMessageTimeRef.current = Date.now();
+                          inactivityNudgeIndexRef.current = 0;
+                          inactivityNudgeSentRef.current = false;
                         }}
                       />
                     </Suspense>

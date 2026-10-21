@@ -879,10 +879,6 @@ export default function Home() {
                           <AppointmentCalendar
                             slots={msg.appointmentSlots.slots}
                             durationMinutes={msg.appointmentSlots.durationMinutes}
-                            onSelectSlot={(date: string, time: string) => {
-                              setMessage(`I'd like to book an appointment on ${date} at ${time}`);
-                              setTimeout(() => sendMessage(), 100);
-                            }}
                             chatColor={chatColor}
                             chatColorEnd={chatColorEnd}
                             businessAccountId={currentUser.activeBusinessAccountId || currentUser.businessAccountId}
