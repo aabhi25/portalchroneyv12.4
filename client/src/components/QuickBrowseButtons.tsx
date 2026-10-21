@@ -46,11 +46,12 @@ export function QuickBrowseButtons({
 
   const containerClass = collapsible
     ? "flex flex-col gap-2 my-3 px-1"
-    : "flex flex-wrap gap-2 my-3 px-1";
+    : "flex flex-wrap gap-1.5 my-2.5 px-1";
 
   const buttonClass = collapsible
     ? "group relative w-full px-4 py-2.5 text-sm font-medium rounded-xl border text-left transition-all duration-200 active:scale-[0.98]"
-    : "group relative px-3 py-1.5 text-sm font-medium rounded-full border-2 transition-all duration-200 hover:scale-105 active:scale-95";
+    // Compact chips: a long option wraps to a second line as a soft rounded box, not a tall pill.
+    : "group relative max-w-full px-3 py-1 text-[13px] leading-snug font-medium text-left rounded-[14px] border transition-colors duration-150 active:scale-[0.97]";
 
   const baseBorder = neutral ? NEUTRAL_BORDER : chatColor;
   const baseText = neutral ? NEUTRAL_TEXT : chatColor;
