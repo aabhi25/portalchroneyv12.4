@@ -352,7 +352,7 @@ export default function Conversations() {
       <WebsiteNavTabs />
       <div className="flex flex-1 min-h-0 overflow-hidden">
       {/* Left Panel - Conversations List */}
-      <div className={`${selectedConversation ? 'hidden md:flex' : 'flex'} w-full md:w-96 border-r border-gray-200 bg-white flex-col min-h-0 overflow-hidden`}>
+      <div className={`${selectedConversation ? 'hidden md:flex' : 'flex'} w-full md:w-[340px] md:shrink-0 border-r border-gray-200 bg-white flex-col min-h-0 overflow-hidden`}>
         {/* Header */}
         <div className="p-4 border-b border-gray-200">
           {/* Search Bar */}
@@ -534,7 +534,7 @@ export default function Conversations() {
                 <div
                   key={conversation.id}
                   onClick={() => { setSelectedConversationId(conversation.id); setSummaryExpanded(false); }}
-                  className={`p-4 cursor-pointer transition-colors group ${
+                  className={`px-4 py-3 cursor-pointer transition-colors group ${
                     selectedConversationId === conversation.id
                       ? 'bg-blue-50 border-l-4 border-blue-500'
                       : 'hover:bg-gray-50'
@@ -664,102 +664,92 @@ export default function Conversations() {
               <ChevronLeft className="w-4 h-4" />
               All conversations
             </button>
-            {/* Conversation Header */}
-            <div className="bg-white border-b border-gray-200 p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                    selectedConversation.viaJourney
-                      ? 'bg-gradient-to-br from-violet-500 to-purple-600'
-                      : selectedConversation.viaForm
-                        ? 'bg-gradient-to-br from-green-500 to-emerald-600'
-                        : 'bg-gradient-to-br from-purple-500 to-blue-600'
-                  }`}>
-                    {selectedConversation.viaJourney
-                      ? <GitBranch className="w-5 h-5 text-white" />
-                      : selectedConversation.viaForm
-                        ? <FileText className="w-5 h-5 text-white" />
-                        : <MessageSquare className="w-5 h-5 text-white" />}
-                  </div>
-                  <div>
-                    <h2 className="font-semibold text-gray-900">{selectedConversation.visitorLabel || selectedConversation.title}</h2>
-                    {selectedConversation.subtitle && (
-                      <p className="text-sm text-gray-600">{selectedConversation.subtitle}</p>
-                    )}
-                    <p className="text-xs text-gray-500">{formatDate(selectedConversation.createdAt)}</p>
-                    {(selectedConversation.viaJourney || selectedConversation.viaForm || selectedConversation.hasLead || selectedConversation.visitorCity) && (
-                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                        {selectedConversation.viaJourney && (
-                          <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium bg-violet-50 text-violet-600 border border-violet-200">
-                            <GitBranch className="w-3 h-3" />
-                            {selectedConversation.journeyName ? `Journey · ${selectedConversation.journeyName}` : 'Journey'}
-                          </span>
-                        )}
-                        {selectedConversation.viaForm && (
-                          <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium bg-emerald-50 text-emerald-600 border border-emerald-200">
-                            <FileText className="w-3 h-3" />
-                            Form
-                          </span>
-                        )}
-                        {selectedConversation.hasLead && (
-                          <span className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium border ${
-                            selectedConversation.leadBadge === 'Discount Availed'
-                              ? 'bg-orange-50 text-orange-600 border-orange-200'
-                              : 'bg-green-50 text-green-600 border-green-200'
-                          }`}>
-                            <span className="font-bold text-[10px]">L</span>
-                            {selectedConversation.leadBadge === 'Discount Availed' ? 'Discount' : 'Lead'}
-                          </span>
-                        )}
-                        {selectedConversation.visitorCity && (
-                          <span className="inline-flex items-center gap-1 text-[11px] text-gray-500 bg-gray-50 px-2 py-0.5 rounded-full border border-gray-200">
-                            <MapPin className="w-3 h-3" />
-                            {selectedConversation.visitorCity}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
+            {/* Conversation header: one compact row (who, badges / what · when) */}
+            <div className="flex items-center gap-3 border-b border-gray-200 bg-white px-4 py-2.5">
+              <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                selectedConversation.viaJourney
+                  ? 'bg-gradient-to-br from-violet-500 to-purple-600'
+                  : selectedConversation.viaForm
+                    ? 'bg-gradient-to-br from-green-500 to-emerald-600'
+                    : 'bg-gradient-to-br from-purple-500 to-blue-600'
+              }`}>
+                {selectedConversation.viaJourney
+                  ? <GitBranch className="h-4 w-4 text-white" />
+                  : selectedConversation.viaForm
+                    ? <FileText className="h-4 w-4 text-white" />
+                    : <MessageSquare className="h-4 w-4 text-white" />}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-center gap-2">
+                  <h2 className="truncate text-[15px] font-semibold text-gray-900">{selectedConversation.visitorLabel || selectedConversation.title}</h2>
+                  {selectedConversation.viaJourney && (
+                    <span className="inline-flex min-w-0 max-w-[220px] shrink items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-600" title={selectedConversation.journeyName ? `Journey: ${selectedConversation.journeyName}` : 'Journey'}>
+                      <GitBranch className="h-3 w-3 shrink-0" />
+                      <span className="truncate">{selectedConversation.journeyName ? `Journey · ${selectedConversation.journeyName}` : 'Journey'}</span>
+                    </span>
+                  )}
+                  {selectedConversation.viaForm && (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-600">
+                      <FileText className="h-3 w-3" />
+                      Form
+                    </span>
+                  )}
+                  {selectedConversation.hasLead && (
+                    <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                      selectedConversation.leadBadge === 'Discount Availed'
+                        ? 'border-orange-200 bg-orange-50 text-orange-600'
+                        : 'border-green-200 bg-green-50 text-green-600'
+                    }`}>
+                      <span className="text-[10px] font-bold">L</span>
+                      {selectedConversation.leadBadge === 'Discount Availed' ? 'Discount' : 'Lead'}
+                    </span>
+                  )}
                 </div>
+                <p className="truncate text-xs text-gray-500" title={selectedConversation.subtitle || undefined}>
+                  {[selectedConversation.subtitle, formatDate(selectedConversation.createdAt), selectedConversation.visitorCity].filter(Boolean).join(' · ')}
+                </p>
               </div>
             </div>
 
+            {/* AI summary: one line until opened (keywords only when open) */}
             {selectedConversation.summary && (
-              <div className="bg-gradient-to-r from-purple-50 to-blue-50 border-b border-purple-100 px-4 py-3">
-                <div className="flex items-start gap-2">
-                  <Sparkles className="w-4 h-4 text-purple-500 mt-0.5 flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-sm text-gray-700 leading-relaxed ${!summaryExpanded ? 'line-clamp-2' : ''}`}>{selectedConversation.summary}</p>
-                    <button
-                      onClick={() => setSummaryExpanded(!summaryExpanded)}
-                      className="text-xs text-purple-600 hover:text-purple-800 font-medium mt-1"
-                    >
-                      {summaryExpanded ? 'View Less' : 'View More'}
-                    </button>
-                    {selectedConversation.topicKeywords && (() => {
-                      try {
-                        const keywords = JSON.parse(selectedConversation.topicKeywords);
-                        if (Array.isArray(keywords) && keywords.length > 0) {
-                          return (
-                            <div className="mt-2 flex flex-wrap gap-1.5">
-                              {keywords.map((kw: string, i: number) => (
-                                <span key={i} className="px-2 py-0.5 text-xs font-medium rounded-full bg-white text-purple-700 border border-purple-200">
-                                  {kw}
-                                </span>
-                              ))}
-                            </div>
-                          );
-                        }
-                        return null;
-                      } catch { return null; }
-                    })()}
-                  </div>
-                </div>
+              <div className="border-b border-purple-100 bg-gradient-to-r from-purple-50/70 to-blue-50/70 px-4 py-2">
+                <button
+                  type="button"
+                  onClick={() => setSummaryExpanded(!summaryExpanded)}
+                  className="flex w-full items-start gap-2 text-left"
+                  aria-expanded={summaryExpanded}
+                >
+                  <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-purple-500" />
+                  <p className={`min-w-0 flex-1 text-[13px] leading-relaxed text-gray-700 ${summaryExpanded ? '' : 'line-clamp-1'}`}>
+                    {selectedConversation.summary}
+                  </p>
+                  <span className="shrink-0 whitespace-nowrap text-xs font-medium text-purple-600 hover:text-purple-800">
+                    {summaryExpanded ? 'Show less' : 'Show more'}
+                  </span>
+                </button>
+                {summaryExpanded && selectedConversation.topicKeywords && (() => {
+                  try {
+                    const keywords = JSON.parse(selectedConversation.topicKeywords);
+                    if (Array.isArray(keywords) && keywords.length > 0) {
+                      return (
+                        <div className="mt-2 flex flex-wrap gap-1.5 pl-5">
+                          {keywords.map((kw: string, i: number) => (
+                            <span key={i} className="rounded-full border border-purple-200 bg-white px-2 py-0.5 text-xs font-medium text-purple-700">
+                              {kw}
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    }
+                    return null;
+                  } catch { return null; }
+                })()}
               </div>
             )}
 
             {/* Messages */}
-            <div ref={threadRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 space-y-4">
+            <div ref={threadRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 space-y-3">
               {messages.map((message, index) => {
                 const prevSource = index > 0 ? (messages[index - 1].interactionSource || 'chat') : null;
                 const currentSource = message.interactionSource || 'chat';
@@ -770,9 +760,9 @@ export default function Conversations() {
                 return (
                 <div key={message.id}>
                 {(sourceChanged || (index === 0 && currentSource !== 'chat')) && (
-                  <div className="flex items-center gap-2 my-3">
+                  <div className="flex items-center gap-2 my-2">
                     <div className="flex-1 border-t border-gray-200" />
-                    <span className={`flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full border ${sourceColor}`}>
+                    <span className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-full border ${sourceColor}`}>
                       {sourceIcon}
                       {sourceLabel}
                     </span>
@@ -789,7 +779,7 @@ export default function Conversations() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <Card className="bg-white shadow-sm">
-                          <CardContent className="p-4">
+                          <CardContent className="px-4 py-3">
                             <div className="prose prose-sm max-w-none">
                               <ReactMarkdown
                                 remarkPlugins={[remarkGfm, remarkMath]}

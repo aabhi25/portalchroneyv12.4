@@ -79,6 +79,46 @@ export function HubFrame({ user, children }: { user: MeResponseDto | null; child
 
   return (
     <div className={`flex flex-col bg-[#f5f5f7] ${fillsScreen ? "h-full min-h-0" : "min-h-full"}`} data-testid={`hub-${area.id}`}>
+      {fillsScreen ? (
+        // Inbox pages: one slim row (agent + tabs), so the conversation gets the height.
+        <div className="border-b border-black/[0.06] bg-white">
+          <div className="flex w-full items-center gap-3 px-4 md:gap-5 md:px-6">
+            <div className="flex shrink-0 items-center gap-2">
+              <SidebarTrigger className="-ml-2 hidden text-gray-400 lg:inline-flex" />
+              <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg text-white ${area.tint}`}>
+                <Icon className="h-4 w-4" />
+              </span>
+              <h1 className="hidden whitespace-nowrap text-[15px] font-semibold text-gray-900 sm:block">{area.label}</h1>
+            </div>
+            {tabs.length > 1 && (
+              <div className="-mb-px min-w-0 flex-1">
+            <ScrollRow role="tablist" aria-label={area.label} selectedKey={tab?.key} fadeFrom="from-white" className="flex gap-1 overflow-x-auto [scrollbar-width:none]">
+              {tabs.map(t => {
+                const active = t.key === tab?.key;
+                const isSettings = t.key === "settings";
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setLocation(t.href)}
+                    data-testid={`hub-tab-${area.id}-${t.key}`}
+                    className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-3 text-[14px] transition-colors ${
+                      isSettings ? "ml-auto" : ""
+                    } ${active ? "border-gray-900 font-semibold text-gray-900" : "border-transparent text-gray-500 hover:text-gray-900"}`}
+                  >
+                    {isSettings && <Settings className="h-4 w-4" />}
+                    {t.label}
+                  </button>
+                );
+              })}
+            </ScrollRow>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
       <div className="border-b border-black/[0.06] bg-white">
         <div className="mx-auto w-full max-w-[1400px] px-4 pt-5 md:px-8">
           <div className="flex items-center gap-3">
@@ -119,6 +159,7 @@ export function HubFrame({ user, children }: { user: MeResponseDto | null; child
           )}
         </div>
       </div>
+      )}
 
       {sectionItems && (
         <div className="border-b border-black/[0.06] bg-white/70">
