@@ -149,12 +149,15 @@ export async function syncLeadToLeadSquared(
     await (await import('./leadsquaredRetryWorker')).markLeadsquaredSyncPending(lead.id, businessAccountId);
     if (isUpdate && lead.leadsquaredLeadId) {
       console.log('[LeadSquared-Tool] Auto-syncing lead update:', lead.id, '→', lead.leadsquaredLeadId);
-      const result = await leadsquaredService.updateLeadWithMappings(lead.leadsquaredLeadId, fieldMappings, leadContext, changedFields);
+      const result = await leadsquaredService.updateLeadOrRecover(lead.leadsquaredLeadId, fieldMappings, leadContext, changedFields);
       
       if (result.success) {
         await storage.updateLead(lead.id, businessAccountId, {
+          // The stored lead was gone in LeadSquared and got found / created again under a new ID.
+          ...(result.leadId ? { leadsquaredLeadId: result.leadId } : {}),
           leadsquaredSyncStatus: 'synced',
           leadsquaredSyncedAt: new Date(),
+          leadsquaredSyncError: null,
           leadsquaredSyncPayload: result.syncPayload || null
         });
         console.log('[LeadSquared-Tool] Lead update synced successfully:', lead.id);

@@ -149,6 +149,22 @@ function isDuplicateLeadError(exceptionType?: string, message?: string): boolean
 }
 
 /**
+ * The field names in LeadSquared's "Attribute(s) does not exist - mx_a,mx_b." rejection of a
+ * Lead.Update (the account has no such custom field). Lead.Update rejects the whole update for one
+ * unknown field, so the update is resent without them. Empty for any other error.
+ */
+export function unknownAttributesFromError(message?: string | null): string[] {
+  const match = (message || '').match(/attribute\(s\)\s+do(?:es)?\s+not\s+exist\s*-\s*(.+)$/i);
+  if (!match) return [];
+  return match[1].split(',').map(s => s.trim().replace(/\.+$/, '')).filter(Boolean);
+}
+
+/** LeadSquared's Lead.Update answer when the stored lead ID was deleted / merged away in LeadSquared. */
+export function isLeadGoneError(message?: string | null): boolean {
+  return /lead does not exist in the system/i.test(message || '');
+}
+
+/**
  * The value of a mapping's dynamic source (lead.name, session.utmSource, journey.<key>,
  * conversation.summary, ...) in a lead's CRM context. Shared by the CRM integrations.
  */
@@ -670,64 +686,72 @@ export class LeadSquaredService {
         console.log('[LeadSquared] Update filtering - Changed fields:', changedFields.join(', '), '- Filtered mappings:', filteredMappings.length);
       }
       
-      const attributeArray = this.buildAttributesFromMappings(filteredMappings, context);
-      
+      let attributeArray = this.buildAttributesFromMappings(filteredMappings, context);
+
       console.log('[LeadSquared] Updating lead with dynamic mappings - Host:', this.baseUrl, '- Lead ID:', leadId);
       console.log('[LeadSquared] Updating lead - Fields count:', attributeArray.length, '- Fields:', attributeArray.map(a => a.Attribute).join(', '));
-      
+
       if (attributeArray.length === 0) {
         return {
           success: false,
           message: 'No fields to sync - all field mappings are disabled or have no data',
         };
       }
-      
-      // Build a simple key-value payload for debugging/display
-      const syncPayload: Record<string, string> = {};
-      for (const attr of attributeArray) {
-        syncPayload[attr.Attribute] = attr.Value;
-      }
 
-      const response = await fetchWithTimeout(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache',
-        },
-        body: JSON.stringify(attributeArray),
-      }, 30_000);
+      // Lead.Update rejects the whole update when one field doesn't exist in the account
+      // ("Attribute(s) does not exist - mx_x"): resend once without those fields.
+      let skippedFields: string[] = [];
+      for (let attempt = 0; ; attempt++) {
+        const response = await fetchWithTimeout(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache',
+          },
+          body: JSON.stringify(attributeArray),
+        }, 30_000);
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('[LeadSquared] Updating lead - Error response:', errorText);
-        let detailedError = `Failed to update lead: ${response.status} ${response.statusText}`;
-        try {
-          const errorJson = JSON.parse(errorText);
-          if (errorJson.ExceptionMessage) detailedError = errorJson.ExceptionMessage;
-          else if (errorJson.Message) detailedError = errorJson.Message;
-          else if (errorJson.message) detailedError = errorJson.message;
-        } catch { 
-          if (errorText && errorText.length < 500) detailedError += ` — ${errorText}`;
+        const responseText = await response.text();
+        let data: LeadSquaredResponse | null = null;
+        try { data = JSON.parse(responseText); } catch { /* not JSON */ }
+
+        if (response.ok && data?.Status === 'Success') {
+          // Build a simple key-value payload for debugging/display
+          const syncPayload: Record<string, string> = {};
+          for (const attr of attributeArray) {
+            syncPayload[attr.Attribute] = attr.Value;
+          }
+          return {
+            success: true,
+            message: skippedFields.length
+              ? `Lead updated in LeadSquared (skipped fields that don't exist there: ${skippedFields.join(', ')})`
+              : 'Lead updated successfully in LeadSquared',
+            syncPayload,
+          };
+        }
+
+        let detailedError: string;
+        if (!response.ok) {
+          console.error('[LeadSquared] Updating lead - Error response:', responseText);
+          const errorJson = data as any;
+          detailedError = errorJson?.ExceptionMessage || errorJson?.Message || errorJson?.message
+            || `Failed to update lead: ${response.status} ${response.statusText}${!data && responseText && responseText.length < 500 ? ` — ${responseText}` : ''}`;
+        } else {
+          console.error('[LeadSquared] Updating lead - Failed:', data?.ExceptionMessage || 'Unknown error');
+          detailedError = data?.ExceptionMessage || 'Failed to update lead';
+        }
+
+        const unknown = new Set(unknownAttributesFromError(detailedError).map(a => a.toLowerCase()));
+        const remaining = attributeArray.filter(a => !unknown.has(a.Attribute.toLowerCase()));
+        if (attempt === 0 && unknown.size > 0 && remaining.length > 0 && remaining.length < attributeArray.length) {
+          skippedFields = attributeArray.filter(a => unknown.has(a.Attribute.toLowerCase())).map(a => a.Attribute);
+          console.warn('[LeadSquared] Updating lead - Retrying without fields missing in LeadSquared:', skippedFields.join(', '));
+          attributeArray = remaining;
+          continue;
         }
         return {
           success: false,
           message: detailedError,
-        };
-      }
-
-      const data: LeadSquaredResponse = await response.json();
-      
-      if (data.Status === 'Success') {
-        return {
-          success: true,
-          message: 'Lead updated successfully in LeadSquared',
-          syncPayload,
-        };
-      } else {
-        console.error('[LeadSquared] Updating lead - Failed:', data.ExceptionMessage || 'Unknown error');
-        return {
-          success: false,
-          message: data.ExceptionMessage || 'Failed to update lead',
         };
       }
     } catch (error: any) {
@@ -737,6 +761,46 @@ export class LeadSquaredService {
         message: error.message || 'Failed to update lead in LeadSquared',
       };
     }
+  }
+
+  /**
+   * Updates the lead stored as `leadId`. When LeadSquared no longer has that lead (deleted or merged
+   * there — "Lead does not exist in the system"), finds the person by phone / email and updates that
+   * lead, or creates the lead again. `leadId` in the result is the lead's new LeadSquared ID when it
+   * changed, so the caller can store it.
+   */
+  async updateLeadOrRecover(
+    leadId: string,
+    mappings: LeadsquaredFieldMapping[],
+    context: LeadDataContext,
+    changedFields?: string[]
+  ): Promise<{ success: boolean; message: string; syncPayload?: Record<string, string>; leadId?: string }> {
+    const updated = await this.updateLeadWithMappings(leadId, mappings, context, changedFields);
+    if (updated.success || this.config.uds || !isLeadGoneError(updated.message)) return updated;
+
+    console.warn('[LeadSquared] Stored lead no longer exists in LeadSquared — looking it up again:', leadId);
+    const existingId = await this.findExistingLeadId(context.lead.phone, context.lead.email);
+    if (existingId && existingId !== leadId) {
+      const retried = await this.updateLeadWithMappings(existingId, mappings, context, ['name', 'email', 'phone', 'city', 'sourceUrl']);
+      if (retried.success) {
+        console.log('[LeadSquared] Updated the same person under their current LeadSquared lead:', leadId, '→', existingId);
+        return { ...retried, leadId: existingId, message: 'The old LeadSquared lead was gone — updated the current lead for this person.' };
+      }
+      return retried;
+    }
+    if (existingId) return updated; // the lookup still returns the same ID: nothing else to try
+
+    const created = await this.createLeadWithMappings(mappings, context);
+    if (created.success) {
+      console.log('[LeadSquared] Old LeadSquared lead was gone — created it again:', leadId, '→', created.leadId || 'no id');
+      return {
+        success: true,
+        message: 'The old LeadSquared lead was gone — created it again.',
+        syncPayload: created.syncPayload,
+        leadId: created.leadId,
+      };
+    }
+    return { success: false, message: created.message };
   }
 
   async createLead(leadData: LeadSquaredLeadData): Promise<{ success: boolean; leadId?: string; message: string; alreadyExists?: boolean }> {

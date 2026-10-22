@@ -82,6 +82,7 @@ async function testUpdateFilterInclusion() {
     return {
       ok: true,
       json: async () => ({ Status: "Success" }),
+      text: async () => JSON.stringify({ Status: "Success" }),
     } as any;
   }) as any;
 
@@ -111,7 +112,7 @@ async function testUpdateFilterExclusionWhenEmpty() {
   const originalFetch = global.fetch;
   global.fetch = (async (_url: any, init: any) => {
     capturedBody = JSON.parse(init.body);
-    return { ok: true, json: async () => ({ Status: "Success" }) } as any;
+    return { ok: true, json: async () => ({ Status: "Success" }), text: async () => JSON.stringify({ Status: "Success" }) } as any;
   }) as any;
 
   try {
