@@ -41,6 +41,10 @@ import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
 import { format, subDays, startOfDay, endOfDay, startOfMonth, endOfMonth, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
+import { DEFAULT_LEAD_COLUMNS, LeadColumnsPicker, WebsiteLeadColumnCell, leadColumnIcon, leadColumnLabel, websiteLeadColumnText, type LeadColumnKey } from "@/components/leads/LeadColumns";
+import { LeadDetailsSheet, websiteRowFromLead } from "@/components/leads/LeadDetailsSheet";
+import type { CrmTarget } from "@/components/leads/LeadCrm";
+import type { Lead } from "@shared/schema";
 
 type DatePreset = 'all' | 'today' | 'yesterday' | 'last7' | 'currentMonth' | 'lastMonth' | 'custom';
 
@@ -107,6 +111,10 @@ interface ConversationItem {
   leadBadge?: string | null;
   viaJourney?: boolean;
   viaForm?: boolean;
+  // Visitor-first list row (same as the business account's Conversations).
+  visitorLabel?: string;
+  subtitle?: string | null;
+  journeyName?: string | null;
 }
 
 interface MessageItem {
@@ -142,7 +150,48 @@ interface LeadItem {
   salesforceSyncError?: string | null;
   salesforceSyncedAt?: string | null;
   topicsOfInterest?: string[] | null;
+  message?: string | null;
+  landingUrl?: string | null;
+  // Added by the server (same as the business Leads table).
+  interestTopics?: string[];
+  hasJourneyAnswers?: boolean;
+  journeyName?: string | null;
+  journeyAnswers?: Record<string, string>;
 }
+
+/** How the lead came in, from its stored topics (same rule as the row's menu). */
+function leadKind(lead: { topicsOfInterest?: string[] | null }): 'journey' | 'form' | 'chat' {
+  const topics = (lead.topicsOfInterest || []).map(t => t.toLowerCase());
+  if (topics.some(t => t.includes('journey'))) return 'journey';
+  if (topics.some(t => t.includes('via form'))) return 'form';
+  return 'chat';
+}
+
+/** The lead's real interests (journey answers and funnel markers left out; see the server's addWebsiteLeadExtras). */
+function leadInterests(lead: LeadItem): string[] {
+  if (Array.isArray(lead.interestTopics)) return lead.interestTopics;
+  return (lead.topicsOfInterest || []).filter(t => !['Via Form', 'Via Journey Form', 'Discount Availed'].includes(t));
+}
+
+/** Added table columns that exports list after their base columns (Name, Email, Phone, Account, Topics, date). */
+function exportExtraColumns(columns: LeadColumnKey[]): LeadColumnKey[] {
+  return columns.filter(k => !['phone', 'email', 'topics', 'captured'].includes(k));
+}
+
+/** A lead's value for an added column, as plain text. */
+function leadExportValue(key: LeadColumnKey, lead: LeadItem): string | null {
+  if (key === 'city') return lead.city || null;
+  if (key === 'funnel') {
+    const topics = lead.topicsOfInterest || [];
+    return topics.includes('Discount Availed') ? 'Discount Availed' : topics.includes('Via Form') ? 'Via Form' : topics.includes('Via Journey Form') ? 'Via Journey' : 'Via Chat';
+  }
+  return websiteLeadColumnText(key, lead as any);
+}
+
+/** Group Leads table: the date column is always shown (with the auto-delete countdown). */
+const GROUP_ALWAYS_SHOWN_COLUMNS: LeadColumnKey[] = ["captured"];
+const groupColumnWidth = (key: LeadColumnKey) =>
+  key === "phone" ? "150px" : key === "email" ? "190px" : key === "city" ? "110px" : key === "topics" ? "210px" : key === "funnel" ? "120px" : "180px";
 
 interface AnalyticsData {
   groupId: string;
@@ -180,10 +229,11 @@ export default function GroupAdminDashboard() {
   const [leadsAccountFilter, setLeadsAccountFilter] = useState<string>("all");
   const [isExportingLeads, setIsExportingLeads] = useState(false);
   const [isExportingLeadsPDF, setIsExportingLeadsPDF] = useState(false);
-  const [selectedLeadDetails, setSelectedLeadDetails] = useState<LeadItem | null>(null);
-  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
 
   const [convoSearch, setConvoSearch] = useState("");
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  // The open thread starts at its first message when another conversation is picked.
+  const convoThreadRef = useRef<HTMLDivElement>(null);
   const [convoDatePreset, setConvoDatePreset] = useState<DatePreset>("all");
   const [convoFromDate, setConvoFromDate] = useState<Date | undefined>(undefined);
   const [convoToDate, setConvoToDate] = useState<Date | undefined>(undefined);
@@ -440,6 +490,40 @@ export default function GroupAdminDashboard() {
   const leadsTotal = leadsInfiniteData?.pages[0]?.total || 0;
   const leadsUniqueLeads = leadsInfiniteData?.pages[0]?.uniqueLeads ?? null;
 
+  // Columns of the Leads table: chosen for the whole group (any admin who can view leads).
+  const leadColumnsQueryKey = ["/api/group-admin/groups", selectedGroupId, "leads", "table-columns"];
+  const { data: leadColumnsData } = useQuery<{ columns: LeadColumnKey[] | null; journeyQuestions: string[] }>({
+    queryKey: leadColumnsQueryKey,
+    queryFn: async () => {
+      const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/leads/table-columns`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load columns");
+      return res.json();
+    },
+    enabled: !!selectedGroupId && !!selectedGroup?.canViewLeads,
+  });
+  const saveLeadColumnsMutation = useMutation({
+    mutationFn: (columns: LeadColumnKey[] | null) =>
+      apiRequest<{ columns: LeadColumnKey[] | null }>("PUT", `/api/group-admin/groups/${selectedGroupId}/leads/table-columns`, { columns }),
+    onMutate: (columns) => {
+      const previous = queryClient.getQueryData(leadColumnsQueryKey);
+      queryClient.setQueryData(leadColumnsQueryKey, (old: any) => ({ journeyQuestions: [], ...(old || {}), columns }));
+      return { previous };
+    },
+    onError: (_error, _columns, context) => {
+      if (context?.previous) queryClient.setQueryData(leadColumnsQueryKey, context.previous);
+      toast({ title: "Couldn't save columns", description: "Please try again.", variant: "destructive" });
+    },
+  });
+  const leadTableColumns: LeadColumnKey[] = (leadColumnsData?.columns ?? DEFAULT_LEAD_COLUMNS).filter(k => !GROUP_ALWAYS_SHOWN_COLUMNS.includes(k));
+  const leadGridTemplate = [
+    selectedGroup?.canViewLeads && selectedGroup?.canDeleteData ? "20px" : null,
+    "36px", "minmax(150px, 1.3fr)", "160px",
+    ...leadTableColumns.map(groupColumnWidth),
+    "120px", "64px", "36px",
+  ].filter(Boolean).join(" ");
+
+  const [detailsLead, setDetailsLead] = useState<LeadItem | null>(null);
+
   // ---- CRM sync (only for admins with the "Can sync leads" permission) ----
   const canSyncLeads = !!selectedGroup?.canViewLeads && !!selectedGroup?.canSyncLeads;
 
@@ -507,6 +591,27 @@ export default function GroupAdminDashboard() {
 
   const isSyncingLead = (leadId: string, crm: CrmName) =>
     syncLeadMutation.isPending && syncLeadMutation.variables?.lead.id === leadId && syncLeadMutation.variables?.crm === crm;
+
+  // The lead panel's "CRM sync" list: each CRM the lead's account uses (or that has a status).
+  const groupCrmTargets = (lead: LeadItem): CrmTarget[] => {
+    const crm = crmByAccount.get(lead.businessAccountId);
+    const out: CrmTarget[] = [];
+    if (crm?.leadsquared || lead.leadsquaredSyncStatus) {
+      out.push({
+        crm: 'leadsquared', label: 'LeadSquared',
+        state: { status: lead.leadsquaredSyncStatus ?? null, error: lead.leadsquaredSyncError ?? null, syncedAt: lead.leadsquaredSyncedAt ?? null, crmLeadId: lead.leadsquaredLeadId ?? null },
+        canSync: canSyncLeads && !!crm?.leadsquared && lead.leadsquaredSyncStatus !== 'synced' && lead.leadsquaredSyncStatus !== 'disqualified',
+      });
+    }
+    if (crm?.salesforce || lead.salesforceSyncStatus) {
+      out.push({
+        crm: 'salesforce', label: 'Salesforce',
+        state: { status: lead.salesforceSyncStatus ?? null, error: lead.salesforceSyncError ?? null, syncedAt: lead.salesforceSyncedAt ?? null, crmLeadId: null },
+        canSync: canSyncLeads && !!crm?.salesforce && (lead.salesforceSyncStatus === 'failed' || !lead.salesforceSyncStatus),
+      });
+    }
+    return out;
+  };
 
   const [bulkSyncOpen, setBulkSyncOpen] = useState(false);
   const [bulkSyncWindow, setBulkSyncWindow] = useState<SyncWindow>('today');
@@ -591,14 +696,20 @@ export default function GroupAdminDashboard() {
         return;
       }
 
-      const worksheetData = allLeads.map((lead: LeadItem) => ({
-        Name: lead.name || "-",
-        Email: lead.email || "-",
-        Phone: lead.phone || "-",
-        Account: lead.businessAccountName || "-",
-        "Topics of Interest": (lead.topicsOfInterest && Array.isArray(lead.topicsOfInterest) && lead.topicsOfInterest.length > 0) ? (lead.topicsOfInterest as string[]).join(", ") : "-",
-        "Created At": lead.createdAt ? format(new Date(lead.createdAt), "yyyy-MM-dd HH:mm:ss") : "-",
-      }));
+      // The base columns, then the columns this group added to its Leads table.
+      const extraKeys = exportExtraColumns(leadTableColumns);
+      const worksheetData = allLeads.map((lead: LeadItem) => {
+        const row: Record<string, string> = {
+          Name: lead.name || "-",
+          Email: lead.email || "-",
+          Phone: lead.phone || "-",
+          Account: lead.businessAccountName || "-",
+          "Topics of Interest": leadInterests(lead).join(", ") || "-",
+          "Created At": lead.createdAt ? format(new Date(lead.createdAt), "yyyy-MM-dd HH:mm:ss") : "-",
+        };
+        for (const key of extraKeys) row[leadColumnLabel(key)] = leadExportValue(key, lead) || "-";
+        return row;
+      });
 
       const worksheet = XLSX.utils.json_to_sheet(worksheetData);
       const workbook = XLSX.utils.book_new();
@@ -687,15 +798,15 @@ export default function GroupAdminDashboard() {
         ? `${format(from, "MMMM d, yyyy")} to ${format(to, "MMMM d, yyyy")}`
         : "All time";
 
+      const extraKeys = exportExtraColumns(leadTableColumns);
       const leadsPayload = deduped.map((lead) => ({
         name: lead.name || "-",
         phone: lead.phone || "-",
         email: lead.email || "-",
         account: lead.businessAccountName || "-",
-        source: (lead.topicsOfInterest && Array.isArray(lead.topicsOfInterest) && lead.topicsOfInterest.length > 0)
-          ? (lead.topicsOfInterest as string[]).join(", ")
-          : "-",
+        source: leadInterests(lead).join(", ") || "-",
         date: lead.createdAt ? format(new Date(lead.createdAt), "dd MMM yyyy") : "-",
+        extra: extraKeys.map(key => leadExportValue(key, lead) || "-"),
       }));
 
       // PDF is rendered server-side: the browser jsPDF is intentionally stubbed (vite.config.ts).
@@ -711,6 +822,8 @@ export default function GroupAdminDashboard() {
           totalConversations: analyticsUnavailable ? "N/A" : totalConversations,
           conversionRate: analyticsUnavailable ? "N/A" : conversionRate,
           leads: leadsPayload,
+          sourceHeader: "Interests",
+          extraHeaders: extraKeys.map(leadColumnLabel),
         }),
       });
       if (!pdfRes.ok) throw new Error("Failed to generate PDF");
@@ -886,6 +999,11 @@ export default function GroupAdminDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/group-admin/groups", selectedGroupId] });
     },
   });
+
+  // Each conversation opens at its first message (the thread panel is reused).
+  useEffect(() => {
+    if (convoThreadRef.current) convoThreadRef.current.scrollTop = 0;
+  }, [selectedConversationId]);
 
   if (loadingGroups) {
     return (
@@ -1109,7 +1227,7 @@ export default function GroupAdminDashboard() {
 
               <RetentionBanner policies={retentionPolicies} totalAccounts={retentionAccountCount} onViewReport={() => setRetentionReportOpen(true)} />
               <div className="px-6 py-3 border-b border-gray-100 bg-gradient-to-r from-violet-50/50 to-transparent">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Users className="w-4 h-4 text-purple-500" />
                   <span className="text-sm font-medium text-gray-700">
                     {leadsTotal?.toLocaleString() || 0} leads captured
@@ -1125,7 +1243,7 @@ export default function GroupAdminDashboard() {
                     </span>
                   )}
                   {canDeleteLeads && allLeads.length > 0 && (
-                    <div className="ml-auto flex items-center gap-2">
+                    <div className="ml-auto flex flex-wrap items-center gap-2">
                       <Button
                         size="sm"
                         variant="outline"
@@ -1242,6 +1360,16 @@ export default function GroupAdminDashboard() {
                       ))}
                     </SelectContent>
                   </Select>
+
+                  <LeadColumnsPicker
+                    columns={leadTableColumns}
+                    journeyQuestions={leadColumnsData?.journeyQuestions || []}
+                    onChange={(columns) => saveLeadColumnsMutation.mutate(columns)}
+                    saving={saveLeadColumnsMutation.isPending}
+                    excludeKeys={GROUP_ALWAYS_SHOWN_COLUMNS}
+                    alwaysShownLabel="Only Name, Account, Captured and CRM"
+                    savedForLabel="Saved for everyone in this group"
+                  />
                 </div>
               </div>
 
@@ -1274,7 +1402,27 @@ export default function GroupAdminDashboard() {
                     )}
                   </div>
                 ) : (
-                  <div className="divide-y divide-gray-50 flex-1">
+                  <div className="min-w-fit flex-1">
+                    {/* Column headings (Name, Account, date and CRM always show; the rest are chosen with "Columns"). */}
+                    <div
+                      className="sticky top-0 z-[2] grid items-center gap-3 border-b border-gray-100 bg-gray-50/95 px-6 py-2 text-[11.5px] font-semibold uppercase tracking-wide text-gray-500 backdrop-blur"
+                      style={{ gridTemplateColumns: leadGridTemplate }}
+                    >
+                      {canDeleteLeads && <span />}
+                      <span />
+                      <span>Name</span>
+                      <span>Account</span>
+                      {leadTableColumns.map(key => (
+                        <span key={key} className="flex min-w-0 items-center gap-1.5" title={leadColumnLabel(key)}>
+                          {leadColumnIcon(key)}
+                          <span className="truncate">{leadColumnLabel(key)}</span>
+                        </span>
+                      ))}
+                      <span className="text-right">Captured</span>
+                      <span className="text-center">CRM</span>
+                      <span />
+                    </div>
+                    <div className="divide-y divide-gray-50">
                     {allLeads.map((lead, index) => {
                       const avatarColors = [
                         'from-violet-400 to-purple-500',
@@ -1293,17 +1441,22 @@ export default function GroupAdminDashboard() {
                       return (
                         <div
                           key={lead.id}
-                          className={`group flex items-center gap-4 px-6 py-3.5 transition-all duration-150 hover:bg-purple-50/40 border-l-3 border-l-transparent hover:border-l-purple-400 cursor-default ${selectedLeadIds.has(lead.id) ? 'bg-red-50/40' : index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}
+                          onClick={() => setDetailsLead(lead)}
+                          className={`group grid cursor-pointer items-center gap-3 px-6 py-2.5 transition-colors duration-150 hover:bg-purple-50/40 ${selectedLeadIds.has(lead.id) ? 'bg-red-50/40' : index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}
+                          style={{ gridTemplateColumns: leadGridTemplate }}
+                          data-testid={`group-lead-row-${lead.id}`}
                         >
                           {canDeleteLeads && (
-                            <Checkbox
-                              aria-label={`Select lead ${lead.name || lead.phone || lead.id}`}
-                              checked={selectedLeadIds.has(lead.id)}
-                              disabled={!selectedLeadIds.has(lead.id) && selectedLeadIds.size >= MAX_BULK_DELETE}
-                              onCheckedChange={(checked) => toggleId(setSelectedLeadIds, lead.id, checked === true)}
-                            />
+                            <div onClick={(e) => e.stopPropagation()}>
+                              <Checkbox
+                                aria-label={`Select lead ${lead.name || lead.phone || lead.id}`}
+                                checked={selectedLeadIds.has(lead.id)}
+                                disabled={!selectedLeadIds.has(lead.id) && selectedLeadIds.size >= MAX_BULK_DELETE}
+                                onCheckedChange={(checked) => toggleId(setSelectedLeadIds, lead.id, checked === true)}
+                              />
+                            </div>
                           )}
-                          <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm ${isAnonymous ? 'bg-gray-200' : `bg-gradient-to-br ${avatarColors[colorIndex]}`}`}>
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center shadow-sm ${isAnonymous ? 'bg-gray-200' : `bg-gradient-to-br ${avatarColors[colorIndex]}`}`}>
                             {isAnonymous ? (
                               <User className="w-4 h-4 text-gray-500" />
                             ) : (
@@ -1311,222 +1464,159 @@ export default function GroupAdminDashboard() {
                             )}
                           </div>
 
-                          <div className="flex-1 min-w-0 grid grid-cols-[1fr_1.2fr_1fr_0.7fr_0.8fr_1.2fr_0.5fr_0.3fr_0.3fr] gap-3 items-center">
-                            <div className="min-w-0">
-                              {isAnonymous ? (
-                                <span className="text-sm italic text-gray-400">Anonymous</span>
-                              ) : (
-                                <span className="text-sm font-semibold text-gray-900 truncate block">{lead.name}</span>
-                              )}
-                            </div>
+                          <div className="min-w-0">
+                            {isAnonymous ? (
+                              <span className="text-sm italic text-gray-400">Anonymous</span>
+                            ) : (
+                              <span className="text-sm font-semibold text-gray-900 truncate block" title={lead.name || undefined}>{lead.name}</span>
+                            )}
+                          </div>
 
-                            <div className="min-w-0">
-                              {lead.email && isMaskedValue(lead.email) ? (
-                                <span className="text-sm text-gray-500 flex items-center gap-1.5" title="Hidden after sync. The CRM has the full email.">
-                                  <Mail className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                                  <span className="truncate">{lead.email}</span>
-                                </span>
-                              ) : lead.email ? (
-                                <a href={`mailto:${lead.email}`} className="text-sm text-gray-600 hover:text-purple-600 truncate block transition-colors flex items-center gap-1.5">
-                                  <Mail className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                                  <span className="truncate">{lead.email}</span>
-                                </a>
-                              ) : (
-                                <span className="text-sm text-gray-300">—</span>
-                              )}
-                            </div>
+                          <div className="min-w-0">
+                            <span className="inline-block max-w-full truncate px-2 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200/60 align-middle" title={lead.businessAccountName || undefined}>
+                              {lead.businessAccountName || "Unknown"}
+                            </span>
+                          </div>
 
-                            <div className="min-w-0">
-                              {lead.phone && isMaskedValue(lead.phone) ? (
-                                <span className="text-sm text-gray-500 flex items-center gap-1.5" title="Hidden after sync. The CRM has the full number.">
-                                  <Phone className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                                  <span className="break-all">{lead.phone}</span>
-                                </span>
-                              ) : lead.phone ? (
-                                <a href={`tel:${lead.phone}`} className="text-sm text-gray-600 hover:text-purple-600 transition-colors flex items-center gap-1.5">
-                                  <Phone className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                                  <span className="break-all">{lead.phone}</span>
-                                </a>
-                              ) : (
-                                <span className="text-sm text-gray-300">—</span>
-                              )}
+                          {leadTableColumns.map(key => (
+                            <div key={key} className="min-w-0">
+                              <WebsiteLeadColumnCell columnKey={key} lead={lead as any} />
                             </div>
+                          ))}
 
-                            <div className="min-w-0">
-                              {(lead as any).city ? (
-                                <span className="text-sm text-gray-600 flex items-center gap-1.5">
-                                  <MapPin className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                                  <span className="truncate">{(lead as any).city}</span>
-                                </span>
-                              ) : (
-                                <span className="text-sm text-gray-300">—</span>
-                              )}
-                            </div>
+                          <div className="min-w-0 text-right">
+                            {lead.createdAt ? (
+                              <div>
+                                <div className="text-sm font-medium text-gray-700 whitespace-nowrap">{format(new Date(lead.createdAt), "MMM d, yyyy")}</div>
+                                <div className="text-[11px] text-gray-400">{format(new Date(lead.createdAt), "h:mm a")}</div>
+                                <RetentionCountdown lead={lead} retention={retentionData?.accounts?.[lead.businessAccountId]} />
+                              </div>
+                            ) : (
+                              <span className="text-sm text-gray-300">N/A</span>
+                            )}
+                          </div>
 
-                            <div className="min-w-0">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200/60 break-words">
-                                {lead.businessAccountName || "Unknown"}
-                              </span>
-                            </div>
+                          <div className="min-w-0 flex items-center justify-center gap-1">
+                            {isSyncingLead(lead.id, 'leadsquared') ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
+                            ) : lead.leadsquaredSyncStatus === 'synced' ? (
+                              <div className="flex items-center gap-1 text-green-600" title="Synced to CRM">
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                              </div>
+                            ) : lead.leadsquaredSyncStatus === 'needs_attention' ? (
+                              <div className="flex items-center gap-1 text-amber-600 cursor-help" title={`Needs attention (not retried automatically): ${friendlySyncError(lead.leadsquaredSyncError)}`}>
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                              </div>
+                            ) : lead.leadsquaredSyncStatus === 'failed' || lead.leadsquaredSyncStatus === 'permanently_failed' ? (
+                              <div className="flex items-center gap-1 text-red-600 cursor-help" title={`${lead.leadsquaredSyncStatus === 'failed' ? 'Retrying automatically' : 'Gave up retrying'}: ${friendlySyncError(lead.leadsquaredSyncError)}`}>
+                                <XCircle className="h-3.5 w-3.5" />
+                              </div>
+                            ) : lead.leadsquaredSyncStatus === 'pending' ? (
+                              <div className="flex items-center gap-1 text-gray-400 cursor-help" title="Sync in progress">
+                                <Clock className="h-3.5 w-3.5" />
+                              </div>
+                            ) : !lead.salesforceSyncStatus ? (
+                              <span className="text-gray-300 text-xs">—</span>
+                            ) : null}
+                            {isSyncingLead(lead.id, 'salesforce') ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+                            ) : lead.salesforceSyncStatus === 'synced' ? (
+                              <div className="text-blue-500" title="Synced to Salesforce"><CheckCircle2 className="h-3.5 w-3.5" /></div>
+                            ) : lead.salesforceSyncStatus === 'failed' ? (
+                              <div className="text-red-600 cursor-help" title={`Salesforce: ${lead.salesforceSyncError || 'Sync failed'}`}><XCircle className="h-3.5 w-3.5" /></div>
+                            ) : null}
+                          </div>
 
-                            <div className="min-w-0">
-                              {(lead.topicsOfInterest && Array.isArray(lead.topicsOfInterest) && lead.topicsOfInterest.length > 0) ? (
-                                <div className="flex flex-wrap gap-1">
-                                  {(lead.topicsOfInterest as string[]).slice(0, 3).map((topic: string, i: number) => {
-                                    const colors = [
-                                      'bg-purple-100 text-purple-700',
-                                      'bg-blue-100 text-blue-700',
-                                      'bg-green-100 text-green-700',
-                                      'bg-orange-100 text-orange-700'
-                                    ];
-                                    return (
-                                      <span
-                                        key={i}
-                                        className={`px-2 py-0.5 text-xs font-medium rounded-full ${colors[i % colors.length]}`}
-                                      >
-                                        {topic}
-                                      </span>
-                                    );
-                                  })}
-                                </div>
-                              ) : (
-                                <span className="text-sm text-gray-300">—</span>
-                              )}
-                            </div>
-
-                            <div className="min-w-0 text-right">
-                              {lead.createdAt ? (
-                                <div>
-                                  <div className="text-sm font-medium text-gray-700">{format(new Date(lead.createdAt), "MMM d, yyyy")}</div>
-                                  <div className="text-[11px] text-gray-400">{format(new Date(lead.createdAt), "h:mm a")}</div>
-                                  <RetentionCountdown lead={lead} retention={retentionData?.accounts?.[lead.businessAccountId]} />
-                                </div>
-                              ) : (
-                                <span className="text-sm text-gray-300">N/A</span>
-                              )}
-                            </div>
-
-                            <div className="min-w-0 flex items-center justify-center gap-1">
-                              {isSyncingLead(lead.id, 'leadsquared') ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
-                              ) : lead.leadsquaredSyncStatus === 'synced' ? (
-                                <div className="flex items-center gap-1 text-green-600" title="Synced to CRM">
-                                  <CheckCircle2 className="h-3.5 w-3.5" />
-                                </div>
-                              ) : lead.leadsquaredSyncStatus === 'needs_attention' ? (
-                                <div className="flex items-center gap-1 text-amber-600 cursor-help" title={`Needs attention (not retried automatically): ${friendlySyncError(lead.leadsquaredSyncError)}`}>
-                                  <AlertTriangle className="h-3.5 w-3.5" />
-                                </div>
-                              ) : lead.leadsquaredSyncStatus === 'failed' || lead.leadsquaredSyncStatus === 'permanently_failed' ? (
-                                <div className="flex items-center gap-1 text-red-600 cursor-help" title={`${lead.leadsquaredSyncStatus === 'failed' ? 'Retrying automatically' : 'Gave up retrying'}: ${friendlySyncError(lead.leadsquaredSyncError)}`}>
-                                  <XCircle className="h-3.5 w-3.5" />
-                                </div>
-                              ) : lead.leadsquaredSyncStatus === 'pending' ? (
-                                <div className="flex items-center gap-1 text-gray-400 cursor-help" title="Sync in progress">
-                                  <Clock className="h-3.5 w-3.5" />
-                                </div>
-                              ) : !lead.salesforceSyncStatus ? (
-                                <span className="text-gray-300 text-xs">—</span>
-                              ) : null}
-                              {isSyncingLead(lead.id, 'salesforce') ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
-                              ) : lead.salesforceSyncStatus === 'synced' ? (
-                                <div className="text-blue-500" title="Synced to Salesforce"><CheckCircle2 className="h-3.5 w-3.5" /></div>
-                              ) : lead.salesforceSyncStatus === 'failed' ? (
-                                <div className="text-red-600 cursor-help" title={`Salesforce: ${lead.salesforceSyncError || 'Sync failed'}`}><XCircle className="h-3.5 w-3.5" /></div>
-                              ) : null}
-                            </div>
-
-                            <div className="min-w-0 flex items-center justify-center">
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button size="icon" variant="ghost" className="h-7 w-7 text-gray-400 hover:text-gray-600">
-                                    <MoreVertical className="h-4 w-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-44">
-                                  <DropdownMenuItem
-                                    onClick={() => { setSelectedLeadDetails(lead); setDetailsDialogOpen(true); }}
-                                    className="cursor-pointer"
-                                  >
-                                    <Info className="h-4 w-4 mr-2 text-blue-600" />
-                                    View Details
-                                  </DropdownMenuItem>
-                                  {(() => {
-                                    const topics = (lead.topicsOfInterest || []).map(t => t.toLowerCase());
-                                    const isJourney = topics.some(t => t.includes('journey'));
-                                    const isForm = !isJourney && topics.some(t => t.includes('via form'));
-                                    if (isForm) {
-                                      return (
-                                        <DropdownMenuItem
-                                          onClick={() => {
-                                            setFormDialogLead(lead);
-                                            setFormDialogOpen(true);
-                                          }}
-                                          className="cursor-pointer"
-                                        >
-                                          <FileText className="h-4 w-4 mr-2 text-green-600" />
-                                          View Form
-                                        </DropdownMenuItem>
-                                      );
-                                    }
-                                    if (isJourney) {
-                                      return (
-                                        <DropdownMenuItem
-                                          onClick={() => {
-                                            setJourneyDialogLeadId(lead.id);
-                                            setJourneyDialogOpen(true);
-                                          }}
-                                          className="cursor-pointer"
-                                        >
-                                          <GitBranch className="h-4 w-4 mr-2 text-orange-600" />
-                                          View Journey
-                                        </DropdownMenuItem>
-                                      );
-                                    }
-                                    if (!isForm && !isJourney && lead.conversationId) {
-                                      return (
-                                        <DropdownMenuItem
-                                          onClick={() => {
-                                            setChatDialogConversationId(lead.conversationId!);
-                                            setChatDialogOpen(true);
-                                          }}
-                                          className="cursor-pointer"
-                                        >
-                                          <Eye className="h-4 w-4 mr-2 text-purple-600" />
-                                          View Chat
-                                        </DropdownMenuItem>
-                                      );
-                                    }
-                                    return null;
-                                  })()}
-                                  {canSyncLeads && crmByAccount.get(lead.businessAccountId)?.leadsquared && lead.leadsquaredSyncStatus !== 'synced' && lead.leadsquaredSyncStatus !== 'disqualified' && (
+                          <div className="min-w-0 flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button size="icon" variant="ghost" className="h-7 w-7 text-gray-400 hover:text-gray-600" aria-label="Lead actions">
+                                  <MoreVertical className="h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-44">
+                              <DropdownMenuItem
+                                onClick={() => setDetailsLead(lead)}
+                                className="cursor-pointer"
+                              >
+                                <Info className="h-4 w-4 mr-2 text-blue-600" />
+                                View Details
+                              </DropdownMenuItem>
+                              {(() => {
+                                const topics = (lead.topicsOfInterest || []).map(t => t.toLowerCase());
+                                const isJourney = topics.some(t => t.includes('journey'));
+                                const isForm = !isJourney && topics.some(t => t.includes('via form'));
+                                if (isForm) {
+                                  return (
                                     <DropdownMenuItem
-                                      onClick={() => syncLeadMutation.mutate({ lead, crm: 'leadsquared' })}
-                                      disabled={syncLeadMutation.isPending}
+                                      onClick={() => {
+                                        setFormDialogLead(lead);
+                                        setFormDialogOpen(true);
+                                      }}
                                       className="cursor-pointer"
                                     >
-                                      <RefreshCw className={`h-4 w-4 mr-2 text-blue-600 ${isSyncingLead(lead.id, 'leadsquared') ? 'animate-spin' : ''}`} />
-                                      {lead.leadsquaredSyncStatus && lead.leadsquaredSyncStatus !== 'pending' ? 'Retry LSQ Sync' : 'Sync to LeadSquared'}
+                                      <FileText className="h-4 w-4 mr-2 text-green-600" />
+                                      View Form
                                     </DropdownMenuItem>
-                                  )}
-                                  {canSyncLeads && crmByAccount.get(lead.businessAccountId)?.salesforce && (lead.salesforceSyncStatus === 'failed' || !lead.salesforceSyncStatus) && (
+                                  );
+                                }
+                                if (isJourney) {
+                                  return (
                                     <DropdownMenuItem
-                                      onClick={() => syncLeadMutation.mutate({ lead, crm: 'salesforce' })}
-                                      disabled={syncLeadMutation.isPending}
+                                      onClick={() => {
+                                        setJourneyDialogLeadId(lead.id);
+                                        setJourneyDialogOpen(true);
+                                      }}
                                       className="cursor-pointer"
                                     >
-                                      <RefreshCw className={`h-4 w-4 mr-2 text-blue-500 ${isSyncingLead(lead.id, 'salesforce') ? 'animate-spin' : ''}`} />
-                                      {lead.salesforceSyncStatus === 'failed' ? 'Retry SF Sync' : 'Sync to Salesforce'}
+                                      <GitBranch className="h-4 w-4 mr-2 text-orange-600" />
+                                      View Journey
                                     </DropdownMenuItem>
-                                  )}
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
+                                  );
+                                }
+                                if (!isForm && !isJourney && lead.conversationId) {
+                                  return (
+                                    <DropdownMenuItem
+                                      onClick={() => {
+                                        setChatDialogConversationId(lead.conversationId!);
+                                        setChatDialogOpen(true);
+                                      }}
+                                      className="cursor-pointer"
+                                    >
+                                      <Eye className="h-4 w-4 mr-2 text-purple-600" />
+                                      View Chat
+                                    </DropdownMenuItem>
+                                  );
+                                }
+                                return null;
+                              })()}
+                              {canSyncLeads && crmByAccount.get(lead.businessAccountId)?.leadsquared && lead.leadsquaredSyncStatus !== 'synced' && lead.leadsquaredSyncStatus !== 'disqualified' && (
+                                <DropdownMenuItem
+                                  onClick={() => syncLeadMutation.mutate({ lead, crm: 'leadsquared' })}
+                                  disabled={syncLeadMutation.isPending}
+                                  className="cursor-pointer"
+                                >
+                                  <RefreshCw className={`h-4 w-4 mr-2 text-blue-600 ${isSyncingLead(lead.id, 'leadsquared') ? 'animate-spin' : ''}`} />
+                                  {lead.leadsquaredSyncStatus && lead.leadsquaredSyncStatus !== 'pending' ? 'Retry LSQ Sync' : 'Sync to LeadSquared'}
+                                </DropdownMenuItem>
+                              )}
+                              {canSyncLeads && crmByAccount.get(lead.businessAccountId)?.salesforce && (lead.salesforceSyncStatus === 'failed' || !lead.salesforceSyncStatus) && (
+                                <DropdownMenuItem
+                                  onClick={() => syncLeadMutation.mutate({ lead, crm: 'salesforce' })}
+                                  disabled={syncLeadMutation.isPending}
+                                  className="cursor-pointer"
+                                >
+                                  <RefreshCw className={`h-4 w-4 mr-2 text-blue-500 ${isSyncingLead(lead.id, 'salesforce') ? 'animate-spin' : ''}`} />
+                                  {lead.salesforceSyncStatus === 'failed' ? 'Retry SF Sync' : 'Sync to Salesforce'}
+                                </DropdownMenuItem>
+                              )}
+                            </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
                         </div>
                       );
                     })}
+                    </div>
                     <div ref={leadsEndRef} className="h-4" />
                     {isFetchingNextPage && (
                       <div className="flex items-center justify-center py-4">
@@ -1835,8 +1925,8 @@ export default function GroupAdminDashboard() {
                       {filteredConversations.map((conversation) => (
                         <div
                           key={conversation.id}
-                          onClick={() => setSelectedConversationId(conversation.id)}
-                          className={`p-4 cursor-pointer transition-colors ${
+                          onClick={() => { setSelectedConversationId(conversation.id); setSummaryExpanded(false); }}
+                          className={`px-4 py-3 cursor-pointer transition-colors ${
                             selectedConversationId === conversation.id
                               ? 'bg-blue-50 border-l-4 border-blue-500'
                               : 'hover:bg-gray-50'
@@ -1867,12 +1957,19 @@ export default function GroupAdminDashboard() {
                                   : <MessageSquare className="w-5 h-5 text-white" />}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <h3 className="font-semibold text-sm text-gray-900 truncate mb-0.5">
-                                {conversation.title || 'Untitled Conversation'}
-                              </h3>
-                              <div className="flex items-center gap-2 mb-1">
-                                <Badge variant="outline" className="text-xs">{conversation.businessAccountName || "Unknown"}</Badge>
+                              <div className="flex min-w-0 items-center gap-2 mb-0.5">
+                                <h3 className="min-w-0 flex-1 font-semibold text-sm text-gray-900 truncate" title={conversation.visitorLabel || conversation.title || undefined}>
+                                  {conversation.visitorLabel || conversation.title || 'Untitled Conversation'}
+                                </h3>
+                                <span className="max-w-[110px] shrink-0 truncate rounded-md border border-slate-200/60 bg-slate-50 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600" title={conversation.businessAccountName || undefined}>
+                                  {conversation.businessAccountName || "Unknown"}
+                                </span>
                               </div>
+                              {conversation.subtitle && (
+                                <p className="mb-1 truncate text-[13px] text-gray-600" title={conversation.subtitle}>
+                                  {conversation.subtitle}
+                                </p>
+                              )}
                               <div className="flex items-center justify-between text-xs text-gray-500">
                                 <span className="truncate">{formatConvoDate(conversation.createdAt)}</span>
                                 <span className="ml-2 px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full font-medium">
@@ -1882,9 +1979,9 @@ export default function GroupAdminDashboard() {
                               {(conversation.viaJourney || conversation.viaForm || conversation.hasLead || conversation.visitorCity) && (
                                 <div className="flex items-center gap-1 mt-1 flex-wrap">
                                   {conversation.viaJourney && (
-                                    <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-violet-50 text-violet-600 border border-violet-200" title="Via Journey">
-                                      <GitBranch className="w-2.5 h-2.5" />
-                                      Journey
+                                    <span className="inline-flex max-w-[180px] items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-violet-50 text-violet-600 border border-violet-200" title={conversation.journeyName ? `Journey: ${conversation.journeyName}` : "Via Journey"}>
+                                      <GitBranch className="w-2.5 h-2.5 shrink-0" />
+                                      <span className="truncate">{conversation.journeyName ? `Journey · ${conversation.journeyName}` : 'Journey'}</span>
                                     </span>
                                   )}
                                   {conversation.viaForm && (
@@ -1938,98 +2035,99 @@ export default function GroupAdminDashboard() {
               <div className={`flex-1 flex-col bg-gray-50 min-h-0 overflow-hidden ${selectedConversationId ? 'flex' : 'hidden md:flex'}`}>
                 {selectedConversation ? (
                   <>
-                    <div className="bg-white border-b border-gray-200 p-4">
-                      <div className="flex items-center gap-3">
-                        <button
-                          onClick={() => setSelectedConversationId(null)}
-                          className="md:hidden p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-                        >
-                          <ChevronLeft className="w-5 h-5 text-gray-600" />
-                        </button>
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                          selectedConversation.viaJourney
-                            ? 'bg-gradient-to-br from-violet-500 to-purple-600'
-                            : selectedConversation.viaForm
-                              ? 'bg-gradient-to-br from-green-500 to-emerald-600'
-                              : 'bg-gradient-to-br from-purple-500 to-blue-600'
-                        }`}>
-                          {selectedConversation.viaJourney
-                            ? <GitBranch className="w-5 h-5 text-white" />
-                            : selectedConversation.viaForm
-                              ? <FileText className="w-5 h-5 text-white" />
-                              : <MessageSquare className="w-5 h-5 text-white" />}
-                        </div>
-                        <div>
-                          <h2 className="font-semibold text-gray-900">{selectedConversation.title || 'Untitled Conversation'}</h2>
-                          <div className="flex items-center gap-2 text-xs text-gray-500">
-                            <span>{formatConvoDate(selectedConversation.createdAt)}</span>
-                            <Badge variant="outline" className="text-xs">{selectedConversation.businessAccountName}</Badge>
-                          </div>
-                          {(selectedConversation.viaJourney || selectedConversation.viaForm || selectedConversation.hasLead || selectedConversation.visitorCity) && (
-                            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                              {selectedConversation.viaJourney && (
-                                <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium bg-violet-50 text-violet-600 border border-violet-200">
-                                  <GitBranch className="w-3 h-3" />
-                                  Journey
-                                </span>
-                              )}
-                              {selectedConversation.viaForm && (
-                                <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium bg-emerald-50 text-emerald-600 border border-emerald-200">
-                                  <FileText className="w-3 h-3" />
-                                  Form
-                                </span>
-                              )}
-                              {selectedConversation.hasLead && (
-                                <span className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium border ${
-                                  selectedConversation.leadBadge === 'Discount Availed'
-                                    ? 'bg-orange-50 text-orange-600 border-orange-200'
-                                    : 'bg-green-50 text-green-600 border-green-200'
-                                }`}>
-                                  <span className="font-bold text-[10px]">L</span>
-                                  {selectedConversation.leadBadge === 'Discount Availed' ? 'Discount' : 'Lead'}
-                                </span>
-                              )}
-                              {selectedConversation.visitorCity && (
-                                <span className="inline-flex items-center gap-1 text-[11px] text-gray-500 bg-gray-50 px-2 py-0.5 rounded-full border border-gray-200">
-                                  <MapPin className="w-3 h-3" />
-                                  {selectedConversation.visitorCity}
-                                </span>
-                              )}
-                            </div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedConversationId(null)}
+                      className="md:hidden flex items-center gap-1 border-b border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-purple-700"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      All conversations
+                    </button>
+                    {/* Conversation header: one compact row (who, badges / what · account · when) */}
+                    <div className="flex items-center gap-3 border-b border-gray-200 bg-white px-4 py-2.5">
+                      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                        selectedConversation.viaJourney
+                          ? 'bg-gradient-to-br from-violet-500 to-purple-600'
+                          : selectedConversation.viaForm
+                            ? 'bg-gradient-to-br from-green-500 to-emerald-600'
+                            : 'bg-gradient-to-br from-purple-500 to-blue-600'
+                      }`}>
+                        {selectedConversation.viaJourney
+                          ? <GitBranch className="h-4 w-4 text-white" />
+                          : selectedConversation.viaForm
+                            ? <FileText className="h-4 w-4 text-white" />
+                            : <MessageSquare className="h-4 w-4 text-white" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <h2 className="truncate text-[15px] font-semibold text-gray-900">{selectedConversation.visitorLabel || selectedConversation.title || 'Untitled Conversation'}</h2>
+                          {selectedConversation.viaJourney && (
+                            <span className="hidden min-w-0 max-w-[220px] shrink items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-600 sm:inline-flex" title={selectedConversation.journeyName ? `Journey: ${selectedConversation.journeyName}` : 'Journey'}>
+                              <GitBranch className="h-3 w-3 shrink-0" />
+                              <span className="truncate">{selectedConversation.journeyName ? `Journey · ${selectedConversation.journeyName}` : 'Journey'}</span>
+                            </span>
+                          )}
+                          {selectedConversation.viaForm && (
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-600">
+                              <FileText className="h-3 w-3" />
+                              Form
+                            </span>
+                          )}
+                          {selectedConversation.hasLead && (
+                            <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                              selectedConversation.leadBadge === 'Discount Availed'
+                                ? 'border-orange-200 bg-orange-50 text-orange-600'
+                                : 'border-green-200 bg-green-50 text-green-600'
+                            }`}>
+                              <span className="text-[10px] font-bold">L</span>
+                              {selectedConversation.leadBadge === 'Discount Availed' ? 'Discount' : 'Lead'}
+                            </span>
                           )}
                         </div>
+                        <p className="truncate text-xs text-gray-500" title={selectedConversation.subtitle || undefined}>
+                          {[selectedConversation.subtitle, selectedConversation.businessAccountName, formatConvoDate(selectedConversation.createdAt), selectedConversation.visitorCity].filter(Boolean).join(' · ')}
+                        </p>
                       </div>
                     </div>
 
+                    {/* AI summary: one line until opened (keywords only when open) */}
                     {selectedConversation.summary && (
-                      <div className="bg-gradient-to-r from-purple-50 to-blue-50 border-b border-purple-100 px-4 py-3">
-                        <div className="flex items-start gap-2">
-                          <Sparkles className="w-4 h-4 text-purple-500 mt-0.5 flex-shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm text-gray-700 leading-relaxed">{selectedConversation.summary}</p>
-                            {selectedConversation.topicKeywords && (() => {
-                              try {
-                                const keywords = JSON.parse(selectedConversation.topicKeywords);
-                                if (Array.isArray(keywords) && keywords.length > 0) {
-                                  return (
-                                    <div className="mt-2 flex flex-wrap gap-1.5">
-                                      {keywords.map((kw: string, i: number) => (
-                                        <span key={i} className="px-2 py-0.5 text-xs font-medium rounded-full bg-white text-purple-700 border border-purple-200">
-                                          {kw}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  );
-                                }
-                                return null;
-                              } catch { return null; }
-                            })()}
-                          </div>
-                        </div>
+                      <div className="border-b border-purple-100 bg-gradient-to-r from-purple-50/70 to-blue-50/70 px-4 py-2">
+                        <button
+                          type="button"
+                          onClick={() => setSummaryExpanded(!summaryExpanded)}
+                          className="flex w-full items-start gap-2 text-left"
+                          aria-expanded={summaryExpanded}
+                        >
+                          <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-purple-500" />
+                          <p className={`min-w-0 flex-1 text-[13px] leading-relaxed text-gray-700 ${summaryExpanded ? '' : 'line-clamp-1'}`}>
+                            {selectedConversation.summary}
+                          </p>
+                          <span className="shrink-0 whitespace-nowrap text-xs font-medium text-purple-600 hover:text-purple-800">
+                            {summaryExpanded ? 'Show less' : 'Show more'}
+                          </span>
+                        </button>
+                        {summaryExpanded && selectedConversation.topicKeywords && (() => {
+                          try {
+                            const keywords = JSON.parse(selectedConversation.topicKeywords);
+                            if (Array.isArray(keywords) && keywords.length > 0) {
+                              return (
+                                <div className="mt-2 flex flex-wrap gap-1.5 pl-5">
+                                  {keywords.map((kw: string, i: number) => (
+                                    <span key={i} className="rounded-full border border-purple-200 bg-white px-2 py-0.5 text-xs font-medium text-purple-700">
+                                      {kw}
+                                    </span>
+                                  ))}
+                                </div>
+                              );
+                            }
+                            return null;
+                          } catch { return null; }
+                        })()}
                       </div>
                     )}
 
-                    <div className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-4">
+                    <div ref={convoThreadRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 space-y-3">
                       {loadingMessages ? (
                         <div className="flex justify-center py-8">
                           <div className="w-6 h-6 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
@@ -2567,155 +2665,31 @@ export default function GroupAdminDashboard() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={detailsDialogOpen} onOpenChange={setDetailsDialogOpen}>
-        <DialogContent className="max-w-md max-h-[60vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Info className="w-5 h-5 text-blue-600" />
-              Lead Details
-            </DialogTitle>
-            <DialogDescription>
-              Complete information about this lead
-            </DialogDescription>
-          </DialogHeader>
-          {selectedLeadDetails && (
-            <div className="space-y-4 py-2">
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-gray-700 border-b pb-1">Contact Information</h4>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <span className="text-gray-500">Name:</span>
-                    <p className="font-medium">{selectedLeadDetails.name || '—'}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Email:</span>
-                    <p className="font-medium">{selectedLeadDetails.email || '—'}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Phone:</span>
-                    <p className="font-medium">{selectedLeadDetails.phone || '—'}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">City:</span>
-                    <p className="font-medium">{(selectedLeadDetails as any).city || '—'}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-gray-700 border-b pb-1">Source Information</h4>
-                <div className="space-y-2 text-sm">
-                  {selectedLeadDetails.sourceUrl && (
-                    <div>
-                      <span className="text-gray-500">Page URL:</span>
-                      <p className="font-medium text-xs break-all text-blue-600">{selectedLeadDetails.sourceUrl}</p>
-                    </div>
-                  )}
-                  <div>
-                    <span className="text-gray-500">Account:</span>
-                    <p className="font-medium">{selectedLeadDetails.businessAccountName}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Created:</span>
-                    <p className="font-medium">{format(new Date(selectedLeadDetails.createdAt), "PPpp")}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-gray-700 border-b pb-1">LeadSquared Sync</h4>
-                <div className="space-y-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="text-gray-500">Status:</span>
-                    {selectedLeadDetails.leadsquaredSyncStatus === 'synced' ? (
-                      <Badge className="bg-green-100 text-green-700">
-                        <CheckCircle2 className="h-3 w-3 mr-1" />
-                        Synced
-                      </Badge>
-                    ) : selectedLeadDetails.leadsquaredSyncStatus === 'failed' ? (
-                      <Badge className="bg-red-100 text-red-700">
-                        <XCircle className="h-3 w-3 mr-1" />
-                        Failed
-                      </Badge>
-                    ) : (
-                      <Badge className="bg-gray-100 text-gray-600">Not Synced</Badge>
-                    )}
-                  </div>
-                  {selectedLeadDetails.leadsquaredLeadId && (
-                    <div>
-                      <span className="text-gray-500">LeadSquared ID:</span>
-                      <div className="flex items-center gap-2 mt-1">
-                        <code className="text-xs bg-gray-100 px-2 py-1 rounded font-mono">
-                          {selectedLeadDetails.leadsquaredLeadId}
-                        </code>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 w-6 p-0"
-                          onClick={() => {
-                            navigator.clipboard.writeText(selectedLeadDetails.leadsquaredLeadId || '');
-                            toast({
-                              title: "Copied!",
-                              description: "LeadSquared ID copied to clipboard",
-                            });
-                          }}
-                        >
-                          <Copy className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                  {selectedLeadDetails.leadsquaredSyncedAt && (
-                    <div>
-                      <span className="text-gray-500">Synced At:</span>
-                      <p className="font-medium">{format(new Date(selectedLeadDetails.leadsquaredSyncedAt), "PPpp")}</p>
-                    </div>
-                  )}
-                  {selectedLeadDetails.leadsquaredSyncError && (
-                    <div>
-                      <span className="text-gray-500">Error:</span>
-                      <p className="text-red-600 text-sm mt-1 bg-red-50 p-3 rounded">{friendlySyncError(selectedLeadDetails.leadsquaredSyncError)}</p>
-                      {friendlySyncError(selectedLeadDetails.leadsquaredSyncError) !== selectedLeadDetails.leadsquaredSyncError && (
-                        <p className="text-gray-400 text-[10px] mt-1 italic">Technical: {selectedLeadDetails.leadsquaredSyncError}</p>
-                      )}
-                    </div>
-                  )}
-                  {(() => {
-                    const payload = selectedLeadDetails.leadsquaredSyncPayload;
-                    if (!payload || typeof payload !== 'object') return null;
-                    const entries = Object.entries(payload as Record<string, unknown>);
-                    if (entries.length === 0) return null;
-                    return (
-                      <div className="mt-3">
-                        <span className="text-gray-500 block mb-2">Synced Fields:</span>
-                        <div className="bg-gray-50 rounded-md p-3 space-y-1.5 max-h-48 overflow-y-auto">
-                          {entries.map(([key, value]) => (
-                            <div key={key} className="flex text-xs">
-                              <span className="text-gray-600 font-mono min-w-[140px] flex-shrink-0">{key}:</span>
-                              <span className="text-gray-800 break-all">{value != null ? String(value) : '—'}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
-
-              {selectedLeadDetails.topicsOfInterest && selectedLeadDetails.topicsOfInterest.length > 0 && (
-                <div className="space-y-3">
-                  <h4 className="text-sm font-semibold text-gray-700 border-b pb-1">Topics of Interest</h4>
-                  <div className="flex flex-wrap gap-1">
-                    {selectedLeadDetails.topicsOfInterest.map((topic, idx) => (
-                      <Badge key={idx} variant="outline" className="text-xs">{topic}</Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      <LeadDetailsSheet
+        row={detailsLead ? websiteRowFromLead(detailsLead as unknown as Lead) : null}
+        onClose={() => setDetailsLead(null)}
+        targets={detailsLead ? groupCrmTargets(detailsLead) : []}
+        isSyncing={(crm) => !!detailsLead && (crm === 'leadsquared' || crm === 'salesforce') && isSyncingLead(detailsLead.id, crm)}
+        onSync={(crm) => {
+          if (detailsLead && (crm === 'leadsquared' || crm === 'salesforce')) syncLeadMutation.mutate({ lead: detailsLead, crm });
+        }}
+        onSelectRow={() => {}}
+        onViewChat={detailsLead?.conversationId ? () => {
+          setChatDialogConversationId(detailsLead.conversationId!);
+          setChatDialogOpen(true);
+          setDetailsLead(null);
+        } : undefined}
+        onViewForm={detailsLead && leadKind(detailsLead) === 'form' ? () => {
+          setFormDialogLead(detailsLead);
+          setFormDialogOpen(true);
+          setDetailsLead(null);
+        } : undefined}
+        journeyResponsesUrl={detailsLead ? `/api/group-admin/groups/${selectedGroupId}/journey-responses-by-lead/${detailsLead.id}` : undefined}
+        showCalls={false}
+        accountName={detailsLead?.businessAccountName}
+        noCrmText={canSyncLeads ? "No CRM is connected for this account." : "No CRM sync recorded for this lead."}
+        showInternalIds={false}
+      />
 
       <Dialog open={chatDialogOpen} onOpenChange={(open) => { setChatDialogOpen(open); if (!open) setChatDialogConversationId(null); }}>
         <DialogContent className="max-w-2xl w-full max-h-[85vh] flex flex-col p-0 gap-0">

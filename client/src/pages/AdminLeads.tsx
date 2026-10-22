@@ -52,7 +52,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { DEFAULT_LEAD_COLUMNS, LeadColumnsPicker, leadColumnLabel, websiteLeadColumnText, type LeadColumnKey } from "@/components/leads/LeadColumns";
+import { DEFAULT_LEAD_COLUMNS, LeadColumnsPicker, WebsiteLeadColumnCell, leadColumnIcon, leadColumnLabel, leadColumnWidth, websiteLeadColumnText, type LeadColumnKey } from "@/components/leads/LeadColumns";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useLocation } from "wouter";
@@ -1271,15 +1271,8 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                     </TableHead>
                       </>
                     ) : tableColumns.map(key => {
-                      const icon = key === 'phone' ? <Phone className="h-4 w-4 text-green-600" />
-                        : key === 'email' ? <Mail className="h-4 w-4 text-blue-600" />
-                        : key === 'city' ? <MapPin className="h-4 w-4 text-red-500" />
-                        : key === 'topics' ? <MessageSquare className="h-4 w-4 text-purple-600" />
-                        : key === 'funnel' ? <Filter className="h-4 w-4 text-indigo-600" />
-                        : key.startsWith('q:') ? <GitBranch className="h-4 w-4 text-violet-600" />
-                        : null;
-                      const width = key === 'phone' ? 'w-[140px]' : key === 'email' ? 'w-[170px]' : key === 'city' ? 'w-[100px]'
-                        : key === 'topics' ? 'w-[180px]' : key === 'funnel' ? 'w-[120px]' : 'min-w-[120px] max-w-[220px]';
+                      const icon = leadColumnIcon(key);
+                      const width = leadColumnWidth(key);
                       return (
                         <TableHead key={key} className={`font-semibold text-gray-900 ${width} px-4 py-3`}>
                           <div className="flex items-center gap-2" title={leadColumnLabel(key)}>
@@ -1367,123 +1360,11 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                         {showChannelColumn && (
                           <TableCell className="px-4 py-3"><ChannelTrail row={row} /></TableCell>
                         )}
-                        {tableColumns.map((key) => {
-                          switch (key) {
-                            case 'phone': return (
-                            <TableCell key="phone" className="px-4 py-3">
-                              {lead.phone && isMaskedValue(lead.phone) ? (
-                                <span className="text-sm text-gray-500 font-mono" title="Hidden after sync. Your CRM has the full number.">{lead.phone}</span>
-                              ) : lead.phone ? (
-                                <a 
-                                  href={`tel:${lead.phone}`}
-                                  className="text-sm text-green-600 hover:text-green-700 hover:underline transition-colors font-mono"
-                                >
-                                  {lead.phone}
-                                </a>
-                              ) : (
-                                <span className="text-gray-400 text-sm">—</span>
-                              )}
-                            </TableCell>
-                            );
-                            case 'email': return (
-                            <TableCell key="email" className="px-4 py-3">
-                              {lead.email ? (
-                                <span className="text-sm text-gray-700 truncate block max-w-[160px]" title={lead.email}>{lead.email}</span>
-                              ) : (
-                                <span className="text-gray-400 text-sm">—</span>
-                              )}
-                            </TableCell>
-                            );
-                            case 'city': return (
-                            <TableCell key="city" className="px-4 py-3">
-                              {lead.city ? (
-                                <span className="text-sm text-gray-600">{lead.city}</span>
-                              ) : (
-                                <span className="text-gray-400 text-sm">—</span>
-                              )}
-                            </TableCell>
-                            );
-                            case 'topics': return (
-                            <TableCell key="topics" className="px-4 py-3">
-                              {(() => {
-                                // Real interests only: journey answers are shown with their questions in the lead panel.
-                                const funnelValues = ['Via Form', 'Via Journey Form', 'Discount Availed'];
-                                const interestTopics = (lead as any).interestTopics as string[] | undefined;
-                                const topics = Array.isArray(interestTopics)
-                                  ? interestTopics
-                                  : (lead.topicsOfInterest && Array.isArray(lead.topicsOfInterest))
-                                    ? (lead.topicsOfInterest as string[]).filter(t => !funnelValues.includes(t))
-                                    : [];
-                                if (topics.length > 0) {
-                                  const colors = [
-                                    'bg-purple-100 text-purple-700',
-                                    'bg-blue-100 text-blue-700',
-                                  ];
-                                  return (
-                                    <div className="flex flex-wrap items-center gap-1" title={topics.join(', ')}>
-                                      {topics.slice(0, 2).map((topic, i) => (
-                                        <span key={i} className={`max-w-[160px] truncate px-2 py-0.5 text-xs font-medium rounded-full ${colors[i % colors.length]}`}>
-                                          {topic}
-                                        </span>
-                                      ))}
-                                      {topics.length > 2 && (
-                                        <span className="px-1.5 py-0.5 text-xs font-medium text-gray-500">+{topics.length - 2}</span>
-                                      )}
-                                    </div>
-                                  );
-                                }
-                                if ((lead as any).hasJourneyAnswers) {
-                                  return <span className="text-xs text-gray-500">Journey answers · open lead</span>;
-                                }
-                                return lead.message && lead.message !== 'Via Chat'
-                                  ? <span className="text-sm text-gray-500 italic">{lead.message}</span>
-                                  : <span className="text-gray-400 text-sm">—</span>;
-                              })()}
-                            </TableCell>
-                            );
-                            case 'funnel': return (
-                            <TableCell key="funnel" className="px-4 py-3">
-                              {(() => {
-                                const allTopics = (lead.topicsOfInterest && Array.isArray(lead.topicsOfInterest)) ? lead.topicsOfInterest as string[] : [];
-                                if (allTopics.includes('Discount Availed')) {
-                                  return <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-700">Discount Availed</span>;
-                                } else if (allTopics.includes('Via Form')) {
-                                  return <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-700">Via Form</span>;
-                                } else if (allTopics.includes('Via Journey Form')) {
-                                  return <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700">Via Journey</span>;
-                                }
-                                return <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">Via Chat</span>;
-                              })()}
-                            </TableCell>
-                            );
-                            case 'captured':
-                              return (
-                                <TableCell key={key} className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
-                                  {format(new Date(lead.createdAt), "MMM d, yyyy h:mm a")}
-                                </TableCell>
-                              );
-                            default: {
-                              const text = websiteLeadColumnText(key, lead as any);
-                              const isUrl = !!text && /^https?:\/\//i.test(text);
-                              return (
-                                <TableCell key={key} className="px-4 py-3">
-                                  {text ? (
-                                    isUrl ? (
-                                      <a href={text} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
-                                        className="block max-w-[220px] truncate text-sm text-blue-600 hover:underline" title={text}>
-                                        {text.replace(/^https?:\/\/(www\.)?/i, '')}
-                                      </a>
-                                    ) : (
-                                      <span className="block max-w-[220px] truncate text-sm text-gray-700" title={text}>{text}</span>
-                                    )
-                                  ) : (
-                                    <span className="text-gray-400 text-sm">—</span>
-                                  )}
-                                </TableCell>
-                              );
-                            }
-                          }
-                        })}
+                        {tableColumns.map((key) => (
+                          <TableCell key={key} className="px-4 py-3">
+                            <WebsiteLeadColumnCell columnKey={key} lead={lead as any} />
+                          </TableCell>
+                        ))}
                         <TableCell className={`px-2 py-3 ${STICKY_CRM} ${STICKY_ROW_BG}`}>
                           <LeadCrmCell targets={crmTargetsForRow(row)} isSyncing={crm => isRowSyncing(row, crm)} onSync={crm => syncRow(row, crm)} />
                         </TableCell>

@@ -30,7 +30,13 @@ export interface LeadsPdfData {
     account: string;
     source: string;
     date: string;
+    /** Values for `extraHeaders`, in the same order. */
+    extra?: string[];
   }>;
+  /** Header of the "source" column (default "Source"). */
+  sourceHeader?: string;
+  /** Extra columns the viewer added to their Leads table (the page turns landscape). */
+  extraHeaders?: string[];
 }
 
 function toBuffer(doc: jsPDF): Buffer {
@@ -138,7 +144,8 @@ export function renderAnalyticsPdf(data: AnalyticsPdfData): Buffer {
 }
 
 export function renderLeadsPdf(data: LeadsPdfData): Buffer {
-  const doc = new jsPDF();
+  const extraHeaders = (data.extraHeaders || []).slice(0, 12);
+  const doc = extraHeaders.length > 0 ? new jsPDF({ orientation: "landscape" }) : new jsPDF();
 
   doc.setFontSize(22);
   doc.setTextColor(88, 28, 135);
@@ -151,7 +158,7 @@ export function renderLeadsPdf(data: LeadsPdfData): Buffer {
   doc.text(`Generated: ${data.generatedText}`, 14, 40);
 
   doc.setFillColor(245, 243, 255);
-  doc.rect(14, 47, 182, 28, "F");
+  doc.rect(14, 47, doc.internal.pageSize.getWidth() - 28, 28, "F");
 
   doc.setFontSize(9);
   doc.setTextColor(88, 28, 135);
@@ -180,16 +187,18 @@ export function renderLeadsPdf(data: LeadsPdfData): Buffer {
     lead.account || "-",
     lead.source || "-",
     lead.date || "-",
+    ...extraHeaders.map((_, i) => lead.extra?.[i] || "-"),
   ]);
 
   autoTable(doc, {
     startY: 90,
-    head: [["Name", "Phone", "Email", "Account", "Source", "Date"]],
+    head: [["Name", "Phone", "Email", "Account", data.sourceHeader || "Source", "Date", ...extraHeaders]],
     body: tableData,
-    headStyles: { fillColor: [88, 28, 135], fontSize: 9 },
-    bodyStyles: { fontSize: 8 },
+    headStyles: { fillColor: [88, 28, 135], fontSize: extraHeaders.length > 0 ? 8 : 9 },
+    bodyStyles: { fontSize: extraHeaders.length > 0 ? 7 : 8 },
     alternateRowStyles: { fillColor: [248, 245, 255] },
-    columnStyles: {
+    // With extra columns, let the table share the (landscape) width out itself.
+    columnStyles: extraHeaders.length > 0 ? {} : {
       0: { cellWidth: 28 },
       1: { cellWidth: 28 },
       2: { cellWidth: 38 },

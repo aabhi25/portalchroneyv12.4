@@ -683,7 +683,7 @@ export default function Conversations() {
                 <div className="flex min-w-0 items-center gap-2">
                   <h2 className="truncate text-[15px] font-semibold text-gray-900">{selectedConversation.visitorLabel || selectedConversation.title}</h2>
                   {selectedConversation.viaJourney && (
-                    <span className="inline-flex min-w-0 max-w-[220px] shrink items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-600" title={selectedConversation.journeyName ? `Journey: ${selectedConversation.journeyName}` : 'Journey'}>
+                    <span className="hidden min-w-0 max-w-[220px] shrink items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-600 sm:inline-flex" title={selectedConversation.journeyName ? `Journey: ${selectedConversation.journeyName}` : 'Journey'}>
                       <GitBranch className="h-3 w-3 shrink-0" />
                       <span className="truncate">{selectedConversation.journeyName ? `Journey · ${selectedConversation.journeyName}` : 'Journey'}</span>
                     </span>

@@ -9,67 +9,18 @@ import { resolveAuthorizedLeadAccountId } from "../lib/leadAccess";
 import { parseUnifiedLeadFilters, queryUnifiedLeads } from "../services/unifiedLeadsService";
 import { isSocialChannel, type SocialChannel } from "../services/socialLeadFields";
 import { db } from "../db";
-import { journeyResponses, journeySteps, journeySessions, conversationJourneys, businessAccounts } from "@shared/schema";
-import { and, asc, eq, inArray } from "drizzle-orm";
-import { maskPhonesInText } from "../lib/leadAccess";
+import { businessAccounts } from "@shared/schema";
+import { eq } from "drizzle-orm";
+import { addWebsiteLeadExtras, journeyQuestionsForAccounts } from "../lib/leadExtras";
 
 const router = Router();
 
-/** Internal markers kept in topicsOfInterest (funnel source), not interests. */
-const FUNNEL_MARKERS = new Set(["Via Form", "Via Journey Form", "Discount Availed"]);
-
-/**
- * Website leads, for the table and the export:
- * - `detail.interestTopics`: the topics that are real interests. Journeys also store their answers
- *   in topicsOfInterest (other features rely on that), so the lead's own journey answers and the
- *   funnel markers are left out here; the answers are shown with their questions instead.
- * - `detail.journeyName`, `detail.journeyAnswers` ({ question: answer }) for the journey columns.
- */
+/** Website leads get interestTopics / journeyName / journeyAnswers (see addWebsiteLeadExtras). */
 async function addLeadExtras(accountId: string, rows: Array<{ channel: string; detail: Record<string, any> }>): Promise<void> {
-  const website = rows.filter(r => r.channel === "website" && r.detail);
+  const website = rows.filter(r => r.channel === "website" && r.detail).map(r => r.detail);
   if (website.length === 0) return;
-  const conversationIds = Array.from(new Set(website.map(r => r.detail.conversationId).filter((v): v is string => typeof v === "string" && !!v)));
-  const answersByConv = new Map<string, Array<{ question: string; answer: string }>>();
-  const journeyNameByConv = new Map<string, string>();
-  let mask = false;
-  if (conversationIds.length > 0) {
-    const [answers, sessions, account] = await Promise.all([
-      db.select({ conversationId: journeyResponses.conversationId, response: journeyResponses.response, question: journeySteps.questionText })
-        .from(journeyResponses)
-        .leftJoin(journeySteps, eq(journeySteps.id, journeyResponses.stepId))
-        .where(inArray(journeyResponses.conversationId, conversationIds))
-        .orderBy(asc(journeyResponses.createdAt)),
-      db.select({ conversationId: journeySessions.conversationId, name: conversationJourneys.name })
-        .from(journeySessions)
-        .leftJoin(conversationJourneys, eq(conversationJourneys.id, journeySessions.journeyId))
-        .where(and(eq(journeySessions.businessAccountId, accountId), inArray(journeySessions.conversationId, conversationIds)))
-        .orderBy(asc(journeySessions.createdAt)),
-      storage.getBusinessAccount(accountId),
-    ]);
-    mask = account?.leadPhoneMaskingEnabled === "true";
-    for (const a of answers) {
-      const list = answersByConv.get(a.conversationId) || [];
-      list.push({ question: (a.question || "").trim(), answer: a.response });
-      answersByConv.set(a.conversationId, list);
-    }
-    for (const s of sessions) {
-      if (s.name && !journeyNameByConv.has(s.conversationId)) journeyNameByConv.set(s.conversationId, s.name);
-    }
-  }
-  for (const row of website) {
-    const topics: string[] = Array.isArray(row.detail.topicsOfInterest) ? row.detail.topicsOfInterest : [];
-    const answers = answersByConv.get(row.detail.conversationId) || [];
-    const answerTexts = new Set(answers.map(a => a.answer.trim().toLowerCase()));
-    row.detail.interestTopics = topics.filter(t => typeof t === "string" && !FUNNEL_MARKERS.has(t) && !answerTexts.has(t.trim().toLowerCase()));
-    row.detail.hasJourneyAnswers = answers.length > 0;
-    row.detail.journeyName = journeyNameByConv.get(row.detail.conversationId) || null;
-    const byQuestion: Record<string, string> = {};
-    for (const a of answers) {
-      if (!a.question) continue;
-      byQuestion[a.question] = mask ? (maskPhonesInText(a.answer) || "") : a.answer; // latest answer wins
-    }
-    row.detail.journeyAnswers = byQuestion;
-  }
+  const account = await storage.getBusinessAccount(accountId);
+  await addWebsiteLeadExtras(website, new Set(account?.leadPhoneMaskingEnabled === "true" ? [accountId] : []));
 }
 
 async function leadAccount(req: Request, res: Response): Promise<string | null> {
@@ -110,14 +61,10 @@ router.get("/api/leads/table-columns", requireAuth, requireBusinessAccount, asyn
   try {
     const accountId = await leadAccount(req, res);
     if (!accountId) return;
-    const [account, steps] = await Promise.all([
+    const [account, questions] = await Promise.all([
       storage.getBusinessAccount(accountId),
-      db.select({ question: journeySteps.questionText })
-        .from(journeySteps)
-        .innerJoin(conversationJourneys, eq(conversationJourneys.id, journeySteps.journeyId))
-        .where(eq(conversationJourneys.businessAccountId, accountId)),
+      journeyQuestionsForAccounts([accountId]),
     ]);
-    const questions = Array.from(new Set(steps.map(s => (s.question || "").trim()).filter(Boolean)));
     const saved = (account as any)?.leadsTableColumns;
     res.json({ columns: Array.isArray(saved) ? saved : null, journeyQuestions: questions });
   } catch (error: any) {

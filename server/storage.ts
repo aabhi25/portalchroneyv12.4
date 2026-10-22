@@ -5738,9 +5738,15 @@ export class DatabaseStorage implements IStorage {
     
     const conditions: any[] = [this.groupConversationsWhere(accountIds, filters)];
     
-    // Search filter - search by userId
-    if (filters?.search) {
-      conditions.push(ilike(conversations.userId, `%${filters.search}%`));
+    // Search: the chat's title or the visitor's name / phone / email (the list shows the
+    // visitor). Same as the business account's Conversations search. (It used to match a
+    // conversations.userId column that doesn't exist, so every search failed.)
+    if (filters?.search && filters.search.trim()) {
+      const pattern = `%${filters.search.trim()}%`;
+      conditions.push(or(
+        ilike(conversations.title, pattern),
+        sql`EXISTS (SELECT 1 FROM ${leads} WHERE ${leads.conversationId} = ${conversations.id} AND (${leads.name} ILIKE ${pattern} OR ${leads.phone} ILIKE ${pattern} OR ${leads.email} ILIKE ${pattern}))`,
+      ));
     }
     
     const whereClause = and(...conditions);

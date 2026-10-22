@@ -55,6 +55,7 @@ export function websiteRowFromLead(lead: Lead): UnifiedLeadRow {
  */
 export function LeadDetailsSheet({
   row, onClose, targets, isSyncing, onSync, onSelectRow, onViewChat, onViewForm, onViewJourney, onOpenChannelPage, onDelete, showInternalIds,
+  journeyResponsesUrl, showCalls = true, accountName, noCrmText = "No CRM is connected. Connect one in Settings › Connected apps.",
 }: {
   row: UnifiedLeadRow | null;
   onClose: () => void;
@@ -69,6 +70,14 @@ export function LeadDetailsSheet({
   onOpenChannelPage?: () => void;
   onDelete?: () => void;
   showInternalIds: boolean;
+  /** Where the lead's journey answers come from (default: the business account's lead API). */
+  journeyResponsesUrl?: string;
+  /** The phone calls panel (business accounts only). */
+  showCalls?: boolean;
+  /** The business the lead belongs to (group admin view). */
+  accountName?: string | null;
+  /** Shown in "CRM sync" when there is nothing to list. */
+  noCrmText?: string;
 }) {
   const { toast } = useToast();
   const website = row?.channel === "website" ? (row.detail as unknown as Lead) : null;
@@ -81,9 +90,9 @@ export function LeadDetailsSheet({
   const listedInterests = (row?.detail as any)?.interestTopics as string[] | undefined;
   const storedTopics = website && Array.isArray(website.topicsOfInterest) ? (website.topicsOfInterest as string[]) : [];
   const { data: journey } = useQuery<{ journeyName: string | null; responses: Array<{ question: string; answer: string; stepOrder: number }> }>({
-    queryKey: ["/api/leads", website?.id, "journey-responses"],
+    queryKey: [journeyResponsesUrl || "/api/leads", website?.id, "journey-responses"],
     queryFn: async () => {
-      const res = await fetch(`/api/leads/${website!.id}/journey-responses`, { credentials: "include" });
+      const res = await fetch(journeyResponsesUrl || `/api/leads/${website!.id}/journey-responses`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load journey answers");
       return res.json();
     },
@@ -129,6 +138,7 @@ export function LeadDetailsSheet({
 
             <Section title="Where they came from">
               <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-4 gap-y-2 text-[14px]">
+                {accountName && <Field label="Account">{accountName}</Field>}
                 <Field label="Channel"><ChannelBadge channel={row.channel} /></Field>
                 {website?.sourceUrl && (
                   <Field label="Page">
@@ -162,7 +172,7 @@ export function LeadDetailsSheet({
 
             <Section title="CRM sync">
               {targets.length === 0 ? (
-                <p className="text-[13.5px] text-gray-500">No CRM is connected. Connect one in Settings › Connected apps.</p>
+                <p className="text-[13.5px] text-gray-500">{noCrmText}</p>
               ) : (
                 <ul className="overflow-hidden rounded-xl border border-black/[0.07] bg-white">
                   {targets.map(t => {
@@ -250,7 +260,7 @@ export function LeadDetailsSheet({
               </Section>
             )}
 
-            {website && (
+            {website && showCalls && (
               <div className="mt-6">
                 <LeadCallsPanel leadId={website.id} leadName={website.name} phone={website.phone} />
               </div>

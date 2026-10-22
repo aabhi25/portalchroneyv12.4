@@ -95,6 +95,8 @@ import unifiedLeadsRoutes from "./routes/unifiedLeads";
 import homeSummaryRoutes from "./routes/homeSummary";
 import whatsappHandoffRoutes from "./routes/whatsappHandoff";
 import { resolveAuthorizedLeadAccountId, maskLeadPhone, maskPhonesInText } from "./lib/leadAccess";
+import { conversationListExtras } from "./lib/conversationListExtras";
+import { addWebsiteLeadExtras, journeyQuestionsForAccounts } from "./lib/leadExtras";
 
 /** The website script's first-touch landing page (http(s), at most 2000 chars), else undefined. */
 function cleanLandingUrl(value: unknown): string | undefined {
@@ -14478,6 +14480,14 @@ Return ONLY the refined instruction, nothing else.`
   });
 
   // Group Admin: Get conversations for a specific group
+  /** The group's accounts that hide lead phone numbers (each account's own setting). */
+  async function groupMaskedAccountIds(accountIds: string[]): Promise<Set<string>> {
+    if (accountIds.length === 0) return new Set();
+    const rows = await db.select({ id: businessAccounts.id, masking: businessAccounts.leadPhoneMaskingEnabled })
+      .from(businessAccounts).where(inArray(businessAccounts.id, accountIds));
+    return new Set(rows.filter(r => r.masking === "true").map(r => r.id));
+  }
+
   app.get("/api/group-admin/groups/:groupId/conversations", requireAuth, requireGroupAdmin, async (req, res) => {
     try {
       const { groupId } = req.params;
@@ -14523,34 +14533,11 @@ Return ONLY the refined instruction, nothing else.`
       // Get conversations for all accounts in this group with filters
       const { conversations, total } = await storage.getConversationsForAccounts(accountIds, limit, offset, filters);
       
-      const conversationIds = conversations.map(c => c.id);
-      const leadBadgeMap = new Map<string, string>();
-      const journeyConvIds = new Set<string>();
-      const viaFormConvIds = new Set<string>();
-      if (conversationIds.length > 0) {
-        const [leadRows, journeyRows] = await Promise.all([
-          db.select({ conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest })
-            .from(leads)
-            .where(inArray(leads.conversationId, conversationIds)),
-          db.select({ conversationId: journeySessions.conversationId })
-            .from(journeySessions)
-            .where(inArray(journeySessions.conversationId, conversationIds)),
-        ]);
-        for (const row of leadRows) {
-          if (row.conversationId) {
-            const topics = (row.topicsOfInterest as string[]) || [];
-            const badge = topics.includes('Discount Availed') ? 'Discount Availed' : 'Lead Captured';
-            leadBadgeMap.set(row.conversationId, badge);
-            if (topics.includes('Via Form')) viaFormConvIds.add(row.conversationId);
-          }
-        }
-        for (const row of journeyRows) {
-          journeyConvIds.add(row.conversationId);
-        }
-      }
-      
+      // Same list rows as the business account: visitor first, then what they're after.
+      const extras = await conversationListExtras(conversations, await groupMaskedAccountIds(accountIds));
+
       res.json({
-        conversations: conversations.map(c => ({ ...c, hasLead: leadBadgeMap.has(c.id), leadBadge: leadBadgeMap.get(c.id) || null, viaJourney: journeyConvIds.has(c.id), viaForm: viaFormConvIds.has(c.id) })),
+        conversations: conversations.map(c => ({ ...c, ...extras.get(c.id) })),
         total,
         page,
         limit: exportAll ? total : limit,
@@ -14667,8 +14654,11 @@ Return ONLY the refined instruction, nothing else.`
               account: String(l?.account ?? "-"),
               source: String(l?.source ?? "-"),
               date: String(l?.date ?? "-"),
+              extra: Array.isArray(l?.extra) ? l.extra.slice(0, 12).map((v: unknown) => String(v ?? "-").slice(0, 300)) : undefined,
             }))
           : [],
+        sourceHeader: body.sourceHeader ? String(body.sourceHeader).slice(0, 40) : undefined,
+        extraHeaders: Array.isArray(body.extraHeaders) ? body.extraHeaders.slice(0, 12).map((h: unknown) => String(h ?? "").slice(0, 80)) : undefined,
       });
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", 'attachment; filename="leads.pdf"');
@@ -14740,6 +14730,8 @@ Return ONLY the refined instruction, nothing else.`
       const protectedLeads = leads.map(lead =>
         protectLeadPhone(lead, maskedAccountIds.has(lead.businessAccountId))
       );
+      // Same extras as the business Leads table: real interests, journey name and answers.
+      await addWebsiteLeadExtras(protectedLeads as Array<Record<string, any>>, maskedAccountIds);
       
       res.json({
         leads: protectedLeads,
@@ -14753,6 +14745,45 @@ Return ONLY the refined instruction, nothing else.`
     } catch (error: any) {
       console.error('[Group Admin] Error fetching leads:', error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Group Admin: the group's Leads table columns (in order; null = default) and the journey
+  // questions in the admin's accounts that can be shown as columns. Any admin who can view the
+  // group's leads can change them; the choice is shared by the whole group.
+  app.get("/api/group-admin/groups/:groupId/leads/table-columns", requireAuth, requireGroupAdmin, async (req, res) => {
+    try {
+      const { groupId } = req.params;
+      const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
+      if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
+      if (!permissions.canViewLeads) return res.status(403).json({ error: "No permission to view leads" });
+      const accountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
+      const [group, journeyQuestions] = await Promise.all([
+        storage.getAccountGroup(groupId),
+        journeyQuestionsForAccounts(accountIds),
+      ]);
+      const saved = (group as any)?.leadsTableColumns;
+      res.json({ columns: Array.isArray(saved) ? saved : null, journeyQuestions });
+    } catch (error: any) {
+      console.error('[Group Admin] Error loading lead columns:', error);
+      res.status(500).json({ error: "Failed to load columns" });
+    }
+  });
+
+  app.put("/api/group-admin/groups/:groupId/leads/table-columns", requireAuth, requireGroupAdmin, async (req, res) => {
+    try {
+      const { groupId } = req.params;
+      const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
+      if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
+      if (!permissions.canViewLeads) return res.status(403).json({ error: "No permission to view leads" });
+      const parsed = z.object({ columns: z.array(z.string().trim().min(1).max(300)).max(40).nullable() }).strict().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid columns" });
+      const columns = parsed.data.columns ? Array.from(new Set(parsed.data.columns)) : null;
+      await db.update(accountGroups).set({ leadsTableColumns: columns, updatedAt: new Date() } as any).where(eq(accountGroups.id, groupId));
+      res.json({ columns });
+    } catch (error: any) {
+      console.error('[Group Admin] Error saving lead columns:', error);
+      res.status(500).json({ error: "Failed to save columns" });
     }
   });
 
@@ -27423,104 +27454,17 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const conversationIds = result.conversations.map(conv => conv.id);
       const messageCounts = await storage.getMessageCountsForConversations(conversationIds);
       
-      const leadBadgeMap = new Map<string, string>();
-      const journeyConvIds = new Set<string>();
-      const viaFormConvIds = new Set<string>();
       // For the list row: who the visitor is, what they're after, and which journey (if any).
-      const leadContact = new Map<string, { name: string | null; phone: string | null; email: string | null }>();
-      const journeyNameByConv = new Map<string, string>();
-      const answersByConv = new Map<string, string[]>();
-      const lastMessageByConv = new Map<string, { role: string; content: string }>();
-      let maskPhones = false;
-      if (conversationIds.length > 0) {
-        const [leadRows, journeyRows, answerRows, lastMessageRows, account] = await Promise.all([
-          db.select({ conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest, name: leads.name, phone: leads.phone, email: leads.email })
-            .from(leads)
-            .where(and(eq(leads.businessAccountId, businessAccountId), inArray(leads.conversationId, conversationIds)))
-            .orderBy(asc(leads.createdAt)),
-          db.select({ conversationId: journeySessions.conversationId, journeyName: conversationJourneys.name })
-            .from(journeySessions)
-            .leftJoin(conversationJourneys, eq(conversationJourneys.id, journeySessions.journeyId))
-            .where(and(eq(journeySessions.businessAccountId, businessAccountId), inArray(journeySessions.conversationId, conversationIds)))
-            .orderBy(asc(journeySessions.createdAt)),
-          db.select({ conversationId: journeyResponses.conversationId, response: journeyResponses.response })
-            .from(journeyResponses)
-            .where(inArray(journeyResponses.conversationId, conversationIds))
-            .orderBy(asc(journeyResponses.createdAt)),
-          db.selectDistinctOn([messages.conversationId], { conversationId: messages.conversationId, role: messages.role, content: messages.content })
-            .from(messages)
-            .where(inArray(messages.conversationId, conversationIds))
-            .orderBy(messages.conversationId, desc(messages.createdAt)),
-          storage.getBusinessAccount(businessAccountId),
-        ]);
-        maskPhones = account?.leadPhoneMaskingEnabled === "true";
-        for (const row of leadRows) {
-          if (row.conversationId) {
-            const topics = (row.topicsOfInterest as string[]) || [];
-            const badge = topics.includes('Discount Availed') ? 'Discount Availed' : 'Lead Captured';
-            leadBadgeMap.set(row.conversationId, badge);
-            if (topics.includes('Via Form')) viaFormConvIds.add(row.conversationId);
-            if (!leadContact.has(row.conversationId)) {
-              leadContact.set(row.conversationId, { name: row.name, phone: row.phone, email: row.email });
-            }
-          }
-        }
-        for (const row of journeyRows) {
-          journeyConvIds.add(row.conversationId);
-          if (row.journeyName && !journeyNameByConv.has(row.conversationId)) journeyNameByConv.set(row.conversationId, row.journeyName);
-        }
-        for (const row of answerRows) {
-          const list = answersByConv.get(row.conversationId) || [];
-          list.push(row.response);
-          answersByConv.set(row.conversationId, list);
-        }
-        for (const row of lastMessageRows) {
-          lastMessageByConv.set(row.conversationId, { role: row.role, content: row.content });
-        }
-      }
-
-      const DEFAULT_TITLES = new Set(['New Chat', 'Anonymous', '']);
-      const looksLikeContact = (v: string) => /@/.test(v) || v.replace(/\D/g, '').length >= 7;
-      const oneLine = (v: string, max = 90) => {
-        const t = v.replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim();
-        return t.length > max ? `${t.slice(0, max - 1)}…` : t;
-      };
-      const visitorLabelFor = (conv: { id: string; visitorCity: string | null }) => {
-        const lead = leadContact.get(conv.id);
-        const name = lead?.name?.trim();
-        if (name && name !== 'Anonymous') return name;
-        if (lead?.phone) return maskPhones ? (maskLeadPhone(lead.phone) as string) : lead.phone;
-        if (lead?.email) return lead.email;
-        return conv.visitorCity ? `Visitor from ${conv.visitorCity}` : 'Website visitor';
-      };
-      const subtitleFor = (conv: { id: string; title: string }) => {
-        const journeyName = journeyNameByConv.get(conv.id);
-        // Journey chats: their key answers (contact details are already in the heading).
-        const answers = (answersByConv.get(conv.id) || [])
-          .map(a => a.trim())
-          .filter(a => a && a.length <= 40 && !looksLikeContact(a) && a !== leadContact.get(conv.id)?.name);
-        if (answers.length > 0) return answers.slice(0, 3).join(' · ');
-        // Chats: the topic the AI gave the chat, else the latest message.
-        const title = (conv.title || '').trim();
-        if (!DEFAULT_TITLES.has(title) && title !== journeyName && !looksLikeContact(title) && title !== leadContact.get(conv.id)?.name) return title;
-        const last = lastMessageByConv.get(conv.id);
-        if (last?.content) {
-          const text = maskPhones ? (maskPhonesInText(last.content) || '') : last.content;
-          return `${last.role === 'user' ? 'Visitor' : 'AI'}: ${oneLine(text)}`;
-        }
-        return null;
-      };
+      const account = await storage.getBusinessAccount(businessAccountId);
+      const extras = await conversationListExtras(
+        result.conversations,
+        new Set(account?.leadPhoneMaskingEnabled === "true" ? [businessAccountId] : []),
+      );
 
       const conversationsWithCounts = result.conversations.map(conv => ({
         ...conv,
         messageCount: messageCounts[conv.id] || 0,
-        hasLead: leadBadgeMap.has(conv.id),
-        leadBadge: leadBadgeMap.get(conv.id) || null,
-        viaJourney: journeyConvIds.has(conv.id),
-        viaForm: viaFormConvIds.has(conv.id),
-        visitorLabel: visitorLabelFor(conv),
-        subtitle: subtitleFor(conv),
-        journeyName: journeyNameByConv.get(conv.id) || null,
+        ...extras.get(conv.id),
       }));
       
       res.json({

@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, Columns3, RotateCcw } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { format } from "date-fns";
+import { ArrowDown, ArrowUp, Columns3, Filter, GitBranch, Mail, MapPin, MessageSquare, Phone, RotateCcw } from "lucide-react";
+import { isMaskedValue } from "@shared/contactMasking";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -67,18 +69,100 @@ export function websiteLeadColumnText(key: LeadColumnKey, lead: Record<string, a
   }
 }
 
+/** Header icon for a column (null when it has none). */
+export function leadColumnIcon(key: LeadColumnKey): ReactNode {
+  return key === 'phone' ? <Phone className="h-4 w-4 text-green-600" />
+    : key === 'email' ? <Mail className="h-4 w-4 text-blue-600" />
+    : key === 'city' ? <MapPin className="h-4 w-4 text-red-500" />
+    : key === 'topics' ? <MessageSquare className="h-4 w-4 text-purple-600" />
+    : key === 'funnel' ? <Filter className="h-4 w-4 text-indigo-600" />
+    : key.startsWith('q:') ? <GitBranch className="h-4 w-4 text-violet-600" />
+    : null;
+}
+
+/** Header width class for a column. */
+export function leadColumnWidth(key: LeadColumnKey): string {
+  return key === 'phone' ? 'w-[140px]' : key === 'email' ? 'w-[170px]' : key === 'city' ? 'w-[100px]'
+    : key === 'topics' ? 'w-[180px]' : key === 'funnel' ? 'w-[120px]' : 'min-w-[120px] max-w-[220px]';
+}
+
+const FUNNEL_VALUES = ['Via Form', 'Via Journey Form', 'Discount Availed'];
+const EMPTY = <span className="text-gray-400 text-sm">—</span>;
+
+/** A website lead's cell content for one column (the business Leads table and the group admin's). */
+export function WebsiteLeadColumnCell({ columnKey, lead }: { columnKey: LeadColumnKey; lead: Record<string, any> }) {
+  switch (columnKey) {
+    case 'phone':
+      return lead.phone && isMaskedValue(lead.phone) ? (
+        <span className="text-sm text-gray-500 font-mono" title="Hidden after sync. The CRM has the full number.">{lead.phone}</span>
+      ) : lead.phone ? (
+        <a href={`tel:${lead.phone}`} onClick={(e) => e.stopPropagation()} className="text-sm text-green-600 hover:text-green-700 hover:underline transition-colors font-mono">{lead.phone}</a>
+      ) : EMPTY;
+    case 'email':
+      return lead.email ? <span className="text-sm text-gray-700 truncate block max-w-[160px]" title={lead.email}>{lead.email}</span> : EMPTY;
+    case 'city':
+      return lead.city ? <span className="text-sm text-gray-600">{lead.city}</span> : EMPTY;
+    case 'topics': {
+      // Real interests only: journey answers are shown with their questions in the lead panel.
+      const topics: string[] = Array.isArray(lead.interestTopics)
+        ? lead.interestTopics
+        : Array.isArray(lead.topicsOfInterest) ? (lead.topicsOfInterest as string[]).filter(t => !FUNNEL_VALUES.includes(t)) : [];
+      if (topics.length > 0) {
+        const colors = ['bg-purple-100 text-purple-700', 'bg-blue-100 text-blue-700'];
+        return (
+          <div className="flex flex-wrap items-center gap-1" title={topics.join(', ')}>
+            {topics.slice(0, 2).map((topic, i) => (
+              <span key={i} className={`max-w-[160px] truncate px-2 py-0.5 text-xs font-medium rounded-full ${colors[i % colors.length]}`}>{topic}</span>
+            ))}
+            {topics.length > 2 && <span className="px-1.5 py-0.5 text-xs font-medium text-gray-500">+{topics.length - 2}</span>}
+          </div>
+        );
+      }
+      if (lead.hasJourneyAnswers) return <span className="text-xs text-gray-500">Journey answers · open lead</span>;
+      return lead.message && lead.message !== 'Via Chat'
+        ? <span className="block max-w-[200px] truncate text-sm text-gray-500 italic" title={lead.message}>{lead.message}</span>
+        : EMPTY;
+    }
+    case 'funnel': {
+      const allTopics: string[] = Array.isArray(lead.topicsOfInterest) ? lead.topicsOfInterest : [];
+      if (allTopics.includes('Discount Availed')) return <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-700">Discount Availed</span>;
+      if (allTopics.includes('Via Form')) return <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-700">Via Form</span>;
+      if (allTopics.includes('Via Journey Form')) return <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700">Via Journey</span>;
+      return <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">Via Chat</span>;
+    }
+    case 'captured':
+      return <span className="whitespace-nowrap text-sm text-gray-600">{format(new Date(lead.createdAt), "MMM d, yyyy h:mm a")}</span>;
+    default: {
+      const text = websiteLeadColumnText(columnKey, lead);
+      if (!text) return EMPTY;
+      return /^https?:\/\//i.test(text) ? (
+        <a href={text} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+          className="block max-w-[220px] truncate text-sm text-blue-600 hover:underline" title={text}>
+          {text.replace(/^https?:\/\/(www\.)?/i, '')}
+        </a>
+      ) : (
+        <span className="block max-w-[220px] truncate text-sm text-gray-700" title={text}>{text}</span>
+      );
+    }
+  }
+}
+
 /** "Columns" button: tick columns to show, move them up / down, or go back to the default. */
-export function LeadColumnsPicker({ columns, journeyQuestions, onChange, saving }: {
+export function LeadColumnsPicker({ columns, journeyQuestions, onChange, saving, excludeKeys, alwaysShownLabel = "Only Name and CRM", savedForLabel = "Saved for everyone on your team" }: {
   columns: LeadColumnKey[];
   journeyQuestions: string[];
   onChange: (columns: LeadColumnKey[] | null) => void;
   saving?: boolean;
+  /** Built-in columns this table always shows itself (not offered here). */
+  excludeKeys?: LeadColumnKey[];
+  alwaysShownLabel?: string;
+  savedForLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const available = useMemo(() => {
-    const all = [...BUILT_IN_LEAD_COLUMNS.map(c => c.key), ...journeyQuestions.map(questionColumnKey)];
+    const all = [...BUILT_IN_LEAD_COLUMNS.map(c => c.key).filter(k => !excludeKeys?.includes(k)), ...journeyQuestions.map(questionColumnKey)];
     return all.filter(k => !columns.includes(k));
-  }, [columns, journeyQuestions]);
+  }, [columns, journeyQuestions, excludeKeys]);
 
   const move = (index: number, delta: number) => {
     const next = [...columns];
@@ -105,7 +189,7 @@ export function LeadColumnsPicker({ columns, journeyQuestions, onChange, saving 
         <div className="flex items-center justify-between border-b border-gray-100 px-3 py-2.5">
           <div>
             <p className="text-sm font-semibold text-gray-900">Columns</p>
-            <p className="text-[11px] text-gray-500">Saved for everyone on your team{saving ? " · saving…" : ""}</p>
+            <p className="text-[11px] text-gray-500">{savedForLabel}{saving ? " · saving…" : ""}</p>
           </div>
           <button
             type="button"
@@ -118,7 +202,7 @@ export function LeadColumnsPicker({ columns, journeyQuestions, onChange, saving 
         </div>
         <div className="max-h-[420px] overflow-y-auto py-1.5">
           <p className="px-3 pb-1 pt-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-gray-400">Shown (in this order)</p>
-          {columns.length === 0 && <p className="px-3 py-1 text-xs text-gray-400">Only Name and CRM</p>}
+          {columns.length === 0 && <p className="px-3 py-1 text-xs text-gray-400">{alwaysShownLabel}</p>}
           {columns.map((key, i) => (
             <div key={key} className="group flex items-center gap-2 px-3 py-1 hover:bg-gray-50">
               <Checkbox checked onCheckedChange={() => toggle(key, false)} aria-label={`Hide ${leadColumnLabel(key)}`} />

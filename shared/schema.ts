@@ -1439,6 +1439,7 @@ export const accountGroups = pgTable("account_groups", {
   name: text("name").notNull(), // Group name (e.g., "My Businesses", "Company Group")
   ownerUserId: varchar("owner_user_id").notNull().references(() => users.id, { onDelete: "cascade" }), // The user who owns/created this group
   primaryHasFullAccess: text("primary_has_full_access").notNull().default("false"), // 'true' | 'false' - Primary account holder can access all linked accounts
+  leadsTableColumns: jsonb("leads_table_columns"), // group admin Leads table: chosen columns in order (null = default), like business_accounts.leads_table_columns
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
