@@ -1318,26 +1318,34 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                         </TableCell>
                         <TableCell className="px-4 py-3">
                           {(() => {
+                            // Real interests only: journey answers are shown with their questions in the lead panel.
                             const funnelValues = ['Via Form', 'Via Journey Form', 'Discount Availed'];
-                            const topics = (lead.topicsOfInterest && Array.isArray(lead.topicsOfInterest))
-                              ? (lead.topicsOfInterest as string[]).filter(t => !funnelValues.includes(t))
-                              : [];
+                            const interestTopics = (lead as any).interestTopics as string[] | undefined;
+                            const topics = Array.isArray(interestTopics)
+                              ? interestTopics
+                              : (lead.topicsOfInterest && Array.isArray(lead.topicsOfInterest))
+                                ? (lead.topicsOfInterest as string[]).filter(t => !funnelValues.includes(t))
+                                : [];
                             if (topics.length > 0) {
                               const colors = [
                                 'bg-purple-100 text-purple-700',
                                 'bg-blue-100 text-blue-700',
-                                'bg-green-100 text-green-700',
-                                'bg-orange-100 text-orange-700'
                               ];
                               return (
-                                <div className="flex flex-wrap gap-1">
-                                  {topics.slice(0, 4).map((topic, i) => (
-                                    <span key={i} className={`px-2 py-0.5 text-xs font-medium rounded-full ${colors[i % colors.length]}`}>
+                                <div className="flex flex-wrap items-center gap-1" title={topics.join(', ')}>
+                                  {topics.slice(0, 2).map((topic, i) => (
+                                    <span key={i} className={`max-w-[160px] truncate px-2 py-0.5 text-xs font-medium rounded-full ${colors[i % colors.length]}`}>
                                       {topic}
                                     </span>
                                   ))}
+                                  {topics.length > 2 && (
+                                    <span className="px-1.5 py-0.5 text-xs font-medium text-gray-500">+{topics.length - 2}</span>
+                                  )}
                                 </div>
                               );
+                            }
+                            if ((lead as any).hasJourneyAnswers) {
+                              return <span className="text-xs text-gray-500">Journey answers · open lead</span>;
                             }
                             return lead.message
                               ? <span className="text-sm text-gray-500 italic">{lead.message}</span>

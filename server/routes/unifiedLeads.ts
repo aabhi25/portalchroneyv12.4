@@ -8,8 +8,42 @@ import { recordAuditEventSafely } from "../services/auditService";
 import { resolveAuthorizedLeadAccountId } from "../lib/leadAccess";
 import { parseUnifiedLeadFilters, queryUnifiedLeads } from "../services/unifiedLeadsService";
 import { isSocialChannel, type SocialChannel } from "../services/socialLeadFields";
+import { db } from "../db";
+import { journeyResponses } from "@shared/schema";
+import { inArray } from "drizzle-orm";
 
 const router = Router();
+
+/** Internal markers kept in topicsOfInterest (funnel source), not interests. */
+const FUNNEL_MARKERS = new Set(["Via Form", "Via Journey Form", "Discount Availed"]);
+
+/**
+ * Website leads: `detail.interestTopics` = the topics that are real interests. Journeys also store
+ * their answers in topicsOfInterest (other features rely on that), so the lead's own journey answers
+ * and the funnel markers are left out here; the answers are shown with their questions instead.
+ */
+async function addInterestTopics(rows: Array<{ channel: string; detail: Record<string, any> }>): Promise<void> {
+  const website = rows.filter(r => r.channel === "website" && r.detail);
+  if (website.length === 0) return;
+  const conversationIds = Array.from(new Set(website.map(r => r.detail.conversationId).filter((v): v is string => typeof v === "string" && !!v)));
+  const answersByConv = new Map<string, Set<string>>();
+  if (conversationIds.length > 0) {
+    const answers = await db.select({ conversationId: journeyResponses.conversationId, response: journeyResponses.response })
+      .from(journeyResponses)
+      .where(inArray(journeyResponses.conversationId, conversationIds));
+    for (const a of answers) {
+      const set = answersByConv.get(a.conversationId) || new Set<string>();
+      set.add(a.response.trim().toLowerCase());
+      answersByConv.set(a.conversationId, set);
+    }
+  }
+  for (const row of website) {
+    const topics: string[] = Array.isArray(row.detail.topicsOfInterest) ? row.detail.topicsOfInterest : [];
+    const answers = answersByConv.get(row.detail.conversationId) || new Set<string>();
+    row.detail.interestTopics = topics.filter(t => typeof t === "string" && !FUNNEL_MARKERS.has(t) && !answers.has(t.trim().toLowerCase()));
+    row.detail.hasJourneyAnswers = answers.size > 0;
+  }
+}
 
 async function leadAccount(req: Request, res: Response): Promise<string | null> {
   const accountId = req.user ? await resolveAuthorizedLeadAccountId(req.user) : null;
@@ -33,6 +67,7 @@ router.get("/api/leads/unified", requireAuth, requireBusinessAccount, async (req
     const pageNum = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
     const limit = Math.max(1, Math.min(100, parseInt(String(req.query.limit ?? "20"), 10) || 20));
     const result = await queryUnifiedLeads(accountId, filters, { limit, offset: (pageNum - 1) * limit });
+    await addInterestTopics(result.leads);
     res.json({ ...result, page: pageNum, limit });
   } catch (error: any) {
     console.error("[UnifiedLeads] list failed:", error?.message);

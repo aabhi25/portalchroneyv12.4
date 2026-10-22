@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { Copy, Eye, FileText, GitBranch, Loader2, RefreshCw, Trash2, ExternalLink } from "lucide-react";
 import type { Lead } from "@shared/schema";
@@ -74,7 +75,24 @@ export function LeadDetailsSheet({
   const extracted: Record<string, any> = (!website && row?.detail?.extractedData) || {};
   const extractedEntries = Object.entries(extracted).filter(([, v]) => v !== null && v !== undefined && typeof v !== "object" && String(v).trim() !== "");
   const sender = row && !website ? (row.detail?.senderUsername ? `@${row.detail.senderUsername}` : row.detail?.senderName || row.detail?.senderPhone || null) : null;
-  const topics = website && Array.isArray(website.topicsOfInterest) ? website.topicsOfInterest : [];
+  // Interests only (journey answers are listed below with their questions). The list API sends
+  // interestTopics; a lead opened from a link falls back to the stored topics minus funnel markers.
+  const FUNNEL_MARKERS = ["Via Form", "Via Journey Form", "Discount Availed"];
+  const listedInterests = (row?.detail as any)?.interestTopics as string[] | undefined;
+  const storedTopics = website && Array.isArray(website.topicsOfInterest) ? (website.topicsOfInterest as string[]) : [];
+  const { data: journey } = useQuery<{ journeyName: string | null; responses: Array<{ question: string; answer: string; stepOrder: number }> }>({
+    queryKey: ["/api/leads", website?.id, "journey-responses"],
+    queryFn: async () => {
+      const res = await fetch(`/api/leads/${website!.id}/journey-responses`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load journey answers");
+      return res.json();
+    },
+    enabled: !!website?.id && !!website?.conversationId,
+  });
+  const journeyAnswers = (journey?.responses || []).filter(r => r.answer && r.answer.trim());
+  const answerTexts = new Set(journeyAnswers.map(r => r.answer.trim().toLowerCase()));
+  const topics = (Array.isArray(listedInterests) ? listedInterests : storedTopics)
+    .filter(t => !FUNNEL_MARKERS.includes(t) && !answerTexts.has(t.trim().toLowerCase()));
   const city = website ? website.city : typeof extracted.city === "string" ? extracted.city : null;
   const syncedFields = website?.leadsquaredSyncPayload && typeof website.leadsquaredSyncPayload === "object"
     ? Object.entries(website.leadsquaredSyncPayload as Record<string, unknown>) : [];
@@ -195,11 +213,32 @@ export function LeadDetailsSheet({
               )}
             </Section>
 
-            {(topics.length > 0 || website?.message || extractedEntries.length > 0) && (
+            {(topics.length > 0 || journeyAnswers.length > 0 || website?.message || extractedEntries.length > 0) && (
               <Section title="What they told us">
+                {journeyAnswers.length > 0 && (
+                  <div className="mb-3">
+                    {journey?.journeyName && (
+                      <p className="mb-1.5 flex items-center gap-1 text-[12px] text-gray-500">
+                        <GitBranch className="h-3.5 w-3.5" />
+                        {journey.journeyName}
+                      </p>
+                    )}
+                    <dl className="divide-y divide-gray-100 rounded-lg border border-gray-100">
+                      {journeyAnswers.map((r, i) => (
+                        <div key={i} className="px-3 py-2">
+                          <dt className="text-[12px] text-gray-500">{r.question}</dt>
+                          <dd className="text-[14px] font-medium text-gray-900">{r.answer}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                )}
                 {topics.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {topics.map((t, i) => <span key={i} className="rounded-full bg-purple-50 px-2.5 py-0.5 text-[12.5px] text-purple-700">{t}</span>)}
+                  <div>
+                    {journeyAnswers.length > 0 && <p className="mb-1.5 text-[12px] text-gray-500">Interests</p>}
+                    <div className="flex flex-wrap gap-1.5">
+                      {topics.map((t, i) => <span key={i} className="rounded-full bg-purple-50 px-2.5 py-0.5 text-[12.5px] text-purple-700">{t}</span>)}
+                    </div>
                   </div>
                 )}
                 {website?.message && <p className="mt-2 text-[14px] text-gray-700">{website.message}</p>}
