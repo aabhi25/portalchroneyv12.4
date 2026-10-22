@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm";
 import { requireAuth, requireBusinessAccount } from "../auth";
 import { db } from "../db";
 import { resolveAuthorizedLeadAccountId } from "../lib/leadAccess";
+import { getPurgedAnalytics } from "../services/dataRetentionService";
 
 const router = Router();
 
@@ -63,10 +64,13 @@ router.get("/api/home/summary", requireAuth, requireBusinessAccount, async (req,
       count(sql`SELECT count(*)::int AS n FROM facebook_leads WHERE business_account_id = ${accountId} AND (leadsquared_sync_status IN ${FAILED} OR salesforce_sync_status IN ${FAILED} OR custom_crm_sync_status IN ${FAILED})`),
     ]);
 
+    // Website chats / leads auto-deleted after sync still count (same as Insights and Group Analytics).
+    const purged = await getPurgedAnalytics([accountId], since);
+
     res.json({
       since: s,
       agents: {
-        website: { people: webPeople, leads: webLeads },
+        website: { people: webPeople + purged.conversations.total, leads: webLeads + purged.leads.total },
         whatsapp: { people: waPeople, leads: waLeads },
         instagram: { people: igPeople, leads: igLeads },
         facebook: { people: fbPeople, leads: fbLeads },

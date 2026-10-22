@@ -16027,13 +16027,20 @@ Return ONLY the refined instruction, nothing else.`
           }
         }
       }
-      const engagedCount = new Set(viAllConvRows.map(c => viFormPhoneMap.get(c.id) || c.visitorToken || c.id)).size;
+      // Plus the chats / leads auto-deleted after sync (same as Group Analytics).
+      const { getPurgedAnalytics } = await import('./services/dataRetentionService');
+      const purged = await getPurgedAnalytics(
+        [accountId],
+        fromDate ? new Date(fromDate as string) : undefined,
+        toDate ? new Date(toDate as string) : undefined,
+      );
+      const engagedCount = new Set(viAllConvRows.map(c => viFormPhoneMap.get(c.id) || c.visitorToken || c.id)).size + purged.conversations.total;
 
       res.json({
         totalVisitors: stats.openedChatCount,
         engagedVisitors: engagedCount,
         totalMessages: 0,
-        leadsGenerated: leadsResult.total || 0,
+        leadsGenerated: (leadsResult.total || 0) + purged.leads.total,
         avgSessionDuration: 0,
         deviceBreakdown: stats.deviceBreakdown,
         topCountries: stats.topCountries,
@@ -16167,12 +16174,16 @@ Return ONLY the refined instruction, nothing else.`
         return true;
       });
 
-      const totalLeads = dedupedLeads.length;
+      // Leads auto-deleted after sync still count, by how they came in (same as Group Analytics).
+      // Their topics aren't kept, so the topics list covers stored leads only.
+      const { getPurgedAnalytics } = await import('./services/dataRetentionService');
+      const purged = await getPurgedAnalytics([accountId], dateFrom, dateTo);
+      const totalLeads = dedupedLeads.length + purged.leads.total;
 
       const CAPTURE_MARKERS = ['Via Form', 'Via Journey Form'];
-      let viaForm = 0;
-      let viaJourneyForm = 0;
-      let conversationalAi = 0;
+      let viaForm = purged.leads.form;
+      let viaJourneyForm = purged.leads.journey;
+      let conversationalAi = purged.leads.chat;
       const topicCounts = new Map<string, number>();
 
       for (const l of dedupedLeads) {
@@ -16434,7 +16445,6 @@ Format your response as JSON with this structure:
         seenLeadKeys.add(key);
         return true;
       });
-      const totalLeads = dedupedLeads.length;
 
       // Deduplicate conversations: phone-based for form leads, visitorToken for others
       const formPhoneMap = new Map<string, string>();
@@ -16447,7 +16457,13 @@ Format your response as JSON with this structure:
         }
       }
       const convDedupKeys = new Set(acctConvRows.map(c => formPhoneMap.get(c.id) || c.visitorToken || c.id));
-      const totalConversations = convDedupKeys.size;
+
+      // Leads / chats removed by auto-delete after sync still count (same as Group Analytics),
+      // when the account keeps anonymous counts.
+      const { getPurgedAnalytics } = await import('./services/dataRetentionService');
+      const purged = await getPurgedAnalytics([accountId], dateFrom, dateTo);
+      const totalLeads = dedupedLeads.length + purged.leads.total;
+      const totalConversations = convDedupKeys.size + purged.conversations.total;
 
       // Get products count
       const productsList = await storage.getAllProducts(accountId);
