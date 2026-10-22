@@ -83,6 +83,8 @@ export interface HubTab {
   href: string;
   matches: (location: string) => boolean;
   visible?: (a: HubAccess) => boolean;
+  /** The page scrolls its own panels (an inbox): the frame gives it exactly the screen height below the tabs. */
+  fillsScreen?: boolean;
 }
 
 export interface HubSettingsItem {
@@ -173,7 +175,7 @@ export const HUB_AREAS: HubArea[] = [
     isAgent: true,
     visible: a => a.website,
     tabs: [
-      { key: "conversations", label: "Conversations", href: "/conversations", matches: exact("/conversations") },
+      { key: "conversations", label: "Conversations", href: "/conversations", matches: exact("/conversations"), fillsScreen: true },
       { key: "leads", label: "Leads", href: "/admin/website/leads", matches: exact("/admin/website/leads") },
       { key: "insights", label: "Insights", href: "/insights", matches: exact("/insights"), visible: a => !a.topScholar },
       { key: "tickets", label: "Support tickets", href: "/tickets", matches: l => l.startsWith("/tickets") || l === "/automation-analytics", visible: a => a.supportTickets },

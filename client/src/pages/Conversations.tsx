@@ -315,6 +315,13 @@ export default function Conversations() {
 
   const selectedConversation = conversations.find(c => c.id === selectedConversationId);
 
+  // Each conversation opens at its first message (the thread panel is reused, so it would
+  // otherwise keep the previous conversation's scroll position).
+  const threadRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (threadRef.current) threadRef.current.scrollTop = 0;
+  }, [selectedConversationId]);
+
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     const today = new Date();
@@ -340,7 +347,7 @@ export default function Conversations() {
       <WebsiteNavTabs />
       <div className="flex flex-1 min-h-0 overflow-hidden">
       {/* Left Panel - Conversations List */}
-      <div className="w-full md:w-96 border-r border-gray-200 bg-white flex flex-col min-h-0 overflow-hidden">
+      <div className={`${selectedConversation ? 'hidden md:flex' : 'flex'} w-full md:w-96 border-r border-gray-200 bg-white flex-col min-h-0 overflow-hidden`}>
         {/* Header */}
         <div className="p-4 border-b border-gray-200">
           {/* Search Bar */}
@@ -635,9 +642,18 @@ export default function Conversations() {
       </div>
 
       {/* Right Panel - Message View */}
-      <div className="flex-1 flex flex-col bg-gray-50 min-h-0 overflow-hidden">
+      <div className={`${selectedConversation ? 'flex' : 'hidden md:flex'} min-w-0 flex-1 flex-col bg-gray-50 min-h-0 overflow-hidden`}>
         {selectedConversation ? (
           <>
+            {/* Phones: back to the list */}
+            <button
+              type="button"
+              onClick={() => setSelectedConversationId(null)}
+              className="md:hidden flex items-center gap-1 border-b border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-purple-700"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              All conversations
+            </button>
             {/* Conversation Header */}
             <div className="bg-white border-b border-gray-200 p-4">
               <div className="flex items-center justify-between">
@@ -730,7 +746,7 @@ export default function Conversations() {
             )}
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-4">
+            <div ref={threadRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 space-y-4">
               {messages.map((message, index) => {
                 const prevSource = index > 0 ? (messages[index - 1].interactionSource || 'chat') : null;
                 const currentSource = message.interactionSource || 'chat';

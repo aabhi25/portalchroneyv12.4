@@ -74,9 +74,11 @@ export function HubFrame({ user, children }: { user: MeResponseDto | null; child
   const sectionItems = area.sections && tab?.key === area.sections.tabKey ? area.sections.items : null;
   // A settings item that opens its own page (e.g. Keyword replies) gets a way back to the list.
   const openedSettingsPage = settingsItem && settingsItem.href ? settingsItem : null;
+  // Inbox pages scroll their own list and thread, so they get a fixed height (not the page scroll).
+  const fillsScreen = !!tab?.fillsScreen && !openedSettingsPage;
 
   return (
-    <div className="flex min-h-full flex-col bg-[#f5f5f7]" data-testid={`hub-${area.id}`}>
+    <div className={`flex flex-col bg-[#f5f5f7] ${fillsScreen ? "h-full min-h-0" : "min-h-full"}`} data-testid={`hub-${area.id}`}>
       <div className="border-b border-black/[0.06] bg-white">
         <div className="mx-auto w-full max-w-[1400px] px-4 pt-5 md:px-8">
           <div className="flex items-center gap-3">
@@ -156,7 +158,7 @@ export function HubFrame({ user, children }: { user: MeResponseDto | null; child
         </div>
       )}
 
-      <div className="min-w-0 flex-1">
+      <div className={fillsScreen ? "relative min-h-0 min-w-0 flex-1" : "min-w-0 flex-1"}>
         <HubFrameContext.Provider value={true}>{children}</HubFrameContext.Provider>
       </div>
     </div>
