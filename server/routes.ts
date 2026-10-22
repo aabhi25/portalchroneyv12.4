@@ -6066,7 +6066,7 @@ If you cannot determine the category or the image doesn't match any category, re
           candidatesEvaluated: candidateProducts.length,
           embeddingsAvailable: stats.withEmbedding,
           totalProducts: stats.total,
-          matchMethod: 'jina_clip_only',
+          matchMethod: 'image_fingerprint',
           jewelryTypesDetected: Object.keys(matchesByType).length,
           hasExactMatch: !!exactMatch
         }
@@ -6181,7 +6181,7 @@ If you cannot determine the category or the image doesn't match any category, re
       const [pHashResult, clipEmbeddingResult, detectionResult] = await Promise.all([
         // 1. pHash for exact match (local, fast)
         imageHashService.generateHash(dataUrl).catch(() => null),
-        // 2. CLIP embedding for similarity search (Jina API - ~30-40s)
+        // 2. Gemini fingerprint for similarity search
         productImageEmbeddingService.embedUploadedImage(dataUrl, businessAccountId as string).catch(() => ({ embedding: null })),
         // 3. Jewelry detection with attribute extraction (OpenAI Vision - ~30-60s) - runs concurrently!
         // Use dataUrl directly since we have the image in memory
@@ -7363,7 +7363,7 @@ If you cannot determine the category or the image doesn't match any category, re
       // Get Vision Warehouse candidate IDs if configured (for pre-filtering)
       let visionWarehouseCandidateIds: string[] | null = null;
       if (useVisionWarehouse) {
-        // Vision Warehouse is configured - use it exclusively (no Jina CLIP fallback)
+        // Vision Warehouse is configured - use it exclusively
         const { visionWarehouseService } = await import('./services/visionWarehouseService');
         
         // Use the cropped image for Vision Warehouse search
@@ -11046,11 +11046,6 @@ Return ONLY the refined instruction, nothing else.`
     }
   });
 
-  // DEPRECATED: Jina CLIP removed - now using Vision Warehouse only
-  app.post("/api/business-accounts/:id/test-jina-key", requireAuth, requireRole("super_admin"), async (req, res) => {
-    res.status(410).json({ error: "Jina CLIP has been deprecated. Please use Vision Warehouse for visual search." });
-  });
-
   // SuperAdmin: Get Vista Studio settings for a business account
   app.get("/api/business-accounts/:id/vista-settings", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
@@ -11970,8 +11965,9 @@ Return ONLY the refined instruction, nothing else.`
         return res.status(404).json({ error: "Business account not found" });
       }
       
-      if (!businessAccount.jinaApiKey) {
-        return res.status(400).json({ error: "No Jina API key configured. Please add a Jina API key first." });
+      const { resolveGeminiKey } = await import("./services/geminiKeys");
+      if (!(await resolveGeminiKey(businessAccount))) {
+        return res.status(400).json({ error: "No Gemini key for photo search. Add one in API Keys (this account) or Settings (platform)." });
       }
       
       const { productImageEmbeddingService } = await import("./services/productImageEmbeddingService");
@@ -12194,8 +12190,9 @@ Return ONLY the refined instruction, nothing else.`
         return res.status(404).json({ error: "Business account not found" });
       }
       
-      if (!businessAccount.jinaApiKey) {
-        return res.status(400).json({ error: "No Jina API key configured. Please add a Jina API key first." });
+      const { resolveGeminiKey } = await import("./services/geminiKeys");
+      if (!(await resolveGeminiKey(businessAccount))) {
+        return res.status(400).json({ error: "No Gemini key for photo search. Add one in API Keys (this account) or Settings (platform)." });
       }
       
       const openaiApiKey = await storage.getBusinessAccountOpenAIKey(id);
@@ -12340,8 +12337,9 @@ Return ONLY the refined instruction, nothing else.`
         return res.status(404).json({ error: "Business account not found" });
       }
       
-      if (!businessAccount.jinaApiKey) {
-        return res.status(400).json({ error: "No Jina API key configured. Please add a Jina API key first." });
+      const { resolveGeminiKey } = await import("./services/geminiKeys");
+      if (!(await resolveGeminiKey(businessAccount))) {
+        return res.status(400).json({ error: "No Gemini key for photo search. Add one in API Keys (this account) or Settings (platform)." });
       }
       
       const { productImageEmbeddingService } = await import("./services/productImageEmbeddingService");
@@ -24114,7 +24112,7 @@ Strict Requirements:
       const skipMessage = result.skipped > 0 ? ` (${result.skipped} already complete)` : '';
       res.json({ 
         success: true, 
-        message: `Re-generated Jina CLIP embeddings for ${result.processed} products${skipMessage}`,
+        message: `Re-generated photo fingerprints for ${result.processed} products${skipMessage}`,
         ...result 
       });
     } catch (error: any) {

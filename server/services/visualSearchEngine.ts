@@ -6,7 +6,7 @@ import { resolveGeminiKey, type GeminiKeySource } from "./geminiKeys";
  *  - "vision_warehouse": the account chose Google Vision Warehouse AND it is fully set up (Svaraa today)
  *  - "gemini": everyone else, through the built-in matcher with Gemini Embedding 2 fingerprints
  *  - "none": no Gemini key for the account (its own or the platform's)
- * Older choices ("jina_clip", "google_product_search") are retired engines and fall through to Gemini.
+ * Any other stored choice is a retired engine and falls through to Gemini.
  */
 export type VisualSearchEngine = "vision_warehouse" | "gemini" | "none";
 

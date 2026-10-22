@@ -72,7 +72,7 @@ interface VisionWarehouseSettings {
   indexId: string;
   endpointId: string;
   hasCredentials: boolean;
-  visualSearchModel: string; // 'google_vision_warehouse' | 'gemini_embedding_2' (older: 'google_product_search', 'jina_clip')
+  visualSearchModel: string; // 'google_vision_warehouse' | 'gemini_embedding_2'; other stored values are retired engines
 }
 
 interface ProductSearchSettings {

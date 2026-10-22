@@ -3,12 +3,12 @@ import { pgTable, text, varchar, timestamp, uuid, numeric, jsonb, customType, in
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Custom vector type for pgvector embeddings (768 dimensions for Jina CLIP v2)
+// Custom vector type for pgvector photo fingerprints (768 dimensions, Gemini Embedding 2)
 const vector768 = customType<{  data: number[];
   driverData: string;
 }>({
   dataType() {
-    return 'vector(768)'; // Jina CLIP v2 uses 768 dimensions for image embeddings
+    return 'vector(768)'; // Gemini Embedding 2 with output_dimensionality 768
   },
   toDriver(value: number[]): string {
     return JSON.stringify(value);
@@ -41,7 +41,7 @@ export const businessAccounts = pgTable("business_accounts", {
   description: text("description").default(""),
   openaiApiKey: text("openai_api_key"), // Business-specific OpenAI API key
   elevenlabsApiKey: text("elevenlabs_api_key"), // Business-specific ElevenLabs API key for TTS voices
-  jinaApiKey: text("jina_api_key"), // Business-specific Jina AI API key for CLIP image embeddings
+  jinaApiKey: text("jina_api_key"), // UNUSED: Jina was retired. The column is kept only so the database stays untouched; nothing reads or writes it.
   status: text("status").notNull().default("active"), // 'active' | 'suspended'
   productTier: text("product_tier").notNull().default("chroney"), // 'chroney' | 'jewelry_showcase' | 'jewelry_showcase_chroney'
   shopifyAutoSyncEnabled: text("shopify_auto_sync_enabled").notNull().default("false"), // 'true' | 'false'
@@ -483,7 +483,7 @@ export const products = pgTable("products", {
   shopifyLastSyncedAt: timestamp("shopify_last_synced_at"), // When last synced from Shopify
   isEditable: text("is_editable").notNull().default("true"), // 'true' | 'false' - Whether user can edit this product
   visualDescription: text("visual_description"), // AI-generated visual description of product image
-  imageEmbedding: vector768("image_embedding"), // Vector embedding for visual similarity search using Jina CLIP (768 dimensions) - stores CROPPED jewelry embedding when jewelry detection is enabled
+  imageEmbedding: vector768("image_embedding"), // Gemini photo fingerprint (768 dimensions) - stores CROPPED jewelry fingerprint when jewelry detection is enabled
   fullImageEmbedding: vector768("full_image_embedding"), // Vector embedding of the FULL original product image (uncropped) for exact match detection
   imageHash: text("image_hash"), // Perceptual hash (pHash) for exact image matching - 16 char hex string
   visionWarehouseAssetId: text("vision_warehouse_asset_id"), // Google Vision Warehouse asset ID for visual search
@@ -516,7 +516,7 @@ export const productJewelryEmbeddings = pgTable("product_jewelry_embeddings", {
   boundingBox: jsonb("bounding_box"), // { x, y, width, height } - location in original image
   
   // Embedding data
-  embedding: vector768("embedding"), // Vector embedding for visual similarity search using Jina CLIP (768 dimensions)
+  embedding: vector768("embedding"), // Gemini photo fingerprint for visual similarity search (768 dimensions)
   
   // AI-generated description for text-based similarity matching
   description: text("description"), // Detailed AI description of the jewelry item (e.g., "Yellow gold necklace with kundan work, red enamel medallions, floral motifs")
@@ -2184,7 +2184,7 @@ export const productEmbeddings = pgTable("product_embeddings", {
   imageHash: text("image_hash"), // Hash of image for change detection
   
   // Embedding data
-  embedding: vector768("embedding"), // Vector embedding for visual similarity search using Jina CLIP (768 dimensions)
+  embedding: vector768("embedding"), // Gemini photo fingerprint for visual similarity search (768 dimensions)
   visualDescription: text("visual_description"), // AI-generated visual description
   
   // Cached product metadata (for quick display without ERP call)

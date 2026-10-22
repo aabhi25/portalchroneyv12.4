@@ -1,7 +1,7 @@
 import { db } from '../db';
 import { products, businessAccounts, productEmbeddings, erpProductCache, productJewelryEmbeddings } from '../../shared/schema';
 // Photo fingerprints come from Gemini Embedding 2 (one platform key). Only rows marked with
-// GEMINI_EMBEDDING_MARKER are searched, so fingerprints left by the retired Jina CLIP engine never mix in.
+// GEMINI_EMBEDDING_MARKER are searched, so fingerprints left by retired engines never mix in.
 import { embedImage, embedImages, GEMINI_EMBEDDING_MARKER } from './geminiImageEmbeddingService';
 import { resolveGeminiKey } from './geminiKeys';
 import { jewelryDetectionService } from './jewelryDetectionService';

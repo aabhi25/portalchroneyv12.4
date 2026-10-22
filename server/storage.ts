@@ -261,7 +261,6 @@ export interface IStorage {
   updateBusinessAccountAutonomousSettings(id: string, settings: Partial<{ autoResolutionEnabled: string; autoResolutionConfidence: string; escalationSensitivity: string; humanOnlyCategories: string }>): Promise<BusinessAccount>;
   updateBusinessAccountOpenAIKey(id: string, apiKey: string | null): Promise<BusinessAccount>;
   updateBusinessAccountElevenLabsKey(id: string, apiKey: string | null): Promise<BusinessAccount>;
-  updateBusinessAccountJinaKey(id: string, apiKey: string | null): Promise<BusinessAccount>;
   updateBusinessAccountVisualSearchModel(id: string, settings: Partial<{ visualSearchModel: string; googleVisionWarehouseCorpusId: string | null; googleVisionWarehouseIndexId: string | null; googleVisionWarehouseEndpointId: string | null; googleVisionWarehouseCredentials: string | null; googleVisionWarehouseProjectNumber: string | null }>): Promise<BusinessAccount>;
   deleteBusinessAccountWithAllData(id: string): Promise<void>;
   getBusinessAnalytics(businessAccountId?: string, dateFrom?: Date, dateTo?: Date): Promise<any[]>;
@@ -981,20 +980,6 @@ export class DatabaseStorage implements IStorage {
     const [account] = await db
       .update(businessAccounts)
       .set({ elevenlabsApiKey: apiKey, updatedAt: new Date() })
-      .where(eq(businessAccounts.id, id))
-      .returning();
-    
-    if (!account) {
-      throw new Error("Business account not found");
-    }
-    
-    return account;
-  }
-
-  async updateBusinessAccountJinaKey(id: string, apiKey: string | null): Promise<BusinessAccount> {
-    const [account] = await db
-      .update(businessAccounts)
-      .set({ jinaApiKey: apiKey, updatedAt: new Date() })
       .where(eq(businessAccounts.id, id))
       .returning();
     
