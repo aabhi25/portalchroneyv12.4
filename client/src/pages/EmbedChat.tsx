@@ -311,6 +311,26 @@ const getDeviceInfo = () => {
   return { deviceType, browser, os, userAgent: ua };
 };
 
+const CAMPAIGN_PARAM = /^(utm_[a-z_]+|gclid|fbclid|msclkid)$/i;
+/** pageUrl with the landing page's campaign parameters added when pageUrl has none of its own. */
+const withCampaignParams = (pageUrl: string, landingUrl: string | null): string => {
+  if (!landingUrl) return pageUrl;
+  try {
+    const page = new URL(pageUrl);
+    let hasOwn = false;
+    page.searchParams.forEach((_v, k) => { if (CAMPAIGN_PARAM.test(k)) hasOwn = true; });
+    if (hasOwn) return pageUrl;
+    const landing = new URL(landingUrl);
+    let added = false;
+    landing.searchParams.forEach((value, key) => {
+      if (CAMPAIGN_PARAM.test(key)) { page.searchParams.set(key, value); added = true; }
+    });
+    return added ? page.toString() : pageUrl;
+  } catch {
+    return pageUrl;
+  }
+};
+
 const getUTMParams = () => {
   const params = new URLSearchParams(window.location.search);
   return {
@@ -584,6 +604,8 @@ export default function EmbedChat() {
   const [expandedImageUrl, setExpandedImageUrl] = useState<string | null>(null);
   const [visitorSessionId, setVisitorSessionId] = useState<string | null>(null);
   const [parentPageUrl, setParentPageUrl] = useState<string | null>(null);
+  // First-touch campaign landing page from the website script (saved on the lead).
+  const landingUrlRef = useRef<string | null>(null);
   const [isUserAtBottom, setIsUserAtBottom] = useState(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   // The ⋮ menu's own pages: the main list, or the language list (opened from its "Language" row).
@@ -2239,10 +2261,13 @@ export default function EmbedChat() {
       // This is critical because document.referrer is unreliable in iframes
       if (event.data && event.data.type === 'PARENT_URL') {
         const pageUrl = event.data.pageUrl;
+        const landing = typeof event.data.landingUrl === 'string' ? event.data.landingUrl : null;
         console.log('[EmbedChat] ========== PARENT_URL RECEIVED ==========');
-        console.log('[EmbedChat] Parent Page URL:', pageUrl);
+        console.log('[EmbedChat] Parent Page URL:', pageUrl, landing ? `(landing: ${landing})` : '');
+        if (landing) landingUrlRef.current = landing;
         if (pageUrl) {
-          setParentPageUrl(pageUrl);
+          // A later page without campaign parameters keeps the campaign of the landing page.
+          setParentPageUrl(withCampaignParams(pageUrl, landing));
         }
         return;
       }
@@ -3385,6 +3410,7 @@ export default function EmbedChat() {
           visitorSessionId: visitorSessionId || undefined,
           sessionToken: visitorSessionTokenRef.current,
           pageUrl: parentPageUrl || undefined,
+          landingUrl: landingUrlRef.current || undefined,
           resumeContextId: pendingResumeContextIdRef.current || undefined,
           imageContextId: pendingImageContextIdRef.current || undefined,
           isReturnExchangeLookup: isReturnExchangeLookup || undefined,
@@ -4602,7 +4628,8 @@ export default function EmbedChat() {
           journeyId: activeJourneyId,
           stepId: submittedStep.stepId,
           visitorToken: visitorSessionTokenRef.current || localStorage.getItem('chroney_visitor_token'),
-          pageUrl: parentPageUrl || (window.parent !== window ? document.referrer : window.location.href) || undefined
+          pageUrl: parentPageUrl || (window.parent !== window ? document.referrer : window.location.href) || undefined,
+          landingUrl: landingUrlRef.current || undefined,
         })
       });
       

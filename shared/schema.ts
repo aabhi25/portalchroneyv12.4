@@ -69,6 +69,7 @@ export const businessAccounts = pgTable("business_accounts", {
   aiCallingEnabled: text("ai_calling_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for AI Calling (phone calls by the AI; default OFF)
   leadsExportEnabled: text("leads_export_enabled").notNull().default("false"), // 'true' | 'false' - Allow viewers of this business account to export all leads
   leadPhoneMaskingEnabled: text("lead_phone_masking_enabled").notNull().default("false"), // 'true' | 'false' - Mask lead phone numbers for viewers of this business account
+  leadsTableColumns: jsonb("leads_table_columns"), // Leads table: chosen columns in order (null = default)
   jobImportConfig: jsonb("job_import_config").$type<{
     apiUrl: string;
     authHeader?: string;
@@ -584,6 +585,7 @@ export const leads = pgTable("leads", {
   message: text("message"),
   city: text("city"), // Visitor city from IP geolocation
   sourceUrl: text("source_url"), // Page URL where the lead was captured
+  landingUrl: text("landing_url"), // First page the visitor landed on from a campaign (utm_* / gclid / fbclid), kept 30 days by the website script
   conversationId: varchar("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
   topicsOfInterest: jsonb("topics_of_interest").$type<string[]>(), // AI-extracted topics from conversation (3-4 labels)
   

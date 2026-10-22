@@ -2198,8 +2198,35 @@
       setTimeout(queue, 3000);
     },
 
+    /**
+     * First-touch campaign landing page: the first page (on this site, in the last 30 days) the
+     * visitor reached with campaign parameters. Stored in this browser only.
+     */
+    firstTouchLandingUrl: function() {
+      const isCampaign = (search) => /[?&](utm_[a-z_]+|gclid|fbclid|msclkid)=/i.test(search || '');
+      try {
+        const key = `hichroney-landing-${this.config.businessAccountId}`;
+        const now = Date.now();
+        let stored = null;
+        try { stored = JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { stored = null; }
+        if (stored && (!stored.url || !stored.at || now - stored.at > 30 * 24 * 60 * 60 * 1000)) {
+          stored = null;
+          localStorage.removeItem(key);
+        }
+        if (!stored && isCampaign(window.location.search)) {
+          stored = { url: window.location.href, at: now };
+          localStorage.setItem(key, JSON.stringify(stored));
+        }
+        return stored ? stored.url : null;
+      } catch (e) {
+        return isCampaign(window.location.search) ? window.location.href : null;
+      }
+    },
+
     createWidget: function() {
       const baseUrl = this.getBaseUrl();
+      // Remember a campaign landing page as soon as the widget loads (even if the chat isn't opened here).
+      this.firstTouchLandingUrl();
       
       // Parse position and size settings
       const position = this.config.widgetPosition || 'bottom-right';
@@ -3008,7 +3035,10 @@
           console.log('[Hi Chroney Widget] Sending parent page URL to iframe:', window.location.href);
           iframe.contentWindow.postMessage({
             type: 'PARENT_URL',
-            pageUrl: window.location.href
+            pageUrl: window.location.href,
+            // First page this visitor landed on from a campaign (utm_* / gclid / fbclid), kept
+            // 30 days, so a lead made on a later page still carries the campaign.
+            landingUrl: HiChroneyWidget.firstTouchLandingUrl()
           }, '*');
           
           // Process any queued messages

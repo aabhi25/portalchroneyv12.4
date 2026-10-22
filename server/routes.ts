@@ -95,6 +95,13 @@ import unifiedLeadsRoutes from "./routes/unifiedLeads";
 import homeSummaryRoutes from "./routes/homeSummary";
 import whatsappHandoffRoutes from "./routes/whatsappHandoff";
 import { resolveAuthorizedLeadAccountId, maskLeadPhone, maskPhonesInText } from "./lib/leadAccess";
+
+/** The website script's first-touch landing page (http(s), at most 2000 chars), else undefined. */
+function cleanLandingUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const v = value.trim();
+  return /^https?:\/\//i.test(v) && v.length <= 2000 ? v : undefined;
+}
 import dataRetentionRoutes from "./routes/dataRetention";
 import merittoRoutes from "./routes/meritto";
 import aiUsageRoutes from "./routes/aiUsage";
@@ -1863,6 +1870,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         }
       }
 
+      let streamedConversationId: string | null = null;
       for await (const chunk of chatService.streamMessage(message, {
         existingConversationId: widgetExistingConversationId,
         userId: widgetUserId,
@@ -1886,6 +1894,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         starterQAContext: starterQAContextString,
         supportsCalendarUI: true,
         pageUrl: clientPageUrl || undefined,
+        landingUrl: cleanLandingUrl(req.body?.landingUrl),
         systemMode: businessAccount.systemMode || 'full',
         k12EducationEnabled: businessAccount.k12EducationEnabled === 'true',
         k12ContentOnlyMode: businessAccount.k12ContentOnlyMode === 'true',
@@ -1919,6 +1928,15 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         topscholarDoubtSyncBaseUrl,
       })) {
         res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        if ((chunk as any)?.type === 'conversation_id' && typeof (chunk as any).data === 'string') streamedConversationId = (chunk as any).data;
+      }
+      // First-touch landing page: fill it on this chat's lead (leads made by the AI tools or the
+      // booking card during the turn included). Only when empty; never blocks the reply.
+      const widgetLandingUrl = cleanLandingUrl(req.body?.landingUrl);
+      if (widgetLandingUrl && streamedConversationId && !streamedConversationId.startsWith('temp_')) {
+        db.update(leads).set({ landingUrl: widgetLandingUrl })
+          .where(and(eq(leads.conversationId, streamedConversationId), eq(leads.businessAccountId, businessAccountId), isNull(leads.landingUrl)))
+          .catch(err => console.warn('[Widget Stream] landing URL fill failed:', err?.message));
       }
 
       // TopScholar doubt-sync: after the tutor has answered, tell the widget this is
@@ -17754,6 +17772,7 @@ Important:
                   topicsOfInterest: ['Via Journey Form', ...extraAnswers],
                   city: visitorCity,
                   sourceUrl: pageUrl || null,
+                  landingUrl: cleanLandingUrl(req.body?.landingUrl) || null,
                   conversationId: activeConversationId || null,
                 });
                 console.log('[Form Journey] Lead auto-created:', lead.id, 'phone:', phone, 'email:', email, 'city:', visitorCity);
@@ -17819,6 +17838,8 @@ Important:
                 const enrichUpdates: Record<string, unknown> = {};
                 if (name && !existingLead.name) enrichUpdates.name = name;
                 if (email && !existingLead.email) enrichUpdates.email = email;
+                const journeyLandingUrl = cleanLandingUrl(req.body?.landingUrl);
+                if (journeyLandingUrl && !existingLead.landingUrl) enrichUpdates.landingUrl = journeyLandingUrl;
                 if (extraAnswers.length > 0) {
                   const existingTopics: string[] = Array.isArray(existingLead.topicsOfInterest) ? existingLead.topicsOfInterest as string[] : [];
                   const mergedTopics = Array.from(new Set([...existingTopics, ...extraAnswers]));

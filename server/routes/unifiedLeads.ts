@@ -9,8 +9,9 @@ import { resolveAuthorizedLeadAccountId } from "../lib/leadAccess";
 import { parseUnifiedLeadFilters, queryUnifiedLeads } from "../services/unifiedLeadsService";
 import { isSocialChannel, type SocialChannel } from "../services/socialLeadFields";
 import { db } from "../db";
-import { journeyResponses } from "@shared/schema";
-import { inArray } from "drizzle-orm";
+import { journeyResponses, journeySteps, journeySessions, conversationJourneys, businessAccounts } from "@shared/schema";
+import { and, asc, eq, inArray } from "drizzle-orm";
+import { maskPhonesInText } from "../lib/leadAccess";
 
 const router = Router();
 
@@ -18,30 +19,56 @@ const router = Router();
 const FUNNEL_MARKERS = new Set(["Via Form", "Via Journey Form", "Discount Availed"]);
 
 /**
- * Website leads: `detail.interestTopics` = the topics that are real interests. Journeys also store
- * their answers in topicsOfInterest (other features rely on that), so the lead's own journey answers
- * and the funnel markers are left out here; the answers are shown with their questions instead.
+ * Website leads, for the table and the export:
+ * - `detail.interestTopics`: the topics that are real interests. Journeys also store their answers
+ *   in topicsOfInterest (other features rely on that), so the lead's own journey answers and the
+ *   funnel markers are left out here; the answers are shown with their questions instead.
+ * - `detail.journeyName`, `detail.journeyAnswers` ({ question: answer }) for the journey columns.
  */
-async function addInterestTopics(rows: Array<{ channel: string; detail: Record<string, any> }>): Promise<void> {
+async function addLeadExtras(accountId: string, rows: Array<{ channel: string; detail: Record<string, any> }>): Promise<void> {
   const website = rows.filter(r => r.channel === "website" && r.detail);
   if (website.length === 0) return;
   const conversationIds = Array.from(new Set(website.map(r => r.detail.conversationId).filter((v): v is string => typeof v === "string" && !!v)));
-  const answersByConv = new Map<string, Set<string>>();
+  const answersByConv = new Map<string, Array<{ question: string; answer: string }>>();
+  const journeyNameByConv = new Map<string, string>();
+  let mask = false;
   if (conversationIds.length > 0) {
-    const answers = await db.select({ conversationId: journeyResponses.conversationId, response: journeyResponses.response })
-      .from(journeyResponses)
-      .where(inArray(journeyResponses.conversationId, conversationIds));
+    const [answers, sessions, account] = await Promise.all([
+      db.select({ conversationId: journeyResponses.conversationId, response: journeyResponses.response, question: journeySteps.questionText })
+        .from(journeyResponses)
+        .leftJoin(journeySteps, eq(journeySteps.id, journeyResponses.stepId))
+        .where(inArray(journeyResponses.conversationId, conversationIds))
+        .orderBy(asc(journeyResponses.createdAt)),
+      db.select({ conversationId: journeySessions.conversationId, name: conversationJourneys.name })
+        .from(journeySessions)
+        .leftJoin(conversationJourneys, eq(conversationJourneys.id, journeySessions.journeyId))
+        .where(and(eq(journeySessions.businessAccountId, accountId), inArray(journeySessions.conversationId, conversationIds)))
+        .orderBy(asc(journeySessions.createdAt)),
+      storage.getBusinessAccount(accountId),
+    ]);
+    mask = account?.leadPhoneMaskingEnabled === "true";
     for (const a of answers) {
-      const set = answersByConv.get(a.conversationId) || new Set<string>();
-      set.add(a.response.trim().toLowerCase());
-      answersByConv.set(a.conversationId, set);
+      const list = answersByConv.get(a.conversationId) || [];
+      list.push({ question: (a.question || "").trim(), answer: a.response });
+      answersByConv.set(a.conversationId, list);
+    }
+    for (const s of sessions) {
+      if (s.name && !journeyNameByConv.has(s.conversationId)) journeyNameByConv.set(s.conversationId, s.name);
     }
   }
   for (const row of website) {
     const topics: string[] = Array.isArray(row.detail.topicsOfInterest) ? row.detail.topicsOfInterest : [];
-    const answers = answersByConv.get(row.detail.conversationId) || new Set<string>();
-    row.detail.interestTopics = topics.filter(t => typeof t === "string" && !FUNNEL_MARKERS.has(t) && !answers.has(t.trim().toLowerCase()));
-    row.detail.hasJourneyAnswers = answers.size > 0;
+    const answers = answersByConv.get(row.detail.conversationId) || [];
+    const answerTexts = new Set(answers.map(a => a.answer.trim().toLowerCase()));
+    row.detail.interestTopics = topics.filter(t => typeof t === "string" && !FUNNEL_MARKERS.has(t) && !answerTexts.has(t.trim().toLowerCase()));
+    row.detail.hasJourneyAnswers = answers.length > 0;
+    row.detail.journeyName = journeyNameByConv.get(row.detail.conversationId) || null;
+    const byQuestion: Record<string, string> = {};
+    for (const a of answers) {
+      if (!a.question) continue;
+      byQuestion[a.question] = mask ? (maskPhonesInText(a.answer) || "") : a.answer; // latest answer wins
+    }
+    row.detail.journeyAnswers = byQuestion;
   }
 }
 
@@ -67,11 +94,50 @@ router.get("/api/leads/unified", requireAuth, requireBusinessAccount, async (req
     const pageNum = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
     const limit = Math.max(1, Math.min(100, parseInt(String(req.query.limit ?? "20"), 10) || 20));
     const result = await queryUnifiedLeads(accountId, filters, { limit, offset: (pageNum - 1) * limit });
-    await addInterestTopics(result.leads);
+    await addLeadExtras(accountId, result.leads);
     res.json({ ...result, page: pageNum, limit });
   } catch (error: any) {
     console.error("[UnifiedLeads] list failed:", error?.message);
     res.status(500).json({ error: "Failed to load leads" });
+  }
+});
+
+/**
+ * Leads table columns: the business's chosen columns (in order; null = default) and the journey
+ * questions that can be shown as columns.
+ */
+router.get("/api/leads/table-columns", requireAuth, requireBusinessAccount, async (req, res) => {
+  try {
+    const accountId = await leadAccount(req, res);
+    if (!accountId) return;
+    const [account, steps] = await Promise.all([
+      storage.getBusinessAccount(accountId),
+      db.select({ question: journeySteps.questionText })
+        .from(journeySteps)
+        .innerJoin(conversationJourneys, eq(conversationJourneys.id, journeySteps.journeyId))
+        .where(eq(conversationJourneys.businessAccountId, accountId)),
+    ]);
+    const questions = Array.from(new Set(steps.map(s => (s.question || "").trim()).filter(Boolean)));
+    const saved = (account as any)?.leadsTableColumns;
+    res.json({ columns: Array.isArray(saved) ? saved : null, journeyQuestions: questions });
+  } catch (error: any) {
+    console.error("[UnifiedLeads] table columns failed:", error?.message);
+    res.status(500).json({ error: "Failed to load columns" });
+  }
+});
+
+router.put("/api/leads/table-columns", requireAuth, requireBusinessAccount, async (req, res) => {
+  try {
+    const accountId = await leadAccount(req, res);
+    if (!accountId) return;
+    const parsed = z.object({ columns: z.array(z.string().trim().min(1).max(300)).max(40).nullable() }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid columns" });
+    const columns = parsed.data.columns ? Array.from(new Set(parsed.data.columns)) : null;
+    await db.update(businessAccounts).set({ leadsTableColumns: columns } as any).where(eq(businessAccounts.id, accountId));
+    res.json({ columns });
+  } catch (error: any) {
+    console.error("[UnifiedLeads] save table columns failed:", error?.message);
+    res.status(500).json({ error: "Failed to save columns" });
   }
 });
 
@@ -94,6 +160,7 @@ router.get("/api/leads/unified/export", requireAuth, requireBusinessAccount, asy
     const filters = parseUnifiedLeadFilters(req.query as Record<string, unknown>);
     if ("error" in filters) return res.status(400).json({ error: filters.error });
     const result = await queryUnifiedLeads(accountId, filters, null);
+    await addLeadExtras(accountId, result.leads);
     const exportId = randomUUID();
     await recordAuditEventSafely(req, {
       action: "leads.export.data_delivered",

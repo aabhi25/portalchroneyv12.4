@@ -105,6 +105,7 @@ export interface ChatContext {
   starterQAContext?: string; // Pre-formatted Q&A context from guidance conversation starters
   supportsCalendarUI?: boolean; // True when client can render visual calendar for appointment slots
   pageUrl?: string; // Parent page URL where the widget is embedded (for UTM tracking)
+  landingUrl?: string; // First campaign page the visitor landed on (first-touch UTMs), from the website script
   systemMode?: string; // 'full' | 'essential'
   k12EducationEnabled?: boolean;
   k12ContentOnlyMode?: boolean;
@@ -1763,7 +1764,7 @@ Response:`;
         const up = await upsertConversationLead({
           businessAccountId: context.businessAccountId,
           conversationId,
-          values: { name: said.name || null, email: said.email || null, city: context.visitorCity || null, sourceUrl: context.pageUrl || null },
+          values: { name: said.name || null, email: said.email || null, city: context.visitorCity || null, sourceUrl: context.pageUrl || null, landingUrl: context.landingUrl || null },
           policy: { name: 'fill', email: 'fill' },
         });
         lead = up.lead;
@@ -1836,7 +1837,8 @@ Response:`;
     visitorCity?: string,
     visitorSessionId?: string,
     pageUrl?: string,
-    channel?: 'widget' | 'whatsapp' | 'instagram' | 'facebook' | 'other'
+    channel?: 'widget' | 'whatsapp' | 'instagram' | 'facebook' | 'other',
+    landingUrl?: string,
   ): Promise<void> {
     void visitorSessionId;
     try {
@@ -1878,7 +1880,7 @@ Response:`;
       const up = await upsertConversationLead({
         businessAccountId,
         conversationId,
-        values: { name: detectedName, email: detectedEmail, phone: detectedPhone, city: visitorCity || null, sourceUrl: pageUrl || null },
+        values: { name: detectedName, email: detectedEmail, phone: detectedPhone, city: visitorCity || null, sourceUrl: pageUrl || null, landingUrl: landingUrl || null },
         policy: { name: 'fill' },
       });
       const lead = up.lead;
@@ -2175,7 +2177,7 @@ Response:`;
       // Auto-detect and capture contact information from user message
       // This ensures leads are captured even if AI doesn't call the capture_lead tool
       if (!context.skipLeadTraining) {
-        await this.autoDetectAndCaptureLead(userMessage, conversationId, context.businessAccountId, lastAIMessage, context.visitorCity, context.visitorSessionId, context.pageUrl, context.channel);
+        await this.autoDetectAndCaptureLead(userMessage, conversationId, context.businessAccountId, lastAIMessage, context.visitorCity, context.visitorSessionId, context.pageUrl, context.channel, context.landingUrl);
       }
       
       // PERFORMANCE: Early check if business has any active journeys
@@ -3507,6 +3509,7 @@ Response:`;
               context.visitorSessionId,
               context.pageUrl,
               context.channel,
+              context.landingUrl,
             );
             autoDetectAwaited = true;
           } catch (err) {
@@ -3693,7 +3696,7 @@ Response:`;
       // must be up to date before this turn's lead plan is computed. Skipped when it already ran
       // above for a phone-hit (Task #23).
       if (userMessage.length > 1 && !context.skipLeadTraining && !autoDetectAwaited) {
-        await this.autoDetectAndCaptureLead(userMessage, conversationId, context.businessAccountId, lastAIMessage, context.visitorCity, context.visitorSessionId, context.pageUrl, context.channel).catch(err => {
+        await this.autoDetectAndCaptureLead(userMessage, conversationId, context.businessAccountId, lastAIMessage, context.visitorCity, context.visitorSessionId, context.pageUrl, context.channel, context.landingUrl).catch(err => {
           console.error('[Chat] Error in auto lead capture:', err);
         });
       }

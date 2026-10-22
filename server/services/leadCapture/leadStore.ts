@@ -38,7 +38,7 @@ export type LeadField = 'name' | 'email' | 'phone' | 'message';
 export interface LeadUpsert {
   businessAccountId: string;
   conversationId: string;
-  values: Partial<Record<LeadField, string | null | undefined>> & { city?: string | null; sourceUrl?: string | null };
+  values: Partial<Record<LeadField, string | null | undefined>> & { city?: string | null; sourceUrl?: string | null; landingUrl?: string | null };
   /** Per field: 'replace' overwrites a different value (explicit capture), 'fill' only sets an empty one. Default 'replace' (name: 'fill' when the lead already has a real name and policy is unset). */
   policy?: Partial<Record<LeadField, 'replace' | 'fill'>>;
   /** Message stored on a newly created lead. */
@@ -137,6 +137,7 @@ function writeConversationLead(input: LeadUpsert): Promise<LeadUpsertResult> {
       }
       if (!norm(existing.city) && norm(input.values.city)) updates.city = norm(input.values.city);
       if (!norm(existing.sourceUrl) && norm(input.values.sourceUrl)) updates.sourceUrl = norm(input.values.sourceUrl);
+      if (!norm(existing.landingUrl) && norm(input.values.landingUrl)) updates.landingUrl = norm(input.values.landingUrl);
       if (reusedFrom !== null) updates.conversationId = conversationId;
       if (Object.keys(updates).length === 0) {
         return { lead: existing, created: false, changed, reusedFromConversationId: reusedFrom };
@@ -155,6 +156,7 @@ function writeConversationLead(input: LeadUpsert): Promise<LeadUpsertResult> {
       message: norm(input.values.message) || input.createMessage || 'Via Chat',
       city: norm(input.values.city) || null,
       sourceUrl: norm(input.values.sourceUrl) || null,
+      landingUrl: norm(input.values.landingUrl) || null,
     };
     const [lead] = await tx.insert(leads).values(values).returning();
     const changed = fields.filter(f => !!(values as any)[f] && f !== 'message');
