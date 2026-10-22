@@ -900,67 +900,7 @@ export default function JewelryShowcase() {
       // Step 0: Downscale image client-side for faster upload
       const optimizedFile = await downscaleImage(file, 1024);
       
-      // Check if Vision Warehouse is configured - use fast endpoint (no GPT Vision, no cropping)
-      const useVisionWarehouse = (widgetSettings as any)?.visualSearchModel === 'google_vision_warehouse';
-      
-      if (useVisionWarehouse) {
-        // VISION WAREHOUSE MODE: Show crop UI, then send cropped image to VW
-        // No GPT Vision detection - user manually adjusts crop box
-        
-        setSearchProgress('Uploading image...');
-        
-        // Upload image to R2 for server-side cropping later
-        const uploadFormData = new FormData();
-        uploadFormData.append('image', optimizedFile);
-        uploadFormData.append('businessAccountId', businessAccountId || '');
-        
-        const uploadResponse = await fetch('/api/chat/widget/upload-image', {
-          method: 'POST',
-          body: uploadFormData,
-          credentials: 'include',
-        });
-        
-        if (!uploadResponse.ok) {
-          throw new Error('Failed to upload image');
-        }
-        
-        const uploadResult = await uploadResponse.json();
-        setUploadedImageServerUrl(uploadResult.imageUrl);
-        
-        // Get actual image dimensions for accurate crop UI
-        const img = new Image();
-        await new Promise<void>((resolve, reject) => {
-          img.onload = () => resolve();
-          img.onerror = () => reject(new Error('Failed to load image'));
-          img.src = previewUrl;
-        });
-        
-        const imgWidth = img.naturalWidth;
-        const imgHeight = img.naturalHeight;
-        
-        // Set default crop box (center 80% of image) for user adjustment
-        setCroppedJewelry({
-          detected: true,
-          type: 'jewelry',
-          description: 'Adjust the crop box to select the jewelry',
-          imageWidth: imgWidth,
-          imageHeight: imgHeight,
-          allItems: [{
-            type: 'jewelry',
-            croppedDataUrl: null,
-            confidence: 1.0,
-            description: 'Adjust the crop box to select the jewelry',
-            boundingBox: { x: 10, y: 10, width: 80, height: 80 },
-            attributes: null
-          }]
-        });
-        
-        setSearchProgress('');
-        setIsSearchingByImage(false);
-        return;
-      }
-      
-      // STANDARD MODE: GPT Vision detection with cropping UI
+      // GPT Vision detection with cropping UI
       setSearchProgress('Analyzing image...');
       
       const formData = new FormData();

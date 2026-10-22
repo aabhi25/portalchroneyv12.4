@@ -3033,7 +3033,7 @@ export default function EmbedChat() {
         timestamp: new Date()
       }]);
 
-      // Call visual search endpoint (Vision Warehouse) with optional bounding box
+      // Call the visual search endpoint with an optional bounding box
       const matchResponse = await fetch('/api/chat/widget/visual-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3050,7 +3050,7 @@ export default function EmbedChat() {
 
       const matchResult = await matchResponse.json();
       
-      // Vision Warehouse returns products array directly
+      // The endpoint returns the products array directly
       let responseContent = '';
       let matchedProducts = matchResult.products || [];
       

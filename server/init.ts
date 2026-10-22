@@ -1,7 +1,6 @@
 import { storage } from "./storage";
 import { hashPassword } from "./auth";
 import { jewelryImageGeneratorService } from "./services/jewelryImageGeneratorService";
-import { visionWarehouseSyncService } from "./services/visionWarehouseSyncService";
 import { db } from "./db";
 import { whatsappLeadFields } from "../shared/schema";
 import { and, eq, isNull, sql } from "drizzle-orm";
@@ -339,13 +338,6 @@ export async function initializeDatabase() {
       await db.execute(sql`ALTER TABLE whatsapp_settings ADD COLUMN IF NOT EXISTS store_sheet_enabled TEXT NOT NULL DEFAULT 'false'`);
     } catch (err) {
       console.error('[INIT] Error adding Dealers & Stores columns:', err);
-    }
-
-    // Resume any interrupted Vision Warehouse syncs
-    try {
-      await visionWarehouseSyncService.resumeInterruptedSyncs();
-    } catch (err) {
-      console.error('[INIT] Error resuming Vision Warehouse syncs:', err);
     }
   } catch (error) {
     console.error('[INIT] Error initializing database:', error);

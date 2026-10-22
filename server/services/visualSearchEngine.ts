@@ -1,30 +1,9 @@
-import type { BusinessAccount } from "@shared/schema";
-import { resolveGeminiKey, type GeminiKeySource } from "./geminiKeys";
+import { sql } from "drizzle-orm";
+import { products, type BusinessAccount } from "@shared/schema";
+import { GEMINI_EMBEDDING_MARKER } from "./geminiImageEmbeddingService";
 
-/**
- * Which engine answers an account's photo searches:
- *  - "vision_warehouse": the account chose Google Vision Warehouse AND it is fully set up (Svaraa today)
- *  - "gemini": everyone else, through the built-in matcher with Gemini Embedding 2 fingerprints
- *  - "none": no Gemini key for the account (its own or the platform's)
- * Any other stored choice is a retired engine and falls through to Gemini.
- */
-export type VisualSearchEngine = "vision_warehouse" | "gemini" | "none";
-
-export async function resolveVisualSearch(
-  account: Pick<BusinessAccount, "visualSearchModel" | "googleVisionWarehouseEndpointId" | "googleVisionWarehouseCredentials" | "geminiApiKey">,
-): Promise<{ engine: VisualSearchEngine; geminiKey: string | null; geminiKeySource: GeminiKeySource | null }> {
-  if (
-    account.visualSearchModel === "google_vision_warehouse" &&
-    account.googleVisionWarehouseEndpointId &&
-    account.googleVisionWarehouseCredentials
-  ) {
-    return { engine: "vision_warehouse", geminiKey: null, geminiKeySource: null };
-  }
-  const resolved = await resolveGeminiKey(account);
-  return resolved
-    ? { engine: "gemini", geminiKey: resolved.key, geminiKeySource: resolved.source }
-    : { engine: "none", geminiKey: null, geminiKeySource: null };
-}
+/** Products whose stored fingerprints were made by Gemini, so they can be compared with a Gemini query. */
+export const productHasGeminiFingerprint = sql`${products.visualDescription} LIKE ${`${GEMINI_EMBEDDING_MARKER}%`}`;
 
 /** Accounts whose catalog photos should carry Gemini fingerprints: photo search on, or Vista. */
 export function usesPhotoSearch(account: Pick<BusinessAccount, "visualSearchEnabled" | "productTier">): boolean {
@@ -32,10 +11,9 @@ export function usesPhotoSearch(account: Pick<BusinessAccount, "visualSearchEnab
 }
 
 /**
- * Gemini fingerprints are compared by cosine similarity, which runs on a different scale from
- * Vision Warehouse's match score. This maps it onto that 0-1 scale so the widget's existing
- * thresholds (Perfect 96 / Very similar 85 / Somewhat similar 70) keep their meaning.
- * Anchor points from testing on jewellery catalogs: [cosine, match score].
+ * Gemini fingerprints are compared by cosine similarity. This maps it onto the 0-1 match score
+ * the widget's thresholds (Perfect 96 / Very similar 85 / Somewhat similar 70) are written for.
+ * Anchor points [cosine, match score]: first estimates, to be tuned on real jewellery catalogs.
  */
 const GEMINI_SCORE_ANCHORS: Array<[number, number]> = [
   [0.0, 0.0],

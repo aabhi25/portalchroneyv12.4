@@ -143,7 +143,8 @@ export const businessAccounts = pgTable("business_accounts", {
   vistaImageProvider: text("vista_image_provider").notNull().default("openai"), // 'openai' | 'google' - Which AI provider to use for Vista Studio image generation
   googleNanoBananaApiKey: text("google_nano_banana_api_key"), // Encrypted Google Nano Banana Pro API key (for gemini-3-pro-image-preview)
   geminiApiKey: text("gemini_api_key"), // Encrypted Google AI Studio key for photo search (Gemini Embedding 2); empty = platform key
-  // Visual Search Model settings
+  // UNUSED since Google Vision Warehouse and Google Product Search were removed (photo search is Gemini-only).
+  // These columns (model choice, Vision Warehouse, Product Search, their sync state) are kept only so the database stays untouched.
   visualSearchModel: text("visual_search_model").notNull().default("google_product_search"), // 'google_vision_warehouse' | 'google_product_search' - Which model to use for visual product search
   googleVisionWarehouseCorpusId: text("google_vision_warehouse_corpus_id"), // Google Vision Warehouse corpus ID for this business
   googleVisionWarehouseIndexId: text("google_vision_warehouse_index_id"), // Google Vision Warehouse index ID
@@ -486,6 +487,7 @@ export const products = pgTable("products", {
   imageEmbedding: vector768("image_embedding"), // Gemini photo fingerprint (768 dimensions) - stores CROPPED jewelry fingerprint when jewelry detection is enabled
   fullImageEmbedding: vector768("full_image_embedding"), // Vector embedding of the FULL original product image (uncropped) for exact match detection
   imageHash: text("image_hash"), // Perceptual hash (pHash) for exact image matching - 16 char hex string
+  // UNUSED: Vision Warehouse / Product Search sync columns, kept so the database stays untouched.
   visionWarehouseAssetId: text("vision_warehouse_asset_id"), // Google Vision Warehouse asset ID for visual search
   visionWarehouseSyncedAt: timestamp("vision_warehouse_synced_at"), // When last synced to Vision Warehouse
   productSearchProductId: text("product_search_product_id"), // Google Product Search product ID (format: projects/{project}/locations/{location}/products/{product_id})

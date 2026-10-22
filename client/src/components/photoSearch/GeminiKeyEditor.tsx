@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
  */
 
 export interface PhotoSearchStatus {
-  engine: "vision_warehouse" | "gemini" | "none";
+  engine: "gemini" | "none";
   keySource: "account" | "platform" | null;
   accountKey: { configured: boolean; masked: string | null };
   platformKeyConfigured: boolean;
@@ -44,7 +44,6 @@ export function usePhotoSearchStatus(businessAccountId: string, enabled = true) 
 
 /** One line describing where an account's photo search stands. */
 export function photoSearchSummary(status: PhotoSearchStatus): { text: string; warn: boolean } {
-  if (status.engine === "vision_warehouse") return { text: "Website chat photo search uses Google Vision Warehouse", warn: false };
   if (status.engine === "none") {
     return { text: "No Gemini key yet, so photo search finds nothing. Add one in Super Admin › API Keys.", warn: true };
   }

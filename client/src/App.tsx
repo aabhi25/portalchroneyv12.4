@@ -85,7 +85,6 @@ import IdleTimeoutSettings from "@/pages/IdleTimeoutSettings";
 import JewelryShowcase from "@/pages/JewelryShowcase";
 import VistaInsights from "@/pages/VistaInsights";
 import Uploads from "@/pages/Uploads";
-import SuperAdminGooglePhotos from "@/pages/SuperAdminGooglePhotos";
 import JewelryImageGenerator from "@/pages/JewelryImageGenerator";
 import GroupAdminDashboard from "@/pages/GroupAdminDashboard";
 import GroupAdminInsights from "@/pages/GroupAdminInsights";
@@ -264,7 +263,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/super-admin/demo" component={SuperAdminDemo} />
                 <Route path="/super-admin/api-keys" component={SuperAdminApiKeys} />
                 <Route path="/super-admin/chat-apis" component={SuperAdminChatApis} />
-                <Route path="/super-admin/google-photos" component={SuperAdminGooglePhotos} />
+                <Route path="/super-admin/google-photos">{() => <Redirect to="/super-admin" />}</Route>
                 <Route path="/super-admin/account-groups" component={SuperAdminAccountGroups} />
                 <Route path="/super-admin/account-groups/:groupId/insights" component={GroupInsightsPage} />
                 <Route path="/super-admin/account-groups/:groupId/training" component={GroupTrainingEditor} />

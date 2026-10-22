@@ -4,6 +4,7 @@ import { products, businessAccounts, productEmbeddings, erpProductCache, product
 // GEMINI_EMBEDDING_MARKER are searched, so fingerprints left by retired engines never mix in.
 import { embedImage, embedImages, GEMINI_EMBEDDING_MARKER } from './geminiImageEmbeddingService';
 import { resolveGeminiKey } from './geminiKeys';
+import { productHasGeminiFingerprint } from './visualSearchEngine';
 import { jewelryDetectionService } from './jewelryDetectionService';
 import { imageCroppingService } from './imageCroppingService';
 import { imageHashService } from './imageHashService';
@@ -11,8 +12,6 @@ import { embeddingService } from './embeddingService';
 import { eq, sql, and, isNull, isNotNull, or, notLike } from 'drizzle-orm';
 
 const GEMINI_ROW = `${GEMINI_EMBEDDING_MARKER}%`;
-/** Products whose stored fingerprints were made by Gemini (and therefore can be compared with a Gemini query). */
-const productHasGeminiFingerprint = sql`${products.visualDescription} LIKE ${GEMINI_ROW}`;
 
 // Lazy import for backgroundRemovalService to avoid loading heavy @imgly/background-removal-node at startup
 const getBackgroundRemovalService = async () => {

@@ -11,7 +11,6 @@ interface ProductWithMeta extends Product {
 import { Button } from "@/components/ui/button";
 import CategoryManager from "@/components/admin/CategoryManager";
 import TagManager from "@/components/admin/TagManager";
-import VisionWarehouseSync from "@/components/admin/VisionWarehouseSync";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -542,7 +541,6 @@ export default function AdminProducts() {
             </TabsList>
 
             <TabsContent value="products" className="mt-6">
-              <VisionWarehouseSync />
               {!showForm && (
                 <div className="flex justify-between items-center gap-2 mb-4">
                   <div className="flex items-center gap-2">

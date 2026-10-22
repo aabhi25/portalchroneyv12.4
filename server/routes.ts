@@ -80,8 +80,6 @@ import { r2Storage } from "./services/r2StorageService";
 import { databaseBackupService } from "./services/databaseBackupService";
 import { backupJobManager } from "./services/backupJobManager";
 import { embeddingService } from "./services/embeddingService";
-import { visionWarehouseSyncService, SyncProgress } from "./services/visionWarehouseSyncService";
-import { visionWarehouseService } from "./services/visionWarehouseService";
 import { unifiedVisualSearchService } from "./services/unifiedVisualSearchService";
 import { getCategoryBreakdown, batchCategorizeUncategorized } from "./services/conversationCategorizationService";
 import erpRoutes from "./routes/erpRoutes";
@@ -109,6 +107,7 @@ import merittoRoutes from "./routes/meritto";
 import aiUsageRoutes from "./routes/aiUsage";
 import avatarRoutes from "./routes/avatar";
 import photoSearchRoutes from "./routes/photoSearch";
+import { productHasGeminiFingerprint } from "./services/visualSearchEngine";
 import tutorRoutes from "./routes/tutor";
 import { getPublicTutorConfig } from "./services/tutor/settings";
 import aiLanguageRoutes from "./routes/aiLanguage";
@@ -5438,7 +5437,7 @@ If you cannot determine the category or the image doesn't match any category, re
               return null;
             }
           })(),
-          // 2. Generate full image embedding (Vision Warehouse)
+          // 2. Gemini fingerprint of the full image
           (async () => {
             try {
               const { embedding } = await productImageEmbeddingService.embedUploadedImage(dataUrl, businessAccountId);
@@ -5486,7 +5485,8 @@ If you cannot determine the category or the image doesn't match any category, re
               .where(
                 and(
                   eq(products.businessAccountId, businessAccountId),
-                  sql`${products.fullImageEmbedding} IS NOT NULL`
+                  sql`${products.fullImageEmbedding} IS NOT NULL`,
+                  productHasGeminiFingerprint
                 )
               )
               .orderBy(sql`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`)
@@ -5744,8 +5744,8 @@ If you cannot determine the category or the image doesn't match any category, re
         });
       }
 
-      // Vision Warehouse with description re-ranking for improved accuracy
-      console.log('[Visual Match] Using Vision Warehouse + description re-ranking');
+      // Fingerprint matches with description re-ranking for improved accuracy
+      console.log('[Visual Match] Using photo fingerprints + description re-ranking');
       
       // Fixed similarity threshold - 80% minimum to show results
       // Match quality labels: Perfect Match (96%+ with pHash, Stage 0 only), Very Similar (90-96%), Somewhat Similar (80-90%)
@@ -6211,7 +6211,8 @@ If you cannot determine the category or the image doesn't match any category, re
           .where(
             and(
               eq(products.businessAccountId, businessAccountId as string),
-              sql`${products.fullImageEmbedding} IS NOT NULL`
+              sql`${products.fullImageEmbedding} IS NOT NULL`,
+              productHasGeminiFingerprint
             )
           )
           .orderBy(sql`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`)
@@ -6618,7 +6619,8 @@ If you cannot determine the category or the image doesn't match any category, re
           .where(
             and(
               eq(products.businessAccountId, businessAccountId as string),
-              sql`${products.fullImageEmbedding} IS NOT NULL`
+              sql`${products.fullImageEmbedding} IS NOT NULL`,
+              productHasGeminiFingerprint
             )
           )
           .orderBy(sql`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`)
@@ -6676,7 +6678,7 @@ If you cannot determine the category or the image doesn't match any category, re
     }
   });
 
-  // Chat widget visual search using Vision Warehouse (with crop support)
+  // Chat widget visual search using Gemini photo fingerprints (with crop support)
   app.post("/api/chat/widget/visual-search", async (req, res) => {
     try {
       const { businessAccountId, imageUrl, boundingBox } = req.body;
@@ -6690,11 +6692,11 @@ If you cannot determine the category or the image doesn't match any category, re
         return res.status(404).json({ error: "Business account not found" });
       }
 
-      // Vision Warehouse when the account has it set up, otherwise Gemini Embedding 2 (built-in matcher)
-      const { resolveVisualSearch } = await import('./services/visualSearchEngine');
-      const { engine, geminiKey } = await resolveVisualSearch(businessAccount);
-      if (engine === 'none') {
-        return res.status(400).json({ error: "Visual search is not configured on this server." });
+      // Gemini Embedding 2 fingerprints, compared by the built-in matcher
+      const { resolveGeminiKey } = await import('./services/geminiKeys');
+      const geminiKey = (await resolveGeminiKey(businessAccount))?.key;
+      if (!geminiKey) {
+        return res.status(400).json({ error: "Visual search is not configured for this account." });
       }
 
       // Get widget settings for thresholds and display mode
@@ -6704,7 +6706,7 @@ If you cannot determine the category or the image doesn't match any category, re
       const somewhatSimilarThreshold = (widgetSettings?.somewhatSimilarThreshold ? parseFloat(widgetSettings.somewhatSimilarThreshold) : 70) / 100;
       const showMatchPercentage = widgetSettings?.showMatchPercentage === 'true';
 
-      console.log(`[Chat Visual Search] Starting ${engine === 'gemini' ? 'Gemini' : 'Vision Warehouse'} search`);
+      console.log('[Chat Visual Search] Starting Gemini search');
 
       // Fetch image with security validation
       const sharp = (await import('sharp')).default;
@@ -6805,62 +6807,27 @@ If you cannot determine the category or the image doesn't match any category, re
           .jpeg({ quality: 85 })
           .toBuffer();
       } else {
-        // Resize full image for Vision Warehouse
+        // Resize the full image
         processedBuffer = await sharp(imageBuffer)
           .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
           .jpeg({ quality: 85 })
           .toBuffer();
       }
 
-      // Each engine returns products with a 0-1 match score on the same scale as the widget's thresholds
-      let scoredProducts: Array<{ id: string; name: string; description: string; price: string | null; imageUrl: string | null; score: number }>;
-
-      if (engine === 'gemini') {
-        const { embedImage } = await import('./services/geminiImageEmbeddingService');
-        const { geminiMatchScore, GEMINI_CANDIDATE_MIN_SIMILARITY } = await import('./services/visualSearchEngine');
-        const { productImageEmbeddingService } = await import('./services/productImageEmbeddingService');
-        const queryEmbedding = await embedImage(processedBuffer, geminiKey!);
-        const matches = await productImageEmbeddingService.searchSimilarProducts(queryEmbedding, businessAccountId, 10, GEMINI_CANDIDATE_MIN_SIMILARITY);
-        scoredProducts = matches
-          .filter(m => m.source !== 'erp')
-          .map(m => ({ id: m.id, name: m.name, description: m.description, price: m.price, imageUrl: m.imageUrl, score: geminiMatchScore(m.similarity) }));
-      } else {
-        const base64Image = processedBuffer.toString('base64');
-        const { visionWarehouseService } = await import('./services/visionWarehouseService');
-
-        const projectNumber = businessAccount.googleVisionWarehouseProjectNumber;
-        if (!projectNumber) {
-          return res.status(400).json({ error: 'Google Vision Warehouse project number not configured' });
-        }
-
-        console.log('[Chat Visual Search] Calling Vision Warehouse API');
-
-        const vwResults = await visionWarehouseService.searchByImage(
-          businessAccount.googleVisionWarehouseCredentials!,
-          businessAccount.googleVisionWarehouseEndpointId!,
-          base64Image,
-          10,
-          undefined,
-          projectNumber
-        );
-        const vwScoreMap = new Map(vwResults.map(r => [r.assetId.replace('p-', ''), r.score]));
-        const vwProducts = vwScoreMap.size === 0 ? [] : await db
-          .select({
-            id: products.id,
-            name: products.name,
-            description: products.description,
-            price: products.price,
-            imageUrl: products.imageUrl,
-          })
-          .from(products)
-          .where(inArray(products.id, Array.from(vwScoreMap.keys())));
-        scoredProducts = vwProducts.map(p => ({ ...p, score: vwScoreMap.get(p.id) ?? 0 }));
-      }
+      // Products with a 0-1 match score on the same scale as the widget's thresholds
+      const { embedImage } = await import('./services/geminiImageEmbeddingService');
+      const { geminiMatchScore, GEMINI_CANDIDATE_MIN_SIMILARITY } = await import('./services/visualSearchEngine');
+      const { productImageEmbeddingService } = await import('./services/productImageEmbeddingService');
+      const queryEmbedding = await embedImage(processedBuffer, geminiKey);
+      const matches = await productImageEmbeddingService.searchSimilarProducts(queryEmbedding, businessAccountId, 10, GEMINI_CANDIDATE_MIN_SIMILARITY);
+      const scoredProducts = matches
+        .filter(m => m.source !== 'erp')
+        .map(m => ({ id: m.id, name: m.name, description: m.description, price: m.price, imageUrl: m.imageUrl, score: geminiMatchScore(m.similarity) }));
 
       // Filter by minimum threshold
       const filteredResults = scoredProducts.filter(r => r.score >= somewhatSimilarThreshold);
 
-      console.log(`[Chat Visual Search] ${engine} returned ${scoredProducts.length} total, ${filteredResults.length} above ${somewhatSimilarThreshold * 100}% threshold`);
+      console.log(`[Chat Visual Search] Gemini returned ${scoredProducts.length} total, ${filteredResults.length} above ${somewhatSimilarThreshold * 100}% threshold`);
 
       if (filteredResults.length === 0) {
         return res.json({
@@ -6910,7 +6877,7 @@ If you cannot determine the category or the image doesn't match any category, re
       return res.json({
         products: results,
         matchCount: results.length,
-        searchType: engine === 'gemini' ? 'gemini_embedding' : 'vision_warehouse',
+        searchType: 'gemini_embedding',
         showMatchPercentage,
         message: `Found ${results.length} similar products`
       });
@@ -6942,26 +6909,10 @@ If you cannot determine the category or the image doesn't match any category, re
         return res.status(400).json({ error: "Business account or OpenAI API key not found" });
       }
 
-      // Check if Google Vision Warehouse or Product Search is configured and selected
-      const visualSearchModel = businessAccount.visualSearchModel || 'google_vision_warehouse';
-      const useVisionWarehouse = visualSearchModel === 'google_vision_warehouse' &&
-        businessAccount.googleVisionWarehouseEndpointId &&
-        businessAccount.googleVisionWarehouseCredentials;
-      const useProductSearch = visualSearchModel === 'google_product_search' &&
-        businessAccount.googleProductSearchProductSetId &&
-        businessAccount.googleProductSearchCredentials;
-
-      if (useProductSearch) {
-        console.log('[Adjusted Boundary Search] Using Google Product Search for search');
-      } else if (useVisionWarehouse) {
-        console.log('[Adjusted Boundary Search] Using Google Vision Warehouse for search');
-      } else if (await (await import('./services/geminiKeys')).resolveGeminiKey(businessAccount)) {
-        console.log('[Adjusted Boundary Search] Using Gemini Embedding 2 (built-in matcher)');
-      } else {
-        console.log('[Adjusted Boundary Search] No visual search model configured');
-        return res.status(400).json({ 
-          error: "Visual search is not configured. Please configure Google Vision Warehouse or Google Product Search in the API Keys settings." 
-        });
+      // Photo fingerprints come from Gemini Embedding 2 (the account's key, else the platform key)
+      if (!(await (await import('./services/geminiKeys')).resolveGeminiKey(businessAccount))) {
+        console.log('[Adjusted Boundary Search] No Gemini key for photo search');
+        return res.status(400).json({ error: "Visual search is not configured for this account." });
       }
 
       // Fetch configurable thresholds from widget settings
@@ -6973,8 +6924,7 @@ If you cannot determine the category or the image doesn't match any category, re
       const PERFECT_MATCH_THRESHOLD = (widgetSettings?.perfectMatchThreshold ? parseFloat(widgetSettings.perfectMatchThreshold) : 96) / 100;
       const VERY_SIMILAR_THRESHOLD = (widgetSettings?.verySimilarThreshold ? parseFloat(widgetSettings.verySimilarThreshold) : 85) / 100;
       const SOMEWHAT_SIMILAR_THRESHOLD = (widgetSettings?.somewhatSimilarThreshold ? parseFloat(widgetSettings.somewhatSimilarThreshold) : 70) / 100;
-      // Skip background removal when using Vision Warehouse or Product Search - they have built-in preprocessing
-      const BACKGROUND_REMOVAL_ENABLED = !useVisionWarehouse && !useProductSearch;
+      const BACKGROUND_REMOVAL_ENABLED = true;
 
       // Import services for visual search
       const { productImageEmbeddingService } = await import('./services/productImageEmbeddingService');
@@ -7095,8 +7045,7 @@ If you cannot determine the category or the image doesn't match any category, re
       // Import image hash service for Stage 0 exact match
       const { imageHashService } = await import('./services/imageHashService');
 
-      // When using Vision Warehouse, skip CLIP embeddings (VW handles visual search)
-      // Only generate pHash for exact match detection (free, local)
+      // Fingerprints for the cut-out piece and the full photo, plus pHash for exact copies
       let croppedEmbeddingResult = { description: '', embedding: null as number[] | null };
       let fullImageEmbeddingResult = { description: '', embedding: null as number[] | null };
       let pHashResult: string | null = null;
@@ -7110,9 +7059,7 @@ If you cannot determine the category or the image doesn't match any category, re
         console.warn('[Adjusted Boundary Search] pHash generation failed:', e);
       }
 
-      // Skip CLIP embeddings and attribute extraction when using Vision Warehouse or Product Search
-      if (!useVisionWarehouse && !useProductSearch) {
-        // Legacy CLIP mode - generate embeddings and attributes
+      {
         const [croppedEmb, fullEmb, attrRes] = await Promise.all([
           productImageEmbeddingService.embedUploadedImage(croppedDataUrl, businessAccountId),
           productImageEmbeddingService.embedUploadedImage(fullImageDataUrl, businessAccountId),
@@ -7128,22 +7075,19 @@ If you cannot determine the category or the image doesn't match any category, re
           console.log(`[Adjusted Boundary Search] Using original attributes from detect-stream (type: ${jewelryType}, skipped API call)`);
         }
         console.log(`[Adjusted Boundary Search] Embedding generated, attributes: ${attributeResult.success ? 'success' : 'failed'}`);
-      } else {
-        console.log('[Adjusted Boundary Search] Google Cloud mode - using Vision Warehouse');
       }
       
       // Use cropped embedding for Stage 1 (if available)
       const embeddingResult = croppedEmbeddingResult;
 
-      // STAGE 0: Check for exact product match using pHash (CLIP removed for VW/Product Search mode)
+      // STAGE 0: Check for exact product match (pHash, plus the full-photo fingerprint when there is one)
       let exactMatch: any = null;
       console.log('[Adjusted Boundary Search] Stage 0: Checking for exact product match');
       
-      // Skip Stage 0 CLIP matching when using Vision Warehouse/Product Search or if no embedding
-      if (useVisionWarehouse || useProductSearch || !fullImageEmbeddingResult.embedding || fullImageEmbeddingResult.embedding.length === 0) {
-        console.log('[Adjusted Boundary Search] Stage 0: Using pHash-only matching (Google Cloud mode)');
-        
-        // For Vision Warehouse mode, use pHash-only exact matching
+      // Without a full-photo fingerprint, fall back to pHash-only exact matching
+      if (!fullImageEmbeddingResult.embedding || fullImageEmbeddingResult.embedding.length === 0) {
+        console.log('[Adjusted Boundary Search] Stage 0: Using pHash-only matching');
+
         if (pHashResult) {
           try {
             // Find products with similar pHash
@@ -7206,7 +7150,8 @@ If you cannot determine the category or the image doesn't match any category, re
           .where(
             and(
               eq(products.businessAccountId, businessAccountId),
-              sql`${products.fullImageEmbedding} IS NOT NULL`
+              sql`${products.fullImageEmbedding} IS NOT NULL`,
+              productHasGeminiFingerprint
             )
           )
           .orderBy(sql`${products.fullImageEmbedding} <=> ${JSON.stringify(fullImageEmbeddingResult.embedding)}::vector`)
@@ -7360,209 +7305,6 @@ If you cannot determine the category or the image doesn't match any category, re
       // Stage 1: Query from productJewelryEmbeddings table for cropped jewelry comparison
       // This compares the cropped uploaded jewelry against cropped catalog jewelry (jewelry-to-jewelry)
       
-      // Get Vision Warehouse candidate IDs if configured (for pre-filtering)
-      let visionWarehouseCandidateIds: string[] | null = null;
-      if (useVisionWarehouse) {
-        // Vision Warehouse is configured - use it exclusively
-        const { visionWarehouseService } = await import('./services/visionWarehouseService');
-        
-        // Use the cropped image for Vision Warehouse search
-        const croppedBase64 = croppedDataUrl.replace(/^data:image\/\w+;base64,/, '');
-        
-        // Pass the configured project number (required for Vision Warehouse API)
-        const projectNumber = businessAccount.googleVisionWarehouseProjectNumber;
-        if (!projectNumber) {
-          return res.status(400).json({ error: 'Google Vision Warehouse project number not configured' });
-        }
-        
-        // Vision Warehouse returns top 10 results sorted by relevance
-        // We filter client-side using configurable threshold from widget settings
-        const VISION_WAREHOUSE_RELEVANCE_THRESHOLD = SOMEWHAT_SIMILAR_THRESHOLD;
-        
-        const vwResults = await visionWarehouseService.searchByImage(
-          businessAccount.googleVisionWarehouseCredentials!,
-          businessAccount.googleVisionWarehouseEndpointId!,
-          croppedBase64,
-          10, // Top 10 results (already sorted by relevance by Google)
-          undefined, // no filters
-          projectNumber // Use configured project number
-        );
-
-        // Filter client-side by relevance threshold (≥70%)
-        const filteredVwResults = vwResults.filter(r => r.score >= VISION_WAREHOUSE_RELEVANCE_THRESHOLD);
-        
-        console.log(`[Adjusted Boundary Search] Vision Warehouse returned ${vwResults.length} total, ${filteredVwResults.length} above ${VISION_WAREHOUSE_RELEVANCE_THRESHOLD * 100}% threshold`);
-        
-        // Log individual scores for debugging
-        vwResults.forEach(r => {
-          const passed = r.score >= VISION_WAREHOUSE_RELEVANCE_THRESHOLD;
-          console.log(`[VisionWarehouse] ${r.assetId}: ${(r.score * 100).toFixed(1)}% relevance ${passed ? '✓' : '✗'}`);
-        });
-        
-        // Extract product IDs from filtered Vision Warehouse results
-        visionWarehouseCandidateIds = filteredVwResults.map(r => r.assetId.replace('p-', ''));
-        
-        // VISION WAREHOUSE DIRECT MODE: Skip local CLIP filtering entirely
-        // VW products may not have local embeddings, so fetch directly from products table
-        if (visionWarehouseCandidateIds.length > 0) {
-          console.log(`[Adjusted Boundary Search] Vision Warehouse direct mode - fetching ${visionWarehouseCandidateIds.length} products directly`);
-          
-          // Create a map of VW scores by product ID
-          const vwScoreMap = new Map(filteredVwResults.map(r => [r.assetId.replace('p-', ''), r.score]));
-          
-          // Fetch products directly from products table (no CLIP embedding requirement)
-          const vwProducts = await db
-            .select({
-              id: products.id,
-              name: products.name,
-              description: products.description,
-              price: products.price,
-              imageUrl: products.imageUrl,
-              detectedJewelryType: products.detectedJewelryType,
-            })
-            .from(products)
-            .where(inArray(products.id, visionWarehouseCandidateIds));
-          
-          // Map to result format with VW scores
-          const results = vwProducts.map(p => {
-            const vwScore = vwScoreMap.get(p.id) || 0.7;
-            const matchLabel = vwScore >= 0.95 ? 'Perfect Match' : vwScore >= 0.85 ? 'Very Similar' : 'Somewhat Similar';
-            return {
-              id: p.id,
-              name: p.name,
-              description: p.description,
-              price: p.price,
-              imageUrl: p.imageUrl,
-              similarity: vwScore,
-              matchScore: Math.round(vwScore * 100),
-              matchLabel,
-              detectedJewelryType: p.detectedJewelryType || detectedType || 'jewelry',
-            };
-          });
-          
-          // Sort by VW score descending
-          results.sort((a, b) => b.similarity - a.similarity);
-          
-          console.log(`[Adjusted Boundary Search] Vision Warehouse direct mode - returning ${results.length} products`);
-          
-          return res.json({
-            products: results,
-            matchCount: results.length,
-            searchType: 'vision_warehouse_direct',
-            message: `Found ${results.length} similar products via Vision Warehouse`
-          });
-        }
-      }
-      
-      // Google Product Search integration (pay-per-use alternative to Vision Warehouse)
-      if (useProductSearch) {
-        console.log('[Adjusted Boundary Search] Using Google Product Search for visual search');
-        const { productSearchService } = await import('./services/productSearchService');
-        
-        // Use the cropped image for Product Search
-        const croppedBase64 = croppedDataUrl.replace(/^data:image\/\w+;base64,/, '');
-        
-        // Validate required configuration
-        if (!businessAccount.googleProductSearchProjectId || !businessAccount.googleProductSearchLocation) {
-          return res.status(400).json({ error: 'Google Product Search project ID or location not configured' });
-        }
-        
-        // Product Search returns top 10 results sorted by relevance
-        // Using configurable threshold from widget settings
-        const PRODUCT_SEARCH_RELEVANCE_THRESHOLD = SOMEWHAT_SIMILAR_THRESHOLD;
-        
-        try {
-          const psResults = await productSearchService.searchByImage(
-            businessAccount.googleProductSearchProjectId,
-            businessAccount.googleProductSearchLocation,
-            businessAccount.googleProductSearchProductSetId!,
-            croppedBase64,
-            businessAccount.googleProductSearchCredentials!,
-            10 // Top 10 results
-          );
-          
-          // Filter client-side by relevance threshold (≥70%)
-          const filteredPsResults = psResults.filter(r => r.score >= PRODUCT_SEARCH_RELEVANCE_THRESHOLD);
-          
-          console.log(`[Adjusted Boundary Search] Product Search returned ${psResults.length} total, ${filteredPsResults.length} above ${PRODUCT_SEARCH_RELEVANCE_THRESHOLD * 100}% threshold`);
-          
-          // Log individual scores for debugging
-          psResults.forEach(r => {
-            const passed = r.score >= PRODUCT_SEARCH_RELEVANCE_THRESHOLD;
-            console.log(`[ProductSearch] ${r.productId}: ${(r.score * 100).toFixed(1)}% relevance ${passed ? '✓' : '✗'}`);
-          });
-          
-          // Extract product IDs from filtered Product Search results
-          const productSearchCandidateIds = filteredPsResults.map(r => r.productId);
-          
-          // PRODUCT SEARCH DIRECT MODE: Skip local CLIP filtering entirely
-          if (productSearchCandidateIds.length > 0) {
-            console.log(`[Adjusted Boundary Search] Product Search direct mode - fetching ${productSearchCandidateIds.length} products directly`);
-            
-            // Create a map of PS scores by product ID
-            const psScoreMap = new Map(filteredPsResults.map(r => [r.productId, r.score]));
-            
-            // Fetch products directly from products table (no CLIP embedding requirement)
-            const psProducts = await db
-              .select({
-                id: products.id,
-                name: products.name,
-                description: products.description,
-                price: products.price,
-                imageUrl: products.imageUrl,
-                detectedJewelryType: products.detectedJewelryType,
-              })
-              .from(products)
-              .where(inArray(products.id, productSearchCandidateIds));
-            
-            // Map to result format with PS scores
-            const results = psProducts.map(p => {
-              const psScore = psScoreMap.get(p.id) || 0.7;
-              const matchLabel = psScore >= 0.95 ? 'Perfect Match' : psScore >= 0.85 ? 'Very Similar' : 'Somewhat Similar';
-              return {
-                id: p.id,
-                name: p.name,
-                description: p.description,
-                price: p.price,
-                imageUrl: p.imageUrl,
-                similarity: psScore,
-                matchScore: Math.round(psScore * 100),
-                matchLabel,
-                detectedJewelryType: p.detectedJewelryType || detectedType || 'jewelry',
-              };
-            });
-            
-            // Sort by PS score descending
-            results.sort((a, b) => b.similarity - a.similarity);
-            
-            console.log(`[Adjusted Boundary Search] Product Search direct mode - returning ${results.length} products`);
-            
-            return res.json({
-              products: results,
-              matchCount: results.length,
-              searchType: 'product_search_direct',
-              message: `Found ${results.length} similar products via Product Search`
-            });
-          } else {
-            // No results from Product Search
-            console.log('[Adjusted Boundary Search] Product Search returned 0 results above threshold');
-            const results = exactMatch ? [exactMatch] : [];
-            return res.json({
-              products: results,
-              matchCount: results.length,
-              searchType: 'product_search_only',
-              message: results.length > 0 ? 'Found exact match' : 'No similar products found in Product Search'
-            });
-          }
-        } catch (psError: any) {
-          console.error('[Adjusted Boundary Search] Product Search failed:', psError);
-          return res.status(500).json({ 
-            error: 'Product Search failed', 
-            details: psError.message 
-          });
-        }
-      }
-      
       // Build type filter condition for productJewelryEmbeddings.jewelryType
       let jewelryTypeFilterConditions;
       if (compatibleTypes.length > 0 && detectedType) {
@@ -7579,28 +7321,11 @@ If you cannot determine the category or the image doesn't match any category, re
       const baseConditions = and(
         eq(productJewelryEmbeddings.businessAccountId, businessAccountId),
         sql`${productJewelryEmbeddings.embedding} IS NOT NULL`,
+        productHasGeminiFingerprint,
         jewelryTypeFilterConditions
       );
       
-      // If Vision Warehouse is configured, use ONLY Vision Warehouse results (no CLIP fallback)
-      // If VW returns 0 candidates, we return empty results instead of falling back to local search
-      if (useVisionWarehouse && (!visionWarehouseCandidateIds || visionWarehouseCandidateIds.length === 0)) {
-        console.log('[Adjusted Boundary Search] Vision Warehouse returned 0 results');
-        
-        // Return exact match if found, otherwise empty results
-        const results = exactMatch ? [exactMatch] : [];
-        return res.json({
-          products: results,
-          matchCount: results.length,
-          searchType: 'vision_warehouse_only',
-          message: results.length > 0 ? 'Found exact match' : 'No similar products found in Vision Warehouse'
-        });
-      }
-      
-      // If Vision Warehouse provided candidates, filter to those product IDs
-      const queryConditions = visionWarehouseCandidateIds && visionWarehouseCandidateIds.length > 0
-        ? and(baseConditions, inArray(products.id, visionWarehouseCandidateIds))
-        : baseConditions;
+      const queryConditions = baseConditions;
       
       // Query productJewelryEmbeddings with JOIN to products (like Visual Match does)
       // This compares cropped jewelry embeddings, not full image embeddings
@@ -7621,11 +7346,7 @@ If you cannot determine the category or the image doesn't match any category, re
         .orderBy(sql`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(embeddingResult.embedding)}::vector`)
         .limit(30);
       
-      if (visionWarehouseCandidateIds) {
-        console.log(`[Adjusted Boundary Search] Vision Warehouse pre-filtered to ${visionWarehouseCandidateIds.length} candidates, found ${candidateProducts.length} with embeddings matching type filter`);
-      } else {
-        console.log(`[Adjusted Boundary Search] Found ${candidateProducts.length} candidates matching type filter (from cropped jewelry embeddings)`);
-      }
+      console.log(`[Adjusted Boundary Search] Found ${candidateProducts.length} candidates matching type filter (from cropped jewelry embeddings)`);
       
       // NO BROAD FALLBACK: If no type matches found, only return exact match (if any)
       // This prevents showing unrelated jewelry types (e.g., rings when searching for earrings)
@@ -7937,7 +7658,7 @@ If you cannot determine the category or the image doesn't match any category, re
 
       res.json({
         products: results,
-        matchSource: visionWarehouseCandidateIds && visionWarehouseCandidateIds.length > 0 ? 'vision_warehouse' : 'adjusted_boundary',
+        matchSource: 'adjusted_boundary',
         hasExactMatch: !!exactMatch,
         stage0Results: exactMatch ? 1 : 0,
         stage1Results: stage1Results.length,
@@ -7950,159 +7671,6 @@ If you cannot determine the category or the image doesn't match any category, re
 
     } catch (error: any) {
       console.error('[Adjusted Boundary Search] Error:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Fast Visual Search - Direct image → Vision Warehouse → results (no GPT Vision, no cropping, no BG removal)
-  app.post("/api/visual-search/fast", chatImageUpload.single('image'), async (req, res) => {
-    try {
-      const startTime = Date.now();
-      const businessAccountId = req.body.businessAccountId;
-      
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "businessAccountId required" });
-      }
-
-      console.log(`[Fast Visual Search] Starting search for business ${businessAccountId}`);
-
-      const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      if (!businessAccount) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      // Check if Vision Warehouse is configured
-      if (!businessAccount.googleVisionWarehouseEndpointId || 
-          !businessAccount.googleVisionWarehouseCredentials ||
-          !businessAccount.googleVisionWarehouseProjectNumber) {
-        return res.status(400).json({ error: "Google Vision Warehouse not configured for this account" });
-      }
-
-      // Get image data - either from file upload or base64 in body
-      let imageBase64: string;
-      
-      if (req.file) {
-        imageBase64 = req.file.buffer.toString('base64');
-      } else if (req.body.image) {
-        // Handle base64 data URL or raw base64
-        imageBase64 = req.body.image.replace(/^data:image\/\w+;base64,/, '');
-      } else {
-        return res.status(400).json({ error: "Image required (file upload or base64)" });
-      }
-
-      console.log(`[Fast Visual Search] Image received, sending to Vision Warehouse...`);
-
-      // Fetch configurable threshold from widget settings
-      const widgetSettings = await storage.getWidgetSettings(businessAccountId);
-      const VISION_WAREHOUSE_RELEVANCE_THRESHOLD = (widgetSettings?.somewhatSimilarThreshold ? parseFloat(widgetSettings.somewhatSimilarThreshold) : 70) / 100;
-
-      // Send directly to Vision Warehouse - it handles preprocessing internally
-      const { visionWarehouseService } = await import('./services/visionWarehouseService');
-      
-      const vwResults = await visionWarehouseService.searchByImage(
-        businessAccount.googleVisionWarehouseCredentials,
-        businessAccount.googleVisionWarehouseEndpointId,
-        imageBase64,
-        10, // Top 10 results
-        undefined,
-        businessAccount.googleVisionWarehouseProjectNumber
-      );
-
-      // Filter by relevance threshold
-      const filteredResults = vwResults.filter(r => r.score >= VISION_WAREHOUSE_RELEVANCE_THRESHOLD);
-      
-      console.log(`[Fast Visual Search] Vision Warehouse returned ${vwResults.length} total, ${filteredResults.length} above ${VISION_WAREHOUSE_RELEVANCE_THRESHOLD * 100}% threshold`);
-      
-      // Log scores
-      vwResults.forEach(r => {
-        const passed = r.score >= VISION_WAREHOUSE_RELEVANCE_THRESHOLD;
-        console.log(`[Fast Visual Search] ${r.assetId}: ${(r.score * 100).toFixed(1)}% ${passed ? '✓' : '✗'}`);
-      });
-
-      if (filteredResults.length === 0) {
-        const elapsed = Date.now() - startTime;
-        console.log(`[Fast Visual Search] No matches above threshold (${elapsed}ms)`);
-        return res.json({
-          products: [],
-          matchCount: 0,
-          searchTime: elapsed,
-          message: 'No similar products found'
-        });
-      }
-
-      // Get product IDs from Vision Warehouse results
-      const productIds = filteredResults.map(r => r.assetId.replace('p-', '')).filter(Boolean);
-      
-      if (productIds.length === 0) {
-        const elapsed = Date.now() - startTime;
-        console.log(`[Fast Visual Search] No valid product IDs found (${elapsed}ms)`);
-        return res.json({
-          products: [],
-          matchCount: 0,
-          searchTime: elapsed,
-          message: 'No similar products found'
-        });
-      }
-      
-      // Fetch product details from database
-      const matchedProducts = await db
-        .select({
-          id: products.id,
-          name: products.name,
-          description: products.description,
-          price: products.price,
-          imageUrl: products.imageUrl,
-          detectedJewelryType: products.detectedJewelryType
-        })
-        .from(products)
-        .where(and(
-          eq(products.businessAccountId, businessAccountId),
-          inArray(products.id, productIds)
-        ));
-
-      // Create a map for quick lookup and merge with VW scores
-      const productMap = new Map(matchedProducts.map(p => [p.id, p]));
-      
-      // Build results with scores, maintaining VW order (highest relevance first)
-      const results = filteredResults
-        .map(vwResult => {
-          const productId = vwResult.assetId.replace('p-', '');
-          const product = productMap.get(productId);
-          if (!product) return null;
-          
-          const similarity = Math.round(vwResult.score * 100);
-          const matchQuality = similarity >= 85 ? 'very_similar' : 
-                              similarity >= 70 ? 'somewhat_similar' : 'related';
-          const matchQualityLabel = matchQuality === 'very_similar' ? 'Very Similar' :
-                                   matchQuality === 'somewhat_similar' ? 'Somewhat Similar' : 'Related';
-          
-          return {
-            id: product.id,
-            name: product.name,
-            description: product.description,
-            price: product.price,
-            imageUrl: product.imageUrl,
-            category: product.detectedJewelryType || 'jewelry',
-            similarity,
-            matchQuality,
-            matchQualityLabel,
-            matchSource: 'vision_warehouse_fast'
-          };
-        })
-        .filter(Boolean);
-
-      const elapsed = Date.now() - startTime;
-      console.log(`[Fast Visual Search] Returning ${results.length} products (${elapsed}ms)`);
-
-      res.json({
-        products: results,
-        matchCount: results.length,
-        searchTime: elapsed,
-        matchSource: 'vision_warehouse_fast'
-      });
-
-    } catch (error: any) {
-      console.error('[Fast Visual Search] Error:', error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -11136,737 +10704,6 @@ Return ONLY the refined instruction, nothing else.`
         success: false, 
         error: "Invalid API key or connection failed. Please check your Google AI API key."
       });
-    }
-  });
-
-  // SuperAdmin: Get Vision Warehouse settings for a business account
-  app.get("/api/business-accounts/:id/vision-warehouse-settings", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const widgetSettings = await storage.getWidgetSettings(id);
-
-      res.json({
-        projectNumber: account.googleVisionWarehouseProjectNumber || '',
-        corpusId: account.googleVisionWarehouseCorpusId || widgetSettings?.googleVisionWarehouseCorpusId || '',
-        indexId: account.googleVisionWarehouseIndexId || widgetSettings?.googleVisionWarehouseIndexId || '',
-        endpointId: account.googleVisionWarehouseEndpointId || widgetSettings?.googleVisionWarehouseEndpointId || '',
-        hasCredentials: !!account.googleVisionWarehouseCredentials,
-        visualSearchModel: account.visualSearchModel || 'google_vision_warehouse',
-      });
-    } catch (error: any) {
-      console.error('[SuperAdmin Vision Warehouse] Error getting settings:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Update visual search model for a business account
-  app.put("/api/business-accounts/:id/visual-search-model", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { model } = req.body;
-
-      if (!['google_vision_warehouse', 'google_product_search', 'gemini_embedding_2'].includes(model)) {
-        return res.status(400).json({ error: "Invalid visual search model" });
-      }
-
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      await db.update(businessAccounts)
-        .set({ visualSearchModel: model })
-        .where(eq(businessAccounts.id, id));
-
-      res.json({ success: true, model });
-    } catch (error: any) {
-      console.error('[SuperAdmin Visual Search Model] Error updating:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Update Vision Warehouse settings for a business account
-  app.put("/api/business-accounts/:id/vision-warehouse-settings", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { projectNumber, corpusId, indexId, endpointId } = req.body;
-
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      // Update business account with Vision Warehouse configuration
-      // Also set visualSearchModel to 'google_vision_warehouse' when corpus ID is provided
-      const updateData: any = {
-        googleVisionWarehouseProjectNumber: projectNumber?.trim() || null,
-        googleVisionWarehouseCorpusId: corpusId?.trim() || null,
-        googleVisionWarehouseIndexId: indexId?.trim() || null,
-        googleVisionWarehouseEndpointId: endpointId?.trim() || null,
-      };
-      
-      // Automatically set visual search model to google_vision_warehouse when corpus ID is configured
-      if (corpusId?.trim()) {
-        updateData.visualSearchModel = 'google_vision_warehouse';
-      }
-      
-      await db.update(businessAccounts)
-        .set(updateData)
-        .where(eq(businessAccounts.id, id));
-
-      // Also update widget settings for backwards compatibility
-      const widgetSettingsData: any = {
-        googleVisionWarehouseCorpusId: corpusId?.trim() || null,
-        googleVisionWarehouseIndexId: indexId?.trim() || null,
-        googleVisionWarehouseEndpointId: endpointId?.trim() || null,
-        googleVisionWarehouseProjectNumber: projectNumber?.trim() || null,
-      };
-      
-      if (corpusId?.trim()) {
-        widgetSettingsData.visualSearchModel = 'google_vision_warehouse';
-      }
-      
-      await storage.upsertWidgetSettings(id, widgetSettingsData);
-
-      const updatedAccount = await storage.getBusinessAccount(id);
-      res.json({
-        projectNumber: updatedAccount?.googleVisionWarehouseProjectNumber || '',
-        corpusId: updatedAccount?.googleVisionWarehouseCorpusId || '',
-        indexId: updatedAccount?.googleVisionWarehouseIndexId || '',
-        endpointId: updatedAccount?.googleVisionWarehouseEndpointId || '',
-        hasCredentials: !!updatedAccount?.googleVisionWarehouseCredentials,
-      });
-    } catch (error: any) {
-      console.error('[SuperAdmin Vision Warehouse] Error updating settings:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Save Vision Warehouse credentials for a business account
-  app.post("/api/business-accounts/:id/vision-warehouse-credentials", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { credentials } = req.body;
-
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      if (!credentials) {
-        return res.status(400).json({ error: "Credentials are required" });
-      }
-
-      // Validate JSON structure
-      let parsedCredentials;
-      try {
-        parsedCredentials = typeof credentials === 'string' ? JSON.parse(credentials) : credentials;
-      } catch (e) {
-        return res.status(400).json({ error: "Invalid JSON format for credentials" });
-      }
-
-      // Check for required fields
-      if (!parsedCredentials.project_id || !parsedCredentials.private_key || !parsedCredentials.client_email) {
-        return res.status(400).json({ error: "Credentials must include project_id, private_key, and client_email" });
-      }
-
-      // Encrypt the credentials
-      const { encrypt } = await import('./services/encryptionService');
-      const encryptedCredentials = encrypt(JSON.stringify(parsedCredentials));
-
-      // Save to database
-      await db.update(businessAccounts)
-        .set({ googleVisionWarehouseCredentials: encryptedCredentials })
-        .where(eq(businessAccounts.id, id));
-
-      res.json({ 
-        success: true, 
-        projectId: parsedCredentials.project_id,
-        message: 'Credentials saved successfully'
-      });
-    } catch (error: any) {
-      console.error('[SuperAdmin Vision Warehouse] Error saving credentials:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Test Vision Warehouse credentials for a business account
-  app.post("/api/business-accounts/:id/test-vision-warehouse-credentials", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { credentials } = req.body;
-
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      let encryptedCredentials;
-      if (credentials) {
-        // Validate and encrypt for testing
-        let parsedCredentials;
-        try {
-          parsedCredentials = typeof credentials === 'string' ? JSON.parse(credentials) : credentials;
-        } catch (e) {
-          return res.status(400).json({ error: "Invalid JSON format for credentials" });
-        }
-
-        const { encrypt } = await import('./services/encryptionService');
-        encryptedCredentials = encrypt(JSON.stringify(parsedCredentials));
-      } else {
-        // Use saved credentials
-        encryptedCredentials = account.googleVisionWarehouseCredentials;
-        
-        if (!encryptedCredentials) {
-          return res.status(400).json({ error: "No credentials configured" });
-        }
-      }
-
-      // Test the credentials
-      const result = await visionWarehouseService.testCredentials(encryptedCredentials);
-      
-      if (result.valid) {
-        res.json({ 
-          success: true, 
-          projectId: result.projectId,
-          message: 'Credentials are valid'
-        });
-      } else {
-        res.status(400).json({ 
-          error: result.error || 'Credentials validation failed'
-        });
-      }
-    } catch (error: any) {
-      console.error('[SuperAdmin Vision Warehouse] Error testing credentials:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Get Vision Warehouse endpoint status for a business account
-  app.get("/api/business-accounts/:id/vision-warehouse-endpoint-status", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const endpointId = account.googleVisionWarehouseEndpointId;
-      const encryptedCredentials = account.googleVisionWarehouseCredentials;
-      const projectNumber = account.googleVisionWarehouseProjectNumber;
-
-      if (!endpointId || !encryptedCredentials || !projectNumber) {
-        return res.json({ state: 'NOT_CONFIGURED', isDeployed: false, deployedIndexes: [] });
-      }
-
-      try {
-        const status = await visionWarehouseService.getIndexEndpointStatus(
-          encryptedCredentials,
-          endpointId,
-          projectNumber
-        );
-        
-        // Note: For shared endpoints (same endpoint used by multiple accounts),
-        // status may show not deployed even if another account's index is deployed.
-        // Clicking "Deploy Index" will verify the true state.
-        
-        res.json(status);
-      } catch (error: any) {
-        console.error('[SuperAdmin Vision Warehouse] Error getting endpoint status:', error);
-        res.json({ state: 'ERROR', isDeployed: false, deployedIndexes: [], error: error.message });
-      }
-    } catch (error: any) {
-      console.error('[SuperAdmin Vision Warehouse] Error getting endpoint status:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Deploy Vision Warehouse index for a business account
-  app.post("/api/business-accounts/:id/vision-warehouse-deploy-index", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const endpointId = account.googleVisionWarehouseEndpointId;
-      const corpusId = account.googleVisionWarehouseCorpusId;
-      const indexId = account.googleVisionWarehouseIndexId;
-      const encryptedCredentials = account.googleVisionWarehouseCredentials;
-      const projectNumber = account.googleVisionWarehouseProjectNumber;
-
-      if (!endpointId || !corpusId || !indexId || !encryptedCredentials || !projectNumber) {
-        return res.status(400).json({ error: "Vision Warehouse not fully configured. Need endpoint ID, corpus ID, index ID, project number, and credentials." });
-      }
-
-      const result = await visionWarehouseService.deployIndex(
-        encryptedCredentials,
-        endpointId,
-        corpusId,
-        indexId,
-        projectNumber
-      );
-      
-      res.json({ 
-        success: true, 
-        operationName: result.operationName,
-        message: 'Index deployment started. This may take 5-15 minutes.'
-      });
-    } catch (error: any) {
-      console.error('[SuperAdmin Vision Warehouse] Error deploying index:', error);
-      
-      // Check if the error indicates the index is already deployed
-      if (error.message && error.message.includes('INDEX_ENDPOINT_ALREADY_DEPLOYED')) {
-        // This is actually a success case - the index is already deployed
-        res.json({ 
-          success: true, 
-          alreadyDeployed: true,
-          message: 'Index is already deployed and serving. Visual search is active.'
-        });
-      } else {
-        res.status(500).json({ error: error.message });
-      }
-    }
-  });
-
-  // SuperAdmin: Undeploy Vision Warehouse index for a business account
-  app.post("/api/business-accounts/:id/vision-warehouse-undeploy-index", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const endpointId = account.googleVisionWarehouseEndpointId;
-      const encryptedCredentials = account.googleVisionWarehouseCredentials;
-      const projectNumber = account.googleVisionWarehouseProjectNumber;
-
-      if (!endpointId || !encryptedCredentials || !projectNumber) {
-        return res.status(400).json({ error: "Vision Warehouse endpoint not configured" });
-      }
-
-      await visionWarehouseService.undeployIndex(
-        encryptedCredentials,
-        endpointId,
-        projectNumber
-      );
-      
-      res.json({ 
-        success: true, 
-        message: 'Index undeploy started. Serving costs will stop once complete.'
-      });
-    } catch (error: any) {
-      console.error('[SuperAdmin Vision Warehouse] Error undeploying index:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Get Product Search settings for a business account
-  app.get("/api/business-accounts/:id/product-search-settings", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      res.json({
-        projectId: account.googleProductSearchProjectId || '',
-        location: account.googleProductSearchLocation || 'us-east1',
-        productSetId: account.googleProductSearchProductSetId || '',
-        hasCredentials: !!account.googleProductSearchCredentials,
-        syncPhase: account.productSearchSyncPhase || 'idle',
-        syncProgress: Number(account.productSearchSyncProgress) || 0,
-        syncTotal: Number(account.productSearchSyncTotal) || 0,
-        syncError: account.productSearchSyncError || null,
-        lastSyncedAt: account.productSearchLastSyncedAt || null,
-      });
-    } catch (error: any) {
-      console.error('[SuperAdmin Product Search] Error getting settings:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Update Product Search settings for a business account
-  app.put("/api/business-accounts/:id/product-search-settings", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { projectId, location, productSetId } = req.body;
-
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const updateData: any = {
-        googleProductSearchProjectId: projectId?.trim() || null,
-        googleProductSearchLocation: location?.trim() || 'us-east1',
-        googleProductSearchProductSetId: productSetId?.trim() || null,
-      };
-      
-      if (productSetId?.trim()) {
-        updateData.visualSearchModel = 'google_product_search';
-      }
-      
-      await db.update(businessAccounts)
-        .set(updateData)
-        .where(eq(businessAccounts.id, id));
-
-      const updatedAccount = await storage.getBusinessAccount(id);
-      res.json({
-        projectId: updatedAccount?.googleProductSearchProjectId || '',
-        location: updatedAccount?.googleProductSearchLocation || 'us-east1',
-        productSetId: updatedAccount?.googleProductSearchProductSetId || '',
-        hasCredentials: !!updatedAccount?.googleProductSearchCredentials,
-      });
-    } catch (error: any) {
-      console.error('[SuperAdmin Product Search] Error updating settings:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Save Product Search credentials for a business account
-  app.post("/api/business-accounts/:id/product-search-credentials", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { credentials } = req.body;
-
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      if (!credentials) {
-        return res.status(400).json({ error: "Credentials are required" });
-      }
-
-      let parsedCredentials;
-      try {
-        parsedCredentials = typeof credentials === 'string' ? JSON.parse(credentials) : credentials;
-      } catch (e) {
-        return res.status(400).json({ error: "Invalid JSON format for credentials" });
-      }
-
-      if (!parsedCredentials.project_id || !parsedCredentials.private_key || !parsedCredentials.client_email) {
-        return res.status(400).json({ error: "Credentials must include project_id, private_key, and client_email" });
-      }
-
-      const { encrypt } = await import('./services/encryptionService');
-      const encryptedCredentials = encrypt(JSON.stringify(parsedCredentials));
-
-      await db.update(businessAccounts)
-        .set({ 
-          googleProductSearchCredentials: encryptedCredentials,
-          googleProductSearchProjectId: parsedCredentials.project_id,
-        })
-        .where(eq(businessAccounts.id, id));
-
-      res.json({ 
-        success: true, 
-        projectId: parsedCredentials.project_id,
-        message: 'Credentials saved successfully'
-      });
-    } catch (error: any) {
-      console.error('[SuperAdmin Product Search] Error saving credentials:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Test Product Search credentials for a business account
-  app.post("/api/business-accounts/:id/test-product-search-credentials", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { credentials } = req.body;
-
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      let encryptedCredentials;
-      let projectId = account.googleProductSearchProjectId;
-      
-      if (credentials) {
-        let parsedCredentials;
-        try {
-          parsedCredentials = typeof credentials === 'string' ? JSON.parse(credentials) : credentials;
-        } catch (e) {
-          return res.status(400).json({ error: "Invalid JSON format for credentials" });
-        }
-
-        const { encrypt } = await import('./services/encryptionService');
-        encryptedCredentials = encrypt(JSON.stringify(parsedCredentials));
-        projectId = parsedCredentials.project_id;
-      } else {
-        encryptedCredentials = account.googleProductSearchCredentials;
-        
-        if (!encryptedCredentials) {
-          return res.status(400).json({ error: "No credentials configured" });
-        }
-      }
-
-      const { productSearchService } = await import('./services/productSearchService');
-      const result = await productSearchService.testConnection(
-        {
-          projectId: projectId || '',
-          location: account.googleProductSearchLocation || 'us-east1',
-          productSetId: account.googleProductSearchProductSetId || '',
-        },
-        encryptedCredentials
-      );
-      
-      if (result.success) {
-        res.json({ 
-          success: true, 
-          message: result.message,
-          productSetExists: result.productSetExists,
-        });
-      } else {
-        res.status(400).json({ 
-          error: result.message || 'Credentials validation failed'
-        });
-      }
-    } catch (error: any) {
-      console.error('[SuperAdmin Product Search] Error testing credentials:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Create Product Set for a business account
-  app.post("/api/business-accounts/:id/product-search-create-product-set", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { productSetId, displayName } = req.body;
-
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      if (!account.googleProductSearchCredentials) {
-        return res.status(400).json({ error: "Credentials not configured" });
-      }
-
-      if (!account.googleProductSearchProjectId) {
-        return res.status(400).json({ error: "Project ID not configured" });
-      }
-
-      const { productSearchService } = await import('./services/productSearchService');
-      const result = await productSearchService.createProductSet(
-        account.googleProductSearchProjectId,
-        account.googleProductSearchLocation || 'us-east1',
-        productSetId || `ps-${id.substring(0, 8)}`,
-        displayName || account.name,
-        account.googleProductSearchCredentials
-      );
-      
-      if (result.success) {
-        const newProductSetId = result.name?.split('/').pop() || productSetId;
-        
-        await db.update(businessAccounts)
-          .set({ googleProductSearchProductSetId: newProductSetId })
-          .where(eq(businessAccounts.id, id));
-
-        res.json({ 
-          success: true, 
-          productSetId: newProductSetId,
-          name: result.name,
-        });
-      } else {
-        res.status(400).json({ error: result.error });
-      }
-    } catch (error: any) {
-      console.error('[SuperAdmin Product Search] Error creating product set:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Sync products to Product Search
-  app.post("/api/business-accounts/:id/product-search-sync", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      if (!account.googleProductSearchCredentials) {
-        return res.status(400).json({ error: "Credentials not configured" });
-      }
-
-      if (!account.googleProductSearchProjectId || !account.googleProductSearchProductSetId) {
-        return res.status(400).json({ error: "Product Search not fully configured" });
-      }
-
-      const allProducts = await db
-        .select()
-        .from(products)
-        .where(
-          and(
-            eq(products.businessAccountId, id),
-            isNotNull(products.imageUrl)
-          )
-        );
-
-      await db.update(businessAccounts)
-        .set({
-          productSearchSyncPhase: 'syncing',
-          productSearchSyncProgress: '0',
-          productSearchSyncTotal: String(allProducts.length),
-          productSearchSyncError: null,
-        })
-        .where(eq(businessAccounts.id, id));
-
-      res.json({ 
-        success: true, 
-        message: `Starting sync of ${allProducts.length} products`,
-        total: allProducts.length,
-      });
-
-      const { productSearchService } = await import('./services/productSearchService');
-      
-      let successCount = 0;
-      let errorCount = 0;
-      
-      for (let i = 0; i < allProducts.length; i++) {
-        const product = allProducts[i];
-        
-        try {
-          const sanitizedProductId = product.id.replace(/-/g, '').substring(0, 32);
-          
-          const createResult = await productSearchService.createProduct(
-            account.googleProductSearchProjectId!,
-            account.googleProductSearchLocation || 'us-east1',
-            sanitizedProductId,
-            product.name,
-            product.description || '',
-            'general',
-            [
-              { key: 'sku', value: product.id },
-              { key: 'source', value: product.source || 'manual' },
-            ],
-            account.googleProductSearchCredentials!
-          );
-
-          if (createResult.success) {
-            await productSearchService.addProductToProductSet(
-              account.googleProductSearchProjectId!,
-              account.googleProductSearchLocation || 'us-east1',
-              account.googleProductSearchProductSetId!,
-              sanitizedProductId,
-              account.googleProductSearchCredentials!
-            );
-
-            if (product.imageUrl) {
-              const refImageId = `ref-${sanitizedProductId}`;
-              await productSearchService.createReferenceImage(
-                account.googleProductSearchProjectId!,
-                account.googleProductSearchLocation || 'us-east1',
-                sanitizedProductId,
-                refImageId,
-                product.imageUrl,
-                account.googleProductSearchCredentials!
-              );
-            }
-
-            await db.update(products)
-              .set({
-                productSearchProductId: createResult.name,
-                productSearchSyncedAt: new Date(),
-              })
-              .where(eq(products.id, product.id));
-
-            successCount++;
-          } else {
-            console.error(`[ProductSearch Sync] Failed to create product ${product.id}:`, createResult.error);
-            errorCount++;
-          }
-        } catch (error: any) {
-          console.error(`[ProductSearch Sync] Error syncing product ${product.id}:`, error.message);
-          errorCount++;
-        }
-
-        await db.update(businessAccounts)
-          .set({ productSearchSyncProgress: String(i + 1) })
-          .where(eq(businessAccounts.id, id));
-      }
-
-      await db.update(businessAccounts)
-        .set({
-          productSearchSyncPhase: errorCount > 0 && successCount === 0 ? 'failed' : 'completed',
-          productSearchSyncError: errorCount > 0 ? `${errorCount} products failed to sync` : null,
-          productSearchLastSyncedAt: new Date(),
-        })
-        .where(eq(businessAccounts.id, id));
-
-      console.log(`[ProductSearch Sync] Completed for ${account.name}: ${successCount} success, ${errorCount} failed`);
-    } catch (error: any) {
-      console.error('[ProductSearch Sync] Error:', error);
-      
-      await db.update(businessAccounts)
-        .set({
-          productSearchSyncPhase: 'failed',
-          productSearchSyncError: error.message,
-        })
-        .where(eq(businessAccounts.id, req.params.id));
-    }
-  });
-
-  // SuperAdmin: Get Product Search sync status
-  app.get("/api/business-accounts/:id/product-search-sync-status", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      
-      const account = await storage.getBusinessAccount(id);
-      if (!account) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const totalProducts = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(products)
-        .where(
-          and(
-            eq(products.businessAccountId, id),
-            isNotNull(products.imageUrl)
-          )
-        );
-
-      const syncedProducts = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(products)
-        .where(
-          and(
-            eq(products.businessAccountId, id),
-            isNotNull(products.productSearchProductId)
-          )
-        );
-
-      res.json({
-        totalProducts: totalProducts[0]?.count || 0,
-        syncedProducts: syncedProducts[0]?.count || 0,
-        syncPhase: account.productSearchSyncPhase || 'idle',
-        syncProgress: Number(account.productSearchSyncProgress) || 0,
-        syncTotal: Number(account.productSearchSyncTotal) || 0,
-        syncError: account.productSearchSyncError || null,
-        lastSyncedAt: account.productSearchLastSyncedAt || null,
-      });
-    } catch (error: any) {
-      console.error('[SuperAdmin Product Search] Error getting sync status:', error);
-      res.status(500).json({ error: error.message });
     }
   });
 
@@ -23399,13 +22236,7 @@ Strict Requirements:
             });
           }
         }
-        
-        // Auto-sync to Vision Warehouse if that model is selected
-        const widgetSettings = await storage.getWidgetSettings(businessAccountId);
-        if (widgetSettings?.visualSearchModel === 'google_vision_warehouse' && widgetSettings?.googleVisionWarehouseCorpusId) {
-          visionWarehouseSyncService.syncSingleProduct(businessAccountId, product)
-            .catch(err => console.error('[Product Create] Failed to sync to Vision Warehouse:', err));
-        }
+
       }
       
       res.json(product);
@@ -23979,19 +22810,6 @@ Strict Requirements:
             }
           }
           
-          // Delete from Vision Warehouse if synced (fire-and-forget)
-          if (product.visionWarehouseAssetId) {
-            const businessAccountForDelete = await storage.getBusinessAccount(businessAccountId);
-            if (businessAccountForDelete?.googleVisionWarehouseCorpusId && 
-                businessAccountForDelete?.googleVisionWarehouseCredentials) {
-              visionWarehouseService.deleteAsset(
-                businessAccountForDelete.googleVisionWarehouseCredentials, 
-                businessAccountForDelete.googleVisionWarehouseCorpusId, 
-                product.visionWarehouseAssetId
-              ).catch(err => console.error('[Bulk Delete] Failed to delete from Vision Warehouse:', err));
-            }
-          }
-          
           await storage.deleteProduct(productId, businessAccountId);
           deletedCount++;
         } catch (err: any) {
@@ -24033,19 +22851,6 @@ Strict Requirements:
           } else {
             console.log("[Product Delete] Could not delete image from R2:", deleteResult.error);
           }
-        }
-      }
-      
-      // Delete from Vision Warehouse if synced (fire-and-forget)
-      if (product?.visionWarehouseAssetId) {
-        const businessAccountForDelete = await storage.getBusinessAccount(businessAccountId);
-        if (businessAccountForDelete?.googleVisionWarehouseCorpusId && 
-            businessAccountForDelete?.googleVisionWarehouseCredentials) {
-          visionWarehouseService.deleteAsset(
-            businessAccountForDelete.googleVisionWarehouseCredentials, 
-            businessAccountForDelete.googleVisionWarehouseCorpusId, 
-            product.visionWarehouseAssetId
-          ).catch(err => console.error('[Product Delete] Failed to delete from Vision Warehouse:', err));
         }
       }
       
@@ -28396,12 +27201,6 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         // Never expose the encrypted CAPTCHA secret. Admins manage it via the
         // dedicated /api/admin/captcha-settings endpoint (returns masked only).
         captchaSecretKeyEnc: undefined,
-        visualSearchModel: businessAccount?.visualSearchModel || 'google_vision_warehouse',
-        googleVisionWarehouseCorpusId: businessAccount?.googleVisionWarehouseCorpusId || null,
-        googleVisionWarehouseIndexId: businessAccount?.googleVisionWarehouseIndexId || null,
-        googleVisionWarehouseEndpointId: businessAccount?.googleVisionWarehouseEndpointId || null,
-        googleVisionWarehouseProjectNumber: businessAccount?.googleVisionWarehouseProjectNumber || null,
-        googleVisionWarehouseCredentialsConfigured: !!businessAccount?.googleVisionWarehouseCredentials,
         hasElevenLabsKey: !!businessAccount?.elevenlabsApiKey,
         businessName: businessAccount?.name || null,
         businessWebsite: businessAccount?.website || null,
@@ -28465,8 +27264,6 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         chatFontSize,
         footerLabelEnabled, footerLabelText,
         poweredByEnabled,
-        // Visual search model settings (stored in business_accounts)
-        visualSearchModel, googleVisionWarehouseCorpusId, googleVisionWarehouseIndexId, googleVisionWarehouseEndpointId, googleVisionWarehouseProjectNumber
       } = req.body;
       
       // Force chat-only mode when voice mode is disabled
@@ -28704,22 +27501,8 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       businessContextCache.invalidate(BusinessContextCache.KEYS.WIDGET_SETTINGS(businessAccountId));
       console.log('[Cache] Invalidated widget settings cache');
 
-      // Save visual search model settings to business_accounts (separate from widget_settings)
-      if (visualSearchModel !== undefined || googleVisionWarehouseCorpusId !== undefined || googleVisionWarehouseIndexId !== undefined || googleVisionWarehouseEndpointId !== undefined || googleVisionWarehouseProjectNumber !== undefined) {
-        const visualSearchSettings: Partial<{ visualSearchModel: string; googleVisionWarehouseCorpusId: string | null; googleVisionWarehouseIndexId: string | null; googleVisionWarehouseEndpointId: string | null; googleVisionWarehouseProjectNumber: string | null }> = {};
-        if (visualSearchModel !== undefined) visualSearchSettings.visualSearchModel = visualSearchModel;
-        if (googleVisionWarehouseCorpusId !== undefined) visualSearchSettings.googleVisionWarehouseCorpusId = googleVisionWarehouseCorpusId || null;
-        if (googleVisionWarehouseIndexId !== undefined) visualSearchSettings.googleVisionWarehouseIndexId = googleVisionWarehouseIndexId || null;
-        if (googleVisionWarehouseEndpointId !== undefined) visualSearchSettings.googleVisionWarehouseEndpointId = googleVisionWarehouseEndpointId || null;
-        if (googleVisionWarehouseProjectNumber !== undefined) visualSearchSettings.googleVisionWarehouseProjectNumber = googleVisionWarehouseProjectNumber || null;
-        await storage.updateBusinessAccountVisualSearchModel(businessAccountId, visualSearchSettings);
-        console.log('[VisualSearch] Updated visual search model settings:', visualSearchSettings);
-      }
-
       const settings = await storage.upsertWidgetSettings(businessAccountId, updateData);
-      
-      // Get updated business account to include visual search model in response
-      const updatedBusinessAccount = await storage.getBusinessAccount(businessAccountId);
+
       
       // Redact sensitive Twilio credentials from response
       const safeSettings = {
@@ -28730,761 +27513,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         twilioAuthToken: settings.twilioAuthToken 
           ? '••••••••'
           : null,
-        visualSearchModel: updatedBusinessAccount?.visualSearchModel || 'google_vision_warehouse',
-        googleVisionWarehouseCorpusId: updatedBusinessAccount?.googleVisionWarehouseCorpusId || null,
-        googleVisionWarehouseIndexId: updatedBusinessAccount?.googleVisionWarehouseIndexId || null,
-        googleVisionWarehouseEndpointId: updatedBusinessAccount?.googleVisionWarehouseEndpointId || null,
-        googleVisionWarehouseProjectNumber: updatedBusinessAccount?.googleVisionWarehouseProjectNumber || null,
       };
       
       res.json(safeSettings);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Vision Warehouse Sync endpoints
-  app.get("/api/vision-warehouse/sync-status", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const status = await visionWarehouseSyncService.getSyncStatus(businessAccountId);
-      const persistedProgress = await visionWarehouseSyncService.getPersistedSyncStatus(businessAccountId);
-      
-      res.json({
-        ...status,
-        persistedProgress,
-        isSyncing: status.isSyncing || (persistedProgress !== null && persistedProgress.status !== 'idle' && persistedProgress.status !== 'completed' && persistedProgress.status !== 'failed'),
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.get("/api/vision-warehouse/sync-progress", requireAuth, requireBusinessAccount, async (req, res) => {
-    const businessAccountId = req.user?.businessAccountId;
-    if (!businessAccountId) {
-      return res.status(400).json({ error: "Business account not found" });
-    }
-
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-
-    const onProgress = (progress: SyncProgress) => {
-      res.write(`data: ${JSON.stringify(progress)}\n\n`);
-    };
-
-    try {
-      const result = await visionWarehouseSyncService.bulkSyncProducts(businessAccountId, onProgress);
-      if (result.success) {
-        res.write(`data: ${JSON.stringify({ status: 'completed', ...result })}\n\n`);
-      } else {
-        res.write(`data: ${JSON.stringify({ status: 'failed', error: result.errors?.[0]?.error || 'Sync failed', failedPhase: result.failedPhase, ...result })}\n\n`);
-      }
-      res.end();
-    } catch (error: any) {
-      res.write(`data: ${JSON.stringify({ status: 'failed', error: error.message })}\n\n`);
-      res.end();
-    }
-  });
-
-  app.post("/api/vision-warehouse/clear-sync-flag", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      visionWarehouseSyncService.clearSyncFlag(businessAccountId);
-      res.json({ success: true });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/vision-warehouse/force-cancel", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      await visionWarehouseSyncService.forceClearAllSyncState(businessAccountId);
-      res.json({ success: true, message: "Sync cancelled and all state cleared" });
-    } catch (error: any) {
-      console.error('[VisionWarehouse] Force cancel failed:', error.message);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/vision-warehouse/reset-sync", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      await visionWarehouseSyncService.resetSyncStatus(businessAccountId);
-      res.json({ success: true, message: "All products marked for re-sync" });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // List Vision Warehouse operations (to see running operations)
-  app.get("/api/vision-warehouse/operations", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      if (!businessAccount) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const corpusId = businessAccount.googleVisionWarehouseCorpusId;
-      const credentials = businessAccount.googleVisionWarehouseCredentials;
-      const projectNumber = businessAccount.googleVisionWarehouseProjectNumber;
-
-      if (!corpusId || !credentials || !projectNumber) {
-        return res.json({ operations: [], configured: false });
-      }
-
-      const operations = await visionWarehouseService.listOperations(credentials, corpusId, projectNumber);
-      
-      // Filter to only show recent operations (last 24 hours) and sort by create time
-      const recentOperations = operations
-        .filter(op => {
-          if (!op.createTime) return true;
-          const created = new Date(op.createTime);
-          const now = new Date();
-          return (now.getTime() - created.getTime()) < 24 * 60 * 60 * 1000;
-        })
-        .sort((a, b) => {
-          const timeA = a.createTime ? new Date(a.createTime).getTime() : 0;
-          const timeB = b.createTime ? new Date(b.createTime).getTime() : 0;
-          return timeB - timeA;
-        });
-
-      const runningOperations = recentOperations.filter(op => !op.done);
-
-      res.json({ 
-        operations: recentOperations,
-        runningCount: runningOperations.length,
-        configured: true
-      });
-    } catch (error: any) {
-      console.error('[VisionWarehouse] Failed to list operations:', error.message);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Cancel a Vision Warehouse operation
-  app.post("/api/vision-warehouse/cancel-operation", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const { operationName } = req.body;
-      if (!operationName) {
-        return res.status(400).json({ error: "Operation name required" });
-      }
-
-      const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      if (!businessAccount) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const credentials = businessAccount.googleVisionWarehouseCredentials;
-      if (!credentials) {
-        return res.status(400).json({ error: "Vision Warehouse not configured" });
-      }
-
-      // Validate the operation name belongs to this business's project
-      const projectNumber = businessAccount.googleVisionWarehouseProjectNumber;
-      if (projectNumber && !operationName.includes(`projects/${projectNumber}`)) {
-        return res.status(403).json({ error: "Operation does not belong to this account" });
-      }
-
-      const result = await visionWarehouseService.cancelOperation(credentials, operationName);
-      
-      // Always clear local sync state - if the operation doesn't exist (404), it's already gone
-      const operationGone = result.error?.includes('404');
-      
-      if (result.success || operationGone) {
-        // Mark as cancelled and clear local state
-        await visionWarehouseSyncService.markSyncCancelled(businessAccountId);
-        visionWarehouseSyncService.clearSyncFlag(businessAccountId);
-        
-        res.json({ 
-          success: true, 
-          message: operationGone ? "Sync state cleared (operation no longer exists)" : "Operation cancelled" 
-        });
-      } else {
-        res.status(500).json({ success: false, error: result.error });
-      }
-    } catch (error: any) {
-      console.error('[VisionWarehouse] Failed to cancel operation:', error.message);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/vision-warehouse/deploy-index", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const { indexId, endpointId, isNewlyCreated } = await visionWarehouseSyncService.ensureIndexAndEndpoint(businessAccountId);
-      
-      await visionWarehouseSyncService.deploySearchIndex(businessAccountId);
-      
-      res.json({ 
-        success: true, 
-        indexId, 
-        endpointId, 
-        isNewlyCreated,
-        message: 'Search index deployed successfully'
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Undeploy index from endpoint (stops serving costs)
-  app.post("/api/vision-warehouse/undeploy-index", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      await visionWarehouseSyncService.undeploySearchIndex(businessAccountId);
-      
-      res.json({ 
-        success: true, 
-        message: 'Search index undeployed successfully. Serving costs have stopped.'
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Get endpoint status (check if deployed, creating, etc.)
-  app.get("/api/vision-warehouse/endpoint-status", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const status = await visionWarehouseSyncService.getEndpointStatus(businessAccountId);
-      res.json(status);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Analyze all assets in the corpus (generates embeddings for search)
-  app.post("/api/vision-warehouse/analyze-corpus", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const result = await visionWarehouseSyncService.analyzeAllAssets(businessAccountId);
-      
-      res.json({ 
-        success: true, 
-        operationName: result.operationName,
-        message: 'Corpus analysis started. This may take a few minutes.'
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Check operation status (e.g., corpus analysis)
-  app.get("/api/vision-warehouse/operation-status", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const { operationName } = req.query;
-      if (!operationName || typeof operationName !== 'string') {
-        return res.status(400).json({ error: "operationName query parameter is required" });
-      }
-
-      const status = await visionWarehouseSyncService.getOperationStatus(businessAccountId, operationName);
-      res.json(status);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Update index to sync with newly analyzed embeddings
-  app.post("/api/vision-warehouse/update-index", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const result = await visionWarehouseSyncService.updateIndex(businessAccountId);
-      
-      res.json({ 
-        success: true, 
-        operationName: result.operationName,
-        message: 'Index update started. The index will sync with the latest embeddings.'
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Vision Warehouse Credentials Management
-  app.post("/api/vision-warehouse/credentials", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const { credentials } = req.body;
-      if (!credentials) {
-        return res.status(400).json({ error: "Credentials are required" });
-      }
-
-      // Validate JSON structure
-      let parsedCredentials;
-      try {
-        parsedCredentials = typeof credentials === 'string' ? JSON.parse(credentials) : credentials;
-      } catch (e) {
-        return res.status(400).json({ error: "Invalid JSON format for credentials" });
-      }
-
-      // Check for required fields
-      if (!parsedCredentials.project_id || !parsedCredentials.private_key || !parsedCredentials.client_email) {
-        return res.status(400).json({ error: "Credentials must include project_id, private_key, and client_email" });
-      }
-
-      // Encrypt the credentials
-      const { encrypt } = await import('./services/encryptionService');
-      const encryptedCredentials = encrypt(JSON.stringify(parsedCredentials));
-
-      // Save to database
-      await storage.updateBusinessAccountVisualSearchModel(businessAccountId, {
-        googleVisionWarehouseCredentials: encryptedCredentials,
-      });
-
-      res.json({ 
-        success: true, 
-        projectId: parsedCredentials.project_id,
-        message: 'Credentials saved successfully'
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/vision-warehouse/test-credentials", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const { credentials } = req.body;
-      
-      // If no credentials provided, test the saved ones
-      let encryptedCredentials;
-      if (credentials) {
-        // Validate and encrypt for testing
-        let parsedCredentials;
-        try {
-          parsedCredentials = typeof credentials === 'string' ? JSON.parse(credentials) : credentials;
-        } catch (e) {
-          return res.status(400).json({ error: "Invalid JSON format for credentials" });
-        }
-
-        const { encrypt } = await import('./services/encryptionService');
-        encryptedCredentials = encrypt(JSON.stringify(parsedCredentials));
-      } else {
-        // Use saved credentials
-        const businessAccount = await storage.getBusinessAccount(businessAccountId);
-        encryptedCredentials = businessAccount?.googleVisionWarehouseCredentials;
-        
-        if (!encryptedCredentials) {
-          return res.status(400).json({ error: "No credentials configured" });
-        }
-      }
-
-      // Test the credentials
-      const result = await visionWarehouseService.testCredentials(encryptedCredentials);
-      
-      if (result.valid) {
-        res.json({ 
-          success: true, 
-          projectId: result.projectId,
-          message: 'Credentials are valid'
-        });
-      } else {
-        res.status(400).json({ 
-          error: result.error || 'Credentials validation failed'
-        });
-      }
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.get("/api/vision-warehouse/search", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      if (!businessAccount) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const endpointId = businessAccount.googleVisionWarehouseEndpointId;
-      if (!endpointId) {
-        return res.status(400).json({ error: "Vision Warehouse endpoint not configured" });
-      }
-
-      const encryptedCredentials = businessAccount.googleVisionWarehouseCredentials;
-      if (!encryptedCredentials) {
-        return res.status(400).json({ error: "Vision Warehouse credentials not configured" });
-      }
-
-      const { query, topK } = req.query;
-      if (!query) {
-        return res.status(400).json({ error: "Query parameter required" });
-      }
-
-      const results = await visionWarehouseService.searchByText(
-        encryptedCredentials,
-        endpointId,
-        query as string,
-        parseInt(topK as string) || 10
-      );
-
-      const productIds = results.map(r => r.assetId.replace('product_', ''));
-      const products = await Promise.all(
-        productIds.map(id => storage.getProduct(id, businessAccountId))
-      );
-
-      res.json({
-        results: results.map((r, i) => ({
-          ...r,
-          product: products[i] || null,
-        })),
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Vision Warehouse Assets Management
-  app.get("/api/vision-warehouse/assets", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      // Get all products that have been synced to Vision Warehouse
-      const allProducts = await storage.getAllProducts(businessAccountId);
-      const syncedProducts = allProducts.filter(p => p.visionWarehouseAssetId);
-
-      const assets = syncedProducts.map(p => ({
-        id: p.id,
-        assetId: p.visionWarehouseAssetId,
-        productName: p.name,
-        imageUrl: p.imageUrl,
-        syncedAt: p.visionWarehouseSyncedAt,
-      }));
-
-      res.json({ assets, total: assets.length });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.delete("/api/vision-warehouse/assets/:productId", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      const { productId } = req.params;
-
-      const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      if (!businessAccount) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const corpusId = businessAccount.googleVisionWarehouseCorpusId;
-      const encryptedCredentials = businessAccount.googleVisionWarehouseCredentials;
-      const projectNumber = businessAccount.googleVisionWarehouseProjectNumber;
-
-      if (!corpusId || !encryptedCredentials) {
-        return res.status(400).json({ error: "Vision Warehouse not configured" });
-      }
-
-      const product = await storage.getProduct(productId, businessAccountId);
-      if (!product) {
-        return res.status(404).json({ error: "Product not found" });
-      }
-
-      if (!product.visionWarehouseAssetId) {
-        return res.status(400).json({ error: "Product not synced to Vision Warehouse" });
-      }
-
-      // Delete from Vision Warehouse
-      await visionWarehouseService.deleteAsset(
-        encryptedCredentials,
-        corpusId,
-        product.visionWarehouseAssetId,
-        projectNumber || undefined
-      );
-
-      // Clear the asset ID from the product
-      await storage.updateProduct(productId, businessAccountId, {
-        visionWarehouseAssetId: null,
-        visionWarehouseSyncedAt: null,
-      } as any);
-
-      res.json({ success: true, message: "Asset deleted successfully" });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.delete("/api/vision-warehouse/assets", requireAuth, requireBusinessAccount, async (req, res) => {
-    try {
-      const businessAccountId = req.user?.businessAccountId;
-      if (!businessAccountId) {
-        return res.status(400).json({ error: "Business account not found" });
-      }
-
-      // Check if sync is in progress
-      if (visionWarehouseSyncService.isSyncInProgress(businessAccountId)) {
-        return res.status(409).json({ error: "Sync is currently in progress. Please wait for it to complete." });
-      }
-
-      const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      if (!businessAccount) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const corpusId = businessAccount.googleVisionWarehouseCorpusId;
-      const encryptedCredentials = businessAccount.googleVisionWarehouseCredentials;
-      const projectNumber = businessAccount.googleVisionWarehouseProjectNumber;
-
-      if (!corpusId || !encryptedCredentials) {
-        return res.status(400).json({ error: "Vision Warehouse not configured" });
-      }
-
-      // Get all synced products
-      const allProducts = await storage.getAllProducts(businessAccountId);
-      const syncedProducts = allProducts.filter(p => p.visionWarehouseAssetId);
-
-      let deletedCount = 0;
-      let failedCount = 0;
-      const errors: string[] = [];
-
-      for (const product of syncedProducts) {
-        try {
-          await visionWarehouseService.deleteAsset(
-            encryptedCredentials,
-            corpusId,
-            product.visionWarehouseAssetId!,
-            projectNumber || undefined
-          );
-
-          await storage.updateProduct(product.id, businessAccountId, {
-            visionWarehouseAssetId: null,
-            visionWarehouseSyncedAt: null,
-          } as any);
-
-          deletedCount++;
-        } catch (err: any) {
-          failedCount++;
-          errors.push(`${product.name}: ${err.message}`);
-        }
-      }
-
-      res.json({ 
-        success: true, 
-        message: `Deleted ${deletedCount} assets${failedCount > 0 ? `, ${failedCount} failed` : ''}`,
-        deletedCount,
-        failedCount,
-        errors: errors.length > 0 ? errors : undefined
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Get Vision Warehouse assets for any business account
-  app.get("/api/super-admin/vision-warehouse/assets", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { businessAccountId } = req.query;
-      if (!businessAccountId || typeof businessAccountId !== 'string') {
-        return res.status(400).json({ error: "businessAccountId query parameter required" });
-      }
-
-      const allProducts = await storage.getAllProducts(businessAccountId);
-      const syncedProducts = allProducts.filter(p => p.visionWarehouseAssetId);
-
-      const assets = syncedProducts.map(p => ({
-        id: p.id,
-        assetId: p.visionWarehouseAssetId,
-        productName: p.name,
-        imageUrl: p.imageUrl,
-        syncedAt: p.visionWarehouseSyncedAt,
-      }));
-
-      res.json({ assets, total: assets.length });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Delete a Vision Warehouse asset for any business account
-  app.delete("/api/super-admin/vision-warehouse/assets/:productId", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { businessAccountId } = req.query;
-      if (!businessAccountId || typeof businessAccountId !== 'string') {
-        return res.status(400).json({ error: "businessAccountId query parameter required" });
-      }
-
-      const { productId } = req.params;
-
-      const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      if (!businessAccount) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const corpusId = businessAccount.googleVisionWarehouseCorpusId;
-      const encryptedCredentials = businessAccount.googleVisionWarehouseCredentials;
-      const projectNumber = businessAccount.googleVisionWarehouseProjectNumber;
-
-      if (!corpusId || !encryptedCredentials) {
-        return res.status(400).json({ error: "Vision Warehouse not configured" });
-      }
-
-      // Use storage.getProduct which validates product belongs to the business account
-      const product = await storage.getProduct(productId, businessAccountId);
-      if (!product) {
-        return res.status(404).json({ error: "Product not found or does not belong to this business account" });
-      }
-
-      // Extra validation: ensure product's businessAccountId matches
-      if (product.businessAccountId !== businessAccountId) {
-        return res.status(403).json({ error: "Product does not belong to this business account" });
-      }
-
-      if (!product.visionWarehouseAssetId) {
-        return res.status(400).json({ error: "Product not synced to Vision Warehouse" });
-      }
-
-      await visionWarehouseService.deleteAsset(
-        encryptedCredentials,
-        corpusId,
-        product.visionWarehouseAssetId,
-        projectNumber || undefined
-      );
-
-      await storage.updateProduct(productId, businessAccountId, {
-        visionWarehouseAssetId: null,
-        visionWarehouseSyncedAt: null,
-      } as any);
-
-      res.json({ success: true, message: "Asset deleted successfully" });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // SuperAdmin: Delete all Vision Warehouse assets for any business account
-  app.delete("/api/super-admin/vision-warehouse/assets", requireAuth, requireRole("super_admin"), async (req, res) => {
-    try {
-      const { businessAccountId } = req.query;
-      if (!businessAccountId || typeof businessAccountId !== 'string') {
-        return res.status(400).json({ error: "businessAccountId query parameter required" });
-      }
-
-      if (visionWarehouseSyncService.isSyncInProgress(businessAccountId)) {
-        return res.status(409).json({ error: "Sync is currently in progress. Please wait for it to complete." });
-      }
-
-      const businessAccount = await storage.getBusinessAccount(businessAccountId);
-      if (!businessAccount) {
-        return res.status(404).json({ error: "Business account not found" });
-      }
-
-      const corpusId = businessAccount.googleVisionWarehouseCorpusId;
-      const encryptedCredentials = businessAccount.googleVisionWarehouseCredentials;
-      const projectNumber = businessAccount.googleVisionWarehouseProjectNumber;
-
-      if (!corpusId || !encryptedCredentials) {
-        return res.status(400).json({ error: "Vision Warehouse not configured" });
-      }
-
-      const allProducts = await storage.getAllProducts(businessAccountId);
-      const syncedProducts = allProducts.filter(p => p.visionWarehouseAssetId);
-
-      let deletedCount = 0;
-      let failedCount = 0;
-      const errors: string[] = [];
-
-      for (const product of syncedProducts) {
-        try {
-          await visionWarehouseService.deleteAsset(
-            encryptedCredentials,
-            corpusId,
-            product.visionWarehouseAssetId!,
-            projectNumber || undefined
-          );
-
-          await storage.updateProduct(product.id, businessAccountId, {
-            visionWarehouseAssetId: null,
-            visionWarehouseSyncedAt: null,
-          } as any);
-
-          deletedCount++;
-        } catch (err: any) {
-          failedCount++;
-          errors.push(`${product.name}: ${err.message}`);
-        }
-      }
-
-      res.json({ 
-        success: true, 
-        message: `Deleted ${deletedCount} assets${failedCount > 0 ? `, ${failedCount} failed` : ''}`,
-        deletedCount,
-        failedCount,
-        errors: errors.length > 0 ? errors : undefined
-      });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -29504,20 +27535,17 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         minSimilarity: minSimilarity || 0.5,
       };
 
-      let results;
-      if (imageUrl) {
-        results = await unifiedVisualSearchService.searchByImage(businessAccountId, imageUrl, options);
-      } else if (query) {
-        results = await unifiedVisualSearchService.searchByText(businessAccountId, query, options);
-      } else {
-        return res.status(400).json({ error: "Either imageUrl or query is required" });
+      if (!imageUrl) {
+        return res.status(400).json({ error: query ? "Text search isn't available; send imageUrl" : "imageUrl is required" });
       }
-
-      const modelInfo = await unifiedVisualSearchService.getModelInfo(businessAccountId);
+      const { resolveGeminiKey } = await import('./services/geminiKeys');
+      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const isConfigured = !!businessAccount && !!(await resolveGeminiKey(businessAccount));
+      const results = isConfigured ? await unifiedVisualSearchService.searchByImage(businessAccountId, imageUrl, options) : [];
 
       res.json({
-        model: modelInfo.model,
-        isConfigured: modelInfo.isConfigured,
+        model: 'gemini_embedding_2',
+        isConfigured,
         results,
       });
     } catch (error: any) {

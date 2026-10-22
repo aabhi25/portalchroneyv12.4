@@ -16,14 +16,14 @@ import {
   setPlatformGeminiKey,
 } from "../services/geminiKeys";
 import { GEMINI_EMBEDDING_MARKER, testGeminiKey } from "../services/geminiImageEmbeddingService";
-import { resolveVisualSearch, usesPhotoSearch } from "../services/visualSearchEngine";
+import { usesPhotoSearch } from "../services/visualSearchEngine";
 import { indexAccountNow } from "../services/photoSearchIndexSweep";
 
 /**
  * Super admin: Gemini keys for photo search.
  *  - platform key (Super Admin › Settings): used by every account without its own key
  *  - account key (Super Admin › API Keys): the account's own Google AI Studio key
- *  - status (Features list): which engine and key an account uses, and how much of its catalog is indexed
+ *  - status (Features list): which key an account uses, and how much of its catalog is indexed
  * Keys are stored encrypted and never returned; responses carry a ••••last4 mask.
  */
 const router = Router();
@@ -87,7 +87,7 @@ router.get("/api/business-accounts/:id/photo-search", ...superAdmin, async (req,
   if (!account) return res.status(404).json({ error: "Business account not found" });
 
   const ownKey = openAccountGeminiKey(account);
-  const { engine, geminiKeySource } = await resolveVisualSearch(account);
+  const resolved = await resolveGeminiKey(account);
   const platform = await describePlatformGeminiKey();
   const [counts] = await db
     .select({
@@ -99,8 +99,8 @@ router.get("/api/business-accounts/:id/photo-search", ...superAdmin, async (req,
     .where(and(eq(products.businessAccountId, account.id), isNotNull(products.imageUrl)));
 
   res.json({
-    engine,
-    keySource: geminiKeySource,
+    engine: resolved ? "gemini" : "none",
+    keySource: resolved?.source ?? null,
     accountKey: ownKey ? { configured: true, masked: maskKey(last4(ownKey)) } : { configured: false, masked: null },
     platformKeyConfigured: platform.configured,
     usesPhotoSearch: usesPhotoSearch(account),
