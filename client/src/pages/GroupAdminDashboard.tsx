@@ -172,19 +172,41 @@ function leadInterests(lead: LeadItem): string[] {
   return (lead.topicsOfInterest || []).filter(t => !['Via Form', 'Via Journey Form', 'Discount Availed'].includes(t));
 }
 
-/** Added table columns that exports list after their base columns (Name, Email, Phone, Account, Topics, date). */
-function exportExtraColumns(columns: LeadColumnKey[]): LeadColumnKey[] {
-  return columns.filter(k => !['phone', 'email', 'topics', 'captured'].includes(k));
-}
-
-/** A lead's value for an added column, as plain text. */
+/** A lead's value for a chosen column, as plain text. */
 function leadExportValue(key: LeadColumnKey, lead: LeadItem): string | null {
+  if (key === 'phone') return lead.phone || null;
+  if (key === 'email') return lead.email || null;
   if (key === 'city') return lead.city || null;
+  if (key === 'topics') return leadInterests(lead).join(', ') || null;
   if (key === 'funnel') {
     const topics = lead.topicsOfInterest || [];
     return topics.includes('Discount Availed') ? 'Discount Availed' : topics.includes('Via Form') ? 'Via Form' : topics.includes('Via Journey Form') ? 'Via Journey' : 'Via Chat';
   }
   return websiteLeadColumnText(key, lead as any);
+}
+
+/** The columns exports print, in screen order: Name, Account, the chosen columns, Captured. */
+function leadExportColumns(columns: LeadColumnKey[]): Array<{ label: string; width: number; value: (lead: LeadItem, format?: 'excel' | 'pdf') => string | null }> {
+  const width = (key: LeadColumnKey) => key === 'email' || key === 'topics' || key === 'pageUrl' || key === 'landingUrl' || key === 'message' ? 30 : 18;
+  return [
+    { label: 'Name', width: 20, value: (lead) => lead.name || null },
+    { label: 'Account', width: 24, value: (lead) => lead.businessAccountName || null },
+    ...columns.map(key => ({ label: leadColumnLabel(key), width: width(key), value: (lead: LeadItem) => leadExportValue(key, lead) })),
+    {
+      label: 'Captured', width: 20,
+      value: (lead: LeadItem, fmt?: 'excel' | 'pdf') => lead.createdAt ? format(new Date(lead.createdAt), fmt === 'excel' ? "yyyy-MM-dd HH:mm:ss" : "dd MMM yyyy, h:mm a") : null,
+    },
+  ];
+}
+
+/** Unique leads, counted like Group Analytics: per account by email, else phone, else the lead. */
+function countUniqueLeads(leads: LeadItem[]): number {
+  const seen = new Set<string>();
+  for (const lead of leads) {
+    const key = (lead.email || '').trim().toLowerCase() || (lead.phone || '').trim() || lead.id;
+    seen.add(`${lead.businessAccountId}|${key}`);
+  }
+  return seen.size;
 }
 
 /** Group Leads table: the date column is always shown (with the auto-delete countdown). */
@@ -695,25 +717,18 @@ export default function GroupAdminDashboard() {
         return;
       }
 
-      // The base columns, then the columns this group added to its Leads table.
-      const extraKeys = exportExtraColumns(leadTableColumns);
+      // Same columns, in the same order, as the table on screen.
+      const exportColumns = leadExportColumns(leadTableColumns);
       const worksheetData = allLeads.map((lead: LeadItem) => {
-        const row: Record<string, string> = {
-          Name: lead.name || "-",
-          Email: lead.email || "-",
-          Phone: lead.phone || "-",
-          Account: lead.businessAccountName || "-",
-          "Topics of Interest": leadInterests(lead).join(", ") || "-",
-          "Created At": lead.createdAt ? format(new Date(lead.createdAt), "yyyy-MM-dd HH:mm:ss") : "-",
-        };
-        for (const key of extraKeys) row[leadColumnLabel(key)] = leadExportValue(key, lead) || "-";
+        const row: Record<string, string> = {};
+        for (const c of exportColumns) row[c.label] = c.value(lead, 'excel') || "-";
         return row;
       });
 
       const worksheet = XLSX.utils.json_to_sheet(worksheetData);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "Leads");
-      worksheet["!cols"] = [{ wch: 20 }, { wch: 30 }, { wch: 15 }, { wch: 25 }, { wch: 20 }];
+      worksheet["!cols"] = exportColumns.map(c => ({ wch: c.width }));
       XLSX.writeFile(workbook, `group-leads-${format(new Date(), "yyyy-MM-dd")}.xlsx`);
       toast({ title: "Export successful", description: `Exported ${allLeads.length} leads to Excel.` });
     } catch (error: any) {
@@ -736,93 +751,34 @@ export default function GroupAdminDashboard() {
       params.append('export', 'true');
       params.append('pdfExport', 'true');
 
-      // Fetch all leads
       const leadsRes = await fetch(`/api/group-admin/groups/${selectedGroupId}/leads?${params.toString()}`, { credentials: "include" });
       if (!leadsRes.ok) throw new Error("Failed to fetch leads");
       const leadsData = await leadsRes.json();
       const allFetchedLeads: LeadItem[] = leadsData.leads || [];
-
       if (allFetchedLeads.length === 0) {
         toast({ title: "No leads to export", description: "No leads match the current filters.", variant: "destructive" });
         return;
       }
 
-      // Fetch analytics for conversation count (same date range)
-      const analyticsParams = new URLSearchParams();
-      if (from) analyticsParams.append('dateFrom', from.toISOString());
-      if (to) analyticsParams.append('dateTo', to.toISOString());
-      let totalConversations = 0;
-      let analyticsUnavailable = false;
-      try {
-        const analyticsRes = await fetch(`/api/group-admin/groups/${selectedGroupId}/analytics?${analyticsParams.toString()}`, { credentials: "include" });
-        if (analyticsRes.ok) {
-          const analyticsJson = await analyticsRes.json();
-          totalConversations = analyticsJson.totals?.conversations || 0;
-        } else {
-          analyticsUnavailable = true;
-        }
-      } catch (_) {
-        analyticsUnavailable = true;
-      }
-
-      // Deduplicate using the same method as Group Analytics and the UI badge:
-      // per-account dedup by email → phone → id (keep most recent — API returns desc by createdAt)
-      const byAccount = new Map<string, LeadItem[]>();
-      for (const lead of allFetchedLeads) {
-        const acctId = lead.businessAccountId || '__none__';
-        if (!byAccount.has(acctId)) byAccount.set(acctId, []);
-        byAccount.get(acctId)!.push(lead);
-      }
-      const deduped: LeadItem[] = [];
-      for (const acctLeads of byAccount.values()) {
-        const seen = new Set<string>();
-        for (const lead of acctLeads) {
-          const email = (lead.email || '').trim().toLowerCase();
-          const phone = (lead.phone || '').trim();
-          const key = email || phone || String(lead.id);
-          if (seen.has(key)) continue;
-          seen.add(key);
-          deduped.push(lead);
-        }
-      }
-      // Restore global newest-first order after per-account grouping
-      deduped.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-      const totalLeads = deduped.length;
-      const conversionRate = totalConversations > 0
-        ? ((totalLeads / totalConversations) * 100).toFixed(1)
-        : '0.0';
-
+      // The table exactly as on screen: Name, Account, the chosen columns, Captured.
+      const exportColumns = leadExportColumns(leadTableColumns);
       const dateRangeText = from && to
         ? `${format(from, "MMMM d, yyyy")} to ${format(to, "MMMM d, yyyy")}`
         : "All time";
-
-      const extraKeys = exportExtraColumns(leadTableColumns);
-      const leadsPayload = deduped.map((lead) => ({
-        name: lead.name || "-",
-        phone: lead.phone || "-",
-        email: lead.email || "-",
-        account: lead.businessAccountName || "-",
-        source: leadInterests(lead).join(", ") || "-",
-        date: lead.createdAt ? format(new Date(lead.createdAt), "dd MMM yyyy") : "-",
-        extra: extraKeys.map(key => leadExportValue(key, lead) || "-"),
-      }));
-
-      // PDF is rendered server-side: the browser jsPDF is intentionally stubbed (vite.config.ts).
       const pdfRes = await fetch(`/api/group-admin/groups/${selectedGroupId}/leads/pdf`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          groupName: selectedGroup?.name || "Group",
           dateRangeText,
+          accountText: leadsAccountFilter !== 'all'
+            ? (accountsForFilter.find(a => a.businessAccountId === leadsAccountFilter)?.businessName || 'Selected account')
+            : 'All accounts',
           generatedText: format(new Date(), "MMMM d, yyyy 'at' h:mm a"),
-          totalLeads,
-          totalConversations: analyticsUnavailable ? "N/A" : totalConversations,
-          conversionRate: analyticsUnavailable ? "N/A" : conversionRate,
-          leads: leadsPayload,
-          sourceHeader: "Interests",
-          extraHeaders: extraKeys.map(leadColumnLabel),
+          totalLeads: allFetchedLeads.length,
+          uniqueLeads: countUniqueLeads(allFetchedLeads),
+          headers: exportColumns.map(c => c.label),
+          rows: allFetchedLeads.map(lead => exportColumns.map(c => c.value(lead) || "-")),
         }),
       });
       if (!pdfRes.ok) throw new Error("Failed to generate PDF");
@@ -836,7 +792,7 @@ export default function GroupAdminDashboard() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      toast({ title: "PDF downloaded", description: `Exported ${totalLeads} unique leads.` });
+      toast({ title: "PDF downloaded", description: `Exported ${allFetchedLeads.length} leads.` });
     } catch (error: any) {
       toast({ title: "PDF export failed", description: error.message, variant: "destructive" });
     } finally {

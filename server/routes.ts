@@ -62,7 +62,7 @@ import { businessContextCache, BusinessContextCache } from "./services/businessC
 import { invalidateKnowledgePresence } from "./services/chatContext/knowledgePresence";
 import { journeyService } from "./services/journeyService";
 import { pdfProcessingService } from "./services/pdfProcessingService";
-import { renderInsightsPdf, renderAnalyticsPdf, renderLeadsPdf } from "./services/pdfReportService";
+import { renderInsightsPdf, renderAnalyticsPdf, renderLeadsPdf, renderLeadTablePdf } from "./services/pdfReportService";
 import { ticketIntelligenceService } from "./services/ticketIntelligenceService";
 import { conversationAnalyzer } from "./services/conversationAnalyzer";
 import { aiUsageLogger } from "./services/aiUsageLogger";
@@ -14637,28 +14637,22 @@ Return ONLY the refined instruction, nothing else.`
       }
 
       const body = req.body || {};
-      const buffer = renderLeadsPdf({
-        groupName: String(body.groupName || "Group"),
-        dateRangeText: String(body.dateRangeText || "All time"),
-        generatedText: String(body.generatedText || ""),
-        totalLeads: Number(body.totalLeads ?? 0),
-        totalConversations: typeof body.totalConversations === "number"
-          ? body.totalConversations
-          : String(body.totalConversations ?? "0"),
-        conversionRate: String(body.conversionRate ?? "0"),
-        leads: Array.isArray(body.leads)
-          ? body.leads.map((l: any) => ({
-              name: String(l?.name ?? "-"),
-              phone: String(l?.phone ?? "-"),
-              email: String(l?.email ?? "-"),
-              account: String(l?.account ?? "-"),
-              source: String(l?.source ?? "-"),
-              date: String(l?.date ?? "-"),
-              extra: Array.isArray(l?.extra) ? l.extra.slice(0, 12).map((v: unknown) => String(v ?? "-").slice(0, 300)) : undefined,
-            }))
-          : [],
-        sourceHeader: body.sourceHeader ? String(body.sourceHeader).slice(0, 40) : undefined,
-        extraHeaders: Array.isArray(body.extraHeaders) ? body.extraHeaders.slice(0, 12).map((h: unknown) => String(h ?? "").slice(0, 80)) : undefined,
+      const group = await storage.getAccountGroup(groupId);
+      const text = (v: unknown, max = 300) => String(v ?? "").slice(0, max);
+      const headers: string[] = Array.isArray(body.headers) ? body.headers.slice(0, 16).map((h: unknown) => text(h, 80)) : [];
+      const rows: string[][] = Array.isArray(body.rows)
+        ? body.rows.slice(0, 20000).map((r: unknown) => (Array.isArray(r) ? r.slice(0, 16).map((v: unknown) => text(v) || "-") : []))
+        : [];
+      if (headers.length === 0) return res.status(400).json({ error: "No columns to print" });
+      const buffer = renderLeadTablePdf({
+        groupName: group?.name || "Group",
+        dateRangeText: text(body.dateRangeText, 120) || "All time",
+        accountText: text(body.accountText, 160) || "All accounts",
+        generatedText: text(body.generatedText, 120),
+        totalLeads: Number(body.totalLeads ?? rows.length) || 0,
+        uniqueLeads: Number(body.uniqueLeads ?? rows.length) || 0,
+        headers,
+        rows,
       });
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", 'attachment; filename="leads.pdf"');

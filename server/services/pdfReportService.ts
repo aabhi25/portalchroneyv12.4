@@ -30,13 +30,19 @@ export interface LeadsPdfData {
     account: string;
     source: string;
     date: string;
-    /** Values for `extraHeaders`, in the same order. */
-    extra?: string[];
   }>;
-  /** Header of the "source" column (default "Source"). */
-  sourceHeader?: string;
-  /** Extra columns the viewer added to their Leads table (the page turns landscape). */
-  extraHeaders?: string[];
+}
+
+/** Group admin Leads PDF: the table exactly as on screen (headers + rows of text). */
+export interface LeadTablePdfData {
+  groupName: string;
+  dateRangeText: string;
+  accountText: string;
+  generatedText: string;
+  totalLeads: number;
+  uniqueLeads: number;
+  headers: string[];
+  rows: string[][];
 }
 
 function toBuffer(doc: jsPDF): Buffer {
@@ -144,8 +150,7 @@ export function renderAnalyticsPdf(data: AnalyticsPdfData): Buffer {
 }
 
 export function renderLeadsPdf(data: LeadsPdfData): Buffer {
-  const extraHeaders = (data.extraHeaders || []).slice(0, 12);
-  const doc = extraHeaders.length > 0 ? new jsPDF({ orientation: "landscape" }) : new jsPDF();
+  const doc = new jsPDF();
 
   doc.setFontSize(22);
   doc.setTextColor(88, 28, 135);
@@ -158,7 +163,7 @@ export function renderLeadsPdf(data: LeadsPdfData): Buffer {
   doc.text(`Generated: ${data.generatedText}`, 14, 40);
 
   doc.setFillColor(245, 243, 255);
-  doc.rect(14, 47, doc.internal.pageSize.getWidth() - 28, 28, "F");
+  doc.rect(14, 47, 182, 28, "F");
 
   doc.setFontSize(9);
   doc.setTextColor(88, 28, 135);
@@ -187,18 +192,16 @@ export function renderLeadsPdf(data: LeadsPdfData): Buffer {
     lead.account || "-",
     lead.source || "-",
     lead.date || "-",
-    ...extraHeaders.map((_, i) => lead.extra?.[i] || "-"),
   ]);
 
   autoTable(doc, {
     startY: 90,
-    head: [["Name", "Phone", "Email", "Account", data.sourceHeader || "Source", "Date", ...extraHeaders]],
+    head: [["Name", "Phone", "Email", "Account", "Source", "Date"]],
     body: tableData,
-    headStyles: { fillColor: [88, 28, 135], fontSize: extraHeaders.length > 0 ? 8 : 9 },
-    bodyStyles: { fontSize: extraHeaders.length > 0 ? 7 : 8 },
+    headStyles: { fillColor: [88, 28, 135], fontSize: 9 },
+    bodyStyles: { fontSize: 8 },
     alternateRowStyles: { fillColor: [248, 245, 255] },
-    // With extra columns, let the table share the (landscape) width out itself.
-    columnStyles: extraHeaders.length > 0 ? {} : {
+    columnStyles: {
       0: { cellWidth: 28 },
       1: { cellWidth: 28 },
       2: { cellWidth: 38 },
@@ -206,6 +209,55 @@ export function renderLeadsPdf(data: LeadsPdfData): Buffer {
       4: { cellWidth: 32 },
       5: { cellWidth: 24 },
     },
+  });
+
+  return toBuffer(doc);
+}
+
+/**
+ * Group admin Leads report: the leads table with the columns the group chose, in screen order.
+ * The summary counts leads only (conversations and conversion rates are in Group Analytics).
+ * More than 6 columns turns the page landscape.
+ */
+export function renderLeadTablePdf(data: LeadTablePdfData): Buffer {
+  const headers = data.headers.slice(0, 16);
+  const landscape = headers.length > 6;
+  const doc = landscape ? new jsPDF({ orientation: "landscape" }) : new jsPDF();
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  doc.setFontSize(22);
+  doc.setTextColor(88, 28, 135);
+  doc.text("Leads Report", 14, 20);
+
+  doc.setFontSize(10);
+  doc.setTextColor(100);
+  doc.text(`Group: ${data.groupName}`, 14, 28);
+  doc.text(`Accounts: ${data.accountText}`, 14, 34);
+  doc.text(`Date Range: ${data.dateRangeText}`, 14, 40);
+  doc.text(`Generated: ${data.generatedText}`, 14, 46);
+
+  doc.setFillColor(245, 243, 255);
+  doc.rect(14, 53, pageWidth - 28, 28, "F");
+  doc.setFontSize(9);
+  doc.setTextColor(88, 28, 135);
+  doc.text("TOTAL LEADS", 24, 62);
+  doc.text("UNIQUE LEADS", 24 + (pageWidth - 28) / 3, 62);
+  doc.setFontSize(16);
+  doc.setTextColor(30, 10, 60);
+  doc.text(data.totalLeads.toLocaleString(), 24, 74);
+  doc.text(data.uniqueLeads.toLocaleString(), 24 + (pageWidth - 28) / 3, 74);
+
+  doc.setFontSize(12);
+  doc.setTextColor(0);
+  doc.text("Leads", 14, 92);
+
+  autoTable(doc, {
+    startY: 96,
+    head: [headers],
+    body: data.rows.map((row) => headers.map((_, i) => row[i] || "-")),
+    headStyles: { fillColor: [88, 28, 135], fontSize: landscape ? 8 : 9 },
+    bodyStyles: { fontSize: landscape ? 7 : 8, overflow: "linebreak" },
+    alternateRowStyles: { fillColor: [248, 245, 255] },
   });
 
   return toBuffer(doc);
