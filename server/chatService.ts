@@ -2310,7 +2310,7 @@ Response:`;
           context.userId,
           context.businessAccountId,
           userMessage,
-          { channel: context.channel }
+          { channel: context.channel, origin: { city: context.visitorCity, sourceUrl: context.pageUrl, landingUrl: context.landingUrl } }
         );
 
         // Conversational journey just ended: the AI replies to the question that started it.
@@ -3853,7 +3853,7 @@ Response:`;
           context.userId,
           context.businessAccountId,
           userMessage,
-          { channel: context.channel }
+          { channel: context.channel, origin: { city: context.visitorCity, sourceUrl: context.pageUrl, landingUrl: context.landingUrl } }
         );
 
         // A mobile number the journey just saved locked the chat: show the CAPTCHA now.

@@ -279,6 +279,20 @@ function phoneProblemMessage(mode: string): string {
   return `That doesn't look like a valid mobile number. Could you share ${rule}?`;
 }
 
+
+/** Where the visitor is and which page they're on — saved on the lead with a journey's contact answers. */
+export interface LeadOrigin {
+  city?: string | null;
+  /** The page the chat is on (lead "Page URL"; UTM fields come from it). */
+  sourceUrl?: string | null;
+  landingUrl?: string | null;
+}
+
+export interface JourneyRunOpts {
+  channel?: string | null;
+  origin?: LeadOrigin;
+}
+
 export class JourneyOrchestrator {
   /**
    * Helper method to get OpenAI client with business account API key
@@ -311,7 +325,7 @@ export class JourneyOrchestrator {
     userId: string,
     businessAccountId: string,
     userMessage: string,
-    opts: { channel?: string | null } = {}
+    opts: JourneyRunOpts = {}
   ): Promise<EngineJourneyResponse> {
     try {
       // Check if a conversation journey is active
@@ -447,7 +461,7 @@ export class JourneyOrchestrator {
           // The visitor keeps asking other things: stop the questions and let the AI answer.
           console.log('[Engine] Visitor keeps asking other things - ending the journey, AI answers normally');
           await journeyService.completeJourney(conversationId);
-          await this.captureLeadFromJourney(conversationId, journeyState, businessAccountId, opts.channel);
+          await this.captureLeadFromJourney(conversationId, journeyState, businessAccountId, opts.channel, opts.origin);
           return { shouldBypassAI: false, isComplete: true };
         }
         // Generate natural off-topic response with redirect
@@ -545,7 +559,7 @@ export class JourneyOrchestrator {
       console.log('[Engine] Recorded answer for step:', currentStep.id);
 
       // A contact answer goes to this chat's lead right away (same lead, checks and CRM rules as chat).
-      const contact = await this.saveJourneyContact(conversationId, businessAccountId, currentStep, answer, journeyState, opts.channel);
+      const contact = await this.saveJourneyContact(conversationId, businessAccountId, currentStep, answer, journeyState, opts.channel, opts.origin);
 
       // Advance to next step
       await journeyService.advanceToNextStep(conversationId);
@@ -572,7 +586,7 @@ export class JourneyOrchestrator {
     businessAccountId: string,
     userMessage: string,
     turn: { situation: 'acknowledgment' | 'skip'; answeredQuestion?: string; answer?: string; captchaRequired?: boolean },
-    opts: { channel?: string | null }
+    opts: JourneyRunOpts
   ): Promise<EngineJourneyResponse> {
     const fill = await autoFillKnownSteps(conversationId, businessAccountId);
     const nextStep = await journeyService.getCurrentStep(conversationId);
@@ -642,7 +656,7 @@ export class JourneyOrchestrator {
     businessAccountId: string,
     step: any,
     userMessage: string,
-    opts: { channel?: string | null }
+    opts: JourneyRunOpts
   ): Promise<EngineJourneyResponse> {
     console.log('[Engine] Moving on from an unanswered step:', step.id);
     journeyState.responses.set(step.id, '[SKIPPED: not answered]');
@@ -655,10 +669,10 @@ export class JourneyOrchestrator {
     conversationId: string,
     journeyState: JourneyState,
     businessAccountId: string,
-    opts: { channel?: string | null }
+    opts: JourneyRunOpts
   ): Promise<EngineJourneyResponse> {
     await journeyService.completeJourney(conversationId);
-    await this.captureLeadFromJourney(conversationId, journeyState, businessAccountId, opts.channel);
+    await this.captureLeadFromJourney(conversationId, journeyState, businessAccountId, opts.channel, opts.origin);
 
     if (journeyState.journeyType === 'form') {
       return {
@@ -736,8 +750,8 @@ export class JourneyOrchestrator {
   }
 
   /** Form journeys (POST /api/journey/submit-step): save a contact answer exactly like a chat journey does. */
-  async saveFormJourneyContact(conversationId: string, businessAccountId: string, step: any, answer: string, channel?: string | null): Promise<{ captchaRequired: boolean }> {
-    return this.saveJourneyContact(conversationId, businessAccountId, step, answer, null, channel);
+  async saveFormJourneyContact(conversationId: string, businessAccountId: string, step: any, answer: string, channel?: string | null, origin?: LeadOrigin): Promise<{ captchaRequired: boolean }> {
+    return this.saveJourneyContact(conversationId, businessAccountId, step, answer, null, channel, origin);
   }
 
   /**
@@ -751,7 +765,8 @@ export class JourneyOrchestrator {
     step: any,
     answer: string,
     journeyState: JourneyState | null,
-    channel?: string | null
+    channel?: string | null,
+    origin?: LeadOrigin
   ): Promise<{ captchaRequired: boolean }> {
     const slot = contactSlot(step);
     if (!slot || !answer || conversationId.startsWith('temp_')) return { captchaRequired: false };
@@ -771,7 +786,17 @@ export class JourneyOrchestrator {
         if (!isValidLeadName(answer)) return { captchaRequired: false };
         values.name = answer.trim();
       }
-      const up = await upsertConversationLead({ businessAccountId, conversationId, values });
+      // City and page go on the lead with the first contact answer: the CRM is sent right after.
+      // City falls back to the one looked up when the chat started.
+      let city = origin?.city || null;
+      if (!city) {
+        const conv = await storage.getConversation(conversationId, businessAccountId).catch(() => undefined);
+        city = conv?.visitorCity || null;
+      }
+      const up = await upsertConversationLead({
+        businessAccountId, conversationId,
+        values: { ...values, city, sourceUrl: origin?.sourceUrl || null, landingUrl: origin?.landingUrl || null },
+      });
       if (journeyState) journeyState.leadId = up.lead.id;
       if (up.changed.length === 0) return { captchaRequired: false };
       console.log(`[Journey Lead] ${up.created ? 'Created' : 'Updated'} lead ${up.lead.id}: ${up.changed.join(', ')}`);
@@ -1172,7 +1197,8 @@ Respond with JSON:
     conversationId: string,
     journeyState: JourneyState,
     businessAccountId: string,
-    channel?: string | null
+    channel?: string | null,
+    origin?: LeadOrigin
   ): Promise<void> {
     try {
       const { db } = await import('../db');
@@ -1192,7 +1218,7 @@ Respond with JSON:
         .where(eq(journeyResponses.sessionId, journeyState.sessionId));
       for (const r of responses) {
         if (!r.response || r.response.startsWith('[SKIPPED') || !contactSlot(r)) continue;
-        await this.saveJourneyContact(conversationId, businessAccountId, r, r.response, journeyState, channel);
+        await this.saveJourneyContact(conversationId, businessAccountId, r, r.response, journeyState, channel, origin);
       }
     } catch (error) {
       console.error('[Lead Capture] Error capturing lead from journey:', error);

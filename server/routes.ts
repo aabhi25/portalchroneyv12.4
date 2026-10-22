@@ -17526,6 +17526,8 @@ Important:
             userId: resolvedUserId,
             visitorToken: visitorToken || null,
             title: journeyName || 'New Chat',
+            // Same city lookup as a chat (cached per IP): the lead and the CRM get it.
+            visitorCity: (await resolveVisitorCity(getClientIp(req))) || null,
           });
           activeConversationId = newConversation.id;
         }
@@ -17646,7 +17648,11 @@ Important:
       // mobile number gets the CAPTCHA when the business uses it.
       let captcha: Awaited<ReturnType<typeof captchaState>> = null;
       if (currentStep && answer !== undefined && answer !== null && String(answer).trim()) {
-        const saved = await journeyOrchestrator.saveFormJourneyContact(activeConversationId, businessAccountId, currentStep, String(answer), journeyChannel);
+        const saved = await journeyOrchestrator.saveFormJourneyContact(activeConversationId, businessAccountId, currentStep, String(answer), journeyChannel, {
+          city: (await resolveVisitorCity(getClientIp(req))) || null,
+          sourceUrl: typeof pageUrl === 'string' ? pageUrl : null,
+          landingUrl: cleanLandingUrl(req.body?.landingUrl) || null,
+        });
         if (saved.captchaRequired) captcha = await captchaState();
       }
 
@@ -17814,23 +17820,8 @@ Important:
                 existingLead = found || null;
               }
 
+              const visitorCity: string | null = (await resolveVisitorCity(getClientIp(req))) || null;
               if (!existingLead) {
-                let visitorCity: string | null = null;
-                try {
-                  const clientIp = getClientIp(req);
-                  if (clientIp && clientIp !== 'unknown' && !clientIp.startsWith('127.') && !clientIp.startsWith('192.168.') && !clientIp.startsWith('10.') && !clientIp.startsWith('::1')) {
-                    const geoResponse = await fetchWithTimeout(`http://ip-api.com/json/${clientIp}?fields=status,city`, undefined, 5_000);
-                    if (geoResponse.ok) {
-                      const geoData = await geoResponse.json();
-                      if (geoData.status === 'success' && geoData.city) {
-                        visitorCity = geoData.city;
-                        console.log(`[Form Journey] Geo-located visitor: ${visitorCity}`);
-                      }
-                    }
-                  }
-                } catch (geoError) {
-                  console.warn('[Form Journey] Geolocation failed:', geoError);
-                }
 
                 const lead = await storage.createLead({
                   businessAccountId,
@@ -17911,6 +17902,8 @@ Important:
                 if (email && !existingLead.email) enrichUpdates.email = email;
                 const journeyLandingUrl = cleanLandingUrl(req.body?.landingUrl);
                 if (journeyLandingUrl && !existingLead.landingUrl) enrichUpdates.landingUrl = journeyLandingUrl;
+                if (visitorCity && !existingLead.city) enrichUpdates.city = visitorCity;
+                if (typeof pageUrl === 'string' && pageUrl && !existingLead.sourceUrl) enrichUpdates.sourceUrl = pageUrl;
                 if (extraAnswers.length > 0) {
                   const existingTopics: string[] = Array.isArray(existingLead.topicsOfInterest) ? existingLead.topicsOfInterest as string[] : [];
                   const mergedTopics = Array.from(new Set([...existingTopics, ...extraAnswers]));
