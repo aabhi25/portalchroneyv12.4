@@ -2,7 +2,6 @@
 import { db } from "../db";
 import { journeyResponses, journeySteps, journeySessions, conversationJourneys } from "@shared/schema";
 import { and, asc, eq, inArray } from "drizzle-orm";
-import { maskPhonesInText } from "./leadAccess";
 
 /** Internal markers kept in topicsOfInterest (funnel source), not interests. */
 export const FUNNEL_MARKERS = new Set(["Via Form", "Via Journey Form", "Discount Availed"]);
@@ -12,8 +11,7 @@ export const FUNNEL_MARKERS = new Set(["Via Form", "Via Journey Form", "Discount
  * - `interestTopics`: the topics that are real interests. Journeys also store their answers in
  *   topicsOfInterest (other features rely on that), so the lead's own journey answers and the
  *   funnel markers are left out; the answers are shown with their questions instead.
- * - `hasJourneyAnswers`, `journeyName`, `journeyAnswers` ({ question: answer }) for the journey
- *   columns. Answers are phone-masked for accounts in `maskedAccountIds`.
+ * - `hasJourneyAnswers`, `journeyName` (the Journey column).
  */
 export async function addWebsiteLeadExtras(leadRows: Array<Record<string, any>>, maskedAccountIds: Set<string>): Promise<void> {
   if (leadRows.length === 0) return;
@@ -56,22 +54,5 @@ export async function addWebsiteLeadExtras(leadRows: Array<Record<string, any>>,
     lead.interestTopics = topics.filter(t => typeof t === "string" && !FUNNEL_MARKERS.has(t) && !answerTexts.has(t.trim().toLowerCase()));
     lead.hasJourneyAnswers = answers.length > 0;
     lead.journeyName = (lead.conversationId && journeyNameByConv.get(lead.conversationId)) || null;
-    const mask = maskedAccountIds.has(lead.businessAccountId);
-    const byQuestion: Record<string, string> = {};
-    for (const a of answers) {
-      if (!a.question) continue;
-      byQuestion[a.question] = mask ? (maskPhonesInText(a.answer) || "") : a.answer; // latest answer wins
-    }
-    lead.journeyAnswers = byQuestion;
   }
-}
-
-/** Distinct journey questions in these accounts (the journey-question columns). */
-export async function journeyQuestionsForAccounts(accountIds: string[]): Promise<string[]> {
-  if (accountIds.length === 0) return [];
-  const steps = await db.select({ question: journeySteps.questionText })
-    .from(journeySteps)
-    .innerJoin(conversationJourneys, eq(conversationJourneys.id, journeySteps.journeyId))
-    .where(inArray(conversationJourneys.businessAccountId, accountIds));
-  return Array.from(new Set(steps.map(s => (s.question || "").trim()).filter(Boolean)));
 }

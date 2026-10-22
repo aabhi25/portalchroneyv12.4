@@ -41,7 +41,7 @@ import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
 import { format, subDays, startOfDay, endOfDay, startOfMonth, endOfMonth, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
-import { DEFAULT_LEAD_COLUMNS, LeadColumnsPicker, WebsiteLeadColumnCell, leadColumnIcon, leadColumnLabel, websiteLeadColumnText, type LeadColumnKey } from "@/components/leads/LeadColumns";
+import { DEFAULT_LEAD_COLUMNS, LeadColumnsPicker, WebsiteLeadColumnCell, knownLeadColumns, leadColumnIcon, leadColumnLabel, websiteLeadColumnText, type LeadColumnKey } from "@/components/leads/LeadColumns";
 import { LeadDetailsSheet, websiteRowFromLead } from "@/components/leads/LeadDetailsSheet";
 import type { CrmTarget } from "@/components/leads/LeadCrm";
 import type { Lead } from "@shared/schema";
@@ -156,7 +156,6 @@ interface LeadItem {
   interestTopics?: string[];
   hasJourneyAnswers?: boolean;
   journeyName?: string | null;
-  journeyAnswers?: Record<string, string>;
 }
 
 /** How the lead came in, from its stored topics (same rule as the row's menu). */
@@ -492,7 +491,7 @@ export default function GroupAdminDashboard() {
 
   // Columns of the Leads table: chosen for the whole group (any admin who can view leads).
   const leadColumnsQueryKey = ["/api/group-admin/groups", selectedGroupId, "leads", "table-columns"];
-  const { data: leadColumnsData } = useQuery<{ columns: LeadColumnKey[] | null; journeyQuestions: string[] }>({
+  const { data: leadColumnsData } = useQuery<{ columns: LeadColumnKey[] | null }>({
     queryKey: leadColumnsQueryKey,
     queryFn: async () => {
       const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/leads/table-columns`, { credentials: "include" });
@@ -506,7 +505,7 @@ export default function GroupAdminDashboard() {
       apiRequest<{ columns: LeadColumnKey[] | null }>("PUT", `/api/group-admin/groups/${selectedGroupId}/leads/table-columns`, { columns }),
     onMutate: (columns) => {
       const previous = queryClient.getQueryData(leadColumnsQueryKey);
-      queryClient.setQueryData(leadColumnsQueryKey, (old: any) => ({ journeyQuestions: [], ...(old || {}), columns }));
+      queryClient.setQueryData(leadColumnsQueryKey, (old: any) => ({ ...(old || {}), columns }));
       return { previous };
     },
     onError: (_error, _columns, context) => {
@@ -514,7 +513,7 @@ export default function GroupAdminDashboard() {
       toast({ title: "Couldn't save columns", description: "Please try again.", variant: "destructive" });
     },
   });
-  const leadTableColumns: LeadColumnKey[] = (leadColumnsData?.columns ?? DEFAULT_LEAD_COLUMNS).filter(k => !GROUP_ALWAYS_SHOWN_COLUMNS.includes(k));
+  const leadTableColumns: LeadColumnKey[] = knownLeadColumns(leadColumnsData?.columns ?? DEFAULT_LEAD_COLUMNS).filter(k => !GROUP_ALWAYS_SHOWN_COLUMNS.includes(k));
   const leadGridTemplate = [
     selectedGroup?.canViewLeads && selectedGroup?.canDeleteData ? "20px" : null,
     "36px", "minmax(150px, 1.3fr)", "160px",
@@ -1363,7 +1362,6 @@ export default function GroupAdminDashboard() {
 
                   <LeadColumnsPicker
                     columns={leadTableColumns}
-                    journeyQuestions={leadColumnsData?.journeyQuestions || []}
                     onChange={(columns) => saveLeadColumnsMutation.mutate(columns)}
                     saving={saveLeadColumnsMutation.isPending}
                     excludeKeys={GROUP_ALWAYS_SHOWN_COLUMNS}

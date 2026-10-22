@@ -96,7 +96,7 @@ import homeSummaryRoutes from "./routes/homeSummary";
 import whatsappHandoffRoutes from "./routes/whatsappHandoff";
 import { resolveAuthorizedLeadAccountId, maskLeadPhone, maskPhonesInText } from "./lib/leadAccess";
 import { conversationListExtras } from "./lib/conversationListExtras";
-import { addWebsiteLeadExtras, journeyQuestionsForAccounts } from "./lib/leadExtras";
+import { addWebsiteLeadExtras } from "./lib/leadExtras";
 
 /** The website script's first-touch landing page (http(s), at most 2000 chars), else undefined. */
 function cleanLandingUrl(value: unknown): string | undefined {
@@ -14748,22 +14748,17 @@ Return ONLY the refined instruction, nothing else.`
     }
   });
 
-  // Group Admin: the group's Leads table columns (in order; null = default) and the journey
-  // questions in the admin's accounts that can be shown as columns. Any admin who can view the
-  // group's leads can change them; the choice is shared by the whole group.
+  // Group Admin: the group's Leads table columns (in order; null = default). Any admin who can
+  // view the group's leads can change them; the choice is shared by the whole group.
   app.get("/api/group-admin/groups/:groupId/leads/table-columns", requireAuth, requireGroupAdmin, async (req, res) => {
     try {
       const { groupId } = req.params;
       const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
       if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
       if (!permissions.canViewLeads) return res.status(403).json({ error: "No permission to view leads" });
-      const accountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
-      const [group, journeyQuestions] = await Promise.all([
-        storage.getAccountGroup(groupId),
-        journeyQuestionsForAccounts(accountIds),
-      ]);
+      const group = await storage.getAccountGroup(groupId);
       const saved = (group as any)?.leadsTableColumns;
-      res.json({ columns: Array.isArray(saved) ? saved : null, journeyQuestions });
+      res.json({ columns: Array.isArray(saved) ? saved : null });
     } catch (error: any) {
       console.error('[Group Admin] Error loading lead columns:', error);
       res.status(500).json({ error: "Failed to load columns" });
@@ -14778,7 +14773,8 @@ Return ONLY the refined instruction, nothing else.`
       if (!permissions.canViewLeads) return res.status(403).json({ error: "No permission to view leads" });
       const parsed = z.object({ columns: z.array(z.string().trim().min(1).max(300)).max(40).nullable() }).strict().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid columns" });
-      const columns = parsed.data.columns ? Array.from(new Set(parsed.data.columns)) : null;
+      // Journey questions are no longer columns (their answers are in the lead panel).
+      const columns = parsed.data.columns ? Array.from(new Set(parsed.data.columns.filter(c => !c.startsWith("q:")))) : null;
       await db.update(accountGroups).set({ leadsTableColumns: columns, updatedAt: new Date() } as any).where(eq(accountGroups.id, groupId));
       res.json({ columns });
     } catch (error: any) {

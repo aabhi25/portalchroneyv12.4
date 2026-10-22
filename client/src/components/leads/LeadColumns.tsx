@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { format } from "date-fns";
-import { ArrowDown, ArrowUp, Columns3, Filter, GitBranch, Mail, MapPin, MessageSquare, Phone, RotateCcw } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Filter, Mail, MapPin, MessageSquare, Phone, RotateCcw } from "lucide-react";
 import { isMaskedValue } from "@shared/contactMasking";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -8,7 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 
 /**
  * Leads table columns a business can show, hide and reorder (Name, CRM and actions always show).
- * Journey questions are columns too: `q:<question text>`.
+ * (Journey answers are not columns: they are listed with their questions in the lead panel.)
  */
 export type LeadColumnKey = string;
 
@@ -31,11 +31,13 @@ export const BUILT_IN_LEAD_COLUMNS: Array<{ key: LeadColumnKey; label: string; g
   { key: "leadId", label: "Lead ID", group: "Other" },
 ];
 
-export const questionColumnKey = (question: string) => `q:${question}`;
-
 export function leadColumnLabel(key: LeadColumnKey): string {
-  if (key.startsWith("q:")) return key.slice(2);
   return BUILT_IN_LEAD_COLUMNS.find(c => c.key === key)?.label || key;
+}
+
+/** The saved columns this table can show (drops keys from older versions, e.g. journey questions). */
+export function knownLeadColumns(columns: LeadColumnKey[]): LeadColumnKey[] {
+  return columns.filter(k => BUILT_IN_LEAD_COLUMNS.some(c => c.key === k));
 }
 
 /** A campaign parameter from the page URL, else from the landing page (first touch). */
@@ -52,10 +54,6 @@ export function campaignParam(pageUrl: string | null | undefined, landingUrl: st
 
 /** A website lead's value for an extra (text) column, as plain text; null when empty. */
 export function websiteLeadColumnText(key: LeadColumnKey, lead: Record<string, any>): string | null {
-  if (key.startsWith("q:")) {
-    const answers = (lead.journeyAnswers || {}) as Record<string, string>;
-    return answers[key.slice(2)] || null;
-  }
   switch (key) {
     case "message": return lead.message || null;
     case "pageUrl": return lead.sourceUrl || null;
@@ -76,7 +74,6 @@ export function leadColumnIcon(key: LeadColumnKey): ReactNode {
     : key === 'city' ? <MapPin className="h-4 w-4 text-red-500" />
     : key === 'topics' ? <MessageSquare className="h-4 w-4 text-purple-600" />
     : key === 'funnel' ? <Filter className="h-4 w-4 text-indigo-600" />
-    : key.startsWith('q:') ? <GitBranch className="h-4 w-4 text-violet-600" />
     : null;
 }
 
@@ -148,9 +145,8 @@ export function WebsiteLeadColumnCell({ columnKey, lead }: { columnKey: LeadColu
 }
 
 /** "Columns" button: tick columns to show, move them up / down, or go back to the default. */
-export function LeadColumnsPicker({ columns, journeyQuestions, onChange, saving, excludeKeys, alwaysShownLabel = "Only Name and CRM", savedForLabel = "Saved for everyone on your team" }: {
+export function LeadColumnsPicker({ columns, onChange, saving, excludeKeys, alwaysShownLabel = "Only Name and CRM", savedForLabel = "Saved for everyone on your team" }: {
   columns: LeadColumnKey[];
-  journeyQuestions: string[];
   onChange: (columns: LeadColumnKey[] | null) => void;
   saving?: boolean;
   /** Built-in columns this table always shows itself (not offered here). */
@@ -160,9 +156,9 @@ export function LeadColumnsPicker({ columns, journeyQuestions, onChange, saving,
 }) {
   const [open, setOpen] = useState(false);
   const available = useMemo(() => {
-    const all = [...BUILT_IN_LEAD_COLUMNS.map(c => c.key).filter(k => !excludeKeys?.includes(k)), ...journeyQuestions.map(questionColumnKey)];
+    const all = BUILT_IN_LEAD_COLUMNS.map(c => c.key).filter(k => !excludeKeys?.includes(k));
     return all.filter(k => !columns.includes(k));
-  }, [columns, journeyQuestions, excludeKeys]);
+  }, [columns, excludeKeys]);
 
   const move = (index: number, delta: number) => {
     const next = [...columns];
@@ -174,7 +170,7 @@ export function LeadColumnsPicker({ columns, journeyQuestions, onChange, saving,
   const toggle = (key: LeadColumnKey, on: boolean) => {
     onChange(on ? [...columns, key] : columns.filter(k => k !== key));
   };
-  const groupOf = (key: LeadColumnKey) => key.startsWith("q:") ? "Journey questions" : BUILT_IN_LEAD_COLUMNS.find(c => c.key === key)?.group || "Other";
+  const groupOf = (key: LeadColumnKey) => BUILT_IN_LEAD_COLUMNS.find(c => c.key === key)?.group || "Other";
   const availableGroups = Array.from(new Set(available.map(groupOf)));
 
   return (

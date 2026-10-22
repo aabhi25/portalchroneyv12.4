@@ -11,11 +11,11 @@ import { isSocialChannel, type SocialChannel } from "../services/socialLeadField
 import { db } from "../db";
 import { businessAccounts } from "@shared/schema";
 import { eq } from "drizzle-orm";
-import { addWebsiteLeadExtras, journeyQuestionsForAccounts } from "../lib/leadExtras";
+import { addWebsiteLeadExtras } from "../lib/leadExtras";
 
 const router = Router();
 
-/** Website leads get interestTopics / journeyName / journeyAnswers (see addWebsiteLeadExtras). */
+/** Website leads get interestTopics / journeyName (see addWebsiteLeadExtras). */
 async function addLeadExtras(accountId: string, rows: Array<{ channel: string; detail: Record<string, any> }>): Promise<void> {
   const website = rows.filter(r => r.channel === "website" && r.detail).map(r => r.detail);
   if (website.length === 0) return;
@@ -54,19 +54,15 @@ router.get("/api/leads/unified", requireAuth, requireBusinessAccount, async (req
 });
 
 /**
- * Leads table columns: the business's chosen columns (in order; null = default) and the journey
- * questions that can be shown as columns.
+ * Leads table columns: the business's chosen columns (in order; null = default).
  */
 router.get("/api/leads/table-columns", requireAuth, requireBusinessAccount, async (req, res) => {
   try {
     const accountId = await leadAccount(req, res);
     if (!accountId) return;
-    const [account, questions] = await Promise.all([
-      storage.getBusinessAccount(accountId),
-      journeyQuestionsForAccounts([accountId]),
-    ]);
+    const account = await storage.getBusinessAccount(accountId);
     const saved = (account as any)?.leadsTableColumns;
-    res.json({ columns: Array.isArray(saved) ? saved : null, journeyQuestions: questions });
+    res.json({ columns: Array.isArray(saved) ? saved : null });
   } catch (error: any) {
     console.error("[UnifiedLeads] table columns failed:", error?.message);
     res.status(500).json({ error: "Failed to load columns" });
@@ -79,7 +75,8 @@ router.put("/api/leads/table-columns", requireAuth, requireBusinessAccount, asyn
     if (!accountId) return;
     const parsed = z.object({ columns: z.array(z.string().trim().min(1).max(300)).max(40).nullable() }).safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid columns" });
-    const columns = parsed.data.columns ? Array.from(new Set(parsed.data.columns)) : null;
+    // Journey questions are no longer columns (their answers are in the lead panel).
+    const columns = parsed.data.columns ? Array.from(new Set(parsed.data.columns.filter(c => !c.startsWith("q:")))) : null;
     await db.update(businessAccounts).set({ leadsTableColumns: columns } as any).where(eq(businessAccounts.id, accountId));
     res.json({ columns });
   } catch (error: any) {

@@ -52,7 +52,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { DEFAULT_LEAD_COLUMNS, LeadColumnsPicker, WebsiteLeadColumnCell, leadColumnIcon, leadColumnLabel, leadColumnWidth, websiteLeadColumnText, type LeadColumnKey } from "@/components/leads/LeadColumns";
+import { DEFAULT_LEAD_COLUMNS, LeadColumnsPicker, WebsiteLeadColumnCell, knownLeadColumns, leadColumnIcon, leadColumnLabel, leadColumnWidth, websiteLeadColumnText, type LeadColumnKey } from "@/components/leads/LeadColumns";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useLocation } from "wouter";
@@ -248,7 +248,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
 
   // Columns the business chose for this table (null = default), plus its journey questions.
   const columnsKey = ["/api/leads/table-columns", currentUser?.activeBusinessAccountId || currentUser?.businessAccount?.id];
-  const { data: columnsData } = useQuery<{ columns: LeadColumnKey[] | null; journeyQuestions: string[] }>({
+  const { data: columnsData } = useQuery<{ columns: LeadColumnKey[] | null }>({
     queryKey: columnsKey,
     queryFn: async () => {
       const response = await fetch(`/api/leads/table-columns`, { credentials: "include" });
@@ -256,13 +256,13 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
       return response.json();
     },
   });
-  const tableColumns: LeadColumnKey[] = columnsData?.columns ?? DEFAULT_LEAD_COLUMNS;
+  const tableColumns: LeadColumnKey[] = knownLeadColumns(columnsData?.columns ?? DEFAULT_LEAD_COLUMNS);
   const saveColumnsMutation = useMutation({
     mutationFn: async (columns: LeadColumnKey[] | null) => {
       return apiRequest("PUT", "/api/leads/table-columns", { columns });
     },
     onMutate: (columns) => {
-      queryClient.setQueryData(columnsKey, (old: any) => ({ journeyQuestions: old?.journeyQuestions || [], columns }));
+      queryClient.setQueryData(columnsKey, (old: any) => ({ ...(old || {}), columns }));
     },
     onError: () => {
       queryClient.invalidateQueries({ queryKey: columnsKey });
@@ -1148,7 +1148,6 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                 {!socialView && (
                   <LeadColumnsPicker
                     columns={tableColumns}
-                    journeyQuestions={columnsData?.journeyQuestions || []}
                     onChange={(cols) => saveColumnsMutation.mutate(cols)}
                     saving={saveColumnsMutation.isPending}
                   />
