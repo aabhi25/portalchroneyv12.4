@@ -153,44 +153,6 @@ export default function Insights() {
     return params.toString() ? `?${params.toString()}` : '';
   }, [datePreset, fromDate, toDate]);
 
-  // Build URL with limit parameter for fetching all data
-  const leadsUrl = dateParams ? `/api/leads${dateParams}&limit=1000` : '/api/leads?limit=1000';
-  const conversationsUrl = dateParams ? `/api/conversations${dateParams}&limit=1000` : '/api/conversations?limit=1000';
-
-  const { data: leadsData } = useQuery<{ leads: Lead[]; total: number }>({
-    queryKey: ["/api/leads", dateParams],
-    queryFn: async () => {
-      const response = await fetch(leadsUrl, {
-        credentials: "include",
-        headers: { 'Cache-Control': 'no-cache' },
-      });
-      if (!response.ok) {
-        throw new Error("Failed to fetch leads");
-      }
-      return response.json();
-    },
-    staleTime: 0, // Always refetch when date params change
-  });
-  const leads = leadsData?.leads || [];
-  const totalLeadsCount = leadsData?.total || 0;
-
-  const { data: conversationsData } = useQuery<{ conversations: Conversation[]; total: number }>({
-    queryKey: ["/api/conversations", dateParams],
-    queryFn: async () => {
-      const response = await fetch(conversationsUrl, {
-        credentials: "include",
-        headers: { 'Cache-Control': 'no-cache' },
-      });
-      if (!response.ok) {
-        throw new Error("Failed to fetch conversations");
-      }
-      return response.json();
-    },
-    staleTime: 0, // Always refetch when date params change
-  });
-  const conversations = conversationsData?.conversations || [];
-  const totalConversationsCount = conversationsData?.total || 0;
-
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
@@ -321,9 +283,10 @@ export default function Insights() {
   const { toast } = useToast();
 
 
-  // Calculate insights - use total from API for accurate counts with date filtering
-  const totalLeads = totalLeadsCount;
-  const totalConversations = totalConversationsCount;
+  // Same numbers as the conversation funnel: one per visitor, and including leads / chats
+  // auto-deleted after sync (see /api/analytics/account-analytics).
+  const totalLeads = accountAnalytics?.conversationFunnel.leadsGenerated ?? 0;
+  const totalConversations = accountAnalytics?.conversationFunnel.total ?? 0;
   const totalProducts = products.length;
 
   // Calculate conversion rate (leads / conversations)
@@ -1164,7 +1127,7 @@ export default function Insights() {
                 Conversation Topics
               </CardTitle>
               <CardDescription className="text-xs">
-                Conversations are automatically categorized by AI when they end
+                Conversations are automatically categorized by AI when they end. Based on chats still stored (chats deleted after sync aren't included).
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
