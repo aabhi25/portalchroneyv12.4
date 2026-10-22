@@ -94,7 +94,7 @@ import verificationRoutes from "./routes/verification";
 import unifiedLeadsRoutes from "./routes/unifiedLeads";
 import homeSummaryRoutes from "./routes/homeSummary";
 import whatsappHandoffRoutes from "./routes/whatsappHandoff";
-import { resolveAuthorizedLeadAccountId, maskLeadPhone } from "./lib/leadAccess";
+import { resolveAuthorizedLeadAccountId, maskLeadPhone, maskPhonesInText } from "./lib/leadAccess";
 import dataRetentionRoutes from "./routes/dataRetention";
 import merittoRoutes from "./routes/meritto";
 import aiUsageRoutes from "./routes/aiUsage";
@@ -27371,28 +27371,91 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const leadBadgeMap = new Map<string, string>();
       const journeyConvIds = new Set<string>();
       const viaFormConvIds = new Set<string>();
+      // For the list row: who the visitor is, what they're after, and which journey (if any).
+      const leadContact = new Map<string, { name: string | null; phone: string | null; email: string | null }>();
+      const journeyNameByConv = new Map<string, string>();
+      const answersByConv = new Map<string, string[]>();
+      const lastMessageByConv = new Map<string, { role: string; content: string }>();
+      let maskPhones = false;
       if (conversationIds.length > 0) {
-        const [leadRows, journeyRows] = await Promise.all([
-          db.select({ conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest })
+        const [leadRows, journeyRows, answerRows, lastMessageRows, account] = await Promise.all([
+          db.select({ conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest, name: leads.name, phone: leads.phone, email: leads.email })
             .from(leads)
-            .where(and(eq(leads.businessAccountId, businessAccountId), inArray(leads.conversationId, conversationIds))),
-          db.select({ conversationId: journeySessions.conversationId })
+            .where(and(eq(leads.businessAccountId, businessAccountId), inArray(leads.conversationId, conversationIds)))
+            .orderBy(asc(leads.createdAt)),
+          db.select({ conversationId: journeySessions.conversationId, journeyName: conversationJourneys.name })
             .from(journeySessions)
-            .where(and(eq(journeySessions.businessAccountId, businessAccountId), inArray(journeySessions.conversationId, conversationIds))),
+            .leftJoin(conversationJourneys, eq(conversationJourneys.id, journeySessions.journeyId))
+            .where(and(eq(journeySessions.businessAccountId, businessAccountId), inArray(journeySessions.conversationId, conversationIds)))
+            .orderBy(asc(journeySessions.createdAt)),
+          db.select({ conversationId: journeyResponses.conversationId, response: journeyResponses.response })
+            .from(journeyResponses)
+            .where(inArray(journeyResponses.conversationId, conversationIds))
+            .orderBy(asc(journeyResponses.createdAt)),
+          db.selectDistinctOn([messages.conversationId], { conversationId: messages.conversationId, role: messages.role, content: messages.content })
+            .from(messages)
+            .where(inArray(messages.conversationId, conversationIds))
+            .orderBy(messages.conversationId, desc(messages.createdAt)),
+          storage.getBusinessAccount(businessAccountId),
         ]);
+        maskPhones = account?.leadPhoneMaskingEnabled === "true";
         for (const row of leadRows) {
           if (row.conversationId) {
             const topics = (row.topicsOfInterest as string[]) || [];
             const badge = topics.includes('Discount Availed') ? 'Discount Availed' : 'Lead Captured';
             leadBadgeMap.set(row.conversationId, badge);
             if (topics.includes('Via Form')) viaFormConvIds.add(row.conversationId);
+            if (!leadContact.has(row.conversationId)) {
+              leadContact.set(row.conversationId, { name: row.name, phone: row.phone, email: row.email });
+            }
           }
         }
         for (const row of journeyRows) {
           journeyConvIds.add(row.conversationId);
+          if (row.journeyName && !journeyNameByConv.has(row.conversationId)) journeyNameByConv.set(row.conversationId, row.journeyName);
+        }
+        for (const row of answerRows) {
+          const list = answersByConv.get(row.conversationId) || [];
+          list.push(row.response);
+          answersByConv.set(row.conversationId, list);
+        }
+        for (const row of lastMessageRows) {
+          lastMessageByConv.set(row.conversationId, { role: row.role, content: row.content });
         }
       }
-      
+
+      const DEFAULT_TITLES = new Set(['New Chat', 'Anonymous', '']);
+      const looksLikeContact = (v: string) => /@/.test(v) || v.replace(/\D/g, '').length >= 7;
+      const oneLine = (v: string, max = 90) => {
+        const t = v.replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim();
+        return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+      };
+      const visitorLabelFor = (conv: { id: string; visitorCity: string | null }) => {
+        const lead = leadContact.get(conv.id);
+        const name = lead?.name?.trim();
+        if (name && name !== 'Anonymous') return name;
+        if (lead?.phone) return maskPhones ? (maskLeadPhone(lead.phone) as string) : lead.phone;
+        if (lead?.email) return lead.email;
+        return conv.visitorCity ? `Visitor from ${conv.visitorCity}` : 'Website visitor';
+      };
+      const subtitleFor = (conv: { id: string; title: string }) => {
+        const journeyName = journeyNameByConv.get(conv.id);
+        // Journey chats: their key answers (contact details are already in the heading).
+        const answers = (answersByConv.get(conv.id) || [])
+          .map(a => a.trim())
+          .filter(a => a && a.length <= 40 && !looksLikeContact(a) && a !== leadContact.get(conv.id)?.name);
+        if (answers.length > 0) return answers.slice(0, 3).join(' · ');
+        // Chats: the topic the AI gave the chat, else the latest message.
+        const title = (conv.title || '').trim();
+        if (!DEFAULT_TITLES.has(title) && title !== journeyName && !looksLikeContact(title) && title !== leadContact.get(conv.id)?.name) return title;
+        const last = lastMessageByConv.get(conv.id);
+        if (last?.content) {
+          const text = maskPhones ? (maskPhonesInText(last.content) || '') : last.content;
+          return `${last.role === 'user' ? 'Visitor' : 'AI'}: ${oneLine(text)}`;
+        }
+        return null;
+      };
+
       const conversationsWithCounts = result.conversations.map(conv => ({
         ...conv,
         messageCount: messageCounts[conv.id] || 0,
@@ -27400,6 +27463,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         leadBadge: leadBadgeMap.get(conv.id) || null,
         viaJourney: journeyConvIds.has(conv.id),
         viaForm: viaFormConvIds.has(conv.id),
+        visitorLabel: visitorLabelFor(conv),
+        subtitle: subtitleFor(conv),
+        journeyName: journeyNameByConv.get(conv.id) || null,
       }));
       
       res.json({

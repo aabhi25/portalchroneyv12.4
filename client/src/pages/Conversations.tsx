@@ -42,6 +42,11 @@ interface Conversation {
   leadBadge?: string | null;
   viaJourney?: boolean;
   viaForm?: boolean;
+  /** Who: the visitor's name, else their (masked) mobile or email, else "Visitor from <city>". */
+  visitorLabel?: string;
+  /** What they're after: journey answers, the chat's topic, or the latest message. */
+  subtitle?: string | null;
+  journeyName?: string | null;
 }
 
 interface Message {
@@ -552,7 +557,7 @@ export default function Conversations() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between mb-0.5">
                         <h3 className="font-semibold text-sm text-gray-900 truncate">
-                          {conversation.title}
+                          {conversation.visitorLabel || conversation.title}
                         </h3>
                         <button
                           onClick={(e) => handleDeleteClick(e, conversation)}
@@ -562,6 +567,11 @@ export default function Conversations() {
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
+                      {conversation.subtitle && (
+                        <p className="mb-1 truncate text-[13px] text-gray-600" title={conversation.subtitle}>
+                          {conversation.subtitle}
+                        </p>
+                      )}
                       <div className="flex items-center justify-between text-xs text-gray-500">
                         <span className="truncate">{formatDate(conversation.createdAt)}</span>
                         <span className="ml-2 px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full font-medium">
@@ -571,9 +581,9 @@ export default function Conversations() {
                       {(conversation.viaJourney || conversation.viaForm || conversation.hasLead || conversation.visitorCity) && (
                         <div className="flex items-center gap-1 mt-1 flex-wrap">
                           {conversation.viaJourney && (
-                            <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-violet-50 text-violet-600 border border-violet-200" title="Via Journey">
-                              <GitBranch className="w-2.5 h-2.5" />
-                              Journey
+                            <span className="inline-flex max-w-[180px] items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-violet-50 text-violet-600 border border-violet-200" title={conversation.journeyName ? `Journey: ${conversation.journeyName}` : "Via Journey"}>
+                              <GitBranch className="w-2.5 h-2.5 shrink-0" />
+                              <span className="truncate">{conversation.journeyName ? `Journey · ${conversation.journeyName}` : 'Journey'}</span>
                             </span>
                           )}
                           {conversation.viaForm && (
@@ -672,14 +682,17 @@ export default function Conversations() {
                         : <MessageSquare className="w-5 h-5 text-white" />}
                   </div>
                   <div>
-                    <h2 className="font-semibold text-gray-900">{selectedConversation.title}</h2>
+                    <h2 className="font-semibold text-gray-900">{selectedConversation.visitorLabel || selectedConversation.title}</h2>
+                    {selectedConversation.subtitle && (
+                      <p className="text-sm text-gray-600">{selectedConversation.subtitle}</p>
+                    )}
                     <p className="text-xs text-gray-500">{formatDate(selectedConversation.createdAt)}</p>
                     {(selectedConversation.viaJourney || selectedConversation.viaForm || selectedConversation.hasLead || selectedConversation.visitorCity) && (
                       <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                         {selectedConversation.viaJourney && (
                           <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium bg-violet-50 text-violet-600 border border-violet-200">
                             <GitBranch className="w-3 h-3" />
-                            Journey
+                            {selectedConversation.journeyName ? `Journey · ${selectedConversation.journeyName}` : 'Journey'}
                           </span>
                         )}
                         {selectedConversation.viaForm && (

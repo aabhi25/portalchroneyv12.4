@@ -1449,7 +1449,12 @@ export class DatabaseStorage implements IStorage {
     
     // Add search filter if provided
     if (filters?.search && filters.search.trim()) {
-      conditions.push(ilike(conversations.title, `%${filters.search}%`));
+      // The chat's title, or the visitor's name / phone / email (the list shows the visitor).
+      const pattern = `%${filters.search.trim()}%`;
+      conditions.push(or(
+        ilike(conversations.title, pattern),
+        sql`EXISTS (SELECT 1 FROM ${leads} WHERE ${leads.conversationId} = ${conversations.id} AND (${leads.name} ILIKE ${pattern} OR ${leads.phone} ILIKE ${pattern} OR ${leads.email} ILIKE ${pattern}))`,
+      )!);
     }
     
     // Get total count
