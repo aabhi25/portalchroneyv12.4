@@ -1,24 +1,27 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
 import type { LucideIcon } from "lucide-react";
-import { Calendar, GraduationCap, Headphones, Loader2, Megaphone, Mic, PackageOpen, ShoppingBag, Video } from "lucide-react";
-import type { BusinessAccountDto, ProductTier } from "@shared/dto";
+import { Briefcase, Calendar, Camera, GraduationCap, Headphones, LayoutGrid, Loader2, Megaphone, Mic, PackageOpen, School, ShoppingBag, Video } from "lucide-react";
+import type { BusinessAccountDto, ProductTier, SystemMode } from "@shared/dto";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AiCallingMinuteCap } from "@/components/calling/SuperAdminAiCallingCard";
 import { LiveAvatarSettingsDialog } from "@/components/LiveAvatarSettingsDialog";
 import { TutorSettingsDialog, tutorKey, type TutorAdminView } from "@/components/TutorSettingsDialog";
 import { hubArea, type HubAreaId } from "@/navigation/hubAreas";
 import { callingApi, callingKeys, errorStatus, type SuperAdminCallingState } from "@/lib/aiCallingApi";
 
 /**
- * Settings › Features on this account (super admins viewing as a business only).
+ * Everything a business account gets, in one list. Super admins only; shown in two places with the
+ * same switches so they never disagree:
+ *  - Settings › Features on this account (while viewing as the business)
+ *  - Super Admin › Business accounts › Features (a dialog on the list)
  *
- * The same switches as Super Admin › Business accounts ("Product features" and "Manage modules"),
- * saved through the same endpoints, so both places always show the same thing:
- *  - add-ons and channel switches → PATCH /api/business-accounts/:id/features
+ * Saved through:
+ *  - system mode, add-ons and channel switches → PATCH /api/business-accounts/:id/features
  *  - anything that changes the product tier (Vista) → PUT /api/business-accounts/:id
  *  - Phone calls → PUT /api/super-admin/ai-calling/:id
  *  - Live video avatar → the same set-up dialog as the Business accounts list
@@ -27,14 +30,15 @@ import { callingApi, callingKeys, errorStatus, type SuperAdminCallingState } fro
 type FlagField =
   | "chroneyEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled"
   | "whatsappMarketingEnabled" | "voiceModeEnabled" | "supportTicketsEnabled"
-  | "appointmentsEnabled" | "demoOrdersEnabled" | "shopifyEnabled";
+  | "appointmentsEnabled" | "demoOrdersEnabled" | "shopifyEnabled" | "visualSearchEnabled"
+  | "k12EducationEnabled" | "jobPortalEnabled";
 
 const accountKey = (id: string) => ["/api/business-accounts", id];
 const avatarKey = (id: string) => ["/api/super-admin/avatar/accounts", id];
 
 const isJewelryTier = (tier: ProductTier) => tier === "jewelry_showcase" || tier === "jewelry_showcase_chroney";
 
-/** Same rule as the Business accounts "Product features" dialog. */
+/** Which product tier the Website chat + Vista switches add up to. */
 function deriveProductTier(chroney: boolean, jewelry: boolean): ProductTier {
   if (chroney && jewelry) return "jewelry_showcase_chroney";
   if (jewelry) return "jewelry_showcase";
@@ -45,20 +49,23 @@ function deriveProductTier(chroney: boolean, jewelry: boolean): ProductTier {
 const vistaOn = (ba: BusinessAccountDto) =>
   isJewelryTier(ba.productTier) && (ba.productTier === "jewelry_showcase" || ba.jewelryShowcaseEnabled);
 
-function Row({ icon: Icon, tint, label, description, hint, children }: {
-  icon: LucideIcon; tint: string; label: string; description: string; hint?: string | null; children: ReactNode;
+function Row({ icon: Icon, tint, label, description, hint, below, children }: {
+  icon: LucideIcon; tint: string; label: string; description: string; hint?: string | null; below?: ReactNode; children: ReactNode;
 }) {
   return (
-    <li className="flex items-center gap-3 border-t border-black/[0.06] px-4 py-3 first:border-t-0">
-      <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-white ${tint}`}>
-        <Icon className="h-4 w-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-[14.5px] font-medium text-gray-900">{label}</p>
-        <p className="text-[12.5px] text-gray-500">{description}</p>
-        {hint && <p className="mt-0.5 text-[12px] text-amber-700">{hint}</p>}
+    <li className="border-t border-black/[0.06] px-4 py-3 first:border-t-0">
+      <div className="flex items-center gap-3">
+        <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-white ${tint}`}>
+          <Icon className="h-4 w-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[14.5px] font-medium text-gray-900">{label}</p>
+          <p className="text-[12.5px] text-gray-500">{description}</p>
+          {hint && <p className="mt-0.5 text-[12px] text-amber-700">{hint}</p>}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">{children}</div>
       </div>
-      <div className="flex shrink-0 items-center gap-2">{children}</div>
+      {below && <div className="mt-3 pl-11">{below}</div>}
     </li>
   );
 }
@@ -74,7 +81,6 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
 
 export default function AccountFeaturesSettings({ businessAccountId }: { businessAccountId: string }) {
   const { toast } = useToast();
-  const [, setLocation] = useLocation();
   const [busy, setBusy] = useState<string | null>(null);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [tutorOpen, setTutorOpen] = useState(false);
@@ -100,6 +106,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
     onMutate: ({ key }) => setBusy(key),
     onSuccess: (updated, { label, on }) => {
       queryClient.setQueryData(accountKey(businessAccountId), updated);
+      queryClient.invalidateQueries({ queryKey: tutorKey(businessAccountId) }); // K12 decides whether the AI tutor applies
       refreshEverywhere();
       toast({ title: `${label} ${on ? "switched on" : "switched off"}`, description: "This account's menus update straight away." });
     },
@@ -137,7 +144,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
     );
   }
 
-  const patchFeatures = (body: Partial<Record<FlagField | "jewelryShowcaseEnabled", boolean>>) =>
+  const patchFeatures = (body: Partial<Record<FlagField | "jewelryShowcaseEnabled", boolean>> & { systemMode?: SystemMode }) =>
     apiRequest<BusinessAccountDto>("PATCH", `/api/business-accounts/${ba.id}/features`, body);
 
   /** Same request the "Product features" dialog sends. */
@@ -174,6 +181,12 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
       },
     });
 
+  const setSystemMode = (mode: SystemMode) =>
+    save.mutate({
+      key: "systemMode", label: mode === "essential" ? "Essential menu" : "Full menu", on: true,
+      run: () => patchFeatures({ systemMode: mode }),
+    });
+
   const pending = save.isPending || saveCalling.isPending;
   const spinner = (key: string) => busy === key ? <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" /> : null;
 
@@ -195,9 +208,37 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
   const callingUnavailable = calling.isError && (errorStatus(calling.error) === 404 || errorStatus(calling.error) === 501);
   const callingOn = calling.data?.enabled ?? ba.aiCallingEnabled;
   const hasProducts = ba.chroneyEnabled || ba.whatsappEnabled || isJewelryTier(ba.productTier);
+  const nothingOn = !ba.chroneyEnabled && !ba.whatsappEnabled && !ba.instagramEnabled && !ba.facebookEnabled
+    && !callingOn && !vistaOn(ba) && !ba.k12EducationEnabled && !ba.jobPortalEnabled;
 
   return (
     <div className="max-w-[760px] space-y-6">
+      <Group title="Menu">
+        <Row
+          icon={LayoutGrid} tint="bg-slate-500" label="System mode"
+          description={(ba.systemMode || "full") === "essential"
+            ? "Essential: only the core pages (Home, Leads, Conversations, Products, Widget, Settings)"
+            : "Full: every page, including Training, Smart discounts and Gaps"}
+        >
+          {spinner("systemMode")}
+          <Select value={ba.systemMode || "full"} onValueChange={(v) => setSystemMode(v as SystemMode)} disabled={pending}>
+            <SelectTrigger className="h-8 w-[120px]" aria-label="System mode" data-testid="select-system-mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="full">Full</SelectItem>
+              <SelectItem value="essential">Essential</SelectItem>
+            </SelectContent>
+          </Select>
+        </Row>
+      </Group>
+
+      {nothingOn && (
+        <p className="rounded-xl bg-amber-50 px-4 py-2.5 text-[13px] text-amber-800" data-testid="text-nothing-on">
+          Nothing is switched on yet, so this account's menu is almost empty. Switch on at least one agent below.
+        </p>
+      )}
+
       <Group title="AI agents">
         <Row {...area("website")} label="Website chat" description="The chat widget on the business's website">
           {flagSwitch("chroneyEnabled", "Website chat")}
@@ -216,14 +257,10 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           label="Phone calls"
           description="The AI phones new leads and answers the business's number"
           hint={callingUnavailable ? "The AI Calling server update isn't installed yet." : null}
+          below={!callingUnavailable && callingOn ? <AiCallingMinuteCap businessAccountId={ba.id} /> : null}
         >
           {!callingUnavailable && (
             <>
-              {callingOn && (
-                <Button variant="ghost" size="sm" className="h-7 px-2 text-[12.5px] text-purple-700" onClick={() => setLocation("/admin/calling/settings")} data-testid="link-calling-limits">
-                  Limits
-                </Button>
-              )}
               {spinner("calls")}
               <Switch
                 checked={callingOn}
@@ -255,6 +292,13 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           hint={!ba.chroneyEnabled ? "Needs Website chat switched on to show up." : null}
         >
           {flagSwitch("voiceModeEnabled", "Voice mode")}
+        </Row>
+        <Row
+          icon={Camera} tint="bg-cyan-600" label="Visual product search"
+          description="Visitors upload a photo in the website chat to find similar products"
+          hint={!ba.chroneyEnabled ? "Needs Website chat switched on to show up." : null}
+        >
+          {flagSwitch("visualSearchEnabled", "Visual product search")}
         </Row>
         <Row
           icon={Video} tint="bg-fuchsia-600" label="Live video avatar"
@@ -304,8 +348,17 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
         </Row>
       </Group>
 
+      <Group title="Industry modules">
+        <Row icon={School} tint="bg-indigo-500" label="K12 education" description="Subjects, chapters and topics for schools; the AI tutor builds on it">
+          {flagSwitch("k12EducationEnabled", "K12 education")}
+        </Row>
+        <Row icon={Briefcase} tint="bg-cyan-700" label="Job portal" description="Job listings, applicants and AI candidate matching">
+          {flagSwitch("jobPortalEnabled", "Job portal")}
+        </Row>
+      </Group>
+
       <p className="px-1.5 text-[12.5px] text-gray-500">
-        These are the same switches as Super Admin › Business accounts. Changes apply straight away for everyone on this account.
+        The same switches show in Super Admin › Business accounts › Features and in this account's Settings. Changes apply straight away for everyone on this account.
       </p>
 
       {tutorOpen && (

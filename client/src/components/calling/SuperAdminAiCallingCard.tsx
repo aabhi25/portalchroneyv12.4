@@ -14,38 +14,11 @@ import { callingApi, callingKeys, errorStatus, type SuperAdminCallingState } fro
  * `bare` shows only the controls (Phone calls › Settings puts its own heading around them).
  */
 export function SuperAdminAiCallingCard({ businessAccountId, initialEnabled, bare }: { businessAccountId: string; initialEnabled?: boolean; bare?: boolean }) {
-  const { toast } = useToast();
-  const q = useQuery<SuperAdminCallingState>({
-    queryKey: callingKeys.superAdmin(businessAccountId),
-    queryFn: () => callingApi.superAdminGet(businessAccountId),
-    staleTime: 0,
-    retry: false,
-  });
+  const q = useSuperAdminCalling(businessAccountId);
+  const save = useSaveSuperAdminCalling(businessAccountId, q.data);
   const unavailable = q.isError && (errorStatus(q.error) === 404 || errorStatus(q.error) === 501);
   const enabled = q.data?.enabled ?? initialEnabled ?? false;
-  const [cap, setCap] = useState("");
-
-  useEffect(() => {
-    if (q.data) setCap(q.data.monthlyMinuteCap === null || q.data.monthlyMinuteCap === undefined ? "" : String(q.data.monthlyMinuteCap));
-  }, [q.data]);
-
   const savedCap = q.data?.monthlyMinuteCap ?? null;
-  const capValid = cap.trim() === "" || (/^\d+$/.test(cap.trim()) && Number(cap) > 0);
-  const capNumber = cap.trim() === "" ? null : Number(cap);
-  const capDirty = capValid && capNumber !== savedCap;
-
-  const save = useMutation({
-    mutationFn: (body: { enabled: boolean; monthlyMinuteCap: number | null }) => callingApi.superAdminPut(businessAccountId, body),
-    onSuccess: (data, body) => {
-      queryClient.setQueryData(callingKeys.superAdmin(businessAccountId), { ...q.data, ...data });
-      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", businessAccountId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      queryClient.invalidateQueries({ queryKey: callingKeys.settings });
-      toast({ title: "AI Calling updated", description: body.enabled ? "Enabled for this business." : "Disabled for this business." });
-    },
-    onError: (e: Error) => toast({ title: "Couldn't update AI Calling", description: e.message, variant: "destructive" }),
-  });
 
   const controls = unavailable ? (
     <p className="text-xs text-amber-700">The AI Calling server update isn't installed yet.</p>
@@ -61,30 +34,7 @@ export function SuperAdminAiCallingCard({ businessAccountId, initialEnabled, bar
         <span className="text-sm font-medium text-gray-700">{enabled ? "Enabled" : "Disabled"}</span>
         {(q.isLoading || save.isPending) && <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />}
       </div>
-      {enabled && (
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-gray-600" htmlFor={`ai-calling-cap-${businessAccountId}`}>Monthly minute cap (optional)</label>
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              id={`ai-calling-cap-${businessAccountId}`}
-              className="w-32 h-8"
-              inputMode="numeric"
-              placeholder="No cap"
-              value={cap}
-              onChange={e => setCap(e.target.value)}
-              data-testid="input-ai-calling-cap"
-            />
-            <span className="text-xs text-gray-500">minutes</span>
-            <Button size="sm" variant="outline" className="h-8" disabled={!capDirty || save.isPending} onClick={() => save.mutate({ enabled, monthlyMinuteCap: capNumber })} data-testid="button-save-ai-calling-cap">
-              Save cap
-            </Button>
-          </div>
-          {!capValid && <p className="text-xs text-red-600">Enter a whole number of minutes, or leave empty for no cap.</p>}
-          {typeof q.data?.minutesThisMonth === "number" && (
-            <p className="text-xs text-gray-500">{Math.round(q.data.minutesThisMonth).toLocaleString()} minutes used this month.</p>
-          )}
-        </div>
-      )}
+      {enabled && <AiCallingMinuteCap businessAccountId={businessAccountId} />}
     </div>
   );
 
@@ -102,6 +52,72 @@ export function SuperAdminAiCallingCard({ businessAccountId, initialEnabled, bar
         </p>
         {controls}
       </div>
+    </div>
+  );
+}
+
+function useSuperAdminCalling(businessAccountId: string) {
+  return useQuery<SuperAdminCallingState>({
+    queryKey: callingKeys.superAdmin(businessAccountId),
+    queryFn: () => callingApi.superAdminGet(businessAccountId),
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+function useSaveSuperAdminCalling(businessAccountId: string, current: SuperAdminCallingState | undefined) {
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: (body: { enabled: boolean; monthlyMinuteCap: number | null }) => callingApi.superAdminPut(businessAccountId, body),
+    onSuccess: (data, body) => {
+      queryClient.setQueryData(callingKeys.superAdmin(businessAccountId), { ...current, ...data });
+      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", businessAccountId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      queryClient.invalidateQueries({ queryKey: callingKeys.settings });
+      toast({ title: "AI Calling updated", description: body.enabled ? "Enabled for this business." : "Disabled for this business." });
+    },
+    onError: (e: Error) => toast({ title: "Couldn't update AI Calling", description: e.message, variant: "destructive" }),
+  });
+}
+
+/** The optional monthly minute cap (and minutes used), for an account whose AI Calling is on. */
+export function AiCallingMinuteCap({ businessAccountId }: { businessAccountId: string }) {
+  const q = useSuperAdminCalling(businessAccountId);
+  const save = useSaveSuperAdminCalling(businessAccountId, q.data);
+  const [cap, setCap] = useState("");
+
+  useEffect(() => {
+    if (q.data) setCap(q.data.monthlyMinuteCap === null || q.data.monthlyMinuteCap === undefined ? "" : String(q.data.monthlyMinuteCap));
+  }, [q.data]);
+
+  const savedCap = q.data?.monthlyMinuteCap ?? null;
+  const capValid = cap.trim() === "" || (/^\d+$/.test(cap.trim()) && Number(cap) > 0);
+  const capNumber = cap.trim() === "" ? null : Number(cap);
+  const capDirty = capValid && capNumber !== savedCap;
+
+  return (
+    <div className="space-y-1">
+      <label className="text-xs font-medium text-gray-600" htmlFor={`ai-calling-cap-${businessAccountId}`}>Monthly minute cap (optional)</label>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          id={`ai-calling-cap-${businessAccountId}`}
+          className="w-32 h-8"
+          inputMode="numeric"
+          placeholder="No cap"
+          value={cap}
+          onChange={e => setCap(e.target.value)}
+          data-testid="input-ai-calling-cap"
+        />
+        <span className="text-xs text-gray-500">minutes</span>
+        <Button size="sm" variant="outline" className="h-8" disabled={!capDirty || save.isPending} onClick={() => save.mutate({ enabled: q.data?.enabled ?? true, monthlyMinuteCap: capNumber })} data-testid="button-save-ai-calling-cap">
+          Save cap
+        </Button>
+      </div>
+      {!capValid && <p className="text-xs text-red-600">Enter a whole number of minutes, or leave empty for no cap.</p>}
+      {typeof q.data?.minutesThisMonth === "number" && (
+        <p className="text-xs text-gray-500">{Math.round(q.data.minutesThisMonth).toLocaleString()} minutes used this month.</p>
+      )}
     </div>
   );
 }

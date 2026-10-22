@@ -42,17 +42,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { DataRetentionDialog } from "@/components/DataRetentionDialog";
 import { LiveAvatarSettingsDialog } from "@/components/LiveAvatarSettingsDialog";
-import { Plus, Timer, Building2, Pencil, Copy, Check, ShieldCheck, ShoppingBag, Calendar, Sparkles, MoreVertical, Eye, Mic, Camera, Search, Trash2, Gem, Power, LogIn, Headphones, Play, MessageCircle, MessageSquare, GraduationCap, Briefcase, PackageOpen, Megaphone, Video } from "lucide-react";
-import type { BusinessAccountDto, ProductTier, SystemMode } from "@shared/dto/businessAccount";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Plus, Timer, Building2, Pencil, Copy, Check, Sparkles, MoreVertical, Eye, Search, Trash2, Gem, Power, LogIn, Play, MessageCircle, MessageSquare, Video } from "lucide-react";
+import type { BusinessAccountDto, ProductTier } from "@shared/dto/businessAccount";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { SuperAdminAiCallingCard } from "@/components/calling/SuperAdminAiCallingCard"; // AI Calling (C)
+import AccountFeaturesSettings from "@/pages/settings/AccountFeaturesSettings";
 
 export default function SuperAdmin() {
   const [retentionAccount, setRetentionAccount] = useState<{ id: string; name: string } | null>(null);
@@ -83,8 +76,7 @@ export default function SuperAdmin() {
   const [viewPasswordData, setViewPasswordData] = useState<{ username: string; tempPassword: string | null } | null>(null);
   const [copiedPassword, setCopiedPassword] = useState(false);
   
-  const [modulesDialogOpen, setModulesDialogOpen] = useState(false);
-  const [selectedBusiness, setSelectedBusiness] = useState<BusinessAccountDto | null>(null);
+  const [featuresAccount, setFeaturesAccount] = useState<{ id: string; name: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -92,16 +84,6 @@ export default function SuperAdmin() {
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteError, setDeleteError] = useState("");
   
-  const [tierDialogOpen, setTierDialogOpen] = useState(false);
-  const [tierBusiness, setTierBusiness] = useState<BusinessAccountDto | null>(null);
-  const [selectedTier, setSelectedTier] = useState<ProductTier>("chroney");
-  const [tierChroneyEnabled, setTierChroneyEnabled] = useState(true);
-  const [tierWhatsappEnabled, setTierWhatsappEnabled] = useState(false);
-  const [tierInstagramEnabled, setTierInstagramEnabled] = useState(false);
-  const [tierFacebookEnabled, setTierFacebookEnabled] = useState(false);
-  const [tierJewelryEnabled, setTierJewelryEnabled] = useState(false);
-  const [tierK12EducationEnabled, setTierK12EducationEnabled] = useState(false);
-  const [tierJobPortalEnabled, setTierJobPortalEnabled] = useState(false);
   
   const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
   const [businessToDuplicate, setBusinessToDuplicate] = useState<BusinessAccountDto | null>(null);
@@ -354,313 +336,6 @@ export default function SuperAdmin() {
   const handleImpersonate = (business: BusinessAccountDto) => {
     impersonateMutation.mutate(business.id);
   };
-
-  // Toggle business account feature settings mutation
-  const toggleFeaturesMutation = useMutation({
-    mutationFn: async (data: { id: string; shopifyEnabled?: boolean; appointmentsEnabled?: boolean; voiceModeEnabled?: boolean; visualSearchEnabled?: boolean; jewelryShowcaseEnabled?: boolean; supportTicketsEnabled?: boolean; whatsappEnabled?: boolean; whatsappMarketingEnabled?: boolean; k12EducationEnabled?: boolean; demoOrdersEnabled?: boolean; systemMode?: SystemMode }) => {
-      return await apiRequest<BusinessAccountDto>("PATCH", `/api/business-accounts/${data.id}/features`, {
-        shopifyEnabled: data.shopifyEnabled,
-        appointmentsEnabled: data.appointmentsEnabled,
-        voiceModeEnabled: data.voiceModeEnabled,
-        visualSearchEnabled: data.visualSearchEnabled,
-        jewelryShowcaseEnabled: data.jewelryShowcaseEnabled,
-        supportTicketsEnabled: data.supportTicketsEnabled,
-        whatsappEnabled: data.whatsappEnabled,
-        whatsappMarketingEnabled: data.whatsappMarketingEnabled,
-        k12EducationEnabled: data.k12EducationEnabled,
-        demoOrdersEnabled: data.demoOrdersEnabled,
-        systemMode: data.systemMode,
-      });
-    },
-    onSuccess: (updatedBusiness) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      // Update selectedBusiness with fresh data from server response
-      if (selectedBusiness && selectedBusiness.id === updatedBusiness.id) {
-        setSelectedBusiness(updatedBusiness);
-      }
-      toast({
-        title: "Success",
-        description: "Feature settings updated successfully",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to update feature settings",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const handleToggleShopify = (business: BusinessAccountDto) => {
-    const newValue = !business.shopifyEnabled;
-    // Deep copy using structuredClone for complete isolation
-    const previousState = selectedBusiness ? structuredClone(selectedBusiness) : null;
-    
-    // Optimistically update selectedBusiness using functional updater
-    if (selectedBusiness && selectedBusiness.id === business.id) {
-      setSelectedBusiness(prev => prev ? {...prev, shopifyEnabled: newValue} : prev);
-    }
-    toggleFeaturesMutation.mutate(
-      {
-        id: business.id,
-        shopifyEnabled: newValue,
-      },
-      {
-        onError: () => {
-          // Rollback only if still on the same business (functional updater prevents cross-business contamination)
-          setSelectedBusiness(prev => 
-            (prev && prev.id === business.id && previousState) ? previousState : prev
-          );
-          queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-        }
-      }
-    );
-  };
-
-  const handleToggleAppointments = (business: BusinessAccountDto) => {
-    const newValue = !business.appointmentsEnabled;
-    // Deep copy using structuredClone for complete isolation
-    const previousState = selectedBusiness ? structuredClone(selectedBusiness) : null;
-    
-    // Optimistically update selectedBusiness using functional updater
-    if (selectedBusiness && selectedBusiness.id === business.id) {
-      setSelectedBusiness(prev => prev ? {...prev, appointmentsEnabled: newValue} : prev);
-    }
-    toggleFeaturesMutation.mutate(
-      {
-        id: business.id,
-        appointmentsEnabled: newValue,
-      },
-      {
-        onError: () => {
-          // Rollback only if still on the same business (functional updater prevents cross-business contamination)
-          setSelectedBusiness(prev => 
-            (prev && prev.id === business.id && previousState) ? previousState : prev
-          );
-          queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-        }
-      }
-    );
-  };
-
-  const handleToggleVoiceMode = (business: BusinessAccountDto) => {
-    const newValue = !business.voiceModeEnabled;
-    // Deep copy using structuredClone for complete isolation
-    const previousState = selectedBusiness ? structuredClone(selectedBusiness) : null;
-    
-    // Optimistically update selectedBusiness using functional updater
-    if (selectedBusiness && selectedBusiness.id === business.id) {
-      setSelectedBusiness(prev => prev ? {...prev, voiceModeEnabled: newValue} : prev);
-    }
-    toggleFeaturesMutation.mutate(
-      {
-        id: business.id,
-        voiceModeEnabled: newValue,
-      },
-      {
-        onError: () => {
-          // Rollback only if still on the same business (functional updater prevents cross-business contamination)
-          setSelectedBusiness(prev => 
-            (prev && prev.id === business.id && previousState) ? previousState : prev
-          );
-          queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-        }
-      }
-    );
-  };
-
-  const handleToggleVisualSearch = (business: BusinessAccountDto) => {
-    const newValue = !business.visualSearchEnabled;
-    // Deep copy using structuredClone for complete isolation
-    const previousState = selectedBusiness ? structuredClone(selectedBusiness) : null;
-    
-    // Optimistically update selectedBusiness using functional updater
-    if (selectedBusiness && selectedBusiness.id === business.id) {
-      setSelectedBusiness(prev => prev ? {...prev, visualSearchEnabled: newValue} : prev);
-    }
-    toggleFeaturesMutation.mutate(
-      {
-        id: business.id,
-        visualSearchEnabled: newValue,
-      },
-      {
-        onError: () => {
-          // Rollback only if still on the same business (functional updater prevents cross-business contamination)
-          setSelectedBusiness(prev => 
-            (prev && prev.id === business.id && previousState) ? previousState : prev
-          );
-          queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-        }
-      }
-    );
-  };
-
-  const handleToggleJewelryShowcase = (business: BusinessAccountDto) => {
-    const newValue = !business.jewelryShowcaseEnabled;
-    // Deep copy using structuredClone for complete isolation
-    const previousState = selectedBusiness ? structuredClone(selectedBusiness) : null;
-    
-    // Optimistically update selectedBusiness using functional updater
-    if (selectedBusiness && selectedBusiness.id === business.id) {
-      setSelectedBusiness(prev => prev ? {...prev, jewelryShowcaseEnabled: newValue} : prev);
-    }
-    toggleFeaturesMutation.mutate(
-      {
-        id: business.id,
-        jewelryShowcaseEnabled: newValue,
-      },
-      {
-        onError: () => {
-          // Rollback only if still on the same business (functional updater prevents cross-business contamination)
-          setSelectedBusiness(prev => 
-            (prev && prev.id === business.id && previousState) ? previousState : prev
-          );
-          queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-        }
-      }
-    );
-  };
-
-  const handleToggleSupportTickets = (business: BusinessAccountDto) => {
-    const newValue = !business.supportTicketsEnabled;
-    // Deep copy using structuredClone for complete isolation
-    const previousState = selectedBusiness ? structuredClone(selectedBusiness) : null;
-    
-    // Optimistically update selectedBusiness using functional updater
-    if (selectedBusiness && selectedBusiness.id === business.id) {
-      setSelectedBusiness(prev => prev ? {...prev, supportTicketsEnabled: newValue} : prev);
-    }
-    toggleFeaturesMutation.mutate(
-      {
-        id: business.id,
-        supportTicketsEnabled: newValue,
-      },
-      {
-        onError: () => {
-          // Rollback only if still on the same business (functional updater prevents cross-business contamination)
-          setSelectedBusiness(prev => 
-            (prev && prev.id === business.id && previousState) ? previousState : prev
-          );
-          queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-        }
-      }
-    );
-  };
-
-  const handleToggleWhatsapp = (business: BusinessAccountDto) => {
-    const newValue = !business.whatsappEnabled;
-    // Deep copy using structuredClone for complete isolation
-    const previousState = selectedBusiness ? structuredClone(selectedBusiness) : null;
-    
-    // Optimistically update selectedBusiness using functional updater
-    if (selectedBusiness && selectedBusiness.id === business.id) {
-      setSelectedBusiness(prev => prev ? {...prev, whatsappEnabled: newValue} : prev);
-    }
-    toggleFeaturesMutation.mutate(
-      {
-        id: business.id,
-        whatsappEnabled: newValue,
-      },
-      {
-        onError: () => {
-          // Rollback only if still on the same business (functional updater prevents cross-business contamination)
-          setSelectedBusiness(prev => 
-            (prev && prev.id === business.id && previousState) ? previousState : prev
-          );
-          queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-        }
-      }
-    );
-  };
-
-  const handleToggleK12Education = (business: BusinessAccountDto) => {
-    const newValue = !business.k12EducationEnabled;
-    const previousState = selectedBusiness ? structuredClone(selectedBusiness) : null;
-    
-    if (selectedBusiness && selectedBusiness.id === business.id) {
-      setSelectedBusiness(prev => prev ? {...prev, k12EducationEnabled: newValue} : prev);
-    }
-    toggleFeaturesMutation.mutate(
-      {
-        id: business.id,
-        k12EducationEnabled: newValue,
-      },
-      {
-        onError: () => {
-          setSelectedBusiness(prev => 
-            (prev && prev.id === business.id && previousState) ? previousState : prev
-          );
-          queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-        }
-      }
-    );
-  };
-
-  const handleToggleWhatsappMarketing = (business: BusinessAccountDto) => {
-    const newValue = !business.whatsappMarketingEnabled;
-    const previousState = selectedBusiness ? structuredClone(selectedBusiness) : null;
-    if (selectedBusiness && selectedBusiness.id === business.id) {
-      setSelectedBusiness(prev => prev ? {...prev, whatsappMarketingEnabled: newValue} : prev);
-    }
-    toggleFeaturesMutation.mutate(
-      { id: business.id, whatsappMarketingEnabled: newValue },
-      {
-        onError: () => {
-          setSelectedBusiness(prev =>
-            (prev && prev.id === business.id && previousState) ? previousState : prev
-          );
-          queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-        }
-      }
-    );
-  };
-
-  const handleToggleDemoOrders = (business: BusinessAccountDto) => {
-    const newValue = !business.demoOrdersEnabled;
-    const previousState = selectedBusiness ? structuredClone(selectedBusiness) : null;
-    if (selectedBusiness && selectedBusiness.id === business.id) {
-      setSelectedBusiness(prev => prev ? {...prev, demoOrdersEnabled: newValue} : prev);
-    }
-    toggleFeaturesMutation.mutate(
-      { id: business.id, demoOrdersEnabled: newValue },
-      {
-        onError: () => {
-          setSelectedBusiness(prev =>
-            (prev && prev.id === business.id && previousState) ? previousState : prev
-          );
-          queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-        }
-      }
-    );
-  };
-
-  const handleSystemModeChange = (business: BusinessAccountDto, newMode: SystemMode) => {
-    // Deep copy using structuredClone for complete isolation
-    const previousState = selectedBusiness ? structuredClone(selectedBusiness) : null;
-    
-    // Optimistically update selectedBusiness using functional updater
-    if (selectedBusiness && selectedBusiness.id === business.id) {
-      setSelectedBusiness(prev => prev ? {...prev, systemMode: newMode} : prev);
-    }
-    toggleFeaturesMutation.mutate(
-      {
-        id: business.id,
-        systemMode: newMode,
-      },
-      {
-        onError: () => {
-          // Rollback only if still on the same business (functional updater prevents cross-business contamination)
-          setSelectedBusiness(prev => 
-            (prev && prev.id === business.id && previousState) ? previousState : prev
-          );
-          queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-        }
-      }
-    );
-  };
-
   // Reset password mutation (auto-generates new password)
   const resetPasswordMutation = useMutation({
     mutationFn: async (businessAccountId: string) => {
@@ -712,95 +387,8 @@ export default function SuperAdmin() {
     viewPasswordMutation.mutate(business.id);
   };
 
-  const handleManageModules = (business: BusinessAccountDto) => {
-    setSelectedBusiness(business);
-    setModulesDialogOpen(true);
-  };
-
-  const handleChangeTier = (business: BusinessAccountDto) => {
-    setTierBusiness(business);
-    setSelectedTier(business.productTier || "chroney");
-    // Set checkbox values based on feature flags
-    setTierChroneyEnabled(business.chroneyEnabled ?? true);
-    setTierJewelryEnabled(business.productTier === "jewelry_showcase" || business.productTier === "jewelry_showcase_chroney");
-    setTierWhatsappEnabled(business.whatsappEnabled || false);
-    setTierInstagramEnabled(business.instagramEnabled || false);
-    setTierFacebookEnabled(business.facebookEnabled || false);
-    setTierK12EducationEnabled(business.k12EducationEnabled || false);
-    setTierJobPortalEnabled(business.jobPortalEnabled || false);
-    setTierDialogOpen(true);
-  };
-
-  const updateTierMutation = useMutation({
-    mutationFn: async (data: { 
-      id: string; 
-      productTier: ProductTier; 
-      name: string; 
-      website: string;
-      chroneyEnabled: boolean;
-      whatsappEnabled: boolean;
-      instagramEnabled: boolean;
-      facebookEnabled: boolean;
-      k12EducationEnabled: boolean;
-      jobPortalEnabled: boolean;
-    }) => {
-      return await apiRequest("PUT", `/api/business-accounts/${data.id}`, { 
-        name: data.name, 
-        website: data.website, 
-        productTier: data.productTier,
-        chroneyEnabled: data.chroneyEnabled,
-        whatsappEnabled: data.whatsappEnabled,
-        instagramEnabled: data.instagramEnabled,
-        facebookEnabled: data.facebookEnabled,
-        k12EducationEnabled: data.k12EducationEnabled,
-        jobPortalEnabled: data.jobPortalEnabled,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      setTierDialogOpen(false);
-      setTierBusiness(null);
-      toast({
-        title: "Product Features Updated",
-        description: "The product features have been updated successfully.",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to update product features",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const handleSaveTier = () => {
-    if (tierBusiness) {
-      // Derive productTier from checkbox selections
-      let productTier: ProductTier = "chroney";
-      if (tierChroneyEnabled && tierJewelryEnabled) {
-        productTier = "jewelry_showcase_chroney";
-      } else if (tierJewelryEnabled) {
-        productTier = "jewelry_showcase";
-      } else {
-        productTier = "chroney";
-      }
-      
-      updateTierMutation.mutate({ 
-        id: tierBusiness.id, 
-        productTier,
-        name: tierBusiness.name,
-        website: tierBusiness.website || "",
-        chroneyEnabled: tierChroneyEnabled,
-        whatsappEnabled: tierWhatsappEnabled,
-        instagramEnabled: tierInstagramEnabled,
-        facebookEnabled: tierFacebookEnabled,
-        k12EducationEnabled: tierK12EducationEnabled,
-        jobPortalEnabled: tierJobPortalEnabled,
-      });
-    }
-  };
+  // Everything an account gets (agents, add-ons, system mode) lives in one Features dialog.
+  const openFeatures = (business: BusinessAccountDto) => setFeaturesAccount({ id: business.id, name: business.name });
 
   const duplicateAccountMutation = useMutation({
     mutationFn: async (data: { 
@@ -1295,544 +883,23 @@ export default function SuperAdmin() {
             </DialogContent>
           </Dialog>
 
-          {/* Manage Modules Dialog */}
-          <Dialog open={modulesDialogOpen} onOpenChange={setModulesDialogOpen}>
-            <DialogContent className="sm:max-w-[600px]">
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  <ShieldCheck className="h-5 w-5 text-blue-600" />
-                  Manage Modules - {selectedBusiness?.name}
-                </DialogTitle>
-                <DialogDescription>
-                  Enable or disable modules for this business account. Changes take effect immediately and will update the user's sidebar menu.
-                </DialogDescription>
-              </DialogHeader>
-              
-              <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
-                {/* System Mode Selector - Top of dialog */}
-                <div className="p-4 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-lg">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="font-semibold text-gray-900 mb-1">System Mode</h4>
-                      <p className="text-sm text-gray-600">
-                        {selectedBusiness?.systemMode === 'essential' 
-                          ? 'Essential mode shows only core pages (Home, Insights, Leads, Conversations, Products, Widget, Settings)'
-                          : 'Full mode shows all features including Training, Smart Discounts, Gaps, and more'}
-                      </p>
-                    </div>
-                    <Select
-                      value={selectedBusiness?.systemMode || 'full'}
-                      onValueChange={(value: SystemMode) => {
-                        if (selectedBusiness) {
-                          handleSystemModeChange(selectedBusiness, value);
-                        }
-                      }}
-                      disabled={toggleFeaturesMutation.isPending}
-                    >
-                      <SelectTrigger className="w-[140px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="full">Full</SelectItem>
-                        <SelectItem value="essential">Essential</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* Show Chroney modules only when Chroney Chat is enabled */}
-                {selectedBusiness?.chroneyEnabled && (
-                  <>
-                    {/* Shopify Module */}
-                    <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
-                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500 to-green-600 flex items-center justify-center flex-shrink-0">
-                        <ShoppingBag className="h-5 w-5 text-white" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="font-semibold text-gray-900 mb-1">Shopify Integration</h4>
-                        <p className="text-sm text-gray-600 mb-2">
-                          Connect to Shopify stores, sync products automatically, and manage inventory through the Shopify tab.
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={selectedBusiness?.shopifyEnabled || false}
-                            onCheckedChange={(checked) => {
-                              if (selectedBusiness) {
-                                handleToggleShopify(selectedBusiness);
-                              }
-                            }}
-                            disabled={toggleFeaturesMutation.isPending}
-                          />
-                          <span className="text-sm font-medium text-gray-700">
-                            {selectedBusiness?.shopifyEnabled ? "Enabled" : "Disabled"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Appointments Module */}
-                    <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
-                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center flex-shrink-0">
-                        <Calendar className="h-5 w-5 text-white" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="font-semibold text-gray-900 mb-1">Appointment Booking</h4>
-                        <p className="text-sm text-gray-600 mb-2">
-                          AI-powered appointment scheduling with weekly templates, slot overrides, and conversational booking through Chroney.
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={selectedBusiness?.appointmentsEnabled || false}
-                            onCheckedChange={(checked) => {
-                              if (selectedBusiness) {
-                                handleToggleAppointments(selectedBusiness);
-                              }
-                            }}
-                            disabled={toggleFeaturesMutation.isPending}
-                          />
-                          <span className="text-sm font-medium text-gray-700">
-                            {selectedBusiness?.appointmentsEnabled ? "Enabled" : "Disabled"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Voice Mode Module */}
-                    <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
-                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0">
-                        <Mic className="h-5 w-5 text-white" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="font-semibold text-gray-900 mb-1">Voice Mode</h4>
-                        <p className="text-sm text-gray-600 mb-2">
-                          Real-time conversational voice mode with ChatGPT-style full-screen interface, animated orb, and zero-latency streaming responses.
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={selectedBusiness?.voiceModeEnabled || false}
-                            onCheckedChange={(checked) => {
-                              if (selectedBusiness) {
-                                handleToggleVoiceMode(selectedBusiness);
-                              }
-                            }}
-                            disabled={toggleFeaturesMutation.isPending}
-                          />
-                          <span className="text-sm font-medium text-gray-700">
-                            {selectedBusiness?.voiceModeEnabled ? "Enabled" : "Disabled"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Live AI avatar (commercial add-on, configured per account) */}
-                    <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors" data-testid="card-module-live-avatar">
-                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-fuchsia-500 to-purple-600 flex items-center justify-center flex-shrink-0">
-                        <Video className="h-5 w-5 text-white" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="font-semibold text-gray-900 mb-1">Live AI avatar</h4>
-                        <p className="text-sm text-gray-600 mb-2">
-                          A lip-synced video avatar on top of voice mode (HeyGen LiveAvatar or Anam), with this account's provider, key, avatar and minute limits. Off by default.
-                        </p>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => selectedBusiness && setAvatarAccount({ id: selectedBusiness.id, name: selectedBusiness.name })}
-                          data-testid="button-configure-live-avatar"
-                        >
-                          Configure
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Visual Product Search Module */}
-                    <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
-                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center flex-shrink-0">
-                        <Camera className="h-5 w-5 text-white" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="font-semibold text-gray-900 mb-1">Visual Product Search</h4>
-                        <p className="text-sm text-gray-600 mb-2">
-                          Allow customers to upload product images to find similar items in the catalog using AI-powered visual matching.
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={selectedBusiness?.visualSearchEnabled || false}
-                            onCheckedChange={(checked) => {
-                              if (selectedBusiness) {
-                                handleToggleVisualSearch(selectedBusiness);
-                              }
-                            }}
-                            disabled={toggleFeaturesMutation.isPending}
-                          />
-                          <span className="text-sm font-medium text-gray-700">
-                            {selectedBusiness?.visualSearchEnabled ? "Enabled" : "Disabled"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {/* Show Jewelry Showcase module only for 'jewelry_showcase' or 'jewelry_showcase_chroney' tiers */}
-                {(selectedBusiness?.productTier === 'jewelry_showcase' || selectedBusiness?.productTier === 'jewelry_showcase_chroney') && (
-                  <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
-                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-500 to-yellow-600 flex items-center justify-center flex-shrink-0">
-                      <Gem className="h-5 w-5 text-white" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h4 className="font-semibold text-gray-900 mb-1">Jewelry Showcase</h4>
-                      <p className="text-sm text-gray-600 mb-2">
-                        In-store tablet kiosk for jewelry stores. Customers can browse inventory, search by image or text, with elegant jewelry-themed design.
-                      </p>
-                      {/* For jewelry-only tier, this is mandatory and cannot be toggled */}
-                      {selectedBusiness?.productTier === 'jewelry_showcase' ? (
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-green-600 bg-green-50 px-2 py-1 rounded">
-                            Always Enabled (Core Feature)
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={selectedBusiness?.jewelryShowcaseEnabled || false}
-                            onCheckedChange={(checked) => {
-                              if (selectedBusiness) {
-                                handleToggleJewelryShowcase(selectedBusiness);
-                              }
-                            }}
-                            disabled={toggleFeaturesMutation.isPending}
-                          />
-                          <span className="text-sm font-medium text-gray-700">
-                            {selectedBusiness?.jewelryShowcaseEnabled ? "Enabled" : "Disabled"}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Show Shopify for jewelry-only tier (since it's not shown in the Chroney modules section) */}
-                {selectedBusiness?.productTier === 'jewelry_showcase' && (
-                  <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
-                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500 to-green-600 flex items-center justify-center flex-shrink-0">
-                      <ShoppingBag className="h-5 w-5 text-white" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h4 className="font-semibold text-gray-900 mb-1">Shopify Integration</h4>
-                      <p className="text-sm text-gray-600 mb-2">
-                        Connect to Shopify stores, sync products automatically, and manage inventory through the Shopify tab.
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <Switch
-                          checked={selectedBusiness?.shopifyEnabled || false}
-                          onCheckedChange={(checked) => {
-                            if (selectedBusiness) {
-                              handleToggleShopify(selectedBusiness);
-                            }
-                          }}
-                          disabled={toggleFeaturesMutation.isPending}
-                        />
-                        <span className="text-sm font-medium text-gray-700">
-                          {selectedBusiness?.shopifyEnabled ? "Enabled" : "Disabled"}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Support Tickets Module - Available for all tiers */}
-                <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center flex-shrink-0">
-                    <Headphones className="h-5 w-5 text-white" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-semibold text-gray-900 mb-1">Support Tickets</h4>
-                    <p className="text-sm text-gray-600 mb-2">
-                      Exception queue for handling tickets that require human intervention. AI handles routine queries automatically.
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={selectedBusiness?.supportTicketsEnabled || false}
-                        onCheckedChange={(checked) => {
-                          if (selectedBusiness) {
-                            handleToggleSupportTickets(selectedBusiness);
-                          }
-                        }}
-                        disabled={toggleFeaturesMutation.isPending}
-                      />
-                      <span className="text-sm font-medium text-gray-700">
-                        {selectedBusiness?.supportTicketsEnabled ? "Enabled" : "Disabled"}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* K12 Education Module */}
-                <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center flex-shrink-0">
-                    <GraduationCap className="h-5 w-5 text-white" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-semibold text-gray-900 mb-1">K12 Education</h4>
-                    <p className="text-sm text-gray-600 mb-2">
-                      Subject/chapter/topic content management with AI tutor capabilities for K12 students.
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={selectedBusiness?.k12EducationEnabled || false}
-                        onCheckedChange={(checked) => {
-                          if (selectedBusiness) {
-                            handleToggleK12Education(selectedBusiness);
-                          }
-                        }}
-                        disabled={toggleFeaturesMutation.isPending}
-                      />
-                      <span className="text-sm font-medium text-gray-700">
-                        {selectedBusiness?.k12EducationEnabled ? "Enabled" : "Disabled"}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* WhatsApp Marketing Module */}
-                <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center flex-shrink-0">
-                    <Megaphone className="h-5 w-5 text-white" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-semibold text-gray-900 mb-1">WhatsApp Marketing</h4>
-                    <p className="text-sm text-gray-600 mb-2">
-                      Send approved WhatsApp template campaigns to CSV-imported contact groups, schedule blasts, and let AI negotiate with each reply per-campaign. Includes opt-out (STOP) handling and a per-recipient AI transcript viewer.
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={selectedBusiness?.whatsappMarketingEnabled || false}
-                        onCheckedChange={() => {
-                          if (selectedBusiness) {
-                            handleToggleWhatsappMarketing(selectedBusiness);
-                          }
-                        }}
-                        disabled={toggleFeaturesMutation.isPending}
-                        data-testid="switch-whatsapp-marketing"
-                      />
-                      <span className="text-sm font-medium text-gray-700">
-                        {selectedBusiness?.whatsappMarketingEnabled ? "Enabled" : "Disabled"}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* AI Calling Module — AI Calling (C) */}
-                {selectedBusiness && (
-                  <SuperAdminAiCallingCard
-                    key={selectedBusiness.id}
-                    businessAccountId={selectedBusiness.id}
-                    initialEnabled={String((selectedBusiness as { aiCallingEnabled?: unknown }).aiCallingEnabled) === "true"}
-                  />
-                )}
-
-                {/* Demo Orders Module */}
-                <div className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center flex-shrink-0">
-                    <PackageOpen className="h-5 w-5 text-white" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-semibold text-gray-900 mb-1">Demo Orders</h4>
-                    <p className="text-sm text-gray-600 mb-2">
-                      Self-contained demo order management for e-commerce chatbot demos. Lets customers track orders, request returns, and check order status — no real backend needed.
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={selectedBusiness?.demoOrdersEnabled || false}
-                        onCheckedChange={() => {
-                          if (selectedBusiness) {
-                            handleToggleDemoOrders(selectedBusiness);
-                          }
-                        }}
-                        disabled={toggleFeaturesMutation.isPending}
-                      />
-                      <span className="text-sm font-medium text-gray-700">
-                        {selectedBusiness?.demoOrdersEnabled ? "Enabled" : "Disabled"}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                              </div>
-
-              <div className="flex justify-end gap-2 pt-4 border-t">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setModulesDialogOpen(false);
-                    setSelectedBusiness(null);
-                  }}
-                >
-                  Close
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-
-          {/* Product Tier Dialog */}
-          <Dialog open={tierDialogOpen} onOpenChange={setTierDialogOpen}>
-            <DialogContent className="sm:max-w-[420px] max-h-[85vh] flex flex-col p-0 gap-0">
+          {/* Features: everything this account gets, one list (same screen as Settings › Features on this account) */}
+          <Dialog open={!!featuresAccount} onOpenChange={(open) => { if (!open) setFeaturesAccount(null); }}>
+            <DialogContent className="sm:max-w-[640px] max-h-[88vh] flex flex-col p-0 gap-0">
               <DialogHeader className="px-6 pt-6 pb-3 shrink-0">
                 <DialogTitle className="flex items-center gap-2">
                   <Sparkles className="h-5 w-5 text-purple-600" />
-                  Product Features
+                  Features · {featuresAccount?.name}
                 </DialogTitle>
                 <DialogDescription>
-                  Select which products are enabled for {tierBusiness?.name}.
+                  Switch on what this account gets. Each change saves straight away and updates the account's menus.
                 </DialogDescription>
               </DialogHeader>
-              
-              <div className="space-y-4 px-6 py-2 overflow-y-auto flex-1">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
-                        <MessageSquare className="w-5 h-5 text-blue-600" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-sm">Chroney Chat</p>
-                        <p className="text-xs text-gray-500">AI chatbot, conversations, training</p>
-                      </div>
-                    </div>
-                    <Switch
-                      checked={tierChroneyEnabled}
-                      onCheckedChange={setTierChroneyEnabled}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
-                        <MessageCircle className="w-5 h-5 text-green-600" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-sm">WhatsApp AI Agent</p>
-                        <p className="text-xs text-gray-500">Lead capture via WhatsApp messages</p>
-                      </div>
-                    </div>
-                    <Switch
-                      checked={tierWhatsappEnabled}
-                      onCheckedChange={setTierWhatsappEnabled}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-pink-100 flex items-center justify-center">
-                        <svg className="w-5 h-5 text-pink-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
-                          <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
-                          <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
-                        </svg>
-                      </div>
-                      <div>
-                        <p className="font-medium text-sm">Instagram AI Agent</p>
-                        <p className="text-xs text-gray-500">AI replies to Instagram DMs</p>
-                      </div>
-                    </div>
-                    <Switch
-                      checked={tierInstagramEnabled}
-                      onCheckedChange={setTierInstagramEnabled}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
-                        <svg className="w-5 h-5 text-blue-600" viewBox="0 0 24 24" fill="currentColor">
-                          <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-                        </svg>
-                      </div>
-                      <div>
-                        <p className="font-medium text-sm">Facebook AI Agent</p>
-                        <p className="text-xs text-gray-500">AI replies to Facebook Page DMs</p>
-                      </div>
-                    </div>
-                    <Switch
-                      checked={tierFacebookEnabled}
-                      onCheckedChange={setTierFacebookEnabled}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center">
-                        <Gem className="w-5 h-5 text-amber-600" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-sm">Jewelry Showcase</p>
-                        <p className="text-xs text-gray-500">Visual search, kiosk mode, Vista</p>
-                      </div>
-                    </div>
-                    <Switch
-                      checked={tierJewelryEnabled}
-                      onCheckedChange={setTierJewelryEnabled}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center">
-                        <GraduationCap className="w-5 h-5 text-indigo-600" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-sm">K12 Education</p>
-                        <p className="text-xs text-gray-500">Subject/chapter/topic content, AI tutor</p>
-                      </div>
-                    </div>
-                    <Switch
-                      checked={tierK12EducationEnabled}
-                      onCheckedChange={setTierK12EducationEnabled}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-cyan-100 flex items-center justify-center">
-                        <Briefcase className="w-5 h-5 text-cyan-600" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-sm">Job Portal</p>
-                        <p className="text-xs text-gray-500">Job listings, applicant tracking, AI matching</p>
-                      </div>
-                    </div>
-                    <Switch
-                      checked={tierJobPortalEnabled}
-                      onCheckedChange={setTierJobPortalEnabled}
-                    />
-                  </div>
-                </div>
-
-                {!tierChroneyEnabled && !tierWhatsappEnabled && !tierInstagramEnabled && !tierFacebookEnabled && !tierJewelryEnabled && !tierK12EducationEnabled && !tierJobPortalEnabled && (
-                  <p className="text-sm text-amber-600 bg-amber-50 p-2 rounded">
-                    At least one product should be enabled.
-                  </p>
-                )}
+              <div className="overflow-y-auto flex-1 bg-gray-50/60 px-6 py-4">
+                {featuresAccount && <AccountFeaturesSettings key={featuresAccount.id} businessAccountId={featuresAccount.id} />}
               </div>
-
-              <div className="flex justify-end gap-2 px-6 py-4 border-t shrink-0">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setTierDialogOpen(false);
-                    setTierBusiness(null);
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleSaveTier}
-                  disabled={updateTierMutation.isPending || (!tierChroneyEnabled && !tierWhatsappEnabled && !tierInstagramEnabled && !tierFacebookEnabled && !tierJewelryEnabled && !tierK12EducationEnabled && !tierJobPortalEnabled)}
-                  className="bg-gradient-to-r from-purple-600 to-blue-600"
-                >
-                  {updateTierMutation.isPending ? "Saving..." : "Save Changes"}
-                </Button>
+              <div className="flex justify-end px-6 py-3 border-t shrink-0">
+                <Button variant="outline" onClick={() => setFeaturesAccount(null)} data-testid="button-close-features">Done</Button>
               </div>
             </DialogContent>
           </Dialog>
@@ -2048,7 +1115,7 @@ export default function SuperAdmin() {
                     <TableHead className="font-semibold w-[280px]">Business</TableHead>
                     <TableHead className="font-semibold w-[80px]">Status</TableHead>
                     <TableHead className="font-semibold w-[100px]">Created</TableHead>
-                    <TableHead className="font-semibold w-[140px]">Product Tier</TableHead>
+                    <TableHead className="font-semibold w-[160px]">Features</TableHead>
                     <TableHead className="font-semibold text-right w-[140px]">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -2110,7 +1177,8 @@ export default function SuperAdmin() {
                         </TableCell>
                         <TableCell className="text-sm">
                           <button
-                            onClick={() => handleChangeTier(business)}
+                            onClick={() => openFeatures(business)}
+                            title="Change features"
                             className="flex flex-wrap gap-1 cursor-pointer hover:opacity-80 transition-opacity"
                           >
                             {business.chroneyEnabled && (
@@ -2133,9 +1201,37 @@ export default function SuperAdmin() {
                                 Facebook
                               </span>
                             )}
+                            {business.aiCallingEnabled && (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-100 text-cyan-700">
+                                Calls
+                              </span>
+                            )}
                             {(business.productTier === 'jewelry_showcase' || business.productTier === 'jewelry_showcase_chroney') && (
                               <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
-                                Jewelry
+                                Vista
+                              </span>
+                            )}
+                            {business.k12EducationEnabled && (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700">
+                                K12
+                              </span>
+                            )}
+                            {business.jobPortalEnabled && (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-100 text-cyan-800">
+                                Jobs
+                              </span>
+                            )}
+                            {(() => {
+                              const addOns = [business.whatsappMarketingEnabled, business.voiceModeEnabled, business.visualSearchEnabled, business.supportTicketsEnabled, business.appointmentsEnabled, business.demoOrdersEnabled, business.shopifyEnabled].filter(Boolean).length;
+                              return addOns > 0 ? (
+                                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                                  +{addOns} add-on{addOns === 1 ? "" : "s"}
+                                </span>
+                              ) : null;
+                            })()}
+                            {business.systemMode === 'essential' && (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+                                Essential
                               </span>
                             )}
                           </button>
@@ -2156,11 +1252,12 @@ export default function SuperAdmin() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleManageModules(business)}
-                              className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 border-blue-200 h-8"
+                              onClick={() => openFeatures(business)}
+                              data-testid={`button-features-${business.id}`}
+                              className="text-purple-600 hover:text-purple-700 hover:bg-purple-50 border-purple-200 h-8"
                             >
-                              <ShieldCheck className="h-4 w-4 sm:mr-1.5" />
-                              <span className="hidden sm:inline">Modules</span>
+                              <Sparkles className="h-4 w-4 sm:mr-1.5" />
+                              <span className="hidden sm:inline">Features</span>
                             </Button>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
