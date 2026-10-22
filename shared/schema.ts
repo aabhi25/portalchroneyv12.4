@@ -1284,6 +1284,10 @@ export const conversationJourneys = pgTable("conversation_journeys", {
   
   // Journey-specific AI training
   conversationalGuidelines: text("conversational_guidelines"), // Optional instructions for AI tone, acknowledgments, and conversational style specific to this journey
+
+  // Set when this journey is the account's copy of a group journey (account_group_journeys.id).
+  // Group publishes update this copy in place, so its sessions and answers are kept.
+  groupJourneyId: varchar("group_journey_id"),
   
   // Usage tracking
   totalStarts: numeric("total_starts", { precision: 10, scale: 0 }).notNull().default("0"),
@@ -1291,7 +1295,9 @@ export const conversationJourneys = pgTable("conversation_journeys", {
   
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => [
+  index("conversation_journeys_group_journey_idx").on(table.groupJourneyId),
+]);
 
 // Journey Steps - Individual questions/steps in a conversation journey
 export const journeySteps = pgTable("journey_steps", {
@@ -1333,6 +1339,9 @@ export const journeySteps = pgTable("journey_steps", {
   // Help text and placeholders
   placeholderText: text("placeholder_text"), // Placeholder for input field
   helpText: text("help_text"), // Additional guidance for user
+
+  // Set on a group journey copy's steps (account_group_journey_steps.id) so publishes update them in place.
+  groupStepId: varchar("group_step_id"),
   
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -1524,6 +1533,7 @@ export const accountGroupJourneys = pgTable("account_group_journeys", {
   triggerMode: text("trigger_mode").notNull().default("manual"),
   triggerKeywords: text("trigger_keywords"),
   startFromScratch: text("start_from_scratch").notNull().default("false"),
+  endMode: text("end_mode").notNull().default("chat"), // same as conversation_journeys.end_mode
   
   conversationalGuidelines: text("conversational_guidelines"),
   
@@ -1546,6 +1556,7 @@ export const accountGroupJourneySteps = pgTable("account_group_journey_steps", {
   questionType: text("question_type").notNull().default("text"),
   
   fieldName: text("field_name"),
+  crmFieldKey: text("crm_field_key"), // same as journey_steps.crm_field_key (journey.<key> in LeadSquared mappings)
   isRequired: text("is_required").notNull().default("false"),
   multipleChoiceOptions: text("multiple_choice_options"),
   

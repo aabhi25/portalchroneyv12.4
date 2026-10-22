@@ -13866,18 +13866,21 @@ Return ONLY the refined instruction, nothing else.`
       if (!group) {
         return res.status(404).json({ error: "Account group not found" });
       }
-      const members = await storage.getGroupMembers(groupId);
       const result = await storage.publishGroupJourneysToMembers(groupId);
       if (!result.success) {
         return res.status(400).json({
           error: "Failed to publish journeys. Make sure the group has member accounts."
         });
       }
+      const failedNames = result.failedMembers.map((m) => m.name).join(', ');
       res.json({
-        success: true,
-        message: `Journeys published to ${result.affectedCount} of ${members.length} member accounts`,
+        success: result.failedMembers.length === 0,
+        message: result.failedMembers.length === 0
+          ? `Journeys published to ${result.affectedCount} of ${result.attemptedCount} member accounts`
+          : `Journeys: ${result.affectedCount} of ${result.attemptedCount} accounts updated, ${result.failedMembers.length} failed (${failedNames})`,
         affectedCount: result.affectedCount,
-        totalMembers: members.length,
+        totalMembers: result.attemptedCount,
+        failedMembers: result.failedMembers,
       });
     } catch (error: any) {
       console.error('[Group Journeys] Error publishing journeys:', error);
@@ -13909,7 +13912,27 @@ Return ONLY the refined instruction, nothing else.`
   app.put("/api/super-admin/account-groups/:groupId/extra-settings", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
       const { groupId } = req.params;
-      const settings = await storage.upsertGroupExtraSettings(groupId, req.body);
+      const group = await storage.getAccountGroup(groupId);
+      if (!group) {
+        return res.status(404).json({ error: "Account group not found" });
+      }
+      // Only these settings belong to the group (never id / groupId / timestamps).
+      const onOff = z.enum(["true", "false"]);
+      const parsed = z.object({
+        responseLength: z.enum(["concise", "balanced", "detailed"]),
+        autoOpenChat: z.enum(["false", "desktop", "mobile", "both"]),
+        openingSoundEnabled: onOff,
+        openingSoundStyle: z.string().trim().min(1).max(30),
+        inactivityNudgeEnabled: onOff,
+        inactivityNudgeDelay: z.coerce.number().int().min(5).max(600).transform(String),
+        inactivityNudgeMessage: z.string().trim().min(1).max(500),
+        smartNudgeEnabled: onOff,
+      }).partial().strip().safeParse(req.body || {});
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        return res.status(400).json({ error: `Invalid ${issue?.path.join('.') || 'settings'}: ${issue?.message || 'check the values'}` });
+      }
+      const settings = await storage.upsertGroupExtraSettings(groupId, parsed.data);
       res.json(settings);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -13974,24 +13997,31 @@ Return ONLY the refined instruction, nothing else.`
     }
   });
 
-  // SuperAdmin: Update group LeadSquared field mapping
+  // SuperAdmin: Update group LeadSquared field mapping. Only the fields sent are changed
+  // (switching a mapping on/off sends just isEnabled and must keep its fallback value).
   app.put("/api/super-admin/account-groups/:groupId/leadsquared/field-mappings/:mappingId", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
-      const { mappingId } = req.params;
-      const { leadsquaredField, sourceType, sourceField, customValue, fallbackValue, displayName, isEnabled, sortOrder } = req.body;
-      
-      const mapping = await storage.updateGroupLeadsquaredFieldMapping(mappingId, {
-        leadsquaredField,
-        sourceType,
-        sourceField,
-        customValue,
-        fallbackValue: sourceType === 'dynamic' ? (fallbackValue || null) : null,
-        ...(req.body.phoneCountryCode !== undefined ? lsqPhoneOptions(req.body, sourceType) : {}),
-        displayName,
-        isEnabled,
-        sortOrder,
-      });
-      
+      const { groupId, mappingId } = req.params;
+      const existing = (await storage.getGroupLeadsquaredFieldMappings(groupId)).find((m) => m.id === mappingId);
+      if (!existing) {
+        return res.status(404).json({ error: "Field mapping not found" });
+      }
+      const body = req.body || {};
+      const update: Record<string, any> = {};
+      for (const key of ['leadsquaredField', 'sourceType', 'sourceField', 'customValue', 'displayName'] as const) {
+        if (body[key] !== undefined) update[key] = body[key];
+      }
+      if (body.isEnabled !== undefined) update.isEnabled = body.isEnabled === true || body.isEnabled === 'true' ? 'true' : 'false';
+      if (body.sortOrder !== undefined && Number.isFinite(Number(body.sortOrder))) update.sortOrder = Number(body.sortOrder);
+      const sourceType = body.sourceType ?? existing.sourceType;
+      if (body.fallbackValue !== undefined || body.sourceType !== undefined) {
+        update.fallbackValue = sourceType === 'dynamic' ? ((body.fallbackValue ?? existing.fallbackValue) || null) : null;
+      }
+      if (body.phoneCountryCode !== undefined || body.sourceType !== undefined) {
+        Object.assign(update, lsqPhoneOptions(body.phoneCountryCode !== undefined ? body : existing, sourceType));
+      }
+
+      const mapping = await storage.updateGroupLeadsquaredFieldMapping(mappingId, update);
       if (!mapping) {
         return res.status(404).json({ error: "Field mapping not found" });
       }
@@ -14006,7 +14036,11 @@ Return ONLY the refined instruction, nothing else.`
   // SuperAdmin: Delete group LeadSquared field mapping
   app.delete("/api/super-admin/account-groups/:groupId/leadsquared/field-mappings/:mappingId", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
-      const { mappingId } = req.params;
+      const { groupId, mappingId } = req.params;
+      const existing = (await storage.getGroupLeadsquaredFieldMappings(groupId)).some((m) => m.id === mappingId);
+      if (!existing) {
+        return res.status(404).json({ error: "Field mapping not found" });
+      }
       await storage.deleteGroupLeadsquaredFieldMapping(mappingId);
       res.json({ success: true });
     } catch (error: any) {

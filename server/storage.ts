@@ -205,6 +205,8 @@ export interface GroupPublishMemberResult {
   name: string;
   ok: boolean;
   error?: string;
+  /** Published, but with something to fix (e.g. a menu button whose form isn't in this account). */
+  warnings?: string[];
 }
 export interface GroupPublishResult {
   /** False only when there was nothing to publish (no group training / no members). */
@@ -612,7 +614,9 @@ export interface IStorage {
   reorderGroupJourneySteps(journeyId: string, stepOrders: { id: string; stepOrder: number }[]): Promise<void>;
 
   // Publish group journeys to member accounts
-  publishGroupJourneysToMembers(groupId: string): Promise<{ success: boolean; affectedCount: number }>;
+  publishGroupJourneysToMembers(groupId: string): Promise<{ success: boolean; affectedCount: number; attemptedCount: number; failedMembers: { businessAccountId: string; name: string; error: string }[] }>;
+  resolveAccountJourneyId(businessAccountId: string, reference: string | null | undefined): Promise<string | null>;
+  relinkMenuJourneyButtons(businessAccountId: string): Promise<void>;
 
   // Group Extra Settings
   getGroupExtraSettings(groupId: string): Promise<AccountGroupExtraSettings | undefined>;
@@ -718,6 +722,20 @@ export interface IStorage {
   createApplication(data: InsertJobApplication): Promise<JobApplication>;
   updateApplication(id: string, businessAccountId: string, updates: Partial<InsertJobApplication>): Promise<JobApplication | undefined>;
   deleteApplication(id: string, businessAccountId: string): Promise<void>;
+}
+
+/** A copied journey step's branching rules, with group step ids swapped for the account copy's step ids. */
+function translateBranchingStepIds(branchingCondition: string | null, stepIdMap: Record<string, string>): string | null {
+  if (!branchingCondition) return branchingCondition;
+  try {
+    const parsed = JSON.parse(branchingCondition);
+    const swap = (id: unknown) => (typeof id === 'string' && stepIdMap[id]) || id;
+    if (Array.isArray(parsed?.routes)) parsed.routes = parsed.routes.map((r: any) => ({ ...r, targetStepId: swap(r?.targetStepId) }));
+    if (parsed && 'defaultNextStepId' in parsed) parsed.defaultNextStepId = swap(parsed.defaultNextStepId);
+    return JSON.stringify(parsed);
+  } catch {
+    return branchingCondition;
+  }
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4467,67 +4485,190 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async publishGroupJourneysToMembers(groupId: string): Promise<{ success: boolean; affectedCount: number }> {
+  /**
+   * Push the group's journeys to every member account.
+   *
+   * Each member keeps one copy per group journey, linked by groupJourneyId (steps by
+   * groupStepId), and a publish updates that copy IN PLACE — same journey id, so the
+   * account's journey sessions and saved answers (which cascade on delete) are kept, and
+   * menu buttons that open the journey keep working. The account's own journeys are not
+   * touched. Copies made before these links existed are adopted by name (steps by order).
+   * A group journey that was deleted from the group is switched off in members, not
+   * deleted, so its history stays. A question removed from a group journey is deleted
+   * from the copies (with its answers).
+   */
+  async publishGroupJourneysToMembers(groupId: string): Promise<{
+    success: boolean; affectedCount: number; attemptedCount: number;
+    failedMembers: { businessAccountId: string; name: string; error: string }[];
+  }> {
     const groupJourneys = await this.getAllGroupJourneys(groupId);
     const members = await this.getGroupMembers(groupId);
-
     if (members.length === 0) {
-      return { success: false, affectedCount: 0 };
+      return { success: false, affectedCount: 0, attemptedCount: 0, failedMembers: [] };
     }
+    const stepsByGroupJourney = new Map<string, AccountGroupJourneyStep[]>();
+    for (const gj of groupJourneys) stepsByGroupJourney.set(gj.id, await this.getGroupJourneySteps(gj.id));
+    const groupJourneyIds = new Set(groupJourneys.map((j) => j.id));
+    const { journeyService } = await import('./services/journeyService');
 
     let affectedCount = 0;
-
+    const failedMembers: { businessAccountId: string; name: string; error: string }[] = [];
     for (const member of members) {
       const businessAccountId = member.businessAccountId;
+      try {
+        await db.transaction(async (tx) => {
+          const existing = await tx.select().from(conversationJourneys)
+            .where(eq(conversationJourneys.businessAccountId, businessAccountId));
+          const claimed = new Set<string>();
 
-      await db
-        .delete(conversationJourneys)
-        .where(eq(conversationJourneys.businessAccountId, businessAccountId));
+          for (const gj of groupJourneys) {
+            const nameKey = gj.name.trim().toLowerCase();
+            const copy = existing.find((j) => j.groupJourneyId === gj.id)
+              || existing.find((j) => !j.groupJourneyId && !claimed.has(j.id) && j.name.trim().toLowerCase() === nameKey);
+            const journeyValues = {
+              name: gj.name,
+              description: gj.description,
+              templateType: gj.templateType,
+              journeyType: gj.journeyType,
+              status: gj.status,
+              isDefault: gj.isDefault,
+              triggerMode: gj.triggerMode,
+              triggerKeywords: gj.triggerKeywords,
+              startFromScratch: gj.startFromScratch,
+              endMode: gj.endMode,
+              conversationalGuidelines: gj.conversationalGuidelines,
+              groupJourneyId: gj.id,
+            };
+            let journeyId: string;
+            if (copy) {
+              claimed.add(copy.id);
+              journeyId = copy.id;
+              await tx.update(conversationJourneys).set({ ...journeyValues, updatedAt: new Date() })
+                .where(eq(conversationJourneys.id, copy.id));
+            } else {
+              const [created] = await tx.insert(conversationJourneys).values({ businessAccountId, ...journeyValues }).returning();
+              journeyId = created.id;
+            }
 
-      for (const groupJourney of groupJourneys) {
-        const [newJourney] = await db.insert(conversationJourneys).values({
+            // Steps: match by groupStepId, else (older copies) by position.
+            const groupSteps = stepsByGroupJourney.get(gj.id) || [];
+            const memberSteps = (await tx.select().from(journeySteps).where(eq(journeySteps.journeyId, journeyId)))
+              .sort((a, b) => Number(a.stepOrder) - Number(b.stepOrder));
+            const usedStepIds = new Set<string>();
+            const stepIdMap: Record<string, string> = {}; // group step id → member step id
+            const pending: { groupStep: AccountGroupJourneyStep; memberStepId: string | null }[] = [];
+            const unlinkedSteps = memberSteps.filter((m) => !m.groupStepId);
+            groupSteps.forEach((groupStep, index) => {
+              let match = memberSteps.find((m) => m.groupStepId === groupStep.id);
+              if (!match && unlinkedSteps[index] && !usedStepIds.has(unlinkedSteps[index].id)) match = unlinkedSteps[index];
+              if (match) usedStepIds.add(match.id);
+              pending.push({ groupStep, memberStepId: match?.id ?? null });
+            });
+            for (const item of pending) {
+              if (item.memberStepId) stepIdMap[item.groupStep.id] = item.memberStepId;
+            }
+            for (const item of pending) {
+              if (!item.memberStepId) {
+                const [created] = await tx.insert(journeySteps).values({
+                  journeyId, stepOrder: item.groupStep.stepOrder, questionText: item.groupStep.questionText, groupStepId: item.groupStep.id,
+                }).returning();
+                item.memberStepId = created.id;
+                stepIdMap[item.groupStep.id] = created.id;
+              }
+            }
+            for (const { groupStep, memberStepId } of pending) {
+              await tx.update(journeySteps).set({
+                stepOrder: groupStep.stepOrder,
+                questionText: groupStep.questionText,
+                questionType: groupStep.questionType,
+                fieldName: groupStep.fieldName,
+                crmFieldKey: groupStep.crmFieldKey,
+                isRequired: groupStep.isRequired,
+                multipleChoiceOptions: groupStep.multipleChoiceOptions,
+                toolTrigger: groupStep.toolTrigger,
+                toolParameters: groupStep.toolParameters,
+                branchingCondition: translateBranchingStepIds(groupStep.branchingCondition, stepIdMap),
+                exitOnValue: groupStep.exitOnValue,
+                exitMessage: groupStep.exitMessage,
+                skipOnValue: groupStep.skipOnValue,
+                skipToStepIndex: groupStep.skipToStepIndex,
+                isConditional: groupStep.isConditional,
+                completionButtonText: groupStep.completionButtonText,
+                placeholderText: groupStep.placeholderText,
+                helpText: groupStep.helpText,
+                groupStepId: groupStep.id,
+                updatedAt: new Date(),
+              }).where(eq(journeySteps.id, memberStepId!));
+            }
+            const removed = memberSteps.filter((m) => !usedStepIds.has(m.id)).map((m) => m.id);
+            if (removed.length > 0) {
+              await tx.delete(journeySteps).where(inArray(journeySteps.id, removed));
+            }
+          }
+
+          // Copies of journeys that are no longer in the group: switch off, keep history.
+          const orphaned = existing.filter((j) => j.groupJourneyId && !groupJourneyIds.has(j.groupJourneyId)).map((j) => j.id);
+          if (orphaned.length > 0) {
+            await tx.update(conversationJourneys).set({ status: 'inactive', isDefault: 'false', updatedAt: new Date() })
+              .where(inArray(conversationJourneys.id, orphaned));
+          }
+        });
+        // Menu buttons that open a group journey now point at this account's copy.
+        await this.relinkMenuJourneyButtons(businessAccountId);
+        journeyService.invalidateJourneyCache(businessAccountId);
+        businessContextCache.invalidateBusinessCache(businessAccountId);
+        affectedCount++;
+      } catch (error: any) {
+        console.error(`[Group Journeys] Failed to publish to account ${businessAccountId}:`, error);
+        failedMembers.push({
           businessAccountId,
-          name: groupJourney.name,
-          description: groupJourney.description,
-          templateType: groupJourney.templateType,
-          journeyType: groupJourney.journeyType,
-          status: groupJourney.status,
-          isDefault: groupJourney.isDefault,
-          triggerMode: groupJourney.triggerMode,
-          triggerKeywords: groupJourney.triggerKeywords,
-          startFromScratch: groupJourney.startFromScratch,
-          conversationalGuidelines: groupJourney.conversationalGuidelines,
-        }).returning();
-
-        const groupSteps = await this.getGroupJourneySteps(groupJourney.id);
-        for (const step of groupSteps) {
-          await db.insert(journeySteps).values({
-            journeyId: newJourney.id,
-            stepOrder: step.stepOrder,
-            questionText: step.questionText,
-            questionType: step.questionType,
-            fieldName: step.fieldName,
-            isRequired: step.isRequired,
-            multipleChoiceOptions: step.multipleChoiceOptions,
-            toolTrigger: step.toolTrigger,
-            toolParameters: step.toolParameters,
-            branchingCondition: step.branchingCondition,
-            exitOnValue: step.exitOnValue,
-            exitMessage: step.exitMessage,
-            skipOnValue: step.skipOnValue,
-            skipToStepIndex: step.skipToStepIndex,
-            isConditional: step.isConditional,
-            completionButtonText: step.completionButtonText,
-            placeholderText: step.placeholderText,
-            helpText: step.helpText,
-          });
-        }
+          name: member.businessAccount?.name || businessAccountId,
+          error: String(error?.message || error || 'Unknown error').slice(0, 300),
+        });
       }
-
-      affectedCount++;
     }
 
-    return { success: true, affectedCount };
+    return { success: true, affectedCount, attemptedCount: members.length, failedMembers };
+  }
+
+  /**
+   * The account's journey for a menu button's journey reference, which may be: this
+   * account's own journey id; a group journey id; or (menus set up before group journeys
+   * could be picked) another member's journey id — then its group journey, else a journey
+   * of the same name in this account. null when the account has no matching journey.
+   */
+  async resolveAccountJourneyId(businessAccountId: string, reference: string | null | undefined): Promise<string | null> {
+    if (!reference) return null;
+    const accountJourneys = await db.select({ id: conversationJourneys.id, name: conversationJourneys.name, groupJourneyId: conversationJourneys.groupJourneyId })
+      .from(conversationJourneys).where(eq(conversationJourneys.businessAccountId, businessAccountId));
+    if (accountJourneys.some((j) => j.id === reference)) return reference;
+    const byGroup = (groupJourneyId: string) => accountJourneys.find((j) => j.groupJourneyId === groupJourneyId)?.id ?? null;
+    const direct = byGroup(reference);
+    if (direct) return direct;
+    const [other] = await db.select({ name: conversationJourneys.name, groupJourneyId: conversationJourneys.groupJourneyId })
+      .from(conversationJourneys).where(eq(conversationJourneys.id, reference)).limit(1);
+    if (other) {
+      if (other.groupJourneyId) {
+        const viaGroup = byGroup(other.groupJourneyId);
+        if (viaGroup) return viaGroup;
+      }
+      const nameKey = other.name.trim().toLowerCase();
+      return accountJourneys.find((j) => j.name.trim().toLowerCase() === nameKey)?.id ?? null;
+    }
+    // A group journey not published to this account yet: keep nothing to point at.
+    return null;
+  }
+
+  /** Point this account's "open a form" menu buttons at its own journeys (see resolveAccountJourneyId). */
+  async relinkMenuJourneyButtons(businessAccountId: string): Promise<void> {
+    const formItems = await db.select().from(chatMenuItems)
+      .where(and(eq(chatMenuItems.businessAccountId, businessAccountId), eq(chatMenuItems.itemType, 'form')));
+    for (const item of formItems) {
+      const resolved = await this.resolveAccountJourneyId(businessAccountId, item.actionValue);
+      if (resolved && resolved !== item.actionValue) {
+        await db.update(chatMenuItems).set({ actionValue: resolved, updatedAt: new Date() }).where(eq(chatMenuItems.id, item.id));
+      }
+    }
   }
 
   async getGroupExtraSettings(groupId: string): Promise<AccountGroupExtraSettings | undefined> {
@@ -4582,6 +4723,7 @@ export class DatabaseStorage implements IStorage {
           smartNudgeEnabled: extraSettings.smartNudgeEnabled,
         };
         await this.upsertWidgetSettings(member.businessAccountId, updateData);
+        businessContextCache.invalidateBusinessCache(member.businessAccountId);
         affectedCount++;
       } catch (error) {
         console.error(`[Group Extra] Failed to publish to account ${member.businessAccountId}:`, error);
@@ -4996,6 +5138,7 @@ export class DatabaseStorage implements IStorage {
       const name = member.businessAccount?.name || member.businessAccountId;
       try {
         let touched = false;
+        const warnings: string[] = [];
         const updateData: Partial<InsertWidgetSettings> = {};
 
         if (publishAll || module === 'instructions') {
@@ -5058,7 +5201,10 @@ export class DatabaseStorage implements IStorage {
 
         if (publishAll || module === 'menuBuilder') {
           if (groupTraining.menuConfig !== undefined || groupTraining.menuItems !== undefined) {
-            await this.publishGroupMenuToMember(member.businessAccountId, groupTraining.menuConfig, groupTraining.menuItems);
+            const missing = await this.publishGroupMenuToMember(member.businessAccountId, groupTraining.menuConfig, groupTraining.menuItems);
+            if (missing.length > 0) {
+              warnings.push(`Form not in this account for: ${missing.join(', ')} (publish Journey Training first)`);
+            }
             touched = true;
           }
         }
@@ -5068,7 +5214,7 @@ export class DatabaseStorage implements IStorage {
           // WhatsApp) so the new training is used on the next message, not after TTL.
           businessContextCache.invalidateBusinessCache(member.businessAccountId);
         }
-        results.push({ businessAccountId: member.businessAccountId, name, ok: true });
+        results.push({ businessAccountId: member.businessAccountId, name, ok: true, ...(warnings.length ? { warnings } : {}) });
       } catch (error: any) {
         console.error(`[Group Training] Failed to update account ${member.businessAccountId}:`, error);
         const message = String(error?.message || error || 'Unknown error').slice(0, 300);
@@ -5112,7 +5258,9 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async publishGroupMenuToMember(businessAccountId: string, menuConfig: any, menuItems: any): Promise<void> {
+  /** Returns the titles of "open a form" buttons whose journey this account doesn't have. */
+  async publishGroupMenuToMember(businessAccountId: string, menuConfig: any, menuItems: any): Promise<string[]> {
+    const missingForms: string[] = [];
     // Update or create the menu config for this account
     if (menuConfig) {
       const [existing] = await db
@@ -5150,54 +5298,71 @@ export class DatabaseStorage implements IStorage {
       }
     }
     
-    // Delete existing menu items and insert new ones if provided
-    if (menuItems && Array.isArray(menuItems) && menuItems.length > 0) {
-      // Delete all existing menu items for this account
-      await db
-        .delete(chatMenuItems)
-        .where(eq(chatMenuItems.businessAccountId, businessAccountId));
-        
-      // Create a mapping from old IDs to new IDs to preserve hierarchy
-      const idMapping: Record<string, string> = {};
-      
-      // First pass: Insert all items and build ID mapping
+    // Replace the account's menu items with the group's (an empty list clears them).
+    if (Array.isArray(menuItems)) {
+      // "Open a form" buttons are saved with a group journey (or, from older menus, another
+      // member's journey): point each one at this account's own copy.
+      const journeyIds: Record<string, string | null> = {};
       for (const item of menuItems) {
-        const [inserted] = await db.insert(chatMenuItems).values({
-          businessAccountId,
-          parentId: null, // Will be updated in second pass
-          title: item.title || item.label || 'Untitled',
-          subtitle: item.subtitle || item.description || null,
-          icon: item.icon || null,
-          iconColor: item.iconColor || null,
-          iconBgColor: item.iconBgColor || null,
-          itemType: item.itemType || 'navigate',
-          actionValue: item.actionValue || null,
-          leadFormFields: item.leadFormFields || null,
-          sortOrder: item.sortOrder ?? item.order ?? 0,
-          isActive: item.isActive || 'true',
-        }).returning();
-        
-        if (item.id && inserted.id) {
-          idMapping[item.id] = inserted.id;
+        if (item?.itemType === 'form' && item.actionValue && !(item.actionValue in journeyIds)) {
+          journeyIds[item.actionValue] = await this.resolveAccountJourneyId(businessAccountId, item.actionValue);
+        }
+        if (item?.itemType === 'form' && item.actionValue && !journeyIds[item.actionValue]) {
+          missingForms.push(item.title || item.label || 'Untitled');
         }
       }
-      
-      // Second pass: Update parentId references using the mapping
-      for (const item of menuItems) {
-        if (item.parentId) {
-          const newItemId = idMapping[item.id];
-          const newParentId = idMapping[item.parentId];
-          if (newItemId && newParentId) {
-            await db
-              .update(chatMenuItems)
-              .set({ parentId: newParentId })
-              .where(eq(chatMenuItems.id, newItemId));
+
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(chatMenuItems)
+          .where(eq(chatMenuItems.businessAccountId, businessAccountId));
+
+        // Create a mapping from old IDs to new IDs to preserve hierarchy
+        const idMapping: Record<string, string> = {};
+
+        // First pass: Insert all items and build ID mapping
+        for (const item of menuItems) {
+          const actionValue = item.itemType === 'form' && item.actionValue
+            ? (journeyIds[item.actionValue] || item.actionValue)
+            : (item.actionValue || null);
+          const [inserted] = await tx.insert(chatMenuItems).values({
+            businessAccountId,
+            parentId: null, // Will be updated in second pass
+            title: item.title || item.label || 'Untitled',
+            subtitle: item.subtitle || item.description || null,
+            icon: item.icon || null,
+            iconColor: item.iconColor || null,
+            iconBgColor: item.iconBgColor || null,
+            itemType: item.itemType || 'navigate',
+            actionValue,
+            leadFormFields: item.leadFormFields || null,
+            sortOrder: item.sortOrder ?? item.order ?? 0,
+            isActive: item.isActive || 'true',
+          }).returning();
+
+          if (item.id && inserted.id) {
+            idMapping[item.id] = inserted.id;
           }
         }
-      }
+
+        // Second pass: Update parentId references using the mapping
+        for (const item of menuItems) {
+          if (item.parentId) {
+            const newItemId = idMapping[item.id];
+            const newParentId = idMapping[item.parentId];
+            if (newItemId && newParentId) {
+              await tx
+                .update(chatMenuItems)
+                .set({ parentId: newParentId })
+                .where(eq(chatMenuItems.id, newItemId));
+            }
+          }
+        }
+      });
     }
     
     console.log(`[Group Menu] Published menu settings to account ${businessAccountId}`);
+    return missingForms;
   }
 
   async getChatMenuItems(businessAccountId: string) {

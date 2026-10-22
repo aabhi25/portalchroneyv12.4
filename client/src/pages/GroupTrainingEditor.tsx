@@ -143,6 +143,7 @@ interface GroupPublishResponse {
   attemptedCount: number;
   totalMembers: number;
   failedMembers: Array<{ businessAccountId: string; name: string; error?: string }>;
+  results?: Array<{ businessAccountId: string; name: string; ok: boolean; error?: string; warnings?: string[] }>;
   fullyPublished?: boolean;
 }
 
@@ -414,6 +415,8 @@ export default function GroupTrainingEditor() {
   const [deleteGroupJourneyOpen, setDeleteGroupJourneyOpen] = useState(false);
   const [journeyToDeleteId, setJourneyToDeleteId] = useState<string | null>(null);
   const [publishingJourneys, setPublishingJourneys] = useState(false);
+  // Confirm step before the Journey Training / Extra settings "Publish to All Accounts".
+  const [confirmSimplePublish, setConfirmSimplePublish] = useState<"journeys" | "extra" | null>(null);
   const [journeyDraggedStepId, setJourneyDraggedStepId] = useState<string | null>(null);
   const [journeyStepForm, setJourneyStepForm] = useState({
     questionText: "",
@@ -427,6 +430,7 @@ export default function GroupTrainingEditor() {
     skipToStepIndex: null as number | null,
     isConditional: false,
     completionButtonText: "",
+    crmFieldKey: "",
   });
 
   // Extra Settings state
@@ -679,8 +683,8 @@ export default function GroupTrainingEditor() {
         phoneCountryCode: newLsqMapping.sourceType === 'dynamic' && isLsqPhoneSource(newLsqMapping.sourceField) && newLsqMapping.addCountryCode ? DEFAULT_PHONE_COUNTRY_CODE : null,
         phoneCodeStyle: newLsqMapping.phoneCodeStyle,
         displayName: newLsqMapping.displayName,
-        isEnabled: true,
-        sortOrder: lsqFieldMappings.length,
+        // A new mapping goes at the end; editing one keeps its place and on/off state.
+        ...(editingLsqMapping ? {} : { isEnabled: true, sortOrder: lsqFieldMappings.length }),
       };
       
       const url = editingLsqMapping 
@@ -722,19 +726,15 @@ export default function GroupTrainingEditor() {
     if (!groupId || !deletingLsqMappingId) return;
     
     try {
-      const response = await apiRequest("DELETE", `/api/super-admin/account-groups/${groupId}/leadsquared/field-mappings/${deletingLsqMappingId}`);
-      
-      if (response.ok) {
-        toast({
-          title: "Mapping deleted",
-          description: "Field mapping has been removed.",
-        });
-        setShowLsqDeleteDialog(false);
-        setDeletingLsqMappingId(null);
-        fetchLsqFieldMappings();
-      } else {
-        throw new Error("Failed to delete mapping");
-      }
+      // apiRequest throws on a failed request and returns the parsed body otherwise.
+      await apiRequest("DELETE", `/api/super-admin/account-groups/${groupId}/leadsquared/field-mappings/${deletingLsqMappingId}`);
+      toast({
+        title: "Mapping deleted",
+        description: "Field mapping has been removed.",
+      });
+      setShowLsqDeleteDialog(false);
+      setDeletingLsqMappingId(null);
+      fetchLsqFieldMappings();
     } catch (error: any) {
       toast({
         title: "Error deleting mapping",
@@ -754,13 +754,9 @@ export default function GroupTrainingEditor() {
     ));
     
     try {
-      const response = await apiRequest("PUT", `/api/super-admin/account-groups/${groupId}/leadsquared/field-mappings/${mapping.id}`, {
+      await apiRequest("PUT", `/api/super-admin/account-groups/${groupId}/leadsquared/field-mappings/${mapping.id}`, {
         isEnabled: newIsEnabled,
       });
-      
-      if (!response.ok) {
-        fetchLsqFieldMappings();
-      }
     } catch (error) {
       console.error("Error toggling mapping:", error);
       fetchLsqFieldMappings();
@@ -882,6 +878,7 @@ export default function GroupTrainingEditor() {
       skipToStepIndex: null,
       isConditional: false,
       completionButtonText: "",
+      crmFieldKey: "",
     });
   };
 
@@ -903,6 +900,7 @@ export default function GroupTrainingEditor() {
       skipToStepIndex: step.skipToStepIndex ?? null,
       isConditional: step.isConditional === "true" || step.isConditional === true,
       completionButtonText: step.completionButtonText || "",
+      crmFieldKey: step.crmFieldKey || "",
     });
     setJourneyStepDialogOpen(true);
   };
@@ -913,6 +911,7 @@ export default function GroupTrainingEditor() {
       ...journeyStepForm,
       multipleChoiceOptions: journeyStepForm.multipleChoiceOptions.length > 0 ? JSON.stringify(journeyStepForm.multipleChoiceOptions) : null,
       isConditional: journeyStepForm.isConditional ? "true" : "false",
+      crmFieldKey: journeyStepForm.crmFieldKey.trim() || null,
     };
     try {
       if (editingJourneyStep) {
@@ -974,9 +973,15 @@ export default function GroupTrainingEditor() {
     setPublishingJourneys(true);
     try {
       const result = await apiRequest("POST", `/api/super-admin/account-groups/${groupId}/group-journeys/publish`);
-      toast({ title: result.message || "Journeys published to all member accounts" });
-    } catch (error) {
-      toast({ title: "Failed to publish journeys", variant: "destructive" });
+      const failed = result.failedMembers?.length || 0;
+      toast({
+        title: result.message || "Journeys published to all member accounts",
+        description: failed > 0 ? "Those accounts were left as they were. Publish again to retry." : undefined,
+        variant: failed > 0 ? "destructive" : undefined,
+      });
+      queryClient.invalidateQueries({ queryKey: [`/api/super-admin/account-groups/${groupId}/journeys`] });
+    } catch (error: any) {
+      toast({ title: "Failed to publish journeys", description: error?.message, variant: "destructive" });
     } finally {
       setPublishingJourneys(false);
     }
@@ -1006,8 +1011,8 @@ export default function GroupTrainingEditor() {
     }
   }, [activeTab, groupId, extraLoaded]);
 
-  const handleSaveExtraSettings = async () => {
-    if (!groupId) return;
+  const handleSaveExtraSettings = async (opts?: { quiet?: boolean }): Promise<boolean> => {
+    if (!groupId) return false;
     setSavingExtra(true);
     try {
       await apiRequest("PUT", `/api/super-admin/account-groups/${groupId}/extra-settings`, {
@@ -1020,9 +1025,11 @@ export default function GroupTrainingEditor() {
         inactivityNudgeMessage: extraInactivityNudgeMessage,
         smartNudgeEnabled: extraSmartNudgeEnabled ? "true" : "false",
       });
-      toast({ title: "Extra settings saved" });
-    } catch (error) {
-      toast({ title: "Failed to save extra settings", variant: "destructive" });
+      if (!opts?.quiet) toast({ title: "Extra settings saved" });
+      return true;
+    } catch (error: any) {
+      toast({ title: "Failed to save extra settings", description: error?.message, variant: "destructive" });
+      return false;
     } finally {
       setSavingExtra(false);
     }
@@ -1032,7 +1039,8 @@ export default function GroupTrainingEditor() {
     if (!groupId) return;
     setPublishingExtra(true);
     try {
-      await handleSaveExtraSettings();
+      // Publishing copies the SAVED settings, so stop if saving failed.
+      if (!(await handleSaveExtraSettings({ quiet: true }))) return;
       const result = await apiRequest("POST", `/api/super-admin/account-groups/${groupId}/extra-settings/publish`);
       toast({ title: result.message || "Extra settings published to all member accounts" });
     } catch (error) {
@@ -1040,6 +1048,37 @@ export default function GroupTrainingEditor() {
     } finally {
       setPublishingExtra(false);
     }
+  };
+
+  // "Open a form" menu buttons pick a GROUP journey; publishing points each account's button at
+  // its own copy. A button saved before this (pointing at one member's journey) still shows.
+  const renderMenuJourneyOptions = (currentValue?: string | null) => {
+    const legacy = currentValue && !groupJourneysList.some((j: any) => j.id === currentValue)
+      ? groupJourneys?.flatMap((a) => a.journeys.map((j) => ({ ...j, accountName: a.accountName }))).find((j) => j.id === currentValue)
+      : undefined;
+    if (groupJourneysList.length === 0 && !legacy) {
+      return <div className="px-2 py-4 text-sm text-muted-foreground text-center">No group journeys yet. Create one in Journey Training.</div>;
+    }
+    return (
+      <>
+        {groupJourneysList.length > 0 && (
+          <SelectGroup>
+            <SelectLabel>Group journeys</SelectLabel>
+            {groupJourneysList.map((journey: any) => (
+              <SelectItem key={journey.id} value={journey.id}>
+                {journey.name} ({journey.journeyType})
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        )}
+        {legacy && (
+          <SelectGroup>
+            <SelectLabel>Currently set (from {legacy.accountName})</SelectLabel>
+            <SelectItem value={legacy.id}>{legacy.name} ({legacy.journeyType})</SelectItem>
+          </SelectGroup>
+        )}
+      </>
+    );
   };
 
   const hasFallbackInstruction = instructions.some(instr => instr.type === 'fallback');
@@ -1410,6 +1449,15 @@ export default function GroupTrainingEditor() {
         toast({
           title: `${moduleName}: ${data.affectedCount} of ${data.attemptedCount} updated, ${failedCount} failed`,
           description: `Failed: ${data.failedMembers.map((m) => m.name).join(', ')}. Use "Retry failed" to try them again.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      const warned = (data.results || []).filter((r) => r.warnings?.length);
+      if (warned.length > 0) {
+        toast({
+          title: `${moduleName} published, with something to fix`,
+          description: warned.map((r) => `${r.name}: ${r.warnings!.join('; ')}`).join(' · '),
           variant: "destructive",
         });
         return;
@@ -2615,7 +2663,7 @@ export default function GroupTrainingEditor() {
               </div>
               <div className="flex gap-2">
                 <Button
-                  onClick={handlePublishJourneys}
+                  onClick={() => setConfirmSimplePublish("journeys")}
                   disabled={publishingJourneys || groupJourneysList.length === 0}
                   variant="outline"
                   className="gap-2 border-green-300 hover:border-green-500 hover:bg-green-50"
@@ -2756,6 +2804,30 @@ export default function GroupTrainingEditor() {
                           />
                         </div>
 
+                        <div className="p-3 bg-gray-50 dark:bg-gray-800/30 rounded-lg">
+                          <Label className="text-sm font-medium">When the journey ends</Label>
+                          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                            {([
+                              ['chat', 'The visitor can keep chatting', 'A "Chat Now" button lets them ask the AI anything.'],
+                              ['end', 'End the chat here (no AI)', 'No typing after the closing message. Only "Start a new chat".'],
+                            ] as const).map(([mode, title, hint]) => {
+                              const active = (selectedGroupJourney.endMode === 'end' ? 'end' : 'chat') === mode;
+                              return (
+                                <button
+                                  key={mode}
+                                  type="button"
+                                  onClick={() => !active && handleUpdateGroupJourney(selectedGroupJourney.id, { endMode: mode })}
+                                  className={`rounded-lg border p-2.5 text-left transition-colors ${active ? 'border-purple-500 bg-purple-50 dark:bg-purple-950/30' : 'border-gray-200 bg-white dark:bg-transparent hover:bg-gray-50'}`}
+                                  data-testid={`group-journey-ends-${mode}`}
+                                >
+                                  <span className={`block text-sm font-medium ${active ? 'text-purple-900 dark:text-purple-200' : 'text-gray-800 dark:text-gray-200'}`}>{title}</span>
+                                  <span className="mt-0.5 block text-xs text-muted-foreground">{hint}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
                         {selectedGroupJourney.startFromScratch !== 'true' && (
                           <div className="p-3 bg-purple-50/50 dark:bg-purple-950/10 rounded-lg border border-purple-200/50">
                             <Label className="text-sm font-medium">Trigger Keywords</Label>
@@ -2833,7 +2905,7 @@ export default function GroupTrainingEditor() {
                                     )}
                                   </div>
                                   <p className="text-sm font-medium">{step.questionText}</p>
-                                  <p className="text-xs text-muted-foreground mt-1">Type: {step.questionType}</p>
+                                  <p className="text-xs text-muted-foreground mt-1">Type: {step.questionType}{step.crmFieldKey ? ` · Saved as ${step.crmFieldKey}` : ""}</p>
                                 </div>
                                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                   <Button size="sm" variant="ghost" onClick={() => handleEditJourneyStep(step)} className="h-8 w-8 p-0"><Edit2 className="w-3.5 h-3.5" /></Button>
@@ -3381,22 +3453,7 @@ export default function GroupTrainingEditor() {
                           <SelectValue placeholder="Select a journey..." />
                         </SelectTrigger>
                         <SelectContent>
-                          {groupJourneys && groupJourneys.some(a => a.journeys.length > 0) ? (
-                            groupJourneys.map((account) =>
-                              account.journeys.length > 0 ? (
-                                <SelectGroup key={account.accountId}>
-                                  <SelectLabel>{account.accountName}</SelectLabel>
-                                  {account.journeys.map((journey) => (
-                                    <SelectItem key={journey.id} value={journey.id}>
-                                      {journey.name} ({journey.journeyType})
-                                    </SelectItem>
-                                  ))}
-                                </SelectGroup>
-                              ) : null
-                            )
-                          ) : (
-                            <div className="px-2 py-4 text-sm text-muted-foreground text-center">No active journeys found</div>
-                          )}
+                          {renderMenuJourneyOptions(newMenuItem.actionValue)}
                         </SelectContent>
                       </Select>
                     </div>
@@ -3582,22 +3639,7 @@ export default function GroupTrainingEditor() {
                             <SelectValue placeholder="Select a journey..." />
                           </SelectTrigger>
                           <SelectContent>
-                            {groupJourneys && groupJourneys.some(a => a.journeys.length > 0) ? (
-                              groupJourneys.map((account) =>
-                                account.journeys.length > 0 ? (
-                                  <SelectGroup key={account.accountId}>
-                                    <SelectLabel>{account.accountName}</SelectLabel>
-                                    {account.journeys.map((journey) => (
-                                      <SelectItem key={journey.id} value={journey.id}>
-                                        {journey.name} ({journey.journeyType})
-                                      </SelectItem>
-                                    ))}
-                                  </SelectGroup>
-                                ) : null
-                              )
-                            ) : (
-                              <div className="px-2 py-4 text-sm text-muted-foreground text-center">No active journeys found</div>
-                            )}
+                            {renderMenuJourneyOptions(editingMenuItem.actionValue)}
                           </SelectContent>
                         </Select>
                       </div>
@@ -3871,11 +3913,11 @@ export default function GroupTrainingEditor() {
                 <p className="text-sm text-gray-500 mt-1">Configure response length, chat behavior, and inactivity nudge for all group members</p>
               </div>
               <div className="flex gap-2">
-                <Button onClick={handleSaveExtraSettings} disabled={savingExtra} variant="outline">
+                <Button onClick={() => handleSaveExtraSettings()} disabled={savingExtra} variant="outline">
                   {savingExtra ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
                   Save
                 </Button>
-                <Button onClick={handlePublishExtraSettings} disabled={publishingExtra} className="bg-purple-600 hover:bg-purple-700 text-white">
+                <Button onClick={() => setConfirmSimplePublish("extra")} disabled={publishingExtra} className="bg-purple-600 hover:bg-purple-700 text-white">
                   {publishingExtra ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
                   Publish to All Accounts
                 </Button>
@@ -4073,11 +4115,11 @@ export default function GroupTrainingEditor() {
 
             {/* Bottom action buttons */}
             <div className="flex gap-3 justify-end pt-2">
-              <Button onClick={handleSaveExtraSettings} disabled={savingExtra} variant="outline">
+              <Button onClick={() => handleSaveExtraSettings()} disabled={savingExtra} variant="outline">
                 {savingExtra ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
                 Save Settings
               </Button>
-              <Button onClick={handlePublishExtraSettings} disabled={publishingExtra} className="bg-purple-600 hover:bg-purple-700 text-white">
+              <Button onClick={() => setConfirmSimplePublish("extra")} disabled={publishingExtra} className="bg-purple-600 hover:bg-purple-700 text-white">
                 {publishingExtra ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
                 Publish to All Accounts
               </Button>
@@ -4421,6 +4463,18 @@ export default function GroupTrainingEditor() {
                   <Label className="cursor-pointer">This field is required</Label>
                 </div>
 
+                <div>
+                  <Label>Saved as <span className="font-normal text-muted-foreground">(optional, used in the lead and for the CRM)</span></Label>
+                  <Input
+                    value={journeyStepForm.crmFieldKey}
+                    onChange={(e) => setJourneyStepForm({ ...journeyStepForm, crmFieldKey: e.target.value.replace(/\s+/g, "_") })}
+                    placeholder="e.g. course"
+                    className="mt-1 max-w-xs"
+                    data-testid="input-group-step-saved-as"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">In LeadSquared mappings this answer is <code>journey.{journeyStepForm.crmFieldKey.trim() || "key"}</code>.</p>
+                </div>
+
                 {selectedGroupJourney?.journeyType === 'form' && (journeyStepForm.questionType === 'dropdown' || journeyStepForm.questionType === 'radio') && journeyStepForm.multipleChoiceOptions.length > 0 && (
                   <div className="border-t pt-4 mt-4">
                     <div className="flex items-center gap-2 mb-2">
@@ -4537,6 +4591,56 @@ export default function GroupTrainingEditor() {
               ) : (
                 <Upload className="w-4 h-4 mr-2" />
               )}
+              Publish to All Accounts
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!confirmSimplePublish} onOpenChange={(open) => !open && setConfirmSimplePublish(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              {confirmSimplePublish === "journeys" ? "Publish Journeys" : "Publish Extra Settings"}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              {confirmSimplePublish === "journeys" ? (
+                <div className="space-y-2 text-sm text-muted-foreground" data-testid="publish-journeys-summary">
+                  <span className="block">
+                    This updates the group's {groupJourneysList.length} journey{groupJourneysList.length === 1 ? "" : "s"} on all {groupTraining?.memberCount ?? 0} member accounts
+                    {groupTraining?.members?.length ? ` (${groupTraining.members.map((m) => m.name).join(', ')})` : ''}.
+                  </span>
+                  <ul className="list-disc pl-5 space-y-0.5">
+                    <li>Each account's copy is updated in place: answers visitors already gave are kept.</li>
+                    <li>Journeys an account made itself are not changed.</li>
+                    <li>A journey deleted from the group is switched off in the accounts, not deleted.</li>
+                    <li>A question deleted from a group journey is removed from the accounts, with its saved answers.</li>
+                  </ul>
+                </div>
+              ) : (
+                <div className="space-y-2 text-sm text-muted-foreground">
+                  <span className="block">
+                    This saves and then overwrites response length, auto-open, opening sound and inactivity nudge on all {groupTraining?.memberCount ?? 0} member accounts.
+                  </span>
+                  <span className="block text-destructive font-medium">Any different values set on individual accounts will be replaced.</span>
+                </div>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const which = confirmSimplePublish;
+                setConfirmSimplePublish(null);
+                if (which === "journeys") handlePublishJourneys();
+                else if (which === "extra") handlePublishExtraSettings();
+              }}
+              className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+              data-testid="button-confirm-simple-publish"
+            >
+              <Upload className="w-4 h-4 mr-2" />
               Publish to All Accounts
             </AlertDialogAction>
           </AlertDialogFooter>
