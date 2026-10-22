@@ -48,11 +48,6 @@ type ApiKeyFormData = z.infer<typeof apiKeySchema>;
 type ElevenLabsKeyFormData = z.infer<typeof elevenlabsKeySchema>;
 type CurrencyFormData = z.infer<typeof currencySchema>;
 
-interface BusinessAccount {
-  id: string;
-  name: string;
-  website: string | null;
-}
 
 interface ApiSettings {
   businessAccountId: string;
@@ -64,43 +59,19 @@ interface ApiSettings {
   currency: string;
 }
 
-export default function SuperAdminApiKeys() {
+/**
+ * One account's AI keys (OpenAI, ElevenLabs, Vista Studio image model, photo search) or its display
+ * currency. Shown on the account's own page (AI & keys, and Details & login for currency).
+ */
+export default function AccountApiSettings({ businessAccountId, section }: { businessAccountId: string; section: "keys" | "currency" }) {
   const { toast } = useToast();
-  const [selectedBusinessId, setSelectedBusinessId] = useState<string>("");
+  const selectedBusinessId = businessAccountId;
   const [showOpenAIKey, setShowOpenAIKey] = useState(false);
   const [showElevenLabsKey, setShowElevenLabsKey] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
   const [googleApiKey, setGoogleApiKey] = useState("");
   const [showGoogleApiKey, setShowGoogleApiKey] = useState(false);
   const [isTestingGoogleKey, setIsTestingGoogleKey] = useState(false);
   
-  const { data: businessAccounts = [] } = useQuery<BusinessAccount[]>({
-    queryKey: ["/api/business-accounts", "all"],
-    queryFn: async () => {
-      const response = await fetch("/api/business-accounts?limit=1000", { credentials: "include" });
-      if (!response.ok) throw new Error("Failed to fetch business accounts");
-      const data = await response.json();
-      // API returns { accounts: [...], total, hasMore } - extract accounts array
-      return data.accounts || data;
-    },
-  });
-
-  const selectedAccount = useMemo(() => 
-    businessAccounts.find(b => b.id === selectedBusinessId),
-    [businessAccounts, selectedBusinessId]
-  );
-
-  const filteredAccounts = useMemo(() => 
-    [...businessAccounts]
-      .filter(account => 
-        account.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (account.website && account.website.toLowerCase().includes(searchQuery.toLowerCase()))
-      )
-      .sort((a, b) => a.name.localeCompare(b.name)),
-    [businessAccounts, searchQuery]
-  );
-
   const { data: apiSettings, isLoading: apiSettingsLoading } = useQuery<ApiSettings>({
     queryKey: ["/api/business-accounts", selectedBusinessId, "api-settings"],
     enabled: !!selectedBusinessId,
@@ -128,8 +99,9 @@ export default function SuperAdminApiKeys() {
 
   const currencyForm = useForm<CurrencyFormData>({
     resolver: zodResolver(currencySchema),
+    // Settings may already be cached (e.g. after the AI & keys tab), so start from them.
     defaultValues: {
-      currency: "USD",
+      currency: apiSettings?.currency || "USD",
     },
   });
 
@@ -308,98 +280,13 @@ export default function SuperAdminApiKeys() {
   });
 
   return (
-    <div className="container mx-auto p-6 space-y-6 max-w-5xl">
-      <div className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight">API Keys & Settings</h1>
-        <p className="text-muted-foreground">
-          Manage OpenAI API keys and currency settings for business accounts
-        </p>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Building2 className="w-5 h-5" />
-            Select Business Account
-          </CardTitle>
-          <CardDescription>
-            Choose a business account to configure its API settings
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Popover open={searchOpen} onOpenChange={setSearchOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                role="combobox"
-                aria-expanded={searchOpen}
-                className="w-full justify-between"
-                data-testid="select-business-account"
-              >
-                {selectedAccount ? (
-                  <span className="truncate">{selectedAccount.name}</span>
-                ) : (
-                  <span className="text-muted-foreground">Search business accounts...</span>
-                )}
-                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-[400px] p-0" align="start">
-              <Command shouldFilter={false}>
-                <CommandInput 
-                  placeholder="Search by name or website..." 
-                  value={searchQuery}
-                  onValueChange={setSearchQuery}
-                />
-                <CommandList>
-                  <CommandEmpty>No business account found.</CommandEmpty>
-                  <CommandGroup>
-                    {filteredAccounts.map((account) => (
-                      <CommandItem
-                        key={account.id}
-                        value={account.id}
-                        onSelect={(value) => {
-                          setSelectedBusinessId(value);
-                          setSearchOpen(false);
-                          setSearchQuery("");
-                        }}
-                      >
-                        <Check
-                          className={cn(
-                            "mr-2 h-4 w-4",
-                            selectedBusinessId === account.id ? "opacity-100" : "opacity-0"
-                          )}
-                        />
-                        <div className="flex flex-col">
-                          <span>{account.name}</span>
-                          {account.website && (
-                            <span className="text-xs text-muted-foreground">{account.website}</span>
-                          )}
-                        </div>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
-          
-          {selectedBusinessId && selectedAccount && (
-            <div className="mt-4 p-3 bg-muted/50 rounded-md border">
-              <p className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">Website:</span>{" "}
-                {selectedAccount.website || "Not specified"}
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
+    <div className="max-w-3xl space-y-5">
       {selectedBusinessId && !apiSettingsLoading && apiSettings && (
         <>
+          {section === "keys" && (<>
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
                 <Key className="w-5 h-5" />
                 OpenAI API Key
               </CardTitle>
@@ -465,7 +352,7 @@ export default function SuperAdminApiKeys() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
                 <Key className="w-5 h-5" />
                 ElevenLabs API Key
               </CardTitle>
@@ -526,11 +413,14 @@ export default function SuperAdminApiKeys() {
             </CardContent>
           </Card>
 
+          </>)}
+
+          {section === "currency" && (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
                 <DollarSign className="w-5 h-5" />
-                Currency Settings
+                Currency
               </CardTitle>
               <CardDescription>
                 Configure the display currency for products and pricing
@@ -572,10 +462,13 @@ export default function SuperAdminApiKeys() {
               </form>
             </CardContent>
           </Card>
+          )}
+
+          {section === "keys" && (<>
 
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
                 <Camera className="w-5 h-5" />
                 Vista Studio
               </CardTitle>
@@ -704,7 +597,7 @@ export default function SuperAdminApiKeys() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
                 <Sparkles className="w-5 h-5" />
                 Photo search
               </CardTitle>
@@ -717,6 +610,7 @@ export default function SuperAdminApiKeys() {
               <GeminiAccountKeyEditor businessAccountId={selectedBusinessId} />
             </CardContent>
           </Card>
+          </>)}
         </>
       )}
 
@@ -731,15 +625,6 @@ export default function SuperAdminApiKeys() {
         </Card>
       )}
 
-      {!selectedBusinessId && (
-        <Card>
-          <CardContent className="flex items-center justify-center py-12">
-            <p className="text-muted-foreground">
-              Please select a business account to manage its API settings
-            </p>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

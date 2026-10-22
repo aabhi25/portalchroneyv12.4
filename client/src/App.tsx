@@ -44,20 +44,21 @@ import Conversations from "@/pages/Conversations";
 import Calendar from "@/pages/Calendar";
 import SuperAdmin from "@/pages/SuperAdmin";
 import SuperAdminSettings from "@/pages/SuperAdminSettings";
-import SuperAdminInsights from "@/pages/SuperAdminInsights";
 import SuperAdminCosts from "@/pages/SuperAdminCosts";
 import SuperAdminUsage from "@/pages/SuperAdminUsage";
 import SuperAdminMIS from "@/pages/SuperAdminMIS";
 import SuperAdminDemo from "@/pages/SuperAdminDemo";
-import SuperAdminApiKeys from "@/pages/SuperAdminApiKeys";
 import SuperAdminChatApis from "@/pages/SuperAdminChatApis";
 import SuperAdminAccountGroups from "@/pages/SuperAdminAccountGroups";
-import GroupInsightsPage from "@/pages/GroupInsightsPage";
-import GroupTrainingEditor from "@/pages/GroupTrainingEditor";
 import SuperAdminR2Settings from "@/pages/SuperAdminR2Settings";
 import SuperAdminServerInfo from "@/pages/SuperAdminServerInfo";
 import SuperAdminLiveLogs from "@/pages/SuperAdminLiveLogs";
 import SuperAdminAuditLogs from "@/pages/SuperAdminAuditLogs";
+import SuperAdminToday from "@/pages/SuperAdminToday";
+import SuperAdminGroupPage from "@/pages/SuperAdminGroupPage";
+import { LiveAvatarPlatformCard } from "@/components/LiveAvatarPlatformCard";
+import { GeminiPlatformKeyCard } from "@/components/photoSearch/GeminiKeyEditor";
+import { SuperAdminFrame, isSuperAdminHome } from "@/components/superadmin/SuperAdminFrame";
 import PublicDemo from "@/pages/PublicDemo";
 import PublicChat from "@/pages/PublicChat";
 import Login from "@/pages/Login";
@@ -159,9 +160,9 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
     }
   }, [currentUser, setLocation]);
 
-  // Apple-style portal look (index.css), only for logged-in business views, never on public pages.
+  // Apple-style portal look (index.css), for logged-in business views and the super admin side, never on public pages.
   const isPublicPage = /^\/(embed|demo|public-chat|reset-password)(\/|$)/.test(location);
-  const portalLook = !!user && usesHubLayout(user) && !isPublicPage && location !== "/change-password";
+  const portalLook = !!user && (usesHubLayout(user) || isSuperAdminHome(user)) && !isPublicPage && location !== "/change-password";
   useEffect(() => {
     document.documentElement.classList.toggle("portal-apple", portalLook);
   }, [portalLook]);
@@ -237,6 +238,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
         </header>
         <div className="flex-1 overflow-auto">
           <HubFrame user={user}>
+          <SuperAdminFrame user={user}>
           <Switch>
             <Route path="/admin/content-sync">
               {() => canManageTopScholarContent ? <ContentSync /> : <Redirect to="/" />}
@@ -254,23 +256,32 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                     return <Redirect to="/super-admin" />;
                   })()}
                 </Route>
-                <Route path="/super-admin" component={SuperAdmin} />
-                <Route path="/admin/insights" component={SuperAdminInsights} />
-                <Route path="/super-admin/insights" component={SuperAdminInsights} />
+                <Route path="/super-admin">{() => <SuperAdmin />}</Route>
+                <Route path="/super-admin/accounts/:id/:tab?">{({ id, tab }) => <SuperAdmin key={id} accountId={id} tab={tab} />}</Route>
+                <Route path="/super-admin/today" component={SuperAdminToday} />
                 <Route path="/super-admin/costs" component={SuperAdminCosts} />
                 <Route path="/super-admin/usage" component={SuperAdminUsage} />
                 <Route path="/super-admin/mis" component={SuperAdminMIS} />
-                <Route path="/super-admin/demo" component={SuperAdminDemo} />
-                <Route path="/super-admin/api-keys" component={SuperAdminApiKeys} />
-                <Route path="/super-admin/chat-apis" component={SuperAdminChatApis} />
-                <Route path="/super-admin/google-photos">{() => <Redirect to="/super-admin" />}</Route>
-                <Route path="/super-admin/account-groups" component={SuperAdminAccountGroups} />
-                <Route path="/super-admin/account-groups/:groupId/insights" component={GroupInsightsPage} />
-                <Route path="/super-admin/account-groups/:groupId/training" component={GroupTrainingEditor} />
-                <Route path="/super-admin/settings" component={SuperAdminSettings} />
-                <Route path="/super-admin/r2-storage" component={SuperAdminR2Settings} />
+                <Route path="/super-admin/demo">{() => <SuperAdminDemo />}</Route>
+                <Route path="/super-admin/ai-providers" component={SuperAdminChatApis} />
+                <Route path="/super-admin/ai-providers/avatar">{() => <LiveAvatarPlatformCard />}</Route>
+                <Route path="/super-admin/ai-providers/photo-search">{() => <GeminiPlatformKeyCard />}</Route>
+                <Route path="/super-admin/account-groups">{() => <SuperAdminAccountGroups />}</Route>
+                <Route path="/super-admin/account-groups/:groupId/:tab?">{({ groupId, tab }) => <SuperAdminGroupPage key={groupId} groupId={groupId} tab={tab} />}</Route>
+                <Route path="/super-admin/settings">{() => <SuperAdminSettings section="account" />}</Route>
+                <Route path="/super-admin/backups">{() => <SuperAdminSettings section="backups" />}</Route>
+                <Route path="/super-admin/backups/download">{() => <SuperAdminSettings section="download" />}</Route>
+                <Route path="/super-admin/backups/storage" component={SuperAdminR2Settings} />
+                <Route path="/super-admin/backups/search-index">{() => <SuperAdminSettings section="index" />}</Route>
                 <Route path="/super-admin/server-info" component={SuperAdminServerInfo} />
                 <Route path="/super-admin/live-logs" component={SuperAdminLiveLogs} />
+                {/* Old addresses: Insights and API Keys now live on each account's page. */}
+                <Route path="/admin/insights">{() => <Redirect to="/super-admin" replace />}</Route>
+                <Route path="/super-admin/insights">{() => <Redirect to="/super-admin" replace />}</Route>
+                <Route path="/super-admin/api-keys">{() => <Redirect to="/super-admin" replace />}</Route>
+                <Route path="/super-admin/google-photos">{() => <Redirect to="/super-admin" replace />}</Route>
+                <Route path="/super-admin/chat-apis">{() => <Redirect to="/super-admin/ai-providers" replace />}</Route>
+                <Route path="/super-admin/r2-storage">{() => <Redirect to="/super-admin/backups/storage" replace />}</Route>
                 <Route path="/super-admin/audit-logs" component={SuperAdminAuditLogs} />
               </>
             ) : user?.role === "account_group_admin" ? (
@@ -454,6 +465,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
             )}
             <Route component={NotFound} />
           </Switch>
+          </SuperAdminFrame>
           </HubFrame>
         </div>
       </SidebarInset>

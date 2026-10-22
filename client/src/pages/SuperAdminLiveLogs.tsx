@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -159,20 +158,9 @@ export default function SuperAdminLiveLogs() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-950 text-gray-100">
-      <header className="flex items-center gap-3 px-4 py-3 bg-gray-900 border-b border-gray-800 flex-shrink-0">
-        <SidebarTrigger className="text-gray-400 hover:text-gray-100" />
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded bg-gradient-to-br from-green-600 to-emerald-800 flex items-center justify-center">
-            <Terminal className="w-4 h-4 text-white" />
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold text-gray-100 leading-tight">Live Server Logs</h1>
-            <p className="text-xs text-gray-500 leading-tight">Real-time server console output</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1.5 ml-2">
+    <div className="flex min-h-0 flex-1 flex-col bg-gray-950 text-gray-100">
+      <header className="flex flex-wrap items-center gap-3 px-4 py-2.5 bg-gray-900 border-b border-gray-800 flex-shrink-0">
+        <div className="flex items-center gap-1.5">
           <span className={`w-2 h-2 rounded-full ${connected ? "bg-green-500 animate-pulse" : "bg-red-500"}`} />
           <span className="text-xs text-gray-400">{connected ? "Live" : "Reconnecting..."}</span>
           {connected ? <Wifi className="w-3.5 h-3.5 text-green-500" /> : <WifiOff className="w-3.5 h-3.5 text-red-500" />}
@@ -234,6 +222,7 @@ export default function SuperAdminLiveLogs() {
             variant="ghost"
             size="sm"
             onClick={downloadLogs}
+            title="Download logs"
             className="h-7 px-2 text-xs gap-1.5 text-gray-400 hover:text-gray-100"
           >
             <Download className="w-3.5 h-3.5" />
@@ -243,6 +232,7 @@ export default function SuperAdminLiveLogs() {
             variant="ghost"
             size="sm"
             onClick={clearLogs}
+            title="Clear the screen"
             className="h-7 px-2 text-xs gap-1.5 text-gray-400 hover:text-red-400"
           >
             <Trash2 className="w-3.5 h-3.5" />

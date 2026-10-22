@@ -136,7 +136,8 @@ function ProviderKeyRow({ businessAccountId, provider, label, status, prominent 
 }
 
 /** Super admin: the "Live AI avatar" card for one business account. */
-export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open, onOpenChange }: { businessAccountId: string; businessName: string; open: boolean; onOpenChange: (open: boolean) => void }) {
+/** The account's live avatar settings: a pop-up, or (bare) laid out on the account's own page. */
+export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open, onOpenChange, bare = false }: { businessAccountId: string; businessName: string; open: boolean; onOpenChange: (open: boolean) => void; bare?: boolean }) {
   const { toast } = useToast();
   const { data, isLoading, isError } = useQuery<AdminView>({
     queryKey: queryKey(businessAccountId),
@@ -213,20 +214,12 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
   const providerLabel = (id: string) => data?.providers.find((p) => p.id === id)?.label || id;
   const opts = (form?.providerOptions || {}) as Record<string, any>;
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[680px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Video className="h-5 w-5 text-purple-600" />Live AI avatar — {businessName}</DialogTitle>
-          <DialogDescription>
-            Commercial add-on. Choose the provider this account signed for, its avatar and limits. The avatar only renders our own
-            voice answers (our brain and ElevenLabs voice) and starts only when a visitor taps it.
-          </DialogDescription>
-        </DialogHeader>
+  const body = (
+      <>
         {isLoading || !form ? (
           <div className="flex items-center justify-center py-10 text-muted-foreground"><Loader2 className="mr-2 h-5 w-5 animate-spin" />{isError ? "Failed to load" : "Loading…"}</div>
         ) : (
-          <div className="max-h-[65vh] space-y-5 overflow-y-auto pr-1" data-testid="avatar-settings-form">
+          <div className={bare ? "space-y-5" : "max-h-[65vh] space-y-5 overflow-y-auto pr-1"} data-testid="avatar-settings-form">
             {data!.warnings.length > 0 && (
               <div className="space-y-1 rounded-lg border border-amber-200 bg-amber-50 p-3">
                 {data!.warnings.map((w) => (
@@ -409,6 +402,37 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
             </div>
           </div>
         )}
+      </>
+  );
+
+  if (bare) {
+    return (
+      <div className="max-w-3xl space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Commercial add-on. Choose the provider this account signed for, its avatar and limits. The avatar only renders our own
+          voice answers (our brain and ElevenLabs voice) and starts only when a visitor taps it.
+        </p>
+        <div className="rounded-2xl border border-black/[0.07] bg-white p-5">{body}</div>
+        <div className="flex justify-end">
+          <Button onClick={() => save.mutate()} disabled={!form || save.isPending} data-testid="button-save-avatar-settings">
+            {save.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[680px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Video className="h-5 w-5 text-purple-600" />Live AI avatar — {businessName}</DialogTitle>
+          <DialogDescription>
+            Commercial add-on. Choose the provider this account signed for, its avatar and limits. The avatar only renders our own
+            voice answers (our brain and ElevenLabs voice) and starts only when a visitor taps it.
+          </DialogDescription>
+        </DialogHeader>
+        {body}
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
           <Button onClick={() => save.mutate()} disabled={!form || save.isPending} data-testid="button-save-avatar-settings">

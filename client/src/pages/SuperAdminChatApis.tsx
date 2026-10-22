@@ -483,24 +483,18 @@ export default function SuperAdminChatApis() {
   const hasFallback = settings?.hasFallbackKey;
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Bot className="w-6 h-6" />
-          Chat APIs
-        </h1>
-        <p className="text-muted-foreground mt-1">
-          Configure master AI provider keys that override individual business account settings. When enabled, all chats use these keys.
-        </p>
-      </div>
+    <div className="max-w-3xl space-y-6">
+      <p className="text-sm text-muted-foreground">
+        Master keys replace every account's own chat key while they are on. The backup provider takes over when the main one fails.
+      </p>
 
       {activeMaster && hasPrimary ? (
         <div className="flex items-center gap-2 px-4 py-3 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg text-sm">
           <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />
           <span className="text-green-800 dark:text-green-200 font-medium">
-            Master keys active — Primary: {settings.primaryProvider === "gemini" ? "Google Gemini" : "OpenAI"} ({settings.primaryModel})
+            Every account now uses the master keys: {settings.primaryProvider === "gemini" ? "Google Gemini" : "OpenAI"} ({settings.primaryModel})
             {settings.fallbackEnabled && hasFallback && (
-              <> | Fallback: {settings.fallbackProvider === "gemini" ? "Google Gemini" : "OpenAI"} ({settings.fallbackModel})</>
+              <>, with {settings.fallbackProvider === "gemini" ? "Google Gemini" : "OpenAI"} ({settings.fallbackModel}) as backup</>
             )}
           </span>
         </div>
@@ -508,22 +502,22 @@ export default function SuperAdminChatApis() {
         <div className="flex items-center gap-2 px-4 py-3 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-lg text-sm">
           <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
           <span className="text-amber-800 dark:text-amber-200">
-            {!hasPrimary ? "No master key configured — using individual business account keys" : "Master keys configured but not enabled — toggle below to activate"}
+            {!hasPrimary ? "Each account uses its own chat key. No master key is saved." : "Each account uses its own chat key. Master keys are saved but switched off."}
           </span>
         </div>
       )}
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Master Control</CardTitle>
-          <CardDescription>Toggle global override and fallback behavior</CardDescription>
+          <CardTitle className="text-base">Master control</CardTitle>
+          <CardDescription>Which keys every account's chats use</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium text-sm">Enable Master Keys</p>
+              <p className="font-medium text-sm">Use master keys for every account</p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                When on, all business accounts use the primary key below instead of their own keys
+                When on, all business accounts use the main provider below instead of their own keys
               </p>
             </div>
             <Switch
@@ -534,9 +528,9 @@ export default function SuperAdminChatApis() {
           </div>
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium text-sm">Enable Fallback</p>
+              <p className="font-medium text-sm">Use the backup provider if the main one fails</p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                If the primary provider fails (auth error, quota exceeded), automatically retry with the fallback provider
+                For example a wrong key or used-up quota: the reply is retried with the backup provider
               </p>
             </div>
             <Switch
@@ -549,8 +543,8 @@ export default function SuperAdminChatApis() {
       </Card>
 
       <ProviderSection
-        title="Primary Provider"
-        description="Main AI provider used for all chat responses"
+        title="Main provider"
+        description="Answers every chat while master keys are on"
         provider={effectivePrimaryProvider}
         apiKey={primaryApiKey}
         model={effectivePrimaryModel}
@@ -578,13 +572,13 @@ export default function SuperAdminChatApis() {
           className="gap-2 text-sm"
         >
           <ArrowUpDown className={`w-4 h-4 ${isSwapping ? "animate-spin" : ""}`} />
-          {isSwapping ? "Swapping..." : "Swap Primary ↔ Fallback"}
+          {isSwapping ? "Swapping..." : "Swap main and backup"}
         </Button>
       </div>
 
       <ProviderSection
-        title="Fallback Provider"
-        description="Used automatically if the primary provider fails"
+        title="Backup provider"
+        description="Takes over automatically when the main provider fails"
         provider={effectiveFallbackProvider}
         apiKey={fallbackApiKey}
         model={effectiveFallbackModel}

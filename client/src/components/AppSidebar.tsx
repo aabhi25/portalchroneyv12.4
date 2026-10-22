@@ -19,6 +19,8 @@ import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { SIDEBAR_GROUPS, findHubLocation, hubArea, visibleTabs, type HubArea } from "@/navigation/hubAreas";
 import { useHubAccess, usesHubLayout } from "@/components/hub/HubFrame";
 import { FindSetting } from "@/components/hub/FindSetting";
+import { SaFind } from "@/components/superadmin/SaFind";
+import { SA_AREAS, SA_GROUPS, findSaLocation, saArea, type SaArea } from "@/navigation/superAdminAreas";
 import { Button } from "@/components/ui/button";
 import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Sparkles, Settings, Brain, BarChart3, MessageSquare, ShoppingBag, Calendar, GraduationCap, ChevronRight, Presentation, FileText, Key, LifeBuoy, ClipboardList, Route, Link2, Users, DollarSign, Percent, HardDrive, Gem, Image, Database, Camera, Globe, Lightbulb, MessageCircle, MoreHorizontal, Bot, TrendingUp, Zap, BookOpen, Library, HelpCircle as QuizIcon, Briefcase, UserCircle, Terminal, PackageOpen, Megaphone, FileCode2, UsersRound, ScrollText, Gauge } from "lucide-react";
 
@@ -102,6 +104,28 @@ function AreaNavItem({ area, isActive, onClick, badge }: { area: HubArea; isActi
   );
 }
 
+/** One super admin area in the sidebar, styled like the business areas. */
+function SaNavItem({ area, isActive, onClick }: { area: SaArea; isActive: boolean; onClick: () => void }) {
+  const Icon = area.icon;
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        onClick={onClick}
+        isActive={isActive}
+        data-testid={`link-sa-${area.id}`}
+        className={`group/nav relative transition-all duration-200 ${
+          isActive ? "bg-purple-50 text-purple-700 font-medium border border-purple-100/60" : "hover:bg-gray-50/80"
+        }`}
+      >
+        <div className={`flex items-center justify-center w-7 h-7 rounded-lg ${area.tint}`}>
+          <Icon className="w-3.5 h-3.5 text-white" />
+        </div>
+        <span className="text-[14px]">{area.label}</span>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
 export function AppSidebar({ user }: AppSidebarProps) {
   const [location, setLocation] = useLocation();
 
@@ -117,6 +141,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
   // The standard business layout: areas from navigation/hubAreas.ts.
   const hubAccess = useHubAccess(user);
   const currentAreaId = usesHubLayout(user) ? findHubLocation(location, hubAccess)?.area.id : undefined;
+  const currentSaAreaId = isSuperAdmin && !isSuperAdminImpersonating ? findSaLocation(location)?.area.id : undefined;
 
   const { data: ticketStats } = useQuery<{ open: number }>({
     queryKey: ["/api/tickets/stats"],
@@ -377,25 +402,21 @@ export function AppSidebar({ user }: AppSidebarProps) {
         )}
 
         {isSuperAdmin && !isSuperAdminImpersonating ? (
-          <SidebarGroup>
-            <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-gray-400 font-semibold px-3 mb-1">Super Admin</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu className="space-y-0.5">
-                <NavItem icon={ShieldCheck} label="Business Accounts" onClick={() => setLocation("/super-admin")} isActive={location === "/super-admin"} testId="link-super-admin" gradient="bg-gradient-to-br from-purple-500 to-violet-600" />
-                <NavItem icon={BarChart3} label="Insights" onClick={() => setLocation("/super-admin/insights")} isActive={location === "/super-admin/insights"} testId="link-super-admin-insights" gradient="bg-gradient-to-br from-blue-500 to-indigo-600" />
-                <NavItem icon={DollarSign} label="Cost Analytics" onClick={() => setLocation("/super-admin/costs")} isActive={location === "/super-admin/costs"} testId="link-super-admin-costs" gradient="bg-gradient-to-br from-emerald-500 to-green-600" />
-                <NavItem icon={Gauge} label="Usage & Limits" onClick={() => setLocation("/super-admin/usage")} isActive={location === "/super-admin/usage"} testId="link-super-admin-usage" gradient="bg-gradient-to-br from-teal-500 to-emerald-600" />
-                <NavItem icon={Presentation} label="Demo" onClick={() => setLocation("/super-admin/demo")} isActive={location === "/super-admin/demo"} testId="link-super-admin-demo" gradient="bg-gradient-to-br from-amber-500 to-orange-600" />
-                <NavItem icon={Key} label="API Keys" onClick={() => setLocation("/super-admin/api-keys")} isActive={location === "/super-admin/api-keys"} testId="link-super-admin-api-keys" gradient="bg-gradient-to-br from-rose-500 to-pink-600" />
-                <NavItem icon={Bot} label="Chat APIs" onClick={() => setLocation("/super-admin/chat-apis")} isActive={location === "/super-admin/chat-apis"} testId="link-super-admin-chat-apis" gradient="bg-gradient-to-br from-cyan-500 to-teal-600" />
-                <NavItem icon={Link2} label="Account Groups" onClick={() => setLocation("/super-admin/account-groups")} isActive={location === "/super-admin/account-groups"} testId="link-super-admin-account-groups" gradient="bg-gradient-to-br from-indigo-500 to-purple-600" />
-                <NavItem icon={ClipboardList} label="MIS" onClick={() => setLocation("/super-admin/mis")} isActive={location === "/super-admin/mis"} testId="link-super-admin-mis" gradient="bg-gradient-to-br from-fuchsia-500 to-pink-600" />
-                <NavItem icon={Globe} label="Server Info" onClick={() => setLocation("/super-admin/server-info")} isActive={location === "/super-admin/server-info"} testId="link-super-admin-server-info" gradient="bg-gradient-to-br from-slate-500 to-gray-700" />
-                <NavItem icon={Terminal} label="Live Logs" onClick={() => setLocation("/super-admin/live-logs")} isActive={location === "/super-admin/live-logs"} testId="link-super-admin-live-logs" gradient="bg-gradient-to-br from-green-700 to-emerald-900" />
-                <NavItem icon={ScrollText} label="Audit Logs" onClick={() => setLocation("/super-admin/audit-logs")} isActive={location === "/super-admin/audit-logs"} testId="link-super-admin-audit-logs" gradient="bg-gradient-to-br from-slate-600 to-zinc-800" />
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          <>
+            <SaFind />
+            {SA_GROUPS.map(group => (
+              <SidebarGroup key={group}>
+                <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-gray-400 font-semibold px-3 mb-1">{group}</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu className="space-y-0.5">
+                    {SA_AREAS.filter(a => a.group === group).map(area => (
+                      <SaNavItem key={area.id} area={area} isActive={currentSaAreaId === area.id} onClick={() => setLocation(area.href)} />
+                    ))}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            ))}
+          </>
         ) : isGroupAdmin ? (
           <SidebarGroup>
             <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-gray-400 font-semibold px-3 mb-1">Group Admin</SidebarGroupLabel>
@@ -414,14 +435,18 @@ export function AppSidebar({ user }: AppSidebarProps) {
 
       <SidebarFooter className="p-3 border-t border-gray-100/80">
         <SidebarMenu className="space-y-0.5">
-          <NavItem
-            icon={Settings}
-            label="Settings"
-            onClick={() => setLocation(isSuperAdmin && !isSuperAdminImpersonating ? "/super-admin/settings" : SETTINGS_PATHS.root)}
-            isActive={location === SETTINGS_PATHS.root || location.startsWith(`${SETTINGS_PATHS.root}/`) || location === "/super-admin/settings"}
-            testId="link-settings"
-            gradient="bg-gradient-to-br from-slate-500 to-gray-600"
-          />
+          {isSuperAdmin && !isSuperAdminImpersonating ? (
+            <SaNavItem area={saArea("me")} isActive={currentSaAreaId === "me"} onClick={() => setLocation(saArea("me").href)} />
+          ) : (
+            <NavItem
+              icon={Settings}
+              label="Settings"
+              onClick={() => setLocation(SETTINGS_PATHS.root)}
+              isActive={location === SETTINGS_PATHS.root || location.startsWith(`${SETTINGS_PATHS.root}/`)}
+              testId="link-settings"
+              gradient="bg-gradient-to-br from-slate-500 to-gray-600"
+            />
+          )}
           <SidebarMenuItem>
             <SidebarMenuButton
               onClick={handleLogout}

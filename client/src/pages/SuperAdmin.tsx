@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { useMutation, useInfiniteQuery } from "@tanstack/react-query";
+import { useMutation, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
+import { AccountPage, FeatureChips } from "@/components/superadmin/AccountPage";
+import type { SummaryResponse } from "@/pages/SuperAdminUsage";
+import { accountHref } from "@/navigation/superAdminAreas";
+import { currentIstMonth, formatUsd, monthLabel } from "@/components/usage/usageFormat";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,10 +49,12 @@ import { DataRetentionDialog } from "@/components/DataRetentionDialog";
 import { LiveAvatarSettingsDialog } from "@/components/LiveAvatarSettingsDialog";
 import { Plus, Timer, Building2, Pencil, Copy, Check, Sparkles, MoreVertical, Eye, Search, Trash2, Gem, Power, LogIn, Play, MessageCircle, MessageSquare, Video } from "lucide-react";
 import type { BusinessAccountDto, ProductTier } from "@shared/dto/businessAccount";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import AccountFeaturesSettings from "@/pages/settings/AccountFeaturesSettings";
 
-export default function SuperAdmin() {
+/** Business accounts: the list, or (with accountId) one account's own page. Both share the dialogs below. */
+export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab?: string } = {}) {
+  const [, setLocation] = useLocation();
+  const [listFilter, setListFilter] = useState<"all" | "live" | "disabled" | "over">("all");
   const [retentionAccount, setRetentionAccount] = useState<{ id: string; name: string } | null>(null);
   const [avatarAccount, setAvatarAccount] = useState<{ id: string; name: string } | null>(null);
   const [newBusinessName, setNewBusinessName] = useState("");
@@ -102,6 +109,19 @@ export default function SuperAdmin() {
   });
   
   const { toast } = useToast();
+  const accountQuery = useQuery<BusinessAccountDto>({ queryKey: ["/api/business-accounts", accountId], enabled: !!accountId, retry: false });
+  const usageMonth = currentIstMonth();
+  const { data: usage } = useQuery<SummaryResponse>({
+    queryKey: ["/api/super-admin/usage", usageMonth],
+    queryFn: async () => {
+      const res = await fetch(`/api/super-admin/usage?month=${usageMonth}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load usage");
+      return res.json();
+    },
+    enabled: !accountId,
+    staleTime: 60_000,
+  });
+  const usageById = new Map((usage?.accounts ?? []).map(r => [r.businessAccountId, r]));
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const ACCOUNTS_PER_PAGE = 30;
 
@@ -166,7 +186,7 @@ export default function SuperAdmin() {
       return await apiRequest<{ businessAccount: BusinessAccountDto; user: any; credentials: { username: string; tempPassword: string } }>("POST", "/api/business-accounts", data);
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts"] });
       setNewBusinessName("");
       setNewBusinessWebsite("");
       setNewUsername("");
@@ -223,7 +243,7 @@ export default function SuperAdmin() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts"] });
       setIsEditDialogOpen(false);
       setEditingBusiness(null);
       toast({
@@ -284,7 +304,7 @@ export default function SuperAdmin() {
       });
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts"] });
       toast({
         title: "Success",
         description: `Business account ${variables.status === "active" ? "activated" : "suspended"} successfully`,
@@ -387,6 +407,10 @@ export default function SuperAdmin() {
     viewPasswordMutation.mutate(business.id);
   };
 
+  const domainOf = (url: string) => {
+    try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+  };
+
   // Everything an account gets (agents, add-ons, system mode) lives in one Features dialog.
   const openFeatures = (business: BusinessAccountDto) => setFeaturesAccount({ id: business.id, name: business.name });
 
@@ -414,7 +438,7 @@ export default function SuperAdmin() {
       );
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts"] });
       setDuplicateDialogOpen(false);
       resetDuplicateForm();
       setGeneratedCredentials(data.credentials);
@@ -492,11 +516,12 @@ export default function SuperAdmin() {
       return await apiRequest("DELETE", `/api/business-accounts/${data.id}`, { password: data.password });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", "paginated"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts"] });
       setDeleteDialogOpen(false);
       setBusinessToDelete(null);
       setDeletePassword("");
       setDeleteError("");
+      if (accountId) setLocation("/super-admin");
       toast({
         title: "Business Account Deleted",
         description: "The business account and all associated data have been permanently deleted.",
@@ -530,50 +555,67 @@ export default function SuperAdmin() {
   };
 
 
-  return (
-    <div className="flex flex-col flex-1 h-screen">
-      {/* Header */}
-      <header className="flex items-center justify-between h-[56px] px-6 bg-gradient-to-r from-red-500 via-purple-600 to-blue-600 shadow-sm">
-        <div className="flex items-center gap-3">
-          <SidebarTrigger data-testid="button-sidebar-toggle" className="text-white hover:bg-white/10 rounded-md" />
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
-              <Sparkles className="w-4 h-4 text-white" />
-            </div>
-            <div>
-              <h1 className="text-[15px] font-semibold text-white leading-tight">AI Chroney</h1>
-              <p className="text-[11px] text-white/90 leading-tight mt-0.5">Super Admin Dashboard</p>
-            </div>
-          </div>
-        </div>
-      </header>
+  const visibleAccounts = businessAccounts.filter((business) => {
+    const q = searchQuery.trim().toLowerCase();
+    if (q && !business.name.toLowerCase().includes(q) && !(business.website || "").toLowerCase().includes(q)) return false;
+    if (listFilter === "live") return !!business.isLive;
+    if (listFilter === "disabled") return business.status !== "active";
+    if (listFilter === "over") { const level = usageById.get(business.id)?.limit?.level; return level === "warn" || level === "exceeded"; }
+    return true;
+  });
 
-      {/* Main Content */}
-      <div className="flex-1 overflow-auto bg-gray-50">
-        <div className="max-w-7xl mx-auto p-4 md:p-6 lg:p-8">
-          <div className="mb-6">
-            <div className="mb-4">
-              <h2 className="text-2xl font-bold text-gray-900">Business Accounts</h2>
-              <p className="text-muted-foreground mt-1">
-                Manage business accounts and their users
-              </p>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <div className="relative flex-1 max-w-md">
+  return (
+    <>
+      {accountId ? (
+        <AccountPage
+          accountId={accountId}
+          tab={tab}
+          account={accountQuery.data}
+          isLoading={accountQuery.isLoading}
+          isError={accountQuery.isError}
+          actions={{
+            openPortal: () => { if (accountQuery.data) handleImpersonate(accountQuery.data); },
+            openingPortal: impersonateMutation.isPending,
+            openFeatures: () => { if (accountQuery.data) openFeatures(accountQuery.data); },
+            edit: () => { if (accountQuery.data) handleEditBusiness(accountQuery.data); },
+            credentials: () => { if (accountQuery.data) handleViewPassword(accountQuery.data); },
+            toggleStatus: () => { if (accountQuery.data) handleToggleStatus(accountQuery.data); },
+            togglingStatus: toggleStatusMutation.isPending,
+            duplicate: () => { if (accountQuery.data) handleDuplicateBusiness(accountQuery.data); },
+            remove: () => { if (accountQuery.data) handleDeleteBusiness(accountQuery.data); },
+          }}
+        />
+      ) : (
+            <div className="mb-5 flex flex-wrap items-center gap-3">
+              <div className="relative w-full max-w-md sm:w-auto sm:flex-1">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
                   type="text"
-                  placeholder="Search business accounts..."
+                  placeholder="Search accounts"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 w-full"
+                  className="pl-9 w-full bg-white"
                 />
+              </div>
+              <div className="mr-auto flex flex-wrap gap-1.5" role="group" aria-label="Show accounts">
+                {([["all", "All"], ["live", "Live"], ["disabled", "Disabled"], ["over", "Over limit"]] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setListFilter(key)}
+                    aria-pressed={listFilter === key}
+                    data-testid={`filter-accounts-${key}`}
+                    className={`rounded-full px-3 py-1 text-[12.5px] font-medium transition-colors ${listFilter === key ? "bg-gray-900 text-white" : "border border-black/[0.08] bg-white text-gray-700 hover:bg-gray-50"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
               <Dialog open={isBusinessDialogOpen} onOpenChange={setIsBusinessDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 shadow-sm" data-testid="button-create-business">
+                  <Button data-testid="button-create-business">
                     <Plus className="w-4 h-4 mr-2" />
-                    New Business Account
+                    New account
                   </Button>
                 </DialogTrigger>
               <DialogContent className="max-w-md">
@@ -676,7 +718,7 @@ export default function SuperAdmin() {
               </DialogContent>
             </Dialog>
             </div>
-          </div>
+      )}
 
           {/* Edit Business Account Dialog */}
           <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
@@ -1085,7 +1127,7 @@ export default function SuperAdmin() {
                   <Button
                     type="submit"
                     disabled={duplicateAccountMutation.isPending || !duplicateName.trim() || !duplicateAdminEmail.trim() || !duplicateAdminPassword.trim()}
-                    className="bg-gradient-to-r from-blue-600 to-purple-600"
+                    
                   >
                     {duplicateAccountMutation.isPending ? "Duplicating..." : "Duplicate Account"}
                   </Button>
@@ -1094,7 +1136,7 @@ export default function SuperAdmin() {
             </DialogContent>
           </Dialog>
 
-          {isLoadingAccounts ? (
+          {!accountId && (isLoadingAccounts ? (
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
               <div className="w-8 h-8 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
               <p className="text-sm text-gray-600">Loading business accounts...</p>
@@ -1108,135 +1150,56 @@ export default function SuperAdmin() {
               </p>
             </div>
           ) : (
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-x-auto">
+            <div className="overflow-x-auto rounded-2xl border border-black/[0.07] bg-white">
               <Table>
                 <TableHeader>
-                  <TableRow className="bg-gray-50">
-                    <TableHead className="font-semibold w-[280px]">Business</TableHead>
-                    <TableHead className="font-semibold w-[80px]">Status</TableHead>
-                    <TableHead className="font-semibold w-[100px]">Created</TableHead>
-                    <TableHead className="font-semibold w-[160px]">Features</TableHead>
-                    <TableHead className="font-semibold text-right w-[140px]">Actions</TableHead>
+                  <TableRow>
+                    <TableHead className="min-w-[180px]">Business</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="min-w-[230px]">Agents & add-ons</TableHead>
+                    <TableHead className="whitespace-nowrap text-right">AI spend ({monthLabel(usageMonth).slice(0, 3)})</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {businessAccounts
-                    .filter((business) => {
-                      if (!searchQuery.trim()) return true;
-                      const query = searchQuery.toLowerCase();
-                      return (
-                        business.name.toLowerCase().includes(query) ||
-                        (business.website && business.website.toLowerCase().includes(query))
-                      );
-                    })
-                    .map((business) => {
-                    const getDomain = (url: string) => {
-                      try {
-                        const domain = new URL(url).hostname;
-                        return domain.replace('www.', '');
-                      } catch {
-                        return url;
-                      }
-                    };
-
+                  {visibleAccounts.length === 0 && (
+                    <TableRow><TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">No accounts match.</TableCell></TableRow>
+                  )}
+                  {visibleAccounts.map((business) => {
+                    const spend = usageById.get(business.id);
                     return (
-                      <TableRow key={business.id} className="hover:bg-gray-50">
-                        <TableCell className="font-medium">
-                          <div className="flex items-start gap-2">
-                            <Building2 className="h-4 w-4 text-purple-600 flex-shrink-0 mt-0.5" />
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="truncate">{business.name}</span>
-                                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${business.status === "active" ? "bg-green-500" : "bg-gray-400"}`} title={business.status} />
-                              </div>
-                              {business.website && (
-                                <a 
-                                  href={business.website} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer"
-                                  className="text-xs text-purple-600 hover:underline truncate block"
-                                  title={business.website}
-                                >
-                                  {getDomain(business.website)}
-                                </a>
-                              )}
+                      <TableRow
+                        key={business.id}
+                        className="cursor-pointer hover:bg-gray-50/80"
+                        onClick={() => setLocation(accountHref(business.id))}
+                        data-testid={`row-account-${business.id}`}
+                      >
+                        <TableCell>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate font-semibold text-gray-900">{business.name}</span>
+                              {business.status !== "active" && <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">Disabled</span>}
                             </div>
+                            {business.website && <div className="truncate text-xs text-gray-500">{domainOf(business.website)}</div>}
                           </div>
                         </TableCell>
-                        <TableCell className="text-sm">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            business.isLive 
-                              ? 'bg-green-100 text-green-700' 
-                              : 'bg-gray-100 text-gray-500'
-                          }`}>
-                            {business.isLive ? 'Live' : 'Not Live'}
+                        <TableCell>
+                          <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11.5px] font-semibold ${business.isLive ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500"}`}>
+                            {business.isLive ? "Live" : "Not live"}
                           </span>
                         </TableCell>
-                        <TableCell className="text-sm text-gray-600 whitespace-nowrap">
-                          {new Date(business.createdAt).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })}
+                        <TableCell><FeatureChips account={business} /></TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          <div className="text-sm text-gray-900">{spend ? formatUsd(spend.costUsd) : "—"}</div>
+                          <div className={`text-xs ${spend?.limit?.level === "exceeded" ? "text-red-600" : spend?.limit?.level === "warn" ? "text-amber-600" : "text-gray-500"}`}>
+                            {spend?.limit ? `of ${formatUsd(spend.limit.monthlyLimitUsd)}` : "No limit"}
+                          </div>
                         </TableCell>
-                        <TableCell className="text-sm">
-                          <button
-                            onClick={() => openFeatures(business)}
-                            title="Change features"
-                            className="flex flex-wrap gap-1 cursor-pointer hover:opacity-80 transition-opacity"
-                          >
-                            {business.chroneyEnabled && (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                                Chat
-                              </span>
-                            )}
-                            {business.whatsappEnabled && (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                                WhatsApp
-                              </span>
-                            )}
-                            {business.instagramEnabled && (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-pink-100 text-pink-700">
-                                Instagram
-                              </span>
-                            )}
-                            {business.facebookEnabled && (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                                Facebook
-                              </span>
-                            )}
-                            {business.aiCallingEnabled && (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-100 text-cyan-700">
-                                Calls
-                              </span>
-                            )}
-                            {(business.productTier === 'jewelry_showcase' || business.productTier === 'jewelry_showcase_chroney') && (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
-                                Vista
-                              </span>
-                            )}
-                            {business.k12EducationEnabled && (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700">
-                                K12
-                              </span>
-                            )}
-                            {business.jobPortalEnabled && (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-100 text-cyan-800">
-                                Jobs
-                              </span>
-                            )}
-                            {(() => {
-                              const addOns = [business.whatsappMarketingEnabled, business.voiceModeEnabled, business.visualSearchEnabled, business.supportTicketsEnabled, business.appointmentsEnabled, business.demoOrdersEnabled, business.shopifyEnabled].filter(Boolean).length;
-                              return addOns > 0 ? (
-                                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                                  +{addOns} add-on{addOns === 1 ? "" : "s"}
-                                </span>
-                              ) : null;
-                            })()}
-                            {business.systemMode === 'essential' && (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
-                                Essential
-                              </span>
-                            )}
-                          </button>
+                        <TableCell className="whitespace-nowrap text-sm text-gray-600">
+                          {new Date(business.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}
                         </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
                             {business.id === "760c81e7-7f3f-497b-8f0d-b0dc54903c4a" && (
                               <Button
@@ -1254,7 +1217,7 @@ export default function SuperAdmin() {
                               size="sm"
                               onClick={() => openFeatures(business)}
                               data-testid={`button-features-${business.id}`}
-                              className="text-purple-600 hover:text-purple-700 hover:bg-purple-50 border-purple-200 h-8"
+                              className="h-8 bg-white"
                             >
                               <Sparkles className="h-4 w-4 sm:mr-1.5" />
                               <span className="hidden sm:inline">Features</span>
@@ -1270,13 +1233,17 @@ export default function SuperAdmin() {
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => setLocation(accountHref(business.id))}>
+                                  <Building2 className="h-4 w-4 mr-2" />
+                                  Open account page
+                                </DropdownMenuItem>
                                 <DropdownMenuItem 
                                   onClick={() => handleImpersonate(business)}
                                   disabled={impersonateMutation.isPending}
                                   className="text-blue-600 focus:text-blue-600 focus:bg-blue-50"
                                 >
                                   <LogIn className="h-4 w-4 mr-2" />
-                                  Access Account
+                                  Open portal (view as the business)
                                 </DropdownMenuItem>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem onClick={() => handleEditBusiness(business)}>
@@ -1285,14 +1252,14 @@ export default function SuperAdmin() {
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => handleViewPassword(business)}>
                                   <Eye className="h-4 w-4 mr-2" />
-                                  Login Credentials
+                                  Login details
                                 </DropdownMenuItem>
                                 <DropdownMenuItem 
                                   onClick={() => handleToggleStatus(business)}
                                   disabled={toggleStatusMutation.isPending}
                                 >
                                   <Power className="h-4 w-4 mr-2" />
-                                  {business.status === "active" ? "Disable Account" : "Enable Account"}
+                                  {business.status === "active" ? "Disable account" : "Enable account"}
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setAvatarAccount({ id: business.id, name: business.name })}>
                                   <Video className="h-4 w-4 mr-2" />
@@ -1304,7 +1271,7 @@ export default function SuperAdmin() {
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => handleDuplicateBusiness(business)}>
                                   <Copy className="h-4 w-4 mr-2" />
-                                  Duplicate Account
+                                  Duplicate account
                                 </DropdownMenuItem>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem 
@@ -1312,7 +1279,7 @@ export default function SuperAdmin() {
                                   className="text-red-600 focus:text-red-600 focus:bg-red-50"
                                 >
                                   <Trash2 className="h-4 w-4 mr-2" />
-                                  Delete Account
+                                  Delete account
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
@@ -1341,9 +1308,7 @@ export default function SuperAdmin() {
                 )}
               </div>
             </div>
-          )}
-        </div>
-      </div>
+          ))}
       {avatarAccount && (
         <LiveAvatarSettingsDialog
           open={!!avatarAccount}
@@ -1361,7 +1326,6 @@ export default function SuperAdmin() {
           scopeName={retentionAccount.name}
         />
       )}
-    </div>
+    </>
   );
 }
-

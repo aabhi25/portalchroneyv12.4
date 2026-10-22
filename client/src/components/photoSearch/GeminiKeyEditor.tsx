@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 
 /**
  * Gemini (Google AI Studio) keys for photo search.
- *  - scope "platform": Super Admin › Settings; used by every account without its own key
+ *  - scope "platform": Super admin › AI providers › Photo search; used by every account without its own key
  *  - scope "account": Super Admin › API Keys; the account's own key
  * Keys are write-only: the server returns ••••last4 and never the key.
  */
@@ -143,7 +143,7 @@ function KeyEditor({
 const testKey = (body: Record<string, unknown>) =>
   apiRequest<{ success: boolean; message: string }>("POST", "/api/super-admin/photo-search/test-key", body);
 
-/** Super Admin › Settings: the platform's Gemini key, used by every account without its own. */
+/** Super admin › AI providers › Photo search: the platform's Gemini key, used by every account without its own. */
 export function GeminiPlatformKeyCard() {
   const { data, isLoading } = useQuery<PlatformKeyView>({
     queryKey: PLATFORM_KEY,
@@ -155,8 +155,8 @@ export function GeminiPlatformKeyCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><ImageIcon className="h-5 w-5 text-purple-600" />Photo search — platform Gemini key</CardTitle>
         <CardDescription>
-          Our Google AI Studio key for photo search (Vista and Visual product search). Every account without its own key in
-          API Keys uses it, billed to us. Use a Google project with billing on, so customers' photos aren't used by Google.
+          Our Google AI Studio key for photo search (Vista and Visual product search). Every account without its own key (on the
+          account's AI &amp; keys tab) uses it, billed to us. Use a Google project with billing on, so customers' photos aren't used by Google.
           Keys are encrypted and only the last 4 characters are shown.
         </CardDescription>
       </CardHeader>
@@ -205,8 +205,8 @@ export function GeminiAccountKeyEditor({ businessAccountId }: { businessAccountI
         {data.accountKey.configured
           ? "Google bills this account's photo searches to this key."
           : data.platformKeyConfigured
-            ? "Empty: this account uses the platform key from Super Admin › Settings."
-            : "Empty, and there's no platform key in Super Admin › Settings either."}
+            ? "Empty: this account uses the platform key from AI providers › Photo search."
+            : "Empty, and there's no platform key in AI providers › Photo search either."}
       </p>
       <p className={`text-xs ${summary.warn ? "text-amber-700" : "text-muted-foreground"}`} data-testid="text-photo-search-status">{summary.text}</p>
     </div>

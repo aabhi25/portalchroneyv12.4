@@ -10804,7 +10804,7 @@ Return ONLY the refined instruction, nothing else.`
       
       const { resolveGeminiKey } = await import("./services/geminiKeys");
       if (!(await resolveGeminiKey(businessAccount))) {
-        return res.status(400).json({ error: "No Gemini key for photo search. Add one in API Keys (this account) or Settings (platform)." });
+        return res.status(400).json({ error: "No Gemini key for photo search. Add one on the account's AI & keys tab, or a platform key in AI providers › Photo search." });
       }
       
       const { productImageEmbeddingService } = await import("./services/productImageEmbeddingService");
@@ -11029,7 +11029,7 @@ Return ONLY the refined instruction, nothing else.`
       
       const { resolveGeminiKey } = await import("./services/geminiKeys");
       if (!(await resolveGeminiKey(businessAccount))) {
-        return res.status(400).json({ error: "No Gemini key for photo search. Add one in API Keys (this account) or Settings (platform)." });
+        return res.status(400).json({ error: "No Gemini key for photo search. Add one on the account's AI & keys tab, or a platform key in AI providers › Photo search." });
       }
       
       const openaiApiKey = await storage.getBusinessAccountOpenAIKey(id);
@@ -11176,7 +11176,7 @@ Return ONLY the refined instruction, nothing else.`
       
       const { resolveGeminiKey } = await import("./services/geminiKeys");
       if (!(await resolveGeminiKey(businessAccount))) {
-        return res.status(400).json({ error: "No Gemini key for photo search. Add one in API Keys (this account) or Settings (platform)." });
+        return res.status(400).json({ error: "No Gemini key for photo search. Add one on the account's AI & keys tab, or a platform key in AI providers › Photo search." });
       }
       
       const { productImageEmbeddingService } = await import("./services/productImageEmbeddingService");

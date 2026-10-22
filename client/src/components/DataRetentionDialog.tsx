@@ -234,12 +234,14 @@ interface PreviewResponse {
   accounts: { businessAccountId: string; name: string; overridden: boolean; leads: number; idleChats: number; hide?: number; crm?: { leadsquared: boolean; salesforce: boolean; meritto?: boolean } }[];
 }
 
-export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, scopeName }: {
+/** Auto-delete settings for an account or a group: a pop-up, or (bare) laid out on that account's or group's page. */
+export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, scopeName, bare = false }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   scopeType: 'group' | 'account';
   scopeId: string;
   scopeName: string;
+  bare?: boolean;
 }) {
   const { toast } = useToast();
   const url = `/api/super-admin/data-retention/${scopeType}/${scopeId}`;
@@ -318,6 +320,164 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
 
   return (
     <>
+      {bare ? (
+        <div className="max-w-3xl space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {scopeType === 'group'
+                ? `${scopeName} — applies to all ${data?.memberCount ?? ''} member accounts${data?.overriddenAccounts ? ` (${data.overriddenAccounts} with their own override)` : ''}.`
+                : `${scopeName} — overrides any group policy for this account.`}
+          </p>
+          <div className="rounded-2xl border border-black/[0.07] bg-white p-5">
+          {isLoading || !settings ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-8"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
+          ) : (
+            <Tabs defaultValue="settings">
+              <TabsList>
+                <TabsTrigger value="settings">Settings</TabsTrigger>
+                <TabsTrigger value="report">Report</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="settings" className="space-y-5 pt-2">
+                {scopeType === 'account' && (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      {[{ v: true, t: "Use group policy" }, { v: false, t: "Override for this account" }].map(o => (
+                        <button
+                          key={String(o.v)}
+                          type="button"
+                          onClick={() => setUseGroupPolicy(o.v)}
+                          className={`rounded-lg border p-2.5 text-sm text-left ${useGroupPolicy === o.v ? "border-purple-500 bg-purple-50 ring-1 ring-purple-500" : "hover:bg-muted/50"}`}
+                        >
+                          {o.t}
+                        </button>
+                      ))}
+                    </div>
+                    {useGroupPolicy && (
+                      <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
+                        {data?.groups?.length ? data.groups.map(g => (
+                          <div key={g.groupId}>
+                            <span className="font-medium">{g.name}:</span>{" "}
+                            {g.policy && g.policy.mode !== 'off'
+                              ? `${MODE_LABEL[g.policy.mode]} — synced leads deleted after ${formatMinutes(g.policy.deleteSyncedAfterMinutes)}`
+                              : "auto-delete off"}
+                            {g.policy?.maskContactsAfterSync && "; contact details hidden after sync"}
+                          </div>
+                        )) : <div className="text-muted-foreground">This account is not in any group, so auto-delete is off.</div>}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {!useGroupPolicy && (
+                  <>
+                    <div className="space-y-2">
+                      <Label>Auto-delete</Label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {([
+                          ["off", "Off", "Nothing is deleted"],
+                          ["dry_run", "Dry run", "Only reports what would be deleted"],
+                          ["live", "Live", "Deletes on schedule"],
+                        ] as const).map(([v, t, d]) => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => set('mode', v)}
+                            className={`rounded-lg border p-2.5 text-left ${settings.mode === v ? (v === 'live' ? "border-red-500 bg-red-50 ring-1 ring-red-500" : "border-purple-500 bg-purple-50 ring-1 ring-purple-500") : "hover:bg-muted/50"}`}
+                          >
+                            <div className="text-sm font-medium">{t}</div>
+                            <div className="text-[11px] text-muted-foreground">{d}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="ret-synced">Delete synced leads after</Label>
+                        <DurationSelect id="ret-synced" value={settings.deleteSyncedAfterMinutes} onChange={(v) => set('deleteSyncedAfterMinutes', v ?? 24 * 60)} />
+                        <p className="text-[11px] text-muted-foreground">Counted from the lead's last successful sync to LeadSquared/Salesforce.</p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="ret-unsynced">Delete leads that never sync</Label>
+                        <DurationSelect id="ret-unsynced" allowNever value={settings.deleteUnsyncedAfterMinutes} onChange={(v) => set('deleteUnsyncedAfterMinutes', v)} />
+                        <p className="text-[11px] text-muted-foreground">Counted from capture. "Never" keeps them until they sync.</p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="ret-chats">Delete chats with no lead after</Label>
+                        <DurationSelect id="ret-chats" allowNever value={settings.deleteIdleChatsAfterMinutes} onChange={(v) => set('deleteIdleChatsAfterMinutes', v)} />
+                        <p className="text-[11px] text-muted-foreground">Counted from the last message.</p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Keep anonymous counts</Label>
+                        <div className="flex items-center gap-2 pt-1">
+                          <Switch checked={settings.keepAnonymousCounts} onCheckedChange={(v) => set('keepAnonymousCounts', v)} />
+                          <span className="text-xs text-muted-foreground">Dashboards keep counting deleted leads (numbers only).</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+                      <p>Deleted with each lead: its conversation, messages, journey/form answers, uploaded chat images, and linked appointments, tickets and applications.</p>
+                      <p>A conversation is never deleted while the visitor is still chatting (30 minutes idle required). Copies in the client's CRM are not touched.</p>
+                    </div>
+
+                    <div className={`rounded-lg border p-3 space-y-2 ${settings.maskContactsAfterSync ? "border-emerald-300 bg-emerald-50/50" : ""}`} data-testid="retention-mask-section">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <Label htmlFor="ret-mask" className="flex items-center gap-1.5"><EyeOff className="w-4 h-4 text-emerald-700" /> Hide contact details after sync</Label>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Separate from auto-delete: leads and chats are kept, but once a lead has synced, its mobile numbers and
+                            emails are hidden, like <span className="font-mono">******3210</span> and <span className="font-mono">ra***@gmail.com</span>.
+                            The business can still read the conversation.
+                          </p>
+                        </div>
+                        <Switch id="ret-mask" checked={settings.maskContactsAfterSync} onCheckedChange={(v) => set('maskContactsAfterSync', v)} data-testid="switch-retention-mask" />
+                      </div>
+                      {settings.maskContactsAfterSync && (
+                        <ul className="text-[11px] text-muted-foreground list-disc pl-4 space-y-0.5">
+                          <li>Hidden on the lead, in its chat messages, form/journey answers and the chat summary. Name and everything else stay.</li>
+                          <li>Happens once the lead has synced to every connected CRM and the chat has gone quiet, after the final summary has reached the CRM. Leads that never sync are not hidden.</li>
+                          <li>The real details are removed from our database and can't be brought back here. The CRM keeps them, and a hidden lead is never sent to the CRM again.</li>
+                          <li>Website chat leads only. Appointments and support tickets keep their contact details so reminders and replies still work.</li>
+                        </ul>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending}>
+                        {previewMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Search className="w-4 h-4 mr-1.5" />}
+                        {settings.maskContactsAfterSync ? "Check what these settings would delete or hide now" : "Check what these settings would delete now"}
+                      </Button>
+                      {preview && <PreviewSummary preview={preview} showDeletes={settings?.mode !== 'off' || !settings?.maskContactsAfterSync} />}
+                    </div>
+                  </>
+                )}
+
+                {scopeType === 'account' && status && (
+                  <div className="text-xs text-muted-foreground border-t pt-3">
+                    Last run {format(new Date(status.lastRunAt), "d MMM, h:mm a")} ({MODE_LABEL[status.mode] || status.mode}):
+                    {" "}{status.dueLeads} lead(s) and {status.dueConversations} idle chat(s) due
+                    {status.mode === 'live' && `, ${status.lastPurgedLeads} lead(s) deleted`}.
+                    {status.lastError && <span className="text-red-600"> Error: {status.lastError}</span>}
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="report" className="pt-2">
+                <RetentionReport baseUrl={`/api/super-admin/data-retention/report?scopeType=${scopeType}&scopeId=${scopeId}`} />
+              </TabsContent>
+            </Tabs>
+          )}
+
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={handleSave} disabled={!settings || saveMutation.isPending} className={needsConfirm ? "bg-red-600 hover:bg-red-700" : ""}>
+              {saveMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {goingLive ? "Switch to live…" : startingToHide ? "Start hiding…" : "Save"}
+            </Button>
+          </div>
+        </div>
+      ) : (
       <Dialog open={open && !confirmOpen} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -479,6 +639,7 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      )}
 
       <Dialog open={open && confirmOpen} onOpenChange={(o) => { if (!o && !saveMutation.isPending) { setConfirmOpen(false); setConfirmText(""); } }}>
         <DialogContent className="max-w-lg">

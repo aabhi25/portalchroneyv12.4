@@ -21,7 +21,7 @@ import { indexAccountNow } from "../services/photoSearchIndexSweep";
 
 /**
  * Super admin: Gemini keys for photo search.
- *  - platform key (Super Admin › Settings): used by every account without its own key
+ *  - platform key (Super admin › AI providers › Photo search): used by every account without its own key
  *  - account key (Super Admin › API Keys): the account's own Google AI Studio key
  *  - status (Features list): which key an account uses, and how much of its catalog is indexed
  * Keys are stored encrypted and never returned; responses carry a ••••last4 mask.

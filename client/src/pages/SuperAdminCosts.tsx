@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
 import { DollarSign, BarChart3, MessageSquare, Globe, FileText, Image, Mic, Calendar as CalendarIcon, Sparkles, Check, ChevronsUpDown } from "lucide-react";
 import { format, subDays } from "date-fns";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Command,
@@ -240,35 +239,12 @@ export default function SuperAdminCosts() {
   const aggregatedData = aggregateCosts();
 
   return (
-    <div className="flex flex-col flex-1 h-screen">
-      <header className="flex items-center justify-between h-[56px] px-6 bg-gradient-to-r from-red-500 via-purple-600 to-blue-600 shadow-sm">
-        <div className="flex items-center gap-3">
-          <SidebarTrigger data-testid="button-sidebar-toggle" className="text-white hover:bg-white/10 rounded-md" />
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
-              <Sparkles className="w-4 h-4 text-white" />
-            </div>
-            <div>
-              <h1 className="text-[15px] font-semibold text-white leading-tight">AI Chroney</h1>
-              <p className="text-[11px] text-white/90 leading-tight mt-0.5">Super Admin Cost Analytics</p>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <div className="flex-1 overflow-auto bg-gray-50">
-        <div className="max-w-7xl mx-auto p-4 md:p-6 lg:p-8">
+    <div>
           <div className="mb-6">
             <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <DollarSign className="w-6 h-6 text-purple-600" />
-                  <h2 className="text-2xl font-bold text-gray-900">Cost Analytics</h2>
-                </div>
-                <p className="text-muted-foreground mt-1">
-                  AI usage costs and analytics for business accounts
-                </p>
-              </div>
+              <p className="text-sm text-muted-foreground lg:max-w-md">
+                What AI cost, by account and by kind of work, for any date range.
+              </p>
 
               <div className="flex flex-col sm:flex-row gap-3">
                 <div className="w-full sm:w-64">
@@ -623,8 +599,6 @@ export default function SuperAdminCosts() {
               )}
             </>
           )}
-        </div>
-      </div>
     </div>
   );
 }

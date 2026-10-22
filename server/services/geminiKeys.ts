@@ -3,7 +3,7 @@
  *
  * Resolution for an account:
  *   1. the account's own key (business_accounts.gemini_api_key, encrypted), set in Super Admin › API Keys;
- *   2. else the platform key, set in Super Admin › Settings (system_settings, encrypted),
+ *   2. else the platform key, set in Super admin › AI providers › Photo search (system_settings, encrypted),
  *      with the GEMINI_API_KEY environment variable as a fallback for local testing;
  *   3. else none: the account has no Gemini photo search.
  *

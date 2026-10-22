@@ -43,8 +43,9 @@ import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { DataRetentionDialog } from "@/components/DataRetentionDialog";
-import { Plus, Pencil, Timer, Link2, Unlink, Trash2, Building2, Crown, Search, X, Check, Shield, BarChart3, Users, MessageSquare, Contact, Package, FileQuestion, Calendar, KeyRound, Clock, GraduationCap, RefreshCw, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
-import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Plus, Pencil, Timer, Link2, Unlink, Trash2, Building2, Crown, Search, X, Check, Shield, BarChart3, Users, MessageSquare, Contact, Package, FileQuestion, Calendar, KeyRound, Clock, GraduationCap, RefreshCw, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Loader2, MoreVertical } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { groupHref } from "@/navigation/superAdminAreas";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { format, startOfDay, endOfDay, subDays, startOfMonth, endOfMonth, subMonths } from "date-fns";
@@ -145,7 +146,8 @@ interface GroupAdminUser {
   username: string;
 }
 
-export default function SuperAdminAccountGroups() {
+/** Account groups: all of them, or (with groupId) just that one group, shown on its own page. */
+export default function SuperAdminAccountGroups({ groupId }: { groupId?: string } = {}) {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -249,7 +251,7 @@ export default function SuperAdminAccountGroups() {
   };
 
   const navigateToInsights = (group: AccountGroup) => {
-    setLocation(`/super-admin/account-groups/${group.id}/insights`);
+    setLocation(groupHref(group.id, "insights"));
   };
 
   const linkedAccountIds = new Set(
@@ -340,6 +342,7 @@ export default function SuperAdminAccountGroups() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/super-admin/account-groups"] });
+      if (groupId) setLocation("/super-admin/account-groups");
       toast({
         title: "Group Deleted",
         description: "All accounts have been unlinked",
@@ -584,19 +587,15 @@ export default function SuperAdminAccountGroups() {
     : [];
 
   return (
-    <div className="flex flex-col h-screen bg-background">
-      <header className="flex items-center gap-3 px-6 py-4 border-b bg-gradient-to-r from-[hsl(var(--gradient-start))] to-[hsl(var(--gradient-end))]">
-        <SidebarTrigger className="text-white hover:bg-white/10" />
-        <div className="flex items-center gap-2">
-          <Link2 className="w-5 h-5 text-white" />
-          <h1 className="text-lg font-semibold text-white">Account Groups</h1>
-        </div>
-        <div className="ml-auto">
+    <div>
+      <div className={groupId ? "hidden" : "mb-5 flex flex-wrap items-center justify-between gap-3"}>
+        <p className="text-sm text-muted-foreground">Groups let one login manage several business accounts.</p>
+        <div>
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
             <DialogTrigger asChild>
-              <Button variant="secondary" size="sm">
+              <Button size="sm">
                 <Plus className="w-4 h-4 mr-2" />
-                Create Group
+                New group
               </Button>
             </DialogTrigger>
             <DialogContent className="sm:max-w-[500px]">
@@ -745,9 +744,9 @@ export default function SuperAdminAccountGroups() {
             </DialogContent>
           </Dialog>
         </div>
-      </header>
+      </div>
 
-      <main className="flex-1 overflow-auto p-6">
+      <div>
         {groupsLoading ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-muted-foreground">Loading account groups...</p>
@@ -765,74 +764,68 @@ export default function SuperAdminAccountGroups() {
             </Button>
           </div>
         ) : (
-          <div className="grid gap-6 md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
-            {accountGroups.map((group) => (
-              <Card key={group.id} className="relative flex flex-col h-[400px]">
+          <div className={groupId ? "grid max-w-2xl gap-6" : "grid gap-6 md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3"}>
+            {(groupId ? accountGroups.filter(g => g.id === groupId) : accountGroups).map((group) => (
+              <Card key={group.id} className={`relative flex flex-col ${groupId ? "" : "h-[400px]"}`}>
                 <CardHeader className="pb-3 flex-shrink-0">
                   <div className="flex items-start justify-between">
-                    <div>
-                      <CardTitle className="text-lg">{group.name}</CardTitle>
+                    <div className="min-w-0">
+                      <CardTitle className="text-lg">
+                        {groupId ? group.name : (
+                          <button type="button" className="text-left hover:text-violet-700 hover:underline" onClick={() => setLocation(groupHref(group.id))}>{group.name}</button>
+                        )}
+                      </CardTitle>
                       <CardDescription>
                         {group.members.length} linked account{group.members.length !== 1 ? 's' : ''}
                       </CardDescription>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-primary hover:bg-primary/10"
-                        title="View Insights"
-                        onClick={() => navigateToInsights(group)}
-                      >
-                        <BarChart3 className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-indigo-600 hover:bg-indigo-50"
-                        title="Manage Group Admins"
-                        onClick={() => openAdminsDialog(group)}
-                      >
-                        <Users className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-amber-600 hover:bg-amber-50"
-                        title="Group Training"
-                        onClick={() => setLocation(`/super-admin/account-groups/${group.id}/training`)}
-                      >
-                        <GraduationCap className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-green-600 hover:bg-green-50"
-                        title="Sync Unsynced Leads to LeadSquared"
-                        onClick={() => openSyncDialog(group)}
-                      >
-                        <RefreshCw className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-purple-600 hover:bg-purple-50"
-                        title="Auto-delete (data retention)"
-                        onClick={() => setRetentionGroup({ id: group.id, name: group.name })}
-                      >
-                        <Timer className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-destructive hover:bg-destructive/10"
-                        onClick={() => {
-                          setGroupToDelete(group);
-                          setDeleteDialogOpen(true);
-                        }}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {!groupId && (
+                        <Button variant="outline" size="sm" className="h-8" onClick={() => setLocation(groupHref(group.id))} data-testid={`button-open-group-${group.id}`}>
+                          Open
+                        </Button>
+                      )}
+                      {groupId && (
+                        <Button variant="outline" size="sm" className="h-8" onClick={() => openAdminsDialog(group)} data-testid={`button-group-admins-${group.id}`}>
+                          <Users className="w-4 h-4 mr-1.5" />Admins
+                        </Button>
+                      )}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="More group actions">
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          {!groupId && (
+                            <DropdownMenuItem onClick={() => openAdminsDialog(group)}>
+                              <Users className="w-4 h-4 mr-2" />Group admins
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuItem onClick={() => navigateToInsights(group)}>
+                            <BarChart3 className="w-4 h-4 mr-2" />Insights
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setLocation(groupHref(group.id, "training"))}>
+                            <GraduationCap className="w-4 h-4 mr-2" />Group training
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => openSyncDialog(group)}>
+                            <RefreshCw className="w-4 h-4 mr-2" />Sync unsynced leads to LeadSquared
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => groupId ? setLocation(groupHref(group.id, "privacy")) : setRetentionGroup({ id: group.id, name: group.name })}>
+                            <Timer className="w-4 h-4 mr-2" />Auto-delete (data retention)
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                            onClick={() => {
+                              setGroupToDelete(group);
+                              setDeleteDialogOpen(true);
+                            }}
+                          >
+                            <Trash2 className="w-4 h-4 mr-2" />Delete group
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </div>
                 </CardHeader>
@@ -926,7 +919,7 @@ export default function SuperAdminAccountGroups() {
             ))}
           </div>
         )}
-      </main>
+      </div>
 
       <Dialog open={isAddMemberDialogOpen} onOpenChange={setIsAddMemberDialogOpen}>
         <DialogContent>

@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { HardDrive, CheckCircle, XCircle, Loader2, Eye, EyeOff, TestTube, Trash2, Wand2 } from "lucide-react";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Dialog,
@@ -131,16 +130,8 @@ export default function SuperAdminR2Settings() {
   const isFormValid = accountId && accessKeyId && secretAccessKey && bucketName;
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50 dark:bg-gray-900">
-      <div className="flex items-center gap-4 p-4 border-b bg-white dark:bg-gray-800">
-        <SidebarTrigger />
-        <div className="flex items-center gap-2">
-          <HardDrive className="h-6 w-6 text-blue-600" />
-          <h1 className="text-xl font-semibold">R2 Storage Settings</h1>
-        </div>
-      </div>
-
-      <div className="flex-1 p-6 max-w-4xl">
+    <div>
+      <div className="max-w-4xl">
         <Card className="mb-6">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

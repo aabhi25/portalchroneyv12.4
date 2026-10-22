@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, BarChart3, Users, Building2, Download } from "lucide-react";
-import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Loader2, Users, Building2, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -128,32 +127,15 @@ export default function SuperAdminMIS() {
     : { mtd: "0.00", today: "0.00" };
 
   return (
-    <div className="flex flex-col h-screen">
-      <header className="border-b bg-gradient-to-r from-red-600 via-purple-600 to-blue-600 text-white p-4">
-        <div className="flex items-center gap-3">
-          <SidebarTrigger className="text-white hover:bg-white/20" />
-          <div>
-            <h1 className="text-lg font-semibold">AI Chroney</h1>
-            <p className="text-sm text-white/80">MIS Dashboard</p>
-          </div>
-        </div>
-      </header>
-
-      <main className="flex-1 overflow-auto p-6 bg-gray-50 dark:bg-gray-900">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
-            <BarChart3 className="h-6 w-6 text-purple-600" />
-            <div>
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">MIS Report</h2>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Month-to-date and today's metrics across all partners
-              </p>
-            </div>
-          </div>
+    <div>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+          <p className="text-sm text-gray-500">
+            Month-to-date and today's numbers for every partner.
+          </p>
           {data && data.length > 0 && totals && (
             <Button
               onClick={() => downloadPDF(data, totals, totalConversionRate)}
-              className="bg-purple-600 hover:bg-purple-700 text-white gap-2"
+              className="gap-2"
             >
               <Download className="h-4 w-4" />
               Download PDF
@@ -178,127 +160,65 @@ export default function SuperAdminMIS() {
           <div className="text-center py-20 text-gray-500">No data available.</div>
         )}
 
-        {data && data.length > 0 && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-x-auto">
-            <table className="w-full text-sm">
+        {data && data.length > 0 && totals && (
+          <div className="overflow-x-auto rounded-2xl border border-black/[0.07] bg-white">
+            <table className="w-full text-sm tabular-nums">
               <thead>
-                <tr className="bg-purple-600 text-white">
-                  <th className="px-4 py-3 text-left font-semibold border-r border-purple-500" rowSpan={2}>
-                    Partner Name
-                  </th>
-                  <th className="px-4 py-3 text-center font-semibold border-r border-purple-500" rowSpan={2}>
-                    Type
-                  </th>
-                  <th className="px-4 py-2 text-center font-semibold border-r border-purple-500" colSpan={2}>
-                    Visitors
-                  </th>
-                  <th className="px-4 py-2 text-center font-semibold border-r border-purple-500" colSpan={2}>
-                    Leads
-                  </th>
-                  <th className="px-4 py-2 text-center font-semibold border-r border-purple-500" colSpan={2}>
-                    Conversations
-                  </th>
-                  <th className="px-4 py-2 text-center font-semibold" colSpan={2}>
-                    Conversion Rate
-                  </th>
+                <tr className="border-b border-black/[0.06] text-[12px] text-gray-500">
+                  <th className="sticky left-0 z-10 bg-white px-4 pb-1 pt-3 text-left font-medium" rowSpan={2}>Partner</th>
+                  <th className="px-4 pb-1 pt-3 text-left font-medium" rowSpan={2}>Type</th>
+                  <th className="px-4 pb-1 pt-3 text-center font-medium" colSpan={2}>Visitors</th>
+                  <th className="px-4 pb-1 pt-3 text-center font-medium" colSpan={2}>Leads</th>
+                  <th className="px-4 pb-1 pt-3 text-center font-medium" colSpan={2}>Conversations</th>
+                  <th className="px-4 pb-1 pt-3 text-center font-medium" colSpan={2}>Conversion</th>
                 </tr>
-                <tr className="bg-purple-500 text-white text-xs">
-                  <th className="px-4 py-2 text-center font-medium border-r border-purple-400">MTD</th>
-                  <th className="px-4 py-2 text-center font-medium border-r border-purple-400">Today</th>
-                  <th className="px-4 py-2 text-center font-medium border-r border-purple-400">MTD</th>
-                  <th className="px-4 py-2 text-center font-medium border-r border-purple-400">Today</th>
-                  <th className="px-4 py-2 text-center font-medium border-r border-purple-400">MTD</th>
-                  <th className="px-4 py-2 text-center font-medium border-r border-purple-400">Today</th>
-                  <th className="px-4 py-2 text-center font-medium border-r border-purple-400">MTD</th>
-                  <th className="px-4 py-2 text-center font-medium">Today</th>
+                <tr className="border-b border-black/[0.06] text-[11px] uppercase tracking-wide text-gray-400">
+                  {["Month", "Today", "Month", "Today", "Month", "Today", "Month", "Today"].map((h, i) => (
+                    <th key={i} className="px-4 pb-2 text-right font-medium">{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {data.map((row, i) => (
-                  <tr
-                    key={row.name}
-                    className={`border-b border-gray-100 dark:border-gray-700 ${
-                      i % 2 === 0 ? "bg-white dark:bg-gray-800" : "bg-gray-50 dark:bg-gray-750"
-                    } hover:bg-purple-50 dark:hover:bg-gray-700 transition-colors`}
-                  >
-                    <td className="px-4 py-3 font-medium text-gray-900 dark:text-white border-r border-gray-100 dark:border-gray-700">
-                      {row.name}
-                    </td>
-                    <td className="px-4 py-3 text-center border-r border-gray-100 dark:border-gray-700">
+                {data.map((row) => (
+                  <tr key={row.name} className="border-b border-black/[0.04] hover:bg-gray-50/70">
+                    <td className="sticky left-0 z-10 whitespace-nowrap bg-white px-4 py-3 font-medium text-gray-900">{row.name}</td>
+                    <td className="px-4 py-3">
                       {row.type === "group" ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
-                          <Users className="h-3 w-3" />
-                          Group ({row.accountCount})
+                        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[11.5px] font-medium text-indigo-700">
+                          <Users className="h-3 w-3" />Group of {row.accountCount}
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-                          <Building2 className="h-3 w-3" />
-                          Individual
+                        <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11.5px] font-medium text-gray-600">
+                          <Building2 className="h-3 w-3" />Account
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-center text-gray-700 dark:text-gray-300 border-r border-gray-100 dark:border-gray-700">
-                      {row.visitors.mtd.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-center text-gray-700 dark:text-gray-300 border-r border-gray-100 dark:border-gray-700">
-                      {row.visitors.today.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-center text-gray-700 dark:text-gray-300 border-r border-gray-100 dark:border-gray-700">
-                      {row.leads.mtd.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-center text-gray-700 dark:text-gray-300 border-r border-gray-100 dark:border-gray-700">
-                      {row.leads.today.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-center text-gray-700 dark:text-gray-300 border-r border-gray-100 dark:border-gray-700">
-                      {row.conversations.mtd.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-center text-gray-700 dark:text-gray-300 border-r border-gray-100 dark:border-gray-700">
-                      {row.conversations.today.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-center text-gray-700 dark:text-gray-300 border-r border-gray-100 dark:border-gray-700">
-                      {row.conversionRate.mtd.toFixed(2)}%
-                    </td>
-                    <td className="px-4 py-3 text-center text-gray-700 dark:text-gray-300">
-                      {row.conversionRate.today.toFixed(2)}%
-                    </td>
+                    <td className="px-4 py-3 text-right text-gray-800">{row.visitors.mtd.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right text-gray-500">{row.visitors.today.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right text-gray-800">{row.leads.mtd.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right text-gray-500">{row.leads.today.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right text-gray-800">{row.conversations.mtd.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right text-gray-500">{row.conversations.today.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right text-gray-800">{row.conversionRate.mtd.toFixed(2)}%</td>
+                    <td className="px-4 py-3 text-right text-gray-500">{row.conversionRate.today.toFixed(2)}%</td>
                   </tr>
                 ))}
-                <tr className="bg-purple-100 dark:bg-purple-900/30 font-bold border-t-2 border-purple-300 dark:border-purple-700">
-                  <td className="px-4 py-3 text-gray-900 dark:text-white border-r border-purple-200 dark:border-purple-700">
-                    Total
-                  </td>
-                  <td className="px-4 py-3 text-center text-gray-900 dark:text-white border-r border-purple-200 dark:border-purple-700">
-                  </td>
-                  <td className="px-4 py-3 text-center text-gray-900 dark:text-white border-r border-purple-200 dark:border-purple-700">
-                    {totals?.visitors.mtd.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-center text-gray-900 dark:text-white border-r border-purple-200 dark:border-purple-700">
-                    {totals?.visitors.today.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-center text-gray-900 dark:text-white border-r border-purple-200 dark:border-purple-700">
-                    {totals?.leads.mtd.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-center text-gray-900 dark:text-white border-r border-purple-200 dark:border-purple-700">
-                    {totals?.leads.today.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-center text-gray-900 dark:text-white border-r border-purple-200 dark:border-purple-700">
-                    {totals?.conversations.mtd.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-center text-gray-900 dark:text-white border-r border-purple-200 dark:border-purple-700">
-                    {totals?.conversations.today.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-center text-gray-900 dark:text-white border-r border-purple-200 dark:border-purple-700">
-                    {totalConversionRate.mtd}%
-                  </td>
-                  <td className="px-4 py-3 text-center text-gray-900 dark:text-white">
-                    {totalConversionRate.today}%
-                  </td>
+                <tr className="bg-gray-50 font-semibold text-gray-900">
+                  <td className="sticky left-0 z-10 bg-gray-50 px-4 py-3">Total</td>
+                  <td className="px-4 py-3" />
+                  <td className="px-4 py-3 text-right">{totals.visitors.mtd.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right">{totals.visitors.today.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right">{totals.leads.mtd.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right">{totals.leads.today.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right">{totals.conversations.mtd.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right">{totals.conversations.today.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right">{totalConversionRate.mtd}%</td>
+                  <td className="px-4 py-3 text-right">{totalConversionRate.today}%</td>
                 </tr>
               </tbody>
             </table>
           </div>
         )}
-      </main>
     </div>
   );
 }

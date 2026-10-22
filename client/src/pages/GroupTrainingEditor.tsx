@@ -2,6 +2,7 @@ import { DEFAULT_PHONE_COUNTRY_CODE, normalizePhoneCodeStyle, phoneCodeExample, 
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useLocation } from "wouter";
+import { useInHubFrame } from "@/components/hub/hubContext";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -298,6 +299,7 @@ const getFieldLabel = (fieldId: string) => {
 
 export default function GroupTrainingEditor() {
   const { groupId } = useParams();
+  const inFrame = useInHubFrame();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -1494,6 +1496,9 @@ export default function GroupTrainingEditor() {
     <div className="min-h-screen bg-background">
       <header className="border-b bg-card sticky top-0 z-10">
         <div className="flex items-center justify-between h-14 px-4">
+          {inFrame ? (
+            <p className="text-sm text-muted-foreground">Shared training used by every account in this group.</p>
+          ) : (
           <div className="flex items-center gap-3">
             <SidebarTrigger />
             <Button
@@ -1510,6 +1515,7 @@ export default function GroupTrainingEditor() {
               <h1 className="font-semibold">Group Training: {groupTraining?.groupName || "Loading..."}</h1>
             </div>
           </div>
+          )}
           <div className="flex items-center gap-2">
             {saveStatus !== "idle" && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground mr-2">

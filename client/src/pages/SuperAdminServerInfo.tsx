@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Globe, Server, RefreshCw, Copy, CheckCircle2, Clock, Cpu, Loader2 } from "lucide-react";
 import { useState } from "react";
 
@@ -53,33 +52,21 @@ export default function SuperAdminServerInfo() {
     : "bg-gray-100 text-gray-700 border-gray-200";
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50">
-      <header className="flex items-center gap-3 px-6 py-4 bg-white border-b border-gray-200">
-        <SidebarTrigger />
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-slate-500 to-gray-700 flex items-center justify-center">
-            <Server className="w-4 h-4 text-white" />
-          </div>
-          <div>
-            <h1 className="text-lg font-semibold text-gray-900">Server Info</h1>
-            <p className="text-xs text-gray-500">Live outbound IP and environment details</p>
-          </div>
-        </div>
-        <div className="ml-auto">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refetch()}
-            disabled={isFetching}
-            className="gap-2"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-        </div>
-      </header>
-
-      <main className="flex-1 p-6 max-w-2xl mx-auto w-full">
+    <div className="max-w-2xl">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <p className="text-sm text-gray-500">Live outbound IP and environment details.</p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="gap-2 bg-white"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
+      </div>
+      <div>
         {isLoading && (
           <div className="flex items-center justify-center h-48 gap-2 text-gray-500">
             <Loader2 className="w-5 h-5 animate-spin" />
@@ -177,7 +164,7 @@ export default function SuperAdminServerInfo() {
             </p>
           </div>
         )}
-      </main>
+      </div>
     </div>
   );
 }

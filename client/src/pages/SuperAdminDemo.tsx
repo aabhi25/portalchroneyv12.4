@@ -75,13 +75,14 @@ interface DemoPage {
   updatedAt: string;
 }
 
-export default function SuperAdminDemo() {
+/** Every demo page, or (on an account's page) just that account's. */
+export default function SuperAdminDemo({ businessAccountId }: { businessAccountId?: string } = {}) {
   const { toast } = useToast();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [editingDemo, setEditingDemo] = useState<DemoPage | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [createFormData, setCreateFormData] = useState({
-    businessAccountId: "",
+    businessAccountId: businessAccountId ?? "",
     title: "",
     description: "",
     expiresAt: "",
@@ -119,7 +120,7 @@ export default function SuperAdminDemo() {
     onSuccess: (newDemo) => {
       queryClient.invalidateQueries({ queryKey: ["/api/super-admin/demo-pages"] });
       setIsCreateOpen(false);
-      setCreateFormData({ businessAccountId: "", title: "", description: "", expiresAt: "" });
+      setCreateFormData({ businessAccountId: businessAccountId ?? "", title: "", description: "", expiresAt: "" });
       toast({
         title: "Demo Page Created",
         description: "The demo page has been created successfully.",
@@ -295,24 +296,23 @@ export default function SuperAdminDemo() {
     return businessAccounts.find(b => b.id === businessAccountId)?.name || "Unknown";
   };
 
+  const visibleDemos = businessAccountId ? demoPages.filter(d => d.businessAccountId === businessAccountId) : demoPages;
+
   return (
-    <div className="container mx-auto p-6 max-w-7xl">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <h1 className="text-3xl font-bold">Demo Pages</h1>
-          <p className="text-muted-foreground mt-1">
-            Create and manage shareable demo pages for business accounts
-          </p>
-        </div>
+    <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-5">
+        <p className="text-sm text-muted-foreground">
+          Shareable demo pages that show a business its own AI assistant.
+        </p>
         <div className="flex items-center gap-3">
-          <div className="relative">
+          <div className={`relative ${businessAccountId ? "hidden" : ""}`}>
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
             <Input
               type="text"
               placeholder="Search demo pages..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 w-64"
+              className="pl-9 w-56 bg-white"
             />
           </div>
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
@@ -421,7 +421,7 @@ export default function SuperAdminDemo() {
 
       {isDemoPagesLoading ? (
         <div className="text-center py-12">Loading demo pages...</div>
-      ) : demoPages.length === 0 ? (
+      ) : visibleDemos.length === 0 ? (
         <div className="text-center py-12 border rounded-lg bg-muted/50">
           <p className="text-muted-foreground">No demo pages created yet</p>
           <p className="text-sm text-muted-foreground mt-1">
@@ -429,7 +429,7 @@ export default function SuperAdminDemo() {
           </p>
         </div>
       ) : (
-        <div className="border rounded-lg">
+        <div className="overflow-x-auto rounded-2xl border border-black/[0.07] bg-white">
           <Table>
             <TableHeader>
               <TableRow>
@@ -442,7 +442,7 @@ export default function SuperAdminDemo() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {demoPages
+              {visibleDemos
                 .filter((demo) => {
                   if (!searchQuery.trim()) return true;
                   const query = searchQuery.toLowerCase();

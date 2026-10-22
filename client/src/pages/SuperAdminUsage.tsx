@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, ArrowUpDown, Gauge, Loader2, Search } from "lucide-react";
-import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Link } from "wouter";
+import { accountHref } from "@/navigation/superAdminAreas";
+import { ArrowDown, ArrowUp, ArrowUpDown, Loader2, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,7 +24,7 @@ import {
   type UsageLimit,
 } from "@/components/usage/usageFormat";
 
-interface AccountRow {
+export interface AccountRow {
   businessAccountId: string;
   name: string;
   status: string | null;
@@ -39,7 +40,7 @@ interface AccountRow {
   avatarSessions?: number;
 }
 
-interface SummaryResponse {
+export interface SummaryResponse {
   month: string;
   timezone: string;
   usdInrRate: number;
@@ -59,7 +60,7 @@ function sortValue(r: AccountRow, key: SortKey): number | string {
   }
 }
 
-function SetLimitDialog({ row, onClose, rate }: { row: AccountRow; onClose: () => void; rate: number }) {
+export function SetLimitDialog({ row, onClose, rate }: { row: AccountRow; onClose: () => void; rate: number }) {
   const { toast } = useToast();
   const [limitUsd, setLimitUsd] = useState(row.limit ? String(row.limit.monthlyLimitUsd) : "");
   const [warnAt, setWarnAt] = useState(String(row.limit?.warnAtPercent ?? 80));
@@ -182,22 +183,11 @@ export default function SuperAdminUsage() {
   );
 
   return (
-    <div className="flex flex-col flex-1 min-h-screen bg-gray-50">
-      <header className="flex items-center h-[56px] px-6 border-b bg-white">
-        <SidebarTrigger className="-ml-1 mr-2" />
-        <h1 className="text-[15px] font-semibold text-gray-900">Usage & Limits</h1>
-      </header>
-      <div className="max-w-7xl w-full mx-auto p-4 md:p-6 lg:p-8 space-y-6">
+    <div className="space-y-6">
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Gauge className="w-6 h-6 text-purple-600" />
-              <h2 className="text-2xl font-bold text-gray-900">AI usage by account</h2>
-            </div>
-            <p className="text-sm text-muted-foreground mt-1">
-              Months follow India time (IST). ₹ amounts are approximate (1 USD ≈ ₹{rate}). Trend compares with the whole previous month.
-            </p>
-          </div>
+          <p className="text-sm text-muted-foreground lg:max-w-xl">
+            Months follow India time (IST). ₹ amounts are approximate (1 USD ≈ ₹{rate}). Trend compares with the whole previous month.
+          </p>
           <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative sm:w-60">
               <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-muted-foreground" />
@@ -246,7 +236,7 @@ export default function SuperAdminUsage() {
                     {rows.map((r) => (
                       <TableRow key={r.businessAccountId} data-testid={`row-usage-${r.businessAccountId}`}>
                         <TableCell>
-                          <div className="font-medium">{r.name}</div>
+                          <Link href={accountHref(r.businessAccountId, "usage")} className="font-medium hover:text-violet-700 hover:underline">{r.name}</Link>
                           {r.status && r.status !== "active" && <Badge variant="secondary" className="mt-0.5">{r.status}</Badge>}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
@@ -306,7 +296,6 @@ export default function SuperAdminUsage() {
           <input type="checkbox" checked={showIdle} onChange={(e) => setShowIdle(e.target.checked)} />
           Show accounts with no usage (to set a limit in advance)
         </label>
-      </div>
       {editing && <SetLimitDialog row={editing} rate={rate} onClose={() => setEditing(null)} />}
     </div>
   );

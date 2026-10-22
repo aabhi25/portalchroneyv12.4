@@ -1,17 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Settings2, Lock, AlertCircle, Sparkles, Database, Download, Brain, CheckCircle2, XCircle, Loader2, RefreshCw, Cloud, Trash2, Calendar, HardDrive, ChevronRight, ArrowDownToLine, Upload, Copy, Check, ExternalLink } from "lucide-react";
+import { Lock, AlertCircle, Sparkles, Database, Download, Brain, CheckCircle2, XCircle, Loader2, RefreshCw, Cloud, Trash2, Calendar, HardDrive, ArrowDownToLine, Upload, Copy, Check, ExternalLink } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
-import { LiveAvatarPlatformCard } from "@/components/LiveAvatarPlatformCard";
-import { GeminiPlatformKeyCard } from "@/components/photoSearch/GeminiKeyEditor";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -113,9 +109,42 @@ interface BatchEmbedResult {
   }>;
 }
 
-export default function SuperAdminSettings() {
+/** A failed backup's error in one plain line, with the full text behind "Show details". */
+function summariseBackupError(message: string): string {
+  const table = message.match(/permission denied for table (\w+)/i);
+  if (table) return `Permission problem on one table (${table[1]})`;
+  if (/integrity check/i.test(message)) return "The uploaded file failed its integrity check";
+  if (/internal error/i.test(message)) return "Internal error";
+  if (/timeout|timed out/i.test(message)) return "Timed out";
+  return message.length > 140 ? `${message.slice(0, 140)}…` : message;
+}
+
+function FailedJobMessage({ message }: { message: string | null | undefined }) {
+  const [open, setOpen] = useState(false);
+  const text = message || "Unknown error";
+  const summary = summariseBackupError(text);
+  return (
+    <div className="mb-1">
+      <p className="text-sm text-red-600">{summary}</p>
+      {summary !== text && (
+        <>
+          <button type="button" onClick={() => setOpen(o => !o)} className="text-xs font-medium text-gray-500 hover:text-gray-800">
+            {open ? "Hide details" : "Show details"}
+          </button>
+          {open && <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-gray-50 p-2 text-[11px] text-gray-600">{text}</pre>}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Which part of the old Settings page to show: My account, or a Backups & storage tab. */
+export type SuperAdminSettingsSection = "account" | "backups" | "download" | "index";
+
+export default function SuperAdminSettings({ section }: { section: SuperAdminSettingsSection }) {
+  const isBackups = section === "backups";
+  const isIndex = section === "index";
   const { toast } = useToast();
-  const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   
   // Password change state
@@ -192,6 +221,7 @@ export default function SuperAdminSettings() {
 
   // Check for active backup job on mount
   useEffect(() => {
+    if (!isBackups) return;
     const checkActiveJob = async () => {
       try {
         const response = await fetch('/api/super-admin/backups/active-job', { 
@@ -209,11 +239,12 @@ export default function SuperAdminSettings() {
       }
     };
     checkActiveJob();
-  }, []);
+  }, [isBackups]);
 
   // R2 Backup queries
   const { data: backups, isLoading: backupsLoading, refetch: refetchBackups } = useQuery<BackupFile[]>({
     queryKey: ['/api/super-admin/backups'],
+    enabled: isBackups,
     queryFn: async () => {
       const response = await fetch('/api/super-admin/backups', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to fetch backups');
@@ -223,6 +254,7 @@ export default function SuperAdminSettings() {
 
   const { data: backupStats, isLoading: statsBackupLoading, refetch: refetchBackupStats } = useQuery<BackupStats>({
     queryKey: ['/api/super-admin/backups/stats'],
+    enabled: isBackups,
     queryFn: async () => {
       const response = await fetch('/api/super-admin/backups/stats', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to fetch backup stats');
@@ -232,6 +264,7 @@ export default function SuperAdminSettings() {
 
   const { data: restoreHistory, refetch: refetchRestoreHistory } = useQuery<RestoreHistoryItem[]>({
     queryKey: ['/api/super-admin/backups/restore-history'],
+    enabled: isBackups,
     queryFn: async () => {
       const response = await fetch('/api/super-admin/backups/restore-history', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to fetch restore history');
@@ -241,6 +274,7 @@ export default function SuperAdminSettings() {
 
   const { data: failedJobs, refetch: refetchFailedJobs } = useQuery<BackupJobHistory[]>({
     queryKey: ['/api/super-admin/backups/failed-jobs'],
+    enabled: isBackups,
     queryFn: async () => {
       const response = await fetch('/api/super-admin/backups/failed-jobs', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to fetch failed jobs');
@@ -415,6 +449,7 @@ export default function SuperAdminSettings() {
     verificationReport?: { tableName: string; expected: number; actual: number; status: 'ok' | 'mismatch' | 'recovered' | 'failed' }[];
   }>({
     queryKey: ['/api/super-admin/backups/restore-progress'],
+    enabled: isBackups,
     queryFn: async () => {
       const response = await fetch('/api/super-admin/backups/restore-progress', { credentials: 'include' });
       if (response.status === 401) {
@@ -434,6 +469,7 @@ export default function SuperAdminSettings() {
   // FAQ embedding stats query
   const { data: faqStats, isLoading: statsLoading, refetch: refetchStats } = useQuery<FAQEmbeddingStats>({
     queryKey: ['/api/system/faq-embedding-stats'],
+    enabled: isIndex,
     queryFn: async () => {
       const response = await fetch('/api/system/faq-embedding-stats', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to fetch FAQ embedding stats');
@@ -474,6 +510,7 @@ export default function SuperAdminSettings() {
   // Product embedding stats query
   const { data: productStats, isLoading: productStatsLoading, refetch: refetchProductStats } = useQuery<ProductEmbeddingStats>({
     queryKey: ['/api/system/product-embedding-stats'],
+    enabled: isIndex,
     queryFn: async () => {
       const response = await fetch('/api/system/product-embedding-stats', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to fetch product embedding stats');
@@ -646,44 +683,9 @@ export default function SuperAdminSettings() {
   };
 
   return (
-    <div className="flex flex-col flex-1 h-screen">
-      {/* Header */}
-      <header className="flex items-center justify-between h-[56px] px-6 bg-gradient-to-r from-red-500 via-purple-600 to-blue-600 shadow-sm">
-        <div className="flex items-center gap-3">
-          <SidebarTrigger data-testid="button-sidebar-toggle" className="text-white hover:bg-white/10 rounded-md" />
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
-              <Sparkles className="w-4 h-4 text-white" />
-            </div>
-            <div>
-              <h1 className="text-[15px] font-semibold text-white leading-tight">AI Chroney</h1>
-              <p className="text-[11px] text-white/90 leading-tight mt-0.5">Super Admin Settings</p>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <div className="flex-1 overflow-auto bg-gray-50">
-        <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6">
-          {/* Page Header */}
-          <div className="mb-2">
-            <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900">
-              <Settings2 className="w-6 h-6 text-purple-600" />
-              Settings
-            </h2>
-            <p className="text-muted-foreground mt-1">
-              Manage your Super Admin account settings
-            </p>
-          </div>
-
-          {/* Live AI avatar: platform provider keys + cost rates */}
-          <LiveAvatarPlatformCard />
-
-          {/* Photo search: the platform Gemini key used by accounts without their own */}
-          <GeminiPlatformKeyCard />
-
+    <>
           {/* Change Password Card */}
+          {section === "account" && (
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
@@ -746,7 +748,7 @@ export default function SuperAdminSettings() {
                   <Button
                     type="submit"
                     disabled={changePasswordMutation.isPending}
-                    className="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+                    className="w-full"
                   >
                     {changePasswordMutation.isPending ? "Changing Password..." : "Change Password"}
                   </Button>
@@ -758,7 +760,10 @@ export default function SuperAdminSettings() {
             </CardContent>
           </Card>
 
+          )}
+
           {/* Database Backup Card */}
+          {section === "download" && (
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
@@ -774,7 +779,7 @@ export default function SuperAdminSettings() {
                   <Button
                     onClick={() => downloadBackupMutation.mutate()}
                     disabled={downloadBackupMutation.isPending}
-                    className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
+                    className="w-full"
                   >
                     {downloadBackupMutation.isPending ? (
                       <>
@@ -796,7 +801,10 @@ export default function SuperAdminSettings() {
             </CardContent>
           </Card>
 
+          )}
+
           {/* Automated Cloud Backups Card */}
+          {isBackups && (
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
@@ -811,20 +819,20 @@ export default function SuperAdminSettings() {
 
                 {/* Backup Stats */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                  <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-4 border border-blue-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <p className="text-2xl font-bold text-blue-600">
                       {statsBackupLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : backupStats?.totalBackups || 0}
                     </p>
                     <p className="text-xs text-muted-foreground">Total Backups</p>
                   </div>
-                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 border border-green-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <p className="text-2xl font-bold text-green-600">
                       {statsBackupLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 
                         backupStats?.totalSize ? `${(backupStats.totalSize / 1024 / 1024).toFixed(1)} MB` : '0 MB'}
                     </p>
                     <p className="text-xs text-muted-foreground">Total Size</p>
                   </div>
-                  <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-4 border border-violet-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <div className="flex gap-1">
                       <span className="text-sm font-bold text-violet-600">{backupStats?.byType.daily || 0}D</span>
                       <span className="text-sm font-bold text-indigo-600">{backupStats?.byType.weekly || 0}W</span>
@@ -832,7 +840,7 @@ export default function SuperAdminSettings() {
                     </div>
                     <p className="text-xs text-muted-foreground">By Type</p>
                   </div>
-                  <div className="bg-gradient-to-br from-amber-50 to-yellow-50 rounded-xl p-4 border border-amber-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <p className="text-sm font-bold text-amber-600">
                       {backupStats?.newestBackup ? new Date(backupStats.newestBackup).toLocaleDateString() : 'Never'}
                     </p>
@@ -872,7 +880,7 @@ export default function SuperAdminSettings() {
                   <Button
                     onClick={() => triggerBackupMutation.mutate()}
                     disabled={triggerBackupMutation.isPending || !!activeBackupJob}
-                    className="bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
+                    
                   >
                     {triggerBackupMutation.isPending ? (
                       <>
@@ -1220,7 +1228,7 @@ export default function SuperAdminSettings() {
                               {new Date(job.startedAt).toLocaleString()}
                             </span>
                           </div>
-                          <p className="text-sm text-red-600 mb-1">{job.errorMessage || 'Unknown error'}</p>
+                          <FailedJobMessage message={job.errorMessage} />
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-xs text-gray-500">
                               <span>ID: <code className="bg-gray-100 px-1 rounded">{job.correlationId}</code></span>
@@ -1250,28 +1258,10 @@ export default function SuperAdminSettings() {
             </CardContent>
           </Card>
 
-          {/* R2 Storage Configuration Card */}
-          <Card 
-            className="cursor-pointer hover:shadow-md transition-all"
-            onClick={() => setLocation("/super-admin/r2-storage")}
-          >
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center">
-                    <HardDrive className="w-5 h-5 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-gray-900">R2 Storage Configuration</h3>
-                    <p className="text-sm text-muted-foreground">Configure Cloudflare R2 credentials for file storage</p>
-                  </div>
-                </div>
-                <ChevronRight className="w-5 h-5 text-gray-400" />
-              </div>
-            </CardContent>
-          </Card>
+          )}
 
           {/* FAQ Embedding Migration Card */}
+          {isIndex && (
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
@@ -1286,25 +1276,25 @@ export default function SuperAdminSettings() {
 
                 {/* Stats Display */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                  <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-4 border border-violet-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <p className="text-2xl font-bold text-violet-600">
                       {statsLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : faqStats?.totalFAQs || 0}
                     </p>
                     <p className="text-xs text-muted-foreground">Total FAQs</p>
                   </div>
-                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 border border-green-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <p className="text-2xl font-bold text-green-600">
                       {statsLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : faqStats?.embeddedFAQs || 0}
                     </p>
                     <p className="text-xs text-muted-foreground">Embedded</p>
                   </div>
-                  <div className="bg-gradient-to-br from-amber-50 to-yellow-50 rounded-xl p-4 border border-amber-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <p className="text-2xl font-bold text-amber-600">
                       {statsLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : faqStats?.missingEmbeddings || 0}
                     </p>
                     <p className="text-xs text-muted-foreground">Missing</p>
                   </div>
-                  <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-4 border border-blue-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <p className="text-2xl font-bold text-blue-600">
                       {statsLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : faqStats?.businessesWithFAQs || 0}
                     </p>
@@ -1316,7 +1306,7 @@ export default function SuperAdminSettings() {
                   <Button
                     onClick={() => batchEmbedMutation.mutate()}
                     disabled={batchEmbedMutation.isPending || (faqStats?.missingEmbeddings === 0)}
-                    className="bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-700 hover:to-violet-700"
+                    
                   >
                     {batchEmbedMutation.isPending ? (
                       <>
@@ -1411,7 +1401,10 @@ export default function SuperAdminSettings() {
             </CardContent>
           </Card>
 
+          )}
+
           {/* Product Embedding Migration Card */}
+          {isIndex && (
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
@@ -1426,25 +1419,25 @@ export default function SuperAdminSettings() {
 
                 {/* Stats Display */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                  <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl p-4 border border-orange-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <p className="text-2xl font-bold text-orange-600">
                       {productStatsLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : productStats?.totalProducts || 0}
                     </p>
                     <p className="text-xs text-muted-foreground">Total Products</p>
                   </div>
-                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 border border-green-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <p className="text-2xl font-bold text-green-600">
                       {productStatsLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : productStats?.embeddedProducts || 0}
                     </p>
                     <p className="text-xs text-muted-foreground">Embedded</p>
                   </div>
-                  <div className="bg-gradient-to-br from-amber-50 to-yellow-50 rounded-xl p-4 border border-amber-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <p className="text-2xl font-bold text-amber-600">
                       {productStatsLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : productStats?.missingEmbeddings || 0}
                     </p>
                     <p className="text-xs text-muted-foreground">Missing</p>
                   </div>
-                  <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-4 border border-blue-100">
+                  <div className="bg-white rounded-xl p-4 border border-black/[0.07]">
                     <p className="text-2xl font-bold text-blue-600">
                       {productStatsLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : productStats?.businessesWithProducts || 0}
                     </p>
@@ -1456,7 +1449,7 @@ export default function SuperAdminSettings() {
                   <Button
                     onClick={() => productBatchEmbedMutation.mutate()}
                     disabled={productBatchEmbedMutation.isPending || (productStats?.missingEmbeddings === 0)}
-                    className="bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700"
+                    
                   >
                     {productBatchEmbedMutation.isPending ? (
                       <>
@@ -1532,8 +1525,7 @@ export default function SuperAdminSettings() {
                 </p>
             </CardContent>
           </Card>
-        </div>
-      </div>
+          )}
 
       {/* Restore Backup Confirmation Dialog */}
       <AlertDialog open={restoreDialogOpen} onOpenChange={setRestoreDialogOpen}>
@@ -1563,6 +1555,6 @@ export default function SuperAdminSettings() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   );
 }

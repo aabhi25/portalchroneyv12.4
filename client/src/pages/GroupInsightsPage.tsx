@@ -1,6 +1,8 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
+import { HideInHub } from "@/components/hub/HideInHub";
+import { useInHubFrame } from "@/components/hub/hubContext";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -159,6 +161,7 @@ function getDateRangeForFilter(filterType: DateFilterType): DateRange {
 export default function GroupInsightsPage() {
   const [, setLocation] = useLocation();
   const [, params] = useRoute("/super-admin/account-groups/:groupId/insights");
+  const inFrame = useInHubFrame();
   const groupId = params?.groupId;
   const { toast } = useToast();
 
@@ -383,7 +386,8 @@ export default function GroupInsightsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className={inFrame ? "" : "min-h-screen bg-background"}>
+      <HideInHub>
       <header className="sticky top-0 z-40 flex h-14 items-center gap-4 border-b bg-background px-4 sm:px-6">
         <SidebarTrigger />
         <Button
@@ -396,8 +400,9 @@ export default function GroupInsightsPage() {
           Back to Groups
         </Button>
       </header>
+      </HideInHub>
 
-      <main className="p-4 sm:p-6 space-y-6">
+      <main className={inFrame ? "space-y-6" : "p-4 sm:p-6 space-y-6"}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
