@@ -1,11 +1,18 @@
 import { db } from '../db';
 import { products, businessAccounts, productEmbeddings, erpProductCache, productJewelryEmbeddings } from '../../shared/schema';
-// Jina CLIP removed - now using Vision Warehouse only for visual search
+// Photo fingerprints come from Gemini Embedding 2 (one platform key). Only rows marked with
+// GEMINI_EMBEDDING_MARKER are searched, so fingerprints left by the retired Jina CLIP engine never mix in.
+import { embedImage, embedImages, GEMINI_EMBEDDING_MARKER } from './geminiImageEmbeddingService';
+import { resolveGeminiKey } from './geminiKeys';
 import { jewelryDetectionService } from './jewelryDetectionService';
 import { imageCroppingService } from './imageCroppingService';
 import { imageHashService } from './imageHashService';
 import { embeddingService } from './embeddingService';
-import { eq, sql, and, isNull, isNotNull } from 'drizzle-orm';
+import { eq, sql, and, isNull, isNotNull, or, notLike } from 'drizzle-orm';
+
+const GEMINI_ROW = `${GEMINI_EMBEDDING_MARKER}%`;
+/** Products whose stored fingerprints were made by Gemini (and therefore can be compared with a Gemini query). */
+const productHasGeminiFingerprint = sql`${products.visualDescription} LIKE ${GEMINI_ROW}`;
 
 // Lazy import for backgroundRemovalService to avoid loading heavy @imgly/background-removal-node at startup
 const getBackgroundRemovalService = async () => {
@@ -42,6 +49,17 @@ export interface JewelryEmbeddingMatch {
 }
 
 class ProductImageEmbeddingService {
+  /** The account's Gemini key (its own, else the platform's); throws when there is none. */
+  private async geminiKeyFor(businessAccountId: string): Promise<string> {
+    const [account] = await db
+      .select({ geminiApiKey: businessAccounts.geminiApiKey })
+      .from(businessAccounts)
+      .where(eq(businessAccounts.id, businessAccountId));
+    const resolved = account ? await resolveGeminiKey(account) : null;
+    if (!resolved) throw new Error('No Gemini API key for photo search');
+    return resolved.key;
+  }
+
   private isCriticalError(errorMessage: string): boolean {
     const lowerMessage = errorMessage.toLowerCase();
     const criticalPatterns = [
@@ -85,36 +103,147 @@ class ProductImageEmbeddingService {
   }
 
   /**
-   * DEPRECATED: Jina CLIP embedding removed - now using Vision Warehouse only
-   * This method is kept for compatibility but does nothing
+   * Fingerprint the whole product photo with Gemini (no detection or cropping).
+   * `clearCrops` drops the product's cut-out pieces (used when detection was re-run and found none);
+   * cut-outs made for an older engine are always dropped, as they can't be compared with Gemini.
    */
-  async embedProduct(productId: string, imageUrl: string, productName: string, businessAccountId: string): Promise<void> {
-    console.log(`[Product Image Embedding] Skipping CLIP embedding for ${productId} - Vision Warehouse handles visual search`);
-    // No-op: Vision Warehouse handles all visual search, CLIP embeddings no longer generated
+  async embedProduct(
+    productId: string,
+    imageUrl: string,
+    productName: string,
+    businessAccountId: string,
+    options: { clearCrops?: boolean } = {}
+  ): Promise<void> {
+    const [current] = await db
+      .select({ visualDescription: products.visualDescription })
+      .from(products)
+      .where(and(eq(products.id, productId), eq(products.businessAccountId, businessAccountId)));
+    if (!current) return;
+
+    const embedding = await embedImage(imageUrl, await this.geminiKeyFor(businessAccountId));
+    let imageHash: string | null = null;
+    try {
+      imageHash = await imageHashService.generateHash(imageUrl);
+    } catch (e) {
+      console.warn(`[Product Image Embedding] pHash failed for ${productName}:`, (e as Error).message);
+    }
+
+    if (options.clearCrops || !current.visualDescription?.startsWith(GEMINI_EMBEDDING_MARKER)) {
+      await db.delete(productJewelryEmbeddings).where(eq(productJewelryEmbeddings.productId, productId));
+    }
+    await db
+      .update(products)
+      .set({
+        visualDescription: `${GEMINI_EMBEDDING_MARKER} (full photo) for: ${productName}`,
+        imageEmbedding: embedding,
+        fullImageEmbedding: embedding,
+        ...(imageHash ? { imageHash } : {}),
+      })
+      .where(eq(products.id, productId));
+    console.log(`[Product Image Embedding] Gemini fingerprint saved for ${productName}`);
   }
 
   /**
-   * DEPRECATED: Jina CLIP embedding removed - now using Vision Warehouse only
+   * Record that a product's photo couldn't be fingerprinted, so the background sweep doesn't retry it
+   * every run (it is retried when the product's photo changes). Old-engine data is cleared either way.
    */
-  async embedMissingProducts(businessAccountId: string): Promise<{ processed: number; skipped: number; failed: number }> {
-    console.log(`[Product Image Embedding] CLIP embedding disabled - Vision Warehouse handles visual search`);
-    return { processed: 0, skipped: 0, failed: 0 };
+  private async markEmbeddingFailed(productId: string, productName: string, reason: string): Promise<void> {
+    await db.delete(productJewelryEmbeddings).where(eq(productJewelryEmbeddings.productId, productId));
+    await db
+      .update(products)
+      .set({
+        visualDescription: `${GEMINI_EMBEDDING_MARKER} failed for: ${productName} (${reason.slice(0, 160)})`,
+        imageEmbedding: null,
+        fullImageEmbedding: null,
+      })
+      .where(eq(products.id, productId));
   }
 
   /**
-   * DEPRECATED: Jina CLIP embedding removed - now using Vision Warehouse only
+   * Fingerprint every product photo that has no Gemini fingerprint yet (new products, and products
+   * still carrying fingerprints from a retired engine). Products that already failed are skipped.
    */
-  async reembedAllProducts(businessAccountId: string, forceReprocess: boolean = false): Promise<{ processed: number; skipped: number; failed: number }> {
-    console.log(`[Product Image Embedding] CLIP embedding disabled - Vision Warehouse handles visual search`);
-    return { processed: 0, skipped: 0, failed: 0 };
+  async embedMissingProducts(
+    businessAccountId: string,
+    options: {
+      limit?: number;
+      /** Detect and cut out each piece first (uses the account's OpenAI key), as AI product processing does. */
+      useDetection?: boolean;
+      onProgress?: (current: number, total: number, processed: number, failed: number) => void;
+    } = {}
+  ): Promise<{ processed: number; skipped: number; failed: number; error?: string }> {
+    const pending = await db
+      .select({ id: products.id, name: products.name, imageUrl: products.imageUrl })
+      .from(products)
+      .where(
+        and(
+          eq(products.businessAccountId, businessAccountId),
+          isNotNull(products.imageUrl),
+          or(isNull(products.visualDescription), notLike(products.visualDescription, GEMINI_ROW))
+        )
+      )
+      .limit(options.limit ?? 10_000);
+    return this.embedProductList(businessAccountId, pending, options.onProgress, options.useDetection);
   }
 
-  /**
-   * DEPRECATED: Jina CLIP embedding removed - now using Vision Warehouse only
-   */
+  /** Re-fingerprint products with Gemini; `forceReprocess` also redoes products that already have one. */
+  async reembedAllProducts(businessAccountId: string, forceReprocess: boolean = false): Promise<{ processed: number; skipped: number; failed: number; error?: string }> {
+    if (!forceReprocess) return this.embedMissingProducts(businessAccountId);
+    const all = await db
+      .select({ id: products.id, name: products.name, imageUrl: products.imageUrl })
+      .from(products)
+      .where(and(eq(products.businessAccountId, businessAccountId), isNotNull(products.imageUrl)));
+    return this.embedProductList(businessAccountId, all);
+  }
+
+  private async embedProductList(
+    businessAccountId: string,
+    list: Array<{ id: string; name: string; imageUrl: string | null }>,
+    onProgress?: (current: number, total: number, processed: number, failed: number) => void,
+    useDetection = false
+  ): Promise<{ processed: number; skipped: number; failed: number; error?: string }> {
+    const CONCURRENCY = 3;
+    let processed = 0;
+    let failed = 0;
+    let completed = 0;
+    let criticalError: string | undefined;
+    for (let i = 0; i < list.length && !criticalError; i += CONCURRENCY) {
+      await Promise.all(list.slice(i, i + CONCURRENCY).map(async product => {
+        try {
+          if (useDetection) {
+            const result = await this.detectAndEmbedProduct(product.id, product.imageUrl!, product.name, businessAccountId);
+            if (!result.success) throw Object.assign(new Error(result.error || 'Processing failed'), { critical: result.isCritical });
+          } else {
+            await this.embedProduct(product.id, product.imageUrl!, product.name, businessAccountId);
+          }
+          processed++;
+        } catch (error: any) {
+          const message = error?.message || String(error);
+          // Key, quota and billing problems stop the run; nothing is marked so the next run retries.
+          if (error?.critical || this.isCriticalError(message) || /No Gemini API key/.test(message)) {
+            criticalError = message;
+          } else {
+            failed++;
+            console.warn(`[Product Image Embedding] Could not fingerprint ${product.name}: ${message}`);
+            await this.markEmbeddingFailed(product.id, product.name, message).catch(() => {});
+          }
+        }
+        completed++;
+        onProgress?.(completed, list.length, processed, failed);
+      }));
+    }
+    if (criticalError) console.error(`[Product Image Embedding] Stopped: ${criticalError}`);
+    return { processed, skipped: 0, failed, ...(criticalError ? { error: criticalError } : {}) };
+  }
+
+  /** Fingerprint a customer's photo (or a cut-out piece of it) for searching. Null if Gemini is unavailable. */
   async embedUploadedImage(imageDataUrl: string, businessAccountId: string): Promise<{ description: string; embedding: number[] | null }> {
-    console.log('[Product Image Embedding] CLIP embedding disabled - Vision Warehouse handles visual search');
-    return { description: 'Vision Warehouse handles visual search', embedding: null };
+    try {
+      return { description: GEMINI_EMBEDDING_MARKER, embedding: await embedImage(imageDataUrl, await this.geminiKeyFor(businessAccountId)) };
+    } catch (error: any) {
+      console.error(`[Product Image Embedding] Could not fingerprint uploaded photo for ${businessAccountId}: ${error?.message || error}`);
+      return { description: GEMINI_EMBEDDING_MARKER, embedding: null };
+    }
   }
 
   /**
@@ -153,11 +282,13 @@ class ProductImageEmbeddingService {
               ? and(
                   eq(productJewelryEmbeddings.businessAccountId, businessAccountId),
                   sql`${productJewelryEmbeddings.embedding} IS NOT NULL`,
+                  productHasGeminiFingerprint,
                   sql`(${productJewelryEmbeddings.jewelryType} = ${jewelryTypeFilter} OR LOWER(${productJewelryEmbeddings.jewelryType}) = 'others')`
                 )
               : and(
                   eq(productJewelryEmbeddings.businessAccountId, businessAccountId),
-                  sql`${productJewelryEmbeddings.embedding} IS NOT NULL`
+                  sql`${productJewelryEmbeddings.embedding} IS NOT NULL`,
+                  productHasGeminiFingerprint
                 )
           )
           .orderBy(sql`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`)
@@ -203,11 +334,14 @@ class ProductImageEmbeddingService {
             ? and(
                 eq(products.businessAccountId, businessAccountId),
                 sql`${products.imageEmbedding} IS NOT NULL`,
-                sql`(${products.detectedJewelryType} = ${jewelryTypeFilter} OR LOWER(${products.detectedJewelryType}) = 'others')`
+                productHasGeminiFingerprint,
+                // Products fingerprinted from the full photo may have no detected type: keep them in.
+                sql`(${products.detectedJewelryType} = ${jewelryTypeFilter} OR LOWER(${products.detectedJewelryType}) = 'others' OR ${products.detectedJewelryType} IS NULL)`
               )
             : and(
                 eq(products.businessAccountId, businessAccountId),
-                sql`${products.imageEmbedding} IS NOT NULL`
+                sql`${products.imageEmbedding} IS NOT NULL`,
+                productHasGeminiFingerprint
               )
         )
         .orderBy(sql`${products.imageEmbedding} <=> ${JSON.stringify(queryEmbedding)}::vector`)
@@ -247,7 +381,8 @@ class ProductImageEmbeddingService {
             .where(
               and(
                 eq(productEmbeddings.businessAccountId, businessAccountId),
-                sql`${productEmbeddings.embedding} IS NOT NULL`
+                sql`${productEmbeddings.embedding} IS NOT NULL`,
+                sql`${productEmbeddings.visualDescription} LIKE ${GEMINI_ROW}`
               )
             )
             .orderBy(sql`${productEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`)
@@ -322,11 +457,13 @@ class ProductImageEmbeddingService {
             ? and(
                 eq(productJewelryEmbeddings.businessAccountId, businessAccountId),
                 eq(productJewelryEmbeddings.jewelryType, jewelryTypeFilter),
-                sql`${productJewelryEmbeddings.embedding} IS NOT NULL`
+                sql`${productJewelryEmbeddings.embedding} IS NOT NULL`,
+                productHasGeminiFingerprint
               )
             : and(
                 eq(productJewelryEmbeddings.businessAccountId, businessAccountId),
-                sql`${productJewelryEmbeddings.embedding} IS NOT NULL`
+                sql`${productJewelryEmbeddings.embedding} IS NOT NULL`,
+                productHasGeminiFingerprint
               )
         )
         .orderBy(sql`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`)
@@ -371,7 +508,7 @@ class ProductImageEmbeddingService {
   }> {
     try {
       const allProducts = await db
-        .select({ id: products.id, hasEmbedding: sql<boolean>`${products.imageEmbedding} IS NOT NULL` })
+        .select({ id: products.id, hasEmbedding: sql<boolean>`(${products.imageEmbedding} IS NOT NULL AND ${productHasGeminiFingerprint})` })
         .from(products)
         .where(eq(products.businessAccountId, businessAccountId));
 
@@ -384,7 +521,7 @@ class ProductImageEmbeddingService {
         const [erpCount] = await db
           .select({ count: sql<number>`count(*)::int` })
           .from(productEmbeddings)
-          .where(eq(productEmbeddings.businessAccountId, businessAccountId));
+          .where(and(eq(productEmbeddings.businessAccountId, businessAccountId), sql`${productEmbeddings.visualDescription} LIKE ${GEMINI_ROW}`));
         erpEmbeddings = erpCount?.count || 0;
       } catch (e) {
       }
@@ -396,16 +533,18 @@ class ProductImageEmbeddingService {
     }
   }
 
-  /**
-   * DEPRECATED: Jina CLIP embedding removed - now using Vision Warehouse only
-   */
+  /** Gemini fingerprint for a photo by URL (ERP catalog sync). */
   async generateEmbeddingFromUrl(
     imageUrl: string,
     businessAccountId: string,
     productName?: string
   ): Promise<{ embedding: number[] | null; visualDescription: string | null }> {
-    console.log('[Product Image Embedding] CLIP embedding disabled - Vision Warehouse handles visual search');
-    return { embedding: null, visualDescription: 'Vision Warehouse handles visual search' };
+    try {
+      return { embedding: await embedImage(imageUrl, await this.geminiKeyFor(businessAccountId)), visualDescription: `${GEMINI_EMBEDDING_MARKER} for: ${productName || 'ERP product'}` };
+    } catch (error: any) {
+      console.error(`[Product Image Embedding] Could not fingerprint ${productName || imageUrl}: ${error?.message || error}`);
+      return { embedding: null, visualDescription: null };
+    }
   }
 
   /**
@@ -427,9 +566,9 @@ class ProductImageEmbeddingService {
 
       console.log(`[Jewelry Detection] Processing product: ${productName}`);
 
-      // STEP 1: Generate pHash for exact match detection (free, local, no API cost)
-      // CLIP embedding removed - Vision Warehouse handles visual search
-      let fullImageEmbedding: number[] | null = null;
+      // STEP 1: pHash (exact copies) and a Gemini fingerprint of the full photo (exact-match check)
+      const geminiKey = await this.geminiKeyFor(businessAccountId);
+      let fullImageEmbedding: number[] | null = await embedImage(imageUrl, geminiKey);
       let imageHash: string | null = null;
       
       // Generate pHash for exact image matching (free, local, no API cost)
@@ -440,15 +579,12 @@ class ProductImageEmbeddingService {
         console.error(`[Jewelry Detection] Failed to generate pHash for ${productName}:`, e);
       }
       
-      // CLIP embedding skipped - Vision Warehouse handles visual search
-      console.log(`[Jewelry Detection] Skipping CLIP embedding - Vision Warehouse handles visual search`);
-
       // STEP 2: Detect jewelry items
       const detection = await jewelryDetectionService.detectJewelry(imageUrl, businessAccountId);
       
       if (!detection.success || detection.detectedItems.length === 0) {
         console.log(`[Jewelry Detection] No jewelry detected in ${productName}, using original image`);
-        await this.embedProduct(productId, imageUrl, productName, businessAccountId);
+        await this.embedProduct(productId, imageUrl, productName, businessAccountId, { clearCrops: true });
         return { success: true };
       }
 
@@ -459,7 +595,7 @@ class ProductImageEmbeddingService {
       
       if (croppedImages.length === 0) {
         console.log(`[Jewelry Detection] Cropping failed for ${productName}, using original image`);
-        await this.embedProduct(productId, imageUrl, productName, businessAccountId);
+        await this.embedProduct(productId, imageUrl, productName, businessAccountId, { clearCrops: true });
         return { success: true };
       }
 
@@ -504,7 +640,7 @@ class ProductImageEmbeddingService {
 
       if (croppedWithItems.length === 0) {
         console.log(`[Jewelry Detection] No valid crop-item pairs for ${productName}, using original image`);
-        await this.embedProduct(productId, imageUrl, productName, businessAccountId);
+        await this.embedProduct(productId, imageUrl, productName, businessAccountId, { clearCrops: true });
         return { success: true };
       }
 
@@ -613,16 +749,9 @@ class ProductImageEmbeddingService {
       
       console.log(`[Jewelry Detection] Extracted attributes for ${extractedAttributesMap.size} items`);
       
-      // STEP 3: CLIP embeddings skipped - Vision Warehouse handles visual search
-      console.log(`[Jewelry Detection] Skipping CLIP embeddings - Vision Warehouse handles visual search`);
-      
+      // STEP 3: Gemini fingerprints for every cut-out piece (up to 6 per request)
       const imageDataUrls = processedItems.map(p => p.imageDataUrl);
-      let batchEmbeddings: number[][] = [];
-      
-      // Fill with empty embeddings since CLIP is disabled
-      for (const _ of processedItems) {
-        batchEmbeddings.push([]);
-      }
+      const batchEmbeddings: number[][] = await embedImages(imageDataUrls, geminiKey);
       
       // STEP 4: Build results using attributes extracted from cropped images (STEP 2)
       const validResults: Array<{
@@ -668,7 +797,7 @@ class ProductImageEmbeddingService {
 
       if (validResults.length === 0) {
         console.log(`[Jewelry Detection] All embeddings failed for ${productName}, using original image`);
-        await this.embedProduct(productId, imageUrl, productName, businessAccountId);
+        await this.embedProduct(productId, imageUrl, productName, businessAccountId, { clearCrops: true });
         return { success: true };
       }
 
@@ -710,7 +839,7 @@ class ProductImageEmbeddingService {
       await db
         .update(products)
         .set({ 
-          visualDescription: `Jina CLIP v2 embedding (cropped ${primaryResult.originalType}) for: ${productName}`,
+          visualDescription: `${GEMINI_EMBEDDING_MARKER} (cropped ${primaryResult.originalType}) for: ${productName}`,
           imageEmbedding: primaryResult.embedding,
           fullImageEmbedding: fullImageEmbedding, // Full image embedding for exact match detection
           imageHash: imageHash, // pHash for exact image verification
@@ -737,7 +866,7 @@ class ProductImageEmbeddingService {
       }
       
       try {
-        await this.embedProduct(productId, imageUrl, productName, businessAccountId);
+        await this.embedProduct(productId, imageUrl, productName, businessAccountId, { clearCrops: true });
         return { success: true };
       } catch (fallbackError: any) {
         const fallbackErrorMessage = fallbackError?.message || String(fallbackError);
@@ -761,9 +890,8 @@ class ProductImageEmbeddingService {
     try {
       console.log(`[Custom Crop] Processing ${customBoundingBoxes.length} custom bounding boxes for ${productName}`);
 
-      // CLIP embedding skipped - Vision Warehouse handles visual search
-      let fullImageEmbedding: number[] | null = null;
-      console.log(`[Custom Crop] Skipping CLIP embedding - Vision Warehouse handles visual search`);
+      const geminiKey = await this.geminiKeyFor(businessAccountId);
+      const fullImageEmbedding: number[] | null = await embedImage(imageUrl, geminiKey);
 
       // Generate pHash for exact matching
       let imageHash: string | null = null;
@@ -830,15 +958,8 @@ class ProductImageEmbeddingService {
         });
       }
 
-      // CLIP embeddings skipped - Vision Warehouse handles visual search
-      console.log(`[Custom Crop] Skipping CLIP embeddings - Vision Warehouse handles visual search`);
       const imageDataUrls = processedItems.map(p => p.imageDataUrl);
-      let batchEmbeddings: number[][] = [];
-
-      // Fill with empty embeddings since CLIP is disabled
-      for (const _ of processedItems) {
-        batchEmbeddings.push([]);
-      }
+      const batchEmbeddings: number[][] = await embedImages(imageDataUrls, geminiKey);
 
       // Build insert values
       const insertValues = processedItems.map((item, index) => {
@@ -874,7 +995,7 @@ class ProductImageEmbeddingService {
       await db
         .update(products)
         .set({
-          visualDescription: `Jina CLIP v2 embedding (custom crop ${primaryType}) for: ${productName}`,
+          visualDescription: `${GEMINI_EMBEDDING_MARKER} (custom crop ${primaryType}) for: ${productName}`,
           imageEmbedding: primaryItem.embedding,
           fullImageEmbedding: fullImageEmbedding,
           imageHash: imageHash,
@@ -977,7 +1098,7 @@ class ProductImageEmbeddingService {
     forceReprocess: boolean = false,
     onProgress?: (current: number, total: number, processed: number, failed: number) => void
   ): Promise<{ processed: number; failed: number; skipped: number; error?: string; stoppedEarly?: boolean }> {
-    const CONCURRENCY_LIMIT = 2; // Reduced from 4 to avoid Jina API rate limits
+    const CONCURRENCY_LIMIT = 2; // detection and attribute calls go to the account's OpenAI key
     
     try {
       // Get all products with images first
@@ -992,11 +1113,12 @@ class ProductImageEmbeddingService {
         );
 
       // Smart resume: filter products that need processing
-      // A product is complete if it has croppedJewelryUrl AND both embeddings
+      // A product is complete if it has croppedJewelryUrl AND both Gemini fingerprints
       const productsToProcess = forceReprocess
         ? allProducts
         : allProducts.filter(p => 
-            !p.croppedJewelryUrl || !p.imageEmbedding || !p.fullImageEmbedding
+            !p.croppedJewelryUrl || !p.imageEmbedding || !p.fullImageEmbedding ||
+            !p.visualDescription?.startsWith(GEMINI_EMBEDDING_MARKER)
           );
       
       const alreadyComplete = allProducts.length - productsToProcess.length;
@@ -1055,7 +1177,7 @@ class ProductImageEmbeddingService {
         await Promise.all(batch.map(product => processProduct(product)));
         
         if (!shouldStop && i + CONCURRENCY_LIMIT < validProducts.length) {
-          // Wait 2 seconds between batches to avoid Jina API rate limits
+          // Pause between batches to stay within API rate limits
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
@@ -1073,15 +1195,13 @@ class ProductImageEmbeddingService {
     }
   }
 
-  /**
-   * DEPRECATED: Jina CLIP embedding removed - now using Vision Warehouse only
-   */
+  /** Fingerprint the products still waiting for a Gemini fingerprint. */
   async processAwaitingEmbeddings(
     businessAccountId: string,
     onProgress?: (current: number, total: number, processed: number, failed: number) => void
   ): Promise<{ processed: number; failed: number; skipped: number; error?: string; stoppedEarly?: boolean }> {
-    console.log(`[Awaiting Embeddings] CLIP embedding disabled - Vision Warehouse handles visual search`);
-    return { processed: 0, failed: 0, skipped: 0 };
+    const result = await this.embedMissingProducts(businessAccountId, { onProgress });
+    return { ...result, ...(result.error ? { stoppedEarly: true } : {}) };
   }
 }
 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { GeminiAccountKeyEditor } from "@/components/photoSearch/GeminiKeyEditor";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -47,6 +48,8 @@ type ApiKeyFormData = z.infer<typeof apiKeySchema>;
 type ElevenLabsKeyFormData = z.infer<typeof elevenlabsKeySchema>;
 type CurrencyFormData = z.infer<typeof currencySchema>;
 
+
+type VisualSearchModelChoice = 'google_vision_warehouse' | 'gemini_embedding_2';
 interface BusinessAccount {
   id: string;
   name: string;
@@ -69,7 +72,7 @@ interface VisionWarehouseSettings {
   indexId: string;
   endpointId: string;
   hasCredentials: boolean;
-  visualSearchModel: 'google_vision_warehouse' | 'google_product_search';
+  visualSearchModel: string; // 'google_vision_warehouse' | 'gemini_embedding_2' (older: 'google_product_search', 'jina_clip')
 }
 
 interface ProductSearchSettings {
@@ -124,7 +127,7 @@ export default function SuperAdminApiKeys() {
   const [isSyncingProducts, setIsSyncingProducts] = useState(false);
   
   // Visual Search Model selector
-  const [visualSearchModel, setVisualSearchModel] = useState<'google_vision_warehouse' | 'google_product_search'>('google_vision_warehouse');
+  const [visualSearchModel, setVisualSearchModel] = useState<VisualSearchModelChoice>('google_vision_warehouse');
   
   // Endpoint deploy/undeploy state
   const [isDeploying, setIsDeploying] = useState(false);
@@ -229,7 +232,8 @@ export default function SuperAdminApiKeys() {
       setVwCorpusId(vwSettings.corpusId || "");
       setVwIndexId(vwSettings.indexId || "");
       setVwEndpointId(vwSettings.endpointId || "");
-      setVisualSearchModel(vwSettings.visualSearchModel || 'google_vision_warehouse');
+      // Anything but Vision Warehouse runs on Gemini (older engines were retired).
+      setVisualSearchModel(vwSettings.visualSearchModel === 'google_vision_warehouse' ? 'google_vision_warehouse' : 'gemini_embedding_2');
     }
   }, [vwSettings]);
 
@@ -358,7 +362,7 @@ export default function SuperAdminApiKeys() {
     },
   });
 
-  const handleVisualSearchModelChange = (model: 'google_vision_warehouse' | 'google_product_search') => {
+  const handleVisualSearchModelChange = (model: VisualSearchModelChoice) => {
     setVisualSearchModel(model);
     updateVisualSearchModelMutation.mutate(model);
   };
@@ -1115,9 +1119,35 @@ export default function SuperAdminApiKeys() {
                 <Label className="text-sm font-medium">Select Visual Search Model</Label>
                 <RadioGroup
                   value={visualSearchModel}
-                  onValueChange={(value) => handleVisualSearchModelChange(value as 'google_vision_warehouse' | 'google_product_search')}
+                  onValueChange={(value) => handleVisualSearchModelChange(value as VisualSearchModelChoice)}
                   className="grid gap-3"
                 >
+                  <div
+                    className={cn(
+                      "flex items-start space-x-3 p-4 rounded-lg border-2 cursor-pointer transition-all",
+                      visualSearchModel === 'gemini_embedding_2'
+                        ? "border-indigo-500 bg-indigo-50/50"
+                        : "border-gray-200 hover:border-gray-300"
+                    )}
+                    onClick={() => visualSearchModel !== 'gemini_embedding_2' && handleVisualSearchModelChange('gemini_embedding_2')}
+                    data-testid="option-visual-search-gemini"
+                  >
+                    <RadioGroupItem value="gemini_embedding_2" id="gemini_embedding_2" className="mt-1" />
+                    <div className="flex-1">
+                      <label htmlFor="gemini_embedding_2" className="text-base font-medium flex items-center gap-2 cursor-pointer">
+                        Gemini Embedding 2
+                        {visualSearchModel === 'gemini_embedding_2' && <Badge className="text-xs bg-gradient-to-r from-blue-500 to-green-500">Active</Badge>}
+                      </label>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Google's photo fingerprints, matched by Chroney's built-in matcher (each jewellery piece is cut out and
+                        matched within its type). Nothing to deploy; the catalog is indexed automatically.
+                      </p>
+                      <div className="flex gap-2 mt-2">
+                        <Badge variant="outline" className="text-xs">No always-on cost</Badge>
+                        <Badge variant="outline" className="text-xs">~$0.12 per 1,000 photos</Badge>
+                      </div>
+                    </div>
+                  </div>
                   <div 
                     className={cn(
                       "flex items-start space-x-3 p-4 rounded-lg border-2 cursor-pointer transition-all",
@@ -1168,6 +1198,13 @@ export default function SuperAdminApiKeys() {
                   </div>
                 </RadioGroup>
               </div>
+
+              {visualSearchModel === 'gemini_embedding_2' && (
+                <div className="mt-6 p-4 bg-gray-50 rounded-lg border space-y-3" data-testid="section-gemini-photo-search">
+                  <div className="text-sm font-medium text-gray-700">Gemini key</div>
+                  <GeminiAccountKeyEditor businessAccountId={selectedBusinessId} />
+                </div>
+              )}
 
               {visualSearchModel === 'google_vision_warehouse' && (
               <div className="mt-6 p-4 bg-gray-50 rounded-lg border space-y-4">

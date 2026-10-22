@@ -364,6 +364,13 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
       console.error("[Server] Failed to start workbook auto-sync:", err);
     });
 
+    // Keep photo-search catalogs fingerprinted with Gemini Embedding 2 (every 15 min; accounts with a Gemini key)
+    import("./services/photoSearchIndexSweep").then(({ startPhotoSearchIndexSweep }) => {
+      startPhotoSearchIndexSweep();
+    }).catch(err => {
+      console.error("[Server] Failed to start photo search index sweep:", err);
+    });
+
     // Start webhook idempotency cleanup job (deletes >14 day old webhook event rows)
     import("./services/webhookIdempotencyService").then(({ startWebhookCleanupJob }) => {
       startWebhookCleanupJob();

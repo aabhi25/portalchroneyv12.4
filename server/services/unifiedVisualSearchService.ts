@@ -1,5 +1,6 @@
 import { storage } from '../storage';
 import { visionWarehouseService } from './visionWarehouseService';
+import { resolveVisualSearch, geminiMatchScore, GEMINI_CANDIDATE_MIN_SIMILARITY } from './visualSearchEngine';
 import type { Product } from '@shared/schema';
 
 export interface VisualSearchResult {
@@ -14,8 +15,9 @@ export interface VisualSearchOptions {
 }
 
 /**
- * Unified Visual Search Service - Now using Vision Warehouse only
- * Jina CLIP has been removed for cost efficiency
+ * Unified Visual Search Service: photo search through Vision Warehouse for accounts that have it
+ * set up, and through Gemini Embedding 2 fingerprints (built-in matcher) for everyone else.
+ * Text search is Vision Warehouse only.
  */
 class UnifiedVisualSearchService {
   async searchByImage(
@@ -30,7 +32,37 @@ class UnifiedVisualSearchService {
       throw new Error('Business account not found');
     }
 
+    const { engine, geminiKey } = await resolveVisualSearch(businessAccount);
+    if (engine === 'gemini') return this.searchWithGemini(businessAccountId, imageUrl, topK, minSimilarity, geminiKey!);
     return this.searchWithVisionWarehouse(businessAccountId, businessAccount, imageUrl, topK, minSimilarity);
+  }
+
+  private async searchWithGemini(
+    businessAccountId: string,
+    imageUrl: string,
+    topK: number,
+    minSimilarity: number,
+    geminiKey: string
+  ): Promise<VisualSearchResult[]> {
+    try {
+      const { embedImage } = await import('./geminiImageEmbeddingService');
+      const { productImageEmbeddingService } = await import('./productImageEmbeddingService');
+      const queryEmbedding = await embedImage(imageUrl, geminiKey);
+      const matches = await productImageEmbeddingService.searchSimilarProducts(queryEmbedding, businessAccountId, topK, GEMINI_CANDIDATE_MIN_SIMILARITY);
+
+      const results: VisualSearchResult[] = [];
+      for (const match of matches) {
+        if (match.source === 'erp') continue;
+        const score = geminiMatchScore(match.similarity);
+        if (score < minSimilarity) continue;
+        const product = await storage.getProduct(match.id, businessAccountId);
+        if (product) results.push({ product, similarity: score, matchType: this.getMatchType(score) });
+      }
+      return results;
+    } catch (error: any) {
+      console.error('[UnifiedVisualSearch] Gemini search failed:', error.message);
+      return [];
+    }
   }
 
   async searchByText(

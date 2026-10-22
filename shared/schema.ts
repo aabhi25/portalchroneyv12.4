@@ -142,6 +142,7 @@ export const businessAccounts = pgTable("business_accounts", {
   // Vista Studio AI Model settings
   vistaImageProvider: text("vista_image_provider").notNull().default("openai"), // 'openai' | 'google' - Which AI provider to use for Vista Studio image generation
   googleNanoBananaApiKey: text("google_nano_banana_api_key"), // Encrypted Google Nano Banana Pro API key (for gemini-3-pro-image-preview)
+  geminiApiKey: text("gemini_api_key"), // Encrypted Google AI Studio key for photo search (Gemini Embedding 2); empty = platform key
   // Visual Search Model settings
   visualSearchModel: text("visual_search_model").notNull().default("google_product_search"), // 'google_vision_warehouse' | 'google_product_search' - Which model to use for visual product search
   googleVisionWarehouseCorpusId: text("google_vision_warehouse_corpus_id"), // Google Vision Warehouse corpus ID for this business

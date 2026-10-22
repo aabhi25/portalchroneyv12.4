@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AiCallingMinuteCap } from "@/components/calling/SuperAdminAiCallingCard";
+import { photoSearchSummary, usePhotoSearchStatus } from "@/components/photoSearch/GeminiKeyEditor";
 import { LiveAvatarSettingsDialog } from "@/components/LiveAvatarSettingsDialog";
 import { TutorSettingsDialog, tutorKey, type TutorAdminView } from "@/components/TutorSettingsDialog";
 import { hubArea, type HubAreaId } from "@/navigation/hubAreas";
@@ -94,6 +95,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
   });
   const avatar = useQuery<{ settings: { enabled: boolean } }>({ queryKey: avatarKey(businessAccountId), retry: false });
   const tutor = useQuery<TutorAdminView>({ queryKey: tutorKey(businessAccountId), retry: false });
+  const photoSearch = usePhotoSearchStatus(businessAccountId);
 
   const refreshEverywhere = () => {
     // The portal's own menus, and the Business accounts list.
@@ -107,6 +109,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
     onSuccess: (updated, { label, on }) => {
       queryClient.setQueryData(accountKey(businessAccountId), updated);
       queryClient.invalidateQueries({ queryKey: tutorKey(businessAccountId) }); // K12 decides whether the AI tutor applies
+      queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", businessAccountId, "photo-search"] });
       refreshEverywhere();
       toast({ title: `${label} ${on ? "switched on" : "switched off"}`, description: "This account's menus update straight away." });
     },
@@ -188,6 +191,11 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
     });
 
   const pending = save.isPending || saveCalling.isPending;
+  // Where photo search stands (engine, key, catalog indexed), under the rows that use it
+  const photoStatus = photoSearch.data ? photoSearchSummary(photoSearch.data) : null;
+  const photoStatusLine = photoStatus
+    ? <p className={`text-[12px] ${photoStatus.warn ? "text-amber-700" : "text-gray-500"}`} data-testid="text-feature-photo-search">{photoStatus.text}</p>
+    : null;
   const spinner = (key: string) => busy === key ? <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" /> : null;
 
   const flagSwitch = (field: FlagField, label: string) => (
@@ -272,7 +280,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
             </>
           )}
         </Row>
-        <Row {...area("vista")} label="Vista" description="Visual search for jewellery: customers upload a photo and find matching designs">
+        <Row {...area("vista")} label="Vista" description="Visual search for jewellery: customers upload a photo and find matching designs" below={vistaOn(ba) ? photoStatusLine : null}>
           {spinner("vista")}
           <Switch checked={vistaOn(ba)} disabled={pending} onCheckedChange={setVista} aria-label="Vista" data-testid="switch-feature-vista" />
         </Row>
@@ -297,6 +305,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           icon={Camera} tint="bg-cyan-600" label="Visual product search"
           description="Visitors upload a photo in the website chat to find similar products"
           hint={!ba.chroneyEnabled ? "Needs Website chat switched on to show up." : null}
+          below={ba.visualSearchEnabled ? photoStatusLine : null}
         >
           {flagSwitch("visualSearchEnabled", "Visual product search")}
         </Row>

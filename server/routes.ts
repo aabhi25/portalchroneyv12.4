@@ -108,6 +108,7 @@ import dataRetentionRoutes from "./routes/dataRetention";
 import merittoRoutes from "./routes/meritto";
 import aiUsageRoutes from "./routes/aiUsage";
 import avatarRoutes from "./routes/avatar";
+import photoSearchRoutes from "./routes/photoSearch";
 import tutorRoutes from "./routes/tutor";
 import { getPublicTutorConfig } from "./services/tutor/settings";
 import aiLanguageRoutes from "./routes/aiLanguage";
@@ -643,6 +644,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Live AI avatar (super-admin settings, widget sessions). Close avatar sessions
   // a previous process left open (billed to their last heartbeat).
   app.use(avatarRoutes);
+  app.use(photoSearchRoutes);
   app.use(tutorRoutes);
   app.use(aiLanguageRoutes);
   app.use((await import("./routes/aiCalling")).default, (await import("./routes/callingWebhooks")).default, (await import("./routes/callingPlivo")).default); // AI Calling (B)
@@ -6688,16 +6690,11 @@ If you cannot determine the category or the image doesn't match any category, re
         return res.status(404).json({ error: "Business account not found" });
       }
 
-      // Check if Vision Warehouse is configured
-      const visualSearchModel = businessAccount.visualSearchModel || 'google_vision_warehouse';
-      const useVisionWarehouse = visualSearchModel === 'google_vision_warehouse' &&
-        businessAccount.googleVisionWarehouseEndpointId &&
-        businessAccount.googleVisionWarehouseCredentials;
-
-      if (!useVisionWarehouse) {
-        return res.status(400).json({ 
-          error: "Visual search is not configured. Please configure Google Vision Warehouse in settings." 
-        });
+      // Vision Warehouse when the account has it set up, otherwise Gemini Embedding 2 (built-in matcher)
+      const { resolveVisualSearch } = await import('./services/visualSearchEngine');
+      const { engine, geminiKey } = await resolveVisualSearch(businessAccount);
+      if (engine === 'none') {
+        return res.status(400).json({ error: "Visual search is not configured on this server." });
       }
 
       // Get widget settings for thresholds and display mode
@@ -6707,7 +6704,7 @@ If you cannot determine the category or the image doesn't match any category, re
       const somewhatSimilarThreshold = (widgetSettings?.somewhatSimilarThreshold ? parseFloat(widgetSettings.somewhatSimilarThreshold) : 70) / 100;
       const showMatchPercentage = widgetSettings?.showMatchPercentage === 'true';
 
-      console.log('[Chat Visual Search] Starting Vision Warehouse search');
+      console.log(`[Chat Visual Search] Starting ${engine === 'gemini' ? 'Gemini' : 'Vision Warehouse'} search`);
 
       // Fetch image with security validation
       const sharp = (await import('sharp')).default;
@@ -6815,31 +6812,55 @@ If you cannot determine the category or the image doesn't match any category, re
           .toBuffer();
       }
 
-      const base64Image = processedBuffer.toString('base64');
+      // Each engine returns products with a 0-1 match score on the same scale as the widget's thresholds
+      let scoredProducts: Array<{ id: string; name: string; description: string; price: string | null; imageUrl: string | null; score: number }>;
 
-      // Search using Vision Warehouse
-      const { visionWarehouseService } = await import('./services/visionWarehouseService');
-      
-      const projectNumber = businessAccount.googleVisionWarehouseProjectNumber;
-      if (!projectNumber) {
-        return res.status(400).json({ error: 'Google Vision Warehouse project number not configured' });
+      if (engine === 'gemini') {
+        const { embedImage } = await import('./services/geminiImageEmbeddingService');
+        const { geminiMatchScore, GEMINI_CANDIDATE_MIN_SIMILARITY } = await import('./services/visualSearchEngine');
+        const { productImageEmbeddingService } = await import('./services/productImageEmbeddingService');
+        const queryEmbedding = await embedImage(processedBuffer, geminiKey!);
+        const matches = await productImageEmbeddingService.searchSimilarProducts(queryEmbedding, businessAccountId, 10, GEMINI_CANDIDATE_MIN_SIMILARITY);
+        scoredProducts = matches
+          .filter(m => m.source !== 'erp')
+          .map(m => ({ id: m.id, name: m.name, description: m.description, price: m.price, imageUrl: m.imageUrl, score: geminiMatchScore(m.similarity) }));
+      } else {
+        const base64Image = processedBuffer.toString('base64');
+        const { visionWarehouseService } = await import('./services/visionWarehouseService');
+
+        const projectNumber = businessAccount.googleVisionWarehouseProjectNumber;
+        if (!projectNumber) {
+          return res.status(400).json({ error: 'Google Vision Warehouse project number not configured' });
+        }
+
+        console.log('[Chat Visual Search] Calling Vision Warehouse API');
+
+        const vwResults = await visionWarehouseService.searchByImage(
+          businessAccount.googleVisionWarehouseCredentials!,
+          businessAccount.googleVisionWarehouseEndpointId!,
+          base64Image,
+          10,
+          undefined,
+          projectNumber
+        );
+        const vwScoreMap = new Map(vwResults.map(r => [r.assetId.replace('p-', ''), r.score]));
+        const vwProducts = vwScoreMap.size === 0 ? [] : await db
+          .select({
+            id: products.id,
+            name: products.name,
+            description: products.description,
+            price: products.price,
+            imageUrl: products.imageUrl,
+          })
+          .from(products)
+          .where(inArray(products.id, Array.from(vwScoreMap.keys())));
+        scoredProducts = vwProducts.map(p => ({ ...p, score: vwScoreMap.get(p.id) ?? 0 }));
       }
 
-      console.log('[Chat Visual Search] Calling Vision Warehouse API');
-      
-      const vwResults = await visionWarehouseService.searchByImage(
-        businessAccount.googleVisionWarehouseCredentials!,
-        businessAccount.googleVisionWarehouseEndpointId!,
-        base64Image,
-        10,
-        undefined,
-        projectNumber
-      );
-
       // Filter by minimum threshold
-      const filteredResults = vwResults.filter(r => r.score >= somewhatSimilarThreshold);
-      
-      console.log(`[Chat Visual Search] Vision Warehouse returned ${vwResults.length} total, ${filteredResults.length} above ${somewhatSimilarThreshold * 100}% threshold`);
+      const filteredResults = scoredProducts.filter(r => r.score >= somewhatSimilarThreshold);
+
+      console.log(`[Chat Visual Search] ${engine} returned ${scoredProducts.length} total, ${filteredResults.length} above ${somewhatSimilarThreshold * 100}% threshold`);
 
       if (filteredResults.length === 0) {
         return res.json({
@@ -6850,24 +6871,9 @@ If you cannot determine the category or the image doesn't match any category, re
         });
       }
 
-      // Create score map and fetch products
-      const vwScoreMap = new Map(filteredResults.map(r => [r.assetId.replace('p-', ''), r.score]));
-      const productIds = filteredResults.map(r => r.assetId.replace('p-', ''));
-
-      const vwProducts = await db
-        .select({
-          id: products.id,
-          name: products.name,
-          description: products.description,
-          price: products.price,
-          imageUrl: products.imageUrl,
-        })
-        .from(products)
-        .where(inArray(products.id, productIds));
-
       // Map to result format with match quality
-      const results = vwProducts.map(p => {
-        const similarity = vwScoreMap.get(p.id) || 0.7;
+      const results = filteredResults.map(p => {
+        const similarity = p.score;
         
         let matchLabel: string;
         let matchQuality: string;
@@ -6904,7 +6910,7 @@ If you cannot determine the category or the image doesn't match any category, re
       return res.json({
         products: results,
         matchCount: results.length,
-        searchType: 'vision_warehouse',
+        searchType: engine === 'gemini' ? 'gemini_embedding' : 'vision_warehouse',
         showMatchPercentage,
         message: `Found ${results.length} similar products`
       });
@@ -6949,6 +6955,8 @@ If you cannot determine the category or the image doesn't match any category, re
         console.log('[Adjusted Boundary Search] Using Google Product Search for search');
       } else if (useVisionWarehouse) {
         console.log('[Adjusted Boundary Search] Using Google Vision Warehouse for search');
+      } else if (await (await import('./services/geminiKeys')).resolveGeminiKey(businessAccount)) {
+        console.log('[Adjusted Boundary Search] Using Gemini Embedding 2 (built-in matcher)');
       } else {
         console.log('[Adjusted Boundary Search] No visual search model configured');
         return res.status(400).json({ 
@@ -11168,7 +11176,7 @@ Return ONLY the refined instruction, nothing else.`
       const { id } = req.params;
       const { model } = req.body;
 
-      if (!['google_vision_warehouse', 'google_product_search'].includes(model)) {
+      if (!['google_vision_warehouse', 'google_product_search', 'gemini_embedding_2'].includes(model)) {
         return res.status(400).json({ error: "Invalid visual search model" });
       }
 
@@ -23382,6 +23390,16 @@ Strict Requirements:
                 .catch(err => console.error('[Product Create] Failed to generate embedding:', err));
             }
           });
+        } else if (businessAccount) {
+          // Photo search without AI processing: a Gemini fingerprint of the full photo (cheap, no detection)
+          const { usesPhotoSearch } = await import('./services/visualSearchEngine');
+          const { resolveGeminiKey } = await import('./services/geminiKeys');
+          if (usesPhotoSearch(businessAccount) && await resolveGeminiKey(businessAccount)) {
+            import('./services/productImageEmbeddingService').then(({ productImageEmbeddingService }) => {
+              productImageEmbeddingService.embedProduct(product.id, product.imageUrl!, product.name, businessAccountId)
+                .catch(err => console.error('[Product Create] Failed to generate embedding:', err));
+            });
+          }
         }
         
         // Auto-sync to Vision Warehouse if that model is selected
@@ -23894,9 +23912,11 @@ Strict Requirements:
       // Invalidate cached intro since product changed
       await invalidateCachedIntro(businessAccountId);
       
-      // Regenerate image embedding if image changed (fire-and-forget)
+      // Regenerate image embedding if image changed (fire-and-forget), for accounts that use photo search
       // Use jewelry detection if enabled for this business account
-      if (imageChanging && product.imageUrl) {
+      const accountForPhotoSearch = imageChanging && product.imageUrl ? await storage.getBusinessAccount(businessAccountId) : undefined;
+      const { usesPhotoSearch } = await import('./services/visualSearchEngine');
+      if (imageChanging && product.imageUrl && accountForPhotoSearch && usesPhotoSearch(accountForPhotoSearch)) {
         const openaiApiKey = await storage.getBusinessAccountOpenAIKey(businessAccountId);
         const useJewelryDetection = !!openaiApiKey;
         

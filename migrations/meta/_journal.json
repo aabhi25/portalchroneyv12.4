@@ -253,6 +253,13 @@
       "when": 1792676495145,
       "tag": "0035_meta_token_invalid",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792683319723,
+      "tag": "0036_gemini_api_key",
+      "breakpoints": true
     }
   ]
 }
