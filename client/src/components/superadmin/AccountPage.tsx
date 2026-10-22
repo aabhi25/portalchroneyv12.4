@@ -88,6 +88,42 @@ const when = (d: string | Date | null | undefined) => {
   try { return format(new Date(d), "d MMM yyyy, h:mm a"); } catch { return "—"; }
 };
 
+/* ---------- activity status (replaces the old Live / Not live badge) ---------- */
+
+/** Days without activity before an account counts as "Quiet". */
+export const ACTIVE_DAYS = 7;
+export type ActivityState = "active" | "quiet" | "new" | "disabled";
+
+function ago(iso: string): string {
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 60) return `${days} days ago`;
+  return `${Math.round(days / 30)} months ago`;
+}
+
+/** Active (used in the last 7 days), Quiet (used before), Not set up (never used) or Disabled. */
+export function accountActivity(account: Pick<BusinessAccountDto, "status" | "lastActiveAt" | "lastActiveChannel">): { state: ActivityState; label: string; detail: string } {
+  const last = account.lastActiveAt
+    ? `Last active ${ago(account.lastActiveAt)}${account.lastActiveChannel ? ` · ${account.lastActiveChannel}` : ""}`
+    : "No activity yet";
+  if (account.status !== "active") return { state: "disabled", label: "Disabled", detail: last };
+  if (!account.lastActiveAt) return { state: "new", label: "Not set up", detail: last };
+  const fresh = Date.now() - new Date(account.lastActiveAt).getTime() <= ACTIVE_DAYS * 86_400_000;
+  return fresh ? { state: "active", label: "Active", detail: last } : { state: "quiet", label: "Quiet", detail: last };
+}
+
+const ACTIVITY_PILL: Record<ActivityState, string> = {
+  active: "bg-emerald-50 text-emerald-700",
+  quiet: "bg-amber-50 text-amber-700",
+  new: "bg-gray-100 text-gray-600",
+  disabled: "bg-red-50 text-red-700",
+};
+
+export function ActivityPill({ state, label }: { state: ActivityState; label: string }) {
+  return <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11.5px] font-semibold ${ACTIVITY_PILL[state]}`}>{label}</span>;
+}
+
 /* ---------- Overview (was Super admin › Insights) ---------- */
 
 type Period = "today" | "yesterday" | "last7days" | "lastMonth" | "custom" | "lifetime";
@@ -208,17 +244,14 @@ function AccountOverview({ account }: { account: BusinessAccountDto }) {
         <SaCard title="Account">
           <SaRow label="Website">{account.website ? <a href={account.website} target="_blank" rel="noopener noreferrer" className="text-violet-700 hover:underline">{domainOf(account.website)}</a> : "—"}</SaRow>
           <SaRow label="Created">{when(account.createdAt as unknown as string)}</SaRow>
-          <SaRow label="Last activity">{when(stats?.lastLogin)}</SaRow>
-          <SaRow label="Status">
-            <span className={`rounded-full px-2 py-0.5 text-[11.5px] font-semibold ${account.status === "active" ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
-              {account.status === "active" ? "Active" : "Disabled"}
-            </span>
-            {account.isLive !== undefined && (
-              <span className={`rounded-full px-2 py-0.5 text-[11.5px] font-semibold ${account.isLive ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
-                {account.isLive ? "Live" : "Not live"}
-              </span>
-            )}
-          </SaRow>
+          {(() => {
+            const activity = accountActivity(account);
+            return (
+              <SaRow label="Activity" help={`${activity.detail}. Active means used in the last ${ACTIVE_DAYS} days on any channel.`}>
+                <ActivityPill state={activity.state} label={activity.label} />
+              </SaRow>
+            );
+          })()}
           <SaRow label="Agents & add-ons"><FeatureChips account={account} /></SaRow>
         </SaCard>
         <div className="space-y-5">
@@ -357,9 +390,7 @@ export function AccountPage({ accountId, tab, account, isLoading, isError, actio
         subtitle={
           <span className="inline-flex flex-wrap items-center gap-2">
             {account.website && <a href={account.website} target="_blank" rel="noopener noreferrer" className="hover:text-violet-700 hover:underline">{domainOf(account.website)}</a>}
-            <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${account.status === "active" ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
-              {account.status === "active" ? "Active" : "Disabled"}
-            </span>
+            <ActivityPill {...accountActivity(account)} />
           </span>
         }
         back={{ label: "Accounts", href: "/super-admin" }}

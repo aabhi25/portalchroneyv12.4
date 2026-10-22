@@ -31,6 +31,9 @@ export type BusinessAccountDto = Omit<BusinessAccount, "shopifyEnabled" | "appoi
   productTier: ProductTier;
   systemMode: SystemMode;
   isLive?: boolean;
+  /** Super admin lists: when the account was last really used, and where (see server/services/accountActivity.ts). */
+  lastActiveAt?: string | null;
+  lastActiveChannel?: string | null;
 };
 
 // Convert database BusinessAccount (text flags) to BusinessAccountDto (boolean flags)

@@ -1,10 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useMutation, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { AccountPage, FeatureChips } from "@/components/superadmin/AccountPage";
-import type { SummaryResponse } from "@/pages/SuperAdminUsage";
+import { AccountPage, ActivityPill, FeatureChips, accountActivity, type ActivityState } from "@/components/superadmin/AccountPage";
 import { accountHref } from "@/navigation/superAdminAreas";
-import { currentIstMonth } from "@/components/usage/usageFormat";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,7 +52,7 @@ import AccountFeaturesSettings from "@/pages/settings/AccountFeaturesSettings";
 /** Business accounts: the list, or (with accountId) one account's own page. Both share the dialogs below. */
 export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab?: string } = {}) {
   const [, setLocation] = useLocation();
-  const [listFilter, setListFilter] = useState<"all" | "live" | "disabled" | "over">("all");
+  const [listFilter, setListFilter] = useState<"all" | ActivityState>("all");
   const [retentionAccount, setRetentionAccount] = useState<{ id: string; name: string } | null>(null);
   const [avatarAccount, setAvatarAccount] = useState<{ id: string; name: string } | null>(null);
   const [newBusinessName, setNewBusinessName] = useState("");
@@ -110,18 +108,6 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
   
   const { toast } = useToast();
   const accountQuery = useQuery<BusinessAccountDto>({ queryKey: ["/api/business-accounts", accountId], enabled: !!accountId, retry: false });
-  const usageMonth = currentIstMonth();
-  const { data: usage } = useQuery<SummaryResponse>({
-    queryKey: ["/api/super-admin/usage", usageMonth],
-    queryFn: async () => {
-      const res = await fetch(`/api/super-admin/usage?month=${usageMonth}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load usage");
-      return res.json();
-    },
-    enabled: !accountId,
-    staleTime: 60_000,
-  });
-  const usageById = new Map((usage?.accounts ?? []).map(r => [r.businessAccountId, r]));
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const ACCOUNTS_PER_PAGE = 30;
 
@@ -558,10 +544,7 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
   const visibleAccounts = businessAccounts.filter((business) => {
     const q = searchQuery.trim().toLowerCase();
     if (q && !business.name.toLowerCase().includes(q) && !(business.website || "").toLowerCase().includes(q)) return false;
-    if (listFilter === "live") return !!business.isLive;
-    if (listFilter === "disabled") return business.status !== "active";
-    if (listFilter === "over") { const level = usageById.get(business.id)?.limit?.level; return level === "warn" || level === "exceeded"; }
-    return true;
+    return listFilter === "all" || accountActivity(business).state === listFilter;
   });
 
   return (
@@ -598,7 +581,7 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                 />
               </div>
               <div className="mr-auto flex flex-wrap gap-1.5" role="group" aria-label="Show accounts">
-                {([["all", "All"], ["live", "Live"], ["disabled", "Disabled"], ["over", "Over limit"]] as const).map(([key, label]) => (
+                {([["all", "All"], ["active", "Active"], ["quiet", "Quiet"], ["new", "Not set up"], ["disabled", "Disabled"]] as const).map(([key, label]) => (
                   <button
                     key={key}
                     type="button"
@@ -1155,7 +1138,7 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                 <TableHeader>
                   <TableRow>
                     <TableHead className="min-w-[180px]">Business</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead className="min-w-[170px]">Activity</TableHead>
                     <TableHead className="min-w-[230px]">Agents & add-ons</TableHead>
                     <TableHead>Created</TableHead>
                     <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead>
@@ -1177,15 +1160,20 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="truncate font-semibold text-gray-900">{business.name}</span>
-                              {business.status !== "active" && <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">Disabled</span>}
                             </div>
                             {business.website && <div className="truncate text-xs text-gray-500">{domainOf(business.website)}</div>}
                           </div>
                         </TableCell>
                         <TableCell>
-                          <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11.5px] font-semibold ${business.isLive ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500"}`}>
-                            {business.isLive ? "Live" : "Not live"}
-                          </span>
+                          {(() => {
+                            const activity = accountActivity(business);
+                            return (
+                              <div className="space-y-0.5">
+                                <ActivityPill state={activity.state} label={activity.label} />
+                                <div className="text-xs text-gray-500">{activity.detail.replace(/^Last active /, "")}</div>
+                              </div>
+                            );
+                          })()}
                         </TableCell>
                         <TableCell><FeatureChips account={business} /></TableCell>
                         <TableCell className="whitespace-nowrap text-sm text-gray-600">

@@ -9511,12 +9511,18 @@ Return ONLY the refined instruction, nothing else.`
       
       // Get live status for all accounts in this batch
       const accountIds = accounts.map(a => a.id);
-      const liveStatusMap = await storage.getBusinessAccountsWithPageviewStatus(accountIds);
+      const { getAccountsLastActivity } = await import("./services/accountActivity");
+      const [liveStatusMap, activityMap] = await Promise.all([
+        storage.getBusinessAccountsWithPageviewStatus(accountIds),
+        getAccountsLastActivity(accountIds),
+      ]);
       
       const { toBusinessAccountDto } = await import("@shared/dto/businessAccount");
       const dtos = accounts.map(account => ({
         ...toBusinessAccountDto(account),
-        isLive: liveStatusMap.get(account.id) ?? false
+        isLive: liveStatusMap.get(account.id) ?? false,
+        lastActiveAt: activityMap.get(account.id)?.lastActiveAt ?? null,
+        lastActiveChannel: activityMap.get(account.id)?.lastActiveChannel ?? null,
       }));
       
       // Return paginated response with total count
@@ -9542,7 +9548,13 @@ Return ONLY the refined instruction, nothing else.`
         return res.status(404).json({ error: "Business account not found" });
       }
       const { toBusinessAccountDto } = await import("@shared/dto/businessAccount");
-      res.json(toBusinessAccountDto(businessAccount));
+      const { getAccountsLastActivity } = await import("./services/accountActivity");
+      const activity = (await getAccountsLastActivity([businessAccount.id])).get(businessAccount.id);
+      res.json({
+        ...toBusinessAccountDto(businessAccount),
+        lastActiveAt: activity?.lastActiveAt ?? null,
+        lastActiveChannel: activity?.lastActiveChannel ?? null,
+      });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
