@@ -15,6 +15,7 @@ import WebsiteNavTabs from "@/components/WebsiteNavTabs";
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer
 } from "recharts";
+import { countryLabel, pageVisitsOf } from "@/lib/visitorStats";
 
 interface Lead {
   id: string;
@@ -943,31 +944,41 @@ export default function Insights() {
           ) : (
             <>
             {/* Visitor Stats Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-2">
+              <div className="p-3 bg-sky-50 rounded-lg">
+                <div className="flex items-center gap-2 mb-1">
+                  <Eye className="w-4 h-4 text-sky-600" />
+                  <span className="text-xs font-medium text-gray-700">Page Visits</span>
+                </div>
+                <p className="text-2xl font-bold text-sky-600">{pageVisitsOf(pageVisitorStats?.deviceBreakdown)}</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">Pages where the widget loaded</p>
+              </div>
               <div className="p-3 bg-indigo-50 rounded-lg">
                 <div className="flex items-center gap-2 mb-1">
                   <MessageSquare className="w-4 h-4 text-indigo-600" />
                   <span className="text-xs font-medium text-gray-700">Opened Chat</span>
                 </div>
                 <p className="text-2xl font-bold text-indigo-600">{pageVisitorStats?.uniqueVisitors || 0}</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">Opened the chat window</p>
               </div>
-              
               <div className="p-3 bg-green-50 rounded-lg">
                 <div className="flex items-center gap-2 mb-1">
                   <TrendingUp className="w-4 h-4 text-green-600" />
                   <span className="text-xs font-medium text-gray-700">Engaged</span>
                 </div>
                 <p className="text-2xl font-bold text-green-600">{totalConversations}</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">Chatted with the AI</p>
               </div>
-              
               <div className="p-3 bg-purple-50 rounded-lg">
                 <div className="flex items-center gap-2 mb-1">
                   <Users className="w-4 h-4 text-purple-600" />
                   <span className="text-xs font-medium text-gray-700">Leads Generated</span>
                 </div>
                 <p className="text-2xl font-bold text-purple-600">{totalLeads}</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">Shared their contact details</p>
               </div>
             </div>
+            <p className="text-[11px] text-gray-500 mb-4">Page visits are pages where your chat widget loaded, each visitor counted once a day; devices, countries and cities are based on them. Search-engine crawlers stopped being counted in Oct 2026.</p>
 
             {/* Device Breakdown */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -975,6 +986,7 @@ export default function Insights() {
                 <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
                   <Monitor className="w-4 h-4" />
                   Device Breakdown
+                  <span className="text-xs font-normal text-gray-400">(page visits)</span>
                 </h4>
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -1016,12 +1028,13 @@ export default function Insights() {
                   <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
                     <Globe className="w-4 h-4" />
                     Top Countries
+                    <span className="text-xs font-normal text-gray-400">(page visits)</span>
                   </h4>
                   {(pageVisitorStats?.topCountries?.length || 0) > 0 ? (
                     <div className="flex flex-wrap gap-2">
                       {pageVisitorStats?.topCountries?.slice(0, 6).map((country, idx) => (
                         <div key={idx} className="px-3 py-1.5 bg-white rounded-full border text-sm">
-                          <span className="text-gray-700">{country.country}</span>
+                          <span className="text-gray-700">{countryLabel(country.country)}</span>
                           <span className="ml-2 text-gray-500">({country.count})</span>
                         </div>
                       ))}
@@ -1036,6 +1049,7 @@ export default function Insights() {
                   <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
                     <Globe className="w-4 h-4" />
                     Top Cities
+                    <span className="text-xs font-normal text-gray-400">(page visits)</span>
                   </h4>
                   {(pageVisitorStats?.topCities?.length || 0) > 0 ? (
                     <div className="flex flex-wrap gap-2">

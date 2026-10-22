@@ -4904,6 +4904,8 @@ export class DatabaseStorage implements IStorage {
     let tablet = 0;
     const countryMap: Record<string, number> = {};
     const cityMap: Record<string, number> = {};
+    // Older rows say "India" / "New Delhi", newer ones "IN" / "Delhi": counted as one.
+    const { normalizeCountry, normalizeCity } = await import('./lib/visitorStats');
     
     for (const row of rows) {
       openedChatCount += row.openedChatCount ?? 0;
@@ -4913,16 +4915,18 @@ export class DatabaseStorage implements IStorage {
       
       if (Array.isArray(row.topCountries)) {
         for (const entry of row.topCountries) {
-          if (entry.country) {
-            countryMap[entry.country] = (countryMap[entry.country] || 0) + (entry.count || 0);
+          const country = normalizeCountry(entry.country);
+          if (country) {
+            countryMap[country] = (countryMap[country] || 0) + (entry.count || 0);
           }
         }
       }
       
       if (Array.isArray(row.topCities)) {
         for (const entry of row.topCities) {
-          if (entry.city) {
-            cityMap[entry.city] = (cityMap[entry.city] || 0) + (entry.count || 0);
+          const city = normalizeCity(entry.city);
+          if (city) {
+            cityMap[city] = (cityMap[city] || 0) + (entry.count || 0);
           }
         }
       }

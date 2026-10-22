@@ -30257,6 +30257,12 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(400).json({ error: "businessAccountId is required" });
       }
 
+      // Googlebot & co. render the page with the widget: not visitors.
+      const { isCrawlerUserAgent, normalizeCountry, normalizeCity } = await import("./lib/visitorStats");
+      if (isCrawlerUserAgent(req.headers['user-agent'] as string)) {
+        return res.json({ success: true, ignored: 'crawler' });
+      }
+
       if (visitorToken && visitorDedup.hasVisited(businessAccountId, visitorToken)) {
         return res.json({ success: true, deduplicated: true });
       }
@@ -30292,7 +30298,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
 
       if (visitorToken) visitorDedup.markVisited(businessAccountId, visitorToken);
-      await storage.incrementDailyStats(businessAccountId, { deviceType, country, city });
+      await storage.incrementDailyStats(businessAccountId, { deviceType, country: normalizeCountry(country) || undefined, city: normalizeCity(city) || undefined });
 
       res.json({ success: true });
     } catch (error: any) {
@@ -30307,6 +30313,11 @@ Be constructive and helpful. Return ONLY valid JSON.`;
 
       if (!businessAccountId) {
         return res.status(400).json({ error: "businessAccountId is required" });
+      }
+
+      const { isCrawlerUserAgent } = await import("./lib/visitorStats");
+      if (isCrawlerUserAgent(req.headers['user-agent'] as string)) {
+        return res.json({ success: true, ignored: 'crawler' });
       }
 
       if (visitorToken && visitorDedup.hasChatOpened(businessAccountId, visitorToken)) {

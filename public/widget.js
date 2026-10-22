@@ -666,6 +666,20 @@
       return false;
     },
     
+    // "Opened Chat" in Visitor Insights: every way the chat window opens reports it (the server
+    // counts each visitor once a day).
+    trackChatOpened: function() {
+      if (!this.visitorToken || !this.config) return;
+      fetch(`${this.getBaseUrl()}/api/widget/chat-opened`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          businessAccountId: this.config.businessAccountId,
+          visitorToken: this.visitorToken
+        })
+      }).catch(() => {});
+    },
+
     init: async function(config) {
       if (!config || !config.businessAccountId) {
         console.error('[Hi Chroney] businessAccountId is required');
@@ -3103,6 +3117,7 @@
               // Ensure chat is open and visible for proactive guidance
               if (iframe) {
                 iframe.style.display = 'block';
+                HiChroneyWidget.trackChatOpened();
               }
               
               // Build guidance payload
@@ -3458,16 +3473,7 @@
           }
           
           // Track chat opened event (fire-and-forget)
-          if (HiChroneyWidget.visitorToken) {
-            fetch(`${HiChroneyWidget.getBaseUrl()}/api/widget/chat-opened`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                businessAccountId: HiChroneyWidget.config.businessAccountId,
-                visitorToken: HiChroneyWidget.visitorToken
-              })
-            }).catch(() => {});
-          }
+          HiChroneyWidget.trackChatOpened();
           iframe.classList.remove('partial-mode');
           isPartialMode = false;
           
@@ -3969,16 +3975,7 @@
         }
         
         // Track chat opened event (fire-and-forget)
-        if (HiChroneyWidget.visitorToken) {
-          fetch(`${HiChroneyWidget.getBaseUrl()}/api/widget/chat-opened`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              businessAccountId: HiChroneyWidget.config.businessAccountId,
-              visitorToken: HiChroneyWidget.visitorToken
-            })
-          }).catch(() => {});
-        }
+        HiChroneyWidget.trackChatOpened();
         isPartialMode = false;
         
         // Only hide button completely for pill style - non-pill keeps icon visible
@@ -4329,6 +4326,7 @@
                 if (!isOpen) {
                   isOpen = true;
                   iframe.style.display = 'block';
+                  HiChroneyWidget.trackChatOpened();
                 }
                 
                 // Build guidance message payload
@@ -5174,6 +5172,7 @@
           if (!isOpen) {
             isOpen = true;
             iframe.style.display = 'block';
+            HiChroneyWidget.trackChatOpened();
             iframe.classList.remove('partial-mode', 'mobile-partial-open');
             isPartialMode = false;
             
@@ -5404,6 +5403,7 @@
           if (!isOpen) {
             isOpen = true;
             iframe.style.display = 'block';
+            HiChroneyWidget.trackChatOpened();
             iframe.classList.remove('partial-mode', 'mobile-partial-open');
             isPartialMode = false;
             
