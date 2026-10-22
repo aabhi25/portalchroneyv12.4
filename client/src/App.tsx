@@ -227,7 +227,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
       <AiCallingHost user={user} />
       <SidebarInset>
         {/* Show impersonation banner for SuperAdmins */}
-        {user?.role === "super_admin" && <ImpersonationBanner />}
+        {(user?.role === "super_admin" || user?.viewingAsBusinessUser) && <ImpersonationBanner />}
         {/* Monthly AI limit: full details for super admins viewing as an account; business users only learn when AI replies are paused. */}
         {(user?.role !== "account_group_admin" && (user?.role !== "super_admin" || isSuperAdminImpersonating)) && <UsageLimitBanner showSpend={user?.role === "super_admin"} />}
         <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4 lg:hidden sticky top-0 z-10">

@@ -151,7 +151,8 @@ export function AppSidebar({ user }: AppSidebarProps) {
                 businessAccountId={user.businessAccountId}
               />
             ) : (
-              <p className="text-xs text-gray-400 font-medium">{user?.username}</p>
+              // Business user view: show the account's name, as its own login does (no switcher — that's theirs).
+              <p className="text-xs text-gray-400 font-medium">{user?.viewingAsBusinessUser ? user.businessAccount?.name : user?.username}</p>
             )}
           </div>
         </div>

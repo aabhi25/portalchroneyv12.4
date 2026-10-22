@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { applyBusinessUserView } from "./businessUserView";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -48,7 +49,8 @@ export const getQueryFn: <T>(options: {
     }
 
     await throwIfResNotOk(res);
-    return await res.json();
+    const data = await res.json();
+    return queryKey[0] === "/api/auth/me" ? applyBusinessUserView(data) : data;
   };
 
 export const queryClient = new QueryClient({

@@ -7,6 +7,9 @@ type SafeUser = Omit<User, "passwordHash" | "tempPassword">;
 // MeResponseDto - Response type for /api/auth/me endpoint
 export type MeResponseDto = SafeUser & {
   activeBusinessAccountId?: string | null; // For multi-account switching
+  // Browser only: a super admin who switched to "Business user view" (client/src/lib/businessUserView.ts).
+  // `role` then reads "business_user"; the server never sets this.
+  viewingAsBusinessUser?: boolean;
   businessAccount?: {
     id: string;
     name: string;
