@@ -19,6 +19,7 @@ import { MessageCircle, ArrowLeft, Loader2, Trash2, Search, RefreshCw, Check, X 
 import { useLocation } from "wouter";
 import { format } from "date-fns";
 import InstagramTabBar from "@/components/InstagramTabBar";
+import ChannelDisconnectedBanner from "@/components/social/ChannelDisconnectedBanner";
 
 interface ConversationSummary {
   senderId: string;
@@ -110,6 +111,7 @@ export default function InstagramConversations() {
       <InstagramTabBar activeTab="conversations" />
 
       <div className="p-6">
+        <ChannelDisconnectedBanner channel="instagram" />
         <div className="flex rounded-2xl shadow-sm border overflow-hidden bg-white" style={{ height: 'calc(100vh - 140px)' }}>
           {/* Left Panel - Conversation List */}
           <div className={`${selectedSenderId ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-[380px] md:min-w-[380px] border-r`}>

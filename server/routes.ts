@@ -35473,9 +35473,14 @@ Return ONLY a valid JSON object in this format:
         return res.status(400).json({ error: "Failed to decrypt access token. Try re-saving your token." });
       }
 
-      const profile = await instagramService.getUserProfile(decryptedToken, settings.igAccountId);
+      // Always ask Meta here, even when the token is marked as rejected: this is how it gets un-marked.
+      const probe = { ...settings, tokenInvalidAt: null };
+      const profile = await instagramService.getUserProfile(decryptedToken, settings.igAccountId, probe);
       if (profile) {
+        await instagramService.clearTokenRejected(settings);
         res.json({ success: true, profile });
+      } else if (probe.tokenInvalidAt) {
+        res.status(400).json({ error: `Instagram rejected the access token (${probe.tokenInvalidReason}). Paste a new token and save.` });
       } else {
         res.status(400).json({ error: "Failed to connect. Check your access token." });
       }
@@ -36114,8 +36119,11 @@ Return ONLY a valid JSON object in this format:
       const data = await response.json();
 
       if (response.ok && data.id) {
+        await facebookService.clearTokenRejected(settings);
         res.json({ success: true, profile: { name: data.name, id: data.id } });
       } else {
+        const { MetaChannelService } = await import("./services/social/metaChannelService");
+        if (MetaChannelService.isTokenRejectedResponse(data)) await facebookService.markTokenRejected(settings, data);
         res.status(400).json({ error: data.error?.message || "Failed to connect. Check your access token." });
       }
     } catch (error: any) {

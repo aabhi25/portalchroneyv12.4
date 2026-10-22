@@ -72,7 +72,7 @@ async function getAdapter(platform: MetaPlatform): Promise<Adapter> {
         try {
           const token = instagramService.getDecryptedAccessToken(settings);
           if (!token) return undefined;
-          return (await instagramService.getUserProfile(token, senderId))?.username || undefined;
+          return (await instagramService.getUserProfile(token, senderId, settings))?.username || undefined;
         } catch { return undefined; }
       },
       storeIncoming: (biz, senderId, text, name, mid, message) => instagramService.storeMessage(biz, senderId, text, "incoming", {
@@ -105,7 +105,7 @@ async function getAdapter(platform: MetaPlatform): Promise<Adapter> {
       try {
         const token = facebookService.getDecryptedAccessToken(settings);
         if (!token) return undefined;
-        const profile = await facebookService.getUserProfile(token, senderId);
+        const profile = await facebookService.getUserProfile(token, senderId, settings);
         return profile?.firstName ? [profile.firstName, profile.lastName].filter(Boolean).join(" ") : undefined;
       } catch { return undefined; }
     },
@@ -226,6 +226,12 @@ async function handleDmText(
 ): Promise<void> {
   const businessAccount = await db.query.businessAccounts.findFirst({ where: eq(businessAccounts.id, businessAccountId) });
   if (!businessAccount || !a.isEnabled(businessAccount as any)) return;
+  // Meta rejected the token (expired / revoked): the DM is stored for the inbox, but nothing can
+  // be sent back until a new token is saved, so don't run flows or the AI for nothing.
+  if (settings?.tokenInvalidAt) {
+    console.log(`${a.tag} Login expired for business ${businessAccountId} — DM stored, no reply until reconnected`);
+    return;
+  }
 
   if (isInboundLimited(platform, a, businessAccountId, settings, senderId, messageText)) return;
 
@@ -341,6 +347,11 @@ async function handleComment(platform: MetaPlatform, entryId: string | undefined
   const account = await db.query.businessAccounts.findFirst({ where: eq(businessAccounts.id, businessAccountId) });
   if (!account || !a.isEnabled(account as any)) {
     console.warn(`${a.tag} ${platform} not enabled for business ${businessAccountId} - skipping comment`);
+    return;
+  }
+
+  if (settings?.tokenInvalidAt) {
+    console.log(`${a.tag} Login expired for business ${businessAccountId} - skipping comment until reconnected`);
     return;
   }
 

@@ -4274,6 +4274,8 @@ export const instagramSettings = pgTable("instagram_settings", {
   instagramEnabled: text("instagram_enabled").notNull().default("true"), // 'true' | 'false' - master toggle for Instagram AI Agent
   igAccountId: text("ig_account_id"), // Instagram Professional Account ID (IG_ID)
   igAccessToken: text("ig_access_token"), // Encrypted Instagram User Access Token (long-lived)
+  tokenInvalidAt: timestamp("token_invalid_at"), // Set when Meta rejected the token (expired / revoked); cleared when a new token is saved
+  tokenInvalidReason: text("token_invalid_reason"), // Meta's error message at that time
   appSecret: text("app_secret"), // Encrypted Meta App Secret for webhook signature validation
   webhookVerifyToken: text("webhook_verify_token"), // Token for Meta webhook verification challenge
   autoReplyEnabled: text("auto_reply_enabled").notNull().default("false"), // 'true' | 'false' - enable AI auto-reply to Instagram DMs
@@ -4562,6 +4564,8 @@ export const facebookSettings = pgTable("facebook_settings", {
   facebookEnabled: text("facebook_enabled").notNull().default("true"),
   pageId: text("page_id"),
   pageAccessToken: text("page_access_token"),
+  tokenInvalidAt: timestamp("token_invalid_at"), // Set when Meta rejected the token (expired / revoked); cleared when a new token is saved
+  tokenInvalidReason: text("token_invalid_reason"), // Meta's error message at that time
   appSecret: text("app_secret"),
   webhookVerifyToken: text("webhook_verify_token"),
   autoReplyEnabled: text("auto_reply_enabled").notNull().default("false"),

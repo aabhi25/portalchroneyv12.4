@@ -38,7 +38,7 @@ export class InstagramAutoReplyService extends SocialAutoReplyEngine {
           if (settings) {
             const decryptedToken = instagramService.getDecryptedAccessToken(settings);
             if (decryptedToken) {
-              const profile = await instagramService.getUserProfile(decryptedToken, senderId);
+              const profile = await instagramService.getUserProfile(decryptedToken, senderId, settings);
               if (profile?.username) {
                 console.log(`[Instagram Auto-Reply] Resolved username via API for ${senderId}`);
                 return profile.username;

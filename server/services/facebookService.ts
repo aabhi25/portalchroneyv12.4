@@ -89,10 +89,16 @@ export class FacebookService extends MetaChannelService<FacebookSettings, Facebo
     return this.insertComment(data);
   }
 
+  /**
+   * `settings` (optional): the page the token belongs to — a rejected token is then recorded
+   * (see markTokenRejected) and, once recorded, Meta isn't called at all.
+   */
   async getUserProfile(
     accessToken: string,
-    psid: string
+    psid: string,
+    settings?: FacebookSettings
   ): Promise<{ firstName?: string; lastName?: string; profilePic?: string } | null> {
+    if (this.isTokenRejected(settings)) return null;
     try {
       const response = await fetchWithTimeout(this.graphGetUrl(psid, "first_name,last_name,profile_pic", accessToken), {
         method: "GET",
@@ -101,6 +107,7 @@ export class FacebookService extends MetaChannelService<FacebookSettings, Facebo
 
       if (!response.ok) {
         const errorBody = await response.text();
+        if (settings && await this.recordIfTokenRejected(settings, errorBody)) return null;
         console.error(`[Facebook] Failed to fetch user profile for ${psid}: ${response.status}`, errorBody);
         return null;
       }
@@ -176,6 +183,7 @@ export class FacebookService extends MetaChannelService<FacebookSettings, Facebo
     settings: FacebookSettings,
     postId: string
   ): Promise<{ caption: string; mediaType: string; mediaUrl: string | null; permalink: string | null } | null> {
+    if (this.isTokenRejected(settings)) return null;
     try {
       const accessToken = this.getDecryptedAccessToken(settings);
       if (!accessToken) {
@@ -191,6 +199,7 @@ export class FacebookService extends MetaChannelService<FacebookSettings, Facebo
 
       if (!response.ok) {
         const errorBody = await response.text();
+        if (await this.recordIfTokenRejected(settings, errorBody)) return null;
         console.error(`[Facebook] Failed to fetch post context for post ${postId}: ${response.status}`, errorBody);
         return null;
       }

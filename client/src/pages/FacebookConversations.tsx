@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { MessageCircle, ArrowLeft, Loader2, Trash2, Search, RefreshCw, Check, X } from "lucide-react";
 import { format } from "date-fns";
+import ChannelDisconnectedBanner from "@/components/social/ChannelDisconnectedBanner";
 
 interface ConversationSummary {
   senderId: string;
@@ -104,6 +105,7 @@ export default function FacebookConversations() {
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="p-6">
+        <ChannelDisconnectedBanner channel="facebook" />
         <div className="flex rounded-2xl shadow-sm border overflow-hidden bg-white" style={{ height: 'calc(100vh - 140px)' }}>
           {/* Left Panel - Conversation List */}
           <div className={`${selectedSenderId ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-[380px] md:min-w-[380px] border-r`}>

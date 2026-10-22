@@ -98,10 +98,16 @@ export class InstagramService extends MetaChannelService<InstagramSettings, Inst
     return this.findMessageByPlatformId(igMessageId);
   }
 
+  /**
+   * `settings` (optional): the account the token belongs to — a rejected token is then recorded
+   * (see markTokenRejected) and, once recorded, Meta isn't called at all.
+   */
   async getUserProfile(
     accessToken: string,
-    igScopedId: string
+    igScopedId: string,
+    settings?: InstagramSettings
   ): Promise<{ name?: string; username?: string } | null> {
+    if (this.isTokenRejected(settings)) return null;
     try {
       const response = await fetchWithTimeout(this.graphGetUrl(igScopedId, "name,username", accessToken), {
         method: "GET",
@@ -110,6 +116,7 @@ export class InstagramService extends MetaChannelService<InstagramSettings, Inst
 
       if (!response.ok) {
         const errorBody = await response.text();
+        if (settings && await this.recordIfTokenRejected(settings, errorBody)) return null;
         console.error(`[Instagram] Failed to fetch user profile for ${igScopedId}: ${response.status}`, errorBody);
         return null;
       }
@@ -189,6 +196,7 @@ export class InstagramService extends MetaChannelService<InstagramSettings, Inst
   /** GET helper for the Instagram-only lookups: returns the parsed body or an error. */
   private async graphGet(settings: InstagramSettings, path: string, fields: string, errorLog: string, fallbackError: string): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
+      if (this.isTokenRejected(settings)) return { success: false, error: this.tokenRejectedError };
       const accessToken = this.getDecryptedAccessToken(settings);
       if (!accessToken) {
         return { success: false, error: "Instagram access token not configured" };
@@ -199,6 +207,7 @@ export class InstagramService extends MetaChannelService<InstagramSettings, Inst
       }, 30_000);
       const responseData = await response.json();
       if (!response.ok) {
+        if (MetaChannelService.isTokenRejectedResponse(responseData)) await this.markTokenRejected(settings, responseData);
         return { success: false, error: responseData?.error?.message || `Instagram API error: ${response.status}` };
       }
       return { success: true, data: responseData };

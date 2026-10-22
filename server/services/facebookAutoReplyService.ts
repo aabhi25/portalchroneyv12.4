@@ -34,7 +34,7 @@ export class FacebookAutoReplyService extends SocialAutoReplyEngine {
           if (settings) {
             const decryptedToken = facebookService.getDecryptedAccessToken(settings);
             if (decryptedToken) {
-              const profile = await facebookService.getUserProfile(decryptedToken, senderId);
+              const profile = await facebookService.getUserProfile(decryptedToken, senderId, settings);
               if (profile?.firstName) {
                 const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
                 console.log(`[Facebook Auto-Reply] Resolved name via API for ${senderId}`);

@@ -31,6 +31,9 @@ interface ChannelSettingsData {
   needsAppSecret?: boolean;
   webhookSignatureVerified?: boolean;
   webhookSignature?: { failingRecently?: boolean; lastFailureAt?: string };
+  /** Set when Meta rejected the access token (expired / revoked); cleared by saving a new one. */
+  tokenInvalidAt?: string | null;
+  tokenInvalidReason?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -129,6 +132,7 @@ export default function ChannelSettings({ channel, embedded = false }: { channel
       return await apiRequest("POST", `${c.apiBase}/test-connection`);
     },
     onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: [settingsUrl] });
       const who = isFacebook
         ? data.profile?.name || data.page?.name
         : data.profile?.username || data.profile?.name;
@@ -138,6 +142,7 @@ export default function ChannelSettings({ channel, embedded = false }: { channel
       });
     },
     onError: (error: any) => {
+      queryClient.invalidateQueries({ queryKey: [settingsUrl] });
       toast({ title: "Connection failed", description: error.message || `Could not connect to ${c.label}`, variant: "destructive" });
     },
   });
@@ -177,6 +182,23 @@ export default function ChannelSettings({ channel, embedded = false }: { channel
       )}
 
       <div className={embedded ? "space-y-6 max-w-3xl" : c.usesTabBar ? "p-6 space-y-6" : "flex-1 overflow-y-auto p-4 md:p-6 space-y-6 max-w-3xl"}>
+        {settings?.tokenInvalidAt && (
+          <div className="rounded-md border border-red-300 bg-red-50 p-4 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-200" data-testid="warning-token-expired">
+            <div className="flex items-start gap-2">
+              <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <div className="space-y-1">
+                <p>
+                  <strong>{c.label} is disconnected.</strong> Meta stopped accepting the {copy.tokenLabel.toLowerCase()} on{" "}
+                  {new Date(settings.tokenInvalidAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}.
+                  Messages are still saved, but the AI can't reply until you reconnect.
+                </p>
+                <p>To reconnect, generate a new token in the Meta Developer Portal, paste it into <strong>{copy.tokenLabel}</strong> below and click Save.</p>
+                {settings.tokenInvalidReason && <p className="text-xs opacity-80">Meta said: {settings.tokenInvalidReason}</p>}
+              </div>
+            </div>
+          </div>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle>Webhook Configuration</CardTitle>

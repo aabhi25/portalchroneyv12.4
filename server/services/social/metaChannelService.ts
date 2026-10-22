@@ -95,6 +95,9 @@ export class MetaChannelService<TSettings = any, TMessage = any, TComment = any,
     const tokenField = this.cfg.tokenField;
     if (d[tokenField] !== undefined && d[tokenField] !== null) {
       updateData[tokenField] = encrypt(d[tokenField]);
+      // A new token: forget that the old one was rejected.
+      updateData.tokenInvalidAt = null;
+      updateData.tokenInvalidReason = null;
     }
     if (d.appSecret !== undefined && d.appSecret !== null) {
       updateData.appSecret = encrypt(d.appSecret);
@@ -156,6 +159,68 @@ export class MetaChannelService<TSettings = any, TMessage = any, TComment = any,
     }
   }
 
+  // ── Expired / revoked token ───────────────────────────────────────────────
+
+  /**
+   * Meta's answer when the stored token can't be used any more: OAuthException code 190
+   * ("Error validating access token: Session has expired on …", revoked, password changed).
+   */
+  static isTokenRejectedResponse(data: any): boolean {
+    const error = data?.error;
+    if (!error) return false;
+    if (Number(error.code) === 190) return true;
+    return /error validating access token|session has expired|access token has expired|invalid oauth access token/i.test(String(error.message || ""));
+  }
+
+  /** True once Meta rejected this account's token; calls are skipped until a new token is saved. */
+  isTokenRejected(settings: TSettings | null | undefined): boolean {
+    return !!(settings as any)?.tokenInvalidAt;
+  }
+
+  /** Error returned (without calling Meta) while the token is marked as rejected. */
+  get tokenRejectedError(): string {
+    return `${this.cfg.label} login expired — paste a new ${this.cfg.tokenNoun} in ${this.cfg.label} settings to reconnect`;
+  }
+
+  /**
+   * Records that Meta rejected the token: stops further calls (and the error log flood) until
+   * the business saves a new token, and lets the settings page show a reconnect warning.
+   * Updates `settings` in place so the rest of this request sees it too.
+   */
+  async markTokenRejected(settings: TSettings, data: any): Promise<void> {
+    const s = settings as any;
+    if (!s?.businessAccountId || s.tokenInvalidAt) return;
+    const reason = String(data?.error?.message || "Access token rejected").slice(0, 500);
+    s.tokenInvalidAt = new Date();
+    s.tokenInvalidReason = reason;
+    try {
+      const t = this.cfg.tables.settings;
+      await dbAny.update(t).set({ tokenInvalidAt: s.tokenInvalidAt, tokenInvalidReason: reason }).where(eq(t.businessAccountId, s.businessAccountId));
+      console.warn(`${this.tag} ${this.cfg.tokenNoun} rejected for business ${s.businessAccountId} — pausing ${this.cfg.label} calls until a new token is saved: ${reason}`);
+    } catch (error) {
+      console.error(`${this.tag} Could not record the rejected ${this.cfg.tokenNoun}:`, error instanceof Error ? error.message : error);
+    }
+  }
+
+  /** For calls that read the error body as text: records a rejected token; true when it was one. */
+  protected async recordIfTokenRejected(settings: TSettings, errorBody: string): Promise<boolean> {
+    let data: any = null;
+    try { data = JSON.parse(errorBody); } catch { return false; }
+    if (!MetaChannelService.isTokenRejectedResponse(data)) return false;
+    await this.markTokenRejected(settings, data);
+    return true;
+  }
+
+  /** The token worked again (e.g. Test connection succeeded): clear the rejected mark. */
+  async clearTokenRejected(settings: TSettings): Promise<void> {
+    const s = settings as any;
+    if (!s?.businessAccountId || !s.tokenInvalidAt) return;
+    s.tokenInvalidAt = null;
+    s.tokenInvalidReason = null;
+    const t = this.cfg.tables.settings;
+    await dbAny.update(t).set({ tokenInvalidAt: null, tokenInvalidReason: null }).where(eq(t.businessAccountId, s.businessAccountId));
+  }
+
   // ── Graph API ─────────────────────────────────────────────────────────────
 
   protected truncate(text: string): string {
@@ -182,6 +247,7 @@ export class MetaChannelService<TSettings = any, TMessage = any, TComment = any,
     },
   ): Promise<{ ok: true; data: any } | { ok: false; error: string }> {
     try {
+      if (this.isTokenRejected(settings)) return { ok: false, error: this.tokenRejectedError };
       const accessToken = this.getDecryptedAccessToken(settings);
       if (!accessToken) return { ok: false, error: this.cfg.tokenMissingError };
       if (opts.before) console.log(`${this.tag} ${opts.before}`);
@@ -199,6 +265,7 @@ export class MetaChannelService<TSettings = any, TMessage = any, TComment = any,
       if (opts.describe) console.log(`${this.tag} ${opts.describe(response.status, responseData)}`);
 
       if (!response.ok) {
+        if (MetaChannelService.isTokenRejectedResponse(responseData)) await this.markTokenRejected(settings, responseData);
         return { ok: false, error: responseData?.error?.message || `${this.cfg.label} API error: ${response.status}` };
       }
       return { ok: true, data: responseData };
