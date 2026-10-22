@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import { AccountPage, FeatureChips } from "@/components/superadmin/AccountPage";
 import type { SummaryResponse } from "@/pages/SuperAdminUsage";
 import { accountHref } from "@/navigation/superAdminAreas";
-import { currentIstMonth, formatUsd, monthLabel } from "@/components/usage/usageFormat";
+import { currentIstMonth } from "@/components/usage/usageFormat";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1157,17 +1157,15 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                     <TableHead className="min-w-[180px]">Business</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="min-w-[230px]">Agents & add-ons</TableHead>
-                    <TableHead className="whitespace-nowrap text-right">AI spend ({monthLabel(usageMonth).slice(0, 3)})</TableHead>
                     <TableHead>Created</TableHead>
                     <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {visibleAccounts.length === 0 && (
-                    <TableRow><TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">No accounts match.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">No accounts match.</TableCell></TableRow>
                   )}
                   {visibleAccounts.map((business) => {
-                    const spend = usageById.get(business.id);
                     return (
                       <TableRow
                         key={business.id}
@@ -1190,12 +1188,6 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                           </span>
                         </TableCell>
                         <TableCell><FeatureChips account={business} /></TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          <div className="text-sm text-gray-900">{spend ? formatUsd(spend.costUsd) : "—"}</div>
-                          <div className={`text-xs ${spend?.limit?.level === "exceeded" ? "text-red-600" : spend?.limit?.level === "warn" ? "text-amber-600" : "text-gray-500"}`}>
-                            {spend?.limit ? `of ${formatUsd(spend.limit.monthlyLimitUsd)}` : "No limit"}
-                          </div>
-                        </TableCell>
                         <TableCell className="whitespace-nowrap text-sm text-gray-600">
                           {new Date(business.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}
                         </TableCell>
