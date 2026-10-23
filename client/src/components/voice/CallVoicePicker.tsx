@@ -26,13 +26,13 @@ export const OPENAI_VOICES: Array<{ id: string; label: string; desc: string; gen
 const WIDGET = "__widget__";
 
 /** "el:abc…" → the ElevenLabs voice's name; "shimmer" → "Shimmer". */
-export function useVoiceName(selection: string | null | undefined): string | null {
+export function useVoiceName(selection: string | null | undefined, accountId?: string): string | null {
   const elId = selection?.startsWith("el:") ? selection.slice(3) : null;
   const q = useQuery({
-    queryKey: ["elevenlabs-voice", elId],
+    queryKey: ["elevenlabs-voice", elId, accountId ?? ""],
     enabled: !!elId,
     queryFn: async () => {
-      const r = await fetch(`/api/elevenlabs/voices/${encodeURIComponent(elId!)}`, { credentials: "include" });
+      const r = await fetch(`/api/elevenlabs/voices/${encodeURIComponent(elId!)}${accountId ? `?businessAccountId=${encodeURIComponent(accountId)}` : ""}`, { credentials: "include" });
       return r.ok ? ((await r.json()) as { name: string }) : null;
     },
     staleTime: 60 * 60 * 1000,

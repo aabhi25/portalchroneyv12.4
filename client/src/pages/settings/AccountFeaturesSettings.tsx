@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
-import { Briefcase, Calendar, Camera, GraduationCap, Headphones, LayoutGrid, Loader2, Megaphone, Mic, PackageOpen, School, ShoppingBag, Video } from "lucide-react";
+import { Briefcase, Calendar, Camera, CheckCircle2, GraduationCap, Headphones, LayoutGrid, Loader2, Megaphone, Mic, PackageOpen, School, ShoppingBag, TriangleAlert, Video } from "lucide-react";
 import type { BusinessAccountDto, ProductTier, SystemMode } from "@shared/dto";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -12,6 +12,7 @@ import { AiCallingMinuteCap } from "@/components/calling/SuperAdminAiCallingCard
 import { photoSearchSummary, usePhotoSearchStatus } from "@/components/photoSearch/GeminiKeyEditor";
 import { LiveAvatarSettingsDialog } from "@/components/LiveAvatarSettingsDialog";
 import { TutorSettingsDialog, tutorKey, type TutorAdminView } from "@/components/TutorSettingsDialog";
+import { VoiceSetupPanel, featureStatusKey, useVoiceStatusText, type FeatureStatus } from "@/components/hub/VoiceSetupPanel";
 import { hubArea, type HubAreaId } from "@/navigation/hubAreas";
 import { callingApi, callingKeys, errorStatus, type SuperAdminCallingState } from "@/lib/aiCallingApi";
 
@@ -85,6 +86,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
   const [busy, setBusy] = useState<string | null>(null);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [tutorOpen, setTutorOpen] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
 
   const account = useQuery<BusinessAccountDto>({ queryKey: accountKey(businessAccountId), staleTime: 0 });
   const calling = useQuery<SuperAdminCallingState>({
@@ -96,6 +98,9 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
   const avatar = useQuery<{ settings: { enabled: boolean } }>({ queryKey: avatarKey(businessAccountId), retry: false });
   const tutor = useQuery<TutorAdminView>({ queryKey: tutorKey(businessAccountId), retry: false });
   const photoSearch = usePhotoSearchStatus(businessAccountId);
+  // What each feature still needs (status lines and "Needs attention").
+  const featureStatus = useQuery<Record<string, FeatureStatus>>({ queryKey: featureStatusKey(businessAccountId), retry: false, staleTime: 0 });
+  const voiceText = useVoiceStatusText(featureStatus.data?.voiceMode, businessAccountId);
 
   const refreshEverywhere = () => {
     // The portal's own menus, and the Business accounts list.
@@ -110,6 +115,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
       queryClient.setQueryData(accountKey(businessAccountId), updated);
       queryClient.invalidateQueries({ queryKey: tutorKey(businessAccountId) }); // K12 decides whether the AI tutor applies
       queryClient.invalidateQueries({ queryKey: ["/api/business-accounts", businessAccountId, "photo-search"] });
+      queryClient.invalidateQueries({ queryKey: featureStatusKey(businessAccountId) });
       refreshEverywhere();
       toast({ title: `${label} ${on ? "switched on" : "switched off"}`, description: "This account's menus update straight away." });
     },
@@ -213,6 +219,21 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
 
   const area = (id: HubAreaId) => ({ icon: hubArea(id).icon, tint: hubArea(id).tint });
 
+  /** "Ready · …" in green, or what is missing in amber, under a feature's row. */
+  const statusLine = (status: FeatureStatus | undefined, text: string | null, testId: string) => {
+    if (!status || status.state === "off" || !text) return null;
+    const ready = status.state === "ready";
+    return (
+      <p className={`flex items-center gap-1.5 text-[12px] ${ready ? "text-green-700" : "text-amber-700"}`} data-testid={testId}>
+        {ready ? <CheckCircle2 className="h-3.5 w-3.5" /> : <TriangleAlert className="h-3.5 w-3.5" />}
+        {ready ? `Ready · ${text}` : text}
+      </p>
+    );
+  };
+  const needsAttention = [
+    featureStatus.data?.voiceMode?.state === "needs_setup" ? { label: "Voice mode", open: () => setVoiceOpen(true) } : null,
+  ].filter((x): x is { label: string; open: () => void } => !!x);
+
   const callingUnavailable = calling.isError && (errorStatus(calling.error) === 404 || errorStatus(calling.error) === 501);
   const callingOn = calling.data?.enabled ?? ba.aiCallingEnabled;
   const hasProducts = ba.chroneyEnabled || ba.whatsappEnabled || isJewelryTier(ba.productTier);
@@ -240,6 +261,16 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           </Select>
         </Row>
       </Group>
+
+      {needsAttention.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-amber-50 px-4 py-2.5 text-[13px] text-amber-800" data-testid="text-needs-attention">
+          <TriangleAlert className="h-4 w-4" />
+          <span>{needsAttention.length === 1 ? "1 feature is on but not set up:" : `${needsAttention.length} features are on but not set up:`}</span>
+          {needsAttention.map(n => (
+            <button key={n.label} type="button" onClick={n.open} className="font-medium underline underline-offset-2">{n.label}</button>
+          ))}
+        </div>
+      )}
 
       {nothingOn && (
         <p className="rounded-xl bg-amber-50 px-4 py-2.5 text-[13px] text-amber-800" data-testid="text-nothing-on">
@@ -298,7 +329,11 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           icon={Mic} tint="bg-indigo-500" label="Voice mode"
           description="Visitors can talk to the website chat out loud"
           hint={!ba.chroneyEnabled ? "Needs Website chat switched on to show up." : null}
+          below={statusLine(featureStatus.data?.voiceMode, voiceText, "text-voice-status")}
         >
+          <Button variant="outline" size="sm" className="h-7" onClick={() => setVoiceOpen(true)} data-testid="button-feature-voice">
+            Set up
+          </Button>
           {flagSwitch("voiceModeEnabled", "Voice mode")}
         </Row>
         <Row
@@ -370,6 +405,9 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
         The same switches show in Super Admin › Business accounts › Features and in this account's Settings. Changes apply straight away for everyone on this account.
       </p>
 
+      {voiceOpen && (
+        <VoiceSetupPanel open={voiceOpen} onOpenChange={setVoiceOpen} businessAccountId={ba.id} businessName={ba.name} />
+      )}
       {tutorOpen && (
         <TutorSettingsDialog open={tutorOpen} onOpenChange={setTutorOpen} businessAccountId={ba.id} businessName={ba.name} />
       )}

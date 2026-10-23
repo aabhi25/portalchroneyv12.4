@@ -71,7 +71,10 @@ export function ElevenLabsVoiceBrowser({
   setPlayingVoice,
   currentAudio,
   setCurrentAudio,
+  accountId,
 }: {
+  /** Super admin setting up another account from its page: whose ElevenLabs key to use. */
+  accountId?: string;
   voiceSelection: string;
   setVoiceSelection: (v: string) => void;
   playingVoice: string | null;
@@ -109,7 +112,7 @@ export function ElevenLabsVoiceBrowser({
   }
 
   const voicesQuery = useQuery({
-    queryKey: ["elevenlabs-voices", debouncedSearch, languages.join(","), gender, sort, page],
+    queryKey: ["elevenlabs-voices", accountId ?? "", debouncedSearch, languages.join(","), gender, sort, page],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (debouncedSearch) params.set("search", debouncedSearch);
@@ -118,6 +121,7 @@ export function ElevenLabsVoiceBrowser({
       params.set("sort", sort);
       params.set("pageSize", "20");
       params.set("page", String(page));
+      if (accountId) params.set("businessAccountId", accountId);
       const response = await fetch(`/api/elevenlabs/voices?${params.toString()}`, { credentials: "include" });
       if (!response.ok) throw new Error("Failed to fetch voices");
       return response.json() as Promise<VoicePage>;
@@ -141,10 +145,10 @@ export function ElevenLabsVoiceBrowser({
   const selectedId = voiceSelection.startsWith("el:") ? voiceSelection.slice(3) : null;
   const selectedInList = selectedId ? allVoices.find((v) => v.voice_id === selectedId) || known[selectedId] : undefined;
   const selectedQuery = useQuery({
-    queryKey: ["elevenlabs-voice", selectedId],
+    queryKey: ["elevenlabs-voice", selectedId, accountId ?? ""],
     enabled: !!selectedId && !selectedInList,
     queryFn: async () => {
-      const response = await fetch(`/api/elevenlabs/voices/${encodeURIComponent(selectedId!)}`, { credentials: "include" });
+      const response = await fetch(`/api/elevenlabs/voices/${encodeURIComponent(selectedId!)}${accountId ? `?businessAccountId=${encodeURIComponent(accountId)}` : ""}`, { credentials: "include" });
       if (!response.ok) return null;
       return response.json() as Promise<ElevenLabsVoice>;
     },

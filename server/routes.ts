@@ -105,6 +105,7 @@ function cleanLandingUrl(value: unknown): string | undefined {
 }
 import dataRetentionRoutes from "./routes/dataRetention";
 import merittoRoutes from "./routes/meritto";
+import accountSetupRoutes from "./routes/accountSetup";
 import aiUsageRoutes from "./routes/aiUsage";
 import avatarRoutes from "./routes/avatar";
 import photoSearchRoutes from "./routes/photoSearch";
@@ -640,6 +641,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(whatsappHandoffRoutes);
   app.use(dataRetentionRoutes);
   app.use(merittoRoutes);
+  app.use(accountSetupRoutes);
   app.use(aiUsageRoutes);
   // Live AI avatar (super-admin settings, widget sessions). Close avatar sessions
   // a previous process left open (billed to their last heartbeat).
@@ -27663,9 +27665,17 @@ Be constructive and helpful. Return ONLY valid JSON.`;
   });
 
   // Voice preview endpoint - generate TTS sample
+  // Voice previews and the ElevenLabs voice list use the account in view; a super admin setting up
+  // an account from its Super Admin page names it with ?businessAccountId=.
+  const voiceAccountFor = (req: any): string | undefined => {
+    const asked = typeof req.query?.businessAccountId === 'string' ? req.query.businessAccountId.trim() : '';
+    if (asked && req.user?.role === 'super_admin') return asked;
+    return req.user?.businessAccountId;
+  };
+
   app.get("/api/voice-preview", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const businessAccountId = req.user?.businessAccountId;
+      const businessAccountId = voiceAccountFor(req);
       if (!businessAccountId) {
         return res.status(400).json({ error: "Business account not found" });
       }
@@ -27708,7 +27718,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
 
   app.get("/api/elevenlabs/voices", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const businessAccountId = req.user?.businessAccountId;
+      const businessAccountId = voiceAccountFor(req);
       if (!businessAccountId) {
         return res.status(400).json({ error: "Business account not found" });
       }
@@ -27744,7 +27754,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
   // One voice's name / sample / labels, for the "selected voice" card in the voice picker.
   app.get("/api/elevenlabs/voices/:voiceId", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
-      const businessAccountId = req.user?.businessAccountId;
+      const businessAccountId = voiceAccountFor(req);
       if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
       const businessAccount = await storage.getBusinessAccount(businessAccountId);
       const apiKey = businessAccount?.elevenlabsApiKey;

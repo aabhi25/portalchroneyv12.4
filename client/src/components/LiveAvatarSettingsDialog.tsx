@@ -6,7 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SetupPanel } from "@/components/hub/SetupPanel";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -422,24 +422,25 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
     );
   }
 
+  // Opens from the right, like every feature's "Set up".
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[680px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Video className="h-5 w-5 text-purple-600" />Live AI avatar — {businessName}</DialogTitle>
-          <DialogDescription>
-            Commercial add-on. Choose the provider this account signed for, its avatar and limits. The avatar only renders our own
-            voice answers (our brain and ElevenLabs voice) and starts only when a visitor taps it.
-          </DialogDescription>
-        </DialogHeader>
-        {body}
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
-          <Button onClick={() => save.mutate()} disabled={!form || save.isPending} data-testid="button-save-avatar-settings">
-            {save.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <SetupPanel
+      open={open}
+      onOpenChange={onOpenChange}
+      icon={Video}
+      title={<>Live AI avatar · {businessName}</>}
+      description={<>Commercial add-on. Choose the provider this account signed for, its avatar and limits. The avatar only renders our own
+        voice answers (our brain and ElevenLabs voice) and starts only when a visitor taps it.</>}
+      wide
+      testId="panel-avatar-settings"
+      footer={<>
+        <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+        <Button onClick={() => save.mutate()} disabled={!form || save.isPending} data-testid="button-save-avatar-settings">
+          {save.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save
+        </Button>
+      </>}
+    >
+      {body}
+    </SetupPanel>
   );
 }
