@@ -13,6 +13,7 @@ import { photoSearchSummary, usePhotoSearchStatus } from "@/components/photoSear
 import { LiveAvatarSettingsDialog } from "@/components/LiveAvatarSettingsDialog";
 import { TutorSettingsDialog, tutorKey, type TutorAdminView } from "@/components/TutorSettingsDialog";
 import { VoiceSetupPanel, featureStatusKey, useVoiceStatusText, type FeatureStatus } from "@/components/hub/VoiceSetupPanel";
+import { FeatureSetupPanel, type ChecklistStatus, type SetupFeature } from "@/components/hub/FeatureSetupPanels";
 import { hubArea, type HubAreaId } from "@/navigation/hubAreas";
 import { callingApi, callingKeys, errorStatus, type SuperAdminCallingState } from "@/lib/aiCallingApi";
 
@@ -87,6 +88,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [tutorOpen, setTutorOpen] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [setupFeature, setSetupFeature] = useState<SetupFeature | null>(null);
 
   const account = useQuery<BusinessAccountDto>({ queryKey: accountKey(businessAccountId), staleTime: 0 });
   const calling = useQuery<SuperAdminCallingState>({
@@ -99,7 +101,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
   const tutor = useQuery<TutorAdminView>({ queryKey: tutorKey(businessAccountId), retry: false });
   const photoSearch = usePhotoSearchStatus(businessAccountId);
   // What each feature still needs (status lines and "Needs attention").
-  const featureStatus = useQuery<Record<string, FeatureStatus>>({ queryKey: featureStatusKey(businessAccountId), retry: false, staleTime: 0 });
+  const featureStatus = useQuery<Record<string, ChecklistStatus>>({ queryKey: featureStatusKey(businessAccountId), retry: false, staleTime: 0 });
   const voiceText = useVoiceStatusText(featureStatus.data?.voiceMode, businessAccountId);
 
   const refreshEverywhere = () => {
@@ -230,8 +232,23 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
       </p>
     );
   };
+  /** Row status for the checklist features: the summary when ready, else what is missing. */
+  const checklistLine = (feature: SetupFeature) => {
+    const st = featureStatus.data?.[feature];
+    return statusLine(st, st ? (st.state === "ready" ? st.summary || "set up" : st.problem || "Needs setting up") : null, `text-status-${feature}`);
+  };
+  const setUpButton = (feature: SetupFeature) => (
+    <Button variant="outline" size="sm" className="h-7" onClick={() => setSetupFeature(feature)} data-testid={`button-setup-${feature}`}>
+      Set up
+    </Button>
+  );
+  const CHECKLIST_LABELS: Record<SetupFeature, string> = {
+    website: "Website chat", whatsapp: "WhatsApp", phoneCalls: "Phone calls", whatsappCampaigns: "WhatsApp campaigns", shopify: "Shopify",
+  };
   const needsAttention = [
     featureStatus.data?.voiceMode?.state === "needs_setup" ? { label: "Voice mode", open: () => setVoiceOpen(true) } : null,
+    ...(Object.keys(CHECKLIST_LABELS) as SetupFeature[]).map(f =>
+      featureStatus.data?.[f]?.state === "needs_setup" ? { label: CHECKLIST_LABELS[f], open: () => setSetupFeature(f) } : null),
   ].filter((x): x is { label: string; open: () => void } => !!x);
 
   const callingUnavailable = calling.isError && (errorStatus(calling.error) === 404 || errorStatus(calling.error) === 501);
@@ -279,10 +296,12 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
       )}
 
       <Group title="AI agents">
-        <Row {...area("website")} label="Website chat" description="The chat widget on the business's website">
+        <Row {...area("website")} label="Website chat" description="The chat widget on the business's website" below={checklistLine("website")}>
+          {setUpButton("website")}
           {flagSwitch("chroneyEnabled", "Website chat")}
         </Row>
-        <Row {...area("whatsapp")} label="WhatsApp" description="AI replies on the business's WhatsApp number">
+        <Row {...area("whatsapp")} label="WhatsApp" description="AI replies on the business's WhatsApp number" below={checklistLine("whatsapp")}>
+          {setUpButton("whatsapp")}
           {flagSwitch("whatsappEnabled", "WhatsApp")}
         </Row>
         <Row {...area("instagram")} label="Instagram" description="AI replies to Instagram messages and comments">
@@ -296,10 +315,11 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           label="Phone calls"
           description="The AI phones new leads and answers the business's number"
           hint={callingUnavailable ? "The AI Calling server update isn't installed yet." : null}
-          below={!callingUnavailable && callingOn ? <AiCallingMinuteCap businessAccountId={ba.id} /> : null}
+          below={!callingUnavailable && callingOn ? <div className="space-y-2">{checklistLine("phoneCalls")}<AiCallingMinuteCap businessAccountId={ba.id} /></div> : null}
         >
           {!callingUnavailable && (
             <>
+              {setUpButton("phoneCalls")}
               {spinner("calls")}
               <Switch
                 checked={callingOn}
@@ -322,7 +342,9 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           icon={Megaphone} tint="bg-emerald-600" label="WhatsApp campaigns"
           description="Template campaigns to imported contacts, with AI handling the replies"
           hint={!ba.whatsappEnabled ? "Needs WhatsApp switched on to show up." : null}
+          below={checklistLine("whatsappCampaigns")}
         >
+          {setUpButton("whatsappCampaigns")}
           {flagSwitch("whatsappMarketingEnabled", "WhatsApp campaigns")}
         </Row>
         <Row
@@ -387,7 +409,9 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           icon={ShoppingBag} tint="bg-green-600" label="Shopify"
           description="Bring products in from a Shopify store"
           hint={!hasProducts ? "Needs Website chat, WhatsApp or Vista switched on to show up." : null}
+          below={checklistLine("shopify")}
         >
+          {setUpButton("shopify")}
           {flagSwitch("shopifyEnabled", "Shopify")}
         </Row>
       </Group>
@@ -405,6 +429,13 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
         The same switches show in Super Admin › Business accounts › Features and in this account's Settings. Changes apply straight away for everyone on this account.
       </p>
 
+      <FeatureSetupPanel
+        feature={setupFeature}
+        onOpenChange={(o) => { if (!o) setSetupFeature(null); }}
+        businessAccountId={ba.id}
+        businessName={ba.name}
+        status={setupFeature ? featureStatus.data?.[setupFeature] : undefined}
+      />
       {voiceOpen && (
         <VoiceSetupPanel open={voiceOpen} onOpenChange={setVoiceOpen} businessAccountId={ba.id} businessName={ba.name} />
       )}
