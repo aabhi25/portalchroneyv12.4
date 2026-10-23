@@ -688,9 +688,21 @@ async function main() {
       {
         const late = (ms: number, parts: string[]) => async function* () { await sleep(ms); yield* scripted(parts)(); };
         // Fillers are prepared once the opening line is done (never competing with it).
-        const lookupCount = (await import("../voice/fillers")).fillerPhrasesFor("lookup", "en", null).length;
-        await until(() => (v.conversation.fillerAudio?.size ?? 0) >= lookupCount, 6000);
-        expect((v.conversation.fillerAudio?.size ?? 0) === lookupCount, "filler audio prepared after the intro (only the \"let me check\" kind a video call uses)", v.conversation.fillerAudio?.size);
+        const fillersMod = await import("../voice/fillers");
+        const preparedCount = new Set((["lookup", "ack", "empathy", "thinking"] as const).flatMap((k) => fillersMod.fillerPhrasesFor(k, "en", null))).size;
+        await until(() => (v.conversation.fillerAudio?.size ?? 0) >= preparedCount, 6000);
+        await sleep(100);
+        expect((v.conversation.fillerAudio?.size ?? 0) === preparedCount, "filler audio prepared after the intro (every kind the AI picks, not \"repeat\")", v.conversation.fillerAudio?.size);
+        // The AI check decides the reaction on a video call (stubbed: no network); null = it failed → word rules.
+        const aiPicks: Record<string, string | null> = {
+          "Do you have weekend classes for class ten?": "lookup",
+          "How are you doing today?": "none",
+          "Okay, thank you for the details.": "none",
+          "My son failed his maths exam and I am really worried.": "empathy",
+          "Which subjects do you teach for class ten?": null,
+        };
+        const askedAi: Array<{ transcript: string; channel?: string }> = [];
+        v.svc.setDepsForTesting({ chooseFiller: async (input: any) => { askedAi.push({ transcript: input.transcript, channel: input.channel }); return (aiPicks[input.transcript] ?? null) as any; } });
         const doneBefore = v.client.ofType("ai_done").length;
         const ttsBefore = v.ttsCalls.length;
         v.streams.push(late(1700, ["Weekend batches run on Saturday and Sunday."]));
@@ -721,6 +733,25 @@ async function main() {
         await until(() => v.client.ofType("ai_done").length > done3, 6000);
         const rid3 = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
         expect(v.client.ofType("answer_delta").filter((d) => d.responseId === rid3).every((d) => d.display !== ""), "small talk (\"how are you\") never gets a filler");
+
+        // Thanks the word rules would have taken for a question (4+ words): the AI says none → silence.
+        const done3b = v.client.ofType("ai_done").length;
+        v.streams.push(late(1700, ["You're welcome! Anything else I can help with?"]));
+        await v.utter("Okay, thank you for the details.", 1300);
+        await until(() => v.client.ofType("ai_done").length > done3b, 6000);
+        const rid3b = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
+        expect(v.client.ofType("answer_delta").filter((d) => d.responseId === rid3b).every((d) => d.display !== "") && fillersMod.fillerKind({ transcript: "Okay, thank you for the details." }) === "lookup",
+          "AI says none for thanks → no filler (the word rules alone would have said \"let me check\")");
+
+        // A worry: the AI picks empathy → "Oh, I understand." kind, from the cache.
+        const done3c = v.client.ofType("ai_done").length;
+        v.streams.push(late(1700, ["I'm sorry to hear that. Our maths tutors can help him catch up."]));
+        await v.utter("My son failed his maths exam and I am really worried.", 1300);
+        await until(() => v.client.ofType("ai_done").length > done3c, 6000);
+        const rid3c = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
+        const d3c = v.client.ofType("answer_delta").filter((d) => d.responseId === rid3c);
+        expect(d3c[0]?.display === "" && fillersMod.fillerPhrasesFor("empathy", "en", null).includes(d3c[0]?.speech), "AI picks empathy → an empathy filler", d3c.map((d) => [d.display, d.speech]));
+        expect(askedAi.length >= 4 && askedAi.every((a) => a.channel === "video"), "video calls ask the AI on each turn (video wording)", askedAi);
 
         // A fast answer: no filler.
         const done4 = v.client.ofType("ai_done").length;

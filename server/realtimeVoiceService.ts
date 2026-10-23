@@ -120,6 +120,8 @@ export interface RealtimeVoiceDeps {
   avatar?: AvatarVoiceBridge;
   /** AI tutor: lesson source + minute counter for a session; defaults to the database-backed one. */
   prepareTutor?: (req: VoiceTutorRequest) => ReturnType<typeof prepareVoiceTutor>;
+  /** Which reaction (filler) fits a turn; defaults to the gpt-4o-mini check (voice/fillerPicker.ts). */
+  chooseFiller?: typeof aiFillerChoice;
 }
 
 /**
@@ -1239,8 +1241,10 @@ export class RealtimeVoiceService {
       return true;
     };
     for (const lang of languages) {
-      // A video avatar only ever says the "let me check" kind; phone calls use every kind.
-      for (const phrase of conversation.phone ? fillerPhrases(lang, gender, 'phone') : fillerPhrasesFor('lookup', lang, gender)) {
+      // Phone calls use every kind; a video call every kind the AI picks often (a rare "repeat" is
+      // voiced when it comes up).
+      const kinds: FillerKind[] = ['lookup', 'ack', 'empathy', 'thinking'];
+      for (const phrase of conversation.phone ? fillerPhrases(lang, gender, 'phone') : Array.from(new Set(kinds.flatMap((k) => fillerPhrasesFor(k, lang, gender))))) {
         // (No next_text here: on self-calls it sometimes bled into the clip — "Okay, got it. Of…".)
         const nextText: string | undefined = undefined;
         const cacheKey = `${voiceKey}|${phrase}`;
@@ -4788,8 +4792,10 @@ Never infer intent from a single contained word. For example, "What is stop moti
     // ("Motor.", "मोटर", "Hyundai i20 2019 मॉडल." on an English call).
     if (conversation.phone && fillerLang && conversation.lastFillerLang) fillerLang = conversation.lastFillerLang;
     const isPhone = !!conversation.phone;
-    // The reaction that fits what they said (word rules); phone calls let a quick AI check refine
-    // it in parallel — it only picks among the ready-recorded phrases, and "none" means silence.
+    // The reaction that fits what they said. Video calls ask a quick AI check (in parallel with the
+    // answer) and the word rules only stand in when it fails or is late; phone calls use the rules,
+    // refined by the same check with PHONE_FILLER_AI=1. It only picks among the ready-recorded
+    // phrases, and "none" means silence.
     // Phone calls open nearly every late answer with a few words ("Achha…", "Ji, dekhiye…"), as a
     // person does; turns the rules leave without a reaction get the plain acknowledging kind.
     const rawKind: FillerKind | null = fillerLang
@@ -4798,14 +4804,18 @@ Never infer intent from a single contained word. For example, "What is stop moti
     const ruleKind: FillerKind | null = fillerLang ? (rawKind ?? (isPhone ? 'ack' : null)) : null;
     let aiChoice: FillerChoice | null = null;
     let aiPending = false;
-    if (ruleKind && isPhone && process.env.PHONE_FILLER_AI === '1') {
+    const askFillerAi = isPhone
+      ? !!ruleKind && process.env.PHONE_FILLER_AI === '1'
+      : !!fillerLang && !!conversation.avatar && conversation.avatar.thinkingSounds !== false && !conversation.lastTurnHadFiller;
+    if (askFillerAi) {
       aiPending = true;
       const askedAt = Date.now();
-      void aiFillerChoice({
+      void (this.deps.chooseFiller ?? aiFillerChoice)({
         openaiApiKey: conversation.openaiApiKey,
         businessAccountId: conversation.businessAccountId,
         transcript: userTranscript,
         lastAssistantText: conversation.lastAssistantText,
+        channel: isPhone ? 'phone' : 'video',
       }).then((choice) => {
         aiChoice = choice;
         aiPending = false;
@@ -4926,24 +4936,28 @@ Never infer intent from a single contained word. For example, "What is stop moti
       };
     }
 
-    if (fillerLang && ruleKind && (isPhone ? phoneFillersOn() : !conversation.lastTurnHadFiller)) {
-      let waitedForAi = false;
+    if (fillerLang && (ruleKind || aiPending) && (isPhone ? phoneFillersOn() : !conversation.lastTurnHadFiller)) {
+      // Phone: the AI's pick gets a quarter second more (once). Video: up to 0.6 s more, in steps —
+      // the filler only plays while the answer is late, which leaves time (live: first audio 1.7–3 s).
+      let aiWaitMs = 0;
+      const aiWaitLimitMs = isPhone ? 250 : 600;
       fireFiller = () => {
         fillerTimer = null;
         if (answerStarted || abandoned() || !(conversation.avatar || conversation.phone) || conversation.clientWs.readyState !== WebSocket.OPEN) return;
         if (!conversation.phone && conversation.avatar?.thinkingSounds === false) return;
-        // The AI's pick is almost back: give it a quarter second more (once), else the rules decide.
-        if (aiPending && !waitedForAi) {
-          waitedForAi = true;
-          fillerTimer = setTimeout(() => fireFiller?.(), 250);
+        // The AI's pick is almost back: wait a little more for it, else the rules decide.
+        if (aiPending && aiWaitMs < aiWaitLimitMs) {
+          const step = isPhone ? 250 : 150;
+          aiWaitMs += step;
+          fillerTimer = setTimeout(() => fireFiller?.(), step);
           fillerTimer.unref?.();
           return;
         }
         // The contextual opener covers this turn (it is ready, promised or already spoken).
         if (opener && opener.status !== 'pending' && opener.status !== 'dropped') return;
-        const chosen: FillerChoice = aiChoice ?? ruleKind;
-        if (chosen === 'none') {
-          console.log('[VoiceTurn] Answer is late — no filler (AI: none)');
+        const chosen: FillerChoice | null = aiChoice ?? ruleKind;
+        if (!chosen || chosen === 'none') {
+          console.log(`[VoiceTurn] Answer is late — no filler (${aiChoice ? 'AI' : 'rules'}: none)`);
           return;
         }
         // Still waiting for the contextual opener: just a quick reaction ("Ji…"), the opener follows.
