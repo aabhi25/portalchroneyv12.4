@@ -45,7 +45,11 @@ export function describeDateRule(offset: number, column: string): string {
   return `${days} day${days === 1 ? "" : "s"} ${offset < 0 ? "before" : "after"} ${column}`;
 }
 
-export default function WhatsAppCampaignAutomations() {
+/**
+ * Repeating campaigns: each one sends a saved campaign again on the days you choose, to whoever
+ * is due. Shown as the "Repeating" view of the Campaigns screen (`embedded`).
+ */
+export default function WhatsAppCampaignAutomations({ embedded = false }: { embedded?: boolean } = {}) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [deleteTarget, setDeleteTarget] = useState<CampaignAutomation | null>(null);
@@ -60,40 +64,42 @@ export default function WhatsAppCampaignAutomations() {
     mutationFn: (id: string) => apiRequest("DELETE", `/api/whatsapp/campaign-automations/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/campaign-automations"] });
-      toast({ title: "Automation deleted" });
+      toast({ title: "Schedule deleted" });
       setDeleteTarget(null);
     },
-    onError: (error: any) => toast({ title: "Could not delete automation", description: error.message, variant: "destructive" }),
+    onError: (error: any) => toast({ title: "Could not delete schedule", description: error.message, variant: "destructive" }),
   });
 
   return (
-    <div className="p-4 sm:p-6 max-w-6xl mx-auto">
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+    <div className={embedded ? "" : "p-4 sm:p-6 max-w-6xl mx-auto"}>
+      <div className={`flex flex-wrap items-center justify-between gap-4 ${embedded ? "mb-3" : "mb-6"}`}>
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <CalendarClock className="h-6 w-6 text-emerald-600" /> Automations
-          </h1>
-          <p className="text-sm text-gray-600 mt-1">
-            Repeat a campaign by itself every day, or on the days you choose. Each day only the people who are due get a message.
+          {!embedded && (
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <CalendarClock className="h-6 w-6 text-emerald-600" /> Repeating campaigns
+            </h1>
+          )}
+          <p className={`text-sm text-gray-600 ${embedded ? "" : "mt-1"}`}>
+            Send a saved campaign again by itself every day, or on the days you choose. Each day only the people who are due get a message.
           </p>
         </div>
-        <Button onClick={() => setLocation("/admin/whatsapp-campaign-automations/new")} data-testid="button-new-campaign-automation">
-          <Plus className="h-4 w-4 mr-1" /> New Automation
+        <Button variant={embedded ? "outline" : "default"} onClick={() => setLocation("/admin/whatsapp-campaign-automations/new")} data-testid="button-new-campaign-automation">
+          <Plus className="h-4 w-4 mr-1" /> New schedule
         </Button>
       </div>
 
       {isLoading ? (
-        <div className="text-center text-gray-500 py-12">Loading automations...</div>
+        <div className="text-center text-gray-500 py-12">Loading...</div>
       ) : automations.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
             <FileSpreadsheet className="h-10 w-10 text-emerald-600 mx-auto mb-3" />
-              <h2 className="font-semibold text-gray-900">No campaign automations yet</h2>
+              <h2 className="font-semibold text-gray-900">No repeating campaigns yet</h2>
             <p className="text-sm text-gray-500 mt-1 max-w-md mx-auto">
-                First save a campaign as a draft (its message and how the AI replies), then create an automation that sends it every day to whoever is due.
+                Create a campaign and choose "Repeat on a schedule". You then pick who is included each day and when it sends.
             </p>
-            <Button className="mt-4" onClick={() => setLocation("/admin/whatsapp-campaign-automations/new")}>
-              Create automation
+            <Button className="mt-4" onClick={() => setLocation("/admin/whatsapp-campaigns/new")}>
+              New campaign
             </Button>
           </CardContent>
         </Card>
@@ -163,9 +169,9 @@ export default function WhatsAppCampaignAutomations() {
       <AlertDialog open={!!deleteTarget} onOpenChange={open => { if (!open && !deleteMutation.isPending) setDeleteTarget(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete automation?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this schedule?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will stop future runs for <strong>{deleteTarget?.name}</strong> and remove it from the active automation list. Already-sent messages and campaign run history will be preserved. Pending review or scheduled work will be cancelled.
+              This will stop future runs for <strong>{deleteTarget?.name}</strong> and remove it from your repeating campaigns. Already-sent messages and campaign run history will be preserved. Pending review or scheduled work will be cancelled.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -178,7 +184,7 @@ export default function WhatsAppCampaignAutomations() {
                 if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
               }}
             >
-              {deleteMutation.isPending ? "Deleting..." : "Delete automation"}
+              {deleteMutation.isPending ? "Deleting..." : "Delete schedule"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

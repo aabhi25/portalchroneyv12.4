@@ -55,6 +55,8 @@ export interface CampaignFormValues {
   /** datetime-local string ("" means no schedule) */
   scheduledAt: string;
   aiEnabled: boolean;
+  /** AI replies off: someone's first reply starts the WhatsApp journey (so it can become a lead). */
+  replyStartsJourney: boolean;
   aiAgentName: string;
   aiSystemPrompt: string;
   aiUseFaqs: boolean;

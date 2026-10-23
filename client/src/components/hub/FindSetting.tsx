@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Search } from "lucide-react";
-import { HUB_AREAS, settingsItemHref, visibleSettings, visibleTabs, type HubAccess } from "@/navigation/hubAreas";
+import { HUB_AREAS, settingsItemHref, visibleItems, visibleSettings, visibleTabs, type HubAccess } from "@/navigation/hubAreas";
 import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 
 interface Entry {
@@ -26,7 +26,7 @@ function buildEntries(access: HubAccess): Entry[] {
       // A row of pills belongs to a tab; when the tab is hidden (e.g. Campaigns without marketing), so are they.
       const tab = visibleTabs(area, access).find(t => t.key === group.tabKey);
       if (!tab) continue;
-      for (const s of group.items) {
+      for (const s of visibleItems(group.items, access)) {
         out.push({ label: s.label, place: `${area.label} › ${tab.label}`, href: s.href, formerly: s.formerly });
       }
     }

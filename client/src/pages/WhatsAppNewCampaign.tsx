@@ -174,7 +174,7 @@ export default function WhatsAppNewCampaign() {
       readyPrefix="Ready to create"
       submitLabel={(hasSchedule, campaignType) =>
         campaignType === "automation"
-          ? <><Send className="h-4 w-4" /> Save &amp; Set Up Automation</>
+          ? <><Send className="h-4 w-4" /> Save &amp; Set Up Schedule</>
           : hasSchedule
           ? <><Clock className="h-4 w-4" /> Schedule Campaign</>
           : source

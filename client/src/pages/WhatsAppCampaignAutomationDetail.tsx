@@ -133,7 +133,7 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/campaign-automations"] });
       toast({ title: "Automation deleted" });
-      setLocation("/admin/whatsapp-campaign-automations");
+      setLocation("/admin/whatsapp-campaigns?view=repeating");
     },
     onError: (error: any) => toast({ title: "Could not delete automation", description: error.message, variant: "destructive" }),
   });
@@ -160,8 +160,8 @@ export default function WhatsAppCampaignAutomationDetail({ id }: { id: string })
 
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-5">
-      <Button variant="ghost" size="sm" onClick={() => setLocation("/admin/whatsapp-campaign-automations")}>
-        <ArrowLeft className="h-4 w-4 mr-1" /> Back to automations
+      <Button variant="ghost" size="sm" onClick={() => setLocation("/admin/whatsapp-campaigns?view=repeating")}>
+        <ArrowLeft className="h-4 w-4 mr-1" /> Back to repeating campaigns
       </Button>
       <div className="flex flex-wrap justify-between gap-4">
         <div>

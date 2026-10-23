@@ -71,8 +71,8 @@ export function StepReview({ ctx, goTo }: { ctx: WizardCtx; goTo: (step: WizardS
                 </Row>
               </>
             )}
-            <Row label="AI replies" onEdit={() => goTo("ai")}>
-              {v.aiEnabled ? `On, as "${v.aiAgentName || "Sales Agent"}"` : "Off"}
+            <Row label="When people reply" onEdit={() => goTo("ai")}>
+              {v.aiEnabled ? `This campaign's AI answers, as "${v.aiAgentName || "Sales Agent"}"` : v.replyStartsJourney ? "Your journey starts" : "Your usual WhatsApp replies"}
               {v.replyClassifications.length > 0 && <span className="text-gray-500"> · {v.replyClassifications.length} reply outcome{v.replyClassifications.length === 1 ? "" : "s"}</span>}
             </Row>
           </div>

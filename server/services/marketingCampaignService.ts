@@ -278,6 +278,8 @@ interface CreatePayload {
   groupIds: string[];
   scheduledAt?: Date | null;
   aiEnabled?: boolean;
+  /** AI replies off only: start the WhatsApp journey when someone first replies. */
+  replyStartsJourney?: boolean;
   aiAgentName?: string;
   aiSystemPrompt?: string;
   aiUseFaqs?: boolean;
@@ -897,6 +899,7 @@ export const marketingCampaignService = {
         status: campaignType === "one_time" && payload.scheduledAt ? "scheduled" : "draft",
         scheduledAt: campaignType === "one_time" ? payload.scheduledAt || null : null,
         aiEnabled: toFlag(payload.aiEnabled, "true"),
+        replyStartsJourney: toFlag(payload.replyStartsJourney, "false"),
         aiAgentName: payload.aiAgentName || "Sales Agent",
         aiSystemPrompt: payload.aiSystemPrompt || "",
         aiUseFaqs: toFlag(payload.aiUseFaqs, "true"),
@@ -1005,6 +1008,7 @@ export const marketingCampaignService = {
     }
     if (payload.scheduledAt !== undefined) set.scheduledAt = payload.scheduledAt;
     if (payload.aiEnabled !== undefined) set.aiEnabled = toFlag(payload.aiEnabled, "true");
+    if (payload.replyStartsJourney !== undefined) set.replyStartsJourney = toFlag(payload.replyStartsJourney, "false");
     if (payload.aiUseFaqs !== undefined) set.aiUseFaqs = toFlag(payload.aiUseFaqs, "true");
     if (payload.aiUseDocs !== undefined) set.aiUseDocs = toFlag(payload.aiUseDocs, "true");
     if (payload.aiUseProducts !== undefined) set.aiUseProducts = toFlag(payload.aiUseProducts, "true");

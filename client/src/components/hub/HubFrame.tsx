@@ -4,7 +4,7 @@ import { ChevronLeft, Settings } from "lucide-react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useAiCallingAvailability } from "@/lib/aiCallingApi";
 import {
-  findHubLocation, getHubAccess, hubSettingsPath, visibleTabs, type HubAccess,
+  findHubLocation, getHubAccess, hubSettingsPath, visibleItems, visibleTabs, type HubAccess,
 } from "@/navigation/hubAreas";
 import type { MeResponseDto } from "@shared/dto";
 import { HubFrameContext } from "./hubContext";
@@ -71,7 +71,9 @@ export function HubFrame({ user, children }: { user: MeResponseDto | null; child
   const { area, tab, settingsItem } = match;
   const Icon = area.icon;
   const tabs = visibleTabs(area, access);
-  const sectionItems = area.sections?.find(s => s.tabKey === tab?.key)?.items ?? null;
+  // A row of one pill says nothing, so it only shows when there is a choice (e.g. Campaign replies needs marketing).
+  const pills = visibleItems(area.sections?.find(s => s.tabKey === tab?.key)?.items ?? [], access);
+  const sectionItems = pills.length > 1 ? pills : null;
   // A settings item that opens its own page (e.g. Keyword replies) gets a way back to the list.
   const openedSettingsPage = settingsItem && settingsItem.href ? settingsItem : null;
   // Inbox pages scroll their own list and thread, so they get a fixed height (not the page scroll).

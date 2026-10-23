@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Search, Users, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import type { WizardCtx } from "./context";
 import { StepSection } from "./StepSection";
+import { WorkbookAudiencePicker } from "./WorkbookAudiencePicker";
 
 export function StepWho({ ctx }: { ctx: WizardCtx }) {
   const { v, set, isAutomation, groups } = ctx;
@@ -34,7 +35,7 @@ export function StepWho({ ctx }: { ctx: WizardCtx }) {
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {([
             ["one_time", "Send once", "Pick who gets it and when."],
-            ["automation", "Repeat automatically", "Save the message now; set up who gets it and when in Automations."],
+            ["automation", "Repeat on a schedule", "Save the message now; choose who gets it and when on the next screen."],
           ] as const).map(([value, label, description]) => (
             <button
               key={value}
@@ -91,6 +92,7 @@ export function StepWho({ ctx }: { ctx: WizardCtx }) {
               {visibleGroups.length === 0 && <p className="p-4 text-center text-sm text-gray-500">No audience matches "{search}".</p>}
             </div>
           )}
+          <WorkbookAudiencePicker ctx={ctx} />
           {v.groupIds.length > 0 && <AudienceCounts ctx={ctx} />}
         </StepSection>
       ) : (
@@ -132,7 +134,7 @@ function AutomationSource({ ctx }: { ctx: WizardCtx }) {
   const sample = workbookSheet?.rows?.[0]?.values;
   const allow = v.recipientAiAllowedFields || [];
   return (
-    <StepSection title="Where the contacts come from" description="When and to whom it repeats is set up next, in Automations.">
+    <StepSection title="Where the contacts come from" description="When and to whom it repeats is set up on the next screen.">
       <div>
         <label className="text-sm font-medium text-gray-700">Contact source</label>
         <Select value={source} onValueChange={(value: "ai_workbook" | "contact_groups") => set(value === "ai_workbook"

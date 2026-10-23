@@ -41,6 +41,7 @@ export const EMPTY_CAMPAIGN_FORM: CampaignFormValues = {
   templateParams: [],
   scheduledAt: "",
   aiEnabled: true,
+  replyStartsJourney: false,
   aiAgentName: "Sales Agent",
   aiSystemPrompt: "",
   aiUseFaqs: true,
@@ -79,6 +80,7 @@ export interface StoredCampaignConfig {
   groupIds: string[] | null;
   scheduledAt: string | null;
   aiEnabled: string;
+  replyStartsJourney?: string | null;
   aiAgentName: string | null;
   aiSystemPrompt: string | null;
   aiUseFaqs: string;
@@ -125,6 +127,7 @@ export function campaignToFormValues(campaign: StoredCampaignConfig): CampaignFo
     templateParams: Array.isArray(campaign.templateParams) ? campaign.templateParams : [],
     scheduledAt: toDateTimeLocal(campaign.scheduledAt),
     aiEnabled: campaign.aiEnabled !== "false",
+    replyStartsJourney: campaign.aiEnabled === "false" && campaign.replyStartsJourney === "true",
     aiAgentName: campaign.aiAgentName || EMPTY_CAMPAIGN_FORM.aiAgentName,
     aiSystemPrompt: campaign.aiSystemPrompt ?? "",
     aiUseFaqs: campaign.aiUseFaqs !== "false",
@@ -208,7 +211,7 @@ const STEP_LABEL: Record<WizardStepKey, string> = {
   who: "Who",
   message: "Message",
   when: "When",
-  ai: "AI replies",
+  ai: "Replies",
   review: "Review",
 };
 

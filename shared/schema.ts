@@ -3692,6 +3692,10 @@ export const marketingCampaigns = pgTable("marketing_campaigns", {
   optedOutCount: integer("opted_out_count").notNull().default(0),
   // Campaign-specific AI negotiation config
   aiEnabled: text("ai_enabled").notNull().default("true"), // 'true' | 'false'
+  // With AI replies off: 'true' starts the business's WhatsApp journey (the one switched on) when
+  // someone first replies, so the reply can become a lead. 'false' leaves replies to the usual
+  // WhatsApp replies (journey only if it would start anyway, keyword replies, AI).
+  replyStartsJourney: text("reply_starts_journey").notNull().default("false"),
   aiAgentName: text("ai_agent_name").default("Sales Agent"),
   aiSystemPrompt: text("ai_system_prompt").default(""), // Custom negotiation persona/instructions
   aiUseFaqs: text("ai_use_faqs").notNull().default("true"),

@@ -549,11 +549,11 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
 
   return (
     <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-5">
-      <Button variant="ghost" size="sm" onClick={() => setLocation(id ? `/admin/whatsapp-campaign-automations/${id}` : "/admin/whatsapp-campaign-automations")}>
-        <ArrowLeft className="h-4 w-4 mr-1" /> Back to automations
+      <Button variant="ghost" size="sm" onClick={() => setLocation(id ? `/admin/whatsapp-campaign-automations/${id}` : "/admin/whatsapp-campaigns?view=repeating")}>
+        <ArrowLeft className="h-4 w-4 mr-1" /> Back to repeating campaigns
       </Button>
       <div>
-        <h1 className="text-2xl font-bold">{id ? "Edit WhatsApp automation" : "New WhatsApp automation"}</h1>
+        <h1 className="text-2xl font-bold">{id ? "Edit repeat schedule" : "New repeat schedule"}</h1>
         <p className="text-sm text-gray-600 mt-1">
           Choose the campaign to repeat, then decide who is included each day and when it sends.
         </p>
@@ -1169,7 +1169,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
       </Section>
 
       <div className="flex justify-end gap-2 pb-6">
-        <Button variant="outline" onClick={() => setLocation("/admin/whatsapp-campaign-automations")}>Cancel</Button>
+        <Button variant="outline" onClick={() => setLocation("/admin/whatsapp-campaigns?view=repeating")}>Cancel</Button>
         <Button
           disabled={
             saveMutation.isPending

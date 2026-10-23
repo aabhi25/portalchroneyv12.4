@@ -2670,7 +2670,10 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     senderPhone: string,
     message: string,
     prefetchedSession?: WhatsappFlowSession | null,
-    isInteractive?: boolean
+    isInteractive?: boolean,
+    /** forceStart: a campaign handed this reply to the journey, so start it even if it is
+     *  keyword-triggered or this person finished it before. Never interrupts a running session. */
+    opts?: { forceStart?: boolean }
   ): Promise<ProcessResult> {
     const startTime = Date.now();
     console.log(`[WhatsApp Flow] Processing message from ${senderPhone}: "${message}"`);
@@ -2731,13 +2734,15 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     }
 
     if (!session) {
-      if (triggerKeyword) {
+      if (opts?.forceStart) {
+        console.log(`[WhatsApp Flow] Campaign reply hands ${senderPhone} to the journey — starting it`);
+      } else if (triggerKeyword) {
         console.log(`[WhatsApp Flow] Message doesn't match trigger keyword "${triggerKeyword}"`);
         console.log(`[WhatsApp Flow] [Timing] processMessage total: ${Date.now() - startTime}ms`);
         return { handled: false, shouldFallbackToAI: activeFlow.fallbackToAI === "true" };
       }
 
-      const hasCompletedSession = await this.hasCompletedSession(businessAccountId, activeFlow.id, senderPhone);
+      const hasCompletedSession = !opts?.forceStart && await this.hasCompletedSession(businessAccountId, activeFlow.id, senderPhone);
       if (hasCompletedSession && activeFlow.repeatMode !== "loop") {
         console.log(`[WhatsApp Flow] User ${senderPhone} already completed flow — falling through to AI`);
         console.log(`[WhatsApp Flow] [Timing] processMessage total: ${Date.now() - startTime}ms`);

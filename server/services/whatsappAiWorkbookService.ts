@@ -1353,6 +1353,8 @@ export const whatsappAiWorkbookService = {
       nameColumn?: string;
       groupName?: string;
       resultMappings?: unknown;
+      /** Only these columns are copied onto each person (all when absent). What isn't copied, the campaign can't use. */
+      includeColumns?: string[];
     },
   ) {
     const workbook = await this.get(businessAccountId, workbookId);
@@ -1370,6 +1372,7 @@ export const whatsappAiWorkbookService = {
     if (rows.length === 0) throw new Error("Select at least one workbook row");
     if (rows.length > 10_000) throw new Error("A workbook audience can contain at most 10,000 rows");
 
+    const include = Array.isArray(input.includeColumns) ? new Set(input.includeColumns.map(String)) : null;
     const valid = new Map<string, AiWorkbookRow>();
     for (const row of rows) {
       const phone = normalizePhone(String(row.values[phoneColumn] || ""));
@@ -1387,6 +1390,7 @@ export const whatsappAiWorkbookService = {
         const attributes: Record<string, string> = {};
         for (const col of sheet.columns) {
           if (col.key === phoneColumn || col.key === nameColumn) continue;
+          if (include && !include.has(col.key)) continue;
           const value = row.values[col.key];
           if (value !== null && value !== undefined && String(value).trim() !== "") attributes[col.key] = String(value);
         }

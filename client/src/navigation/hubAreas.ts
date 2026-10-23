@@ -89,6 +89,11 @@ export interface HubTab {
   formerly?: string;
 }
 
+/** Tabs (or pills) this account can see. */
+export function visibleItems(items: HubTab[], access: HubAccess): HubTab[] {
+  return items.filter(t => (t.visible ? t.visible(access) : true));
+}
+
 export interface HubSettingsItem {
   key: string;
   label: string;
@@ -164,6 +169,25 @@ const WHATSAPP_JOURNEY_ITEMS: HubTab[] = [
   { key: "stores", label: "Dealers & stores", href: "/admin/whatsapp-dealers-stores", matches: exact("/admin/whatsapp-dealers-stores"), formerly: "Dealers, stores & EMI" },
 ];
 
+/** One inbox: chats people started, and replies to your campaigns. */
+const WHATSAPP_CONVERSATION_ITEMS: HubTab[] = [
+  { key: "incoming", label: "Incoming chats", href: "/admin/whatsapp-conversations", matches: exact("/admin/whatsapp-conversations") },
+  {
+    key: "campaign-replies", label: "Campaign replies", href: "/admin/whatsapp-campaign-conversations",
+    matches: l => l.startsWith("/admin/whatsapp-campaign-conversations") || l === "/admin/whatsapp-campaign-replies",
+    visible: a => a.whatsappMarketing, formerly: "Campaigns › Campaign replies",
+  },
+];
+
+/** One place for numbers: incoming messages, and how campaigns did. */
+const WHATSAPP_INSIGHT_ITEMS: HubTab[] = [
+  { key: "incoming", label: "Incoming", href: "/admin/wa-insights", matches: exact("/admin/wa-insights") },
+  {
+    key: "campaign-results", label: "Campaigns", href: "/admin/whatsapp-campaign-results", matches: exact("/admin/whatsapp-campaign-results"),
+    visible: a => a.whatsappMarketing, formerly: "Campaign results · Campaigns › Results",
+  },
+];
+
 export const HUB_AREAS: HubArea[] = [
   {
     id: "leads",
@@ -229,15 +253,17 @@ export const HUB_AREAS: HubArea[] = [
     visible: a => a.whatsapp,
     tabs: [
       { key: "overview", label: "Overview", href: "/admin/whatsapp/overview", matches: l => l === "/admin/whatsapp/overview" || l.startsWith("/admin/whatsapp-hub") },
-      { key: "conversations", label: "Conversations", href: "/admin/whatsapp-conversations", matches: exact("/admin/whatsapp-conversations") },
+      { key: "conversations", label: "Conversations", href: "/admin/whatsapp-conversations", matches: l => WHATSAPP_CONVERSATION_ITEMS.some(i => i.matches(l)) },
       { key: "leads", label: "Leads", href: "/admin/whatsapp-leads", matches: exact("/admin/whatsapp-leads") },
       { key: "journeys", label: "Journeys", href: "/admin/whatsapp-flows", matches: l => WHATSAPP_JOURNEY_ITEMS.some(i => i.matches(l)) },
       { key: "campaigns", label: "Campaigns", href: "/admin/whatsapp-campaigns", matches: l => WHATSAPP_CAMPAIGN_ITEMS.some(i => i.matches(l)), visible: a => a.whatsappMarketing },
-      { key: "insights", label: "Insights", href: "/admin/wa-insights", matches: exact("/admin/wa-insights") },
+      { key: "insights", label: "Insights", href: "/admin/wa-insights", matches: l => WHATSAPP_INSIGHT_ITEMS.some(i => i.matches(l)) },
       settingsTab("whatsapp"),
     ],
     sections: [
+      { tabKey: "conversations", items: WHATSAPP_CONVERSATION_ITEMS },
       { tabKey: "journeys", items: WHATSAPP_JOURNEY_ITEMS },
+      { tabKey: "insights", items: WHATSAPP_INSIGHT_ITEMS },
       { tabKey: "campaigns", items: WHATSAPP_CAMPAIGN_ITEMS },
     ],
     settings: [
@@ -401,7 +427,7 @@ export function hubArea(id: HubAreaId): HubArea {
 }
 
 export function visibleTabs(area: HubArea, access: HubAccess): HubTab[] {
-  return area.tabs.filter(t => (t.visible ? t.visible(access) : true) && (t.key !== "settings" || visibleSettings(area, access).length > 0 || area.id === "calls"));
+  return visibleItems(area.tabs, access).filter(t => (t.key !== "settings" || visibleSettings(area, access).length > 0 || area.id === "calls"));
 }
 
 export function visibleSettings(area: HubArea, access: HubAccess): HubSettingsItem[] {

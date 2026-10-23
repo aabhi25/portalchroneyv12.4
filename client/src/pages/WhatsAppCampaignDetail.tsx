@@ -52,7 +52,7 @@ interface Campaign {
   templateId: string; templateParams: string[] | null; groupIds: string[] | null;
   totalRecipients: number; sentCount: number; failedCount: number; repliedCount: number; optedOutCount: number;
   scheduledAt: string | null; startedAt: string | null; completedAt: string | null;
-  aiEnabled: string; aiAgentName: string;
+  aiEnabled: string; aiAgentName: string; replyStartsJourney?: string;
   aiSystemPrompt: string | null; aiUseFaqs: string; aiUseDocs: string; aiUseProducts: string;
   replyClassifications?: ReplyClassification[] | null;
 }
@@ -334,7 +334,7 @@ export default function WhatsAppCampaignDetail() {
           )}
           {campaign.campaignType === "automation" && campaign.status === "draft" ? (
             <Button onClick={() => setLocation(`/admin/whatsapp-campaign-automations/new?campaign=${campaign.id}`)}>
-              Set up automation
+              Set up schedule
             </Button>
           ) : (campaign.status === "draft" || campaign.status === "scheduled") && (
             <Button onClick={() => setConfirmAction("send")} disabled={sendMutation.isPending}>
@@ -430,7 +430,7 @@ export default function WhatsAppCampaignDetail() {
             </ConfigRow>
             <ConfigRow label="Audiences">
               {campaign.campaignType === "automation"
-                ? <span className="text-violet-700 font-normal">Selected in Automations</span>
+                ? <span className="text-violet-700 font-normal">Chosen in its schedule</span>
                 : targetGroups.length === 0 ? NOT_SET : (
                 <span className="flex flex-wrap gap-1 justify-end">
                   {targetGroups.map(g => (
@@ -455,15 +455,15 @@ export default function WhatsAppCampaignDetail() {
             )}
             <ConfigRow label="Schedule">
               {campaign.campaignType === "automation"
-                ? <span className="text-violet-700 font-normal">Recurring timing is set in Automations</span>
+                ? <span className="text-violet-700 font-normal">Timing is set in its schedule</span>
                 : campaign.scheduledAt
                 ? new Date(campaign.scheduledAt).toLocaleString()
                 : <span className="text-gray-500 font-normal">Send manually</span>}
             </ConfigRow>
-            <ConfigRow label="AI replies">
+            <ConfigRow label="When people reply">
               {campaign.aiEnabled === "false"
-                ? <span className="text-gray-500 font-normal">Off</span>
-                : <span className="text-indigo-700">On · {campaign.aiAgentName || "Sales Agent"}</span>}
+                ? <span className="text-gray-700 font-normal">{campaign.replyStartsJourney === "true" ? "Your journey starts" : "Your usual WhatsApp replies"}</span>
+                : <span className="text-indigo-700">This campaign's AI · {campaign.aiAgentName || "Sales Agent"}</span>}
             </ConfigRow>
             {campaign.aiEnabled !== "false" && (
               <ConfigRow label="Knowledge sources">

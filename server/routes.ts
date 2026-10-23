@@ -30716,6 +30716,9 @@ Return ONLY a valid JSON object in this format:
           // Customers NOT in any active campaign fall through to the
           // existing flow/auto-reply path unchanged.
           // ============================================================
+          // Set when this is someone's first reply to a campaign that hands replies to the journey:
+          // the journey then starts even if it is keyword-triggered or they finished it before.
+          let campaignStartsJourney = false;
           if (businessAccount.whatsappMarketingEnabled === "true") {
             try {
               const { marketingCampaignService, recordOptOut } = await import("./services/marketingCampaignService");
@@ -30752,6 +30755,7 @@ Return ONLY a valid JSON object in this format:
               // campaigns produced no record at all.
               if (recipientCtx && recipientCtx.campaign.aiEnabled !== "true") {
                 console.log(`[MSG91 Webhook] Campaign ${recipientCtx.campaign.id} owns conversation with ${senderPhone} (AI replies off) — recording reply, falling through to normal flow`);
+                campaignStartsJourney = recipientCtx.campaign.replyStartsJourney === "true" && !recipientCtx.recipient.firstReplyAt;
                 await marketingCampaignService.recordInbound(
                   recipientCtx.campaign.id,
                   recipientCtx.recipient.id,
@@ -30840,7 +30844,7 @@ Return ONLY a valid JSON object in this format:
                 flowResult = await whatsappFlowService.processPdfPassword(businessId, senderPhone, text);
               }
             } else {
-              flowResult = await whatsappFlowService.processMessage(businessId, senderPhone, text, pendingSession);
+              flowResult = await whatsappFlowService.processMessage(businessId, senderPhone, text, pendingSession, undefined, { forceStart: campaignStartsJourney });
             }
             return { pendingSession, flowResult };
           });
@@ -31613,12 +31617,14 @@ Return ONLY a valid JSON object in this format:
           // We mirror the same gate here so button replies are recorded in
           // the campaign transcript and the AI can respond to them.
           // ============================================================
+          let campaignStartsJourney = false;
           if (businessAccount.whatsappMarketingEnabled === "true" && interactiveText) {
             try {
               const { marketingCampaignService } = await import("./services/marketingCampaignService");
               const recipientCtx = await marketingCampaignService.findActiveRecipientForInbound(businessId, senderPhone);
               if (recipientCtx) {
                 console.log(`[MSG91 Webhook] Campaign ${recipientCtx.campaign.id} owns interactive reply from ${senderPhone}: "${interactiveText}"`);
+                const isFirstReply = !recipientCtx.recipient.firstReplyAt;
                 await marketingCampaignService.recordInbound(
                   recipientCtx.campaign.id,
                   recipientCtx.recipient.id,
@@ -31651,7 +31657,9 @@ Return ONLY a valid JSON object in this format:
                   })();
                   return;
                 }
-                return res.json({ status: "received", note: "campaign_interactive" });
+                // AI replies off: the tap goes on to the usual WhatsApp replies, the same as a typed
+                // reply does (it used to stop here, so a button tap got no answer at all).
+                campaignStartsJourney = recipientCtx.campaign.replyStartsJourney === "true" && isFirstReply;
               }
             } catch (err) {
               console.error("[MSG91 Webhook] Campaign ownership gate error (interactive):", err);
@@ -31683,7 +31691,7 @@ Return ONLY a valid JSON object in this format:
                 return whatsappFlowService.processPdfPassword(businessId, senderPhone, interactiveText);
               }
               console.log("[MSG91 Webhook] Processing interactive response through flow:", interactiveText);
-              return whatsappFlowService.processMessage(businessId, senderPhone, interactiveText, pendingSession, true);
+              return whatsappFlowService.processMessage(businessId, senderPhone, interactiveText, pendingSession, true, { forceStart: campaignStartsJourney });
             });
             flowSessionId = flowResult.sessionId;
           }

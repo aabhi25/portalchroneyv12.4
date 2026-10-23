@@ -13,7 +13,6 @@ import WhatsAppHub from "@/components/whatsapp/WhatsAppHub";
 import type { HubAreaId } from "@/navigation/hubAreas";
 import AdminProducts from "@/pages/AdminProducts";
 import WhatsAppCampaigns from "@/pages/WhatsAppCampaigns";
-import WhatsAppCampaignAutomations from "@/pages/WhatsAppCampaignAutomations";
 import WhatsAppCampaignAutomationForm from "@/pages/WhatsAppCampaignAutomationForm";
 import WhatsAppCampaignAutomationDetail from "@/pages/WhatsAppCampaignAutomationDetail";
 import WhatsAppNewCampaign from "@/pages/WhatsAppNewCampaign";
@@ -412,7 +411,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                  <Route path="/admin/whatsapp-campaign-automations/new">{() => <RequireWhatsappMarketing><WhatsAppCampaignAutomationForm /></RequireWhatsappMarketing>}</Route>
                  <Route path="/admin/whatsapp-campaign-automations/:id/edit">{({ id }) => <RequireWhatsappMarketing><WhatsAppCampaignAutomationForm id={id} /></RequireWhatsappMarketing>}</Route>
                  <Route path="/admin/whatsapp-campaign-automations/:id">{({ id }) => <RequireWhatsappMarketing><WhatsAppCampaignAutomationDetail id={id} /></RequireWhatsappMarketing>}</Route>
-                 <Route path="/admin/whatsapp-campaign-automations">{() => <RequireWhatsappMarketing><WhatsAppCampaignAutomations /></RequireWhatsappMarketing>}</Route>
+                 {/* Repeating campaigns are a view of the Campaigns list now. */}
+                 <Route path="/admin/whatsapp-campaign-automations"><Redirect to="/admin/whatsapp-campaigns?view=repeating" /></Route>
                 <Route path="/admin/whatsapp-campaigns/new">{() => <RequireWhatsappMarketing><WhatsAppNewCampaign /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-campaigns/:id/edit">{() => <RequireWhatsappMarketing><WhatsAppEditCampaign /></RequireWhatsappMarketing>}</Route>
                 <Route path="/admin/whatsapp-campaigns/:id">{() => <RequireWhatsappMarketing><WhatsAppCampaignDetail /></RequireWhatsappMarketing>}</Route>

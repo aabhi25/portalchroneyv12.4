@@ -207,15 +207,10 @@ const LEAD_GEN_ITEMS: WhatsappNavItem[] = [
 // is the tab's default entry; while nothing has been sent it shows the getting-started steps
 // (audience, template, first campaign) above the list.
 //
-// Replies, Results and Automations are reached from the Campaigns screen rather than having a
-// pill each: they are views of campaigns, not separate jobs. Opt-outs are a list of people, so
-// they sit under Audiences as the "Do not message" list.
-const CAMPAIGN_SCREENS_UNDER_CAMPAIGNS = [
-  "/admin/whatsapp-campaign-home",
-  "/admin/whatsapp-campaign-conversations",
-  "/admin/whatsapp-campaign-replies",
-  "/admin/whatsapp-campaign-results",
-];
+// Campaign replies live under Conversations and campaign results under Insights (one inbox, one
+// place for numbers); repeating campaigns are a view of the Campaigns screen. Opt-outs are a list
+// of people, so they sit under Audiences as the "Do not message" list.
+const CAMPAIGN_SCREENS_UNDER_CAMPAIGNS = ["/admin/whatsapp-campaign-home"];
 const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
   {
     key: "campaigns",
@@ -223,7 +218,7 @@ const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
     description: "Send to an audience and let AI handle replies",
     href: "/admin/whatsapp-campaigns",
     icon: Megaphone,
-    formerly: "All campaigns · Campaigns home · Campaign replies · Results · Automations",
+    formerly: "All campaigns · Campaigns home · Automations · Repeating campaigns",
     hubTestId: "card-wa-campaigns",
     sidebarTestId: "link-wa-campaigns",
     gradient: "bg-gradient-to-br from-emerald-500 to-green-600",

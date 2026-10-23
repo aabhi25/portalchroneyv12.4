@@ -11,7 +11,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, Table2, MoreHorizontal, Search, Smartphone, Moon, Loader2, MessageCircle, TrendingUp, CalendarClock } from "lucide-react";
+import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, Table2, MoreHorizontal, Search, Smartphone, Moon, Loader2, CalendarClock } from "lucide-react";
+import WhatsAppCampaignAutomations from "@/pages/WhatsAppCampaignAutomations";
 import { CampaignGettingStarted } from "@/components/whatsapp/CampaignGettingStarted";
 import { STATUS_LABEL, type AudiencePreview } from "@/components/whatsapp/campaignWizard/types";
 import { TestSendDialog } from "@/components/whatsapp/campaignWizard/TestSendDialog";
@@ -61,9 +62,15 @@ const DELETABLE = ["draft", "cancelled", "failed", "completed"];
 
 const statusLabel = (s: string) => STATUS_LABEL[s] || s;
 
+function initialView(): "all" | "repeating" {
+  try { return new URLSearchParams(window.location.search).get("view") === "repeating" ? "repeating" : "all"; } catch { return "all"; }
+}
+
 export default function WhatsAppCampaigns() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  // Repeating campaigns (the old Automations page) are a view of this screen, not a page of their own.
+  const [view, setView] = useState<"all" | "repeating">(initialView);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sort, setSort] = useState<SortKey>("newest");
@@ -171,23 +178,35 @@ export default function WhatsAppCampaigns() {
           </h1>
           <p className="mt-1 text-sm text-gray-600">Send a WhatsApp message to your audiences; AI can answer the replies.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
-          {/* Views across every campaign. They used to be pills of their own under Campaigns. */}
-          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/whatsapp-campaign-conversations")} data-testid="link-campaign-replies">
-            <MessageCircle className="mr-1 h-4 w-4" /> Replies
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/whatsapp-campaign-results")} data-testid="link-campaign-results">
-            <TrendingUp className="mr-1 h-4 w-4" /> Results
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/whatsapp-campaign-automations")} data-testid="link-campaign-automations">
-            <CalendarClock className="mr-1 h-4 w-4" /> Automations
-          </Button>
-          <Button onClick={() => setLocation("/admin/whatsapp-campaigns/new")} data-testid="button-new-campaign">
-            <Plus className="mr-1 h-4 w-4" /> New campaign
-          </Button>
-        </div>
+        <Button onClick={() => setLocation("/admin/whatsapp-campaigns/new")} data-testid="button-new-campaign" className="self-start sm:self-auto">
+          <Plus className="mr-1 h-4 w-4" /> New campaign
+        </Button>
       </div>
 
+      <div className="mb-4 inline-flex rounded-lg bg-black/[0.05] p-1" role="tablist" aria-label="Which campaigns">
+        {([["all", "All campaigns"], ["repeating", "Repeating"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={view === key}
+            onClick={() => {
+              setView(key);
+              try { window.history.replaceState(null, "", key === "repeating" ? "?view=repeating" : window.location.pathname); } catch { /* address bar only */ }
+            }}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors ${view === key ? "bg-white font-semibold text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-900"}`}
+            data-testid={`view-${key}`}
+          >
+            {key === "repeating" && <CalendarClock className="h-4 w-4" />}
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "repeating" ? (
+        <WhatsAppCampaignAutomations embedded />
+      ) : (
+      <>
       <CampaignGettingStarted />
 
       {isLoading ? (
@@ -287,7 +306,7 @@ export default function WhatsAppCampaigns() {
                               <span>{c.campaignType === "automation" ? "Repeats automatically" : "Sent once"}</span>
                               {c.aiEnabled === "true" && <><span className="text-gray-300">•</span><span>AI replies on</span></>}
                               <span className="text-gray-300">•</span>
-                              <span>{c.campaignType === "automation" ? "Contacts set in Automations" : `${c.totalRecipients.toLocaleString()} recipients`}</span>
+                              <span>{c.campaignType === "automation" ? "Contacts set in its schedule" : `${c.totalRecipients.toLocaleString()} recipients`}</span>
                               {c.status === "paused" && c.quietHoursEnd && <><span className="text-gray-300">•</span><span>Continues at {c.quietHoursEnd}</span></>}
                             </div>
                             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
@@ -304,7 +323,7 @@ export default function WhatsAppCampaigns() {
                           <div>
                             {isAutomationDraft ? (
                               <Button size="sm" onClick={() => setLocation(`/admin/whatsapp-campaign-automations/new?campaign=${c.id}`)} data-testid={`button-setup-automation-${c.id}`}>
-                                Set up automation
+                                Set up schedule
                               </Button>
                             ) : (c.status === "draft" || c.status === "scheduled") ? (
                               <Button size="sm" onClick={() => setSendTarget(c)} disabled={sendMutation.isPending} data-testid={`button-send-${c.id}`}>
@@ -366,6 +385,8 @@ export default function WhatsAppCampaigns() {
             </div>
           )}
         </>
+      )}
+      </>
       )}
 
       {/* Send now */}
