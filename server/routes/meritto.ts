@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db";
 import { merittoFieldMappings } from "@shared/schema";
-import { requireAuth, requireBusinessAccount } from "../auth";
+import { requireAuth, requireBusinessAccount, requireIntegrationAdmin } from "../auth";
 import { storage } from "../storage";
 import { decrypt, encrypt } from "../services/encryptionService";
 import { MERITTO_DEFAULT_CREATE_URL, MERITTO_DEFAULT_MAPPINGS, MERITTO_DEFAULT_UPDATE_URL, MerittoService } from "../services/merittoService";
@@ -45,7 +45,7 @@ router.get("/api/meritto/settings", requireAuth, requireBusinessAccount, async (
   }
 });
 
-router.post("/api/meritto/settings", requireAuth, requireBusinessAccount, async (req, res) => {
+router.post("/api/meritto/settings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
   try {
     const businessAccountId = accountOf(req);
     if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
@@ -77,7 +77,7 @@ router.post("/api/meritto/settings", requireAuth, requireBusinessAccount, async 
   }
 });
 
-router.post("/api/meritto/test-connection", requireAuth, requireBusinessAccount, async (req, res) => {
+router.post("/api/meritto/test-connection", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
   try {
     const businessAccountId = accountOf(req);
     if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
@@ -92,7 +92,7 @@ router.post("/api/meritto/test-connection", requireAuth, requireBusinessAccount,
   }
 });
 
-router.get("/api/meritto/field-mappings", requireAuth, requireBusinessAccount, async (req, res) => {
+router.get("/api/meritto/field-mappings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
   try {
     const businessAccountId = accountOf(req);
     if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
@@ -115,7 +115,7 @@ function readMapping(body: any) {
   };
 }
 
-router.post("/api/meritto/field-mappings", requireAuth, requireBusinessAccount, async (req, res) => {
+router.post("/api/meritto/field-mappings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
   try {
     const businessAccountId = accountOf(req);
     if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
@@ -130,7 +130,7 @@ router.post("/api/meritto/field-mappings", requireAuth, requireBusinessAccount, 
   }
 });
 
-router.put("/api/meritto/field-mappings/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+router.put("/api/meritto/field-mappings/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
   try {
     const businessAccountId = accountOf(req);
     if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
@@ -147,7 +147,7 @@ router.put("/api/meritto/field-mappings/:id", requireAuth, requireBusinessAccoun
   }
 });
 
-router.delete("/api/meritto/field-mappings/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+router.delete("/api/meritto/field-mappings/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
   try {
     const businessAccountId = accountOf(req);
     if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
@@ -159,7 +159,7 @@ router.delete("/api/meritto/field-mappings/:id", requireAuth, requireBusinessAcc
 });
 
 // "Standard fields": adds the standard rows that are missing. Custom rows and edited standard rows stay.
-router.post("/api/meritto/field-mappings/seed-defaults", requireAuth, requireBusinessAccount, async (req, res) => {
+router.post("/api/meritto/field-mappings/seed-defaults", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
   try {
     const businessAccountId = accountOf(req);
     if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
@@ -177,7 +177,7 @@ router.post("/api/meritto/field-mappings/seed-defaults", requireAuth, requireBus
 });
 
 // "Copy from LeadSquared": this account's LeadSquared rows as suggested Meritto rows (nothing saved).
-router.get("/api/meritto/field-mappings/from-leadsquared", requireAuth, requireBusinessAccount, async (req, res) => {
+router.get("/api/meritto/field-mappings/from-leadsquared", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
   try {
     const businessAccountId = accountOf(req);
     if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
@@ -193,7 +193,7 @@ router.get("/api/meritto/field-mappings/from-leadsquared", requireAuth, requireB
 
 // Saves the reviewed rows: new names are added; a name that's already a Meritto row is replaced
 // only when the row says so. LeadSquared is not touched.
-router.post("/api/meritto/field-mappings/import", requireAuth, requireBusinessAccount, async (req, res) => {
+router.post("/api/meritto/field-mappings/import", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
   try {
     const businessAccountId = accountOf(req);
     if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });

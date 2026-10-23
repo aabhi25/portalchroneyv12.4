@@ -1,11 +1,9 @@
 import { useLocation } from "wouter";
 import { useInHubFrame } from "@/components/hub/hubContext";
-import { integrationPath } from "@/pages/settings/settingsPaths";
-import { Link2, Sparkles, ClipboardList, Percent, Lightbulb, LayoutGrid, MoreHorizontal } from "lucide-react";
+import { Sparkles, ClipboardList, Percent, Lightbulb, LayoutGrid, MoreHorizontal } from "lucide-react";
 
 const tabs = [
   { label: "More Features", path: "/admin/more", icon: MoreHorizontal },
-  { label: "CRM", path: integrationPath(), icon: Link2, matchPaths: [integrationPath()] },
   { label: "Chroney IQ", path: "/ai-insights", icon: Sparkles },
   { label: "Gaps", path: "/question-bank", icon: ClipboardList },
   { label: "Smart Discounts", path: "/admin/smart-discounts", icon: Percent },
@@ -23,9 +21,7 @@ export default function MoreFeaturesNavTabs() {
   return (
     <div className="bg-white border-b px-4 py-2 flex items-center gap-1 overflow-x-auto">
       {tabs.map((tab) => {
-        const isActive = tab.matchPaths
-          ? tab.matchPaths.includes(location)
-          : location === tab.path;
+        const isActive = location === tab.path;
         const Icon = tab.icon;
         return (
           <button

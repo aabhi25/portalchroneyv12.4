@@ -135,7 +135,9 @@ export function buildSettingsGroups(user: MeResponseDto | null): SettingsGroup[]
     ],
   });
 
-  if (visibleIntegrationTabs(a.integrations).length > 0) {
+  // Setting up CRMs, Shopify and ERP is done by Chroney (super admins viewing as the account);
+  // business users only see each lead's CRM status and Sync buttons, under Leads.
+  if (a.activeBusinessAccountId && visibleIntegrationTabs(a.integrations).length > 0) {
     const access = a.integrations;
     groups.push({
       id: "integrations",
@@ -150,6 +152,7 @@ export function buildSettingsGroups(user: MeResponseDto | null): SettingsGroup[]
           icon: Link2,
           path: SETTINGS_PATHS.integrations,
           matchPrefix: true,
+          superAdminOnly: true,
           render: () => <IntegrationsSettings access={access} />,
         },
       ],

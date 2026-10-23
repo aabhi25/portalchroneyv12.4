@@ -139,6 +139,20 @@ export function requireRole(...allowedRoles: string[]) {
   };
 }
 
+/**
+ * Setting up connected apps (CRMs, ERP) is done by Chroney: only super admins, who reach a
+ * business's routes while viewing as it. Business users keep read-only status and Sync buttons.
+ */
+export function requireIntegrationAdmin(req: Request, res: Response, next: NextFunction) {
+  if (!req.user) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+  if (req.user.role !== "super_admin") {
+    return res.status(403).json({ error: "Connected apps are set up by the Chroney team. Please contact them to change these settings." });
+  }
+  next();
+}
+
 // Middleware to ensure business user only accesses their own data
 export function requireBusinessAccount(req: Request, res: Response, next: NextFunction) {
   if (!req.user) {

@@ -21,6 +21,7 @@ import {
   requireAuth,
   requireRole,
   requireBusinessAccount,
+  requireIntegrationAdmin,
   updateSessionActiveAccount,
   requireGroupAdmin,
   getGroupAdminAssignments,
@@ -17453,7 +17454,7 @@ Important:
   // LeadSquared CRM Integration Endpoints
   
   // Test LeadSquared connection
-  app.post("/api/leadsquared/test-connection", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/leadsquared/test-connection", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -17548,7 +17549,7 @@ Important:
   });
   
   // Save LeadSquared settings
-  app.post("/api/leadsquared/settings", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/leadsquared/settings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -17629,7 +17630,7 @@ Important:
 
   // UDS: build the JSON payload this account would send, using sample values.
   // Nothing is sent; this is what the client's UDS flow maps from.
-  app.get("/api/leadsquared/uds/sample-payload", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.get("/api/leadsquared/uds/sample-payload", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user!.businessAccountId!;
       const [fieldMappings, businessAccount] = await Promise.all([
@@ -17654,7 +17655,7 @@ Important:
 
   // UDS: send one clearly-labelled test lead to the webhook (unsaved URL/key in the
   // body take precedence over the saved ones, so it can be tested before saving).
-  app.post("/api/leadsquared/uds/send-test", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/leadsquared/uds/send-test", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user!.businessAccountId!;
       const settings = await storage.getWidgetSettings(businessAccountId);
@@ -17693,7 +17694,7 @@ Important:
   });
 
   // Save LeadSquared AI URL extraction settings
-  app.post("/api/leadsquared/extraction-settings", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/leadsquared/extraction-settings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -17716,7 +17717,7 @@ Important:
   });
   
   // URL Rules CRUD
-  app.get("/api/leadsquared/url-rules", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.get("/api/leadsquared/url-rules", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -17728,7 +17729,7 @@ Important:
     }
   });
 
-  app.post("/api/leadsquared/url-rules", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/leadsquared/url-rules", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -17747,7 +17748,7 @@ Important:
     }
   });
 
-  app.put("/api/leadsquared/url-rules/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.put("/api/leadsquared/url-rules/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -17767,7 +17768,7 @@ Important:
     }
   });
 
-  app.delete("/api/leadsquared/url-rules/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.delete("/api/leadsquared/url-rules/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -17781,7 +17782,7 @@ Important:
   });
 
   // Test AI URL extraction
-  app.post("/api/leadsquared/test-url-extraction", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/leadsquared/test-url-extraction", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -17960,7 +17961,7 @@ Important:
   });
 
   // LeadSquared Field Mappings CRUD
-  app.get("/api/leadsquared/field-mappings", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.get("/api/leadsquared/field-mappings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) {
@@ -17987,7 +17988,7 @@ Important:
 
   // List the distinct CRM field keys configured on this business's journey steps.
   // Used by the LeadSquared mapping UI to offer journey.<key> data sources.
-  app.get("/api/leadsquared/journey-field-keys", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.get("/api/leadsquared/journey-field-keys", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) {
@@ -18014,7 +18015,7 @@ Important:
     }
   });
 
-  app.post("/api/leadsquared/field-mappings", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/leadsquared/field-mappings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) {
@@ -18055,7 +18056,7 @@ Important:
     }
   });
 
-  app.put("/api/leadsquared/field-mappings/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.put("/api/leadsquared/field-mappings/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) {
@@ -18122,7 +18123,7 @@ Important:
     }
   });
 
-  app.delete("/api/leadsquared/field-mappings/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.delete("/api/leadsquared/field-mappings/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) {
@@ -18143,7 +18144,7 @@ Important:
     }
   });
 
-  app.post("/api/leadsquared/field-mappings/seed-defaults", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/leadsquared/field-mappings/seed-defaults", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) {
@@ -18162,7 +18163,7 @@ Important:
   // Salesforce CRM Integration Routes
   // ============================================================
 
-  app.post("/api/salesforce/test-connection", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/salesforce/test-connection", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -18228,7 +18229,7 @@ Important:
     }
   });
 
-  app.post("/api/salesforce/settings", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/salesforce/settings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -18286,7 +18287,7 @@ Important:
     }
   });
 
-  app.get("/api/salesforce/field-mappings", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.get("/api/salesforce/field-mappings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: 'Business account not found' });
@@ -18302,7 +18303,7 @@ Important:
     }
   });
 
-  app.post("/api/salesforce/field-mappings", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/salesforce/field-mappings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: 'Business account not found' });
@@ -18327,7 +18328,7 @@ Important:
     }
   });
 
-  app.put("/api/salesforce/field-mappings/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.put("/api/salesforce/field-mappings/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: 'Business account not found' });
@@ -18356,7 +18357,7 @@ Important:
     }
   });
 
-  app.delete("/api/salesforce/field-mappings/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.delete("/api/salesforce/field-mappings/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: 'Business account not found' });
@@ -18371,7 +18372,7 @@ Important:
     }
   });
 
-  app.post("/api/salesforce/field-mappings/seed-defaults", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/salesforce/field-mappings/seed-defaults", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user?.activeBusinessAccountId || req.user?.businessAccountId;
       if (!businessAccountId) return res.status(400).json({ error: 'Business account not found' });
@@ -18457,7 +18458,7 @@ Important:
     return whatsappService.buildLeadDocumentContext(leadId);
   }
 
-  app.get("/api/custom-crm/available-fields", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.get("/api/custom-crm/available-fields", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -18535,7 +18536,7 @@ Important:
     }
   });
 
-  app.post("/api/custom-crm/field-mappings/sync-from-lead-fields", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/custom-crm/field-mappings/sync-from-lead-fields", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -18748,7 +18749,7 @@ Important:
     }
   });
 
-  app.post("/api/custom-crm/settings", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/custom-crm/settings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -18842,7 +18843,7 @@ Important:
     return [...ipv4Private, ...ipv6Private].some(p => p.test(ip));
   }
 
-  app.post("/api/custom-crm/test-relay", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/custom-crm/test-relay", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const { relayUrl } = req.body;
       if (!relayUrl || typeof relayUrl !== 'string') {
@@ -18908,7 +18909,7 @@ Important:
     }
   });
 
-  app.post("/api/custom-crm/test-connection", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/custom-crm/test-connection", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -18947,7 +18948,7 @@ Important:
     }
   });
 
-  app.get("/api/custom-crm/field-mappings", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.get("/api/custom-crm/field-mappings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -18965,7 +18966,7 @@ Important:
     }
   });
 
-  app.post("/api/custom-crm/field-mappings", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/custom-crm/field-mappings", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -18991,7 +18992,7 @@ Important:
     }
   });
 
-  app.put("/api/custom-crm/field-mappings/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.put("/api/custom-crm/field-mappings/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -19033,7 +19034,7 @@ Important:
     }
   });
 
-  app.delete("/api/custom-crm/field-mappings/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.delete("/api/custom-crm/field-mappings/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -19402,7 +19403,7 @@ Important:
     }
   });
 
-  app.get("/api/custom-crm/store-credentials/export-template", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.get("/api/custom-crm/store-credentials/export-template", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -19577,7 +19578,7 @@ Important:
     }
   });
 
-  app.get("/api/custom-crm/store-credentials", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.get("/api/custom-crm/store-credentials", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -19610,7 +19611,7 @@ Important:
     }
   });
 
-  app.post("/api/custom-crm/store-credentials", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/custom-crm/store-credentials", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -19645,7 +19646,7 @@ Important:
     }
   });
 
-  app.put("/api/custom-crm/store-credentials/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.put("/api/custom-crm/store-credentials/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -19691,7 +19692,7 @@ Important:
     }
   });
 
-  app.delete("/api/custom-crm/store-credentials/:id", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.delete("/api/custom-crm/store-credentials/:id", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -19721,7 +19722,7 @@ Important:
     }
   });
 
-  app.post("/api/custom-crm/store-credentials/bulk-delete", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/custom-crm/store-credentials/bulk-delete", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -19863,7 +19864,7 @@ Important:
     }
   });
 
-  app.post("/api/custom-crm/store-credentials/import", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/custom-crm/store-credentials/import", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const user = req.user!;
       const businessAccountId = user.businessAccountId!;
@@ -20056,7 +20057,7 @@ Important:
     return { step3Options, step4Options, step5Options, stats };
   };
 
-  app.post("/api/custom-crm/master-bulk-upload/preview", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/custom-crm/master-bulk-upload/preview", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user!.businessAccountId!;
       const rows = normalizeMasterRows(req.body?.rows);
@@ -20126,7 +20127,7 @@ Important:
     }
   });
 
-  app.post("/api/custom-crm/master-bulk-upload/apply", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/custom-crm/master-bulk-upload/apply", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const businessAccountId = req.user!.businessAccountId!;
       const { flowId, step3Id, step4Id, step5Id, rows: rawRows, credentials: rawCredentials } = req.body;
@@ -20282,7 +20283,7 @@ Important:
     }
   });
 
-  app.post("/api/custom-crm/store-credentials/ai-map-columns", requireAuth, requireBusinessAccount, async (req, res) => {
+  app.post("/api/custom-crm/store-credentials/ai-map-columns", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
     try {
       const { headers, sampleRows } = req.body;
 

@@ -674,8 +674,8 @@ export default function Settings({ section, embedded = false }: { section?: "acc
           </Card>
         )}
 
-        {/* ERP Integration - Only for Jewelry Showcase users (the Settings hub lists it under Integrations) */}
-        {hasJewelryAccess && !embedded && (
+        {/* ERP Integration - set up by super admins viewing as a Jewelry Showcase account (Connected apps) */}
+        {hasJewelryAccess && !embedded && isSuperAdminImpersonating && (
           <Card className="shadow-lg border-gray-200">
             <CardHeader className="border-b bg-gradient-to-r from-blue-50 to-cyan-50 py-4">
               <CardTitle className="text-base flex items-center gap-2">

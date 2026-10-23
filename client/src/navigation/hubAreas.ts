@@ -204,7 +204,7 @@ export const HUB_AREAS: HubArea[] = [
     settings: [
       { key: "export", label: "Export & phone masking", description: "Who can download leads, and whether phone numbers are partly hidden", icon: EyeOff, group: "Privacy", formerly: "Settings › Lead privacy & data › Lead export & masking" },
       { key: "auto-delete", label: "Auto-delete", description: "How long leads and chats are kept before they are deleted", icon: Clock, group: "Privacy", formerly: "Settings › Lead privacy & data › Data retention" },
-      { key: "crm", label: "Send leads to your CRM", description: "LeadSquared, Salesforce or your own CRM", icon: Link2, group: "Send leads elsewhere", href: SETTINGS_PATHS.integrations, leavesArea: true, formerly: "Settings › CRM & integrations" },
+      { key: "crm", label: "Send leads to your CRM", description: "LeadSquared, Salesforce or your own CRM", icon: Link2, group: "Send leads elsewhere", href: SETTINGS_PATHS.integrations, leavesArea: true, superAdminOnly: true, formerly: "Settings › CRM & integrations" },
     ],
   },
   {
@@ -357,7 +357,7 @@ export const HUB_AREAS: HubArea[] = [
     settings: [
       { key: "look", label: "Look & logo", description: "Vista's colour theme and your brand logo", icon: Palette, group: "Look", formerly: "Settings › Account & password › Vista Customization" },
       { key: "visual-search", label: "Match strictness", description: "How close a photo must be to count as a match", icon: SlidersHorizontal, group: "Search", formerly: "Settings › Other › Visual search" },
-      { key: "erp", label: "ERP product sync", description: "Bring designs in from your ERP", icon: Link2, group: "Stock", href: integrationPath("erp"), leavesArea: true, formerly: "Settings › Integrations › ERP" },
+      { key: "erp", label: "ERP product sync", description: "Bring designs in from your ERP", icon: Link2, group: "Stock", href: integrationPath("erp"), leavesArea: true, superAdminOnly: true, formerly: "Settings › Integrations › ERP" },
     ],
   },
   {

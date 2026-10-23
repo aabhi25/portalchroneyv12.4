@@ -9,7 +9,7 @@ import {
   insertErpConfigurationSchema
 } from "@shared/schema";
 import { eq, and, desc, sql, or } from "drizzle-orm";
-import { requireAuth, requireBusinessAccount } from "../auth";
+import { requireAuth, requireBusinessAccount, requireIntegrationAdmin } from "../auth";
 import { ErpClient, encryptCredentials, decryptCredentials } from "../services/erpClient";
 import { ErpSyncService, createErpSyncService } from "../services/erpSyncService";
 import { createProductProvider } from "../services/productProvider";
@@ -46,7 +46,7 @@ router.get("/api/erp/config", requireAuth, requireBusinessAccount, async (req: R
   }
 });
 
-router.post("/api/erp/config", requireAuth, requireBusinessAccount, async (req: Request, res: Response) => {
+router.post("/api/erp/config", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req: Request, res: Response) => {
   try {
     const businessAccountId = (req as any).businessAccountId;
     const body = req.body;
@@ -125,7 +125,7 @@ router.post("/api/erp/config", requireAuth, requireBusinessAccount, async (req: 
   }
 });
 
-router.post("/api/erp/test-connection", requireAuth, requireBusinessAccount, async (req: Request, res: Response) => {
+router.post("/api/erp/test-connection", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req: Request, res: Response) => {
   try {
     const businessAccountId = (req as any).businessAccountId;
 
@@ -286,7 +286,7 @@ router.get("/api/erp/price-range", requireAuth, requireBusinessAccount, async (r
   }
 });
 
-router.delete("/api/erp/config", requireAuth, requireBusinessAccount, async (req: Request, res: Response) => {
+router.delete("/api/erp/config", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req: Request, res: Response) => {
   try {
     const businessAccountId = (req as any).businessAccountId;
 
