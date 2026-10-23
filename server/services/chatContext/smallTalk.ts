@@ -39,21 +39,25 @@ const THANKS = [
   'thank you', 'thank u', 'thanku', 'thankyou', 'thanks', 'thank', 'thanx', 'thnx', 'thnks', 'thx', 'ty', 'tysm',
   'many thanks', 'much appreciated', 'appreciate it', 'dhanyavad', 'dhanyawad', 'dhanyavaad', 'shukriya', 'shukria',
   'धन्यवाद', 'शुक्रिया',
+  // English said on a Hindi call, as speech-to-text writes it ("ठीक है, थैंक यू।" got "let me check", 2026-10-23).
+  'थैंक यू सो मच', 'थैंक यू वेरी मच', 'थैंक्यू सो मच', 'थैंक्स अ लॉट', 'थैंक यू', 'थैंक्यू', 'थैंकयू', 'थैंक्स', 'थैंक',
 ];
 const BYE = [
   'good night', 'goodnight', 'good bye', 'goodbye', 'bye+', 'byee+', 'see you later', 'see you', 'see ya', 'cya',
   'take care', 'tata', 'alvida', 'gn', 'बाय', 'अलविदा',
+  'गुड नाइट', 'गुड बाय', 'गुडबाय', 'बाय बाय', 'सी यू', 'टेक केयर', 'टाटा',
 ];
 // Words that may accompany any of the above ("hi there", "hello ji", "thanks bro").
 const FILLER = [
   'there', 'ji', 'bro', 'bhai', 'buddy', 'dear', 'sir', 'maam', 'mam', 'madam', 'team', 'all', 'guys',
   'friend', 'dude', 'everyone', 'again', 'once again', 'very', 'so', 'much', 'a lot', 'and', 'oh', 'ah', 'ha', 'haha',
+  'जी', 'सर', 'मैम', 'मैडम', 'भाई', 'बहुत', 'और',
 ];
 // Acknowledgements and one-word answers: small talk only when the assistant did not
 // just ask something ("evening" may answer "When should we call you?").
 const ACK = [
   'fine', 'good', 'morning', 'evening', 'later',
-  'ठीक है', 'अच्छा', 'ओके',
+  'ठीक है', 'अच्छा', 'ओके', 'ओकेय', 'ओक', 'कूल', 'ग्रेट', 'नाइस', 'परफेक्ट', 'ऑलराइट', 'गॉट इट',
   'okay', 'okk+', 'ok+', 'okie', 'k', 'kk', 'cool', 'great', 'nice', 'awesome', 'perfect', 'alright', 'all right',
   'got it', 'noted', 'theek hai', 'thik hai', 'theek', 'thik', 'achha', 'accha', 'acha', 'hmm+', 'hm+',
 ];
@@ -134,7 +138,7 @@ export function isConversationMeta(message: string): boolean {
  * call these skip the knowledge search (up to 1.4 s on simulated calls, 2026-10-17) — the reply
  * moves the call on from what is already known. Anything naming a topic is not bare.
  */
-const BARE_ACK_WORD = new RegExp(String.raw`^(yes|yeah|yep|yup|ya|sure|ok|okay|okey|alright|all|right|fine|cool|great|good|go|ahead|please|tell|me|carry|on|continue|thanks|thank|you|so|much|that|sounds|nice|perfect|le|lo|lijiye|haan|han|ha|hanji|ji|jee|haanji|achha|acha|accha|theek|thik|hai|hain|bataiye|batao|bataie|boliye|bolo|bolie|kahiye|zaroor|jarur|bilkul|shukriya|dhanyavaad|dhanyawad|हाँ|हां|जी|अच्छा|ठीक|है|बताइए|बताइये|बताओ|बोलिए|बोलो|कहिए|ज़रूर|जरूर|बिल्कुल|शुक्रिया|धन्यवाद|ओके|हैं|ले|लो|लीजिए)$`, "i");
+const BARE_ACK_WORD = new RegExp(String.raw`^(yes|yeah|yep|yup|ya|sure|ok|okay|okey|alright|all|right|fine|cool|great|good|go|ahead|please|tell|me|carry|on|continue|thanks|thank|you|so|much|that|sounds|nice|perfect|le|lo|lijiye|haan|han|ha|hanji|ji|jee|haanji|achha|acha|accha|theek|thik|hai|hain|bataiye|batao|bataie|boliye|bolo|bolie|kahiye|zaroor|jarur|bilkul|shukriya|dhanyavaad|dhanyawad|हाँ|हां|जी|अच्छा|ठीक|है|बताइए|बताइये|बताओ|बोलिए|बोलो|कहिए|ज़रूर|जरूर|बिल्कुल|शुक्रिया|धन्यवाद|ओके|हैं|ले|लो|लीजिए|थैंक|थैंक्स|थैंक्यू|यू|सो|मच|ग्रेट|परफेक्ट)$`, "i");
 export function isBareAcknowledgement(message: string): boolean {
   const words = String(message || "").toLowerCase().replace(/[’']/g, "").split(/[\s,.!?।-]+/).filter(Boolean);
   return words.length > 0 && words.length <= 6 && words.every((w) => BARE_ACK_WORD.test(w));
