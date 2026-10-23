@@ -138,6 +138,8 @@ interface LiveSession {
   nudgedAtMs: number | null;
   /** When the visitor tapped the hand-off button (kept when the session's record is closed). */
   handoffAt: string | null;
+  /** Last time the visitor spoke or tapped (not the avatar's own speech). */
+  lastVisitorMs: number;
 }
 
 export interface StartSessionResult {
@@ -415,6 +417,7 @@ export class AvatarSessionManager {
       video,
       nudgedAtMs: null,
       handoffAt: null,
+      lastVisitorMs: 0,
     };
     this.live.set(live.id, live);
     handle.onEvent((event) => this.handleProviderEvent(live, event));
@@ -561,9 +564,12 @@ export class AvatarSessionManager {
     live.handle.interrupt?.();
   }
 
-  touch(sessionId: string): void {
+  /** Activity on the call; `byVisitor` when the visitor spoke or tapped (not the avatar's own audio). */
+  touch(sessionId: string, byVisitor = false): void {
     const live = this.live.get(sessionId);
-    if (live) live.lastActivityMs = this.now();
+    if (!live) return;
+    live.lastActivityMs = this.now();
+    if (byVisitor) live.lastVisitorMs = live.lastActivityMs;
   }
 
   /** The visitor finished hearing an answer: a pending "end after answer" can run now. */
@@ -713,12 +719,13 @@ export class AvatarSessionManager {
         if (!answering && live.video?.idleNudge && live.nudgedAtMs == null && live.voice?.speak
           && now - live.lastActivityMs >= live.idleTimeoutMs - nudgeLeadMs) {
           live.nudgedAtMs = now;
-          // The visitor gets the lead time to answer (the call isn't made longer than the idle limit allows).
-          live.lastActivityMs = now - (live.idleTimeoutMs - nudgeLeadMs);
+          live.lastActivityMs = now; // the short wait below runs from the nudge (and its playback)
           live.voice.speak(IDLE_NUDGE_TEXT);
           continue;
         }
-        if (!answering && now - live.lastActivityMs >= live.idleTimeoutMs) {
+        // After the nudge (and no answer from the visitor): only the lead time, counted from when it finished playing.
+        const waitMs = live.nudgedAtMs != null && live.lastVisitorMs < live.nudgedAtMs ? nudgeLeadMs : live.idleTimeoutMs;
+        if (!answering && now - live.lastActivityMs >= waitMs) {
           live.voice?.notify({ type: "avatar_ending", reason: "idle_timeout" });
           void this.endSession(live.id, "idle_timeout");
         }

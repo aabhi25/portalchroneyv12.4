@@ -509,6 +509,23 @@ async function main() {
       await avatarSessionManager.tick();
       await until(async () => (await rowOf(vid)).endReason === "idle_timeout");
       expect((await rowOf(vid)).endReason === "idle_timeout", "…no answer → ends (idle_timeout), not made longer than the idle limit");
+      // (on the second account, so the first one's monthly minutes stay as the checks below expect)
+      await call("PUT", `/api/super-admin/avatar/accounts/${K}`, cSup, { idleTimeoutSeconds: 20 });
+      const vid2 = (await avatarSessionManager.startSession({ businessAccountId: K, visitorId: "widget_video2" })).sessionId;
+      await avatarSessionManager.markConnected(vid2, { businessAccountId: K, visitorId: "widget_video2" }, { firstFrameMs: 1500 });
+      avatarSessionManager.bindVoice(vid2, { businessAccountId: K, visitorId: "widget_video2" }, {
+        conversationId: `conv-${vid2}`, notify: () => {}, isAnswerActive: () => false, onEnded: () => {}, speak: (t) => spoken.push(t),
+      });
+      avatarSessionManager.touch(vid2);
+      clock += 11_000;
+      await avatarSessionManager.heartbeat(vid2, { businessAccountId: K, visitorId: "widget_video2" });
+      await avatarSessionManager.tick();
+      avatarSessionManager.touch(vid2, true); // the visitor answers the nudge
+      clock += 15_000;
+      await avatarSessionManager.heartbeat(vid2, { businessAccountId: K, visitorId: "widget_video2" });
+      await avatarSessionManager.tick();
+      expect(avatarSessionManager.isLive(vid2) && spoken.length === 2, "visitor answered the nudge → the normal idle wait applies again", spoken.length);
+      await avatarSessionManager.endSession(vid2, "visitor_closed");
 
       // Hand-off taps are counted, and kept when the call ends.
       const hid = await startFor("widget_handoff");

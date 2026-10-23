@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ChevronDown, Loader2, Video } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -113,12 +113,20 @@ export function VideoCallSettingsCard({ endpoint, accountId }: { endpoint: strin
   });
   const [form, setForm] = useState<VideoCallSettings | null>(null);
   const [voiceOpen, setVoiceOpen] = useState(false);
-  useEffect(() => { if (data) setForm(data.settings); }, [data]);
+  // A refetch (e.g. on window focus) refreshes the form only while it has no unsaved changes.
+  const loadedRef = useRef<VideoCallSettings | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    setForm((f) => (!f || !loadedRef.current || JSON.stringify(f) === JSON.stringify(loadedRef.current) ? data.settings : f));
+    loadedRef.current = data.settings;
+  }, [data]);
   const voiceName = useVoiceName(form?.voiceSelection ?? data?.widgetVoice, accountId);
 
   const save = useMutation({
     mutationFn: (settings: VideoCallSettings) => apiRequest<VideoCallView>("PUT", endpoint, settings),
     onSuccess: (view) => {
+      loadedRef.current = view.settings;
+      setForm(view.settings);
       queryClient.setQueryData([endpoint], view);
       toast({ title: "Video call settings saved" });
     },

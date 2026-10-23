@@ -62,6 +62,8 @@ import type { TutorLanguage } from './services/tutor/lessonPlanner';
  * would under-report voice spend by roughly 50x.
  */
 const REALTIME_MODEL = 'gpt-realtime-2.1-mini';
+/** Voices the Realtime session accepts (OpenAI's error lists them). */
+const REALTIME_SESSION_VOICES = new Set(['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar']);
 const VOICE_INTENT_ROUTER_MODEL = 'gpt-4o-mini';
 // The curriculum lookup now runs in parallel with the router, so the router's
 // own wait is the only thing on the critical path — keep it short.
@@ -132,7 +134,7 @@ export interface AvatarVoiceBridge {
   sendAudio(sessionId: string, pcm: Buffer): boolean;
   endOfSpeech(sessionId: string): void;
   interrupt(sessionId: string): void;
-  touch(sessionId: string): void;
+  touch(sessionId: string, byVisitor?: boolean): void;
   answerFinished(sessionId: string): void;
   endSession(sessionId: string, reason: AvatarEndReason): Promise<void>;
 }
@@ -400,6 +402,8 @@ interface VoiceConversation {
   openaiAudioFallbackBuffer?: Buffer[];
   /** The avatar's spoken intro is being synthesised (filler preparation waits for it). */
   avatarIntroSpeaking?: boolean;
+  /** When the avatar's introduction / idle nudge will have finished playing (its audio is sent faster than it is spoken). */
+  avatarSpeechEndsAt?: number;
   // In-flight ElevenLabs synth tracking. Only one synth may be streaming
   // PCM bytes to the client at any time — overlapping streams interleave
   // their bytes on the same WebSocket and decode as garbled audio.
@@ -1036,7 +1040,7 @@ export class RealtimeVoiceService {
   private markUserActive(conversation: VoiceConversation): void {
     conversation.lastUserSpeechAt = Date.now();
     conversation.idleNudgedAt = undefined;
-    if (conversation.avatar) this.deps.avatar?.touch(conversation.avatar.sessionId);
+    if (conversation.avatar) this.deps.avatar?.touch(conversation.avatar.sessionId, true);
   }
 
   // ---------------------------------------------------------------------------
@@ -1131,7 +1135,8 @@ export class RealtimeVoiceService {
         }
         this.sendToClient(conversation.clientWs, msg);
       },
-      isAnswerActive: () => conversation.isProcessing || this.isAnswerActive(conversation),
+      isAnswerActive: () => conversation.isProcessing || this.isAnswerActive(conversation)
+        || !!conversation.avatarIntroSpeaking || Date.now() < (conversation.avatarSpeechEndsAt || 0),
       onEnded: (reason) => {
         if (conversation.avatar?.sessionId === sessionId) this.detachAvatar(conversation, reason);
       },
@@ -1278,10 +1283,18 @@ export class RealtimeVoiceService {
     this.sendToClient(conversation.clientWs, { type: 'voice_message_start', responseId });
     this.sendToClient(conversation.clientWs, { type: 'answer_delta', responseId, display: text, speech: text, index: 0 });
     const { primary, fallback } = this.createTtsProviders(conversation);
+    // 24 kHz 16-bit PCM = 48 bytes per ms. Playback starts with the first chunk; ~2 s for the avatar to render.
+    let firstChunkAt = 0;
+    let audioBytes = 0;
     const pipeline = new SentenceTtsPipeline({
       primary,
       fallback,
-      sendAudio: (pcm) => this.sendAnswerAudio(conversation, pcm),
+      sendAudio: (pcm) => {
+        if (!firstChunkAt) firstChunkAt = Date.now();
+        audioBytes += pcm.length;
+        conversation.avatarSpeechEndsAt = firstChunkAt + audioBytes / 48 + 2000;
+        this.sendAnswerAudio(conversation, pcm);
+      },
       // The visitor spoke first: drop the rest of the intro.
       isCancelled: () => conversation.clientWs.readyState !== WebSocket.OPEN || (conversation.lastUserSpeechAt || 0) > startedAt,
       onProviderFailure: (provider, error) => {
@@ -2137,7 +2150,9 @@ export class RealtimeVoiceService {
         const appointmentsEnabled = businessAccount?.appointmentsEnabled || false;
 
         const useElevenLabs = !!conversation.elevenlabsApiKey && !!conversation.elevenlabsVoiceId;
-        const openaiVoice = (useElevenLabs || isElevenLabsVoice(selectedVoice)) ? 'shimmer' : selectedVoice;
+        // The Realtime session only accepts its own voices (our speech pipeline also speaks onyx, nova and
+        // fable); any other value makes OpenAI reject the whole session.update, transcription included.
+        const openaiVoice = (useElevenLabs || isElevenLabsVoice(selectedVoice) || !REALTIME_SESSION_VOICES.has(selectedVoice)) ? 'shimmer' : selectedVoice;
         if (useElevenLabs) {
           console.log('[RealtimeVoice] ElevenLabs TTS active - voice:', selectedVoice, 'voiceId:', conversation.elevenlabsVoiceId);
           // Open the HTTPS connection now (kept alive by fetch) so the first answer doesn't
