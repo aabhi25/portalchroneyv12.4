@@ -7,10 +7,11 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { CheckCircle2, Eye, EyeOff, KeyRound, Loader2, Pencil, Plus, RotateCcw, TableProperties, Trash2, XCircle, Zap } from "lucide-react";
+import { ArrowRight, CheckCircle2, Copy, Eye, EyeOff, KeyRound, Loader2, Pencil, Plus, RotateCcw, TableProperties, Trash2, XCircle, Zap } from "lucide-react";
 
 interface MerittoSettingsData {
   enabled: boolean;
@@ -54,7 +55,31 @@ const SOURCES: { value: string; label: string }[] = [
   { value: "journey", label: "Journey answer (by its \"Saved as\" name)…" },
 ];
 
-const sourceLabel = (m: Mapping) => {
+/** A LeadSquared row offered by "Copy from LeadSquared" (see server/services/merittoImport.ts). */
+interface CopyRow {
+  leadsquaredField: string;
+  displayName: string;
+  merittoField: string;
+  sourceType: "dynamic" | "custom";
+  sourceField: string | null;
+  customValue: string | null;
+  fallbackValue: string | null;
+  isEnabled: boolean;
+  status: "matched" | "check" | "unsupported";
+  note: string | null;
+  existsInMeritto: boolean;
+  /** Reviewer's choices. */
+  include: boolean;
+  replace: boolean;
+}
+
+const COPY_STATUS: Record<CopyRow["status"], { label: string; className: string }> = {
+  matched: { label: "Matched", className: "bg-green-50 text-green-700 border-green-200" },
+  check: { label: "Check name", className: "bg-amber-50 text-amber-800 border-amber-200" },
+  unsupported: { label: "Not available", className: "bg-gray-50 text-gray-600 border-gray-200" },
+};
+
+const sourceLabel = (m: Pick<Mapping, "sourceType" | "sourceField" | "customValue">) => {
   if (m.sourceType === "custom") return `Fixed value: "${m.customValue ?? ""}"`;
   if (m.sourceField?.startsWith("journey.")) return `Journey answer: ${m.sourceField.slice(8)}`;
   return SOURCES.find(s => s.value === m.sourceField)?.label || m.sourceField || "";
@@ -76,6 +101,7 @@ export default function MerittoSettings() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [test, setTest] = useState<{ success: boolean; message: string } | null>(null);
   const [draft, setDraft] = useState<typeof emptyDraft | null>(null);
+  const [copyRows, setCopyRows] = useState<CopyRow[] | null>(null);
 
   useEffect(() => {
     if (settings) { setCreateUrl(settings.createUrl); setUpdateUrl(settings.updateUrl); }
@@ -125,9 +151,44 @@ export default function MerittoSettings() {
     onSuccess: refresh,
   });
   const restoreDefaults = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/meritto/field-mappings/seed-defaults"),
-    onSuccess: () => { refresh(); toast({ title: "Standard Meritto fields restored" }); },
+    mutationFn: () => apiRequest<{ added: string[] }>("POST", "/api/meritto/field-mappings/seed-defaults"),
+    onSuccess: (r) => {
+      refresh();
+      toast(r.added.length
+        ? { title: `Added ${r.added.length} standard field${r.added.length === 1 ? "" : "s"}`, description: r.added.join(", ") }
+        : { title: "All standard fields are already in the list" });
+    },
+    onError: (e: Error) => toast({ title: "Could not add the standard fields", description: e.message, variant: "destructive" }),
   });
+  const openCopy = useMutation({
+    mutationFn: () => apiRequest<{ rows: Omit<CopyRow, "include" | "replace">[] }>("GET", "/api/meritto/field-mappings/from-leadsquared"),
+    onSuccess: (r) => setCopyRows(r.rows.map(row => ({ ...row, include: row.status !== "unsupported", replace: false }))),
+    onError: (e: Error) => toast({ title: "Could not read the LeadSquared fields", description: e.message, variant: "destructive" }),
+  });
+  const runCopy = useMutation({
+    mutationFn: (rows: CopyRow[]) => apiRequest<{ added: number; replaced: number; kept: number }>("POST", "/api/meritto/field-mappings/import", {
+      rows: rows.filter(r => r.include).map(r => ({
+        merittoField: r.merittoField.trim(),
+        displayName: r.merittoField.trim(),
+        sourceType: r.sourceType,
+        sourceField: r.sourceField,
+        customValue: r.customValue,
+        fallbackValue: r.fallbackValue,
+        isEnabled: r.isEnabled,
+        replace: r.replace,
+      })),
+    }),
+    onSuccess: (r) => {
+      setCopyRows(null);
+      refresh();
+      const parts = [`${r.added} added`, r.replaced ? `${r.replaced} replaced` : "", r.kept ? `${r.kept} already there, kept as they were` : ""].filter(Boolean);
+      toast({ title: "Copied from LeadSquared", description: parts.join(" · ") });
+    },
+    onError: (e: Error) => toast({ title: "Could not copy the fields", description: e.message, variant: "destructive" }),
+  });
+  const updateCopyRow = (i: number, patch: Partial<CopyRow>) =>
+    setCopyRows(rows => rows ? rows.map((r, j) => (j === i ? { ...r, ...patch } : r)) : rows);
+  const copyCount = copyRows?.filter(r => r.include && r.merittoField.trim()).length ?? 0;
 
   if (isLoading || !settings) {
     return <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>;
@@ -223,15 +284,18 @@ export default function MerittoSettings() {
               <CardTitle className="flex items-center gap-2 text-lg"><TableProperties className="h-5 w-5 text-orange-600" /> Fields sent to Meritto</CardTitle>
               <CardDescription>Each row is a field in Meritto's lead API (name, mobile, course, campus, …) and what AI Chroney puts in it.</CardDescription>
             </div>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => restoreDefaults.mutate()} disabled={restoreDefaults.isPending}><RotateCcw className="mr-1.5 h-4 w-4" /> Standard fields</Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => openCopy.mutate()} disabled={openCopy.isPending} data-testid="button-meritto-copy-lsq">
+                {openCopy.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Copy className="mr-1.5 h-4 w-4" />} Copy from LeadSquared
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => restoreDefaults.mutate()} disabled={restoreDefaults.isPending} title="Adds the standard fields that are missing; your other fields stay"><RotateCcw className="mr-1.5 h-4 w-4" /> Standard fields</Button>
               <Button size="sm" onClick={() => setDraft({ ...emptyDraft })} data-testid="button-add-meritto-field"><Plus className="mr-1.5 h-4 w-4" /> Add field</Button>
             </div>
           </div>
         </CardHeader>
         <CardContent>
           {mappings.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">No fields yet. Save your keys or click "Standard fields" to start with name, email, mobile and more.</p>
+            <p className="py-6 text-center text-sm text-muted-foreground">No fields yet. Click "Standard fields" to start with name, email, mobile and more, or "Copy from LeadSquared" to reuse this account's LeadSquared fields.</p>
           ) : (
             <div className="divide-y rounded-md border">
               {mappings.map(m => (
@@ -254,6 +318,56 @@ export default function MerittoSettings() {
           </p>
         </CardContent>
       </Card>
+
+      <Dialog open={!!copyRows} onOpenChange={(o) => !o && setCopyRows(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Copy fields from LeadSquared</DialogTitle>
+            <DialogDescription>
+              Each LeadSquared field becomes a Meritto field with the same value. Check the names marked "Check name": they must match the field names in your Meritto account. LeadSquared is not changed, and nothing is sent to Meritto.
+            </DialogDescription>
+          </DialogHeader>
+          {copyRows && copyRows.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">This account has no LeadSquared fields to copy.</p>
+          ) : (
+            <div className="max-h-[60vh] divide-y overflow-y-auto rounded-md border">
+              {copyRows?.map((r, i) => (
+                <div key={i} className={`flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-start ${r.include ? "" : "opacity-60"}`} data-testid={`copy-row-${i}`}>
+                  <div className="flex min-w-0 items-start gap-2 sm:w-[42%]">
+                    <Checkbox checked={r.include} onCheckedChange={(v) => updateCopyRow(i, { include: v === true })} className="mt-0.5" aria-label={`Copy ${r.leadsquaredField || r.merittoField}`} />
+                    <div className="min-w-0">
+                      <div className="truncate font-mono text-sm">{r.leadsquaredField || "(new)"}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {sourceLabel(r)}{r.fallbackValue ? ` · if empty: "${r.fallbackValue}"` : ""}{r.isEnabled ? "" : " · off"}
+                      </div>
+                    </div>
+                  </div>
+                  <ArrowRight className="mt-2 hidden h-4 w-4 shrink-0 text-gray-400 sm:block" />
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Input value={r.merittoField} onChange={(e) => updateCopyRow(i, { merittoField: e.target.value })} disabled={!r.include} className="h-8 font-mono text-sm" aria-label="Meritto field" />
+                      <Badge variant="outline" className={`shrink-0 ${COPY_STATUS[r.status].className}`}>{COPY_STATUS[r.status].label}</Badge>
+                    </div>
+                    {r.note && <p className="text-xs text-muted-foreground">{r.note}</p>}
+                    {r.existsInMeritto && r.include && (
+                      <label className="flex items-center gap-2 text-xs text-gray-700">
+                        <Checkbox checked={r.replace} onCheckedChange={(v) => updateCopyRow(i, { replace: v === true })} />
+                        Already in Meritto: replace it with this one (otherwise it's kept as it is)
+                      </label>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCopyRows(null)}>Cancel</Button>
+            <Button onClick={() => copyRows && runCopy.mutate(copyRows)} disabled={copyCount === 0 || runCopy.isPending} data-testid="button-meritto-copy-confirm">
+              {runCopy.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Copy {copyCount} field{copyCount === 1 ? "" : "s"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!draft} onOpenChange={(o) => !o && setDraft(null)}>
         <DialogContent className="max-w-lg">

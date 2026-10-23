@@ -7,6 +7,7 @@ import { storage } from "../storage";
 import { decrypt, encrypt } from "../services/encryptionService";
 import { MERITTO_DEFAULT_CREATE_URL, MERITTO_DEFAULT_MAPPINGS, MERITTO_DEFAULT_UPDATE_URL, MerittoService } from "../services/merittoService";
 import { getMerittoMappings, syncLeadToMeritto } from "../services/merittoSync";
+import { suggestMerittoRows } from "../services/merittoImport";
 
 /**
  * Meritto (NoPaperForms) CRM settings for the business account in view: keys, auto-sync switch,
@@ -157,14 +158,74 @@ router.delete("/api/meritto/field-mappings/:id", requireAuth, requireBusinessAcc
   }
 });
 
+// "Standard fields": adds the standard rows that are missing. Custom rows and edited standard rows stay.
 router.post("/api/meritto/field-mappings/seed-defaults", requireAuth, requireBusinessAccount, async (req, res) => {
   try {
     const businessAccountId = accountOf(req);
     if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
-    await db.delete(merittoFieldMappings).where(eq(merittoFieldMappings.businessAccountId, businessAccountId));
-    await db.insert(merittoFieldMappings).values(MERITTO_DEFAULT_MAPPINGS.map(m => ({ ...m, businessAccountId, isEnabled: "true" })));
-    res.json(await getMerittoMappings(businessAccountId));
+    const existing = await getMerittoMappings(businessAccountId);
+    const have = new Set(existing.map(m => m.merittoField.trim().toLowerCase()));
+    const missing = MERITTO_DEFAULT_MAPPINGS.filter(m => !have.has(m.merittoField.toLowerCase()));
+    if (missing.length > 0) {
+      const after = existing.reduce((max, m) => Math.max(max, m.sortOrder), 0);
+      await db.insert(merittoFieldMappings).values(missing.map((m, i) => ({ ...m, businessAccountId, isEnabled: "true", sortOrder: after + i + 1 })));
+    }
+    res.json({ added: missing.map(m => m.merittoField), mappings: await getMerittoMappings(businessAccountId) });
   } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// "Copy from LeadSquared": this account's LeadSquared rows as suggested Meritto rows (nothing saved).
+router.get("/api/meritto/field-mappings/from-leadsquared", requireAuth, requireBusinessAccount, async (req, res) => {
+  try {
+    const businessAccountId = accountOf(req);
+    if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
+    const [leadsquared, meritto] = await Promise.all([
+      storage.getLeadsquaredFieldMappings(businessAccountId),
+      getMerittoMappings(businessAccountId),
+    ]);
+    res.json({ rows: suggestMerittoRows(leadsquared, meritto) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Saves the reviewed rows: new names are added; a name that's already a Meritto row is replaced
+// only when the row says so. LeadSquared is not touched.
+router.post("/api/meritto/field-mappings/import", requireAuth, requireBusinessAccount, async (req, res) => {
+  try {
+    const businessAccountId = accountOf(req);
+    if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
+    const input: any[] = Array.isArray(req.body?.rows) ? req.body.rows.slice(0, 200) : [];
+    const rows = input.map(r => ({ ...readMapping(r), isEnabled: r?.isEnabled === false ? "false" : "true", replace: r?.replace === true }))
+      .filter(r => r.merittoField && (r.sourceType === "custom" || r.sourceField));
+    const result = await db.transaction(async (tx) => {
+      const existing = await tx.select().from(merittoFieldMappings).where(eq(merittoFieldMappings.businessAccountId, businessAccountId));
+      const byName = new Map(existing.map(m => [m.merittoField.trim().toLowerCase(), m]));
+      let order = existing.reduce((max, m) => Math.max(max, m.sortOrder), 0);
+      let added = 0, replaced = 0, kept = 0;
+      const seen = new Set<string>();
+      for (const { replace, ...r } of rows) {
+        const key = r.merittoField.toLowerCase();
+        if (seen.has(key)) continue; // the same name twice in one copy: the first one wins
+        seen.add(key);
+        const current = byName.get(key);
+        if (current) {
+          if (!replace) { kept++; continue; }
+          await tx.update(merittoFieldMappings).set({ ...r, updatedAt: new Date() })
+            .where(and(eq(merittoFieldMappings.id, current.id), eq(merittoFieldMappings.businessAccountId, businessAccountId)));
+          replaced++;
+        } else {
+          await tx.insert(merittoFieldMappings).values({ ...r, businessAccountId, sortOrder: ++order });
+          added++;
+        }
+      }
+      return { added, replaced, kept };
+    });
+    res.json({ ...result, mappings: await getMerittoMappings(businessAccountId) });
+  } catch (error: any) {
+    console.error("[Meritto] Copy from LeadSquared error:", error);
     res.status(500).json({ error: error.message });
   }
 });
