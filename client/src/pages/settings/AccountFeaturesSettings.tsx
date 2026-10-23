@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
-import { Briefcase, Calendar, Camera, CheckCircle2, GraduationCap, Headphones, LayoutGrid, Loader2, Megaphone, Mic, PackageOpen, School, ShoppingBag, TriangleAlert, Video } from "lucide-react";
+import { Briefcase, Calendar, Camera, CheckCircle2, GraduationCap, Headphones, LayoutGrid, Link2, Loader2, Megaphone, Mic, PackageOpen, School, ShoppingBag, TriangleAlert, Video } from "lucide-react";
 import type { BusinessAccountDto, ProductTier, SystemMode } from "@shared/dto";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -232,9 +232,26 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
       </p>
     );
   };
+  // Visual product search / Vista: from the photo-search status the page already reads.
+  const visualSearchStatus: ChecklistStatus | undefined = !(ba.visualSearchEnabled || vistaOn(ba))
+    ? { state: "off" }
+    : photoSearch.data
+      ? {
+          state: photoStatus?.warn ? "needs_setup" : "ready",
+          problem: photoStatus?.warn ? "No Gemini key yet, so photo search finds nothing" : undefined,
+          summary: photoStatus?.text,
+          checks: [
+            { label: "A Gemini key (the platform's or this account's)", done: photoSearch.data.engine !== "none" },
+            { label: "Product photos indexed", done: photoSearch.data.products.withPhoto > 0 && photoSearch.data.products.indexed >= photoSearch.data.products.withPhoto - photoSearch.data.products.failed, detail: `${photoSearch.data.products.indexed} of ${photoSearch.data.products.withPhoto} indexed` },
+          ],
+        }
+      : undefined;
+  const statusOf = (feature: SetupFeature): ChecklistStatus | undefined =>
+    feature === "visualSearch" ? visualSearchStatus : featureStatus.data?.[feature];
+
   /** Row status for the checklist features: the summary when ready, else what is missing. */
   const checklistLine = (feature: SetupFeature) => {
-    const st = featureStatus.data?.[feature];
+    const st = statusOf(feature);
     return statusLine(st, st ? (st.state === "ready" ? st.summary || "set up" : st.problem || "Needs setting up") : null, `text-status-${feature}`);
   };
   const setUpButton = (feature: SetupFeature) => (
@@ -243,12 +260,14 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
     </Button>
   );
   const CHECKLIST_LABELS: Record<SetupFeature, string> = {
-    website: "Website chat", whatsapp: "WhatsApp", phoneCalls: "Phone calls", whatsappCampaigns: "WhatsApp campaigns", shopify: "Shopify",
+    website: "Website chat", whatsapp: "WhatsApp", instagram: "Instagram", facebook: "Facebook", phoneCalls: "Phone calls",
+    whatsappCampaigns: "WhatsApp campaigns", visualSearch: "Visual product search", appointments: "Appointments",
+    supportTickets: "Support tickets", demoOrders: "Demo orders", shopify: "Shopify", crm: "CRM",
   };
   const needsAttention = [
     featureStatus.data?.voiceMode?.state === "needs_setup" ? { label: "Voice mode", open: () => setVoiceOpen(true) } : null,
     ...(Object.keys(CHECKLIST_LABELS) as SetupFeature[]).map(f =>
-      featureStatus.data?.[f]?.state === "needs_setup" ? { label: CHECKLIST_LABELS[f], open: () => setSetupFeature(f) } : null),
+      statusOf(f)?.state === "needs_setup" ? { label: CHECKLIST_LABELS[f], open: () => setSetupFeature(f) } : null),
   ].filter((x): x is { label: string; open: () => void } => !!x);
 
   const callingUnavailable = calling.isError && (errorStatus(calling.error) === 404 || errorStatus(calling.error) === 501);
@@ -282,7 +301,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
       {needsAttention.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-amber-50 px-4 py-2.5 text-[13px] text-amber-800" data-testid="text-needs-attention">
           <TriangleAlert className="h-4 w-4" />
-          <span>{needsAttention.length === 1 ? "1 feature is on but not set up:" : `${needsAttention.length} features are on but not set up:`}</span>
+          <span>{needsAttention.length === 1 ? "1 feature needs attention:" : `${needsAttention.length} features need attention:`}</span>
           {needsAttention.map(n => (
             <button key={n.label} type="button" onClick={n.open} className="font-medium underline underline-offset-2">{n.label}</button>
           ))}
@@ -304,10 +323,12 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           {setUpButton("whatsapp")}
           {flagSwitch("whatsappEnabled", "WhatsApp")}
         </Row>
-        <Row {...area("instagram")} label="Instagram" description="AI replies to Instagram messages and comments">
+        <Row {...area("instagram")} label="Instagram" description="AI replies to Instagram messages and comments" below={checklistLine("instagram")}>
+          {setUpButton("instagram")}
           {flagSwitch("instagramEnabled", "Instagram")}
         </Row>
-        <Row {...area("facebook")} label="Facebook" description="AI replies to Facebook messages and comments">
+        <Row {...area("facebook")} label="Facebook" description="AI replies to Facebook messages and comments" below={checklistLine("facebook")}>
+          {setUpButton("facebook")}
           {flagSwitch("facebookEnabled", "Facebook")}
         </Row>
         <Row
@@ -332,6 +353,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           )}
         </Row>
         <Row {...area("vista")} label="Vista" description="Visual search for jewellery: customers upload a photo and find matching designs" below={vistaOn(ba) ? photoStatusLine : null}>
+          {setUpButton("visualSearch")}
           {spinner("vista")}
           <Switch checked={vistaOn(ba)} disabled={pending} onCheckedChange={setVista} aria-label="Vista" data-testid="switch-feature-vista" />
         </Row>
@@ -364,6 +386,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           hint={!ba.chroneyEnabled ? "Needs Website chat switched on to show up." : null}
           below={ba.visualSearchEnabled ? photoStatusLine : null}
         >
+          {setUpButton("visualSearch")}
           {flagSwitch("visualSearchEnabled", "Visual product search")}
         </Row>
         <Row
@@ -392,17 +415,21 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
             </Button>
           </Row>
         )}
-        <Row icon={Headphones} tint="bg-orange-500" label="Support tickets" description="A queue for the questions the AI hands over to people">
+        <Row icon={Headphones} tint="bg-orange-500" label="Support tickets" description="A queue for the questions the AI hands over to people" below={checklistLine("supportTickets")}>
+          {setUpButton("supportTickets")}
           {flagSwitch("supportTicketsEnabled", "Support tickets")}
         </Row>
         <Row
           icon={Calendar} tint="bg-purple-600" label="Appointments"
           description="Visitors book appointments in the chat"
           hint={!ba.chroneyEnabled ? "Needs Website chat switched on to show up." : null}
+          below={checklistLine("appointments")}
         >
+          {setUpButton("appointments")}
           {flagSwitch("appointmentsEnabled", "Appointments")}
         </Row>
-        <Row icon={PackageOpen} tint="bg-rose-500" label="Demo orders" description="Sample orders for showing order tracking and returns in demos">
+        <Row icon={PackageOpen} tint="bg-rose-500" label="Demo orders" description="Sample orders for showing order tracking and returns in demos" below={checklistLine("demoOrders")}>
+          {setUpButton("demoOrders")}
           {flagSwitch("demoOrdersEnabled", "Demo orders")}
         </Row>
         <Row
@@ -413,6 +440,18 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
         >
           {setUpButton("shopify")}
           {flagSwitch("shopifyEnabled", "Shopify")}
+        </Row>
+      </Group>
+
+      <Group title="Where leads go">
+        <Row
+          icon={Link2} tint="bg-sky-600" label="CRM"
+          description="LeadSquared, Salesforce, Meritto or a custom CRM"
+          below={featureStatus.data?.crm?.state === "off"
+            ? <p className="text-[12px] text-gray-500" data-testid="text-status-crm">No CRM set up: leads stay in AI Chroney only.</p>
+            : checklistLine("crm")}
+        >
+          {setUpButton("crm")}
         </Row>
       </Group>
 
@@ -434,7 +473,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
         onOpenChange={(o) => { if (!o) setSetupFeature(null); }}
         businessAccountId={ba.id}
         businessName={ba.name}
-        status={setupFeature ? featureStatus.data?.[setupFeature] : undefined}
+        status={setupFeature ? statusOf(setupFeature) : undefined}
       />
       {voiceOpen && (
         <VoiceSetupPanel open={voiceOpen} onOpenChange={setVoiceOpen} businessAccountId={ba.id} businessName={ba.name} />

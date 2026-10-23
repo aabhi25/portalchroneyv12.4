@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
-import { CheckCircle2, Circle, Copy, ExternalLink, Globe, Loader2, Megaphone, MessageCircle, Phone, RefreshCw, ShoppingBag } from "lucide-react";
+import { Calendar, Camera, CheckCircle2, Circle, Copy, ExternalLink, Facebook, Globe, Headphones, Instagram, Link2, Loader2, Megaphone, MessageCircle, PackageOpen, Phone, RefreshCw, ShoppingBag } from "lucide-react";
+import { GeminiAccountKeyEditor } from "@/components/photoSearch/GeminiKeyEditor";
 import type { MeResponseDto } from "@shared/dto";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -11,7 +12,9 @@ import { getPublicWidgetOrigin } from "@/lib/deploymentUrls";
 import { SetupPanel } from "./SetupPanel";
 import { featureStatusKey, type FeatureStatus } from "./VoiceSetupPanel";
 
-export type SetupFeature = "phoneCalls" | "whatsapp" | "whatsappCampaigns" | "website" | "shopify";
+export type SetupFeature =
+  | "phoneCalls" | "whatsapp" | "whatsappCampaigns" | "website" | "shopify"
+  | "appointments" | "supportTickets" | "instagram" | "facebook" | "demoOrders" | "crm" | "visualSearch";
 
 export interface ChecklistStatus extends FeatureStatus {
   summary?: string;
@@ -19,6 +22,7 @@ export interface ChecklistStatus extends FeatureStatus {
   lastMessage?: string | null;
   storeUrl?: string | null;
   products?: number;
+  crms?: { key: string; label: string; on: boolean }[];
 }
 
 /**
@@ -103,6 +107,41 @@ const META: Record<SetupFeature, { icon: LucideIcon; title: string; description:
     icon: Globe, title: "Website chat", page: "/admin/website/settings/install", pageLabel: "Open install page",
     description: "The chat widget on the business's website. Paste the code below on every page, just before </body>.",
     offText: "Website chat is switched off for this account.",
+  },
+  appointments: {
+    icon: Calendar, title: "Appointments", page: "/admin/calendar", pageLabel: "Open Calendar",
+    description: "Visitors book a time in the website chat. The days, hours and slot length come from the calendar's working hours.",
+    offText: "Appointments are switched off for this account.",
+  },
+  supportTickets: {
+    icon: Headphones, title: "Support tickets", page: "/tickets", pageLabel: "Open Support tickets",
+    description: "Questions the AI hands over to people become tickets the team answers.",
+    offText: "Support tickets are switched off for this account.",
+  },
+  instagram: {
+    icon: Instagram, title: "Instagram", page: "/admin/instagram/settings/connection", pageLabel: "Open Account & connection",
+    description: "AI replies to Instagram messages (and comments, if switched on). The account connects through Meta.",
+    offText: "Instagram is switched off for this account.",
+  },
+  facebook: {
+    icon: Facebook, title: "Facebook", page: "/admin/facebook/settings/connection", pageLabel: "Open Page & connection",
+    description: "AI replies to Facebook page messages (and comments, if switched on). The page connects through Meta.",
+    offText: "Facebook is switched off for this account.",
+  },
+  demoOrders: {
+    icon: PackageOpen, title: "Demo orders", page: "/admin/demo-orders", pageLabel: "Open Demo orders",
+    description: "Sample orders the chat can look up, for showing order tracking and returns in demos.",
+    offText: "Demo orders are switched off for this account.",
+  },
+  crm: {
+    icon: Link2, title: "Where leads go (CRM)", page: "/admin/settings/integrations", pageLabel: "Open Connected apps",
+    description: "LeadSquared, Salesforce, Meritto or a custom CRM. Each is set up in Connected apps.",
+    offText: "No CRM is set up, so leads stay in AI Chroney only.",
+  },
+  visualSearch: {
+    icon: Camera, title: "Visual product search", page: "/admin/vista/settings/visual-search", pageLabel: "Open Match strictness",
+    description: "Visitors upload a photo to find similar products. It needs a Gemini key (the platform's or this account's) and product photos.",
+    offText: "Visual product search is switched off for this account.",
   },
   shopify: {
     icon: ShoppingBag, title: "Shopify", page: "/admin/shopify", pageLabel: "Open Shopify connection",
@@ -191,6 +230,24 @@ export function FeatureSetupPanel({ feature, onOpenChange, businessAccountId, bu
                 {sync.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />} Sync now
               </Button>
             </div>
+          </Section>
+        )}
+
+        {feature === "crm" && (
+          <Section title="Open a CRM's settings">
+            <div className="flex flex-wrap gap-2">
+              {(status?.crms ?? [{ key: "leadsquared", label: "LeadSquared", on: false }, { key: "salesforce", label: "Salesforce", on: false }, { key: "meritto", label: "Meritto", on: false }, { key: "custom-crm", label: "Custom CRM", on: false }]).map(c => (
+                <Button key={c.key} size="sm" variant="outline" onClick={() => openPage.open(`/admin/settings/integrations/${c.key}`)} disabled={openPage.busy} data-testid={`button-open-crm-${c.key}`}>
+                  {c.label}{c.on ? " · on" : ""}
+                </Button>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {feature === "visualSearch" && (
+          <Section title="This account's Gemini key (optional)">
+            <GeminiAccountKeyEditor businessAccountId={businessAccountId} />
           </Section>
         )}
 

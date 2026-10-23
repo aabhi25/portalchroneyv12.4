@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { and, desc, eq, gte, isNotNull, sql } from "drizzle-orm";
-import { conversations, visitorDailyStats, whatsappLeads, whatsappSettings, whatsappTemplates } from "@shared/schema";
+import { appointments, conversations, customCrmSettings, demoOrders, facebookSettings, instagramSettings, leads, scheduleTemplates, supportTickets, visitorDailyStats, whatsappLeads, whatsappSettings, whatsappTemplates } from "@shared/schema";
 import { db } from "../db";
 import { requireAuth, requireRole } from "../auth";
 import { storage } from "../storage";
@@ -163,8 +163,19 @@ router.get("/api/super-admin/accounts/:id/feature-status", requireAuth, requireR
       websiteStatus(id, account),
       shopifyStatus(id, account),
     ]);
-    const whatsappCampaigns = await campaignsStatus(id, account, whatsapp);
-    res.json({ voiceMode, phoneCalls, whatsapp, whatsappCampaigns, website, shopify });
+    const [whatsappCampaigns, appointmentsS, supportTicketsS, instagram, facebook, demoOrdersS, crm] = await Promise.all([
+      campaignsStatus(id, account, whatsapp),
+      appointmentsStatus(id, account),
+      supportTicketsStatus(id, account),
+      metaStatus(id, account, "instagram"),
+      metaStatus(id, account, "facebook"),
+      demoOrdersStatus(id, account),
+      crmStatus(id),
+    ]);
+    res.json({
+      voiceMode, phoneCalls, whatsapp, whatsappCampaigns, website, shopify,
+      appointments: appointmentsS, supportTickets: supportTicketsS, instagram, facebook, demoOrders: demoOrdersS, crm,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -222,6 +233,96 @@ router.put("/api/super-admin/accounts/:id/voice-setup", requireAuth, requireRole
     res.status(500).json({ error: error.message });
   }
 });
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+async function appointmentsStatus(accountId: string, account: any): Promise<FeatureStatus> {
+  if (!on(account.appointmentsEnabled)) return { state: "off" };
+  const ws: any = await storage.getWidgetSettings(accountId);
+  const hours = await db.select().from(scheduleTemplates)
+    .where(and(eq(scheduleTemplates.businessAccountId, accountId), eq(scheduleTemplates.isActive, "true")));
+  const [upcoming] = await db.select({ n: sql<number>`count(*)::int` }).from(appointments)
+    .where(and(eq(appointments.businessAccountId, accountId), gte(appointments.appointmentDate, new Date(Date.now() - 24 * 60 * 60_000))));
+  const days = Array.from(new Set(hours.map(h => Number(h.dayOfWeek)))).sort().map(d => DAY_NAMES[d]).join(", ");
+  const slot = hours[0] ? `${Number(hours[0].slotDurationMinutes)}-min slots` : "";
+  const checks = [
+    { label: "Website chat switched on", done: on(account.chroneyEnabled) },
+    { label: "Booking switched on in the chat", done: ws ? on(ws.appointmentBookingEnabled ?? "true") : true },
+    { label: "Working hours set", done: hours.length > 0, detail: hours.length ? [days, slot].filter(Boolean).join(" · ") : "No days or times yet, so no slots can be offered" },
+  ];
+  const missing = firstMissing(checks);
+  return missing
+    ? { state: "needs_setup", problem: missing.label === "Working hours set" ? "No working hours yet, so visitors see no free slots" : missing.label === "Website chat switched on" ? "Website chat is off" : "Booking is switched off in the chat", checks }
+    : { state: "ready", summary: `${days} · ${upcoming?.n ?? 0} upcoming`, checks };
+}
+
+async function supportTicketsStatus(accountId: string, account: any): Promise<FeatureStatus> {
+  if (!on(account.supportTicketsEnabled)) return { state: "off" };
+  const rows = await db.select({ status: supportTickets.status, n: sql<number>`count(*)::int`, oldest: sql<Date | null>`min(${supportTickets.createdAt})` })
+    .from(supportTickets).where(eq(supportTickets.businessAccountId, accountId)).groupBy(supportTickets.status);
+  const open = rows.filter(r => r.status === "open" || r.status === "in_progress" || r.status === "waiting_customer");
+  const openCount = open.reduce((n, r) => n + r.n, 0);
+  const oldest = open.map(r => r.oldest).filter(Boolean).sort()[0] ?? null;
+  const checks = [
+    { label: "Tickets are created from chats the AI hands over", done: true },
+    { label: "Open tickets", done: openCount === 0, detail: openCount ? `${openCount} open · oldest ${ago(oldest)}` : "None open" },
+  ];
+  return { state: "ready", summary: openCount ? `${openCount} open · oldest ${ago(oldest)}` : "no open tickets", checks };
+}
+
+async function metaStatus(accountId: string, account: any, channel: "instagram" | "facebook"): Promise<FeatureStatus> {
+  if (!on(channel === "instagram" ? account.instagramEnabled : account.facebookEnabled)) return { state: "off" };
+  const row: any = channel === "instagram"
+    ? (await db.select().from(instagramSettings).where(eq(instagramSettings.businessAccountId, accountId)).limit(1))[0]
+    : (await db.select().from(facebookSettings).where(eq(facebookSettings.businessAccountId, accountId)).limit(1))[0];
+  const connected = channel === "instagram" ? !!(row?.igAccountId && row?.igAccessToken) : !!(row?.pageId && row?.pageAccessToken);
+  const checks = [
+    { label: channel === "instagram" ? "Instagram account connected" : "Facebook page connected", done: connected },
+    { label: "Meta token still valid", done: connected && !row?.tokenInvalidAt, detail: row?.tokenInvalidAt ? `Rejected ${ago(row.tokenInvalidAt)}${row.tokenInvalidReason ? `: ${String(row.tokenInvalidReason).slice(0, 120)}` : ""}` : undefined },
+    { label: "Webhook (app secret and verify token)", done: !!(row?.appSecret && row?.webhookVerifyToken) },
+    { label: "AI replies to messages", done: on(row?.autoReplyEnabled) },
+  ];
+  const missing = firstMissing(checks);
+  const extras = [on(row?.commentAutoReplyEnabled) ? "comment replies on" : null].filter(Boolean).join(" · ");
+  return missing
+    ? { state: "needs_setup", problem: missing.label === "Meta token still valid" ? "Meta rejected the token: connect again" : missing.label === "AI replies to messages" ? "AI replies are switched off" : `Missing: ${missing.label}`, checks }
+    : { state: "ready", summary: ["connected", extras].filter(Boolean).join(" · "), checks };
+}
+
+async function demoOrdersStatus(accountId: string, account: any): Promise<FeatureStatus> {
+  if (!on(account.demoOrdersEnabled)) return { state: "off" };
+  const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(demoOrders).where(eq(demoOrders.businessAccountId, accountId));
+  const n = row?.n ?? 0;
+  const checks = [{ label: "Sample orders to show in demos", done: n > 0, detail: n ? `${n} sample orders` : "None yet" }];
+  return n > 0 ? { state: "ready", summary: `${n} sample orders`, checks } : { state: "needs_setup", problem: "No sample orders yet", checks };
+}
+
+/** Where leads go: which CRMs are set up, and sends that failed in the last 7 days. */
+async function crmStatus(accountId: string): Promise<FeatureStatus> {
+  const ws: any = await storage.getWidgetSettings(accountId);
+  const { isLeadSquaredConfigured, isSalesforceConfigured } = await import("../services/crmLeadSync");
+  const [custom] = await db.select({ enabled: customCrmSettings.enabled, name: customCrmSettings.name }).from(customCrmSettings).where(eq(customCrmSettings.businessAccountId, accountId)).limit(1);
+  const crms = [
+    { key: "leadsquared", label: "LeadSquared", on: isLeadSquaredConfigured(ws) },
+    { key: "salesforce", label: "Salesforce", on: isSalesforceConfigured(ws) },
+    { key: "meritto", label: "Meritto", on: !!(ws?.merittoEnabled === "true" && ws?.merittoAccessKey && ws?.merittoSecretKey) },
+    { key: "custom-crm", label: custom?.name || "Custom CRM", on: !!custom?.enabled },
+  ];
+  const active = crms.filter(c => c.on);
+  if (active.length === 0) return { state: "off", crms };
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60_000);
+  const [failed] = await db.select({ n: sql<number>`count(*)::int` }).from(leads).where(and(
+    eq(leads.businessAccountId, accountId), gte(leads.createdAt, since),
+    sql`(${leads.leadsquaredSyncStatus} IN ('failed','needs_attention','permanently_failed') OR ${leads.salesforceSyncStatus} = 'failed' OR ${leads.merittoSyncStatus} IN ('failed','needs_attention'))`,
+  ));
+  const failedN = failed?.n ?? 0;
+  // Only the CRMs in use: the others are optional (the panel offers them as buttons).
+  const checks: { label: string; done: boolean; detail?: string }[] = active.map(c => ({ label: c.label, done: true, detail: "Sending leads" }));
+  checks.push({ label: "Leads sent without errors (last 7 days)", done: failedN === 0, detail: failedN ? `${failedN} lead${failedN === 1 ? "" : "s"} failed to send` : undefined });
+  return failedN
+    ? { state: "needs_setup", problem: `${failedN} lead${failedN === 1 ? "" : "s"} failed to reach the CRM in the last 7 days`, checks, crms }
+    : { state: "ready", summary: active.map(c => c.label).join(", "), checks, crms };
+}
 
 // Shopify "Sync now" from the set-up panel (same sync as the account's own Shopify page).
 const shopifyCooldown = new Map<string, number>();
