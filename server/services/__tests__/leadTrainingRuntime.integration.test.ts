@@ -489,6 +489,28 @@ async function main() {
     expect(/LEAD COLLECTION \(THIS TURN\)/.test(nsRules), 'non-streaming path also gets the lead block');
   }
 
+  // ═════════ 17. CAPTCHA on the mobile field: the message with the number stays in the chat ═════════
+  if (run(17)) {
+    const biz = await seedBiz([
+      field({ id: 'mobile', required: true, priority: 1, captureStrategy: 'custom', customAskAfter: 1, captchaEnabled: true, captchaSiteKey: 'site-key-test' }),
+    ]);
+    const v = visitor();
+    const r1 = await say(biz, v, 'call me');
+    const r2 = await say(biz, v, 'my number is 9876501234');
+    const convId = r1.convId || r2.convId;
+    const captcha = r2.events.find(e => e.type === 'captcha_state');
+    const msgs = await db.select().from(schema.messages).where(eq(schema.messages.conversationId, convId));
+    const [conv] = await db.select().from(schema.conversations).where(eq(schema.conversations.id, convId));
+    expect(!!captcha && conv.awaitingVerification === true && (await leadsOf(convId))[0]?.phone === '9876501234',
+      'number typed mid-chat → lead captured, chat locked, CAPTCHA asked', { captcha: !!captcha, locked: conv.awaitingVerification });
+    expect(msgs.some(m => m.role === 'user' && m.content === 'my number is 9876501234'),
+      'the message with the number is kept in the chat (live: it vanished from the transcript)', msgs.map(m => [m.role, m.content]));
+    const r3 = await say(biz, v, 'hello?');
+    const msgs3 = await db.select().from(schema.messages).where(eq(schema.messages.conversationId, convId));
+    expect(r3.events.some(e => e.type === 'captcha_state') && !msgs3.some(m => m.content === 'hello?'),
+      'while the chat is still locked, later messages are refused unsaved (as before)', msgs3.map(m => m.content));
+  }
+
   // ═════════ Never: the deleted "ASK FOR THEIR NAME FIRST" prefix / static lead prompt ═════════
   {
     const all = fake.calls.map(c => c.messages.map(m => textOf(m.content)).join('\n')).join('\n');

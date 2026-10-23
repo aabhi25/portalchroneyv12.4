@@ -3478,6 +3478,8 @@ Response:`;
       // assistant "I've sent a code…" message — the OTP dialog is the only surface.
       let awaitingOtpBefore = false;
       let otpChallengeJustIssued = false;
+      // Whether the chat was already locked for verification before this message (null = not read).
+      let awaitingFlagBeforeTurn: boolean | null = null;
       if (context.channel === 'widget' && !context.skipLeadTraining) {
         // Task #23: If the user message likely contains a phone number, await
         // auto-detect synchronously BEFORE sampling OTP state — otherwise the
@@ -3493,8 +3495,12 @@ Response:`;
           // tell whether this turn freshly issued a challenge (vs one already
           // pending from a prior turn).
           try {
-            const beforeState = await OtpService.getLatestStateForConversation(context.businessAccountId, conversationId);
+            const [beforeState, flagBefore] = await Promise.all([
+              OtpService.getLatestStateForConversation(context.businessAccountId, conversationId),
+              storage.isConversationAwaitingVerification(conversationId, context.businessAccountId),
+            ]);
             awaitingOtpBefore = !!beforeState.awaiting_otp;
+            awaitingFlagBeforeTurn = flagBefore;
           } catch {
             // best-effort; default awaitingOtpBefore=false
           }
@@ -3566,6 +3572,13 @@ Response:`;
               // the model until the visitor verifies.
               const captchaCfg = await deriveCaptchaMethodConfig(context.businessAccountId);
               if (captchaCfg.enabled) {
+                // This very message (with the mobile number) locked the chat: keep it in the
+                // conversation. Only messages sent while the chat was already locked are refused
+                // unsaved (live: the number vanished from the transcript, 2026-10-24).
+                if (autoDetectAwaited && awaitingFlagBeforeTurn === false && userMessage.trim()) {
+                  await this.storeMessageInDB(conversationId, 'user', userMessage, undefined, context.imageUrl);
+                  conversationMemory.storeMessage(context.userId, 'user', userMessage);
+                }
                 const captchaBody = captchaCfg.misconfigured
                   ? 'Verification is temporarily unavailable. Please try again later.'
                   : 'Please complete the verification to continue chatting. Refresh the page if you don\'t see the verification box.';
