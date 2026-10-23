@@ -18,8 +18,11 @@
  *
  * Rules: settings.enabled && settings.autoCallLeads && super admin switch on; lead has a valid phone;
  * source allowed; not on the do-not-call list; the lead was never auto-called before (one automatic
- * call chain per lead — a later phone change doesn't trigger another); no open call or any call in
- * the last 24 h for the same lead or number. Scheduled at now + autoCallDelayMinutes, moved to the next calling window when
+ * call chain per lead — a later phone change doesn't trigger another); no open call for the same
+ * lead or number, and no call in the last 24 h for one whose lead still exists (a deleted lead's
+ * calls don't count, so the same number coming in as a new lead is called again; calls without a
+ * lead, like "Try a call", don't count either; leads removed by auto-delete still do). Scheduled
+ * at now + autoCallDelayMinutes, moved to the next calling window when
  * outside calling hours. Consent is checked by the dialer at dial time (so a "please call me" said
  * in the chat during the delay still counts — see markConsentFromChat).
  */
@@ -82,7 +85,7 @@ async function decideAndEnqueue(lead: Lead, phone: string, opts: { source?: Lead
   const [earlier] = await db.select({ id: aiCalls.id }).from(aiCalls)
     .where(and(eq(aiCalls.businessAccountId, lead.businessAccountId), eq(aiCalls.leadId, lead.id), eq(aiCalls.trigger, "auto_lead"))).limit(1);
   if (earlier) return { queued: false, reason: "already_called" };
-  if (await findOpenOrRecentCall(lead.businessAccountId, { leadId: lead.id, phone })) return { queued: false, reason: "duplicate" };
+  if (await findOpenOrRecentCall(lead.businessAccountId, { leadId: lead.id, phone }, undefined, { recentOnlyWithLead: true })) return { queued: false, reason: "duplicate" };
   if (!lead.callConsent && settings.consentMode !== "business_attested") {
     await markConsentFromChat(lead).catch(() => false);
   }

@@ -493,6 +493,24 @@ async function main() {
     const leadSamePhone = await mkLead(L, { phone: leadW.phone, conversationId: (await mkConversation(L)).id });
     tr = await trigger.enqueueAutoLeadCall(leadSamePhone);
     expect(!tr.queued && tr.reason === "duplicate", "another lead with the same number within 24 h → not queued", tr.reason);
+    // The 24 h rule counts a call only while its lead still exists.
+    await db.update(schema.aiCalls).set({ status: "completed" }).where(eq(schema.aiCalls.leadId, leadW.id));
+    tr = await trigger.enqueueAutoLeadCall(await mkLead(L, { phone: leadW.phone, conversationId: (await mkConversation(L)).id }));
+    expect(!tr.queued && tr.reason === "duplicate", "called in the last 24 h and that lead still exists → not called again", tr.reason);
+    await db.delete(schema.leads).where(sql`${schema.leads.businessAccountId} = ${L} AND ${schema.leads.phone} = ${leadW.phone}`);
+    tr = await trigger.enqueueAutoLeadCall(await mkLead(L, { phone: leadW.phone, conversationId: (await mkConversation(L)).id }));
+    expect(tr.queued, "the lead was deleted → the same number as a new lead is called again", tr.reason);
+    await db.update(schema.aiCalls).set({ status: "completed" }).where(eq(schema.aiCalls.id, tr.call!.id));
+    // A test call with no lead ("Try a call") doesn't block a new lead's call.
+    const testPhone = `98${String(Math.floor(Math.random() * 1e8)).padStart(8, "0")}`;
+    await db.insert(schema.aiCalls).values({ businessAccountId: L, phone: `+91${testPhone}`, trigger: "test", provider: "simulator", status: "completed", direction: "outbound" } as any);
+    tr = await trigger.enqueueAutoLeadCall(await mkLead(L, { phone: testPhone, conversationId: (await mkConversation(L)).id }));
+    expect(tr.queued, "a test call (no lead) to the number → the new lead is still called", tr.reason);
+    // Auto-delete (data retention) is not a person deciding the number may be called again.
+    const purgedPhone = `98${String(Math.floor(Math.random() * 1e8)).padStart(8, "0")}`;
+    await db.insert(schema.aiCalls).values({ businessAccountId: L, phone: `+91${purgedPhone}`, trigger: "auto_lead", provider: "simulator", status: "completed", direction: "outbound", metadata: { leadAutoDeleted: true } } as any);
+    tr = await trigger.enqueueAutoLeadCall(await mkLead(L, { phone: purgedPhone, conversationId: (await mkConversation(L)).id }));
+    expect(!tr.queued && tr.reason === "duplicate", "lead removed by auto-delete → its call still counts (no second call within 24 h)", tr.reason);
     tr = await trigger.enqueueAutoLeadCall(await mkLead(L, { message: "Added by staff" }));
     expect(!tr.queued && tr.reason === "source_not_selected", "source filter: staff-added lead ('other') not called when only 'website' is selected", tr.reason);
     tr = await trigger.enqueueAutoLeadCall(await mkLead(L, { conversationId: (await mkConversation(L, "Voice Chat")).id }));

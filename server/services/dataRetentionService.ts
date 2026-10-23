@@ -5,6 +5,7 @@ import { db } from "../db";
 import { storage } from "../storage";
 import {
   accountGroupMembers,
+  aiCalls,
   appointments,
   conversations,
   dataPurgeLog,
@@ -233,6 +234,11 @@ async function deleteRecords(accountId: string, leadIds: string[], conversationI
       await tx.delete(topscholarVoiceSessions).where(and(eq(topscholarVoiceSessions.businessAccountId, accountId), inArray(topscholarVoiceSessions.conversationId, conversationIds)));
     }
     if (leadIds.length) {
+      // Their calls keep counting for the 24 h "don't call again" rule (calling/leadTrigger.ts):
+      // auto-delete isn't a person deciding the number may be called again.
+      await tx.update(aiCalls)
+        .set({ metadata: sql`COALESCE(${aiCalls.metadata}, '{}'::jsonb) || '{"leadAutoDeleted": true}'::jsonb` })
+        .where(and(eq(aiCalls.businessAccountId, accountId), inArray(aiCalls.leadId, leadIds)));
       await tx.delete(leads).where(and(eq(leads.businessAccountId, accountId), inArray(leads.id, leadIds)));
     }
     if (conversationIds.length) {

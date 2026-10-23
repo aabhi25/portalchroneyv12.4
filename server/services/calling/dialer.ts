@@ -61,7 +61,18 @@ export async function addDoNotCall(businessAccountId: string, phone: string, inp
 }
 
 /** An open (waiting / live) call for this lead or number, or one created within `windowMs`. */
-export async function findOpenOrRecentCall(businessAccountId: string, target: { leadId?: string | null; phone?: string | null }, windowMs = DEDUPE_WINDOW_MS): Promise<AiCall | null> {
+/**
+ * A call to this lead / number still waiting or in progress, or one placed in the last `windowMs`.
+ * `recentOnlyWithLead`: a recent call counts only while its lead still exists (deleting the lead
+ * lets the same number be auto-called again), or when auto-delete removed the lead after sync
+ * (metadata.leadAutoDeleted: no second call to a real person just because their lead was purged).
+ */
+export async function findOpenOrRecentCall(
+  businessAccountId: string,
+  target: { leadId?: string | null; phone?: string | null },
+  windowMs = DEDUPE_WINDOW_MS,
+  opts: { recentOnlyWithLead?: boolean } = {},
+): Promise<AiCall | null> {
   const who = [] as any[];
   if (target.leadId) who.push(eq(aiCalls.leadId, target.leadId));
   if (target.phone) who.push(eq(aiCalls.phone, target.phone));
@@ -72,7 +83,14 @@ export async function findOpenOrRecentCall(businessAccountId: string, target: { 
       eq(aiCalls.businessAccountId, businessAccountId),
       eq(aiCalls.direction, "outbound"),
       or(...who),
-      or(inArray(aiCalls.status, ["queued", ...LIVE_CALL_STATUSES]), and(gt(aiCalls.createdAt, since), ne(aiCalls.status, "cancelled"))),
+      or(
+        inArray(aiCalls.status, ["queued", ...LIVE_CALL_STATUSES]),
+        and(
+          gt(aiCalls.createdAt, since),
+          ne(aiCalls.status, "cancelled"),
+          opts.recentOnlyWithLead ? or(isNotNull(aiCalls.leadId), sql`${aiCalls.metadata}->>'leadAutoDeleted' = 'true'`) : undefined,
+        ),
+      ),
     ))
     .orderBy(desc(aiCalls.createdAt)).limit(1);
   return row ?? null;
