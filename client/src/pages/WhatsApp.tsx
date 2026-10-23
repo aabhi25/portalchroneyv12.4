@@ -81,6 +81,7 @@ const parseUTCDate = (dateString: string | Date): Date => {
 };
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import WhatsAppHub from "@/components/whatsapp/WhatsAppHub";
+import { JourneysRoutingNotice } from "@/components/whatsapp/JourneysRoutingNotice";
 import type { MeResponseDto } from "@shared/dto";
 
 interface WhatsappSettings {
@@ -1366,6 +1367,7 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
 
         {currentPage === "flows" && (
           <div className="space-y-6">
+            <JourneysRoutingNotice />
             <FlowBuilderSection />
           </div>
         )}
@@ -4013,19 +4015,19 @@ function FlowBuilderSection() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <GitBranch className="h-5 w-5 text-purple-600" />
-            <CardTitle>Conversation Flows</CardTitle>
+            <CardTitle>Journeys</CardTitle>
           </div>
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => setLocation(SETTINGS_PATHS.whatsappFlowSettings)}>
+            <Button size="sm" variant="outline" onClick={() => setLocation(SETTINGS_PATHS.whatsappFlowSettings)} title="Journey settings" aria-label="Journey settings">
               <Settings className="h-4 w-4" />
             </Button>
             <Button size="sm" onClick={() => setShowNewFlowDialog(true)}>
-              <Plus className="h-4 w-4 mr-1" /> New Flow
+              <Plus className="h-4 w-4 mr-1" /> New journey
             </Button>
           </div>
         </div>
         <CardDescription>
-          Create structured conversation flows with buttons and dropdown menus for guided lead capture
+          Button menus and step-by-step questions that answer people who message you and capture their details
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -4035,7 +4037,7 @@ function FlowBuilderSection() {
           </div>
         ) : flowsData?.flows?.length === 0 ? (
           <div className="text-center py-8 text-gray-500">
-            No flows created yet. Create your first conversation flow to guide WhatsApp interactions.
+            No journeys yet. Click New journey to build a button menu or a set of questions for people who message you.
           </div>
         ) : (
           <div className="space-y-3">

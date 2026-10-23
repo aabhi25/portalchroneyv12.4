@@ -17,6 +17,9 @@ export function StepAiReplies({ ctx }: { ctx: WizardCtx }) {
       >
         {v.aiEnabled ? (
           <div className="space-y-3">
+            <p className="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600" data-testid="text-who-answers">
+              While this campaign is running, people who reply get this AI, not your journeys or keyword replies.
+            </p>
             <div>
               <label className="text-sm font-medium text-gray-700" htmlFor="ai-agent-name">Name the AI uses</label>
               <Input id="ai-agent-name" className="mt-1" value={v.aiAgentName} onChange={e => set({ aiAgentName: e.target.value })} placeholder="Sales Agent" data-testid="input-ai-agent-name" />
@@ -50,7 +53,10 @@ export function StepAiReplies({ ctx }: { ctx: WizardCtx }) {
             </div>
           </div>
         ) : (
-          <p className="text-sm text-gray-500">Replies will wait for your team in Campaign replies.</p>
+          <p className="text-sm text-gray-500" data-testid="text-who-answers">
+            Replies go to your usual WhatsApp replies (your journeys, keyword replies and AI), just as if the person had
+            messaged you first. They are still saved with this campaign, so your team can read them under Replies.
+          </p>
         )}
       </StepSection>
 

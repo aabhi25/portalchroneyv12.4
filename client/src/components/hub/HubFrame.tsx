@@ -71,7 +71,7 @@ export function HubFrame({ user, children }: { user: MeResponseDto | null; child
   const { area, tab, settingsItem } = match;
   const Icon = area.icon;
   const tabs = visibleTabs(area, access);
-  const sectionItems = area.sections && tab?.key === area.sections.tabKey ? area.sections.items : null;
+  const sectionItems = area.sections?.find(s => s.tabKey === tab?.key)?.items ?? null;
   // A settings item that opens its own page (e.g. Keyword replies) gets a way back to the list.
   const openedSettingsPage = settingsItem && settingsItem.href ? settingsItem : null;
   // Inbox pages scroll their own list and thread, so they get a fixed height (not the page scroll).

@@ -19,7 +19,7 @@ import WhatsAppCampaignAutomationDetail from "@/pages/WhatsAppCampaignAutomation
 import WhatsAppNewCampaign from "@/pages/WhatsAppNewCampaign";
 import WhatsAppCampaignDetail from "@/pages/WhatsAppCampaignDetail";
 import WhatsAppCampaignConversations from "@/pages/WhatsAppCampaignConversations";
-import WhatsAppCampaignHome from "@/pages/WhatsAppCampaignHome";
+import WhatsAppFlowSettings from "@/pages/WhatsAppFlowSettings";
 import WhatsAppCampaignResults from "@/pages/WhatsAppCampaignResults";
 import WhatsAppOptOuts from "@/pages/WhatsAppOptOuts";
 import WhatsAppAiWorkbooks from "@/pages/WhatsAppAiWorkbooks";
@@ -135,6 +135,12 @@ import type { MeResponseDto } from "@shared/dto";
 
 /** Areas whose Settings tab is /admin/<area>/settings (see navigation/hubAreas.ts). */
 const AREA_SETTINGS_IDS: HubAreaId[] = ["leads", "website", "whatsapp", "instagram", "facebook", "vista"];
+const MOVED_WHATSAPP_SETTINGS: Record<string, string> = {
+  "/admin/whatsapp/settings/journeys": "/admin/whatsapp-flows",
+  "/admin/whatsapp/settings/keyword-replies": "/admin/whatsapp-smart-replies",
+  "/admin/whatsapp/settings/journey-settings": SETTINGS_PATHS.whatsappFlowSettings,
+  "/admin/whatsapp/settings/stores": "/admin/whatsapp-dealers-stores",
+};
 
 function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
   const [location, setLocation] = useLocation();
@@ -388,11 +394,13 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/whatsapp-leads">{() => <WhatsApp />}</Route>
                 <Route path="/admin/whatsapp-flows">{() => <WhatsApp />}</Route>
                 <Route path="/admin/whatsapp-dealers-stores" component={StoreSheet} />
+                <Route path={SETTINGS_PATHS.whatsappFlowSettings} component={WhatsAppFlowSettings} />
                 <Route path="/admin/whatsapp-ai-setup" component={WhatsAppAISetup} />
                 <Route path="/admin/document-type-editor/:id" component={DocumentTypeEditor} />
                 <Route path="/admin/document-type-editor" component={DocumentTypeEditor} />
                 <Route path="/admin/whatsapp-smart-replies">{() => <SmartReplies channel="whatsapp" />}</Route>
-                <Route path="/admin/whatsapp-campaign-home">{() => <RequireWhatsappMarketing><WhatsAppCampaignHome /></RequireWhatsappMarketing>}</Route>
+                {/* Campaigns Home was folded into the Campaigns list (getting-started steps show there until the first send). */}
+                <Route path="/admin/whatsapp-campaign-home"><Redirect to="/admin/whatsapp-campaigns" /></Route>
                 <Route path="/admin/whatsapp-campaign-results">{() => <RequireWhatsappMarketing><WhatsAppCampaignResults /></RequireWhatsappMarketing>}</Route>
                 {/* Plain-language aliases; the original URLs below keep working. */}
                 <Route path="/admin/whatsapp-campaign-replies"><Redirect to="/admin/whatsapp-campaign-conversations" /></Route>
@@ -448,6 +456,10 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/smart-replies">
                   <SmartReplies channel="website" headerContent={<TrainingNavTabs />} />
                 </Route>
+                {/* WhatsApp settings rows that moved to the Journeys tab. Before the area Settings route, which would claim them. */}
+                {Object.entries(MOVED_WHATSAPP_SETTINGS).map(([from, to]) => (
+                  <Route key={from} path={from}>{() => <Redirect to={`${to}${window.location.search}`} replace />}</Route>
+                ))}
                 {/* Each area's own Settings tab (Phone calls keeps its page above). */}
                 <Route path="/admin/:area/settings/:key?">
                   {({ area, key }) => AREA_SETTINGS_IDS.includes(area as HubAreaId)

@@ -22,9 +22,13 @@ function buildEntries(access: HubAccess): Entry[] {
       if (tab.key === "settings") continue;
       out.push({ label: tab.label, place: area.label, href: tab.href });
     }
-    for (const s of area.sections?.items ?? []) {
-      if (area.id === "whatsapp" && !access.whatsappMarketing) continue;
-      out.push({ label: s.label, place: `${area.label} › Campaigns`, href: s.href });
+    for (const group of area.sections ?? []) {
+      // A row of pills belongs to a tab; when the tab is hidden (e.g. Campaigns without marketing), so are they.
+      const tab = visibleTabs(area, access).find(t => t.key === group.tabKey);
+      if (!tab) continue;
+      for (const s of group.items) {
+        out.push({ label: s.label, place: `${area.label} › ${tab.label}`, href: s.href, formerly: s.formerly });
+      }
     }
   }
   out.push({ label: "Account & password", place: "Settings", href: SETTINGS_PATHS.account });

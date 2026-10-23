@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { Link } from "wouter";
 import { Ban, ChevronLeft, ChevronRight, Download, Info, Loader2, Plus, Search, Trash2 } from "lucide-react";
 
 interface OptOut {
@@ -88,10 +89,13 @@ export default function WhatsAppOptOuts() {
     <div className="p-4 sm:p-6 max-w-5xl mx-auto">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
         <div className="min-w-0">
+          <Link href="/admin/whatsapp-contact-groups" className="mb-1 inline-flex items-center text-sm text-gray-500 hover:text-gray-900" data-testid="link-back-audiences">
+            <ChevronLeft className="h-4 w-4" /> Audiences
+          </Link>
           <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Ban className="h-6 w-6 text-rose-600" /> Opted-out numbers
+            <Ban className="h-6 w-6 text-rose-600" /> Do not message
           </h1>
-          <p className="text-sm text-gray-600 mt-1">People who asked not to receive campaign messages. Campaigns always skip these numbers.</p>
+          <p className="text-sm text-gray-600 mt-1">People who asked not to receive campaign messages (opt-outs). Campaigns always skip these numbers.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" asChild data-testid="button-export-opt-outs">

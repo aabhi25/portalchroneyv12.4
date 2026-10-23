@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
-import { ChevronDown, ChevronRight, FileSpreadsheet, Info, Loader2, Plus, RefreshCw, Search, Sparkles, Trash2, UserPlus, Users } from "lucide-react";
+import { Ban, ChevronDown, ChevronRight, FileSpreadsheet, Info, Loader2, Plus, RefreshCw, Search, Sparkles, Trash2, UserPlus, Users } from "lucide-react";
 import {
   AudiencePreviewLine, AudienceRulesEditor, LeadFilterFields, describeRules, useAudiencePreview,
   type AudienceRules, type LeadFilter,
@@ -139,6 +139,10 @@ export default function WhatsAppContactGroups() {
           </h1>
           <p className="text-sm text-gray-600 mt-1">The lists of people your WhatsApp campaigns are sent to.</p>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+        <Button variant="outline" onClick={() => setLocation("/admin/whatsapp-opt-outs")} data-testid="button-do-not-message">
+          <Ban className="h-4 w-4 mr-1" /> Do not message
+        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button data-testid="button-new-contact-group"><Plus className="h-4 w-4 mr-1" /> New audience <ChevronDown className="h-4 w-4 ml-1" /></Button>
@@ -162,6 +166,7 @@ export default function WhatsAppContactGroups() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
       </div>
 
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-sky-100 bg-sky-50/60 px-3 py-2 text-xs text-sky-900">

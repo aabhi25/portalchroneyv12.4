@@ -11,7 +11,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, Table2, MoreHorizontal, Search, Smartphone, Moon, Loader2 } from "lucide-react";
+import { Plus, Megaphone, Send, X, Trash2, ChevronRight, Calendar, Copy, Table2, MoreHorizontal, Search, Smartphone, Moon, Loader2, MessageCircle, TrendingUp, CalendarClock } from "lucide-react";
+import { CampaignGettingStarted } from "@/components/whatsapp/CampaignGettingStarted";
 import { STATUS_LABEL, type AudiencePreview } from "@/components/whatsapp/campaignWizard/types";
 import { TestSendDialog } from "@/components/whatsapp/campaignWizard/TestSendDialog";
 
@@ -166,14 +167,28 @@ export default function WhatsAppCampaigns() {
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-xl font-bold sm:text-2xl">
-            <Megaphone className="h-6 w-6 text-emerald-600" /> WhatsApp Campaigns
+            <Megaphone className="h-6 w-6 text-emerald-600" /> Campaigns
           </h1>
           <p className="mt-1 text-sm text-gray-600">Send a WhatsApp message to your audiences; AI can answer the replies.</p>
         </div>
-        <Button onClick={() => setLocation("/admin/whatsapp-campaigns/new")} data-testid="button-new-campaign" className="self-start sm:self-auto">
-          <Plus className="mr-1 h-4 w-4" /> New campaign
-        </Button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          {/* Views across every campaign. They used to be pills of their own under Campaigns. */}
+          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/whatsapp-campaign-conversations")} data-testid="link-campaign-replies">
+            <MessageCircle className="mr-1 h-4 w-4" /> Replies
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/whatsapp-campaign-results")} data-testid="link-campaign-results">
+            <TrendingUp className="mr-1 h-4 w-4" /> Results
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/whatsapp-campaign-automations")} data-testid="link-campaign-automations">
+            <CalendarClock className="mr-1 h-4 w-4" /> Automations
+          </Button>
+          <Button onClick={() => setLocation("/admin/whatsapp-campaigns/new")} data-testid="button-new-campaign">
+            <Plus className="mr-1 h-4 w-4" /> New campaign
+          </Button>
+        </div>
       </div>
+
+      <CampaignGettingStarted />
 
       {isLoading ? (
         <div className="py-12 text-center text-gray-500">Loading...</div>

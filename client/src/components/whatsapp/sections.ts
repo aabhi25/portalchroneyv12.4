@@ -1,19 +1,16 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Sparkles, Route, Zap, MessagesSquare, Contact, BarChart3, Link2,
-  UsersRound, FileCode2, Megaphone, Settings, ShieldCheck, MessageCircle,
-  FileSpreadsheet, Table2, Store, Home, TrendingUp,
+  UsersRound, FileCode2, Megaphone, Settings, ShieldCheck, Table2, Store,
 } from "lucide-react";
 import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 
 /**
  * The one definition of what lives where in the WhatsApp area.
  *
- * Both the sidebar and the WhatsApp overview page are built from this. That is the whole point:
- * before this existed there were two hand-maintained sidebar layouts — one for accounts with only
- * WhatsApp, one for accounts with several AI agents — and they had already drifted apart, showing
- * different screens under different names. Anything that needs to know the structure reads it
- * from here, so there is nowhere for a second version to grow.
+ * The Campaigns pills in the WhatsApp area (navigation/hubAreas.ts) are built from CAMPAIGN_ITEMS
+ * here; the Journeys pills are defined there. Before this existed there were two hand-maintained
+ * sidebar layouts that had drifted apart, showing different screens under different names.
  *
  * The three sections are not a cosmetic grouping. They reflect a real split in the data:
  *
@@ -69,9 +66,9 @@ export interface WhatsappReadiness {
 
 /** Display names, so a problem can say which section fixes it without re-deriving anything. */
 export const WHATSAPP_SECTION_LABELS: Record<WhatsappSectionId, string> = {
-  "lead-gen": "Lead Gen",
+  "lead-gen": "Replies",
   campaigns: "Campaigns",
-  setup: "Setup",
+  setup: "Settings",
 };
 
 export interface WhatsappNavItem {
@@ -157,11 +154,11 @@ const LEAD_GEN_ITEMS: WhatsappNavItem[] = [
   },
   {
     key: "flows",
-    label: "Guided journeys",
+    label: "Journeys",
     description: "Scripted button menus — no AI involved",
     href: "/admin/whatsapp-flows",
     icon: Route,
-    formerly: "AI Flows",
+    formerly: "Guided journeys · AI Flows",
     sidebarTestId: "link-wa-flows",
     gradient: "bg-gradient-to-br from-purple-500 to-violet-600",
     tone: "bg-purple-50 group-hover:bg-purple-100",
@@ -206,37 +203,52 @@ const LEAD_GEN_ITEMS: WhatsappNavItem[] = [
   },
 ];
 
-// Numbered on the overview page because the order is a real dependency, not a suggestion: a
-// campaign cannot be sent without an audience and an approved template already in place.
-// "Home" comes first so it is the section's default entry: it shows that same journey with a
-// tick against each step that is already done.
+// The four campaign screens, shown as pills under the Campaigns tab. Campaigns comes first so it
+// is the tab's default entry; while nothing has been sent it shows the getting-started steps
+// (audience, template, first campaign) above the list.
+//
+// Replies, Results and Automations are reached from the Campaigns screen rather than having a
+// pill each: they are views of campaigns, not separate jobs. Opt-outs are a list of people, so
+// they sit under Audiences as the "Do not message" list.
+const CAMPAIGN_SCREENS_UNDER_CAMPAIGNS = [
+  "/admin/whatsapp-campaign-home",
+  "/admin/whatsapp-campaign-conversations",
+  "/admin/whatsapp-campaign-replies",
+  "/admin/whatsapp-campaign-results",
+];
 const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
   {
-    key: "campaign-home",
-    label: "Home",
-    hubTitle: "Campaigns home",
-    description: "Your next step, and this month at a glance",
-    href: "/admin/whatsapp-campaign-home",
-    icon: Home,
-    hubTestId: "card-wa-campaign-home",
-    sidebarTestId: "link-wa-campaign-home",
+    key: "campaigns",
+    label: "Campaigns",
+    description: "Send to an audience and let AI handle replies",
+    href: "/admin/whatsapp-campaigns",
+    icon: Megaphone,
+    formerly: "All campaigns · Campaigns home · Campaign replies · Results · Automations",
+    hubTestId: "card-wa-campaigns",
+    sidebarTestId: "link-wa-campaigns",
     gradient: "bg-gradient-to-br from-emerald-500 to-green-600",
     tone: "bg-emerald-50 group-hover:bg-emerald-100",
-    matches: l => l === "/admin/whatsapp-campaign-home",
+    matches: l =>
+      l.startsWith("/admin/whatsapp-campaigns") ||
+      l.startsWith("/admin/whatsapp-campaign-automations") ||
+      CAMPAIGN_SCREENS_UNDER_CAMPAIGNS.includes(l),
+    blocked: r => (r.marketing && !r.marketing.canSend ? "Needs an audience and a template first" : undefined),
   },
   {
     key: "contact-groups",
     label: "Audiences",
-    hubTitle: "1. Audiences",
-    description: "Lists of people to message",
+    description: "Lists of people to message, and the Do not message list",
     href: "/admin/whatsapp-contact-groups",
     icon: UsersRound,
-    formerly: "Contact Groups",
+    formerly: "Contact Groups · Opt-outs · Do not message",
     hubTestId: "card-wa-contact-groups",
     sidebarTestId: "link-wa-contact-groups",
     gradient: "bg-gradient-to-br from-teal-500 to-cyan-600",
     tone: "bg-teal-50 group-hover:bg-teal-100",
-    matches: l => l.startsWith("/admin/whatsapp-contact-groups") || l === "/admin/whatsapp-audiences",
+    matches: l =>
+      l.startsWith("/admin/whatsapp-contact-groups") ||
+      l === "/admin/whatsapp-audiences" ||
+      l.startsWith("/admin/whatsapp-opt-outs"),
     blocked: r =>
       r.marketing && r.marketing.usableAudiences === 0
         ? r.marketing.totalAudiences === 0
@@ -245,9 +257,19 @@ const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
         : undefined,
   },
   {
+    key: "ai-workbooks",
+    label: "AI Workbooks",
+    description: "People with their own details; campaign results flow back in",
+    href: "/admin/whatsapp-ai-workbooks",
+    icon: Table2,
+    sidebarTestId: "link-wa-ai-workbooks",
+    gradient: "bg-gradient-to-br from-purple-500 to-violet-600",
+    tone: "bg-purple-50 group-hover:bg-purple-100",
+    matches: l => l.startsWith("/admin/whatsapp-ai-workbooks"),
+  },
+  {
     key: "templates",
     label: "Templates",
-    hubTitle: "2. Templates",
     description: "Pre-approved messages WhatsApp will deliver",
     href: "/admin/whatsapp-templates",
     icon: FileCode2,
@@ -262,82 +284,6 @@ const CAMPAIGN_ITEMS: WhatsappNavItem[] = [
           ? "None yet"
           : "None approved"
         : undefined,
-  },
-  {
-    key: "campaigns",
-    // Not just "Campaigns": this sits inside a section already called Campaigns.
-    label: "All campaigns",
-    hubTitle: "3. All campaigns",
-    description: "Send to an audience and let AI handle replies",
-    href: "/admin/whatsapp-campaigns",
-    icon: Megaphone,
-    formerly: "Campaigns",
-    hubTestId: "card-wa-campaigns",
-    sidebarTestId: "link-wa-campaigns",
-    gradient: "bg-gradient-to-br from-emerald-500 to-green-600",
-    tone: "bg-emerald-50 group-hover:bg-emerald-100",
-    matches: l => l.startsWith("/admin/whatsapp-campaigns"),
-    blocked: r => (r.marketing && !r.marketing.canSend ? "Needs steps 1 and 2 first" : undefined),
-  },
-  {
-    key: "conversations",
-    label: "Campaign replies",
-    hubTitle: "4. Campaign replies",
-    description: "What people wrote back, across all campaigns",
-    href: "/admin/whatsapp-campaign-conversations",
-    icon: MessageCircle,
-    formerly: "Conversations",
-    hubTestId: "card-wa-campaign-conversations",
-    sidebarTestId: "link-wa-campaign-conversations",
-    gradient: "bg-gradient-to-br from-emerald-500 to-teal-600",
-    tone: "bg-emerald-50 group-hover:bg-emerald-100",
-    matches: l => l.startsWith("/admin/whatsapp-campaign-conversations") || l === "/admin/whatsapp-campaign-replies",
-  },
-  {
-    key: "campaign-results",
-    label: "Results",
-    hubTitle: "Campaign results",
-    description: "Sent, read, replies and opt-outs across all campaigns",
-    href: "/admin/whatsapp-campaign-results",
-    icon: TrendingUp,
-    hubTestId: "card-wa-campaign-results",
-    sidebarTestId: "link-wa-campaign-results",
-    gradient: "bg-gradient-to-br from-orange-500 to-amber-600",
-    tone: "bg-orange-50 group-hover:bg-orange-100",
-    matches: l => l === "/admin/whatsapp-campaign-results",
-  },
-  {
-    key: "automations",
-    label: "Automations",
-    description: "Send a campaign by itself every day",
-    href: "/admin/whatsapp-campaign-automations",
-    icon: FileSpreadsheet,
-    sidebarTestId: "link-wa-campaign-automations",
-    gradient: "bg-gradient-to-br from-emerald-500 to-teal-600",
-    tone: "bg-emerald-50 group-hover:bg-emerald-100",
-    matches: l => l.startsWith("/admin/whatsapp-campaign-automations"),
-  },
-  {
-    key: "ai-workbooks",
-    label: "AI Workbooks",
-    description: "Review campaign recipients and AI results in one sheet",
-    href: "/admin/whatsapp-ai-workbooks",
-    icon: Table2,
-    sidebarTestId: "link-wa-ai-workbooks",
-    gradient: "bg-gradient-to-br from-purple-500 to-violet-600",
-    tone: "bg-purple-50 group-hover:bg-purple-100",
-    matches: l => l.startsWith("/admin/whatsapp-ai-workbooks"),
-  },
-  {
-    key: "opt-outs",
-    label: "Opt-outs",
-    description: "People who asked not to be messaged",
-    href: "/admin/whatsapp-opt-outs",
-    icon: ShieldCheck,
-    sidebarTestId: "link-wa-opt-outs",
-    gradient: "bg-gradient-to-br from-slate-500 to-gray-600",
-    tone: "bg-slate-50 group-hover:bg-slate-100",
-    matches: l => l.startsWith("/admin/whatsapp-opt-outs"),
   },
 ];
 

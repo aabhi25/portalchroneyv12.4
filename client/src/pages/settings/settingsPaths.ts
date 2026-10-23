@@ -20,7 +20,8 @@ export const SETTINGS_PATHS = {
   website: "/admin/website/settings/appearance",
   whatsappConnection: "/admin/whatsapp/settings/connection",
   whatsappAiReplies: "/admin/whatsapp/settings/ai-replies",
-  whatsappFlowSettings: "/admin/whatsapp/settings/journey-settings",
+  // Lives under WhatsApp › Journeys (it changes how journeys behave), not in WhatsApp › Settings.
+  whatsappFlowSettings: "/admin/whatsapp-journey-settings",
   whatsappLeadCapture: "/admin/whatsapp/settings/lead-capture",
   instagramConnection: "/admin/instagram/settings/connection",
   instagramLeadCapture: "/admin/instagram/settings/lead-capture",

@@ -2,7 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Globe, MessageCircle, Camera, Facebook, Phone, Gem, Contact, GraduationCap, Package, CalendarDays, PackageOpen,
   Palette, Sparkles, Mic, Video, Zap, ShoppingBag, UserPlus, KeyRound, Bell, Percent, Compass, LayoutList, Tag, Code,
-  Plug, ShieldCheck, Route, FileText, Store, MessageSquareText, EyeOff, Clock, Link2, SlidersHorizontal,
+  Plug, ShieldCheck, Route, MessageSquareText, EyeOff, Clock, Link2, SlidersHorizontal,
 } from "lucide-react";
 import type { MeResponseDto } from "@shared/dto";
 import { getWhatsappSections } from "@/components/whatsapp/sections";
@@ -85,6 +85,8 @@ export interface HubTab {
   visible?: (a: HubAccess) => boolean;
   /** The page scrolls its own panels (an inbox): the frame gives it exactly the screen height below the tabs. */
   fillsScreen?: boolean;
+  /** Old names, so "Find a setting" still finds a screen that moved. */
+  formerly?: string;
 }
 
 export interface HubSettingsItem {
@@ -122,8 +124,8 @@ export interface HubArea {
   description: string;
   tabs: HubTab[];
   settings?: HubSettingsItem[];
-  /** Second row of choices under one tab (WhatsApp campaign screens). */
-  sections?: { tabKey: string; items: HubTab[] };
+  /** Second row of choices under a tab (WhatsApp journeys and campaigns). */
+  sections?: { tabKey: string; items: HubTab[] }[];
   /** Other addresses that belong to this area without being a tab. */
   alsoMatches?: (location: string) => boolean;
   visible: (a: HubAccess) => boolean;
@@ -144,7 +146,23 @@ const settingsTab = (area: HubAreaId): HubTab => ({
 
 const WHATSAPP_CAMPAIGN_ITEMS: HubTab[] = (
   getWhatsappSections({ marketingEnabled: true }).find(s => s.id === "campaigns")?.items ?? []
-).map(i => ({ key: i.key, label: i.label, href: i.href, matches: i.matches }));
+).map(i => ({ key: i.key, label: i.label, href: i.href, matches: i.matches, formerly: i.formerly }));
+
+/**
+ * WhatsApp does two jobs: journeys answer people who message you, campaigns message many people
+ * at once. Each gets a tab. Keyword replies, journey settings and the dealer/store lists only
+ * matter to the scripted replies, so they live with the journeys rather than in Settings.
+ */
+const WHATSAPP_JOURNEY_ITEMS: HubTab[] = [
+  { key: "journeys", label: "Journeys", href: "/admin/whatsapp-flows", matches: exact("/admin/whatsapp-flows"), formerly: "Guided journeys · AI Flows · flow builder" },
+  { key: "keyword-replies", label: "Keyword replies", href: "/admin/whatsapp-smart-replies", matches: exact("/admin/whatsapp-smart-replies"), formerly: "Smart replies · fixed answers" },
+  {
+    key: "journey-settings", label: "Journey settings", href: SETTINGS_PATHS.whatsappFlowSettings,
+    matches: l => l === SETTINGS_PATHS.whatsappFlowSettings || l.startsWith("/admin/document-type-editor"),
+    formerly: "Journey settings & documents · Flow settings · document types · confirmation step · cooldown",
+  },
+  { key: "stores", label: "Dealers & stores", href: "/admin/whatsapp-dealers-stores", matches: exact("/admin/whatsapp-dealers-stores"), formerly: "Dealers, stores & EMI" },
+];
 
 export const HUB_AREAS: HubArea[] = [
   {
@@ -213,20 +231,20 @@ export const HUB_AREAS: HubArea[] = [
       { key: "overview", label: "Overview", href: "/admin/whatsapp/overview", matches: l => l === "/admin/whatsapp/overview" || l.startsWith("/admin/whatsapp-hub") },
       { key: "conversations", label: "Conversations", href: "/admin/whatsapp-conversations", matches: exact("/admin/whatsapp-conversations") },
       { key: "leads", label: "Leads", href: "/admin/whatsapp-leads", matches: exact("/admin/whatsapp-leads") },
-      { key: "campaigns", label: "Campaigns", href: "/admin/whatsapp-campaign-home", matches: l => WHATSAPP_CAMPAIGN_ITEMS.some(i => i.matches(l)), visible: a => a.whatsappMarketing },
+      { key: "journeys", label: "Journeys", href: "/admin/whatsapp-flows", matches: l => WHATSAPP_JOURNEY_ITEMS.some(i => i.matches(l)) },
+      { key: "campaigns", label: "Campaigns", href: "/admin/whatsapp-campaigns", matches: l => WHATSAPP_CAMPAIGN_ITEMS.some(i => i.matches(l)), visible: a => a.whatsappMarketing },
       { key: "insights", label: "Insights", href: "/admin/wa-insights", matches: exact("/admin/wa-insights") },
       settingsTab("whatsapp"),
     ],
-    sections: { tabKey: "campaigns", items: WHATSAPP_CAMPAIGN_ITEMS },
+    sections: [
+      { tabKey: "journeys", items: WHATSAPP_JOURNEY_ITEMS },
+      { tabKey: "campaigns", items: WHATSAPP_CAMPAIGN_ITEMS },
+    ],
     settings: [
       { key: "connection", label: "Number & connection", description: "MSG91 details, webhook, 24-hour template and the main switch", icon: Plug, group: "Connection", formerly: "Settings › Channels › WhatsApp › Connection" },
       { key: "allowed-numbers", label: "Allowed numbers", description: "Reply only to chosen numbers (also affects campaigns)", icon: ShieldCheck, group: "Connection", href: "/admin/whatsapp-whitelist", formerly: "WhatsApp › Allowed numbers" },
-      { key: "ai-replies", label: "How the AI replies", description: "Main switch, reply mode, goal and what the AI knows", icon: Sparkles, group: "Replies", formerly: "Settings › Channels › WhatsApp › AI replies" },
-      { key: "keyword-replies", label: "Keyword replies", description: "Fixed answers for exact words", icon: Zap, group: "Replies", href: "/admin/whatsapp-smart-replies", formerly: "WhatsApp › Keyword replies" },
-      { key: "journeys", label: "Guided journeys", description: "Button menus and step-by-step flows", icon: Route, group: "Replies", href: "/admin/whatsapp-flows", alsoMatches: l => l.startsWith("/admin/document-type-editor"), formerly: "WhatsApp › Guided journeys" },
-      { key: "journey-settings", label: "Journey settings & documents", description: "Document types, confirmation step, cooldown", icon: FileText, group: "Replies", formerly: "Settings › Channels › WhatsApp › Flow settings" },
+      { key: "ai-replies", label: "How the AI replies", description: "Main switch, reply mode (whether journeys run), goal and what the AI knows", icon: Sparkles, group: "Replies", formerly: "Settings › Channels › WhatsApp › AI replies" },
       { key: "lead-capture", label: "Lead capture", description: "When leads are created, which details are picked up", icon: UserPlus, group: "Leads", formerly: "Settings › Channels › WhatsApp › Lead capture" },
-      { key: "stores", label: "Dealers, stores & EMI", description: "Lists used by journeys and the CRM", icon: Store, group: "Leads", href: "/admin/whatsapp-dealers-stores", formerly: "WhatsApp › Dealers & stores" },
     ],
   },
   {

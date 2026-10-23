@@ -6,7 +6,6 @@ import OtpSettings from "@/pages/OtpSettings";
 import CategorySettings from "@/pages/CategorySettings";
 import WhatsApp from "@/pages/WhatsApp";
 import WhatsAppAISetup from "@/pages/WhatsAppAISetup";
-import WhatsAppFlowSettings from "@/pages/WhatsAppFlowSettings";
 import InstagramSettings from "@/pages/InstagramSettings";
 import InstagramLeads from "@/pages/InstagramLeads";
 import InstagramCommentSettings from "@/pages/InstagramCommentSettings";
@@ -39,7 +38,6 @@ const SCREENS: Partial<Record<`${HubAreaId}/${string}`, (user: MeResponseDto | n
 
   "whatsapp/connection": () => <WhatsApp embeddedPage="config" />,
   "whatsapp/ai-replies": () => <WhatsAppAISetup />,
-  "whatsapp/journey-settings": () => <WhatsAppFlowSettings />,
   "whatsapp/lead-capture": () => <WhatsApp embeddedPage="lead-capture-settings" />,
 
   "instagram/connection": () => <InstagramSettings embedded />,
