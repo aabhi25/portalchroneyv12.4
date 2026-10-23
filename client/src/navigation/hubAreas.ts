@@ -2,7 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Globe, MessageCircle, Camera, Facebook, Phone, Gem, Contact, GraduationCap, Package, CalendarDays, PackageOpen,
   Palette, Sparkles, Mic, Video, Zap, ShoppingBag, UserPlus, KeyRound, Bell, Percent, Compass, LayoutList, Tag, Code,
-  Plug, ShieldCheck, Route, MessageSquareText, EyeOff, Clock, Link2, SlidersHorizontal,
+  Plug, ShieldCheck, Route, MessageSquareText, EyeOff, Clock, Link2, SlidersHorizontal, CircleUserRound,
 } from "lucide-react";
 import type { MeResponseDto } from "@shared/dto";
 import { getWhatsappSections } from "@/components/whatsapp/sections";
@@ -42,6 +42,8 @@ export interface HubAccess {
   orders: boolean;
   fullFeatures: boolean;
   topScholar: boolean;
+  /** The live AI video avatar is switched on for the account. */
+  liveAvatar: boolean;
 }
 
 /** Same rules the sidebar has always used, gathered in one place. */
@@ -74,6 +76,7 @@ export function getHubAccess(user: MeResponseDto | null | undefined, aiCallingEn
     orders: ba?.demoOrdersEnabled === true,
     fullFeatures,
     topScholar: ba?.isTopscholar === true,
+    liveAvatar: ba?.liveAvatarEnabled === true,
   };
 }
 
@@ -227,7 +230,8 @@ export const HUB_AREAS: HubArea[] = [
     alsoMatches: exact("/admin/website"),
     settings: [
       { key: "appearance", label: "Appearance", description: "Colours, button, size and position of the chat", icon: Palette, group: "Look & feel", wide: true, formerly: "Settings › Chat widget › Appearance" },
-      { key: "avatar", label: "Avatar", description: "The picture next to each answer, and the live video avatar", icon: Video, group: "Look & feel", wide: true, formerly: "Settings › Chat widget › Avatar" },
+      { key: "avatar", label: "Avatar", description: "The picture next to each answer", icon: CircleUserRound, group: "Look & feel", wide: true, formerly: "Settings › Chat widget › Avatar" },
+      { key: "video-call", label: "Video call", description: "How the live video avatar sounds and behaves on a call", icon: Video, group: "Look & feel", visible: a => a.liveAvatar, formerly: "Website chat › Avatar › Video call settings" },
       { key: "voice", label: "Voice", description: "Let visitors talk to the assistant", icon: Mic, group: "Look & feel", wide: true, formerly: "Settings › Chat widget › Voice" },
       { key: "behaviour", label: "Welcome & behaviour", description: "Welcome message, tone, auto-open, starters, languages", icon: Sparkles, group: "How it talks", wide: true, formerly: "Settings › Chat widget › Behavior" },
       { key: "keyword-replies", label: "Keyword replies", description: "Fixed answers for exact words", icon: Zap, group: "How it talks", href: "/admin/smart-replies", formerly: "Training › Smart Replies" },

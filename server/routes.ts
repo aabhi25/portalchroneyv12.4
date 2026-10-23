@@ -8949,9 +8949,13 @@ If you cannot determine the category or the image doesn't match any category, re
     // If user has a business account, include feature flags from the ACTIVE account
     const { isTopscholarAccount } = await import("./services/topscholar/config");
     if (businessAccountId) {
-      const businessAccount = await storage.getBusinessAccount(businessAccountId);
+      const { getSettingsRow: getAvatarSettingsRow } = await import("./services/avatar/settingsService");
+      const [businessAccount, avatarRow] = await Promise.all([
+        storage.getBusinessAccount(businessAccountId),
+        getAvatarSettingsRow(businessAccountId).catch(() => null),
+      ]);
       const dto = businessAccount ? toBusinessAccountDto(businessAccount) : null;
-      res.json(toMeResponseDto(user, dto, sessionUser.activeBusinessAccountId, isTopscholarAccount(businessAccountId)));
+      res.json(toMeResponseDto(user, dto, sessionUser.activeBusinessAccountId, isTopscholarAccount(businessAccountId), avatarRow?.enabled === true));
     } else {
       res.json(toMeResponseDto(user, null, sessionUser.activeBusinessAccountId, false));
     }

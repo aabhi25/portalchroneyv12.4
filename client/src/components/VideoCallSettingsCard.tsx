@@ -4,7 +4,6 @@ import { ChevronDown, Loader2, Video } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -98,7 +97,7 @@ function Choice<T extends string>({ value, options, onChange, testId }: { value:
 
 /**
  * Video call settings of the Live AI avatar: how the call sounds and behaves, with a 30-day report.
- * Business users edit their own (Website chat › Avatar); super admins edit any account's from the
+ * Business users edit their own (Website chat › Settings › Video call); super admins edit any account's from the
  * avatar's Set up panel. `endpoint` is the GET/PUT URL; `accountId` is set for another account.
  */
 export function VideoCallSettingsCard({ endpoint, accountId }: { endpoint: string; accountId?: string }) {
@@ -344,9 +343,9 @@ export function VideoCallSettingsCard({ endpoint, accountId }: { endpoint: strin
   );
 }
 
-/** Website chat › Avatar, for the business: shown only when the video avatar is on for the account. */
-export function BusinessVideoCallCard() {
-  const { data } = useQuery<VideoCallView>({
+/** Website chat › Settings › Video call (the business's own settings). */
+export function VideoCallSettingsPage() {
+  const { data, isLoading } = useQuery<VideoCallView>({
     queryKey: ["/api/avatar/video-call"],
     queryFn: async () => {
       const res = await fetch("/api/avatar/video-call", { credentials: "include" });
@@ -354,16 +353,13 @@ export function BusinessVideoCallCard() {
       return res.json();
     },
   });
-  if (!data?.avatarEnabled) return null;
   return (
-    <Card className="shadow-lg border border-gray-200 bg-white" data-testid="card-video-call-settings">
-      <CardHeader className="border-b bg-gradient-to-r from-purple-50/50 to-pink-50/50">
-        <CardTitle className="text-lg flex items-center gap-2"><Video className="h-5 w-5" /> Video call settings</CardTitle>
-        <CardDescription>How the live video avatar sounds and behaves on a call.</CardDescription>
-      </CardHeader>
-      <CardContent className="pt-4">
+    <div className="rounded-2xl border border-black/[0.07] bg-white p-5" data-testid="page-video-call-settings">
+      {!isLoading && data && !data.avatarEnabled ? (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground"><Video className="h-4 w-4" /> The live video avatar isn't on for this account. Contact the AI Chroney team to add it.</p>
+      ) : (
         <VideoCallSettingsCard endpoint="/api/avatar/video-call" />
-      </CardContent>
-    </Card>
+      )}
+    </div>
   );
 }

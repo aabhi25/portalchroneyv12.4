@@ -13,6 +13,7 @@ import FacebookSettings from "@/pages/FacebookSettings";
 import FacebookCommentSettings from "@/pages/FacebookCommentSettings";
 import VisualSearchSettings from "@/pages/VisualSearchSettings";
 import DataRetentionSettings from "@/pages/settings/DataRetentionSettings";
+import { VideoCallSettingsPage } from "@/components/VideoCallSettingsCard";
 import type { HubAreaId } from "@/navigation/hubAreas";
 
 const widget = (tab: WidgetSettingsTab) => () => <WidgetSettings initialTab={tab} />;
@@ -28,6 +29,7 @@ const SCREENS: Partial<Record<`${HubAreaId}/${string}`, (user: MeResponseDto | n
   "website/appearance": widget("appearance"),
   "website/avatar": widget("avatar"),
   "website/voice": widget("voice"),
+  "website/video-call": () => <VideoCallSettingsPage />,
   "website/behaviour": widget("behavior"),
   "website/shopping": widget("shopping"),
   "website/nudges": widget("nudges"),

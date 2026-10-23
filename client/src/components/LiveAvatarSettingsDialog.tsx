@@ -411,7 +411,7 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
     <div className="space-y-3">
       <div>
         <h3 className="flex items-center gap-2 font-semibold"><Video className="h-4 w-4" /> Video call settings</h3>
-        <p className="text-sm text-muted-foreground">How the avatar sounds and behaves on a call. The business can change these too (Website chat › Avatar).</p>
+        <p className="text-sm text-muted-foreground">How the avatar sounds and behaves on a call. The business can change these too (Website chat › Settings › Video call).</p>
       </div>
       <VideoCallSettingsCard endpoint={`/api/super-admin/avatar/accounts/${businessAccountId}/video-call`} accountId={businessAccountId} />
     </div>

@@ -36,6 +36,8 @@ export type MeResponseDto = SafeUser & {
     leadPhoneMaskingEnabled: boolean;
     aiCallingEnabled: boolean; // AI Calling (B)
     isTopscholar: boolean;
+    /** Live AI video avatar switched on (Website chat › Settings › Video call). */
+    liveAvatarEnabled: boolean;
   } | null;
 };
 
@@ -44,7 +46,8 @@ export function toMeResponseDto(
   user: User,
   businessAccount?: BusinessAccountDto | null,
   activeBusinessAccountId?: string | null,
-  isTopscholar?: boolean
+  isTopscholar?: boolean,
+  liveAvatarEnabled?: boolean
 ): MeResponseDto {
   const { passwordHash: _passwordHash, tempPassword: _tempPassword, ...safeUser } = user;
   if (businessAccount) {
@@ -77,6 +80,7 @@ export function toMeResponseDto(
         leadPhoneMaskingEnabled: businessAccount.leadPhoneMaskingEnabled,
         aiCallingEnabled: !!businessAccount.aiCallingEnabled,
         isTopscholar: !!isTopscholar,
+        liveAvatarEnabled: !!liveAvatarEnabled,
       },
     };
   }
