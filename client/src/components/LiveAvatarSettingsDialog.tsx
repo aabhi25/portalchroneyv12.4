@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SetupPanel } from "@/components/hub/SetupPanel";
+import { VideoCallSettingsCard } from "@/components/VideoCallSettingsCard";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -405,6 +406,17 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
       </>
   );
 
+  // Saved on its own (its own button), so a half-edited avatar form isn't saved with it.
+  const videoCall = (
+    <div className="space-y-3">
+      <div>
+        <h3 className="flex items-center gap-2 font-semibold"><Video className="h-4 w-4" /> Video call settings</h3>
+        <p className="text-sm text-muted-foreground">How the avatar sounds and behaves on a call. The business can change these too (Website chat › Avatar).</p>
+      </div>
+      <VideoCallSettingsCard endpoint={`/api/super-admin/avatar/accounts/${businessAccountId}/video-call`} accountId={businessAccountId} />
+    </div>
+  );
+
   if (bare) {
     return (
       <div className="max-w-3xl space-y-4">
@@ -418,6 +430,7 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
             {save.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save
           </Button>
         </div>
+        <div className="rounded-2xl border border-black/[0.07] bg-white p-5">{videoCall}</div>
       </div>
     );
   }
@@ -441,6 +454,7 @@ export function LiveAvatarSettingsDialog({ businessAccountId, businessName, open
       </>}
     >
       {body}
+      <div className="mt-6 border-t pt-5">{videoCall}</div>
     </SetupPanel>
   );
 }

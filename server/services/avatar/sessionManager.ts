@@ -26,6 +26,10 @@ import { aiBudgetService, istMonthKey, istMonthRange } from "../aiBudgetService"
 import { aiUsageLogger } from "../aiUsageLogger";
 import { getRates, resolveApiKey } from "./credentials";
 import { getTutorSettings } from "../tutor/settings";
+import { normalizeVideoCall, PACE_PERCENT, withinVideoHours, type VideoCallSettings } from "@shared/videoCall";
+
+/** Said once, shortly before an idle video call would end (Video call settings: idle nudge). */
+const IDLE_NUDGE_TEXT = "Are you still there? Ask me anything, or tap the red button to end the call.";
 
 /** The AI tutor's spoken AI-avatar notice (when the account has no custom notice text). */
 const TUTOR_DISCLOSURE = "Hi, I'm {name}, your AI tutor. You're talking to an AI avatar, so you can switch to text at any time.";
@@ -58,6 +62,7 @@ export type AvatarGateCode =
   | "concurrency_limit"
   | "provider_error"
   | "rate_limited"
+  | "outside_hours"
   | "forbidden";
 
 export class AvatarGateError extends Error {
@@ -72,6 +77,7 @@ export const VISITOR_FALLBACK_MESSAGES: Partial<Record<AvatarGateCode, string>> 
   concurrency_limit: "The video assistant is busy right now — let's continue by voice.",
   provider_error: "The video assistant couldn't start — let's continue by voice.",
   rate_limited: "Please wait a moment before starting the video assistant again.",
+  outside_hours: "Video calls are available during business hours — let's continue by voice.",
 };
 
 export interface VoiceBinding {
@@ -82,6 +88,17 @@ export interface VoiceBinding {
   isAnswerActive(): boolean;
   /** The avatar session ended (for any reason); voice falls back to local playback. */
   onEnded(reason: AvatarEndReason): void;
+  /** Say a short fixed line on the call (the idle nudge). */
+  speak?(text: string): void;
+}
+
+/** How the voice pipeline should run this video call (Video call settings; null = tutor / defaults). */
+export interface AvatarVoiceOptions {
+  speedPercent: number;
+  voiceSelection: string | null;
+  openingLine: string | null;
+  thinkingSounds: boolean;
+  allowInterruptions: boolean;
 }
 
 interface LiveSession {
@@ -115,6 +132,12 @@ interface LiveSession {
   ending: Promise<void> | null;
   timings: Record<string, number>;
   firstAudioMs: number | null;
+  /** Video call settings (null for AI tutor lessons, which have their own controls). */
+  video: VideoCallSettings | null;
+  /** When the idle nudge was said (once per call). */
+  nudgedAtMs: number | null;
+  /** When the visitor tapped the hand-off button (kept when the session's record is closed). */
+  handoffAt: string | null;
 }
 
 export interface StartSessionResult {
@@ -281,6 +304,8 @@ export class AvatarSessionManager {
         disclosureText: settings.disclosureText?.trim() ? settings.disclosureText : TUTOR_DISCLOSURE,
       };
     }
+    const video = input.purpose === "tutor" ? null : normalizeVideoCall(settings.videoCall);
+    if (video && !withinVideoHours(video)) throw new AvatarGateError("outside_hours", 403, "Video calls are outside this account's video hours");
     if (account.voiceModeEnabled !== "true") throw new AvatarGateError("avatar_disabled", 403, "Voice mode is not enabled for this account");
     if (isChildrensAccount(account) && !settings.parentalConsentConfirmed) {
       throw new AvatarGateError("consent_required", 403, "Parental consent has not been confirmed for this account");
@@ -387,6 +412,9 @@ export class AvatarSessionManager {
       ending: null,
       timings: { providerCreateMs: now - t0 },
       firstAudioMs: null,
+      video,
+      nudgedAtMs: null,
+      handoffAt: null,
     };
     this.live.set(live.id, live);
     handle.onEvent((event) => this.handleProviderEvent(live, event));
@@ -419,6 +447,18 @@ export class AvatarSessionManager {
       throw new AvatarGateError("forbidden", 403, "Not your avatar session");
     }
     return live;
+  }
+
+  /** The visitor tapped the hand-off button (counted in the video call report). */
+  async recordHandoff(sessionId: string, auth: { businessAccountId: string; visitorId: string }): Promise<boolean> {
+    const [row] = await db.select({ id: avatarSessions.id, visitorId: avatarSessions.visitorId, metadata: avatarSessions.metadata }).from(avatarSessions)
+      .where(and(eq(avatarSessions.id, sessionId), eq(avatarSessions.businessAccountId, auth.businessAccountId))).limit(1);
+    if (!row || row.visitorId !== auth.visitorId) return false;
+    const handoffAt = new Date().toISOString();
+    const live = this.live.get(sessionId);
+    if (live) live.handoffAt = handoffAt;
+    await db.update(avatarSessions).set({ metadata: { ...(row.metadata || {}), handoffClicked: true, handoffAt } }).where(eq(avatarSessions.id, sessionId));
+    return true;
   }
 
   async markConnected(sessionId: string, auth: { businessAccountId: string; visitorId: string }, info: { providerSessionId?: string | null; firstFrameMs?: number | null }): Promise<boolean> {
@@ -470,7 +510,7 @@ export class AvatarSessionManager {
 
   // ── voice bridge (used by realtimeVoiceService) ─────────────────────────────
 
-  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: AvatarProviderId; disclosure: string | null; disclosureIsDefault: boolean; displayName: string; avatarGender: "female" | "male" | null } | null {
+  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: AvatarProviderId; disclosure: string | null; disclosureIsDefault: boolean; displayName: string; avatarGender: "female" | "male" | null; video: AvatarVoiceOptions | null } | null {
     const live = this.live.get(sessionId);
     if (!live || live.businessAccountId !== auth.businessAccountId || live.visitorId !== auth.visitorId) return null;
     live.voice = binding;
@@ -479,7 +519,15 @@ export class AvatarSessionManager {
       live.conversationId = binding.conversationId;
       void db.update(avatarSessions).set({ conversationId: binding.conversationId }).where(eq(avatarSessions.id, live.id)).catch(() => undefined);
     }
-    return { audioRoute: live.audioRoute, provider: live.provider, disclosure: live.disclosure, disclosureIsDefault: live.disclosureIsDefault !== false, displayName: live.displayName, avatarGender: live.avatarGender };
+    const v = live.video;
+    const video: AvatarVoiceOptions | null = v ? {
+      speedPercent: PACE_PERCENT[v.speakingPace],
+      voiceSelection: v.voiceSelection,
+      openingLine: v.openingLine,
+      thinkingSounds: v.thinkingSounds,
+      allowInterruptions: v.allowInterruptions,
+    } : null;
+    return { audioRoute: live.audioRoute, provider: live.provider, disclosure: live.disclosure, disclosureIsDefault: live.disclosureIsDefault !== false, displayName: live.displayName, avatarGender: live.avatarGender, video };
   }
 
   unbindVoice(sessionId: string, conversationId?: string): void {
@@ -597,7 +645,11 @@ export class AvatarSessionManager {
           endReason: reason,
           costUsd: costUsd.toFixed(6),
           ...(live.handle.providerSessionId ? { providerSessionId: live.handle.providerSessionId } : {}),
-          metadata: { keySource: live.apiKeySource, timings: live.timings, stats, audioRoute: live.audioRoute, ...(live.clientError ? { error: live.clientError } : {}) },
+          metadata: {
+            keySource: live.apiKeySource, timings: live.timings, stats, audioRoute: live.audioRoute,
+            ...(live.clientError ? { error: live.clientError } : {}),
+            ...(live.handoffAt ? { handoffClicked: true, handoffAt: live.handoffAt } : {}),
+          },
         }).where(eq(avatarSessions.id, live.id));
       } catch (error) {
         console.error(`[Avatar] failed to record end of session ${live.id}:`, (error as Error)?.message || error);
@@ -656,6 +708,16 @@ export class AvatarSessionManager {
         }
         if (capHit) { this.requestEndAfterAnswer(live, "cap_reached", now); continue; }
         if (now - live.startedAtMs >= live.maxSessionMs) { this.requestEndAfterAnswer(live, "max_duration", now); continue; }
+        // Once per call, shortly before an idle call would end: "Are you still there?"
+        const nudgeLeadMs = Math.min(20_000, live.idleTimeoutMs / 2);
+        if (!answering && live.video?.idleNudge && live.nudgedAtMs == null && live.voice?.speak
+          && now - live.lastActivityMs >= live.idleTimeoutMs - nudgeLeadMs) {
+          live.nudgedAtMs = now;
+          // The visitor gets the lead time to answer (the call isn't made longer than the idle limit allows).
+          live.lastActivityMs = now - (live.idleTimeoutMs - nudgeLeadMs);
+          live.voice.speak(IDLE_NUDGE_TEXT);
+          continue;
+        }
         if (!answering && now - live.lastActivityMs >= live.idleTimeoutMs) {
           live.voice?.notify({ type: "avatar_ending", reason: "idle_timeout" });
           void this.endSession(live.id, "idle_timeout");

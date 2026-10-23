@@ -38,6 +38,9 @@ import { avatarDebugEnabled, avatarSessionManager, AvatarGateError, VISITOR_FALL
 import { getAvatarProvider } from "../services/avatar/registry";
 import { isFakeProviderAllowed } from "../services/avatar/providers/fake";
 import { AvatarProviderError, CLIENT_END_REASONS, type AvatarEndReason, type AvatarProviderId } from "../services/avatar/types";
+import { getVideoCallSettings, saveVideoCallSettings } from "../services/avatar/settingsService";
+import { videoCallReport } from "../services/avatar/videoCallReport";
+import { buildCallCentreLoop } from "../services/calling/ambience";
 
 /**
  * Live AI avatar API.
@@ -456,7 +459,93 @@ router.get("/api/avatar/status", requireAuth, async (req, res) => {
   }
 });
 
+// ── video call settings (business users and super admins) ─────────────────────
+
+async function videoCallView(accountId: string) {
+  const [settings, avatar, account, widget, report] = await Promise.all([
+    getVideoCallSettings(accountId),
+    getEffectiveSettings(accountId),
+    storage.getBusinessAccount(accountId),
+    storage.getWidgetSettings(accountId),
+    videoCallReport(accountId).catch(() => null),
+  ]);
+  return {
+    settings,
+    avatarEnabled: avatar.enabled,
+    hasElevenLabsKey: !!account?.elevenlabsApiKey,
+    /** The website chat's voice ("Same as the website chat" in the voice choice). */
+    widgetVoice: widget?.voiceSelection || "shimmer",
+    report,
+  };
+}
+
+router.get("/api/avatar/video-call", requireAuth, async (req, res) => {
+  try {
+    const accountId = await resolveAuthorizedLeadAccountId(req.user!);
+    if (!accountId) return res.status(403).json({ error: "No business account" });
+    res.json(await videoCallView(accountId));
+  } catch (error) {
+    sendSettingsError(res, error, "Failed to load video call settings");
+  }
+});
+
+router.put("/api/avatar/video-call", requireAuth, async (req, res) => {
+  try {
+    const accountId = await resolveAuthorizedLeadAccountId(req.user!);
+    if (!accountId) return res.status(403).json({ error: "No business account" });
+    await saveVideoCallSettings(accountId, req.body, req.user!.id);
+    res.json(await videoCallView(accountId));
+  } catch (error) {
+    sendSettingsError(res, error, "Failed to save video call settings");
+  }
+});
+
+router.get("/api/super-admin/avatar/accounts/:businessAccountId/video-call", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    if (!(await storage.getBusinessAccount(req.params.businessAccountId))) return res.status(404).json({ error: "Business account not found" });
+    res.json(await videoCallView(req.params.businessAccountId));
+  } catch (error) {
+    sendSettingsError(res, error, "Failed to load video call settings");
+  }
+});
+
+router.put("/api/super-admin/avatar/accounts/:businessAccountId/video-call", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    if (!(await storage.getBusinessAccount(req.params.businessAccountId))) return res.status(404).json({ error: "Business account not found" });
+    await saveVideoCallSettings(req.params.businessAccountId, req.body, req.user!.id);
+    res.json(await videoCallView(req.params.businessAccountId));
+  } catch (error) {
+    sendSettingsError(res, error, "Failed to save video call settings");
+  }
+});
+
 // ── widget (public) ──────────────────────────────────────────────────────────
+
+/** The background sound of a video call, as a looping WAV (made once, cached; no audio file shipped). */
+const AMBIENCE_RATE = 24_000;
+const ambienceWav = new Map<string, Buffer>();
+function wavFor(variant: "office" | "call_centre"): Buffer {
+  const cached = ambienceWav.get(variant);
+  if (cached) return cached;
+  const pcm = buildCallCentreLoop(AMBIENCE_RATE, variant === "office" ? 20261024 : 20261017, variant);
+  const data = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0); header.writeUInt32LE(36 + data.length, 4); header.write("WAVE", 8);
+  header.write("fmt ", 12); header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(AMBIENCE_RATE, 24); header.writeUInt32LE(AMBIENCE_RATE * 2, 28); header.writeUInt16LE(2, 32); header.writeUInt16LE(16, 34);
+  header.write("data", 36); header.writeUInt32LE(data.length, 40);
+  const wav = Buffer.concat([header, data]);
+  ambienceWav.set(variant, wav);
+  return wav;
+}
+
+router.get("/api/chat/widget/avatar/ambience/:variant", (req, res) => {
+  const variant = req.params.variant.replace(/\.wav$/, "");
+  if (variant !== "office" && variant !== "call_centre") return res.status(404).end();
+  res.setHeader("Content-Type", "audio/wav");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.send(wavFor(variant));
+});
 
 /** sendBeacon on page close posts text/plain; accept it alongside JSON. */
 const textBody = express.text({ type: ["text/plain"], limit: "4kb" });
@@ -530,6 +619,16 @@ router.post("/api/chat/widget/avatar/session/:id/connected", async (req, res) =>
       firstFrameMs: typeof body.firstFrameMs === "number" ? body.firstFrameMs : null,
     });
     res.json({ active: ok });
+  } catch (error) {
+    sendGateError(res, error);
+  }
+});
+
+router.post("/api/chat/widget/avatar/session/:id/handoff", async (req, res) => {
+  const auth = visitorAuth(req, res);
+  if (!auth) return;
+  try {
+    res.json({ ok: await avatarSessionManager.recordHandoff(req.params.id, auth) });
   } catch (error) {
     sendGateError(res, error);
   }

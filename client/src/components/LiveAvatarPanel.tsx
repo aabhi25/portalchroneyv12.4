@@ -1,4 +1,4 @@
-import { ChevronDown, Loader2, MessageSquare, Mic, PhoneOff, ShoppingBag, Video, Volume2, VolumeX, X } from "lucide-react";
+import { ChevronDown, Headset, Loader2, MessageSquare, Mic, PhoneOff, ShoppingBag, Video, Volume2, VolumeX, X } from "lucide-react";
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import type { AvatarPhase } from "@/lib/liveAvatar/stateMachine";
 
@@ -40,6 +40,9 @@ interface LiveAvatarPanelProps {
    * switching never drops the stream.
    */
   variant?: "call" | "tile";
+  /** Video call settings › Hand-off: a button to reach a person (WhatsApp, phone or a link). */
+  handoff?: { label: string; href: string } | null;
+  onHandoff?: () => void;
 }
 
 function formatClock(total: number): string {
@@ -201,6 +204,22 @@ export function LiveAvatarPanel(props: LiveAvatarPanelProps) {
               <ShoppingBag className="h-3.5 w-3.5" /> Show products
             </button>
           )
+        )}
+
+        {/* Hand-off to a person (Video call settings). */}
+        {phase === "live" && !tile && props.handoff && (
+          <div className="flex flex-shrink-0 justify-center bg-gray-950 px-3 pt-3">
+            <a
+              href={props.handoff.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={props.onHandoff}
+              className="flex h-9 max-w-full items-center gap-1.5 rounded-full bg-white px-4 text-sm font-medium text-gray-900 hover:bg-gray-100"
+              data-testid="button-avatar-handoff"
+            >
+              <Headset className="h-4 w-4 flex-shrink-0" /> <span className="truncate">{props.handoff.label}</span>
+            </a>
+          </div>
         )}
 
         {/* Call controls. */}

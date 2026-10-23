@@ -183,7 +183,12 @@ function addScaled(into: Float32Array, src: Float32Array, scale: number): void {
 }
 
 /** Build the seamless loop at `rate` (PCM16 samples). */
-export function buildCallCentreLoop(rate: number, seed = 20261017): Int16Array {
+/**
+ * `office` (Live AI avatar video calls): a quieter room — two colleagues far away, some typing,
+ * no desk phone. Phone calls keep the call-centre mix.
+ */
+export function buildCallCentreLoop(rate: number, seed = 20261017, variant: "call_centre" | "office" = "call_centre"): Int16Array {
+  const office = variant === "office";
   const rand = rng(seed);
   const loop = Math.round(AMBIENCE_LOOP_SECONDS * rate);
   const fade = Math.round(CROSSFADE_SECONDS * rate);
@@ -191,7 +196,7 @@ export function buildCallCentreLoop(rate: number, seed = 20261017): Int16Array {
 
   // Murmur: five agents at different distances, then far-away and roomy.
   const murmur = new Float32Array(total);
-  for (let v = 0; v < 5; v++) addScaled(murmur, murmurVoice(rate, total, rand, v % 2 === 0), 0.35 + rand() * 0.65);
+  for (let v = 0; v < (office ? 2 : 5); v++) addScaled(murmur, murmurVoice(rate, total, rand, v % 2 === 0), 0.35 + rand() * 0.65);
   const farLp = new Biquad(rate, "lp", 1700);
   for (let i = 0; i < total; i++) murmur[i] = farLp.process(murmur[i]);
   const murmurRoom = roomReverb(murmur, rate);
@@ -204,10 +209,10 @@ export function buildCallCentreLoop(rate: number, seed = 20261017): Int16Array {
   const tone = roomTone(rate, total, rand);
 
   const mix = new Float32Array(total);
-  addScaled(mix, murmurRoom, (TARGET_RMS * 0.85) / Math.max(1e-9, rms(murmurRoom)));
-  addScaled(mix, tone, (TARGET_RMS * 0.35) / Math.max(1e-9, rms(tone)));
-  addScaled(mix, keys, KEYS_PEAK / Math.max(1e-9, peak(keys)));
-  addScaled(mix, phones, RING_PEAK / Math.max(1e-9, peak(phones)));
+  addScaled(mix, murmurRoom, (TARGET_RMS * (office ? 0.5 : 0.85)) / Math.max(1e-9, rms(murmurRoom)));
+  addScaled(mix, tone, (TARGET_RMS * (office ? 0.45 : 0.35)) / Math.max(1e-9, rms(tone)));
+  addScaled(mix, keys, (KEYS_PEAK * (office ? 0.8 : 1)) / Math.max(1e-9, peak(keys)));
+  if (!office) addScaled(mix, phones, RING_PEAK / Math.max(1e-9, peak(phones)));
 
   // Seamless loop: the extra tail fades into the head.
   const out = new Int16Array(loop);

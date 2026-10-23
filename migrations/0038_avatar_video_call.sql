@@ -1,0 +1,1 @@
+ALTER TABLE "avatar_business_settings" ADD COLUMN "video_call" jsonb DEFAULT '{}'::jsonb NOT NULL;

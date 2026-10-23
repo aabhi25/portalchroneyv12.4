@@ -11,6 +11,7 @@ import { db } from "../../db";
 import { avatarBusinessSettings, type AvatarBusinessSettings, type BusinessAccount } from "@shared/schema";
 import { storage } from "../../storage";
 import { isTopscholarAccount } from "../topscholar/config";
+import { BACKGROUND_GAIN, handoffHref, normalizeVideoCall, videoCallProblem, withinVideoHours, type VideoCallSettings } from "@shared/videoCall";
 import {
   keyAvailability,
   maskKey,
@@ -68,6 +69,7 @@ export function defaultSettings(businessAccountId: string, account?: Pick<Busine
     maxConcurrentSessions: 2,
     maxSessionMinutes: 10,
     idleTimeoutSeconds: 60,
+    videoCall: {},
     apiKeys: {},
     allowPlatformKey: false,
     voiceNote: null,
@@ -328,6 +330,11 @@ export interface PublicAvatarConfig {
   enabled: true;
   displayName: string;
   styleHint: string;
+  /** Video call behaviour the widget applies itself (shared/videoCall.ts). */
+  captions: boolean;
+  autoVoiceOnly: boolean;
+  background: { sound: "office" | "call_centre"; gain: number } | null;
+  handoff: { label: string; href: string } | null;
 }
 
 const publicCache = new Map<string, { value: PublicAvatarConfig | null; expiresAt: number }>();
@@ -355,8 +362,19 @@ export async function getPublicAvatarConfig(businessAccountId: string, account?:
       const consentOk = !isChildrensAccount(acc) || row.parentalConsentConfirmed;
       const voiceOk = acc?.voiceModeEnabled === "true" && acc?.status !== "suspended";
       const keyOk = providerOk && !!(await keyAvailability(row.provider as AvatarProviderId, row as any));
-      if (providerOk && consentOk && voiceOk && keyOk && (row.provider === "fake" || row.avatarId)) {
-        value = { enabled: true, displayName: row.displayName?.trim() || DEFAULT_DISPLAY_NAME, styleHint: row.styleHint };
+      const video = normalizeVideoCall(row.videoCall);
+      // Outside video hours the widget shows no video button (voice and text carry on).
+      if (providerOk && consentOk && voiceOk && keyOk && (row.provider === "fake" || row.avatarId) && withinVideoHours(video)) {
+        const href = handoffHref(video.handoff);
+        value = {
+          enabled: true,
+          displayName: row.displayName?.trim() || DEFAULT_DISPLAY_NAME,
+          styleHint: row.styleHint,
+          captions: video.captions,
+          autoVoiceOnly: video.autoVoiceOnly,
+          background: video.backgroundSound === "off" ? null : { sound: video.backgroundSound, gain: BACKGROUND_GAIN[video.backgroundVolume] },
+          handoff: href ? { label: video.handoff.label, href } : null,
+        };
       }
     }
   } catch (error) {
@@ -366,6 +384,37 @@ export async function getPublicAvatarConfig(businessAccountId: string, account?:
   }
   publicCache.set(businessAccountId, { value, expiresAt: Date.now() + PUBLIC_TTL_MS });
   return value;
+}
+
+// ── video call settings (business-editable) ──────────────────────────────────
+
+export async function getVideoCallSettings(businessAccountId: string): Promise<VideoCallSettings> {
+  const row = await getSettingsRow(businessAccountId);
+  return normalizeVideoCall(row?.videoCall);
+}
+
+/** Saves the account's video call settings (a partial update merges into what is stored). */
+export async function saveVideoCallSettings(businessAccountId: string, input: unknown, actorUserId: string | null): Promise<VideoCallSettings> {
+  const current = await getVideoCallSettings(businessAccountId);
+  const patch = (input && typeof input === "object" ? input : {}) as Record<string, any>;
+  const merged = normalizeVideoCall({
+    ...current,
+    ...patch,
+    hours: { ...current.hours, ...(patch.hours || {}) },
+    handoff: { ...current.handoff, ...(patch.handoff || {}) },
+  });
+  const problem = videoCallProblem(merged);
+  if (problem) throw new AvatarSettingsError(problem);
+  if (merged.voiceSelection?.startsWith("el:")) {
+    const account = await storage.getBusinessAccount(businessAccountId);
+    if (!account?.elevenlabsApiKey) throw new AvatarSettingsError("Add the account's ElevenLabs key before choosing an ElevenLabs voice");
+  }
+  const now = new Date();
+  await db.insert(avatarBusinessSettings)
+    .values({ businessAccountId, videoCall: merged as any, updatedBy: actorUserId, updatedAt: now })
+    .onConflictDoUpdate({ target: avatarBusinessSettings.businessAccountId, set: { videoCall: merged as any, updatedBy: actorUserId, updatedAt: now } });
+  invalidatePublicConfig(businessAccountId);
+  return merged;
 }
 
 export function providerLabel(provider: string): string {

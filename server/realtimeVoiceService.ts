@@ -28,7 +28,7 @@ import {
   endTopscholarVoiceSession,
   startTopscholarVoiceSession,
 } from './services/topscholar/voiceUsageService';
-import { avatarSessionManager, type VoiceBinding } from './services/avatar/sessionManager';
+import { avatarSessionManager, type AvatarVoiceOptions, type VoiceBinding } from './services/avatar/sessionManager';
 import { genderOfVoice, genderOfVoiceSync, resolveAssistantGender, type AssistantGender } from './services/chatContext/assistantGender';
 import { fillerDelayMs, fillerKind, fillerLanguage, fillerPhrases, fillerPhrasesFor, isOnlyInterjection, phoneParticle, pickFiller, FILLER_NO_REPEAT, PHONE_FILLER_AFTER_STOP_MS, stripLeadingInterjection, type FillerKind } from './services/voice/fillers';
 import { aiFillerChoice, type FillerChoice } from './services/voice/fillerPicker';
@@ -127,7 +127,7 @@ export interface RealtimeVoiceDeps {
  * ('server' route) or fed to the provider's browser SDK ('client' route).
  */
 export interface AvatarVoiceBridge {
-  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: string; disclosure: string | null; disclosureIsDefault?: boolean; displayName: string; avatarGender?: "female" | "male" | null } | null;
+  bindVoice(sessionId: string, auth: { businessAccountId: string; visitorId: string }, binding: VoiceBinding): { audioRoute: AudioRoute; provider: string; disclosure: string | null; disclosureIsDefault?: boolean; displayName: string; avatarGender?: "female" | "male" | null; video?: AvatarVoiceOptions | null } | null;
   unbindVoice(sessionId: string, conversationId?: string): void;
   sendAudio(sessionId: string, pcm: Buffer): boolean;
   endOfSpeech(sessionId: string): void;
@@ -386,6 +386,8 @@ interface VoiceConversation {
   k12ContentOnly?: boolean;
   elevenlabsApiKey?: string;
   elevenlabsVoiceId?: string;
+  /** The account's ElevenLabs key, for a video call that uses its own ElevenLabs voice. */
+  businessElevenLabsKey?: string;
   /** Gender of the voice actually used (Hindi & co. conjugate by the speaker's gender). */
   voiceGender?: AssistantGender | null;
   /** Resolves when the voice's gender lookup (custom ElevenLabs voices) has finished. */
@@ -539,6 +541,12 @@ interface VoiceConversation {
     gender?: AssistantGender | null;
     attachedAt: number;
     lastInterruptAt?: number;
+    /** Video call settings for this call (null: AI tutor lesson / defaults). */
+    speedPercent?: number;
+    thinkingSounds?: boolean;
+    allowInterruptions?: boolean;
+    /** The voice before the avatar's own voice was applied; restored when the video ends. */
+    savedVoice?: { selectedVoice?: string; elevenlabsApiKey?: string; elevenlabsVoiceId?: string };
   };
 }
 
@@ -941,6 +949,7 @@ export class RealtimeVoiceService {
         topscholarChapter: scopedChapter,
         topscholarScope: topscholarScope || null,
         elevenlabsApiKey: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsApiKey : undefined,
+        businessElevenLabsKey: businessAccount.elevenlabsApiKey || undefined,
         elevenlabsVoiceId: elevenlabsApiKey && elevenlabsVoiceId ? elevenlabsVoiceId : undefined,
         voiceGender,
       };
@@ -1070,10 +1079,34 @@ export class RealtimeVoiceService {
     this.deps.avatar?.interrupt(avatar.sessionId);
   }
 
+  /** Switch this call to the avatar's own voice (Video call settings); the old one is kept to restore. */
+  private applyAvatarVoice(conversation: VoiceConversation, selection: string): void {
+    const avatar = conversation.avatar;
+    if (!avatar || avatar.savedVoice) return;
+    avatar.savedVoice = { selectedVoice: conversation.selectedVoice, elevenlabsApiKey: conversation.elevenlabsApiKey, elevenlabsVoiceId: conversation.elevenlabsVoiceId };
+    if (isElevenLabsVoice(selection)) {
+      const voiceId = getElevenLabsVoiceId(selection) || undefined;
+      const apiKey = conversation.elevenlabsApiKey || conversation.businessElevenLabsKey;
+      if (!voiceId || !apiKey) { avatar.savedVoice = undefined; return; }
+      conversation.selectedVoice = selection;
+      conversation.elevenlabsApiKey = apiKey;
+      conversation.elevenlabsVoiceId = voiceId;
+    } else {
+      conversation.selectedVoice = selection;
+      conversation.elevenlabsVoiceId = undefined;
+    }
+    console.log(`[RealtimeVoice] Avatar voice: ${selection}`, conversation.conversationId);
+  }
+
   private detachAvatar(conversation: VoiceConversation, notifyReason?: AvatarEndReason | string): void {
     const avatar = conversation.avatar;
     if (!avatar) return;
     conversation.avatar = undefined;
+    if (avatar.savedVoice) {
+      conversation.selectedVoice = avatar.savedVoice.selectedVoice;
+      conversation.elevenlabsApiKey = avatar.savedVoice.elevenlabsApiKey;
+      conversation.elevenlabsVoiceId = avatar.savedVoice.elevenlabsVoiceId;
+    }
     this.deps.avatar?.unbindVoice(avatar.sessionId, conversation.conversationId);
     if (notifyReason) {
       this.sendToClient(conversation.clientWs, { type: 'avatar_ended', avatarSessionId: avatar.sessionId, reason: notifyReason });
@@ -1089,7 +1122,7 @@ export class RealtimeVoiceService {
       return;
     }
     if (conversation.avatar && conversation.avatar.sessionId !== sessionId) this.detachAvatar(conversation);
-    const attached = bridge.bindVoice(sessionId, { businessAccountId: conversation.businessAccountId, visitorId: conversation.userId }, {
+    let attached = bridge.bindVoice(sessionId, { businessAccountId: conversation.businessAccountId, visitorId: conversation.userId }, {
       conversationId: conversation.conversationId,
       notify: (msg) => {
         if (msg.type === 'avatar_event' && msg.event === 'speak_started') {
@@ -1102,14 +1135,36 @@ export class RealtimeVoiceService {
       onEnded: (reason) => {
         if (conversation.avatar?.sessionId === sessionId) this.detachAvatar(conversation, reason);
       },
+      // The idle nudge: a short line, only when nothing else is being said.
+      speak: (text) => {
+        if (conversation.avatar?.sessionId !== sessionId || conversation.isProcessing || this.isAnswerActive(conversation)) return;
+        const lang = this.ruledVoiceLanguage(conversation);
+        if (lang && lang !== 'en') {
+          void translateFixedText(conversation.businessAccountId, text, lang).then((t) => {
+            if (conversation.avatar?.sessionId === sessionId && !conversation.isProcessing && !this.isAnswerActive(conversation)) this.speakAvatarIntro(conversation, t);
+          }).catch(() => undefined);
+        } else {
+          this.speakAvatarIntro(conversation, text);
+        }
+      },
     });
     if (!attached) {
       this.sendToClient(conversation.clientWs, { type: 'avatar_attach_failed', avatarSessionId: sessionId, reason: 'not_found' });
       return;
     }
-    conversation.avatar = { sessionId, audioRoute: attached.audioRoute, provider: attached.provider, displayName: attached.displayName, gender: attached.avatarGender ?? null, attachedAt: Date.now() };
+    const video = attached.video ?? null;
+    conversation.avatar = {
+      sessionId, audioRoute: attached.audioRoute, provider: attached.provider, displayName: attached.displayName, gender: attached.avatarGender ?? null, attachedAt: Date.now(),
+      speedPercent: video?.speedPercent, thinkingSounds: video?.thinkingSounds, allowInterruptions: video?.allowInterruptions,
+    };
+    // The avatar's own voice (Video call settings), for as long as the video is on.
+    if (video?.voiceSelection) this.applyAvatarVoice(conversation, video.voiceSelection);
     this.sendToClient(conversation.clientWs, { type: 'avatar_attached', avatarSessionId: sessionId, audioRoute: attached.audioRoute });
     console.log(`[RealtimeVoice] Avatar attached: ${attached.provider} route=${attached.audioRoute}`, conversation.conversationId);
+    // The opening line (Video call settings) follows the AI introduction.
+    if (video?.openingLine) {
+      attached = { ...attached, disclosure: attached.disclosure ? `${attached.disclosure} ${video.openingLine}` : video.openingLine, disclosureIsDefault: false };
+    }
     if (message.speakIntro !== false && attached.disclosure && !conversation.isProcessing && !this.isAnswerActive(conversation)) {
       // A business whose replies are in another language hears the standard (English) AI
       // disclosure in that language; a business's own disclosure text is spoken as written.
@@ -1145,6 +1200,7 @@ export class RealtimeVoiceService {
   private async prewarmFillers(conversation: VoiceConversation): Promise<void> {
     if (!(conversation.avatar || conversation.phone) || conversation.fillerAudio) return;
     if (conversation.phone && !phoneFillersOn()) return;
+    if (!conversation.phone && conversation.avatar?.thinkingSounds === false) return;
     const cache = new Map<string, Buffer>();
     conversation.fillerAudio = cache;
     // Gendered Hindi phrases ("main dekhti hoon") need the voice's gender, looked up in the background.
@@ -3753,6 +3809,8 @@ export class RealtimeVoiceService {
   private beginPossibleInterruption(conversation: VoiceConversation, itemId?: string): void {
     if (conversation.inputMode === 'hold_to_talk') return;
     if (!this.isAnswerActive(conversation)) return;
+    // Video call with interruptions off: the avatar finishes what it is saying.
+    if (conversation.avatar?.allowInterruptions === false) return;
     if (
       conversation.activeElevenLabsStartedAt &&
       Date.now() - conversation.activeElevenLabsStartedAt < this.BARGE_IN_GRACE_MS &&
@@ -3912,6 +3970,12 @@ export class RealtimeVoiceService {
         this.consumeVoiceControl(conversation, control);
         return;
       }
+    }
+
+    if (conversation.avatar?.allowInterruptions === false && aiActive && !input.heldTurn) {
+      this.logVoiceTiming(timing, 'ignored:avatar_speaking');
+      this.ignoreTurn(conversation, 'avatar_speaking', trimmedTranscript, input.heldTurn);
+      return;
     }
 
     const verdict = classifyVoiceTurn({
@@ -4404,6 +4468,8 @@ export class RealtimeVoiceService {
   private phoneSpeed(conversation: VoiceConversation): number {
     // AI tutor speaking speed (the classroom's Speed control).
     if (conversation.tutor?.active && conversation.tutorSpeed) return conversation.tutorSpeed;
+    // Video call speaking pace (Video call settings).
+    if (conversation.avatar?.speedPercent && conversation.avatar.speedPercent !== 100) return conversation.avatar.speedPercent;
     const s = Number(conversation.phone?.speakingSpeed);
     return conversation.phone && Number.isFinite(s) && s >= 70 && s <= 120 ? s : 100;
   }
@@ -4850,6 +4916,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       fireFiller = () => {
         fillerTimer = null;
         if (answerStarted || abandoned() || !(conversation.avatar || conversation.phone) || conversation.clientWs.readyState !== WebSocket.OPEN) return;
+        if (!conversation.phone && conversation.avatar?.thinkingSounds === false) return;
         // The AI's pick is almost back: give it a quarter second more (once), else the rules decide.
         if (aiPending && !waitedForAi) {
           waitedForAi = true;

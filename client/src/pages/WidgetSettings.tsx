@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { HideInHub } from "@/components/hub/HideInHub";
 import { LiveAvatarStatusCard } from "@/components/LiveAvatarStatusCard";
+import { BusinessVideoCallCard } from "@/components/VideoCallSettingsCard";
 import { ElevenLabsVoiceBrowser } from "@/components/voice/ElevenLabsVoiceBrowser";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -4596,6 +4597,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                     </div>
                   </CardContent>
                 </Card>
+                <BusinessVideoCallCard />
               </TabsContent>
 
               {/* Shopping Tab */}

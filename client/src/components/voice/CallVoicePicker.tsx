@@ -47,18 +47,21 @@ export function useVoiceName(selection: string | null | undefined, accountId?: s
  * `defaultOption` relabels that first choice for other uses (e.g. the AI tutor's Hinglish voice,
  * whose default is the Hindi voice).
  */
-export function CallVoicePicker({ value, onChange, defaultOption }: {
+export function CallVoicePicker({ value, onChange, defaultOption, account }: {
   value: string | null;
   onChange: (v: string | null) => void;
   defaultOption?: { label: string; description: string };
+  /** Another account's voices (super admin); otherwise the signed-in account's. */
+  account?: { id: string; widgetVoice: string; hasElevenLabsKey: boolean };
 }) {
   const { toast } = useToast();
   const [playingVoice, setPlayingVoice] = useState<string | null>(null);
   const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
   const [showOpenAi, setShowOpenAi] = useState(false);
 
-  const widget = useQuery({
+  const ownWidget = useQuery({
     queryKey: ["/api/widget-settings"],
+    enabled: !account,
     queryFn: async () => {
       const r = await fetch("/api/widget-settings", { credentials: "include" });
       if (!r.ok) throw new Error("Failed to load widget settings");
@@ -66,8 +69,11 @@ export function CallVoicePicker({ value, onChange, defaultOption }: {
     },
     staleTime: 60 * 1000,
   });
+  const widget = account
+    ? { isLoading: false, data: { voiceSelection: account.widgetVoice, hasElevenLabsKey: account.hasElevenLabsKey } }
+    : ownWidget;
   const widgetVoice = widget.data?.voiceSelection || "shimmer";
-  const widgetVoiceName = useVoiceName(widgetVoice);
+  const widgetVoiceName = useVoiceName(widgetVoice, account?.id);
 
   useEffect(() => () => { currentAudio?.pause(); }, [currentAudio]);
   useEffect(() => {
@@ -82,7 +88,7 @@ export function CallVoicePicker({ value, onChange, defaultOption }: {
     }
     try {
       setPlayingVoice(voiceId);
-      const response = await fetch(`/api/voice-preview?voice=${voiceId}`, { credentials: "include" });
+      const response = await fetch(`/api/voice-preview?voice=${voiceId}${account ? `&businessAccountId=${encodeURIComponent(account.id)}` : ""}`, { credentials: "include" });
       if (!response.ok) throw new Error("preview");
       const url = URL.createObjectURL(await response.blob());
       const audio = new Audio(url);
@@ -157,6 +163,7 @@ export function CallVoicePicker({ value, onChange, defaultOption }: {
         <div className="flex items-center gap-2 text-sm text-gray-500"><Loader2 className="w-4 h-4 animate-spin" />Loading voices…</div>
       ) : widget.data?.hasElevenLabsKey ? (
         <ElevenLabsVoiceBrowser
+          accountId={account?.id}
           voiceSelection={selection}
           setVoiceSelection={select}
           playingVoice={playingVoice}

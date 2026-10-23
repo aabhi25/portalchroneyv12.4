@@ -267,6 +267,13 @@
       "when": 1792751480396,
       "tag": "0037_campaign_reply_starts_journey",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1792769099509,
+      "tag": "0038_avatar_video_call",
+      "breakpoints": true
     }
   ]
 }

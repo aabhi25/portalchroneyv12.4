@@ -194,7 +194,14 @@ interface WidgetSettings {
   id: string;
   businessAccountId: string;
   /** Live AI avatar button (null unless a super admin enabled it and it can start). */
-  liveAvatar?: { enabled: boolean; displayName: string; styleHint: string } | null;
+  liveAvatar?: {
+    enabled: boolean; displayName: string; styleHint: string;
+    /** Video call settings the widget applies (older servers leave them out). */
+    captions?: boolean;
+    autoVoiceOnly?: boolean;
+    background?: { sound: 'office' | 'call_centre'; gain: number } | null;
+    handoff?: { label: string; href: string } | null;
+  } | null;
   /** AI tutor (TopScholar): on when a super admin enabled it for the account. */
   aiTutor?: { enabled: boolean; video?: boolean; doubts?: boolean } | null;
   chatColor: string;
@@ -1341,6 +1348,7 @@ export default function EmbedChat() {
     businessAccountId: businessAccountId || '',
     userId: widgetUserIdRef.current,
     getConversationId: () => conversationIdRef.current || null,
+    video: settings?.liveAvatar ?? null,
   });
   const avatarCallActive = isAvatarCallActive(liveAvatar.state.phase);
   // Voice launched from the video button: hands-free and listening right away (it's a call).
@@ -1741,7 +1749,7 @@ export default function EmbedChat() {
     ? [...messages].reverse().find((m) => m.role === 'assistant' && (m.products?.length ?? 0) > 0
         && new Date(m.timestamp).getTime() >= avatarCallStartedAtRef.current - 1000)
     : undefined;
-  const avatarCaption = liveAvatar.state.phase === 'live' && voiceHighlight
+  const avatarCaption = liveAvatar.state.phase === 'live' && voiceHighlight && settings?.liveAvatar?.captions !== false
     ? captionAt(voiceSpokenTextRef.current.get(voiceHighlight.messageId) || '', voiceHighlight.offset)
     : '';
 
@@ -6012,6 +6020,8 @@ export default function EmbedChat() {
           styleHint={settings?.liveAvatar?.styleHint}
           videoRef={liveAvatar.videoRef}
           caption={avatarCaption}
+          handoff={settings?.liveAvatar?.handoff ?? null}
+          onHandoff={liveAvatar.recordHandoff}
           speaking={liveAvatar.state.speaking}
           muted={liveAvatar.state.muted}
           remainingSeconds={liveAvatar.remainingSeconds}

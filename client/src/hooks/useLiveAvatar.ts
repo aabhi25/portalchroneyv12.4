@@ -20,6 +20,17 @@ import {
 } from "@/lib/liveAvatar";
 import { avatarReducer, initialAvatarState, isAvatarCallActive } from "@/lib/liveAvatar/stateMachine";
 import type { AvatarClientAdapter, AvatarSessionInfo } from "@/lib/liveAvatar/types";
+import { AvatarAmbience } from "@/lib/liveAvatar/ambience";
+
+/** Video call settings the widget applies itself (from the widget's avatar config). */
+export interface LiveAvatarVideoOptions {
+  background?: { sound: "office" | "call_centre"; gain: number } | null;
+  /** Switch to voice only when the video freezes. */
+  autoVoiceOnly?: boolean;
+}
+
+/** The video counts as frozen after this long without a new frame (weak connection). */
+const FROZEN_VIDEO_MS = 8000;
 
 export interface LiveAvatarHandle {
   sessionId: string;
@@ -33,7 +44,7 @@ function errorText(error: unknown): string {
   return [e?.name && e.name !== "Error" ? e.name : "", e?.message || String(error)].filter(Boolean).join(": ").slice(0, 200);
 }
 
-export function useLiveAvatar(opts: { businessAccountId: string; userId: string; getConversationId: () => string | null | undefined }) {
+export function useLiveAvatar(opts: { businessAccountId: string; userId: string; getConversationId: () => string | null | undefined; video?: LiveAvatarVideoOptions | null }) {
   const [state, dispatch] = useReducer(avatarReducer, initialAvatarState);
   const [session, setSession] = useState<AvatarSessionInfo | null>(null);
   const [handle, setHandle] = useState<LiveAvatarHandle | null>(null);
@@ -44,6 +55,9 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
   const stateRef = useRef(state);
   stateRef.current = state;
   const attemptRef = useRef(0);
+  const ambienceRef = useRef<AvatarAmbience | null>(null);
+  const videoOptsRef = useRef(opts.video);
+  videoOptsRef.current = opts.video;
   const auth = useCallback(() => ({ businessAccountId: opts.businessAccountId, userId: opts.userId }), [opts.businessAccountId, opts.userId]);
 
   const teardown = useCallback(async (reason: string | null, detail?: string) => {
@@ -51,6 +65,8 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
     const current = sessionRef.current;
     adapterRef.current = null;
     sessionRef.current = null;
+    ambienceRef.current?.stop();
+    ambienceRef.current = null;
     setHandle(null);
     setRemainingSeconds(null);
     // Tell the server first (with the real reason) — closing the voice socket
@@ -72,6 +88,12 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
       video.playsInline = true;
       video.muted = false;
       void video.play().catch(() => undefined);
+    }
+    // Background sound: its audio is unlocked here, inside the tap; it starts with the video.
+    if (videoOptsRef.current?.background) {
+      ambienceRef.current?.stop();
+      ambienceRef.current = new AvatarAmbience();
+      ambienceRef.current.prepare();
     }
     const result = await startAvatarSession({ ...auth(), conversationId: opts.getConversationId() || null, purpose: startOpts.purpose });
     if (attempt !== attemptRef.current) return;
@@ -132,6 +154,11 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
     console.log(`[AvatarTiming] ${info.provider} first frame ${firstFrameMs}ms after tap`);
     adapter.setMuted(stateRef.current.muted);
     dispatch({ type: "connected", at: Date.now() });
+    const bg = videoOptsRef.current?.background;
+    if (bg && ambienceRef.current) {
+      ambienceRef.current.setMuted(stateRef.current.muted);
+      void ambienceRef.current.start(`/api/chat/widget/avatar/ambience/${bg.sound}`, bg.gain);
+    }
     void reportAvatarConnected(info.sessionId, { ...auth(), providerSessionId: adapter.providerSessionId(), firstFrameMs });
     setHandle({ sessionId: info.sessionId, audioRoute: info.audioRoute, adapter, speakIntro: !!info.disclosure });
   }, [auth, opts, teardown]);
@@ -153,6 +180,7 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
   const setMuted = useCallback((muted: boolean) => {
     dispatch({ type: "mute", muted });
     adapterRef.current?.setMuted(muted);
+    ambienceRef.current?.setMuted(muted);
   }, []);
 
   /** avatar_* messages relayed from the voice socket. */
@@ -189,6 +217,36 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
     return () => clearInterval(timer);
   }, [session, state.phase, auth, fallback]);
 
+  // Weak connection: the video stopped moving for a while → carry on by voice only.
+  useEffect(() => {
+    if (state.phase !== "live" || videoOptsRef.current?.autoVoiceOnly === false) return;
+    let lastTime = -1;
+    let stuckSince = Date.now();
+    const timer = setInterval(() => {
+      const el = videoRef.current;
+      // A hidden page or a paused video (autoplay blocked) is not a slow connection.
+      if (!el || el.paused || document.visibilityState !== "visible") { stuckSince = Date.now(); return; }
+      if (el.currentTime !== lastTime) { lastTime = el.currentTime; stuckSince = Date.now(); return; }
+      if (Date.now() - stuckSince >= FROZEN_VIDEO_MS && sessionRef.current) {
+        avatarDebug("video frozen", { ms: Date.now() - stuckSince });
+        fallback("poor_connection", true);
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [state.phase, fallback]);
+
+  /** The hand-off button was tapped (counted in the video call report). */
+  const recordHandoff = useCallback(() => {
+    const current = sessionRef.current;
+    if (!current) return;
+    void fetch(`/api/chat/widget/avatar/session/${encodeURIComponent(current.sessionId)}/handoff`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(auth()),
+      keepalive: true,
+    }).catch(() => undefined);
+  }, [auth]);
+
   // Local countdown between heartbeats.
   useEffect(() => {
     if (state.phase !== "live") return;
@@ -221,6 +279,7 @@ export function useLiveAvatar(opts: { businessAccountId: string; userId: string;
     end,
     fallback,
     setMuted,
+    recordHandoff,
     onServerMessage,
     reset: () => dispatch({ type: "reset" }),
   };

@@ -1702,6 +1702,10 @@ export const avatarBusinessSettings = pgTable("avatar_business_settings", {
   maxConcurrentSessions: integer("max_concurrent_sessions").notNull().default(2),
   maxSessionMinutes: integer("max_session_minutes").notNull().default(10),
   idleTimeoutSeconds: integer("idle_timeout_seconds").notNull().default(60),
+  // "Video call" settings: background sound, speaking pace, the avatar's voice and opening line,
+  // thinking sounds, captions, interruptions, idle nudge, video hours, voice-only fallback and
+  // hand-off (shared/videoCall.ts; {} = defaults).
+  videoCall: jsonb("video_call").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
   // This business's own provider API keys, one per provider:
   //   { [provider]: { enc: <encryptionService ciphertext>, last4, updatedAt, updatedBy } }
   // Raw keys are never returned by any API; only "set / not set" and a ••••last4 mask.

@@ -459,6 +459,86 @@ async function main() {
     let rowNow = await rowOf(id);
     expect(rowNow.endReason === "idle_timeout" && rowNow.billedSeconds === 51 && ended.includes("idle_timeout"), "idle → ended (idle_timeout), billed on our clock, voice told to fall back", { reason: rowNow.endReason, secs: rowNow.billedSeconds, ended });
 
+    // ── 9a. video call settings (business-editable) ─────────────────────────
+    {
+      const { videoCallReport } = await import("../avatar/videoCallReport");
+      r = await call("GET", "/api/avatar/video-call", cBiz);
+      expect(r.status === 200 && r.json.settings.speakingPace === "normal" && r.json.settings.captions === true && r.json.avatarEnabled === true && typeof r.json.report?.calls === "number",
+        "business reads its video call settings (defaults) with a 30-day report", r.json);
+      r = await call("PUT", "/api/avatar/video-call", cBiz, { handoff: { enabled: true, type: "link", target: "http://insecure.example.com" } });
+      expect(r.status === 400 && /https/.test(r.json.error), "hand-off link must be https", r.json);
+      r = await call("PUT", "/api/avatar/video-call", cBiz, { hours: { enabled: true, days: [1], start: "18:00", end: "09:00" } });
+      expect(r.status === 400, "video hours: end before start refused", r.json);
+      r = await call("PUT", "/api/avatar/video-call", cBiz, { voiceSelection: "el:abcd1234" });
+      expect(r.status === 400, "an ElevenLabs voice needs the account's ElevenLabs key", r.json);
+      r = await call("PUT", "/api/avatar/video-call", cBiz, { backgroundSound: "office", speakingPace: "fast", captions: false, voiceSelection: "sage", handoff: { enabled: true, type: "whatsapp", target: "+91 98765 43210", label: "Talk to us" } });
+      expect(r.status === 200 && r.json.settings.speakingPace === "fast" && r.json.settings.backgroundSound === "office" && r.json.settings.voiceSelection === "sage", "business saves its video call settings", r.json);
+      r = await call("PUT", `/api/super-admin/avatar/accounts/${A}/video-call`, cBiz, { captions: true });
+      expect(r.status === 403, "a business user can't use the super admin route", r.status);
+      r = await call("PUT", `/api/super-admin/avatar/accounts/${A}/video-call`, cSup, { openingLine: "  Ask me about fees.  ", thinkingSounds: false, allowInterruptions: false });
+      expect(r.status === 200 && r.json.settings.openingLine === "Ask me about fees." && r.json.settings.speakingPace === "fast",
+        "super admin edits the same settings (a partial update keeps the rest)", r.json.settings);
+      const pub = await getPublicAvatarConfig(A);
+      expect(pub?.captions === false && pub?.background?.sound === "office" && pub.background.gain > 0 && pub.handoff?.href === "https://wa.me/919876543210" && pub.handoff.label === "Talk to us",
+        "the widget gets captions off, the background sound and the hand-off link", pub);
+      r = await call("GET", "/api/chat/widget/avatar/ambience/office", null);
+      expect(r.status === 200, "background sound served to the widget", r.status);
+
+      // The voice pipeline gets pace, voice, opening line, thinking sounds and interruptions.
+      const spoken: string[] = [];
+      const vid = await startFor("widget_video");
+      const bound = avatarSessionManager.bindVoice(vid, { businessAccountId: A, visitorId: "widget_video" }, {
+        conversationId: `conv-${vid}`, notify: (m) => notified.push(m), isAnswerActive: () => false, onEnded: (reason) => ended.push(reason), speak: (t) => spoken.push(t),
+      });
+      expect(bound?.video?.speedPercent === 112 && bound.video.voiceSelection === "sage" && bound.video.openingLine === "Ask me about fees." && bound.video.thinkingSounds === false && bound.video.allowInterruptions === false,
+        "voice pipeline gets the video call options", bound?.video);
+
+      // "Are you still there?" once, then the call ends within the idle limit.
+      await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { idleTimeoutSeconds: 20 });
+      avatarSessionManager.touch(vid);
+      clock += 11_000;
+      await beat(vid, "widget_video");
+      await avatarSessionManager.tick();
+      expect(spoken.length === 1 && /still there/.test(spoken[0]) && avatarSessionManager.isLive(vid), "quiet call: the avatar asks once if the visitor is still there", spoken);
+      clock += 9_000;
+      await beat(vid, "widget_video");
+      await avatarSessionManager.tick();
+      expect(avatarSessionManager.isLive(vid) && spoken.length === 1, "…and waits for an answer", spoken);
+      clock += 2_000;
+      await beat(vid, "widget_video");
+      await avatarSessionManager.tick();
+      await until(async () => (await rowOf(vid)).endReason === "idle_timeout");
+      expect((await rowOf(vid)).endReason === "idle_timeout", "…no answer → ends (idle_timeout), not made longer than the idle limit");
+
+      // Hand-off taps are counted, and kept when the call ends.
+      const hid = await startFor("widget_handoff");
+      r = await call("POST", `/api/chat/widget/avatar/session/${hid}/handoff`, null, { businessAccountId: A, userId: "someone_else" });
+      expect(r.json?.ok !== true, "another visitor can't record a hand-off on this call", r.json);
+      r = await call("POST", `/api/chat/widget/avatar/session/${hid}/handoff`, null, { businessAccountId: A, userId: "widget_handoff" });
+      expect(r.status === 200 && r.json.ok === true, "hand-off tap recorded", r.json);
+      await avatarSessionManager.endSession(hid, "visitor_closed");
+      expect((await rowOf(hid)).metadata?.handoffClicked === true, "the hand-off survives the end of the call", (await rowOf(hid)).metadata);
+      const rep = await videoCallReport(A);
+      expect(rep.handoffClicks >= 1 && rep.calls >= 2 && rep.endReasons.some((x) => x.reason === "idle_timeout"), "video call report counts calls, hand-offs and end reasons", rep);
+
+      // Video hours: outside them there is no video button and no session.
+      const today = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", weekday: "short" }).format(new Date()));
+      r = await call("PUT", "/api/avatar/video-call", cBiz, { hours: { enabled: true, days: [(today + 1) % 7], start: "00:00", end: "23:59", timezone: "Asia/Kolkata" } });
+      expect(r.status === 200, "video hours saved", r.json);
+      expect((await getPublicAvatarConfig(A)) === null, "outside video hours → no video button");
+      let hoursGate = "";
+      try { await avatarSessionManager.startSession({ businessAccountId: A, visitorId: "widget_hours" }); } catch (e: any) { hoursGate = e?.code || String(e); }
+      expect(hoursGate === "outside_hours", "outside video hours → no video session either", hoursGate);
+      r = await call("PUT", "/api/avatar/video-call", cBiz, { hours: { enabled: true, days: [today], start: "00:00", end: "23:59" } });
+      expect(!!(await getPublicAvatarConfig(A)), "inside video hours → button back");
+      // Back to the defaults for the checks below.
+      r = await call("PUT", "/api/avatar/video-call", cBiz, {
+        hours: { enabled: false }, captions: true, backgroundSound: "off", handoff: { enabled: false },
+        speakingPace: "normal", voiceSelection: null, openingLine: null, thinkingSounds: true, allowInterruptions: true,
+      });
+      expect(r.status === 200 && r.json.settings.thinkingSounds && r.json.settings.allowInterruptions && r.json.settings.voiceSelection === null, "settings back to defaults", r.json.settings);
+    }
+
     await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { idleTimeoutSeconds: 600, maxSessionMinutes: 1 });
     id = await startFor("widget_max");
     bind(id, "widget_max");

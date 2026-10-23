@@ -45,6 +45,7 @@ export type AvatarEndReason =
   | "provider_error"
   | "server_shutdown"
   | "server_restart"
+  | "poor_connection"
   | "disabled";
 
 export const CLIENT_END_REASONS: AvatarEndReason[] = [
@@ -54,6 +55,7 @@ export const CLIENT_END_REASONS: AvatarEndReason[] = [
   "connect_failed",
   "provider_disconnected",
   "provider_error",
+  "poor_connection",
 ];
 
 /**

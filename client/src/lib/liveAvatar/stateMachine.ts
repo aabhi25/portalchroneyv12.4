@@ -67,6 +67,8 @@ const NOTICES: Record<string, string> = {
   heartbeat_timeout: "The video connection was lost — continuing with voice.",
   server_shutdown: "The video assistant restarted — continuing with voice.",
   disabled: "The video assistant was switched off — continuing with voice.",
+  poor_connection: "Your connection is slow, so we switched to voice — you can keep talking.",
+  outside_hours: "Video calls are available during business hours — continuing with voice.",
 };
 
 export function avatarNotice(reason: string | null | undefined): string {
