@@ -1,7 +1,7 @@
 // Conversation list rows (business account and group admin): who the visitor is, what they're
 // after, and the lead / journey / form badges.
 import { db } from "../db";
-import { leads, journeySessions, conversationJourneys, journeyResponses, messages } from "@shared/schema";
+import { leads, leadConversations, conversations, journeySessions, conversationJourneys, journeyResponses, messages } from "@shared/schema";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { maskLeadPhone, maskPhonesInText } from "./leadAccess";
 
@@ -13,6 +13,12 @@ export interface ConversationListExtras {
   visitorLabel: string;
   subtitle: string | null;
   journeyName: string | null;
+  /** The lead this chat belongs to (directly, or an earlier chat of a returning visitor). */
+  leadId: string | null;
+  /** Which of the person's enquiries this chat is ("2 of 2"); null without a lead or with only one chat. */
+  enquiry: { number: number; count: number } | null;
+  /** The same person's other chats, oldest first. */
+  relatedChats: Array<{ id: string; createdAt: string }>;
 }
 
 const DEFAULT_TITLES = new Set(['New Chat', 'Anonymous', '']);
@@ -37,14 +43,24 @@ export async function conversationListExtras(
   const journeyConvIds = new Set<string>();
   const viaFormConvIds = new Set<string>();
   const leadContact = new Map<string, { name: string | null; phone: string | null; email: string | null }>();
+  const leadIdByConv = new Map<string, string>();
+  const chatsByLead = new Map<string, Array<{ id: string; createdAt: Date }>>();
+  const enquiryCountByLead = new Map<string, number>();
   const journeyNameByConv = new Map<string, string>();
   const answersByConv = new Map<string, string[]>();
   const lastMessageByConv = new Map<string, { role: string; content: string }>();
   if (conversationIds.length > 0 && accountIds.length > 0) {
-    const [leadRows, journeyRows, answerRows, lastMessageRows] = await Promise.all([
-      db.select({ conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest, name: leads.name, phone: leads.phone, email: leads.email })
+    const leadCols = { id: leads.id, topicsOfInterest: leads.topicsOfInterest, name: leads.name, phone: leads.phone, email: leads.email, enquiryCount: leads.enquiryCount };
+    const [directLeadRows, linkedLeadRows, journeyRows, answerRows, lastMessageRows] = await Promise.all([
+      db.select({ conversationId: leads.conversationId, ...leadCols })
         .from(leads)
         .where(and(inArray(leads.businessAccountId, accountIds), inArray(leads.conversationId, conversationIds)))
+        .orderBy(asc(leads.createdAt)),
+      // A returning visitor's lead moved on to their latest chat; their earlier chats are linked here.
+      db.select({ conversationId: leadConversations.conversationId, ...leadCols })
+        .from(leadConversations)
+        .innerJoin(leads, eq(leads.id, leadConversations.leadId))
+        .where(and(inArray(leadConversations.businessAccountId, accountIds), inArray(leadConversations.conversationId, conversationIds)))
         .orderBy(asc(leads.createdAt)),
       db.select({ conversationId: journeySessions.conversationId, journeyName: conversationJourneys.name })
         .from(journeySessions)
@@ -60,8 +76,11 @@ export async function conversationListExtras(
         .where(inArray(messages.conversationId, conversationIds))
         .orderBy(messages.conversationId, desc(messages.createdAt)),
     ]);
+    const leadRows = [...directLeadRows, ...linkedLeadRows];
     for (const row of leadRows) {
       if (row.conversationId) {
+        if (!leadIdByConv.has(row.conversationId)) leadIdByConv.set(row.conversationId, row.id);
+        enquiryCountByLead.set(row.id, row.enquiryCount ?? 1);
         const topics = (row.topicsOfInterest as string[]) || [];
         const badge = topics.includes('Discount Availed') ? 'Discount Availed' : 'Lead Captured';
         leadBadgeMap.set(row.conversationId, badge);
@@ -70,6 +89,24 @@ export async function conversationListExtras(
           leadContact.set(row.conversationId, { name: row.name, phone: row.phone, email: row.email });
         }
       }
+    }
+    // Every chat of these leads (the lead's own + linked ones), to link them to each other.
+    const leadIds = Array.from(new Set(leadIdByConv.values()));
+    if (leadIds.length > 0) {
+      const [own, linked] = await Promise.all([
+        db.select({ leadId: leads.id, id: conversations.id, createdAt: conversations.createdAt })
+          .from(leads).innerJoin(conversations, eq(conversations.id, leads.conversationId))
+          .where(inArray(leads.id, leadIds)),
+        db.select({ leadId: leadConversations.leadId, id: conversations.id, createdAt: conversations.createdAt })
+          .from(leadConversations).innerJoin(conversations, eq(conversations.id, leadConversations.conversationId))
+          .where(inArray(leadConversations.leadId, leadIds)),
+      ]);
+      for (const row of [...own, ...linked]) {
+        const list = chatsByLead.get(row.leadId) || [];
+        if (!list.some(c => c.id === row.id)) list.push({ id: row.id, createdAt: row.createdAt });
+        chatsByLead.set(row.leadId, list);
+      }
+      chatsByLead.forEach(list => list.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()));
     }
     for (const row of journeyRows) {
       journeyConvIds.add(row.conversationId);
@@ -112,7 +149,14 @@ export async function conversationListExtras(
       }
       return null;
     })();
+    const leadId = leadIdByConv.get(conv.id) || null;
+    const chats = leadId ? chatsByLead.get(leadId) || [] : [];
+    const position = chats.findIndex(c => c.id === conv.id);
+    const count = Math.max(leadId ? enquiryCountByLead.get(leadId) ?? 1 : 1, chats.length);
     out.set(conv.id, {
+      leadId,
+      enquiry: leadId && count > 1 ? { number: position >= 0 ? position + 1 : count, count } : null,
+      relatedChats: chats.filter(c => c.id !== conv.id).map(c => ({ id: c.id, createdAt: c.createdAt.toISOString() })),
       hasLead: leadBadgeMap.has(conv.id),
       leadBadge: leadBadgeMap.get(conv.id) || null,
       viaJourney: journeyConvIds.has(conv.id),

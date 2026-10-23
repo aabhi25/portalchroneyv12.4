@@ -660,7 +660,9 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
             .filter(([k, v]) => !/name|phone|mobile|email|whatsapp/i.test(k) && v != null && typeof v !== 'object')
             .map(([k, v]) => `${k}: ${v}`).join('; ')),
           "CRM Sync": safeExcelCell(crmSummary(row)),
-          "Created At": format(new Date(row.capturedAt), "yyyy-MM-dd HH:mm:ss"),
+          "Created At": format(new Date(row.firstCapturedAt ?? row.capturedAt), "yyyy-MM-dd HH:mm:ss"),
+          "Latest Enquiry": format(new Date(row.capturedAt), "yyyy-MM-dd HH:mm:ss"),
+          Enquiries: row.enquiryCount ?? 1,
           // The extra columns chosen for the table (contact, message and date are always above).
           ...Object.fromEntries(exportExtraColumns.map((key) => {
             let value: string | null = null;
@@ -693,6 +695,8 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
         { wch: 40 }, // Message
         { wch: 30 }, // CRM Sync
         { wch: 20 }, // Created At
+        { wch: 20 }, // Latest Enquiry
+        { wch: 10 }, // Enquiries
         ...exportExtraColumns.map(() => ({ wch: 30 })),
       ];
 
@@ -1344,7 +1348,18 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                               </Avatar>
                               <span className="text-gray-900 font-medium truncate max-w-[120px]">{lead.name || "Anonymous"}</span>
                             </div>
-                            <span className="text-xs text-gray-400 pl-12">{format(new Date(lead.createdAt), "MMM d, h:mm a")}</span>
+                            <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-400 pl-12">
+                              <span className="whitespace-nowrap">{format(new Date(row.capturedAt), "MMM d, h:mm a")}</span>
+                              {(row.enquiryCount ?? 1) > 1 && (
+                                <span
+                                  className="whitespace-nowrap rounded-full bg-purple-50 px-1.5 py-0.5 text-[10.5px] font-medium text-purple-700"
+                                  title={row.firstCapturedAt ? `Came back: ${row.enquiryCount} enquiries. First enquiry ${format(new Date(row.firstCapturedAt), "MMM d, h:mm a")}` : undefined}
+                                  data-testid={`badge-enquiries-${lead.id}`}
+                                >
+                                  {row.enquiryCount} enquiries
+                                </span>
+                              )}
+                            </span>
                             {accountRetention && (
                               <div className="pl-12">
                                 <RetentionCountdown

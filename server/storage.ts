@@ -10,6 +10,7 @@ import {
   products,
   faqs,
   leads,
+  leadConversations,
   businessAccounts,
   widgetSettings,
   passwordResetTokens,
@@ -1442,6 +1443,8 @@ export class DatabaseStorage implements IStorage {
       conditions.push(or(
         ilike(conversations.title, pattern),
         sql`EXISTS (SELECT 1 FROM ${leads} WHERE ${leads.conversationId} = ${conversations.id} AND (${leads.name} ILIKE ${pattern} OR ${leads.phone} ILIKE ${pattern} OR ${leads.email} ILIKE ${pattern}))`,
+        // …also a returning visitor's earlier chats (their lead moved on to the latest one).
+        sql`EXISTS (SELECT 1 FROM ${leadConversations} lc JOIN ${leads} ON ${leads.id} = lc.lead_id WHERE lc.conversation_id = ${conversations.id} AND (${leads.name} ILIKE ${pattern} OR ${leads.phone} ILIKE ${pattern} OR ${leads.email} ILIKE ${pattern}))`,
       )!);
     }
     
@@ -5720,6 +5723,8 @@ export class DatabaseStorage implements IStorage {
       conditions.push(or(
         ilike(conversations.title, pattern),
         sql`EXISTS (SELECT 1 FROM ${leads} WHERE ${leads.conversationId} = ${conversations.id} AND (${leads.name} ILIKE ${pattern} OR ${leads.phone} ILIKE ${pattern} OR ${leads.email} ILIKE ${pattern}))`,
+        // …also a returning visitor's earlier chats (their lead moved on to the latest one).
+        sql`EXISTS (SELECT 1 FROM ${leadConversations} lc JOIN ${leads} ON ${leads.id} = lc.lead_id WHERE lc.conversation_id = ${conversations.id} AND (${leads.name} ILIKE ${pattern} OR ${leads.phone} ILIKE ${pattern} OR ${leads.email} ILIKE ${pattern}))`,
       ));
     }
     

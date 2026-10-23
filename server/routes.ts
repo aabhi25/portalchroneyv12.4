@@ -26368,18 +26368,13 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       if (!conversation) {
         return res.status(404).json({ error: "Conversation not found" });
       }
-      const [lead, journeySession] = await Promise.all([
-        storage.getLeadByConversation(conversationId, businessAccountId),
-        db.select({ id: journeySessions.id }).from(journeySessions)
-          .where(eq(journeySessions.conversationId, conversationId)).limit(1),
+      // The same fields as a row of the list (lead badge, visitor, linked chats of a returning visitor).
+      const account = await storage.getBusinessAccount(businessAccountId);
+      const [extras, messageCounts] = await Promise.all([
+        conversationListExtras([conversation], new Set(account?.leadPhoneMaskingEnabled === "true" ? [businessAccountId] : [])),
+        storage.getMessageCountsForConversations([conversationId]),
       ]);
-      const leadTopics = (lead?.topicsOfInterest as string[]) || [];
-      const leadBadge = lead
-        ? (leadTopics.includes('Discount Availed') ? 'Discount Availed' : 'Lead Captured')
-        : null;
-      const viaJourney = journeySession.length > 0;
-      const viaForm = leadTopics.includes('Via Form');
-      res.json({ ...conversation, hasLead: !!lead, leadBadge, viaJourney, viaForm });
+      res.json({ ...conversation, messageCount: messageCounts[conversationId] || 0, ...extras.get(conversationId) });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

@@ -39,7 +39,9 @@ export function websiteRowFromLead(lead: Lead): UnifiedLeadRow {
     name: lead.name,
     phone: lead.phone,
     email: lead.email,
-    capturedAt: iso(lead.createdAt)!,
+    capturedAt: iso(lead.lastEnquiryAt ?? lead.createdAt)!,
+    firstCapturedAt: iso(lead.createdAt)!,
+    enquiryCount: lead.enquiryCount ?? 1,
     crm: {
       leadsquared: { status: lead.leadsquaredSyncStatus, error: lead.leadsquaredSyncError, syncedAt: iso(lead.leadsquaredSyncedAt), crmLeadId: lead.leadsquaredLeadId },
       salesforce: { status: lead.salesforceSyncStatus, error: lead.salesforceSyncError, syncedAt: iso(lead.salesforceSyncedAt), crmLeadId: lead.salesforceLeadId },
@@ -145,7 +147,14 @@ export function LeadDetailsSheet({
                     <a href={website.sourceUrl} target="_blank" rel="noopener noreferrer" className="break-all text-purple-700 hover:underline">{website.sourceUrl}</a>
                   </Field>
                 )}
-                <Field label="Captured">{format(new Date(row.capturedAt), "PPpp")}</Field>
+                {(row.enquiryCount ?? 1) > 1 && row.firstCapturedAt ? (
+                  <>
+                    <Field label="Latest enquiry">{format(new Date(row.capturedAt), "PPpp")} <span className="text-gray-500">· {row.enquiryCount} enquiries</span></Field>
+                    <Field label="First enquiry">{format(new Date(row.firstCapturedAt), "PPpp")}</Field>
+                  </>
+                ) : (
+                  <Field label="Captured">{format(new Date(row.capturedAt), "PPpp")}</Field>
+                )}
               </dl>
               {row.linked && row.linked.length > 0 && (
                 <div className="mt-3 rounded-xl border border-black/[0.07] bg-gray-50 p-3">

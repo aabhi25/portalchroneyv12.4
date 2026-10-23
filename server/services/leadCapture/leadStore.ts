@@ -13,11 +13,12 @@
  * and the same visitor has a lead in this account updated within RETURNING_VISITOR_DAYS, that lead
  * is reused (moved to this conversation and updated) instead of creating a new row — unless the new
  * details contradict it (different phone, email or name), which suggests a different person on a
- * shared device.
+ * shared device. A reused lead counts a repeat enquiry (enquiry_count, last_enquiry_at) and keeps
+ * both chats in lead_conversations, so each of them still shows the lead and links to the other.
  */
 import { and, asc, desc, eq, gt, ne, sql } from 'drizzle-orm';
 import { db } from '../../db';
-import { conversations, leads, type Lead } from '@shared/schema';
+import { conversations, leadConversations, leads, type Lead } from '@shared/schema';
 
 export const RETURNING_VISITOR_DAYS = 30;
 
@@ -138,7 +139,15 @@ function writeConversationLead(input: LeadUpsert): Promise<LeadUpsertResult> {
       if (!norm(existing.city) && norm(input.values.city)) updates.city = norm(input.values.city);
       if (!norm(existing.sourceUrl) && norm(input.values.sourceUrl)) updates.sourceUrl = norm(input.values.sourceUrl);
       if (!norm(existing.landingUrl) && norm(input.values.landingUrl)) updates.landingUrl = norm(input.values.landingUrl);
-      if (reusedFrom !== null) updates.conversationId = conversationId;
+      if (reusedFrom !== null) {
+        // A repeat enquiry: the lead moves to this (latest) chat; both chats stay linked to it.
+        updates.conversationId = conversationId;
+        updates.enquiryCount = sql`${leads.enquiryCount} + 1`;
+        updates.lastEnquiryAt = sql`now()`; // the database's clock, like created_at
+        const links = [reusedFrom, conversationId].filter((id): id is string => !!id)
+          .map((id) => ({ leadId: existing!.id, conversationId: id, businessAccountId }));
+        await tx.insert(leadConversations).values(links).onConflictDoNothing();
+      }
       if (Object.keys(updates).length === 0) {
         return { lead: existing, created: false, changed, reusedFromConversationId: reusedFrom };
       }
@@ -157,6 +166,7 @@ function writeConversationLead(input: LeadUpsert): Promise<LeadUpsertResult> {
       city: norm(input.values.city) || null,
       sourceUrl: norm(input.values.sourceUrl) || null,
       landingUrl: norm(input.values.landingUrl) || null,
+      lastEnquiryAt: sql`now()`, // the database's clock, like created_at
     };
     const [lead] = await tx.insert(leads).values(values).returning();
     const changed = fields.filter(f => !!(values as any)[f] && f !== 'message');

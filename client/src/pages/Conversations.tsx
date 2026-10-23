@@ -1,6 +1,6 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare, Calendar, Clock, Search, User, Bot, Trash2, ChevronLeft, ChevronRight, ImageIcon, MapPin, SlidersHorizontal, ChevronDown, Sparkles, Loader2, UserCheck, FileText, GitBranch } from "lucide-react";
+import { MessageSquare, Calendar, Clock, Search, User, Bot, Trash2, ChevronLeft, ChevronRight, ImageIcon, MapPin, SlidersHorizontal, ChevronDown, Sparkles, Loader2, UserCheck, FileText, GitBranch, Repeat } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
@@ -47,6 +47,9 @@ interface Conversation {
   /** What they're after: journey answers, the chat's topic, or the latest message. */
   subtitle?: string | null;
   journeyName?: string | null;
+  /** Returning visitor: which of their enquiries this chat is, and their other chats (oldest first). */
+  enquiry?: { number: number; count: number } | null;
+  relatedChats?: Array<{ id: string; createdAt: string }>;
 }
 
 interface Message {
@@ -318,7 +321,18 @@ export default function Conversations() {
     }
   }, [data, totalPages, currentPage]);
 
-  const selectedConversation = conversations.find(c => c.id === selectedConversationId);
+  // A chat opened from a link (e.g. a returning visitor's other chat) may not be on this page of the list.
+  const listedSelection = conversations.find(c => c.id === selectedConversationId);
+  const { data: fetchedSelection } = useQuery<Conversation>({
+    queryKey: ["/api/conversations", selectedConversationId],
+    enabled: !!selectedConversationId && !listedSelection && data !== undefined,
+    queryFn: async () => {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(selectedConversationId!)}`, { credentials: "include" });
+      if (!response.ok) throw new Error("Failed to fetch conversation");
+      return response.json();
+    },
+  });
+  const selectedConversation = listedSelection ?? (fetchedSelection?.id === selectedConversationId ? fetchedSelection : undefined);
 
   // Each conversation opens at its first message (the thread panel is reused, so it would
   // otherwise keep the previous conversation's scroll position).
@@ -603,6 +617,15 @@ export default function Conversations() {
                               {conversation.leadBadge === 'Discount Availed' ? 'Discount' : 'Lead'}
                             </span>
                           )}
+                          {conversation.enquiry && (
+                            <span
+                              className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium border bg-purple-50 text-purple-700 border-purple-200"
+                              title={`Returning visitor: enquiry ${conversation.enquiry.number} of ${conversation.enquiry.count}`}
+                            >
+                              <Repeat className="w-2.5 h-2.5" />
+                              {conversation.enquiry.number} of {conversation.enquiry.count}
+                            </span>
+                          )}
                           {conversation.visitorCity && (
                             <span className="inline-flex items-center gap-0.5 text-[10px] text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded-full border border-gray-200">
                               <MapPin className="w-2.5 h-2.5" />
@@ -710,6 +733,28 @@ export default function Conversations() {
                 </p>
               </div>
             </div>
+
+            {/* Returning visitor: the same lead's other chats */}
+            {selectedConversation.relatedChats && selectedConversation.relatedChats.length > 0 && (
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-purple-100 bg-purple-50/60 px-4 py-2 text-[12.5px] text-purple-900" data-testid="returning-visitor-bar">
+                <Repeat className="h-3.5 w-3.5 shrink-0 text-purple-600" />
+                <span className="font-medium">
+                  Returning visitor{selectedConversation.enquiry ? ` · enquiry ${selectedConversation.enquiry.number} of ${selectedConversation.enquiry.count}` : ''}
+                </span>
+                <span className="text-purple-700/80">· Other chats:</span>
+                {selectedConversation.relatedChats.map((chat) => (
+                  <button
+                    key={chat.id}
+                    type="button"
+                    onClick={() => { setSelectedConversationId(chat.id); setSummaryExpanded(false); }}
+                    className="rounded-full border border-purple-200 bg-white px-2 py-0.5 text-[12px] font-medium text-purple-700 hover:bg-purple-100"
+                    data-testid={`link-related-chat-${chat.id}`}
+                  >
+                    {formatDate(chat.createdAt)}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* AI summary: one line until opened (keywords only when open) */}
             {selectedConversation.summary && (

@@ -394,6 +394,29 @@ async function main() {
     const [b] = await db.insert(schema.conversations).values({ businessAccountId: biz.id, title: 'b', visitorToken: token }).returning();
     const second = await lc.upsertConversationLead({ businessAccountId: biz.id, conversationId: b.id, values: { email: 'meera@example.com' } });
     expect(second.lead.id === first.lead.id && second.lead.conversationId === b.id && second.reusedFromConversationId === a.id, 'same visitor, new conversation → same lead row (moved to the new conversation)');
+    // Repeat enquiry: counted, timed, and both chats stay linked to the lead.
+    expect(first.lead.enquiryCount === 1 && !!first.lead.lastEnquiryAt, 'a new lead: 1 enquiry, latest enquiry set', { n: first.lead.enquiryCount, at: first.lead.lastEnquiryAt });
+    expect(second.lead.enquiryCount === 2 && new Date(second.lead.lastEnquiryAt!).getTime() >= new Date(first.lead.lastEnquiryAt!).getTime() && +new Date(second.lead.createdAt) === +new Date(first.lead.createdAt),
+      'returning visitor → 2 enquiries, latest enquiry moved, first enquiry (created) kept', { n: second.lead.enquiryCount });
+    const links = await db.select().from(schema.leadConversations).where(eq(schema.leadConversations.leadId, first.lead.id));
+    expect(links.length === 2 && links.some(l => l.conversationId === a.id) && links.some(l => l.conversationId === b.id), 'both chats linked to the lead', links.map(l => l.conversationId));
+    const { conversationListExtras } = await import('../../lib/conversationListExtras');
+    const convA = { ...a, visitorCity: null };
+    const convB = { ...b, visitorCity: null };
+    const extras = await conversationListExtras([convA, convB], new Set());
+    const xa = extras.get(a.id)!, xb = extras.get(b.id)!;
+    expect(xa.hasLead && xb.hasLead && xa.leadId === first.lead.id && xb.leadId === first.lead.id && xa.visitorLabel === 'Meera' && xb.visitorLabel === 'Meera',
+      'both chats show the lead and the visitor (the earlier chat too)', { xa, xb });
+    expect(xa.enquiry?.number === 1 && xa.enquiry.count === 2 && xb.enquiry?.number === 2 && xb.enquiry.count === 2
+      && xa.relatedChats.map(c => c.id).join() === b.id && xb.relatedChats.map(c => c.id).join() === a.id,
+      'each chat says which enquiry it is and links to the other', { a: [xa.enquiry, xa.relatedChats], b: [xb.enquiry, xb.relatedChats] });
+    const { storage } = await import('../../storage');
+    const found = await storage.getAllConversations(biz.id, { search: '9845012345' });
+    expect(found.conversations.some(c => c.id === a.id) && found.conversations.some(c => c.id === b.id), 'searching the number finds both chats', found.conversations.map(c => c.title));
+    const { queryUnifiedLeads } = await import('../unifiedLeadsService');
+    const listed = (await queryUnifiedLeads(biz.id, {}, { limit: 20, offset: 0 })).leads.find(r => r.id === first.lead.id);
+    expect(listed?.enquiryCount === 2 && listed.capturedAt === new Date(second.lead.lastEnquiryAt!).toISOString() && listed.firstCapturedAt === new Date(first.lead.createdAt).toISOString(),
+      'Leads list: latest enquiry time, first enquiry and the count', listed && { at: listed.capturedAt, first: listed.firstCapturedAt, n: listed.enquiryCount });
     const [c] = await db.insert(schema.conversations).values({ businessAccountId: biz.id, title: 'c', visitorToken: token }).returning();
     const third = await lc.upsertConversationLead({ businessAccountId: biz.id, conversationId: c.id, values: { phone: '9123456780' } });
     expect(third.created && third.lead.id !== first.lead.id, 'different phone on the same device → a new lead (no merge of different people)');

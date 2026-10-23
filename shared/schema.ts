@@ -631,6 +631,11 @@ export const leads = pgTable("leads", {
   // Data retention "hide contact details after sync": when this lead's phone numbers and emails
   // (on the lead, in its chat, answers and summary) were last overwritten with masked versions.
   contactsMaskedAt: timestamp("contacts_masked_at"),
+
+  // Repeat enquiries: the same visitor coming back is one lead (see leadCapture/leadStore.ts);
+  // each chat it came from is in lead_conversations. created_at stays the first enquiry.
+  lastEnquiryAt: timestamp("last_enquiry_at"), // null on rows from before this column = created_at
+  enquiryCount: integer("enquiry_count").notNull().default(1),
   
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -640,6 +645,20 @@ export const leads = pgTable("leads", {
   businessEmailIdx: index("leads_business_email_idx").on(table.businessAccountId, table.email),
   conversationIdx: index("leads_conversation_idx").on(table.conversationId),
 }));
+
+// Every website chat a lead came from (a returning visitor's lead links each of their chats;
+// leads.conversation_id is the latest one).
+export const leadConversations = pgTable("lead_conversations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  leadId: varchar("lead_id").notNull().references(() => leads.id, { onDelete: "cascade" }),
+  conversationId: varchar("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  linkedAt: timestamp("linked_at").notNull().defaultNow(),
+}, (table) => ({
+  leadConversationUnique: uniqueIndex("lead_conversations_lead_conv_idx").on(table.leadId, table.conversationId),
+  conversationIdx: index("lead_conversations_conversation_idx").on(table.conversationId),
+}));
+export type LeadConversation = typeof leadConversations.$inferSelect;
 
 // Question Bank - Track questions/issues that AI couldn't handle or answer properly
 export const questionBankEntries = pgTable("question_bank_entries", {

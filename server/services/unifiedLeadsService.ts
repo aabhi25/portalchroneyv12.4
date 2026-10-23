@@ -75,7 +75,11 @@ export interface UnifiedLeadRow {
   name: string | null;
   phone: string | null;
   email: string | null;
+  /** Latest enquiry (a returning visitor's repeat enquiry moves it). */
   capturedAt: string;
+  /** website: the first enquiry and how many there were (1 unless the visitor came back). */
+  firstCapturedAt?: string;
+  enquiryCount?: number;
   crm: {
     leadsquared?: CrmSyncState;
     salesforce?: CrmSyncState;
@@ -153,11 +157,13 @@ function branchSql(channel: LeadChannel, accountId: string, f: UnifiedLeadFilter
   const search = f.search?.trim() ? likePattern(f.search.trim()) : null;
   switch (channel) {
     case "website": {
-      const conds: SQL[] = [sql`l.business_account_id = ${accountId}`, ...dateConds(sql`l.created_at`, f)];
+      // A returning visitor's repeat enquiry counts from its latest enquiry (sort and date filter).
+      const at = sql`COALESCE(l.last_enquiry_at, l.created_at)`;
+      const conds: SQL[] = [sql`l.business_account_id = ${accountId}`, ...dateConds(at, f)];
       if (f.status) conds.push(sql`FALSE`); // website leads have no status
       if (search) conds.push(sql`(l.name ILIKE ${search} OR l.email ILIKE ${search} OR l.phone ILIKE ${search} OR l.message ILIKE ${search})`);
       const pk = opts.personKey ? sql`, ${websitePersonKeySql()} AS person_key` : sql``;
-      return sql`SELECT 'website'::text AS channel, l.id AS id, l.created_at AS captured_at${pk} FROM leads l WHERE ${whereAll(conds)}`;
+      return sql`SELECT 'website'::text AS channel, l.id AS id, ${at} AS captured_at${pk} FROM leads l WHERE ${whereAll(conds)}`;
     }
     case "whatsapp": {
       const conds: SQL[] = [
@@ -223,7 +229,8 @@ async function hydrate(accountId: string, page: { channel: LeadChannel; id: stri
     for (const l of rows) {
       byKey.set(`website:${l.id}`, {
         key: `website:${l.id}`, channel: "website", id: l.id,
-        name: l.name, phone: maskIf(mask, l.phone), email: l.email, capturedAt: toIso(l.createdAt)!,
+        name: l.name, phone: maskIf(mask, l.phone), email: l.email, capturedAt: toIso(l.lastEnquiryAt ?? l.createdAt)!,
+        firstCapturedAt: toIso(l.createdAt)!, enquiryCount: l.enquiryCount ?? 1,
         crm: {
           leadsquared: crmState(l.leadsquaredSyncStatus, l.leadsquaredSyncError, l.leadsquaredSyncedAt, l.leadsquaredLeadId),
           salesforce: crmState(l.salesforceSyncStatus, l.salesforceSyncError, l.salesforceSyncedAt, l.salesforceLeadId),

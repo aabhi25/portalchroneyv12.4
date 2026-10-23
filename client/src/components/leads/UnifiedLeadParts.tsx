@@ -24,7 +24,11 @@ export interface UnifiedLeadRow {
   name: string | null;
   phone: string | null;
   email: string | null;
+  /** Latest enquiry (a returning visitor's repeat enquiry moves it). */
   capturedAt: string;
+  /** website: the first enquiry and how many there were (1 unless the visitor came back). */
+  firstCapturedAt?: string;
+  enquiryCount?: number;
   crm: { leadsquared?: CrmSyncState; salesforce?: CrmSyncState; customCrm?: CrmSyncState; meritto?: CrmSyncState };
   detail: Record<string, any>;
   /** Same person on several channels (website → WhatsApp hand-off / verified phone). */
