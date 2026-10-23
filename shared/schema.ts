@@ -1075,7 +1075,7 @@ export const appointments = pgTable("appointments", {
   conversationId: varchar("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
   leadId: varchar("lead_id").references(() => leads.id, { onDelete: "set null" }),
   
-  // Patient information
+  // Person who booked (named patient* for history; the screens say "Name")
   patientName: text("patient_name").notNull(),
   patientPhone: text("patient_phone").notNull(),
   patientEmail: text("patient_email"),
@@ -1087,7 +1087,7 @@ export const appointments = pgTable("appointments", {
   
   // Status and metadata
   status: text("status").notNull().default("confirmed"), // 'confirmed' | 'cancelled' | 'completed' | 'no_show' | 'rescheduled'
-  notes: text("notes"), // Patient's reason for visit or special requests
+  notes: text("notes"), // What the booking is for, or special requests
   cancellationReason: text("cancellation_reason"),
   reminderSentAt: timestamp("reminder_sent_at"), // When reminder was sent
   

@@ -13,20 +13,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Trash2, Plus, Calendar as CalendarIcon, Clock, CheckCircle2, XCircle, User, TrendingUp, Shield, Zap, Power, X, Pencil, AlertCircle } from "lucide-react";
+import { Trash2, Plus, Calendar as CalendarIcon, Clock, CheckCircle2, XCircle, User, Zap, Power, X, Pencil, AlertCircle } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
-import { format, isSameDay, parseISO, startOfDay } from "date-fns";
+import { addDays, format, isSameDay, parseISO, startOfDay } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
+import { HideInHub } from "@/components/hub/HideInHub";
+import {
+  AppointmentsList, appointmentDay, appointmentStart, isUpcoming, needsUpdate,
+  type Appointment, type AppointmentView,
+} from "@/components/appointments/AppointmentsList";
 
 interface ScheduleTemplate {
   id: string;
@@ -45,18 +42,6 @@ interface SlotOverride {
   isAvailable: string;
   isAllDay: string;
   reason: string;
-}
-
-interface Appointment {
-  id: string;
-  patientName: string;
-  patientPhone: string;
-  patientEmail: string;
-  appointmentDate: string;
-  appointmentTime: string;
-  durationMinutes: string;
-  status: string;
-  notes: string;
 }
 
 interface AppointmentSuggestRule {
@@ -152,7 +137,7 @@ const validateTimeRanges = (dayState: DayScheduleState): { valid: boolean; error
 export default function Calendar() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState("schedule");
+  const [activeTab, setActiveTab] = useState("appointments");
   const [selectedDate, setSelectedDate] = useState<Date | undefined>();
   const [showForm, setShowForm] = useState(false);
   const [editingOverride, setEditingOverride] = useState<SlotOverride | null>(null);
@@ -198,8 +183,8 @@ export default function Calendar() {
   // Working copy of schedules for edit mode (includes pending changes)
   const [workingSchedules, setWorkingSchedules] = useState<ScheduleTemplate[]>([]);
 
-  // Appointment date filter state
-  const [filterDate, setFilterDate] = useState<Date | undefined>();
+  // Which bookings the Appointments tab shows
+  const [appointmentView, setAppointmentView] = useState<AppointmentView>("upcoming");
 
   // Trigger rules state
   const [triggerRules, setTriggerRules] = useState<AppointmentSuggestRule[]>([]);
@@ -510,22 +495,6 @@ export default function Calendar() {
     },
   });
 
-  const updateAppointmentStatusMutation = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      const res = await fetch(`/api/appointments/${id}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ status }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
-    },
-  });
-
   // Enter edit mode - initialize working copy
   const enterEditMode = () => {
     setIsEditMode(true);
@@ -686,24 +655,21 @@ export default function Calendar() {
     parseInt(a.dayOfWeek) - parseInt(b.dayOfWeek)
   );
 
-  const upcomingAppointments = appointments.filter(
-    apt => apt.status !== 'cancelled' && apt.status !== 'completed'
-  );
+  // Header numbers ignore cancelled bookings and ones whose time has passed.
+  const now = new Date();
+  const todayCount = appointments.filter(apt =>
+    apt.status !== 'cancelled' && isSameDay(appointmentDay(apt), now)
+  ).length;
+  const nextWeekCount = appointments.filter(apt =>
+    isUpcoming(apt, now) && appointmentStart(apt) < addDays(startOfDay(now), 8)
+  ).length;
+  const needsUpdateCount = appointments.filter(apt => needsUpdate(apt, now)).length;
+  const upcomingTabCount = appointments.filter(apt => appointmentDay(apt) >= startOfDay(now)).length;
 
-  // Filter appointments based on selected date
-  const filteredAppointments = appointments.filter(apt => {
-    if (!filterDate) {
-      return true; // No filter applied, show all
-    }
-    
-    try {
-      const aptDate = startOfDay(parseISO(apt.appointmentDate));
-      const selectedDate = startOfDay(filterDate);
-      return isSameDay(aptDate, selectedDate);
-    } catch {
-      return false;
-    }
-  });
+  const showAppointments = (view: AppointmentView) => {
+    setAppointmentView(view);
+    setActiveTab("appointments");
+  };
 
   // Group schedule templates by day - use working schedules in edit mode
   const activeSchedules = isEditMode ? workingSchedules : scheduleTemplates;
@@ -732,26 +698,6 @@ export default function Calendar() {
         }
       });
 
-  const getStatusBadge = (status: string) => {
-    const statusConfig: Record<string, { variant: "default" | "secondary" | "destructive" | "outline", icon: any }> = {
-      pending: { variant: "outline", icon: Clock },
-      confirmed: { variant: "default", icon: CheckCircle2 },
-      cancelled: { variant: "destructive", icon: XCircle },
-      completed: { variant: "secondary", icon: CheckCircle2 },
-      no_show: { variant: "outline", icon: XCircle },
-    };
-    
-    const config = statusConfig[status] || { variant: "outline", icon: CalendarIcon };
-    const Icon = config.icon;
-    
-    return (
-      <Badge variant={config.variant} className="gap-1">
-        <Icon className="h-3 w-3" />
-        {status.replace('_', ' ')}
-      </Badge>
-    );
-  };
-
   const handleEditOverride = (override: SlotOverride) => {
     // Calculate end time from start time + duration
     const [hours, minutes] = override.slotTime.split(':').map(Number);
@@ -779,22 +725,24 @@ export default function Calendar() {
       <div className="mb-4">
         <div className="rounded-2xl border border-black/[0.07] bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 bg-indigo-50 rounded-lg">
-                <CalendarIcon className="w-5 h-5 text-indigo-600" />
+            <HideInHub>
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-50 rounded-lg">
+                  <CalendarIcon className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-semibold text-gray-900">
+                    Appointments
+                  </h1>
+                  <p className="text-gray-500 text-sm">
+                    Set the hours people can book, and keep track of their bookings
+                  </p>
+                </div>
               </div>
-              <div>
-                <h1 className="text-xl font-semibold text-gray-900">
-                  Calendar
-                </h1>
-                <p className="text-gray-500 text-sm">
-                  Manage your availability schedule and view upcoming appointments
-                </p>
-              </div>
-            </div>
-            
+            </HideInHub>
+
             {/* Master Toggle for Appointment Booking */}
-            <div className="flex items-center gap-2.5 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
+            <div className="ml-auto flex items-center gap-2.5 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
               <div className="flex items-center gap-1.5">
                 <Power className="w-4 h-4 text-indigo-600" />
                 <p className="font-semibold text-xs text-gray-800">Booking</p>
@@ -808,42 +756,32 @@ export default function Calendar() {
           </div>
           
           {/* KPI Metrics */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-              <div className="flex items-center gap-2.5">
-                <div className="p-1.5 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-lg shadow-md">
-                  <CalendarIcon className="w-4 h-4 text-white" />
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
+            {[
+              { label: "Today", value: todayCount, hint: todayCount === 1 ? "booking" : "bookings", icon: CalendarIcon, tint: "from-indigo-500 to-purple-500", view: "upcoming" as const },
+              { label: "Next 7 days", value: nextWeekCount, hint: "still to come", icon: Clock, tint: "from-teal-500 to-emerald-500", view: "upcoming" as const },
+              { label: "Needs update", value: needsUpdateCount, hint: "past, no outcome", icon: AlertCircle, tint: needsUpdateCount > 0 ? "from-amber-500 to-orange-500" : "from-gray-300 to-gray-400", view: "needs_update" as const },
+            ].map(card => (
+              <button
+                key={card.label}
+                type="button"
+                onClick={() => showAppointments(card.view)}
+                className="text-left bg-gray-50 rounded-lg p-2.5 sm:p-3 border border-gray-100 hover:border-gray-300 hover:bg-white transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className={`hidden sm:block p-1.5 bg-gradient-to-br ${card.tint} rounded-lg shadow-md`}>
+                    <card.icon className="w-4 h-4 text-white" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wide">{card.label}</p>
+                    <p className="text-2xl font-extrabold text-gray-900">
+                      {card.value}
+                      <span className="ml-1.5 hidden sm:inline text-xs font-medium text-gray-500">{card.hint}</span>
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wide">Active Schedules</p>
-                  <p className="text-2xl font-extrabold text-gray-900">{scheduleTemplates.length}</p>
-                </div>
-              </div>
-            </div>
-            
-            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-              <div className="flex items-center gap-2.5">
-                <div className="p-1.5 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg shadow-md">
-                  <TrendingUp className="w-4 h-4 text-white" />
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wide">Upcoming</p>
-                  <p className="text-2xl font-extrabold text-gray-900">{upcomingAppointments.length}</p>
-                </div>
-              </div>
-            </div>
-            
-            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-              <div className="flex items-center gap-2.5">
-                <div className="p-1.5 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-lg shadow-md">
-                  <Shield className="w-4 h-4 text-white" />
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wide">Total Bookings</p>
-                  <p className="text-2xl font-extrabold text-gray-900">{appointments.length}</p>
-                </div>
-              </div>
-            </div>
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -864,8 +802,10 @@ export default function Calendar() {
           <TabsTrigger value="appointments" className="rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-200 data-[state=active]:to-blue-100 data-[state=active]:text-purple-900 data-[state=active]:font-semibold">
             <User className="w-4 h-4 mr-2" />
             Appointments
-            {appointments.length > 0 && (
-              <Badge variant="secondary" className="ml-2">{appointments.length}</Badge>
+            {needsUpdateCount > 0 ? (
+              <Badge variant="secondary" className="ml-2 bg-amber-100 text-amber-800" title="Past bookings that still need an outcome">{needsUpdateCount}</Badge>
+            ) : upcomingTabCount > 0 && (
+              <Badge variant="secondary" className="ml-2">{upcomingTabCount}</Badge>
             )}
           </TabsTrigger>
           <TabsTrigger value="triggers" className="rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-200 data-[state=active]:to-blue-100 data-[state=active]:text-purple-900 data-[state=active]:font-semibold">
@@ -1616,135 +1556,13 @@ export default function Calendar() {
         </TabsContent>
 
         {/* Appointments Tab */}
-        <TabsContent value="appointments" className="space-y-6 mt-6">
-          <Card className="shadow-lg border-blue-100">
-            <CardHeader className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950 dark:to-indigo-950 border-b">
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <div className="p-1.5 bg-blue-100 dark:bg-blue-900 rounded-lg">
-                  <User className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                </div>
-                Appointments
-              </CardTitle>
-              <CardDescription>Manage and track your scheduled appointments</CardDescription>
-            </CardHeader>
-            <CardContent className="pt-6">
-              {/* Date Filter */}
-              <div className="mb-6 p-4 bg-slate-50 dark:bg-slate-900 rounded-lg border">
-                <div className="flex items-center gap-4 flex-wrap">
-                  <div className="flex items-center gap-2">
-                    <CalendarIcon className="h-4 w-4 text-slate-600 dark:text-slate-400" />
-                    <span className="text-sm font-medium">Filter by Date:</span>
-                  </div>
-                  
-                  <Input
-                    type="date"
-                    value={filterDate ? format(filterDate, 'yyyy-MM-dd') : ''}
-                    onChange={(e) => setFilterDate(e.target.value ? new Date(e.target.value) : undefined)}
-                    className="w-48"
-                  />
-                  
-                  {filterDate && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setFilterDate(undefined)}
-                      className="ml-auto"
-                    >
-                      <X className="h-4 w-4 mr-1" />
-                      Clear Filter
-                    </Button>
-                  )}
-                </div>
-                
-                {filterDate && (
-                  <div className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-                    Showing {filteredAppointments.length} of {appointments.length} appointments for {format(filterDate, 'MMM dd, yyyy')}
-                  </div>
-                )}
-              </div>
-
-              {loadingAppointments ? (
-                <div className="text-center py-8 text-muted-foreground">Loading appointments...</div>
-              ) : appointments.length === 0 ? (
-                <div className="text-center py-12">
-                  <User className="h-12 w-12 mx-auto text-muted-foreground/30 mb-3" />
-                  <p className="text-muted-foreground">No appointments scheduled yet</p>
-                </div>
-              ) : filteredAppointments.length === 0 ? (
-                <div className="text-center py-12">
-                  <CalendarIcon className="h-12 w-12 mx-auto text-muted-foreground/30 mb-3" />
-                  <p className="text-muted-foreground">No appointments found for selected dates</p>
-                  <Button
-                    variant="ghost"
-                    onClick={() => setFilterDate(undefined)}
-                    className="mt-2"
-                  >
-                    Clear filter to see all appointments
-                  </Button>
-                </div>
-              ) : (
-                <div className="rounded-lg border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-slate-50 dark:bg-slate-900">
-                        <TableHead className="font-semibold">Patient</TableHead>
-                        <TableHead className="font-semibold">Date & Time</TableHead>
-                        <TableHead className="font-semibold">Contact</TableHead>
-                        <TableHead className="font-semibold">Status</TableHead>
-                        <TableHead className="font-semibold">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredAppointments.map((apt) => (
-                        <TableRow key={apt.id} className="hover:bg-slate-50 dark:hover:bg-slate-900">
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <div className="p-2 bg-blue-100 dark:bg-blue-900 rounded-lg">
-                                <User className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                              </div>
-                              <span className="font-medium">{apt.patientName}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex flex-col">
-                              <span className="font-medium">{format(new Date(apt.appointmentDate), 'MMM dd, yyyy')}</span>
-                              <span className="text-sm text-muted-foreground">{apt.appointmentTime}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="text-sm">
-                              <div>{apt.patientPhone}</div>
-                              {apt.patientEmail && (
-                                <div className="text-muted-foreground">{apt.patientEmail}</div>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell>{getStatusBadge(apt.status)}</TableCell>
-                          <TableCell>
-                            <Select
-                              value={apt.status}
-                              onValueChange={(value) => updateAppointmentStatusMutation.mutate({ id: apt.id, status: value })}
-                            >
-                              <SelectTrigger className="w-32">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="pending">Pending</SelectItem>
-                                <SelectItem value="confirmed">Confirmed</SelectItem>
-                                <SelectItem value="completed">Completed</SelectItem>
-                                <SelectItem value="cancelled">Cancelled</SelectItem>
-                                <SelectItem value="no_show">No Show</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+        <TabsContent value="appointments" className="mt-6">
+          <AppointmentsList
+            appointments={appointments}
+            isLoading={loadingAppointments}
+            view={appointmentView}
+            onViewChange={setAppointmentView}
+          />
         </TabsContent>
 
         {/* Triggers Tab */}

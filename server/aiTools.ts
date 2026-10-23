@@ -733,15 +733,15 @@ export const aiTools = [
         properties: {
           patient_name: {
             type: 'string',
-            description: 'Patient full name (required - must be provided by user)'
+            description: 'Full name of the person booking (required - must be provided by user)'
           },
           patient_phone: {
             type: 'string',
-            description: 'Patient phone number (required - must be provided by user)'
+            description: 'Phone number of the person booking (required - must be provided by user)'
           },
           patient_email: {
             type: 'string',
-            description: 'Patient email address (optional)'
+            description: 'Email address of the person booking (optional)'
           },
           appointment_date: {
             type: 'string',
@@ -757,7 +757,7 @@ export const aiTools = [
           },
           notes: {
             type: 'string',
-            description: 'Optional notes about the appointment (reason for visit, special requests, etc.)'
+            description: 'Optional notes about the appointment (what the booking is for, special requests, etc.)'
           }
         },
         required: ['patient_name', 'patient_phone', 'appointment_date', 'appointment_time']
