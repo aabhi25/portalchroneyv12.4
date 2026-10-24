@@ -1,5 +1,5 @@
 import { db } from "../db";
-import { whatsappSessions, whatsappLeads, type WhatsappSettings } from "@shared/schema";
+import { whatsappSessions, whatsappLeads, whatsappTemplates, type WhatsappSettings } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 
 const SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -238,7 +238,7 @@ export async function sendTemplateMessage(
     await storeOutgoingTemplateMessage(
       settings.businessAccountId,
       recipientPhone,
-      `[Template: ${templateName}]`
+      await templateChatText(settings.businessAccountId, templateName, params, opts.language),
     );
 
     return {
@@ -254,6 +254,40 @@ export async function sendTemplateMessage(
       outcomeUnknown: requestDispatched && isAmbiguousNetworkError(error) ? true : undefined,
     };
   }
+}
+
+/**
+ * What the person actually received, for the chat history: the template's header, body (with the
+ * {{1}}, {{2}} values filled in), footer and buttons. "[Template: name]" alone told the team nothing
+ * (2026-10-24). Falls back to that when the template isn't saved in the portal.
+ */
+export function renderTemplateText(
+  tpl: { headerType?: string | null; headerText?: string | null; bodyText?: string | null; footerText?: string | null; buttons?: { text: string }[] | null },
+  params: Record<string, string> = {},
+  /** Shown for a {{n}} with no value (e.g. "…" for old messages whose values weren't kept). */
+  missing?: string,
+): string {
+  const fill = (s: string) => s.replace(/\{\{\s*(\d+)\s*\}\}/g, (m, n) => (params[n] ?? missing ?? m));
+  const parts: string[] = [];
+  if (tpl.headerType === "text" && tpl.headerText?.trim()) parts.push(fill(tpl.headerText.trim()));
+  if (tpl.bodyText?.trim()) parts.push(fill(tpl.bodyText.trim()));
+  if (tpl.footerText?.trim()) parts.push(tpl.footerText.trim());
+  const buttons = (tpl.buttons || []).map((b) => b?.text?.trim()).filter(Boolean);
+  if (buttons.length) parts.push(buttons.map((b) => `[ ${b} ]`).join("  "));
+  return parts.join("\n\n");
+}
+
+async function templateChatText(businessAccountId: string, templateName: string, params: Record<string, string>, language?: string): Promise<string> {
+  try {
+    const rows = await db.select().from(whatsappTemplates)
+      .where(and(eq(whatsappTemplates.businessAccountId, businessAccountId), eq(whatsappTemplates.name, templateName)));
+    const tpl = rows.find((r) => !r.deletedAt && (!language || r.language === language)) || rows.find((r) => !r.deletedAt) || rows[0];
+    const text = tpl ? renderTemplateText(tpl, params) : "";
+    if (text) return text;
+  } catch (err) {
+    console.error(`[WA Session] Could not render template ${templateName} for the chat:`, err);
+  }
+  return `[Template: ${templateName}]`;
 }
 
 async function storeOutgoingTemplateMessage(

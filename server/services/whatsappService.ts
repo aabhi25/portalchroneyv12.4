@@ -18,7 +18,7 @@ import {
   type WhatsappLead,
   type WhatsappLeadField
 } from "@shared/schema";
-import { eq, ne, sql, and, or, asc, desc, gte, lte, isNull } from "drizzle-orm";
+import { eq, ne, sql, and, or, asc, desc, gte, lte, isNull, inArray } from "drizzle-orm";
 import { r2Storage } from "./r2StorageService";
 import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
 
@@ -2051,8 +2051,25 @@ For example:
       }
     }
 
+    // Older rows stored only "[Template: name]" / "[Interactive message]": show the template's text
+    // (values unknown, shown as "…") and say what the tap was.
+    const { readableChatText } = await import("./whatsappInteractiveText");
+    const templateNames = Array.from(new Set(messages.map(m => /^\[Template: (.+)\]$/.exec(m.rawMessage || "")?.[1]).filter((n): n is string => !!n)));
+    const { renderTemplateText } = await import("./whatsappSessionService");
+    const templateText = new Map<string, string>();
+    if (templateNames.length) {
+      const { whatsappTemplates } = await import("@shared/schema");
+      const tpls = await db.select().from(whatsappTemplates)
+        .where(and(eq(whatsappTemplates.businessAccountId, businessAccountId), inArray(whatsappTemplates.name, templateNames)));
+      for (const name of templateNames) {
+        const tpl = tpls.find(t => t.name === name && !t.deletedAt) || tpls.find(t => t.name === name);
+        const text = tpl ? renderTemplateText(tpl, {}, "…") : "";
+        if (text) templateText.set(name, text);
+      }
+    }
     const messagesWithAttachments = messages.map(msg => ({
       ...msg,
+      rawMessage: readableChatText(msg.rawMessage, templateText),
       attachments: attachmentsByLeadId[msg.id] || []
     }));
 

@@ -31619,7 +31619,10 @@ Return ONLY a valid JSON object in this format:
           }
         } else if (contentType === "interactive" || contentType === "button") {
           const webhookStartTime = Date.now();
-          const interactiveText = text || caption || "";
+          const { interactiveReplyText, interactiveShape } = await import("./services/whatsappInteractiveText");
+          // The tapped button / list option ("Interested", "Call me back"), not "[Interactive message]".
+          const interactiveText = text || caption || interactiveReplyText(payload) || "";
+          if (!interactiveText) console.log(`[MSG91 Webhook] Tap with no readable text (${interactiveShape(payload)})`);
           if (isInboundLimited(businessId, senderPhone, interactiveText, settings, uuid)) {
             return res.json({ status: "received", note: "rate_limited" });
           }
