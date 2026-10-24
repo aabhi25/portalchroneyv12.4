@@ -142,6 +142,8 @@ export interface AiCallingSettingsView {
   transferNumber: string | null;
   /** What the AI should achieve on a lead call (business's words). */
   callPurpose: string;
+  /** What the AI should achieve when someone calls the business; null = DEFAULT_INBOUND_CALL_PURPOSE. */
+  inboundCallPurpose: string | null;
   /** Optional custom first line; placeholders {name}, {business}, {assistant}. */
   openingLine: string | null;
   inboundGreeting: string | null;
@@ -175,7 +177,11 @@ export const DEFAULT_CALL_PURPOSE =
   "Thank them for their enquiry, understand what they need, answer their questions from what you know about the business, " +
   "and if they are interested, confirm the best time for the team to follow up.";
 
-/** Longest "Purpose of the call" the business can save; the AI is given all of it. */
+export const DEFAULT_INBOUND_CALL_PURPOSE =
+  "Find out what they need, answer their questions from what you know about the business, " +
+  "and if they are interested, take their name and what they are looking for so the team can follow up.";
+
+/** Longest "Purpose of the call" (outgoing or incoming) the business can save; the AI is given all of it. */
 export const CALL_PURPOSE_MAX = 1500;
 
 /** Limits enforced by the server (UI uses them for inputs). */

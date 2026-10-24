@@ -288,6 +288,13 @@
       "when": 1792820085444,
       "tag": "0040_video_thinking_sounds_off",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1792821419181,
+      "tag": "0041_inbound_call_purpose",
+      "breakpoints": true
     }
   ]
 }

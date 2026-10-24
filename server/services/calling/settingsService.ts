@@ -39,7 +39,7 @@ import { describeSecret, exotelMissing, normalizeApiKey, plivoMissing, sealSecre
 export const AUTO_CALL_SOURCES = ["website", "whatsapp", "instagram", "facebook", "voice", "form", "import", "other"] as const;
 export const EXOTEL_SUBDOMAINS = ["api.in.exotel.com", "api.exotel.com"] as const;
 export const MONTHLY_MINUTE_LIMIT = { min: 1, max: 100_000 } as const;
-export const TEXT_LIMITS = { callPurpose: CALL_PURPOSE_MAX, openingLine: 300, inboundGreeting: 300, assistantName: 40 } as const;
+export const TEXT_LIMITS = { callPurpose: CALL_PURPOSE_MAX, inboundCallPurpose: CALL_PURPOSE_MAX, openingLine: 300, inboundGreeting: 300, assistantName: 40 } as const;
 
 export class CallingSettingsError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -166,6 +166,7 @@ export function defaultSettingsRow(businessAccountId: string): AiCallingSettings
     recordCalls: true,
     transferNumber: null,
     callPurpose: null,
+    inboundCallPurpose: null,
     openingLine: null,
     inboundGreeting: null,
     assistantName: null,
@@ -262,6 +263,7 @@ export function toSettingsView(row: AiCallingSettingsRow & { exists?: boolean })
     recordCalls: row.recordCalls,
     transferNumber: row.transferNumber,
     callPurpose: row.callPurpose?.trim() || DEFAULT_CALL_PURPOSE,
+    inboundCallPurpose: row.inboundCallPurpose?.trim() || null,
     openingLine: row.openingLine,
     inboundGreeting: row.inboundGreeting,
     assistantName: row.assistantName ?? null,
@@ -382,7 +384,7 @@ const AUDITED = [
   "enabled", "provider", "exotelAccountSid", "exotelSubdomain", "exotelCallerId", "exotelFlowAppId", "plivoAuthId", "plivoNumber",
   "autoCallLeads", "autoCallDelayMinutes", "autoCallSources", "consentMode", "callingHours", "maxAttempts",
   "retryGapMinutes", "maxCallMinutes", "monthlyMinuteLimit", "concurrentCallLimit", "recordCalls", "transferNumber",
-  "callPurpose", "openingLine", "inboundGreeting", "assistantName", "speakingSpeed", "backgroundSound", "voiceSelection", "whatsappFollowUp", "whatsappFollowUpTemplateId",
+  "callPurpose", "inboundCallPurpose", "openingLine", "inboundGreeting", "assistantName", "speakingSpeed", "backgroundSound", "voiceSelection", "whatsappFollowUp", "whatsappFollowUpTemplateId",
 ] as const;
 
 export interface UpdateResult {
@@ -514,6 +516,7 @@ export async function updateCallingSettings(
     }
   }
   if (has(body, "callPurpose")) next.callPurpose = optText("Call purpose", body.callPurpose, TEXT_LIMITS.callPurpose);
+  if (has(body, "inboundCallPurpose")) next.inboundCallPurpose = optText("Purpose of incoming calls", body.inboundCallPurpose, TEXT_LIMITS.inboundCallPurpose);
   if (has(body, "openingLine")) next.openingLine = optText("Opening line", body.openingLine, TEXT_LIMITS.openingLine);
   if (has(body, "inboundGreeting")) next.inboundGreeting = optText("Greeting for incoming calls", body.inboundGreeting, TEXT_LIMITS.inboundGreeting);
   if (has(body, "assistantName")) {
@@ -576,7 +579,7 @@ export async function updateCallingSettings(
 
   const changed: string[] = AUDITED.filter((f) => JSON.stringify((current as any)[f] ?? null) !== JSON.stringify((next as any)[f] ?? null));
   const pick = (s: Record<string, unknown>) => Object.fromEntries(
-    changed.filter((f) => !["callPurpose", "openingLine", "inboundGreeting", "transferNumber", "exotelCallerId", "plivoNumber"].includes(f)).map((f) => [f, s[f] ?? null]),
+    changed.filter((f) => !["callPurpose", "inboundCallPurpose", "openingLine", "inboundGreeting", "transferNumber", "exotelCallerId", "plivoNumber"].includes(f)).map((f) => [f, s[f] ?? null]),
   );
   const now = new Date();
   const { businessAccountId: _b, createdAt: _c, ...values } = next;

@@ -485,7 +485,7 @@ export class CallMediaSession {
       leadMessage: lead?.message ?? null,
       leadTopics: Array.isArray(lead?.topicsOfInterest) ? lead!.topicsOfInterest : null,
       leadEmail: lead?.email ?? null,
-      callPurpose: this.settings?.callPurpose ?? null,
+      callPurpose: (call.direction === "inbound" ? this.settings?.inboundCallPurpose : this.settings?.callPurpose) ?? null,
       staffNote: typeof meta.note === "string" ? meta.note : null,
       transferAvailable,
       maxCallMinutes,

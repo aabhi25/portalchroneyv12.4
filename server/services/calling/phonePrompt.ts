@@ -8,7 +8,7 @@
  * end / hand over / record the call.
  */
 import type { CallDirection, CallOutcome } from "@shared/aiCalling";
-import { CALL_PURPOSE_MAX, DEFAULT_CALL_PURPOSE } from "@shared/aiCalling";
+import { CALL_PURPOSE_MAX, DEFAULT_CALL_PURPOSE, DEFAULT_INBOUND_CALL_PURPOSE } from "@shared/aiCalling";
 
 export const DEFAULT_ASSISTANT_LABEL = "the AI assistant";
 
@@ -41,6 +41,7 @@ export interface PhonePromptInput {
   leadMessage?: string | null;
   leadTopics?: string[] | null;
   leadEmail?: string | null;
+  /** The business's purpose for this direction of call (outgoing or incoming); empty = the default. */
   callPurpose?: string | null;
   /** Staff note for a manual call. */
   staffNote?: string | null;
@@ -105,7 +106,7 @@ function localTime(now: Date, timezone: string): string {
   }
 }
 
-/** The phone layer of the instructions (goes last in the model's rules, after the voice/identity/language blocks). */
+/** The phone layer of the instructions (goes last in the model's rules, after the voice/identity/language blocks); the business's call purpose leads it. */
 export function buildPhoneInstructions(input: PhonePromptInput): string {
   const now = input.now ?? new Date();
   const name = clean(input.customerName, 80);
@@ -115,6 +116,13 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
     ? `- YOU called this person on behalf of ${clean(input.businessName, 120) || "the business"} because they enquired with us. You already said the opening line (it is in the history). Never thank them for calling or "reaching out" — you called them.`
     : `- This person called ${clean(input.businessName, 120) || "the business"}. You already greeted them (it is in the history).`);
   lines.push("- You are an AI assistant. If you have not clearly said so yet, say it briefly within your next reply (\"I'm an AI assistant for the team\"). If asked whether you are a human or a robot, say honestly that you are an AI assistant.");
+  // The business's purpose comes first: it decides what the call is for; the rules after it are how to speak.
+  lines.push("");
+  lines.push("🎯 PURPOSE OF THIS CALL — YOUR MAIN GOAL (the business's own words):");
+  lines.push(clean(input.callPurpose, CALL_PURPOSE_MAX) || (input.direction === "outbound" ? DEFAULT_CALL_PURPOSE : DEFAULT_INBOUND_CALL_PURPOSE));
+  lines.push("- Follow this purpose in every reply and keep moving the conversation towards it. It decides WHAT you are trying to achieve; the rules below are about HOW to speak on a phone call. Only these come before it: saying honestly that you are an AI, never inventing facts, prices, offers or dates, and stopping when they ask not to be called again or clearly say they are not interested.");
+  lines.push("");
+  lines.push("HOW TO SPEAK ON THE CALL:");
   lines.push("- Speak like a polite person on the phone: 1 or 2 short sentences per reply, then let them talk. Ask one question at a time.");
   lines.push("- Sound like a warm, real person on a call, not a script: everyday spoken words and contractions (\"we've\", \"you'll\", \"that's\"). When it fits, start with a short natural reaction in the reply's language — English: \"Right,\" \"Okay so,\" \"Oh, I see,\"; Hindi / Hinglish: \"Haan,\" \"Achha,\" \"Ji,\" — at most one per reply, and not the same one twice in a row. No \"hmm\" / \"umm\" before an answer (it sounds unsure), and no empty openers like \"आपकी बातें सुनकर अच्छा लगा\" / \"Great question\": answer what they asked.");
   lines.push("- Let feeling show in the words: glad when they're interested, sorry when something went wrong for them, calm and patient when they're confused or upset. Never sound like you are reading a list.");
@@ -142,9 +150,6 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
   lines.push(`- Current date and time for the business: ${localTime(now, input.timezone)} (${input.timezone}). Use it to turn "tomorrow evening" into a real time.`);
 
   if (input.direction === "outbound") {
-    lines.push("");
-    lines.push("CALL PURPOSE (the business's words):");
-    lines.push(clean(input.callPurpose, CALL_PURPOSE_MAX) || DEFAULT_CALL_PURPOSE);
     const facts: string[] = [];
     if (name) facts.push(`name: ${name}`);
     if (input.customerPhone) facts.push(`phone: ${clean(input.customerPhone, 20)} (you already have it — never ask for it)`);

@@ -222,7 +222,7 @@ async function main() {
   const OFF = await mkBiz("Calling Off", false);
   const OTHER = await mkBiz("Other Biz");
   const inboundKey = newInboundKey();
-  await db.insert(schema.aiCallingSettings).values({ businessAccountId: BIZ, enabled: true, provider: "simulator", maxCallMinutes: 2, transferNumber: "+919999900000", inboundKey, callPurpose: "Book a site visit" } as any);
+  await db.insert(schema.aiCallingSettings).values({ businessAccountId: BIZ, enabled: true, provider: "simulator", maxCallMinutes: 2, transferNumber: "+919999900000", inboundKey, callPurpose: "Book a site visit", inboundCallPurpose: "Help callers pick a flat" } as any);
   const offKey = newInboundKey();
   await db.insert(schema.aiCallingSettings).values({ businessAccountId: OFF, enabled: true, provider: "exotel", inboundKey: offKey } as any);
   const disabledKey = newInboundKey();
@@ -260,7 +260,7 @@ async function main() {
     expect(!!e && e.input.callId === call.id && e.input.skipLeadTraining === true, "voice session started for the call (lead call: website lead form skipped)");
     const toolNames = e.input.chat.tools.map((t: any) => t.function.name);
     expect(toolNames.includes("end_call") && toolNames.includes("do_not_call") && toolNames.includes("transfer_to_human") && toolNames.includes("save_call_details"), "phone tools passed to the brain (transfer: simulator + transfer number)", toolNames);
-    expect(/Book a site visit/.test(e.input.chat.instructions) && /Need a 2BHK/.test(e.input.chat.instructions), "instructions carry call purpose + lead message");
+    expect(/Book a site visit/.test(e.input.chat.instructions) && /Need a 2BHK/.test(e.input.chat.instructions) && !/Help callers pick a flat/.test(e.input.chat.instructions), "instructions carry the outgoing call purpose + lead message");
     expect(e.input.conversationTitle === "Phone call (outbound)", "conversation is recognisable as a phone call");
 
     // caller audio before the session is ready is kept, then forwarded at 24 kHz
@@ -599,6 +599,7 @@ async function main() {
     const row = await getCall(callId);
     expect(row && row.direction === "inbound" && row.trigger === "inbound" && row.provider === "exotel" && row.status === "in_progress" && row.phone === "+919876543210" && row.leadId === lead.id, "inbound start → inbound row (exotel, in_progress, normalized number, matched lead)", row && { p: row.phone, l: row.leadId });
     expect(e.input.skipLeadTraining === false && !e.input.chat.tools.some((t: any) => t.function.name === "save_call_details") && e.input.chat.knownContact.phone === "+919876543210", "inbound: the lead form runs (number already known)");
+    expect(/Help callers pick a flat/.test(e.input.chat.instructions) && !/Book a site visit/.test(e.input.chat.instructions), "inbound: the incoming-call purpose is used, not the outgoing one");
     e.ready();
     await flush();
     expect(e.said.length === 1 && /^Thanks for calling Acme Homes/.test(e.said[0].text), "inbound: greeting spoken at once", e.said[0]);

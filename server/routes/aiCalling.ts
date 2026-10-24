@@ -5,6 +5,7 @@
  *   PUT    /api/calling/settings                 partial update (audited); secrets write-only
  *   POST   /api/calling/settings/verify          provider.verify → { ok, detail } | 400 { error }
  *   POST   /api/calling/settings/inbound-key     new inbound key (old Exotel inbound URL stops working; audited)
+ *   POST   /api/calling/settings/purpose-suggestion  { direction, brief } → { purpose } (AI-written; not saved)
  *   GET    /api/calling/calls                    list { calls, total }
  *   GET    /api/calling/calls/:id                detail { call, transcript, lead }
  *   GET    /api/calling/calls/:id/recording      audio (proxied from the provider; staff only)
@@ -188,6 +189,21 @@ router.post("/api/calling/settings/verify", ...requireAiCalling, async (req, res
       res.status(400).json({ error: e?.message || "Could not connect to the phone provider" });
     }
   } catch (err) { fail(res, err); }
+});
+
+router.post("/api/calling/settings/purpose-suggestion", ...requireAiCalling, async (req, res) => {
+  const businessAccountId = bizOf(req);
+  const { writeCallPurpose, PurposeWriterError } = await import("../services/calling/purposeWriter");
+  try {
+    const direction = req.body?.direction === "inbound" ? "inbound" : "outbound";
+    const brief = typeof req.body?.brief === "string" ? req.body.brief : "";
+    const [biz] = await db.select({ name: businessAccounts.name }).from(businessAccounts).where(eq(businessAccounts.id, businessAccountId)).limit(1);
+    const purpose = await writeCallPurpose({ businessAccountId, businessName: biz?.name ?? null, direction, brief });
+    res.json({ purpose });
+  } catch (err: any) {
+    if (err instanceof PurposeWriterError) return res.status(400).json({ error: err.message });
+    fail(res, err, "The AI couldn't write a suggestion. Please try again.");
+  }
 });
 
 router.post("/api/calling/settings/inbound-key", ...requireAiCalling, async (req, res) => {

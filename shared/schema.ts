@@ -1784,6 +1784,8 @@ export const aiCallingSettings = pgTable("ai_calling_settings", {
   recordCalls: boolean("record_calls").notNull().default(true),
   transferNumber: text("transfer_number"),
   callPurpose: text("call_purpose"),
+  // Purpose for calls TO the business (inbound); null = DEFAULT_INBOUND_CALL_PURPOSE.
+  inboundCallPurpose: text("inbound_call_purpose"),
   openingLine: text("opening_line"),
   inboundGreeting: text("inbound_greeting"),
   // How the AI sounds on calls: its name, speaking speed (percent of normal) and a quiet background

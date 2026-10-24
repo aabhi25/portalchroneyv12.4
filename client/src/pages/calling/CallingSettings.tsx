@@ -13,12 +13,13 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle2, ChevronDown, Copy, Loader2, ShieldCheck, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, Copy, Loader2, PhoneIncoming, PhoneOutgoing, ShieldCheck, Sparkles, XCircle } from "lucide-react";
 import {
   ASSISTANT_NAME,
   CALL_LIMITS,
   CALL_SPEAKING_SPEEDS,
   DEFAULT_CALL_PURPOSE,
+  DEFAULT_INBOUND_CALL_PURPOSE,
   CALL_PURPOSE_MAX,
   DEFAULT_SPEAKING_SPEED,
   type CallBackgroundSound,
@@ -112,6 +113,7 @@ interface Draft {
   recordCalls: boolean;
   transferNumber: string;
   callPurpose: string;
+  inboundCallPurpose: string;
   openingLine: string;
   inboundGreeting: string;
   assistantName: string;
@@ -158,6 +160,7 @@ function toDraft(v: AiCallingSettingsView): Draft {
     recordCalls: v.recordCalls,
     transferNumber: v.transferNumber || "",
     callPurpose: v.callPurpose || "",
+    inboundCallPurpose: v.inboundCallPurpose || "",
     openingLine: v.openingLine || "",
     inboundGreeting: v.inboundGreeting || "",
     assistantName: v.assistantName || "",
@@ -224,6 +227,7 @@ function buildBody(d: Draft, secrets: { apiKey: string; apiToken: string; plivoA
     recordCalls: d.recordCalls,
     transferNumber: d.transferNumber.trim() ? normalizeCallPhone(d.transferNumber) : null,
     callPurpose: d.callPurpose.trim(),
+    inboundCallPurpose: d.inboundCallPurpose.trim() || null,
     openingLine: d.openingLine.trim() || null,
     inboundGreeting: d.inboundGreeting.trim() || null,
     assistantName: d.assistantName.trim() || null,
@@ -270,6 +274,62 @@ function Field({ label, htmlFor, help, error, children }: { label: ReactNode; ht
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
       {error ? <p className="text-xs text-red-600">{error}</p> : help ? <p className="text-xs text-gray-500">{help}</p> : null}
+    </div>
+  );
+}
+
+function CallSection({ icon, title, description, children }: { icon: ReactNode; title: string; description: string; children: ReactNode }) {
+  return (
+    <section className="space-y-4 border-t pt-5">
+      <div>
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-900">{icon}{title}</h3>
+        <p className="text-xs text-gray-500">{description}</p>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** Purpose of a call (outgoing or incoming) with "Write it with AI": a line or two becomes detailed instructions. */
+function PurposeField({ id, direction, value, onChange, placeholder, testId }: {
+  id: string; direction: "outbound" | "inbound"; value: string; onChange: (v: string) => void; placeholder: string; testId: string;
+}) {
+  const [suggestion, setSuggestion] = useState<string | null>(null);
+  const brief = value.trim();
+  const write = useMutation({
+    mutationFn: () => callingApi.suggestPurpose(direction, brief),
+    onSuccess: r => setSuggestion(r.purpose),
+  });
+  const tooShort = brief.length < 10;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Label htmlFor={id}>Purpose of the call</Label>
+        <Button type="button" variant="outline" size="sm" className="h-8" disabled={tooShort || write.isPending} onClick={() => write.mutate()} data-testid={`button-write-${id}`}>
+          {write.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+          {write.isPending ? "Writing…" : "Write it with AI"}
+        </Button>
+      </div>
+      <Textarea id={id} rows={4} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} maxLength={CALL_PURPOSE_MAX} data-testid={testId} />
+      {write.error ? (
+        <p className="text-xs text-red-600">{(write.error as Error).message}</p>
+      ) : (
+        <p className="text-xs text-gray-500">
+          In your own words, or write a line or two and press Write it with AI. Leave empty to use the suggestion shown. {value.length.toLocaleString()} / {CALL_PURPOSE_MAX.toLocaleString()} characters.
+        </p>
+      )}
+      {suggestion && (
+        <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm" data-testid={`suggestion-${id}`}>
+          <p className="flex items-center gap-1.5 text-xs font-medium text-violet-700"><Sparkles className="h-3.5 w-3.5" />AI suggestion</p>
+          <p className="mt-1 whitespace-pre-wrap text-gray-800">{suggestion}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" size="sm" onClick={() => { onChange(suggestion); setSuggestion(null); }} data-testid={`button-use-${id}`}>Use this</Button>
+            <Button type="button" size="sm" variant="outline" disabled={write.isPending} onClick={() => write.mutate()}>Try again</Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setSuggestion(null)}>Discard</Button>
+          </div>
+          <p className="mt-2 text-xs text-gray-500">Check it says what you want, then press Save changes.</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -775,7 +835,7 @@ export default function CallingSettings() {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">What the AI says</CardTitle>
-            <CardDescription>It already knows everything you've trained it on. Tell it what each call is for.</CardDescription>
+            <CardDescription>It already knows everything you've trained it on. Tell it what each call is for: the AI follows the purpose first on every call.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
             <Field label="Assistant's name (optional)" htmlFor="assistant-name" error={err("assistantName")} help="The AI introduces itself with this name and gives it when asked, for example Anika. Pick a name that suits the voice. It always says it's an AI assistant.">
@@ -802,9 +862,15 @@ export default function CallingSettings() {
                 </Select>
               </Field>
             </div>
-            <Field label="Purpose of the call" htmlFor="call-purpose" help={`In your own words. Leave empty to use the suggestion shown. ${draft.callPurpose.length.toLocaleString()} / ${CALL_PURPOSE_MAX.toLocaleString()} characters.`}>
-              <Textarea id="call-purpose" rows={4} value={draft.callPurpose} onChange={e => set("callPurpose", e.target.value)} placeholder={DEFAULT_CALL_PURPOSE} maxLength={CALL_PURPOSE_MAX} data-testid="input-call-purpose" />
-            </Field>
+            <CallSection icon={<PhoneOutgoing className="h-4 w-4" />} title="Outgoing calls" description="When the AI calls a lead who enquired.">
+            <PurposeField
+              id="call-purpose"
+              direction="outbound"
+              value={draft.callPurpose}
+              onChange={v => set("callPurpose", v)}
+              placeholder={DEFAULT_CALL_PURPOSE}
+              testId="input-call-purpose"
+            />
             <Field
               label="Opening line (optional)"
               htmlFor="opening-line"
@@ -818,9 +884,20 @@ export default function CallingSettings() {
                 <p className="mt-1 text-gray-800">“{openingPreview}”</p>
               </div>
             )}
-            <Field label="Greeting when someone calls you (optional)" htmlFor="inbound-greeting" help="What the AI says when it answers your number. Leave empty for a friendly default.">
+            </CallSection>
+            <CallSection icon={<PhoneIncoming className="h-4 w-4" />} title="Incoming calls" description="When someone calls your number.">
+            <PurposeField
+              id="inbound-call-purpose"
+              direction="inbound"
+              value={draft.inboundCallPurpose}
+              onChange={v => set("inboundCallPurpose", v)}
+              placeholder={DEFAULT_INBOUND_CALL_PURPOSE}
+              testId="input-inbound-call-purpose"
+            />
+            <Field label="Greeting (optional)" htmlFor="inbound-greeting" help="What the AI says when it answers your number. Leave empty for a friendly default.">
               <Textarea id="inbound-greeting" rows={2} value={draft.inboundGreeting} onChange={e => set("inboundGreeting", e.target.value)} maxLength={300} placeholder={`Thanks for calling ${businessName}. How can I help you today?`} data-testid="input-inbound-greeting" />
             </Field>
+            </CallSection>
           </CardContent>
         </Card>
 

@@ -212,6 +212,8 @@ export const callingApi = {
   getSettings: () => apiRequest<CallingSettingsResponse>("GET", "/api/calling/settings"),
   saveSettings: (body: CallingSettingsUpdate) => apiRequest<CallingSettingsResponse>("PUT", "/api/calling/settings", body),
   verify: () => apiRequest<{ ok: boolean; detail?: string }>("POST", "/api/calling/settings/verify"),
+  suggestPurpose: (direction: "outbound" | "inbound", brief: string) =>
+    apiRequest<{ purpose: string }>("POST", "/api/calling/settings/purpose-suggestion", { direction, brief }),
 
   listCalls: (p: CallsListParams) =>
     apiRequest<CallsListResponse>(

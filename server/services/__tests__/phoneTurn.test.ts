@@ -100,6 +100,30 @@ async function main() {
   const longPurpose = `${'Explain the programme and answer questions. '.repeat(40)}Never end the call without securing the next step.`.slice(-CALL_PURPOSE_MAX);
   const withPurpose = buildPhoneInstructions({ direction: 'outbound', businessName: 'ArhamSecure', transferAvailable: false, maxCallMinutes: 5, timezone: 'Asia/Kolkata', leadCaptureOn: false, callPurpose: longPurpose });
   expect(longPurpose.length === CALL_PURPOSE_MAX && withPurpose.includes(longPurpose.trim()), 'the whole call purpose (up to the save limit) is in the phone rules', longPurpose.length);
+  // The purpose leads the phone rules (it decides what the call is for), before the speaking style.
+  const purposeAt = withPurpose.indexOf('PURPOSE OF THIS CALL');
+  expect(purposeAt > 0 && purposeAt < withPurpose.indexOf('HOW TO SPEAK ON THE CALL') && purposeAt < withPurpose.indexOf('1 or 2 short sentences'), 'the call purpose comes before the speaking rules');
+  const inbound = buildPhoneInstructions({ direction: 'inbound', businessName: 'ArhamSecure', transferAvailable: false, maxCallMinutes: 5, timezone: 'Asia/Kolkata', leadCaptureOn: true, callPurpose: 'Help callers renew their policy.' });
+  const inboundDefault = buildPhoneInstructions({ direction: 'inbound', businessName: 'ArhamSecure', transferAvailable: false, maxCallMinutes: 5, timezone: 'Asia/Kolkata', leadCaptureOn: true });
+  const { DEFAULT_INBOUND_CALL_PURPOSE } = await import('@shared/aiCalling');
+  expect(/PURPOSE OF THIS CALL[^\n]*\nHelp callers renew their policy\./.test(inbound) && inboundDefault.includes(DEFAULT_INBOUND_CALL_PURPOSE), 'incoming calls get their own purpose (or the incoming default)');
+
+  // ── "Write it with AI" for the purpose ──
+  const pw = await import('../calling/purposeWriter');
+  expect(pw.cleanPurpose('"**You** call people back.\n- Find out the course."') === 'You call people back. Find out the course.', 'the suggestion loses quotes, markdown and bullets');
+  const longText = 'You call the lead and help them. '.repeat(80);
+  const cleaned = pw.cleanPurpose(longText);
+  expect(cleaned.length <= CALL_PURPOSE_MAX - 200 && cleaned.endsWith('.'), 'a long suggestion is cut at a sentence end, leaving room to add to it', cleaned.length);
+  let seen: any = null;
+  pw.setPurposeWriterForTesting(async (input) => { seen = input; return 'You call MBA enquiries and book a counselling call.'; });
+  const written = await pw.writeCallPurpose({ businessAccountId: 'b', businessName: 'Symbiosis', direction: 'outbound', brief: '  push MBA admissions,\n book counselling  ' });
+  expect(written === 'You call MBA enquiries and book a counselling call.' && seen.brief === 'push MBA admissions, book counselling' && seen.direction === 'outbound', 'the brief is tidied and the suggestion returned', { written, seen });
+  let refused = '';
+  try { await pw.writeCallPurpose({ businessAccountId: 'b', businessName: null, direction: 'inbound', brief: 'mba' }); } catch (e: any) { refused = e instanceof pw.PurposeWriterError ? e.message : 'other'; }
+  expect(/line or two/.test(refused), 'a brief of a word or two is refused with a hint', refused);
+  pw.setPurposeWriterForTesting(null);
+  const sys = pw.purposeWriterPrompt({ businessName: 'Symbiosis', direction: 'outbound' });
+  expect(/Never add facts/.test(sys) && /not interested/.test(sys) && /calls people who enquired/.test(pw.purposeWriterPrompt({ businessName: null, direction: 'outbound' })) && /answers phone calls/.test(pw.purposeWriterPrompt({ businessName: null, direction: 'inbound' })), 'the writer is told not to invent facts, to respect a no, and which way the call goes');
 
   // ── spoken-answer guards (live call 2026-10-17) ──
   const { repeatsAskedQuestion, isPromiseOnly, stripContinuationStart } = await import('../calling/phonePrompt');

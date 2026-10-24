@@ -145,7 +145,7 @@ export async function processFinishedCall(callId: string): Promise<void> {
         businessAccountId: call.businessAccountId,
         businessName: biz?.name ?? null,
         direction: call.direction === "inbound" ? "inbound" : "outbound",
-        callPurpose: settings.callPurpose,
+        callPurpose: call.direction === "inbound" ? settings.inboundCallPurpose : settings.callPurpose,
         transcript: transcript.map(({ role, content }) => ({ role, content })),
         now: new Date(),
         timezone: hours.timezone,

@@ -1,0 +1,1 @@
+ALTER TABLE "ai_calling_settings" ADD COLUMN "inbound_call_purpose" text;
