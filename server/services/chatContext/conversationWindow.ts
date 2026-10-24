@@ -4,6 +4,7 @@
  */
 import { estimateTokens, truncateToTokens } from './tokens';
 import { tokenize } from './lexical';
+import { withEnglishTerms } from './devanagariEnglish';
 
 export interface HistoryMessage { role: 'user' | 'assistant' | 'system'; content: string }
 
@@ -48,9 +49,11 @@ export function isFollowUpMessage(message: string): boolean {
  * `history` is the conversation BEFORE the current message.
  */
 export function buildRetrievalQuery(message: string, history: HistoryMessage[], maxPriorTurns = 2): RetrievalQuery {
-  const primary = message.trim();
+  // "प्लेसमेंट सपोर्ट" also searches for "placement support" (English content).
+  const typed = message.trim();
+  const primary = withEnglishTerms(typed);
   const priorUserTurns = history.filter(h => h.role === 'user').map(h => h.content.trim()).filter(Boolean);
-  if (!priorUserTurns.length || !isFollowUpMessage(primary)) {
+  if (!priorUserTurns.length || !isFollowUpMessage(typed)) {
     return { query: primary, primary, context: '', isFollowUp: false };
   }
   const picked = priorUserTurns.slice(-maxPriorTurns).map(t => truncateToTokens(t, 60));

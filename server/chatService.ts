@@ -243,6 +243,9 @@ function isShortPhoneAnswer(msg: string): boolean {
 
 /** Phone calls: longest wait for the knowledge-search query embedding before keyword-only search. */
 const PHONE_EMBED_WAIT_MS = 800;
+// A question with no English words at all: the keyword search can't match English content, so
+// the meaning search is worth a little more waiting (live call 2026-10-24: 801 ms, cut off).
+const PHONE_EMBED_WAIT_NON_LATIN_MS = 1500;
 
 /** `promise`, or a rejection once `ms` have passed (the promise itself keeps running). */
 function withinMs<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
@@ -6529,7 +6532,7 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
             // Phone: the caller is waiting in silence. The query embedding took 0.4-1.9 s on calls (usually 0.4-0.65 s; 400 ms cut off nearly every one and the keyword search alone found nothing)
             // (2026-10-17) — past PHONE_EMBED_WAIT_MS the keyword search answers alone (the
             // embedding still finishes into the cache for the next turn).
-            return withinMs(embedding, PHONE_EMBED_WAIT_MS, 'query embedding (phone)');
+            return withinMs(embedding, /[a-z]/i.test(text) ? PHONE_EMBED_WAIT_MS : PHONE_EMBED_WAIT_NON_LATIN_MS, 'query embedding (phone)');
           }
           : undefined,
         channel: 'website',

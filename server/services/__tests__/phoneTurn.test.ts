@@ -108,6 +108,27 @@ async function main() {
   const { DEFAULT_INBOUND_CALL_PURPOSE } = await import('@shared/aiCalling');
   expect(/PURPOSE OF THIS CALL[^\n]*\nHelp callers renew their policy\./.test(inbound) && inboundDefault.includes(DEFAULT_INBOUND_CALL_PURPOSE), 'incoming calls get their own purpose (or the incoming default)');
 
+  // ── live call 2026-10-24: Hindi question, English FAQ; false "no"; no next step at the end ──
+  const { englishTermsIn } = await import('../chatContext/devanagariEnglish');
+  const { buildRetrievalQuery } = await import('../chatContext/conversationWindow');
+  const { queryTerms, lexicalScore, tokenSet, keywordPatterns } = await import('../chatContext/lexical');
+  expect(englishTermsIn('आपके पास प्लेसमेंट सपोर्ट भी है?').join(' ') === 'placement support' && englishTermsIn('बिज़नेस एनालिटिक्स की फीस').join(' ') === 'business analytics fees' && englishTermsIn('How much is it?').length === 0, 'English words written in Hindi letters are recognised (nukta spellings too)');
+  const hq = buildRetrievalQuery('आपके पास प्लेसमेंट सपोर्ट भी है?', []);
+  const hTerms = queryTerms(hq.primary, hq.context);
+  const kb = ['Does the program provide placement assistance? Yes, career support services are available.', 'What are the fees for the online MBA? They are paid per semester.', 'Is the degree UGC approved? Yes.'];
+  const kbSets = kb.map((d) => tokenSet(d));
+  const kbDf = new Map<string, number>(); kbSets.forEach((s) => s.forEach((t) => kbDf.set(t, (kbDf.get(t) || 0) + 1)));
+  const scores = kbSets.map((s) => lexicalScore(hTerms, s, kbDf, kb.length));
+  expect(/placement support$/.test(hq.primary) && keywordPatterns(hTerms).join(' ') === '%placement% %support%' && scores[0] >= 0.5 && scores[1] === 0 && scores[2] === 0, 'a Hindi placement question finds the English placement FAQ by keyword (enough to qualify)', scores);
+  const plain = buildRetrievalQuery('What are the fees?', []);
+  expect(plain.primary === 'What are the fees?' && queryTerms('What are the fees?').every((t) => t.weight === 1), 'English questions are unchanged');
+  expect(/Never say the business does NOT have or offer something/.test(withPurpose), 'the AI may not say "we don\'t offer X" without the knowledge saying so');
+  const { isWrappingUp } = await import('../calling/phonePrompt');
+  expect(['Okay, thank you.', 'Thanks a lot', "Theek hai, main soch ke batata hoon", 'ठीक है, थैंक यू', "That's all for now", 'धन्यवाद जी'].every((t) => isWrappingUp(t)), 'winding down is recognised');
+  expect(!['Not interested, thanks.', 'Call me tomorrow, thank you', "Please don't call me again, thanks", 'Can I talk to a person? Thanks', 'Okay.', 'Tell me about the fees', 'नहीं चाहिए, धन्यवाद'].some((t) => isWrappingUp(t)), 'a no / busy / do-not-call / wants a person / a question is not a wrap-up');
+  const wrapHint = phoneTurnHints({ callerText: 'Okay, thank you.', wrappingUp: true }) || '';
+  expect(/ONE short, polite attempt at the next step/.test(wrapHint) && /already said no/.test(wrapHint) && !phoneTurnHints({ callerText: 'Okay, thank you.' }), 'the wrap-up turn gets one next-step attempt (only when asked for)');
+
   // ── "Write it with AI" for the purpose ──
   const pw = await import('../calling/purposeWriter');
   expect(pw.cleanPurpose('"**You** call people back.\n- Find out the course."') === 'You call people back. Find out the course.', 'the suggestion loses quotes, markdown and bullets');

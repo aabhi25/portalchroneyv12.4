@@ -36,7 +36,7 @@ import { colloquialHindi, englishFromDevanagari } from './services/voice/colloqu
 import { aiPhoneOpener, dropEchoedClause, firstWord } from './services/voice/phoneOpener';
 import { isBareAcknowledgement } from './services/chatContext/smallTalk';
 import { PhoneAnswerShaper } from './services/voice/phoneAnswerShaper';
-import { soundsUnfinished, declinedToTalk, isClosingTurn, isPromiseOnly, isUnsureCaller, phoneTurnHints, questionsIn, repeatsAskedQuestion, stripContinuationStart } from './services/calling/phonePrompt';
+import { soundsUnfinished, declinedToTalk, isClosingTurn, isPromiseOnly, isUnsureCaller, isWrappingUp, phoneTurnHints, questionsIn, repeatsAskedQuestion, stripContinuationStart } from './services/calling/phonePrompt';
 import { createOpenAiTtsProvider, OPENAI_TTS_MODEL, type OpenAiSpeechClient } from './services/voice/openaiTts';
 import type { AudioRoute, AvatarEndReason } from './services/avatar/types';
 import { getLanguagePolicy, policyFromSettings, type LanguagePolicy } from './services/language/languagePolicy';
@@ -493,6 +493,8 @@ interface VoiceConversation {
   lastOpenerText?: string;
   /** Phone: questions the AI asked on this call, newest last (never asked again — phoneTurnHints). */
   phoneAskedQuestions?: string[];
+  /** Phone: the caller was already nudged towards the next step while wrapping up (once per call). */
+  phoneWrapUpNudged?: boolean;
   /** Phone: running estimates (ms) of the opener model's time and the answer's first-token time. */
   phoneOpenerMs?: number;
   phoneTtftMs?: number;
@@ -4923,10 +4925,13 @@ Never infer intent from a single contained word. For example, "What is stop moti
           if (opener?.status === 'ready') opener.status = 'committed';
           modelRequestAt = Date.now();
           scheduleReaction();
+          // One next-step attempt per call when the caller winds down ("Okay, thank you.").
+          const wrappingUp = !conversation.phoneWrapUpNudged && isWrappingUp(userTranscript, turnStartAssistantText);
+          if (wrappingUp) conversation.phoneWrapUpNudged = true;
           return {
             spokenSoFar: preAnswer.length ? preAnswer.join(' ') : null,
             callLanguage: conversation.lastFillerLang ?? null,
-            hints: phoneTurnHints({ callerText: userTranscript, lastAssistantText: turnStartAssistantText, askedQuestions: conversation.phoneAskedQuestions }),
+            hints: phoneTurnHints({ callerText: userTranscript, lastAssistantText: turnStartAssistantText, askedQuestions: conversation.phoneAskedQuestions, wrappingUp }),
           };
         },
         callLanguage: () => conversation.lastFillerLang ?? null,

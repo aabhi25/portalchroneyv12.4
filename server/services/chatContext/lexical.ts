@@ -44,10 +44,18 @@ export function jaccard(a: Set<string>, b: Set<string>): number {
 
 export interface WeightedTerm { term: string; weight: number }
 
+const DEVANAGARI = /[\u0900-\u097F]/;
+// A Hindi question that also has English words ("MBA की फीस", or "प्लेसमेंट सपोर्ट" + the English
+// words added for it): the Hindi words around them ("आपके", "भी", "है") can't match English
+// content and would sink its keyword coverage, so they count little.
+const MIXED_SCRIPT_HINDI_WEIGHT = 0.05;
+
 /** Query terms: the current message counts fully, folded-in earlier turns count less. */
 export function queryTerms(primary: string, context = '', contextWeight = 0.4): WeightedTerm[] {
   const map = new Map<string, number>();
-  for (const t of tokenize(primary)) map.set(t, 1);
+  const primaryTokens = tokenize(primary);
+  const mixed = primaryTokens.some(t => DEVANAGARI.test(t)) && primaryTokens.some(t => /[a-z]/.test(t));
+  for (const t of primaryTokens) map.set(t, mixed && DEVANAGARI.test(t) ? MIXED_SCRIPT_HINDI_WEIGHT : 1);
   for (const t of tokenize(context)) if (!map.has(t)) map.set(t, contextWeight);
   return Array.from(map, ([term, weight]) => ({ term, weight }));
 }

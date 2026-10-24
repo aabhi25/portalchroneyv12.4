@@ -138,6 +138,8 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
   lines.push("- Introduce yourself only once in the call; don't say your name or company again in later replies.");
   lines.push("- Language: keep speaking the language of the call so far. A one- or two-word reply (\"Motor.\", \"Yes.\", \"मोटर\") is not a switch — only change language when they speak a full sentence in another language or ask you to.");
   lines.push("- Never invent prices, offers, dates or promises. If you don't know, say the team will confirm.");
+  // Live call 2026-10-24: the knowledge search found nothing and the AI said "हमारे पास प्लेसमेंट सपोर्ट नहीं है" — the FAQ said there was.
+  lines.push("- Never say the business does NOT have or offer something (a service, support, facility, course, feature) unless the business knowledge clearly says so. If you can't find it, say you'll have the team confirm it for them, and carry on.");
   lines.push("- If they are busy, offer to call back and ask when suits them; then end the call with outcome callback_requested and the time.");
   if (input.direction === "outbound") {
     lines.push("- If they answer your opening question (\"is this a good time?\") with no / not now / busy (\"nahi\", \"abhi nahi\", \"नहीं\"), do NOT start pitching: say one warm line and ask once when to call back, in the call's language (English call: \"No problem — when should I call you back, this evening or tomorrow?\"; Hindi call: \"कोई बात नहीं जी — कब call करूँ, शाम को या कल?\"). If they give a time, end the call with outcome callback_requested and that time; if they just want to go, end it politely.");
@@ -413,13 +415,31 @@ export function questionsIn(text: string): string[] {
 }
 
 /**
+ * The caller is winding the call down without saying no ("Okay, thank you.", "theek hai, main
+ * soch ke batata hoon", "that's all"). Live call 2026-10-24: the AI answered "कोई बात नहीं जी" and
+ * let them go without the next step the purpose asked for. Not interested / busy / call later /
+ * don't call / wrong number / "give me a person" have their own handling and are not this.
+ */
+const WRAP_UP = new RegExp(String.raw`\b(thanks?|thank you|thank u|thx|that'?s (all|it)|nothing else|i'?ll (think|let you know|get back|check)|let me think|will think|ok(ay)? bye|bye|soch(ke| ke| kar| kar ke)?( batata| batati| bataunga| bataungi| lunga| lungi| ke batata)?|dekhta hoon|dekhti hoon|dekhte hain|baad mein batata|dhanyavaad|dhanyawad|shukriya)\b|थैंक|धन्यवाद|शुक्रिया|सोच के|सोचकर|सोच कर|बताता हूँ|बताती हूँ|देखते हैं|बाय`, "i");
+export function isWrappingUp(callerText: string, lastAssistantText?: string | null): boolean {
+  const t = String(callerText || "").replace(/[’']/g, "'").trim();
+  if (!t || t.split(/\s+/).length > 14) return false;
+  if (askedNotToBeCalled(t) || WANTS_PERSON.test(t) || declinedToTalk(t, lastAssistantText)) return false;
+  if (/\b(not interested|no interest|nahi chahiye|nahin chahiye|interest nahi|busy|later|tomorrow|call (me )?(back|later|tomorrow|after)|wrong (number|person)|galat number|abhi nahi|baad mein call|kal)\b|नहीं चाहिए|इंटरेस्ट नहीं|बिज़ी|बिजी|बाद में कॉल|गलत नंबर/i.test(t)) return false;
+  return WRAP_UP.test(t);
+}
+
+/**
  * Extra per-turn guidance for the main model (appended to the phone rules for this reply only):
  * what the caller already said no to, the questions already asked on this call (never asked
  * again — live call 2026-10-17 asked "आपको किस प्रकार का insurance चाहिए?" four times), and what
  * to do when the caller is unsure.
  */
-export function phoneTurnHints(input: { callerText: string; lastAssistantText?: string | null; askedQuestions?: string[] }): string | null {
+export function phoneTurnHints(input: { callerText: string; lastAssistantText?: string | null; askedQuestions?: string[]; wrappingUp?: boolean }): string | null {
   const hints: string[] = [];
+  if (input.wrappingUp) {
+    hints.push("They are wrapping up the call. Before saying goodbye, make ONE short, polite attempt at the next step your PURPOSE OF THIS CALL asks for (for example booking a call or visit, or a good time for the team to follow up), as a question in the call's language. If they already said no to that on this call, don't ask again: thank them warmly and say goodbye.");
+  }
   if (declinedToTalk(input.callerText, input.lastAssistantText)) {
     hints.push("They just said it is NOT a good time. Do not pitch or ask about their needs: one warm line, then ask only when to call them back.");
   }
