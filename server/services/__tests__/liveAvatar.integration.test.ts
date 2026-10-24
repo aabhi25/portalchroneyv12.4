@@ -463,8 +463,8 @@ async function main() {
     {
       const { videoCallReport } = await import("../avatar/videoCallReport");
       r = await call("GET", "/api/avatar/video-call", cBiz);
-      expect(r.status === 200 && r.json.settings.speakingPace === "normal" && r.json.settings.captions === true && r.json.avatarEnabled === true && typeof r.json.report?.calls === "number",
-        "business reads its video call settings (defaults) with a 30-day report", r.json);
+      expect(r.status === 200 && r.json.settings.speakingPace === "normal" && r.json.settings.captions === true && r.json.settings.thinkingSounds === false && r.json.avatarEnabled === true && typeof r.json.report?.calls === "number",
+        "business reads its video call settings (defaults: thinking sounds off) with a 30-day report", r.json);
       r = await call("PUT", "/api/avatar/video-call", cBiz, { handoff: { enabled: true, type: "link", target: "http://insecure.example.com" } });
       expect(r.status === 400 && /https/.test(r.json.error), "hand-off link must be https", r.json);
       r = await call("PUT", "/api/avatar/video-call", cBiz, { hours: { enabled: true, days: [1], start: "18:00", end: "09:00" } });
@@ -548,12 +548,12 @@ async function main() {
       expect(hoursGate === "outside_hours", "outside video hours → no video session either", hoursGate);
       r = await call("PUT", "/api/avatar/video-call", cBiz, { hours: { enabled: true, days: [today], start: "00:00", end: "23:59" } });
       expect(!!(await getPublicAvatarConfig(A)), "inside video hours → button back");
-      // Back to the defaults for the checks below.
+      // Back to the defaults for the checks below (thinking sounds on: the filler checks need them).
       r = await call("PUT", "/api/avatar/video-call", cBiz, {
         hours: { enabled: false }, captions: true, backgroundSound: "off", handoff: { enabled: false },
         speakingPace: "normal", voiceSelection: null, openingLine: null, thinkingSounds: true, allowInterruptions: true,
       });
-      expect(r.status === 200 && r.json.settings.thinkingSounds && r.json.settings.allowInterruptions && r.json.settings.voiceSelection === null, "settings back to defaults", r.json.settings);
+      expect(r.status === 200 && r.json.settings.thinkingSounds && r.json.settings.allowInterruptions && r.json.settings.voiceSelection === null, "settings for the checks below", r.json.settings);
     }
 
     await call("PUT", `/api/super-admin/avatar/accounts/${A}`, cSup, { idleTimeoutSeconds: 600, maxSessionMinutes: 1 });
@@ -684,82 +684,64 @@ async function main() {
       expect(v.chatContexts.slice(-1)[0]?.assistantName === "Maya", "answers on a video call introduce the assistant by the avatar's name (not 'Chroney')", v.chatContexts.slice(-1)[0]?.assistantName);
       expect(v.chatContexts.slice(-1)[0]?.assistantGender === "female", "answers on a video call use the avatar's gender (feminine Hindi forms for a female avatar)", v.chatContexts.slice(-1)[0]?.assistantGender);
 
-      // Late answer on a video call → a short filler first (cached audio, spoken only), then the answer.
+      // Video calls ("soft timeout"): a sound only when the answer is still silent ~3 s after the visitor
+      // stopped; "let me check" only while a lookup runs, otherwise "Hmm…"; spoken only, never saved.
       {
-        const late = (ms: number, parts: string[]) => async function* () { await sleep(ms); yield* scripted(parts)(); };
-        // Fillers are prepared once the opening line is done (never competing with it).
+        const late = (ms: number, parts: string[], tools?: string) => async function* () {
+          if (tools) yield { type: "tool_start", data: tools };
+          await sleep(ms);
+          yield* scripted(parts)();
+        };
         const fillersMod = await import("../voice/fillers");
-        const preparedCount = new Set((["lookup", "ack", "empathy", "thinking"] as const).flatMap((k) => fillersMod.fillerPhrasesFor(k, "en", null))).size;
+        const lookupPhrases = fillersMod.fillerPhrasesFor("lookup", "en", null);
+        const neutral = fillersMod.neutralSounds("en");
+        // Fillers are prepared once the opening line is done (never competing with it).
+        const preparedCount = new Set([...lookupPhrases, ...neutral]).size;
         await until(() => (v.conversation.fillerAudio?.size ?? 0) >= preparedCount, 6000);
         await sleep(100);
-        expect((v.conversation.fillerAudio?.size ?? 0) === preparedCount, "filler audio prepared after the intro (every kind the AI picks, not \"repeat\")", v.conversation.fillerAudio?.size);
-        // The AI check decides the reaction on a video call (stubbed: no network); null = it failed → word rules.
-        const aiPicks: Record<string, string | null> = {
-          "Do you have weekend classes for class ten?": "lookup",
-          "How are you doing today?": "none",
-          "Okay, thank you for the details.": "none",
-          "My son failed his maths exam and I am really worried.": "empathy",
-          "Which subjects do you teach for class ten?": null,
+        expect((v.conversation.fillerAudio?.size ?? 0) === preparedCount, "filler audio prepared after the intro (\"let me check\" + neutral sounds)", v.conversation.fillerAudio?.size);
+        const askedAi: string[] = [];
+        v.svc.setDepsForTesting({ chooseFiller: async (input: any) => { askedAi.push(input.transcript); return "lookup" as any; } });
+        const turn = async (text: string, stream: () => AsyncGenerator<any>) => {
+          const before = v.client.ofType("ai_done").length;
+          v.streams.push(stream);
+          await v.utter(text, 1300);
+          await until(() => v.client.ofType("ai_done").length > before, 9000);
+          const rid = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
+          return { rid, deltas: v.client.ofType("answer_delta").filter((d) => d.responseId === rid) };
         };
-        const askedAi: Array<{ transcript: string; channel?: string }> = [];
-        v.svc.setDepsForTesting({ chooseFiller: async (input: any) => { askedAi.push({ transcript: input.transcript, channel: input.channel }); return (aiPicks[input.transcript] ?? null) as any; } });
-        const doneBefore = v.client.ofType("ai_done").length;
+
+        // A lookup is running and the answer is slow → "let me check" kind, from the cache.
         const ttsBefore = v.ttsCalls.length;
-        v.streams.push(late(1700, ["Weekend batches run on Saturday and Sunday."]));
-        await v.utter("Do you have weekend classes for class ten?", 1300);
-        await until(() => v.client.ofType("ai_done").length > doneBefore, 6000);
-        const rid = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
-        const deltas = v.client.ofType("answer_delta").filter((d) => d.responseId === rid);
-        const fillers = (await import("../voice/fillers")).fillerPhrasesFor("lookup", "en", null);
-        expect(deltas[0]?.display === "" && fillers.includes(deltas[0]?.speech) && /Weekend batches/.test(deltas[1]?.display || ""), "late answer: filler spoken first (no visible text), then the answer", deltas.map((d) => [d.display, d.speech]));
+        const a = await turn("Do you have weekend classes for class ten?", late(3800, ["Weekend batches run on Saturday and Sunday."], "get_faqs"));
+        expect(a.deltas[0]?.display === "" && lookupPhrases.includes(a.deltas[0]?.speech) && /Weekend batches/.test(a.deltas[1]?.display || ""),
+          "slow answer while looking something up: \"let me check\" first (no visible text), then the answer", a.deltas.map((d) => [d.display, d.speech]));
         const newTts = v.ttsCalls.slice(ttsBefore);
-        expect(!newTts.some((t) => fillers.includes(t)) && newTts.some((t) => /Weekend batches/.test(t)), "filler audio came from the per-call cache (no TTS call for it)", newTts);
-        const ready = v.client.ofType("answer_ready").find((m) => m.responseId === rid);
-        expect(ready && !/check that|one moment|let me see/i.test(ready.displayMarkdown) && fillers.some((f) => ready.speechText.startsWith(f)), "saved/displayed answer has no filler; captions include it", { display: ready?.displayMarkdown, speech: ready?.speechText });
+        expect(!newTts.some((t) => lookupPhrases.includes(t)) && newTts.some((t) => /Weekend batches/.test(t)), "filler audio came from the per-call cache (no TTS call for it)", newTts);
+        const ready = v.client.ofType("answer_ready").find((m) => m.responseId === a.rid);
+        expect(ready && !/check that|one moment|let me see/i.test(ready.displayMarkdown) && lookupPhrases.some((f) => ready.speechText.startsWith(f)), "saved/displayed answer has no filler; captions include it", { display: ready?.displayMarkdown, speech: ready?.speechText });
 
-        // The very next late answer: no filler (never two in a row).
-        const done2 = v.client.ofType("ai_done").length;
-        v.streams.push(late(1700, ["The fees are 2,500 rupees a month."]));
-        await v.utter("What are the fees for the maths course?", 1300);
-        await until(() => v.client.ofType("ai_done").length > done2, 6000);
-        const rid2 = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
-        const d2 = v.client.ofType("answer_delta").filter((d) => d.responseId === rid2);
-        expect(d2.length > 0 && d2.every((d) => d.display !== ""), "no filler on two turns in a row", d2.map((d) => [d.display, d.speech]));
+        // The very next slow answer: no filler (never two in a row).
+        const b = await turn("What are the fees for the maths course?", late(3800, ["The fees are 2,500 rupees a month."]));
+        expect(b.deltas.length > 0 && b.deltas.every((d) => d.display !== ""), "no filler on two turns in a row", b.deltas.map((d) => [d.display, d.speech]));
 
-        // Small talk, even if slow: no filler.
-        const done3 = v.client.ofType("ai_done").length;
-        v.streams.push(late(1700, ["I'm doing great, thanks for asking!"]));
-        await v.utter("How are you doing today?", 1200);
-        await until(() => v.client.ofType("ai_done").length > done3, 6000);
-        const rid3 = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
-        expect(v.client.ofType("answer_delta").filter((d) => d.responseId === rid3).every((d) => d.display !== ""), "small talk (\"how are you\") never gets a filler");
+        // Small talk, even if slow: nothing (live: "how are you" got "Let me check that.").
+        const c = await turn("It's going good, how are you?", late(3800, ["I'm doing great, thanks for asking!"]));
+        expect(c.deltas.every((d) => d.display !== ""), "small talk (\"…how are you?\") never gets a filler", c.deltas.map((d) => d.speech));
 
-        // Thanks the word rules would have taken for a question (4+ words): the AI says none → silence.
-        const done3b = v.client.ofType("ai_done").length;
-        v.streams.push(late(1700, ["You're welcome! Anything else I can help with?"]));
-        await v.utter("Okay, thank you for the details.", 1300);
-        await until(() => v.client.ofType("ai_done").length > done3b, 6000);
-        const rid3b = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
-        expect(v.client.ofType("answer_delta").filter((d) => d.responseId === rid3b).every((d) => d.display !== "") && fillersMod.fillerKind({ transcript: "Okay, thank you for the details." }) === "lookup",
-          "AI says none for thanks → no filler (the word rules alone would have said \"let me check\")");
+        // An answer in under ~3 s: nothing (most answers).
+        const d = await turn("What documents do I need for admission?", late(1700, ["You need your mark sheets and an ID."], "get_faqs"));
+        expect(d.deltas.every((x) => x.display !== ""), "answer within ~3 s: no filler, even during a lookup", d.deltas.map((x) => x.speech));
 
-        // A worry: the AI picks empathy → "Oh, I understand." kind, from the cache.
-        const done3c = v.client.ofType("ai_done").length;
-        v.streams.push(late(1700, ["I'm sorry to hear that. Our maths tutors can help him catch up."]));
-        await v.utter("My son failed his maths exam and I am really worried.", 1300);
-        await until(() => v.client.ofType("ai_done").length > done3c, 6000);
-        const rid3c = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
-        const d3c = v.client.ofType("answer_delta").filter((d) => d.responseId === rid3c);
-        expect(d3c[0]?.display === "" && fillersMod.fillerPhrasesFor("empathy", "en", null).includes(d3c[0]?.speech), "AI picks empathy → an empathy filler", d3c.map((d) => [d.display, d.speech]));
-        expect(askedAi.length >= 4 && askedAi.every((a) => a.channel === "video"), "video calls ask the AI on each turn (video wording)", askedAi);
+        // Slow, but no lookup running → a neutral "Hmm…", never a promise to check.
+        const e = await turn("Which programs do you offer for working professionals?", late(3800, ["We offer an online MBA and an MCA."]));
+        expect(e.deltas[0]?.display === "" && neutral.includes(e.deltas[0]?.speech), "slow answer without a lookup: a neutral \"Hmm…\"", e.deltas.map((x) => [x.display, x.speech]));
 
-        // A fast answer: no filler.
-        const done4 = v.client.ofType("ai_done").length;
-        v.streams.push(scripted(["We teach maths and science."]));
-        await v.utter("Which subjects do you teach for class ten?", 1300);
-        await until(() => v.client.ofType("ai_done").length > done4, 6000);
-        const rid4 = v.client.ofType("ai_done").slice(-1)[0]?.responseId;
-        expect(v.client.ofType("answer_delta").filter((d) => d.responseId === rid4).every((d) => d.display !== ""), "fast answer: no filler");
+        await turn("How long is the MBA course?", scripted(["It is two years."])); // fast answer (resets "two in a row")
+        // Saving a lead is not a lookup → neutral too.
+        const f = await turn("My name is Ravi and I want the MBA brochure please.", late(3800, ["Thanks Ravi, I will share it."], "capture_lead"));
+        expect(f.deltas[0]?.display === "" && neutral.includes(f.deltas[0]?.speech), "saving a lead isn't a lookup: neutral sound, not \"let me check\"", f.deltas.map((x) => [x.display, x.speech]));
+        expect(askedAi.length === 0, "video calls don't guess the reaction from the words (no AI picker)", askedAi);
       }
 
       // Confirmed interruption → provider interrupt.

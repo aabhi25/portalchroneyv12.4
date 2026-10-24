@@ -30,7 +30,7 @@ import {
 } from './services/topscholar/voiceUsageService';
 import { avatarSessionManager, type AvatarVoiceOptions, type VoiceBinding } from './services/avatar/sessionManager';
 import { genderOfVoice, genderOfVoiceSync, resolveAssistantGender, type AssistantGender } from './services/chatContext/assistantGender';
-import { fillerDelayMs, fillerKind, fillerLanguage, fillerPhrases, fillerPhrasesFor, isOnlyInterjection, phoneParticle, pickFiller, FILLER_NO_REPEAT, PHONE_FILLER_AFTER_STOP_MS, stripLeadingInterjection, type FillerKind } from './services/voice/fillers';
+import { fillerDelayMs, fillerKind, fillerLanguage, fillerPhrases, fillerPhrasesFor, isLookupTool, isNoReactionTurn, isOnlyInterjection, neutralSounds, phoneParticle, pickFiller, pickNeutralSound, FILLER_NO_REPEAT, PHONE_FILLER_AFTER_STOP_MS, VIDEO_FILLER_AFTER_STOP_MS, stripLeadingInterjection, type FillerKind } from './services/voice/fillers';
 import { aiFillerChoice, type FillerChoice } from './services/voice/fillerPicker';
 import { colloquialHindi, englishFromDevanagari } from './services/voice/colloquialHindi';
 import { aiPhoneOpener, dropEchoedClause, firstWord } from './services/voice/phoneOpener';
@@ -1241,10 +1241,8 @@ export class RealtimeVoiceService {
       return true;
     };
     for (const lang of languages) {
-      // Phone calls use every kind; a video call every kind the AI picks often (a rare "repeat" is
-      // voiced when it comes up).
-      const kinds: FillerKind[] = ['lookup', 'ack', 'empathy', 'thinking'];
-      for (const phrase of conversation.phone ? fillerPhrases(lang, gender, 'phone') : Array.from(new Set(kinds.flatMap((k) => fillerPhrasesFor(k, lang, gender))))) {
+      // Phone calls use every kind; a video call "let me check" (during a lookup) or a neutral "Hmm…".
+      for (const phrase of conversation.phone ? fillerPhrases(lang, gender, 'phone') : [...fillerPhrasesFor('lookup', lang, gender), ...neutralSounds(lang)]) {
         // (No next_text here: on self-calls it sometimes bled into the clip — "Okay, got it. Of…".)
         const nextText: string | undefined = undefined;
         const cacheKey = `${voiceKey}|${phrase}`;
@@ -4792,10 +4790,9 @@ Never infer intent from a single contained word. For example, "What is stop moti
     // ("Motor.", "मोटर", "Hyundai i20 2019 मॉडल." on an English call).
     if (conversation.phone && fillerLang && conversation.lastFillerLang) fillerLang = conversation.lastFillerLang;
     const isPhone = !!conversation.phone;
-    // The reaction that fits what they said. Video calls ask a quick AI check (in parallel with the
-    // answer) and the word rules only stand in when it fails or is late; phone calls use the rules,
-    // refined by the same check with PHONE_FILLER_AI=1. It only picks among the ready-recorded
-    // phrases, and "none" means silence.
+    // Phone calls: the reaction that fits what they said (word rules, refined by a quick AI check
+    // with PHONE_FILLER_AI=1; it only picks among the ready-recorded phrases, "none" = silence).
+    // Video calls don't guess from the words: see the "soft timeout" below.
     // Phone calls open nearly every late answer with a few words ("Achha…", "Ji, dekhiye…"), as a
     // person does; turns the rules leave without a reaction get the plain acknowledging kind.
     const rawKind: FillerKind | null = fillerLang
@@ -4804,9 +4801,9 @@ Never infer intent from a single contained word. For example, "What is stop moti
     const ruleKind: FillerKind | null = fillerLang ? (rawKind ?? (isPhone ? 'ack' : null)) : null;
     let aiChoice: FillerChoice | null = null;
     let aiPending = false;
-    const askFillerAi = isPhone
-      ? !!ruleKind && process.env.PHONE_FILLER_AI === '1'
-      : !!fillerLang && !!conversation.avatar && conversation.avatar.thinkingSounds !== false && !conversation.lastTurnHadFiller;
+    const askFillerAi = isPhone && !!ruleKind && process.env.PHONE_FILLER_AI === '1';
+    /** Video calls: the AI started a real lookup this turn (FAQ / product / course search). */
+    let lookupStarted = false;
     if (askFillerAi) {
       aiPending = true;
       const askedAt = Date.now();
@@ -4936,21 +4933,35 @@ Never infer intent from a single contained word. For example, "What is stop moti
       };
     }
 
-    if (fillerLang && (ruleKind || aiPending) && (isPhone ? phoneFillersOn() : !conversation.lastTurnHadFiller)) {
-      // Phone: the AI's pick gets a quarter second more (once). Video: up to 0.6 s more, in steps —
-      // the filler only plays while the answer is late, which leaves time (live: first audio 1.7–3 s).
+    // Video calls ("soft timeout", like ElevenLabs Agents): Thinking sounds on (off by default), and
+    // only when the answer is still silent ~3 s after they stopped; "let me check" only while a
+    // lookup is really running, otherwise a neutral "Hmm…"; never for small talk, thanks, questions
+    // about the call, or two turns in a row. (Live: a guessed "Let me check that." after "how are
+    // you" sounded wrong, 2026-10-24.)
+    const videoFiller = !isPhone && !!conversation.avatar && conversation.avatar.thinkingSounds !== false
+      && !conversation.lastTurnHadFiller && !isNoReactionTurn(userTranscript, conversation.lastAssistantText);
+    if (fillerLang && (isPhone ? (ruleKind || aiPending) && phoneFillersOn() : videoFiller)) {
+      // Phone: the AI's pick gets a quarter second more (once), else the rules decide.
       let aiWaitMs = 0;
-      const aiWaitLimitMs = isPhone ? 250 : 600;
+      const aiWaitLimitMs = 250;
       fireFiller = () => {
         fillerTimer = null;
         if (answerStarted || abandoned() || !(conversation.avatar || conversation.phone) || conversation.clientWs.readyState !== WebSocket.OPEN) return;
         if (!conversation.phone && conversation.avatar?.thinkingSounds === false) return;
         // The AI's pick is almost back: wait a little more for it, else the rules decide.
         if (aiPending && aiWaitMs < aiWaitLimitMs) {
-          const step = isPhone ? 250 : 150;
-          aiWaitMs += step;
-          fillerTimer = setTimeout(() => fireFiller?.(), step);
+          aiWaitMs += aiWaitLimitMs;
+          fillerTimer = setTimeout(() => fireFiller?.(), aiWaitLimitMs);
           fillerTimer.unref?.();
+          return;
+        }
+        if (!isPhone) {
+          const phrase = lookupStarted
+            ? pickFiller(fillerLang, this.callGender(conversation), conversation.recentFillers ?? conversation.lastFillerText, Math.random, 'lookup', 'avatar')
+            : pickNeutralSound(fillerLang, conversation.recentFillers);
+          const cachedAudio = conversation.fillerAudio?.get(phrase);
+          console.log(`[VoiceTurn] Answer is late — filler "${phrase}" (${lookupStarted ? 'lookup running' : 'neutral'}; ${cachedAudio ? 'cached' : 'synthesising'}; +${Date.now() - stoppedAt}ms)`);
+          speakBeforeAnswer(phrase, cachedAudio);
           return;
         }
         // The contextual opener covers this turn (it is ready, promised or already spoken).
@@ -4973,7 +4984,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
       if (isPhone) {
         scheduleReaction();
       } else {
-        fillerTimer = setTimeout(fireFiller, fillerDelayMs(timing?.stoppedAt, Date.now()));
+        fillerTimer = setTimeout(fireFiller, fillerDelayMs(timing?.stoppedAt, Date.now(), VIDEO_FILLER_AFTER_STOP_MS));
         fillerTimer.unref?.();
       }
     }
@@ -5076,6 +5087,9 @@ Never infer intent from a single contained word. For example, "What is stop moti
           for (const segment of splitter.push(event.data)) emitShaped(segment);
         } else if (event.type === 'final' && typeof event.data === 'string' && event.data.trim()) {
           finalMarkdown = event.data;
+        } else if (event.type === 'tool_start') {
+          // A real lookup (FAQ / products / …), not saving a lead: a late answer may say "let me check".
+          if (String(event.data || '').split(',').some((name) => isLookupTool(name))) lookupStarted = true;
         } else if (event.type === 'products' && conversation.avatar && typeof event.data === 'string') {
           // Avatar mode: product cards from the same tool results as text chat
           // are shown under the avatar (the avatar never reads prices or links).

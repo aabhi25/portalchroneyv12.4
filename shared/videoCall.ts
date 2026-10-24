@@ -39,7 +39,7 @@ export interface VideoCallSettings {
   voiceSelection: string | null;
   /** Said right after the AI introduction when the video starts; null = only the introduction. */
   openingLine: string | null;
-  /** Short "hmm, let me check" sounds while the answer is prepared. */
+  /** When an answer takes over ~3 s: "let me check" during a lookup, otherwise a short "hmm". Off by default. */
   thinkingSounds: boolean;
   captions: boolean;
   /** The visitor can talk over the avatar (it stops and listens). Off: it finishes first. */
@@ -58,7 +58,7 @@ export const DEFAULT_VIDEO_CALL: VideoCallSettings = {
   speakingPace: "normal",
   voiceSelection: null,
   openingLine: null,
-  thinkingSounds: true,
+  thinkingSounds: false, // off by default: a sound only when an answer is slow (~3 s), see realtimeVoiceService
   captions: true,
   allowInterruptions: true,
   idleNudge: true,

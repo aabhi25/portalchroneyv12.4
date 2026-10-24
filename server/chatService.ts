@@ -4578,7 +4578,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
 
       // Handle tool calls if any
       if (hasToolCalls && toolCalls.length > 0) {
-        yield { type: 'tool_start', data: '' };
+        // The tool names (the voice pipeline tells a lookup from saving a lead).
+        yield { type: 'tool_start', data: toolCalls.map((t: any) => t?.function?.name).filter(Boolean).join(',') };
         
         const updatedHistory = conversationMemory.getConversationHistory(context.userId);
         const messages: any[] = [

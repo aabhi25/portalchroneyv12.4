@@ -42,6 +42,31 @@ export const FILLER_KINDS: FillerKind[] = ["lookup", "thinking", "empathy", "ack
  */
 export const FILLER_AFTER_STOP_MS = 700;
 /**
+ * Video calls (Video call settings › Thinking sounds, off by default): like ElevenLabs' "soft
+ * timeout", a sound only when the answer is still silent ~3 s after the visitor stopped — most
+ * answers start before that, so most turns get none (live: answers start 1.9–3 s in).
+ */
+export const VIDEO_FILLER_AFTER_STOP_MS = 3000;
+/** Video calls: the sound while the answer is prepared, when no lookup is running (no promise in it). */
+const NEUTRAL_SOUNDS: Record<FillerLanguage, string[]> = {
+  en: ["Hmm…", "Hmm, okay…"],
+  hi: ["Hmm…", "Achha…"],
+};
+export function neutralSounds(language: FillerLanguage): string[] {
+  return NEUTRAL_SOUNDS[language];
+}
+export function pickNeutralSound(language: FillerLanguage, recent?: string[] | null, rand: () => number = Math.random): string {
+  const all = NEUTRAL_SOUNDS[language];
+  const last = (recent || []).slice(-1)[0];
+  const pool = all.filter((p) => p !== last);
+  const choices = pool.length ? pool : all;
+  return choices[Math.min(choices.length - 1, Math.floor(rand() * choices.length))];
+}
+/** A tool that looks something up (FAQ, products, courses, availability) — not saving a lead or ending the chat. */
+export function isLookupTool(name: string): boolean {
+  return /^(get_|search|find|lookup|check_|list_|fetch)/i.test(name.trim());
+}
+/**
  * Phone calls: the opening words come ~0.7 s after the end of speech was detected (just after the
  * transcript; ~1.5 s after the caller really stopped) unless the answer itself has started.
  * Later (1.2 s, 2026-10-16) only lengthened the silence the caller hears first.
@@ -174,6 +199,10 @@ const REPEAT = new RegExp(String.raw`\b(repeat( that| it)?|say (that|it) again|t
 const CALLBACK = new RegExp(String.raw`\b(call (me )?(back|later|tomorrow|in the evening|after)|ring me later|baad (mein|me) (call|phone|baat)|kal (call|phone)|shaam ko (call|phone))\b|(बाद में|कल|शाम को) (कॉल|फोन|फ़ोन|बात)`, "i");
 const EMPATHY = new RegExp(String.raw`\b(problem|issue|complain\w*|rejected|denied|not working|doesn'?t work|didn'?t (get|receive|work)|still waiting|delay(ed)?|refund|cheated|fraud|worried|worry|scared|upset|angry|frustrat\w*|disappointed|bad experience|lost|stolen|accident|hospital\w*|emergency|sick|ill|died|death|dikkat|pareshan\w*|samasya|galat|dhokha|nahi mila|nahi aaya|reject ho|parsani)\b|दिक्कत|परेशान|समस्या|गलत|धोखा|नहीं मिला|रिजेक्ट|अस्पताल|एक्सीडेंट`, "i");
 const THINKING = new RegExp(String.raw`\b(which (one|plan|policy|course|option|is better)|better|best|recommend\w*|suggest\w*|should i|would you|compare|comparison|difference between|worth it|good option|right for me|konsa|kaunsa|kaun sa|kon sa|behtar|accha rahega|sahi rahega|kya karun|kya karna chahiye|salah)\b|कौन सा|बेहतर|सलाह|क्या करूँ|क्या करना चाहिए`, "i");
+/** "…how are you?" anywhere in a short turn ("It's going good, how are you?") — small talk, no filler. */
+const HOW_ARE_YOU_ANYWHERE = /\b(how are (you|u)|how r (you|u)|how'?s it going|how is it going|how have you been|how do you do|kaise (ho|hain|hai)|kya haal|aap kaise)\b|आप कैसे|कैसे हो|कैसे हैं|क्या हाल/i;
+/** Asking for something without a question word ("Explain the MBA fees", "I want to know about the course"). */
+const REQUEST = /\b(tell|explain|share|send|details?|information|info|want to know|know (more )?about|looking for|interested in|samjhao|samjha do|bhejo|bhej do|jaankari|jaanna|janna|jaanni|ke baare (mein|me))\b|जानकारी|जानना|जाननी|के बारे में|बताइए|बताओ|समझाओ|भेजो/i;
 const QUESTION_WORD = new RegExp(String.raw`(\?|^(what|how|when|where|why|which|who|whom|whose|is|are|do|does|did|can|could|will|would|should|may)\b|\b(how (much|many|long)|what (is|are)|tell me|kya|kitna|kitne|kitni|kab|kahan|kaise|kyun|kyon|kaun|batao|bataiye|bata do|bata dijiye)\b|क्या|कितना|कितने|कितनी|कब|कहाँ|कैसे|क्यों|बताइए|बताओ)`, "i");
 
 /**
@@ -181,6 +210,25 @@ const QUESTION_WORD = new RegExp(String.raw`(\?|^(what|how|when|where|why|which|
  * react to short answers ("Health insurance." → "Achha, theek hai."); a video avatar keeps
  * the original rule (only real messages of 3+ words, always "let me check").
  */
+/**
+ * Turns that never get a reaction: numbers / codes, small talk ("how are you", "thank you"),
+ * questions about the assistant or the connection, a decline. (Phone "repeat" requests are
+ * handled before this in fillerKind.)
+ */
+export function isNoReactionTurn(transcript: string, lastAssistantText?: string | null): boolean {
+  const text = String(transcript || "").trim();
+  if (!text) return true;
+  const words = text.split(/\s+/).filter(Boolean);
+  if (/^[\d\s+()-]+$/.test(text) || /\d{6,}/.test(text.replace(/\s+/g, ""))) return true; // phone numbers, codes
+  if (smallTalkKind(text, lastAssistantText ?? null)) return true; // "how are you", "thank you so much"
+  if (/^(how are you|how r u|how are u|kaise ho|kaise hain|kya haal|aap kaise|what'?s up|who are you|what is your name|aap kaun)/i.test(text)) return true;
+  if (words.length <= 10 && HOW_ARE_YOU_ANYWHERE.test(text)) return true;
+  const plain = text.replace(/[’']/g, "'");
+  if (!REPEAT.test(plain) && (ABOUT_THE_CALL.test(plain) || isConversationMeta(text))) return true;
+  if (DECLINE.test(text.replace(NON_LETTER, " ").trim())) return true;
+  return false;
+}
+
 export function fillerKind(input: { transcript: string; lastAssistantText?: string | null; phone?: boolean }): FillerKind | null {
   const text = String(input.transcript || "").trim();
   if (!text) return null;
@@ -188,13 +236,16 @@ export function fillerKind(input: { transcript: string; lastAssistantText?: stri
   if (/^[\d\s+()-]+$/.test(text) || /\d{6,}/.test(text.replace(/\s+/g, ""))) return null; // phone numbers, codes
   if (smallTalkKind(text, input.lastAssistantText ?? null)) return null; // "how are you", "thank you so much"
   if (/^(how are you|how r u|how are u|kaise ho|kaise hain|kya haal|aap kaise|what'?s up|who are you|what is your name|aap kaun)/i.test(text)) return null;
+  if (words.length <= 10 && HOW_ARE_YOU_ANYWHERE.test(text)) return null;
   // About the assistant itself or the connection — "Let me check that." before "Yes, I can
   // hear you!" sounds absurd (seen in a live call, 2026-10-03).
   // Phone: "say that again" gets a quick "Haan ji, zaroor." (live call: 3.5 s of silence there).
   if (input.phone && REPEAT.test(text.replace(/[’']/g, "'"))) return "repeat";
   if (ABOUT_THE_CALL.test(text.replace(/[’']/g, "'")) || isConversationMeta(text)) return null;
   if (DECLINE.test(text.replace(NON_LETTER, " ").trim())) return null;
-  if (!input.phone) return words.length < 3 ? null : "lookup";
+  // Video calls: the AI check decides (fillerPicker.ts); these rules stand in only when it is late,
+  // so they say "let me check" only for an actual question or request ("It's going good." → none).
+  if (!input.phone) return words.length >= 3 && (QUESTION_WORD.test(text) || REQUEST.test(text)) ? "lookup" : null;
   // "क्या तुम" / "what is" — a cut-off or too-short question: the reply asks them to say more, and
   // "Achha, theek hai." before "I didn't catch that" sounds wrong (live call 2026-10-16).
   if (words.length <= 2 && QUESTION_WORD.test(text)) return null;

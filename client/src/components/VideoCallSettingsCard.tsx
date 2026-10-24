@@ -210,7 +210,7 @@ export function VideoCallSettingsCard({ endpoint, accountId }: { endpoint: strin
             data-testid="input-video-opening-line"
           />
         </div>
-        <Row title="Thinking sounds" hint={`Short "let me check" sounds while the answer is prepared.`}>
+        <Row title="Thinking sounds" hint={`Only when an answer takes more than ~3 seconds: "let me check" while it looks something up, otherwise a short "hmm".`}>
           <Switch checked={form.thinkingSounds} onCheckedChange={(v) => set("thinkingSounds", v)} />
         </Row>
         <Row title="Captions" hint="Show what the avatar says as text under the video.">
