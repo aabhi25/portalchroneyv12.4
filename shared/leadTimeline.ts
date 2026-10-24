@@ -29,8 +29,17 @@ export interface LeadStory {
   generatedAt: string;
 }
 
+export interface LeadScoreView {
+  score: number;
+  temperature: "hot" | "warm" | "cold";
+  fit: "good" | "partial" | "unknown";
+  reasons: { up: string[]; down: string[]; fit: string[] };
+}
+
 export interface LeadTimelineResponse {
   events: TimelineEvent[];
+  /** Rescored when the lead is opened (leadScoringService). */
+  score: LeadScoreView | null;
   story: LeadStory | null;
   /** ready = up to date; stale = new activity since it was written; none = not written yet;
    *  unavailable = no AI key or nothing to summarise. */

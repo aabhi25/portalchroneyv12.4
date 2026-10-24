@@ -309,6 +309,13 @@
       "when": 1792831808852,
       "tag": "0043_lead_stories",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1792832287331,
+      "tag": "0044_lead_scores",
+      "breakpoints": true
     }
   ]
 }

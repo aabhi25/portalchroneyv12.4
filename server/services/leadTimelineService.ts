@@ -304,7 +304,9 @@ export async function getLeadTimeline(accountId: string, anchor: TimelineAnchor)
   const storyStatus: LeadTimelineResponse["storyStatus"] = !built.events.length ? "unavailable"
     : !story ? "none"
     : newest && row?.lastEventAt && newest.getTime() > row.lastEventAt.getTime() + 1000 ? "stale" : "ready";
-  return { events: built.events, story, storyStatus };
+  const { rescoreWebsiteLeads, rescoreWhatsappLeads } = await import("./leadScoringService");
+  const scored = anchor.channel === "website" ? await rescoreWebsiteLeads(accountId, [anchor.id]) : await rescoreWhatsappLeads(accountId, [anchor.id]);
+  return { events: built.events, score: scored.get(anchor.id) ?? null, story, storyStatus };
 }
 
 /** Write (or rewrite) the story. Returns null when there's no AI key or nothing to say. */

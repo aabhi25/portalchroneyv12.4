@@ -271,6 +271,14 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     console.error('[TopScholar] Plan sync worker failed to start:', err);
   }
 
+  // Lead scores (hot / warm / cold): recently active leads are rescored every 20 minutes.
+  if (!backgroundJobsDisabled) try {
+    const { startLeadScoringWorker } = await import('./services/leadScoringService');
+    startLeadScoringWorker();
+  } catch (err) {
+    console.error('[LeadScore] worker failed to start:', err);
+  }
+
   // Initialize AI usage pricing
   await aiUsageLogger.initializePricing();
 

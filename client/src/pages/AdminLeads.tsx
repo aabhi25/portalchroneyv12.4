@@ -68,6 +68,7 @@ import {
   type UnifiedLeadRow,
   type UnifiedLeadsResponse,
   ChannelTrail,
+  TemperatureBadge,
 } from "@/components/leads/UnifiedLeadParts";
 import { LeadCrmCell, type CrmTarget } from "@/components/leads/LeadCrm";
 import { LeadDetailsSheet, websiteRowFromLead } from "@/components/leads/LeadDetailsSheet";
@@ -134,11 +135,13 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   const [searchQuery, setSearchQuery] = useState('');
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>(channel ?? 'all');
   const [statusFilter, setStatusFilter] = useState<SocialStatusFilter>('all');
+  const [temperatureFilter, setTemperatureFilter] = useState<'all' | 'hot' | 'warm' | 'cold'>('all');
+  const [sortBy, setSortBy] = useState<'recent' | 'score'>('recent');
   // Status, the details column and per-lead delete belong to Instagram / Facebook leads.
   const socialView = isSocialChannel(channelFilter);
   const activeStatus: SocialStatusFilter = socialView ? statusFilter : 'all';
   const [socialToDelete, setSocialToDelete] = useState<UnifiedLeadRow | null>(null);
-  const prevFiltersRef = useRef({ datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus });
+  const prevFiltersRef = useRef({ datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus, temperatureFilter, sortBy });
   const [, setLocation] = useLocation();
   // The lead whose details panel is open (any channel).
   const [detailsRow, setDetailsRow] = useState<UnifiedLeadRow | null>(null);
@@ -224,13 +227,15 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
     if (trimmedSearch) params.append('search', trimmedSearch);
     if (channelFilter !== 'all') params.append('channel', channelFilter);
     if (activeStatus !== 'all') params.append('status', activeStatus);
+    if (temperatureFilter !== 'all') params.append('temperature', temperatureFilter);
+    if (sortBy === 'score') params.append('sort', 'score');
     // One row per person: a website visitor who continued on WhatsApp is listed once, with the trail.
     params.append('groupByPerson', '1');
     params.append('page', currentPage.toString());
     params.append('limit', itemsPerPage.toString());
 
     return params.toString() ? `?${params.toString()}` : '';
-  }, [datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus, currentPage]);
+  }, [datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus, temperatureFilter, sortBy, currentPage]);
 
   // All channels the account has (Website, WhatsApp, Instagram, Facebook), merged and paged by the server.
   const { data, isLoading } = useQuery<UnifiedLeadsResponse>({
@@ -345,13 +350,15 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
       prev.toDate !== toDate ||
       prev.searchQuery !== searchQuery ||
       prev.channelFilter !== channelFilter ||
-      prev.activeStatus !== activeStatus;
+      prev.activeStatus !== activeStatus ||
+      prev.temperatureFilter !== temperatureFilter ||
+      prev.sortBy !== sortBy;
 
     if (hasChanged) {
       setCurrentPage(1);
-      prevFiltersRef.current = { datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus };
+      prevFiltersRef.current = { datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus, temperatureFilter, sortBy };
     }
-  }, [datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus]);
+  }, [datePreset, fromDate, toDate, searchQuery, channelFilter, activeStatus, temperatureFilter, sortBy]);
 
   // Clamp currentPage to totalPages when results change, reset to page 1 if no results
   useEffect(() => {
@@ -663,6 +670,8 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
           "Created At": format(new Date(row.firstCapturedAt ?? row.capturedAt), "yyyy-MM-dd HH:mm:ss"),
           "Latest Enquiry": format(new Date(row.capturedAt), "yyyy-MM-dd HH:mm:ss"),
           Enquiries: row.enquiryCount ?? 1,
+          Temperature: row.score ? row.score.temperature[0].toUpperCase() + row.score.temperature.slice(1) : "",
+          Score: row.score?.score ?? "",
           // The extra columns chosen for the table (contact, message and date are always above).
           ...Object.fromEntries(exportExtraColumns.map((key) => {
             let value: string | null = null;
@@ -697,6 +706,8 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
         { wch: 20 }, // Created At
         { wch: 20 }, // Latest Enquiry
         { wch: 10 }, // Enquiries
+        { wch: 12 }, // Temperature
+        { wch: 8 }, // Score
         ...exportExtraColumns.map(() => ({ wch: 30 })),
       ];
 
@@ -1045,6 +1056,31 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                 </Select>
               )}
 
+              {!socialView && (
+                <Select value={temperatureFilter} onValueChange={(v) => setTemperatureFilter(v as typeof temperatureFilter)}>
+                  <SelectTrigger className="w-full sm:w-[150px]" data-testid="select-temperature-filter" aria-label="Temperature">
+                    <SelectValue placeholder="Hot, warm, cold" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Hot, warm, cold</SelectItem>
+                    <SelectItem value="hot">Hot only</SelectItem>
+                    <SelectItem value="warm">Warm only</SelectItem>
+                    <SelectItem value="cold">Cold only</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+              {!socialView && (
+                <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
+                  <SelectTrigger className="w-full sm:w-[150px]" data-testid="select-lead-sort" aria-label="Sort">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="recent">Newest first</SelectItem>
+                    <SelectItem value="score">Hottest first</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+
               {socialView && (
                 <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as SocialStatusFilter)}>
                   <SelectTrigger className="w-full sm:w-[150px]" data-testid="select-status-filter" aria-label="Status">
@@ -1350,6 +1386,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                             </div>
                             <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-400 pl-12">
                               <span className="whitespace-nowrap">{format(new Date(row.capturedAt), "MMM d, h:mm a")}</span>
+                              <TemperatureBadge score={row.score} testId={`badge-temperature-${lead.id}`} />
                               {(row.enquiryCount ?? 1) > 1 && (
                                 <span
                                   className="whitespace-nowrap rounded-full bg-purple-50 px-1.5 py-0.5 text-[10.5px] font-medium text-purple-700"

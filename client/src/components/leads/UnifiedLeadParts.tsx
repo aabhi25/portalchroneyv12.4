@@ -1,5 +1,7 @@
 import { format } from "date-fns";
-import { AlertTriangle, CheckCircle2, Clock, Globe, Instagram, Facebook, MessageCircle, XCircle, Info } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Flame, Globe, Instagram, Facebook, MessageCircle, Snowflake, Sun, XCircle, Info } from "lucide-react";
+import type { LeadScoreView } from "@shared/leadTimeline";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -37,6 +39,47 @@ export interface UnifiedLeadRow {
   channels?: LeadChannel[];
   /** groupByPerson: the person's rows on other channels. */
   linked?: UnifiedLeadRow[];
+  /** Lead score (website / WhatsApp; null until scored). */
+  score?: LeadScoreView | null;
+}
+
+export const TEMPERATURE_LOOK: Record<LeadScoreView["temperature"], { label: string; className: string; icon: typeof Flame }> = {
+  hot: { label: "Hot", className: "bg-orange-50 text-orange-700 ring-orange-200", icon: Flame },
+  warm: { label: "Warm", className: "bg-amber-50 text-amber-700 ring-amber-200", icon: Sun },
+  cold: { label: "Cold", className: "bg-slate-50 text-slate-600 ring-slate-200", icon: Snowflake },
+};
+export const FIT_LABEL: Record<LeadScoreView["fit"], string> = { good: "Good fit", partial: "Partial fit", unknown: "Fit unknown" };
+
+/** Why the score is what it is: ▲ what pushes it up, ▼ what pulls it down, and the profile. */
+export function ScoreReasons({ score }: { score: LeadScoreView }) {
+  return (
+    <div className="space-y-1.5 text-[12px] leading-snug">
+      {score.reasons.up.map((r) => <p key={`u-${r}`} className="text-emerald-700">▲ {r}</p>)}
+      {score.reasons.down.map((r) => <p key={`d-${r}`} className="text-red-600">▼ {r}</p>)}
+      {score.reasons.fit.length > 0 && <p className="border-t pt-1.5 text-gray-500">{FIT_LABEL[score.fit]}: {score.reasons.fit.join(" · ")}</p>}
+    </div>
+  );
+}
+
+/** "🔥 Hot · 92" with the reasons on hover. */
+export function TemperatureBadge({ score, testId }: { score: LeadScoreView | null | undefined; testId?: string }) {
+  if (!score) return null;
+  const look = TEMPERATURE_LOOK[score.temperature];
+  const Icon = look.icon;
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={`inline-flex cursor-default items-center gap-1 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold ring-1 ${look.className}`} data-testid={testId}>
+            <Icon className="h-3 w-3" />{look.label} · {score.score}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="start" className="max-w-[280px] bg-white p-3 text-gray-800 shadow-lg ring-1 ring-gray-200">
+          <ScoreReasons score={score} />
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
 }
 
 export interface UnifiedLeadsResponse {

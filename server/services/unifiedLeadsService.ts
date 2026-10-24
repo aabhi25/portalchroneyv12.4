@@ -59,6 +59,10 @@ export interface UnifiedLeadFilters {
   to?: Date;
   /** One row per person (linked website + WhatsApp leads merged); paging and total count persons. */
   groupByPerson?: boolean;
+  /** Lead score temperature (website / WhatsApp leads are scored; others never match). */
+  temperature?: "hot" | "warm" | "cold";
+  /** "score" = hottest first (then newest); default newest first. */
+  sort?: "recent" | "score";
 }
 
 export interface CrmSyncState {
@@ -97,6 +101,8 @@ export interface UnifiedLeadRow {
   channels?: LeadChannel[];
   /** groupByPerson only: the person's other rows (same shape). */
   linked?: UnifiedLeadRow[];
+  /** Lead score (website / WhatsApp; null until scored). */
+  score?: { score: number; temperature: "hot" | "warm" | "cold"; fit: "good" | "partial" | "unknown"; reasons: { up: string[]; down: string[]; fit: string[] } } | null;
 }
 
 export interface UnifiedLeadsResult {
@@ -167,8 +173,9 @@ function branchSql(channel: LeadChannel, accountId: string, f: UnifiedLeadFilter
       const conds: SQL[] = [sql`l.business_account_id = ${accountId}`, ...dateConds(at, f)];
       if (f.status) conds.push(sql`FALSE`); // website leads have no status
       if (search) conds.push(sql`(l.name ILIKE ${search} OR l.email ILIKE ${search} OR l.phone ILIKE ${search} OR l.message ILIKE ${search})`);
+      if (f.temperature) conds.push(sql`l.lead_temperature = ${f.temperature}`);
       const pk = opts.personKey ? sql`, ${websitePersonKeySql()} AS person_key` : sql``;
-      return sql`SELECT 'website'::text AS channel, l.id AS id, ${at} AS captured_at${pk} FROM leads l WHERE ${whereAll(conds)}`;
+      return sql`SELECT 'website'::text AS channel, l.id AS id, ${at} AS captured_at, l.engagement_score AS score${pk} FROM leads l WHERE ${whereAll(conds)}`;
     }
     case "whatsapp": {
       const conds: SQL[] = [
@@ -182,8 +189,9 @@ function branchSql(channel: LeadChannel, accountId: string, f: UnifiedLeadFilter
         conds.push(sql`(w.sender_phone ILIKE ${search} OR w.sender_name ILIKE ${search} OR w.customer_name ILIKE ${search}
           OR w.customer_phone ILIKE ${search} OR w.customer_email ILIKE ${search} OR w.raw_message ILIKE ${search})`);
       }
+      if (f.temperature) conds.push(sql`w.lead_temperature = ${f.temperature}`);
       const pk = opts.personKey ? sql`, ${key10(sql`w.sender_phone`)} AS person_key` : sql``;
-      return sql`SELECT 'whatsapp'::text AS channel, w.id AS id, w.received_at AS captured_at${pk} FROM whatsapp_leads w WHERE ${whereAll(conds)}`;
+      return sql`SELECT 'whatsapp'::text AS channel, w.id AS id, w.received_at AS captured_at, w.engagement_score AS score${pk} FROM whatsapp_leads w WHERE ${whereAll(conds)}`;
     }
     case "instagram":
     case "facebook": {
@@ -192,8 +200,9 @@ function branchSql(channel: LeadChannel, accountId: string, f: UnifiedLeadFilter
       const conds: SQL[] = [sql`s.business_account_id = ${accountId}`, ...dateConds(sql`s.received_at`, f)];
       if (search) conds.push(sql`(s.extracted_data::text ILIKE ${search} OR ${senderCol} ILIKE ${search})`);
       if (f.status) conds.push(sql`s.status = ${f.status}`);
+      if (f.temperature) conds.push(sql`FALSE`); // not scored
       const pk = opts.personKey ? sql`, NULL::text AS person_key` : sql``;
-      return sql`SELECT ${channel}::text AS channel, s.id AS id, s.received_at AS captured_at${pk} FROM ${table} s WHERE ${whereAll(conds)}`;
+      return sql`SELECT ${channel}::text AS channel, s.id AS id, s.received_at AS captured_at, NULL::int AS score${pk} FROM ${table} s WHERE ${whereAll(conds)}`;
     }
   }
 }
@@ -236,6 +245,7 @@ async function hydrate(accountId: string, page: { channel: LeadChannel; id: stri
         key: `website:${l.id}`, channel: "website", id: l.id,
         name: l.name, phone: maskIf(mask, l.phone), email: l.email, capturedAt: toIso(l.lastEnquiryAt ?? l.createdAt)!,
         firstCapturedAt: toIso(l.createdAt)!, enquiryCount: l.enquiryCount ?? 1,
+        score: scoreView(l),
         crm: {
           leadsquared: crmState(l.leadsquaredSyncStatus, l.leadsquaredSyncError, l.leadsquaredSyncedAt, l.leadsquaredLeadId),
           salesforce: crmState(l.salesforceSyncStatus, l.salesforceSyncError, l.salesforceSyncedAt, l.salesforceLeadId),
@@ -258,6 +268,7 @@ async function hydrate(accountId: string, page: { channel: LeadChannel; id: stri
         phone: maskIf(mask, w.customerPhone || w.senderPhone),
         email: w.customerEmail || null,
         capturedAt: toIso(w.receivedAt)!,
+        score: scoreView(w),
         crm: {
           customCrm: crmState(w.customCrmSyncStatus, w.customCrmSyncError, w.customCrmSyncedAt, w.customCrmLeadId),
           ...(w.leadsquaredSyncStatus ? { leadsquared: crmState(w.leadsquaredSyncStatus, w.leadsquaredSyncError, null, w.leadsquaredLeadId) } : {}),
@@ -309,6 +320,16 @@ async function hydrate(accountId: string, page: { channel: LeadChannel; id: stri
   return page.map(p => byKey.get(`${p.channel}:${p.id}`)).filter((r): r is UnifiedLeadRow => !!r);
 }
 
+function scoreView(r: { engagementScore: number | null; leadTemperature: string | null; leadFit: string | null; scoreReasons: any }): UnifiedLeadRow["score"] {
+  if (r.engagementScore === null || r.engagementScore === undefined || !r.leadTemperature) return null;
+  return {
+    score: r.engagementScore,
+    temperature: r.leadTemperature as "hot" | "warm" | "cold",
+    fit: (r.leadFit as "good" | "partial" | "unknown") || "unknown",
+    reasons: { up: r.scoreReasons?.up || [], down: r.scoreReasons?.down || [], fit: r.scoreReasons?.fit || [] },
+  };
+}
+
 export async function queryUnifiedLeads(
   businessAccountId: string,
   filters: UnifiedLeadFilters,
@@ -351,14 +372,15 @@ export async function queryUnifiedLeads(
       ),
       g AS (
         SELECT CASE WHEN m.person_key IS NOT NULL THEN 'p:' || u.person_key ELSE u.channel || ':' || u.id END AS grp,
-               u.channel, u.id, u.captured_at
+               u.channel, u.id, u.captured_at, u.score
         FROM u LEFT JOIN multi m ON m.person_key = u.person_key
       )`;
     const totalRes = await db.execute(sql`${grouped} SELECT count(DISTINCT grp)::int AS n FROM g`);
     const groupTotal = Number((totalRes.rows[0] as any)?.n || 0);
+    const groupOrder = filters.sort === "score" ? sql`max(score) DESC NULLS LAST, last_at DESC, grp ASC` : sql`last_at DESC, grp ASC`;
     const groupsRes = await db.execute(paging
-      ? sql`${grouped} SELECT grp, max(captured_at) AS last_at FROM g GROUP BY grp ORDER BY last_at DESC, grp ASC LIMIT ${paging.limit} OFFSET ${paging.offset}`
-      : sql`${grouped} SELECT grp, max(captured_at) AS last_at FROM g GROUP BY grp ORDER BY last_at DESC, grp ASC`);
+      ? sql`${grouped} SELECT grp, max(captured_at) AS last_at FROM g GROUP BY grp ORDER BY ${groupOrder} LIMIT ${paging.limit} OFFSET ${paging.offset}`
+      : sql`${grouped} SELECT grp, max(captured_at) AS last_at FROM g GROUP BY grp ORDER BY ${groupOrder}`);
     const groupKeys = (groupsRes.rows as { grp: string }[]).map(r => r.grp);
     if (groupKeys.length === 0) return { leads: [], total: groupTotal, countsByChannel, channels, groupedByPerson: true };
     const membersRes = await db.execute(sql`${grouped} SELECT grp, channel, id FROM g WHERE grp IN (${sql.join(groupKeys.map(k => sql`${k}`), sql`, `)}) ORDER BY captured_at DESC, channel ASC, id ASC`);
@@ -377,9 +399,10 @@ export async function queryUnifiedLeads(
     return { leads: out, total: groupTotal, countsByChannel, channels, groupedByPerson: true };
   }
 
+  const order = filters.sort === "score" ? sql`u.score DESC NULLS LAST, u.captured_at DESC, u.channel ASC, u.id ASC` : sql`u.captured_at DESC, u.channel ASC, u.id ASC`;
   const pageSql = paging
-    ? sql`SELECT u.channel, u.id FROM (${union}) u ORDER BY u.captured_at DESC, u.channel ASC, u.id ASC LIMIT ${paging.limit} OFFSET ${paging.offset}`
-    : sql`SELECT u.channel, u.id FROM (${union}) u ORDER BY u.captured_at DESC, u.channel ASC, u.id ASC`;
+    ? sql`SELECT u.channel, u.id FROM (${union}) u ORDER BY ${order} LIMIT ${paging.limit} OFFSET ${paging.offset}`
+    : sql`SELECT u.channel, u.id FROM (${union}) u ORDER BY ${order}`;
   const pageRes = await db.execute(pageSql);
   const page = pageRes.rows as { channel: LeadChannel; id: string }[];
 
@@ -476,11 +499,15 @@ export function parseUnifiedLeadFilters(q: Record<string, unknown>): UnifiedLead
   if (from === null || to === null) return { error: "Invalid date" };
   const search = typeof q.search === "string" ? q.search.slice(0, 200) : undefined;
   const groupByPerson = q.groupByPerson === "1" || q.groupByPerson === "true";
+  const temperature = q.temperature === "hot" || q.temperature === "warm" || q.temperature === "cold" ? q.temperature : undefined;
+  const sort = q.sort === "score" ? "score" as const : undefined;
   const statusRaw = typeof q.status === "string" && q.status && q.status !== "all" ? q.status : undefined;
   if (statusRaw && !(SOCIAL_LEAD_STATUSES as readonly string[]).includes(statusRaw)) return { error: "Unknown status" };
   return {
     channel: channelRaw as LeadChannel | "all", search, from: from || undefined, to: to || undefined,
     ...(statusRaw ? { status: statusRaw as SocialLeadStatus } : {}),
     ...(groupByPerson ? { groupByPerson } : {}),
+    ...(temperature ? { temperature } : {}),
+    ...(sort ? { sort } : {}),
   };
 }

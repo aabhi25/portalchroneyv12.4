@@ -96,6 +96,26 @@ async function main() {
   const ctx = await svc.recentCallContext(B, `91${phone}`);
   expect(/RECENT PHONE CALL/.test(ctx) && /asked about EMI/.test(ctx) && /Interested/.test(ctx) && (await svc.recentCallContext(B, "919000000001")) === "", "WhatsApp replies to this number get the recent call; other numbers don't", ctx);
 
+  // Lead score: rescored on open, stored on the row, filter + "hottest first" on the Leads list.
+  expect(tl!.score && tl!.score.temperature === "hot" && tl!.score.score >= 70 && tl!.score.reasons.up.includes("Interested on the call") && tl!.score.reasons.up.includes("Asked about fees, EMI or admission"),
+    "opening the lead scores it: Hot, with the reasons", tl!.score);
+  const [stored] = await db.select().from(schema.leads).where(eq(schema.leads.id, lead.id));
+  expect(stored.leadTemperature === "hot" && stored.engagementScore === tl!.score!.score && stored.scoredAt, "the score is saved on the lead");
+  const [coldLead] = await db.insert(schema.leads).values({ businessAccountId: B, name: "Quiet", phone: "9811100000", createdAt: new Date(Date.now() - 40 * 24 * 3600_000) } as any).returning();
+  const { queryUnifiedLeads } = await import("../unifiedLeadsService");
+  const { runScoringPass } = await import("../leadScoringService");
+  await runScoringPass();
+  const [waScored] = await db.select().from(schema.whatsappLeads).where(eq(schema.whatsappLeads.id, waIn.id));
+  expect(waScored.scoredAt && waScored.leadTemperature, "the worker scores recent WhatsApp leads too", waScored.leadTemperature);
+  await (await import("../leadScoringService")).rescoreWebsiteLeads(B, [coldLead.id]);
+  const hot = await queryUnifiedLeads(B, { temperature: "hot", channel: "website" }, { limit: 50, offset: 0 });
+  const cold = await queryUnifiedLeads(B, { temperature: "cold", channel: "website" }, { limit: 50, offset: 0 });
+  expect(hot.leads.some((r) => r.id === lead.id) && !hot.leads.some((r) => r.id === coldLead.id) && cold.leads.some((r) => r.id === coldLead.id), "Hot only / Cold only filters", { hot: hot.leads.map((r) => r.name), cold: cold.leads.map((r) => r.name) });
+  const byScore = await queryUnifiedLeads(B, { sort: "score", channel: "website" }, { limit: 50, offset: 0 });
+  expect(byScore.leads[0]?.id === lead.id && byScore.leads[0]?.score?.temperature === "hot", "hottest first puts her on top, with the score on the row", byScore.leads.map((r) => `${r.name}:${r.score?.score}`));
+  const grouped = await queryUnifiedLeads(B, { sort: "score", groupByPerson: true }, { limit: 50, offset: 0 });
+  expect(grouped.leads[0]?.id === lead.id, "hottest first also works with one row per person", grouped.leads.map((r) => `${r.channel}:${r.name}:${r.score?.score}`));
+
   await db.delete(schema.leads).where(eq(schema.leads.id, lead.id));
   const left = await db.select().from(schema.leadStories).where(eq(schema.leadStories.businessAccountId, B));
   expect(left.length === 0, "deleting the lead deletes its story");

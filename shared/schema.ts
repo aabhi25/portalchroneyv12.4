@@ -636,6 +636,13 @@ export const leads = pgTable("leads", {
   // each chat it came from is in lead_conversations. created_at stays the first enquiry.
   lastEnquiryAt: timestamp("last_enquiry_at"), // null on rows from before this column = created_at
   enquiryCount: integer("enquiry_count").notNull().default(1),
+  // Lead score (leadScoringService, refreshed about every 20 min and when the lead is opened):
+  // recent engagement 0-100, hot / warm / cold, profile fit and the reasons both ways.
+  engagementScore: integer("engagement_score"),
+  leadTemperature: varchar("lead_temperature", { length: 8 }),
+  leadFit: varchar("lead_fit", { length: 10 }),
+  scoreReasons: jsonb("score_reasons").$type<{ up: string[]; down: string[]; fit: string[] }>(),
+  scoredAt: timestamp("scored_at"),
   
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -3274,6 +3281,13 @@ export const whatsappLeads = pgTable("whatsapp_leads", {
   verificationResults: jsonb("verification_results"), // Last verification run result (see VerificationResult shape)
   verificationRunAt: timestamp("verification_run_at"), // When verification was last run on this lead
   qualifiedAt: timestamp("qualified_at"), // First time a valid PAN + email were present (see shared/leadQualification.ts); null = draft where required
+  // Lead score (leadScoringService, refreshed about every 20 min and when the lead is opened):
+  // recent engagement 0-100, hot / warm / cold, profile fit and the reasons both ways.
+  engagementScore: integer("engagement_score"),
+  leadTemperature: varchar("lead_temperature", { length: 8 }),
+  leadFit: varchar("lead_fit", { length: 10 }),
+  scoreReasons: jsonb("score_reasons").$type<{ up: string[]; down: string[]; fit: string[] }>(),
+  scoredAt: timestamp("scored_at"),
   lastMessageAt: timestamp("last_message_at"), // When the most recent message was received (for sorting by activity)
   lastMessage: text("last_message"), // Text of the most recent message
   conversationCount: integer("conversation_count").notNull().default(1), // Number of messages/interactions on this lead

@@ -3,7 +3,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { format, formatDistanceToNow } from "date-fns";
 import { Facebook, Globe, Instagram, Loader2, MessageCircle, Phone, RefreshCw, Sparkles, UserCheck, Users } from "lucide-react";
-import type { LeadStory, LeadTimelineResponse, TimelineChannel, TimelineEvent } from "@shared/leadTimeline";
+import type { LeadScoreView, LeadStory, LeadTimelineResponse, TimelineChannel, TimelineEvent } from "@shared/leadTimeline";
+import { FIT_LABEL, ScoreReasons, TEMPERATURE_LOOK } from "./UnifiedLeadParts";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 
@@ -57,11 +58,12 @@ export function LeadStoryTimeline({ channel, id, onOpenConversation, onOpenCall 
     return <p className="mt-6 text-xs text-gray-500"><Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Loading this lead's story…</p>;
   }
   if (timeline.isError || !timeline.data) return null;
-  const { events, story } = timeline.data;
+  const { events, story, score } = timeline.data;
   if (!events.length) return null;
 
   return (
     <div className="mt-6 space-y-5" data-testid="lead-story-timeline">
+      {score && <ScoreCard score={score} />}
       <StoryCard story={story} writing={write.isPending} failed={write.isError} stale={status === "stale" && !write.isPending} onRefresh={() => write.mutate()} />
       <section>
         <h3 className="mb-3 flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-purple-600">
@@ -72,6 +74,23 @@ export function LeadStoryTimeline({ channel, id, onOpenConversation, onOpenCall 
         </ol>
       </section>
     </div>
+  );
+}
+
+function ScoreCard({ score }: { score: LeadScoreView }) {
+  const look = TEMPERATURE_LOOK[score.temperature];
+  const Icon = look.icon;
+  return (
+    <section className="flex gap-3 rounded-xl border border-gray-100 bg-white p-3" data-testid="lead-score">
+      <div className={`flex h-14 w-16 shrink-0 flex-col items-center justify-center rounded-lg ring-1 ${look.className}`}>
+        <span className="flex items-center gap-1 text-[12px] font-semibold"><Icon className="h-3.5 w-3.5" />{look.label}</span>
+        <span className="text-[20px] font-bold leading-none">{score.score}</span>
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="mb-1 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-gray-400">Lead score · <span className="normal-case tracking-normal">{FIT_LABEL[score.fit]}</span></p>
+        <ScoreReasons score={score} />
+      </div>
+    </section>
   );
 }
 
