@@ -30,6 +30,7 @@ import {
   normalizeCallPhone,
   type AiCallView,
   type CallDirection,
+  type CallFollowUpStatus,
   type CallOutcome,
   type CallProviderId,
   type CallStatus,
@@ -92,7 +93,33 @@ export function toCallView(row: AiCall, leadName: string | null): AiCallView {
     hasRecording: !!row.recordingUrl,
     conversationId: row.conversationId ?? null,
     createdAt: iso(row.createdAt)!,
+    followUp: row.followUpStatus ? {
+      template: row.followUpTemplate ?? null,
+      status: row.followUpStatus as CallFollowUpStatus,
+      sentAt: iso(row.followUpSentAt),
+      deliveredAt: iso(row.followUpDeliveredAt),
+      readAt: iso(row.followUpReadAt),
+      repliedAt: null,
+      error: row.followUpError ?? null,
+    } : null,
   };
+}
+
+/** Fill followUp.repliedAt: the person's first WhatsApp message (same number) after the follow-up. */
+async function withFollowUpReplies(businessAccountId: string, views: AiCallView[]): Promise<AiCallView[]> {
+  const ids = views.filter((v) => v.followUp?.sentAt && v.followUp.status !== "failed").map((v) => v.id);
+  if (!ids.length) return views;
+  const res = await db.execute(sql`
+    -- Stored as UTC (like every drizzle timestamp); formatted here so the server's time zone can't shift it.
+    SELECT c.id, to_char(min(w.received_at), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS replied_at
+    FROM ai_calls c
+    JOIN whatsapp_leads w ON w.business_account_id = c.business_account_id AND w.direction = 'incoming'
+      AND w.received_at > c.follow_up_sent_at
+      AND right(regexp_replace(coalesce(w.sender_phone, ''), '\\D', '', 'g'), 10) = right(regexp_replace(c.phone, '\\D', '', 'g'), 10)
+    WHERE c.business_account_id = ${businessAccountId} AND c.id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+    GROUP BY c.id`);
+  const replied = new Map((res.rows as { id: string; replied_at: any }[]).map((r) => [r.id, r.replied_at ? new Date(r.replied_at).toISOString() : null]));
+  return views.map((v) => (v.followUp && replied.get(v.id) ? { ...v, followUp: { ...v.followUp, repliedAt: replied.get(v.id)! } } : v));
 }
 
 function toCallDetail(row: AiCall, leadName: string | null) {
@@ -252,7 +279,7 @@ router.get("/api/calling/calls", ...requireAiCalling, async (req, res) => {
         .where(cond).orderBy(desc(aiCalls.createdAt)).limit(limit).offset(offset),
       db.select({ total: count() }).from(aiCalls).leftJoin(leads, eq(leads.id, aiCalls.leadId)).where(cond),
     ]);
-    res.json({ calls: rows.map((r) => toCallView(r.call, r.leadName ?? null)), total: Number(total) });
+    res.json({ calls: await withFollowUpReplies(businessAccountId, rows.map((r) => toCallView(r.call, r.leadName ?? null))), total: Number(total) });
   } catch (err) { fail(res, err, "Could not load calls"); }
 });
 
@@ -277,7 +304,8 @@ router.get("/api/calling/calls/:id", ...requireAiCalling, async (req, res) => {
         .where(and(eq(leads.id, call.leadId), eq(leads.businessAccountId, businessAccountId))).limit(1);
       lead = l ?? null;
     }
-    res.json({ call: toCallDetail(call, leadName), transcript, lead });
+    const [detail] = await withFollowUpReplies(bizOf(req), [toCallDetail(call, leadName)]);
+    res.json({ call: detail, transcript, lead });
   } catch (err) { fail(res, err, "Could not load the call"); }
 });
 

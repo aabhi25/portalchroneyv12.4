@@ -20,7 +20,7 @@ import {
   type CallDetail,
   type CallDetailResponse,
 } from "@/lib/aiCallingApi";
-import { CallOutcomeBadge, CallStatusBadge, DirectionIcon } from "./CallBadges";
+import { CallFollowUpLine, CallOutcomeBadge, CallStatusBadge, DirectionIcon } from "./CallBadges";
 
 const TRIGGER_LABEL: Record<string, string> = {
   auto_lead: "New lead (automatic)",
@@ -167,7 +167,7 @@ export function CallDetailSheet({ callId, onClose }: { callId: string | null; on
               )}
             </section>
 
-            {(call.summary || call.outcomeNote || call.callbackAt || call.transferred || call.followUpSentAt) && (
+            {(call.summary || call.outcomeNote || call.callbackAt || call.transferred || call.followUp) && (
               <section className="space-y-2">
                 <h3 className="text-sm font-semibold text-gray-700">Summary</h3>
                 {call.summary && <p className="text-sm leading-relaxed text-gray-800 whitespace-pre-line">{call.summary}</p>}
@@ -178,7 +178,7 @@ export function CallDetailSheet({ callId, onClose }: { callId: string | null; on
                   </p>
                 )}
                 {call.transferred && <p className="text-sm text-sky-700">The call was passed to your team.</p>}
-                {call.followUpSentAt && <p className="text-xs text-gray-500">WhatsApp follow-up sent {formatDateTime(call.followUpSentAt)}</p>}
+                <CallFollowUpLine followUp={call.followUp} />
               </section>
             )}
             {call.status === "completed" && !call.summary && (

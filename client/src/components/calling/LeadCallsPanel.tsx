@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Loader2, Phone } from "lucide-react";
 import { callingApi, callingKeys, formatDateTime, formatDuration, useAiCallingAvailability, type CallsListResponse } from "@/lib/aiCallingApi";
-import { CallOutcomeBadge, CallStatusBadge, DirectionIcon } from "./CallBadges";
+import { CallFollowUpLine, CallOutcomeBadge, CallStatusBadge, DirectionIcon } from "./CallBadges";
 import { useCreateCall } from "./CallNowDialog";
 import { LIVE_CALL_STATUSES } from "@shared/aiCalling";
 
@@ -62,6 +62,7 @@ export function LeadCallsPanel({ leadId, leadName, phone }: { leadId: string; le
                   <span className="text-xs text-gray-500">{formatDateTime(c.startedAt || c.createdAt)}{c.durationSec ? ` · ${formatDuration(c.durationSec)}` : ""}</span>
                 </div>
                 {c.summary && <p className="mt-1 line-clamp-2 text-xs text-gray-600">{c.summary}</p>}
+                <CallFollowUpLine followUp={c.followUp} className="mt-1" />
               </div>
             </button>
           ))}

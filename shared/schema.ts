@@ -1841,6 +1841,14 @@ export const aiCalls = pgTable("ai_calls", {
   transferred: boolean("transferred").notNull().default(false),
   errorMessage: text("error_message"),
   followUpSentAt: timestamp("follow_up_sent_at"),
+  // The WhatsApp follow-up after the call: template, MSG91 message id (delivery receipts key on it)
+  // and how far it got ('sent' | 'delivered' | 'read' | 'failed').
+  followUpTemplate: text("follow_up_template"),
+  followUpMessageId: varchar("follow_up_message_id", { length: 128 }),
+  followUpStatus: varchar("follow_up_status", { length: 16 }),
+  followUpDeliveredAt: timestamp("follow_up_delivered_at"),
+  followUpReadAt: timestamp("follow_up_read_at"),
+  followUpError: text("follow_up_error"),
   postProcessedAt: timestamp("post_processed_at"),
   requestedBy: varchar("requested_by"), // staff user for manual calls
   metadata: jsonb("metadata").$type<Record<string, unknown>>(),
@@ -1851,6 +1859,7 @@ export const aiCalls = pgTable("ai_calls", {
   statusScheduledIdx: index("ai_calls_status_scheduled_idx").on(table.status, table.scheduledAt),
   leadIdx: index("ai_calls_lead_idx").on(table.leadId),
   providerSidIdx: index("ai_calls_provider_sid_idx").on(table.provider, table.providerCallSid),
+  followUpMsgIdx: index("ai_calls_follow_up_msg_idx").on(table.businessAccountId, table.followUpMessageId),
 }));
 
 export type AiCall = typeof aiCalls.$inferSelect;

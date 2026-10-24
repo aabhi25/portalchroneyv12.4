@@ -102,7 +102,7 @@ async function main() {
   const summaryCalls: any[] = [];
   summary.setCallSummarizerForTesting(async (input) => { summaryCalls.push(input); return summaryResult; });
   const followUps: any[] = [];
-  let followUpResult: { success: boolean; error?: string } = { success: true };
+  let followUpResult: { success: boolean; error?: string; messageId?: string; template?: string } = { success: true, messageId: `wamid-${Date.now()}`, template: "online_mba" };
   lifecycle.setFollowUpSenderForTesting(async (req) => { followUps.push(req); return followUpResult; });
 
   // ── accounts, users, app ──────────────────────────────────────────────────
@@ -578,6 +578,29 @@ async function main() {
       "processing three times concurrently → exactly one metering row (category 'calling')", meterF.length);
     expect(followUps.length === 1 && followUps[0].templateId === "tpl-1" && followUps[0].leadName === "Ravi Kumar" && followUps[0].phone === `+91${leadF.phone}` && row.followUpSentAt,
       "answered call → one WhatsApp follow-up with the lead's name", followUps);
+    expect(row.followUpStatus === "sent" && row.followUpMessageId === followUpResult.messageId && row.followUpTemplate === "online_mba", "follow-up remembered: status sent, message id, template", row);
+
+    // Delivery receipts move the follow-up forward only; the lead's WhatsApp reply shows as Replied.
+    const msgId = followUpResult.messageId!;
+    expect(!(await lifecycle.applyFollowUpReceipt(F, "wamid-unknown", "delivered")) && !(await lifecycle.applyFollowUpReceipt(R, msgId, "delivered")), "a receipt for an unknown message / another account's call is ignored");
+    await lifecycle.applyFollowUpReceipt(F, msgId, "delivered");
+    await lifecycle.applyFollowUpReceipt(F, msgId, "read");
+    await lifecycle.applyFollowUpReceipt(F, msgId, "delivered");
+    await lifecycle.applyFollowUpReceipt(F, msgId, "failed", "late failure");
+    row = await callRow(done.id);
+    expect(row.followUpStatus === "read" && row.followUpDeliveredAt && row.followUpReadAt && !row.followUpError, "delivered → read; a late 'delivered' / 'failed' doesn't move it back", row);
+    await db.insert(schema.whatsappLeads).values({ businessAccountId: F, senderPhone: `91${leadF.phone}`, senderName: "RR", rawMessage: "[Interactive message]", status: "new", direction: "incoming", receivedAt: new Date(Date.now() + 1000) } as any);
+    const cF = `session=${await createSession((await mkUser("business_user", F)).id)}`;
+    const listF = await call("GET", `/api/calling/calls?leadId=${leadF.id}`, cF);
+    const fu = listF.json?.calls?.[0]?.followUp;
+    expect(fu && fu.status === "read" && fu.template === "online_mba" && fu.deliveredAt && fu.readAt && fu.repliedAt, "the lead's calls list shows the follow-up: template, delivered, read, replied", fu);
+
+    // The answered call confirms the lead's number: their WhatsApp lead groups under the website lead.
+    const { queryUnifiedLeads } = await import("../unifiedLeadsService");
+    await db.update(schema.businessAccounts).set({ whatsappEnabled: "true" } as any).where(eq(schema.businessAccounts.id, F));
+    const grouped: any = await queryUnifiedLeads(F, { groupByPerson: true, search: String(leadF.phone).slice(-10) }, { limit: 50, offset: 0 });
+    const webRow = grouped.leads.find((r: any) => r.channel === "website" && r.id === leadF.id);
+    expect(webRow && (webRow.linked || []).some((l: any) => l.channel === "whatsapp") && !grouped.leads.some((r: any) => r.channel === "whatsapp" && String(r.phone || "").endsWith(String(leadF.phone).slice(-10))), "answered AI call → the WhatsApp reply's lead sits under the website lead, not as its own row", grouped.leads.map((r: any) => ({ ch: r.channel, linked: r.linked?.map((l: any) => l.channel) })));
     const leadFAfter = (await db.select().from(schema.leads).where(eq(schema.leads.id, leadF.id)))[0];
     expect(leadFAfter.name === "Ravi Kumar" && leadFAfter.email === "ravi@example.com", "lead's empty name/email filled from the call", leadFAfter);
     expect(!(await callsOf(F)).some((c) => c.parentCallId === done.id), "answered call → no retry");
@@ -587,7 +610,7 @@ async function main() {
     const [done2] = await db.insert(schema.aiCalls).values({ businessAccountId: F, direction: "inbound", status: "completed", trigger: "inbound", provider: "simulator", phone: uniqPhone(), answeredAt: new Date(Date.now() - 30_000), endedAt: new Date(), durationSec: 30, outcome: "info_given" }).returning();
     await lifecycle.processFinishedCall(done2.id);
     row = await callRow(done2.id);
-    expect(followUps.length === 2 && row.followUpSentAt === null && (row.metadata as any)?.followUpError === "template not approved" && row.outcome === "info_given",
+    expect(followUps.length === 2 && row.followUpSentAt === null && (row.metadata as any)?.followUpError === "template not approved" && row.followUpStatus === "failed" && row.followUpError === "template not approved" && row.outcome === "info_given",
       "failed follow-up recorded (not marked sent); outcome set by the voice AI kept", row.metadata);
     followUpResult = { success: true };
 

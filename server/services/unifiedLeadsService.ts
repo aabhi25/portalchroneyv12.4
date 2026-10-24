@@ -15,7 +15,7 @@
  *
  * One person, several channels: a website lead and a WhatsApp lead are the same person when the
  * visitor continued on WhatsApp with a hand-off code (whatsapp_handoffs) or the website phone was
- * OTP-verified and equals the WhatsApp number. Every row carries personId + channels (the trail,
+ * confirmed — OTP-verified, or an AI call to it was answered — and equals the WhatsApp number. Every row carries personId + channels (the trail,
  * ordered by first contact) when linked; with groupByPerson the listing returns one row per person
  * (the website row first, the others under `linked`), paged and counted by person.
  */
@@ -144,11 +144,16 @@ function websitePersonKeySql(): SQL {
       WHERE h.business_account_id = l.business_account_id AND h.used_at IS NOT NULL AND h.whatsapp_phone IS NOT NULL
         AND (h.website_lead_id = l.id OR (l.conversation_id IS NOT NULL AND h.conversation_id = l.conversation_id))
       ORDER BY h.last_used_at DESC NULLS LAST LIMIT 1),
-    CASE WHEN COALESCE(l.phone, '') <> '' AND l.conversation_id IS NOT NULL AND EXISTS (
+    CASE WHEN COALESCE(l.phone, '') <> '' AND ((l.conversation_id IS NOT NULL AND EXISTS (
       SELECT 1 FROM phone_otp_challenges p
       WHERE p.business_account_id = l.business_account_id AND p.conversation_id = l.conversation_id
         AND p.verified_at IS NOT NULL AND ${key10(sql`p.phone_e164`)} = ${key10(sql`l.phone`)}
-    ) THEN ${key10(sql`l.phone`)} END
+    )) OR EXISTS (
+      -- An AI call to this lead's number was answered: the number is theirs (as good as an OTP).
+      SELECT 1 FROM ai_calls c
+      WHERE c.business_account_id = l.business_account_id AND c.lead_id = l.id AND c.answered_at IS NOT NULL
+        AND ${key10(sql`c.phone`)} = ${key10(sql`l.phone`)}
+    )) THEN ${key10(sql`l.phone`)} END
   )`;
 }
 
@@ -385,11 +390,12 @@ export async function queryUnifiedLeads(
   return { leads: leadsOut, total, countsByChannel, channels };
 }
 
-/** Anything that can link a website lead to a WhatsApp number (used hand-off code or verified OTP)? */
+/** Anything that can link a website lead to a WhatsApp number (used hand-off code, verified OTP, answered AI call)? */
 async function accountHasPersonLinks(accountId: string): Promise<boolean> {
   const res = await db.execute(sql`
     SELECT EXISTS (SELECT 1 FROM whatsapp_handoffs WHERE business_account_id = ${accountId} AND used_at IS NOT NULL)
-        OR EXISTS (SELECT 1 FROM phone_otp_challenges WHERE business_account_id = ${accountId} AND verified_at IS NOT NULL) AS linked
+        OR EXISTS (SELECT 1 FROM phone_otp_challenges WHERE business_account_id = ${accountId} AND verified_at IS NOT NULL)
+        OR EXISTS (SELECT 1 FROM ai_calls WHERE business_account_id = ${accountId} AND lead_id IS NOT NULL AND answered_at IS NOT NULL) AS linked
   `);
   return !!(res.rows[0] as any)?.linked;
 }

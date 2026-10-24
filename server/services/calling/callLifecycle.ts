@@ -58,9 +58,10 @@ export interface FollowUpRequest {
   leadName: string | null;
   businessName: string | null;
 }
-export type FollowUpSender = (req: FollowUpRequest) => Promise<{ success: boolean; error?: string; messageId?: string | null }>;
+export interface FollowUpResult { success: boolean; error?: string; messageId?: string | null; template?: string | null }
+export type FollowUpSender = (req: FollowUpRequest) => Promise<FollowUpResult>;
 
-async function defaultFollowUpSender(req: FollowUpRequest): Promise<{ success: boolean; error?: string; messageId?: string | null }> {
+async function defaultFollowUpSender(req: FollowUpRequest): Promise<FollowUpResult> {
   const { whatsappTemplateService } = await import("../whatsappTemplateService");
   const { whatsappService } = await import("../whatsappService");
   const { sendTemplateMessage } = await import("../whatsappSessionService");
@@ -75,7 +76,34 @@ async function defaultFollowUpSender(req: FollowUpRequest): Promise<{ success: b
     params[String(i)] = i === 1 ? (req.leadName?.trim() || "there") : (req.businessName?.trim() || "us");
   }
   const r = await sendTemplateMessage(settings, req.phone, tpl.name, params, { language: tpl.language, namespace: tpl.namespace });
-  return { success: !!r.success, messageId: r.messageId ?? null, error: r.success ? undefined : String(typeof r.error === "string" ? r.error : JSON.stringify(r.error ?? "send failed")).slice(0, 300) };
+  return { success: !!r.success, messageId: r.messageId ?? null, template: tpl.name, error: r.success ? undefined : String(typeof r.error === "string" ? r.error : JSON.stringify(r.error ?? "send failed")).slice(0, 300) };
+}
+
+/**
+ * A WhatsApp delivery receipt (MSG91 webhook) for a call's follow-up: moves its status forward
+ * only (sent → delivered → read; "failed" only before it was delivered). Returns true when the
+ * message id belongs to one of the account's calls.
+ */
+const FOLLOW_UP_RANK: Record<string, number> = { sent: 1, failed: 1, delivered: 2, read: 3 };
+export async function applyFollowUpReceipt(
+  businessAccountId: string, messageId: string, kind: "sent" | "delivered" | "read" | "failed", error?: string | null,
+): Promise<boolean> {
+  if (!messageId) return false;
+  const [row] = await db.select({ id: aiCalls.id, status: aiCalls.followUpStatus, deliveredAt: aiCalls.followUpDeliveredAt, readAt: aiCalls.followUpReadAt })
+    .from(aiCalls).where(and(eq(aiCalls.businessAccountId, businessAccountId), eq(aiCalls.followUpMessageId, messageId))).limit(1);
+  if (!row) return false;
+  const now = new Date();
+  const update: Partial<typeof aiCalls.$inferInsert> = {};
+  if (kind === "delivered" || kind === "read") {
+    if (!row.deliveredAt) update.followUpDeliveredAt = now;
+    if (kind === "read" && !row.readAt) update.followUpReadAt = now;
+  }
+  if ((FOLLOW_UP_RANK[kind] ?? 0) > (FOLLOW_UP_RANK[row.status ?? ""] ?? 0) || (kind === "failed" && row.status === "sent")) {
+    update.followUpStatus = kind;
+    if (kind === "failed") update.followUpError = String(error || "WhatsApp couldn't deliver the message").slice(0, 300);
+  }
+  if (Object.keys(update).length) await db.update(aiCalls).set(update).where(eq(aiCalls.id, row.id));
+  return true;
 }
 
 let followUpSender: FollowUpSender = defaultFollowUpSender;
@@ -234,10 +262,17 @@ export async function processFinishedCall(callId: string): Promise<void> {
       const res = await followUpSender({
         businessAccountId: call.businessAccountId, phone: call.phone, templateId: settings.whatsappFollowUpTemplateId!,
         leadName: capturedFields.name || lead?.name || (call.metadata as any)?.name || null, businessName: biz?.name ?? null,
-      }).catch((err: any) => ({ success: false, error: err?.message || String(err) }));
+      }).catch((err: any): FollowUpResult => ({ success: false, error: err?.message || String(err) }));
       if (!res.success) {
         const [fresh] = await db.select({ metadata: aiCalls.metadata }).from(aiCalls).where(eq(aiCalls.id, call.id)).limit(1);
-        await db.update(aiCalls).set({ followUpSentAt: null, metadata: { ...(fresh?.metadata || {}), followUpError: res.error || "send failed" } }).where(eq(aiCalls.id, call.id));
+        await db.update(aiCalls).set({
+          followUpSentAt: null, followUpStatus: "failed", followUpError: res.error || "send failed", followUpTemplate: res.template ?? null,
+          metadata: { ...(fresh?.metadata || {}), followUpError: res.error || "send failed" },
+        }).where(eq(aiCalls.id, call.id));
+      } else {
+        // Delivery receipts (delivered / read / failed) find the call by this message id.
+        await db.update(aiCalls).set({ followUpStatus: "sent", followUpMessageId: res.messageId ?? null, followUpTemplate: res.template ?? null })
+          .where(eq(aiCalls.id, call.id));
       }
     }]);
   }

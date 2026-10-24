@@ -295,6 +295,13 @@
       "when": 1792821419181,
       "tag": "0041_inbound_call_purpose",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1792826376027,
+      "tag": "0042_call_follow_up_status",
+      "breakpoints": true
     }
   ]
 }

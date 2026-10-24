@@ -1,10 +1,12 @@
 import { Badge } from "@/components/ui/badge";
-import { PhoneIncoming, PhoneOutgoing } from "lucide-react";
+import { Check, MessageCircle, PhoneIncoming, PhoneOutgoing } from "lucide-react";
+import { formatDateTime, formatTime } from "@/lib/aiCallingApi";
 import {
   CALL_OUTCOME_LABEL,
   CALL_STATUS_LABEL,
   LIVE_CALL_STATUSES,
   type CallDirection,
+  type CallFollowUpView,
   type CallOutcome,
   type CallStatus,
 } from "@shared/aiCalling";
@@ -58,5 +60,40 @@ export function DirectionIcon({ direction, className = "h-4 w-4" }: { direction:
     <PhoneIncoming className={`${className} text-sky-600`} aria-label="Incoming call" />
   ) : (
     <PhoneOutgoing className={`${className} text-violet-600`} aria-label="Outgoing call" />
+  );
+}
+
+/**
+ * The WhatsApp follow-up sent after a call, and how far it got: Sent → Delivered → Read → Replied
+ * (delivery receipts from WhatsApp), or why it failed.
+ */
+export function CallFollowUpLine({ followUp, className = "" }: { followUp: CallFollowUpView | null | undefined; className?: string }) {
+  if (!followUp) return null;
+  const name = followUp.template ? ` “${followUp.template}”` : "";
+  if (followUp.status === "failed") {
+    return (
+      <p className={`flex items-start gap-1.5 text-xs text-red-700 ${className}`} data-testid="call-follow-up">
+        <MessageCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>WhatsApp follow-up{name} failed{followUp.error ? `: ${followUp.error}` : ""}</span>
+      </p>
+    );
+  }
+  const steps: Array<{ label: string; at: string | null; done: boolean }> = [
+    { label: "Sent", at: followUp.sentAt, done: true },
+    { label: "Delivered", at: followUp.deliveredAt, done: !!followUp.deliveredAt || followUp.status === "delivered" || followUp.status === "read" },
+    { label: "Read", at: followUp.readAt, done: !!followUp.readAt || followUp.status === "read" },
+    { label: "Replied", at: followUp.repliedAt, done: !!followUp.repliedAt },
+  ];
+  return (
+    <div className={`flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs ${className}`} data-testid="call-follow-up">
+      <span className="flex items-center gap-1 text-gray-600"><MessageCircle className="h-3.5 w-3.5 text-emerald-600" />WhatsApp follow-up{name}</span>
+      {steps.map((s, i) => (
+        <span key={s.label} className={`flex items-center gap-0.5 ${s.done ? "text-emerald-700" : "text-gray-400"}`} title={s.at ? formatDateTime(s.at) : undefined} data-testid={`follow-up-${s.label.toLowerCase()}${s.done ? "-done" : ""}`}>
+          {i > 0 && <span className="mr-1 text-gray-300">·</span>}
+          {s.done ? <Check className="h-3 w-3" /> : null}
+          {s.label}{s.done && s.at ? ` ${formatTime(s.at)}` : ""}
+        </span>
+      ))}
+    </div>
   );
 }

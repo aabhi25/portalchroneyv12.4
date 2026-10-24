@@ -215,6 +215,21 @@ export interface AiCallView {
   hasRecording: boolean;
   conversationId: string | null;
   createdAt: string;
+  /** The WhatsApp follow-up sent after the call, if any. */
+  followUp: CallFollowUpView | null;
+}
+
+export type CallFollowUpStatus = "sent" | "delivered" | "read" | "failed";
+
+export interface CallFollowUpView {
+  template: string | null;
+  status: CallFollowUpStatus;
+  sentAt: string | null;
+  deliveredAt: string | null;
+  readAt: string | null;
+  /** The person's first WhatsApp message after the follow-up. */
+  repliedAt: string | null;
+  error: string | null;
 }
 
 /** Normalise an Indian / international number to E.164-ish digits with a leading "+". Returns null if unusable. */

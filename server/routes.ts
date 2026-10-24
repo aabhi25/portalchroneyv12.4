@@ -30538,7 +30538,12 @@ Return ONLY a valid JSON object in this format:
               ? (item.errMessage || item.errorMessage || item.error || item.message || statusStr)
               : undefined;
             try {
-              const ok = await marketingCampaignService.applyDeliveryReceipt(businessId, msgId, kind, errMsg);
+              let ok = await marketingCampaignService.applyDeliveryReceipt(businessId, msgId, kind, errMsg);
+              // Not a campaign message: maybe an AI call's WhatsApp follow-up (shown on the lead / call).
+              if (!ok) {
+                const { applyFollowUpReceipt } = await import("./services/calling/callLifecycle");
+                ok = await applyFollowUpReceipt(businessId, msgId, kind, errMsg);
+              }
               if (ok) {
                 applied++;
                 console.log(`[MSG91 Webhook] DLR applied: msg=${msgId} kind=${kind}`);
