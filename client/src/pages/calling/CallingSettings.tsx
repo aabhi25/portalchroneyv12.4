@@ -19,6 +19,7 @@ import {
   CALL_LIMITS,
   CALL_SPEAKING_SPEEDS,
   DEFAULT_CALL_PURPOSE,
+  CALL_PURPOSE_MAX,
   DEFAULT_SPEAKING_SPEED,
   type CallBackgroundSound,
   DEFAULT_CALLING_HOURS,
@@ -801,8 +802,8 @@ export default function CallingSettings() {
                 </Select>
               </Field>
             </div>
-            <Field label="Purpose of the call" htmlFor="call-purpose" help="In your own words. Leave empty to use the suggestion shown.">
-              <Textarea id="call-purpose" rows={4} value={draft.callPurpose} onChange={e => set("callPurpose", e.target.value)} placeholder={DEFAULT_CALL_PURPOSE} maxLength={2000} data-testid="input-call-purpose" />
+            <Field label="Purpose of the call" htmlFor="call-purpose" help={`In your own words. Leave empty to use the suggestion shown. ${draft.callPurpose.length.toLocaleString()} / ${CALL_PURPOSE_MAX.toLocaleString()} characters.`}>
+              <Textarea id="call-purpose" rows={4} value={draft.callPurpose} onChange={e => set("callPurpose", e.target.value)} placeholder={DEFAULT_CALL_PURPOSE} maxLength={CALL_PURPOSE_MAX} data-testid="input-call-purpose" />
             </Field>
             <Field
               label="Opening line (optional)"

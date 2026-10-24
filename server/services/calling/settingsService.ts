@@ -22,6 +22,7 @@ import {
   CALL_PROVIDERS,
   CALL_SPEAKING_SPEEDS,
   DEFAULT_CALL_PURPOSE,
+  CALL_PURPOSE_MAX,
   DEFAULT_SPEAKING_SPEED,
   type CallBackgroundSound,
   normalizeCallProvider,
@@ -38,7 +39,7 @@ import { describeSecret, exotelMissing, normalizeApiKey, plivoMissing, sealSecre
 export const AUTO_CALL_SOURCES = ["website", "whatsapp", "instagram", "facebook", "voice", "form", "import", "other"] as const;
 export const EXOTEL_SUBDOMAINS = ["api.in.exotel.com", "api.exotel.com"] as const;
 export const MONTHLY_MINUTE_LIMIT = { min: 1, max: 100_000 } as const;
-export const TEXT_LIMITS = { callPurpose: 1500, openingLine: 300, inboundGreeting: 300, assistantName: 40 } as const;
+export const TEXT_LIMITS = { callPurpose: CALL_PURPOSE_MAX, openingLine: 300, inboundGreeting: 300, assistantName: 40 } as const;
 
 export class CallingSettingsError extends Error {
   constructor(message: string, public readonly status = 400) {

@@ -8,7 +8,7 @@
  * end / hand over / record the call.
  */
 import type { CallDirection, CallOutcome } from "@shared/aiCalling";
-import { DEFAULT_CALL_PURPOSE } from "@shared/aiCalling";
+import { CALL_PURPOSE_MAX, DEFAULT_CALL_PURPOSE } from "@shared/aiCalling";
 
 export const DEFAULT_ASSISTANT_LABEL = "the AI assistant";
 
@@ -144,7 +144,7 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
   if (input.direction === "outbound") {
     lines.push("");
     lines.push("CALL PURPOSE (the business's words):");
-    lines.push(clean(input.callPurpose, 1000) || DEFAULT_CALL_PURPOSE);
+    lines.push(clean(input.callPurpose, CALL_PURPOSE_MAX) || DEFAULT_CALL_PURPOSE);
     const facts: string[] = [];
     if (name) facts.push(`name: ${name}`);
     if (input.customerPhone) facts.push(`phone: ${clean(input.customerPhone, 20)} (you already have it — never ask for it)`);

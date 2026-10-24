@@ -95,6 +95,11 @@ async function main() {
   expect(/this is Anika, an AI assistant from ArhamSecure/.test(buildOpeningLine({ direction: 'outbound', businessName: 'ArhamSecure', assistantName: 'Anika' }).text), 'a named assistant still says it is an AI in the opening');
   const named = buildPhoneInstructions({ direction: 'outbound', businessName: 'ArhamSecure', transferAvailable: false, maxCallMinutes: 5, timezone: 'Asia/Kolkata', leadCaptureOn: false, assistantName: 'Anika' });
   expect(/your name is Anika/.test(named) && /is this a good time/.test(named), 'phone rules carry the name and the "not a good time" rule');
+  // A long purpose reaches the AI in full (a 1,318-character one lost its closing rules, 2026-10-24).
+  const { CALL_PURPOSE_MAX } = await import('@shared/aiCalling');
+  const longPurpose = `${'Explain the programme and answer questions. '.repeat(40)}Never end the call without securing the next step.`.slice(-CALL_PURPOSE_MAX);
+  const withPurpose = buildPhoneInstructions({ direction: 'outbound', businessName: 'ArhamSecure', transferAvailable: false, maxCallMinutes: 5, timezone: 'Asia/Kolkata', leadCaptureOn: false, callPurpose: longPurpose });
+  expect(longPurpose.length === CALL_PURPOSE_MAX && withPurpose.includes(longPurpose.trim()), 'the whole call purpose (up to the save limit) is in the phone rules', longPurpose.length);
 
   // ── spoken-answer guards (live call 2026-10-17) ──
   const { repeatsAskedQuestion, isPromiseOnly, stripContinuationStart } = await import('../calling/phonePrompt');

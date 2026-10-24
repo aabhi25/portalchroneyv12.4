@@ -175,6 +175,9 @@ export const DEFAULT_CALL_PURPOSE =
   "Thank them for their enquiry, understand what they need, answer their questions from what you know about the business, " +
   "and if they are interested, confirm the best time for the team to follow up.";
 
+/** Longest "Purpose of the call" the business can save; the AI is given all of it. */
+export const CALL_PURPOSE_MAX = 1500;
+
 /** Limits enforced by the server (UI uses them for inputs). */
 export const CALL_LIMITS = {
   autoCallDelayMinutes: { min: 0, max: 1440, default: 2 },
