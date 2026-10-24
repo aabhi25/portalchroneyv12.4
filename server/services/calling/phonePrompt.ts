@@ -45,6 +45,8 @@ export interface PhonePromptInput {
   callPurpose?: string | null;
   /** Staff note for a manual call. */
   staffNote?: string | null;
+  /** What the lead already did on other channels (leadTimelineService.leadHistoryBrief). */
+  priorHistory?: string | null;
   transferAvailable: boolean;
   maxCallMinutes: number;
   timezone: string;
@@ -160,6 +162,7 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
     if (input.leadMessage) facts.push(`what they wrote when they enquired: "${clean(input.leadMessage, 500)}"`);
     if (input.leadTopics?.length) facts.push(`topics they were interested in: ${input.leadTopics.map((t) => clean(t, 60)).filter(Boolean).slice(0, 6).join(", ")}`);
     if (input.staffNote) facts.push(`note from the team for this call: "${clean(input.staffNote, 300)}"`);
+    if (input.priorHistory) facts.push(`what they already did with us (website chat, WhatsApp, earlier calls): ${clean(input.priorHistory, 700)} — build on it: don't ask again what they already told us, and pick up their open questions`);
     if (facts.length) {
       lines.push("");
       lines.push("ABOUT THE PERSON YOU CALLED:");

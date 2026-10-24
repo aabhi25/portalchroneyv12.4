@@ -135,10 +135,10 @@ function whereAll(conds: SQL[]): SQL {
 }
 
 // Last 10 digits, the same normalisation as customer profiles.
-const key10 = (col: SQL) => sql`right(regexp_replace(COALESCE(${col}, ''), '\\D', '', 'g'), 10)`;
+export const key10 = (col: SQL) => sql`right(regexp_replace(COALESCE(${col}, ''), '\\D', '', 'g'), 10)`;
 
 /** The website lead's verified phone: from a used hand-off code, else an OTP-verified lead phone. */
-function websitePersonKeySql(): SQL {
+export function websitePersonKeySql(): SQL {
   return sql`COALESCE(
     (SELECT ${key10(sql`h.whatsapp_phone`)} FROM whatsapp_handoffs h
       WHERE h.business_account_id = l.business_account_id AND h.used_at IS NOT NULL AND h.whatsapp_phone IS NOT NULL

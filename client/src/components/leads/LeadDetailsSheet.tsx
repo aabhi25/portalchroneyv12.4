@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
 import { LeadCallsPanel } from "@/components/calling/LeadCallsPanel";
+import { LeadStoryTimeline } from "./LeadStoryTimeline";
 import { CHANNEL_META, ChannelBadge, ChannelTrail, type SocialCrm, type UnifiedLeadRow } from "./UnifiedLeadParts";
 import { crmStatusLook, syncButtonLabel, type CrmTarget } from "./LeadCrm";
 
@@ -57,7 +58,7 @@ export function websiteRowFromLead(lead: Lead): UnifiedLeadRow {
  */
 export function LeadDetailsSheet({
   row, onClose, targets, isSyncing, onSync, onSelectRow, onViewChat, onViewForm, onViewJourney, onOpenChannelPage, onDelete, showInternalIds,
-  journeyResponsesUrl, showCalls = true, accountName, noCrmText = "No CRM is connected. Connect one in Settings › Connected apps.",
+  journeyResponsesUrl, showCalls = true, showStory = true, onOpenConversation, accountName, noCrmText = "No CRM is connected. Connect one in Settings › Connected apps.",
 }: {
   row: UnifiedLeadRow | null;
   onClose: () => void;
@@ -76,6 +77,10 @@ export function LeadDetailsSheet({
   journeyResponsesUrl?: string;
   /** The phone calls panel (business accounts only). */
   showCalls?: boolean;
+  /** The story so far + cross-channel timeline (business accounts only). */
+  showStory?: boolean;
+  /** Open one of the person's website chats (from the timeline). */
+  onOpenConversation?: (conversationId: string) => void;
   /** The business the lead belongs to (group admin view). */
   accountName?: string | null;
   /** Shown in "CRM sync" when there is nothing to list. */
@@ -128,6 +133,10 @@ export function LeadDetailsSheet({
                 <span>· {format(new Date(row.capturedAt), "d MMM yyyy, h:mm a")}</span>
               </SheetDescription>
             </SheetHeader>
+
+            {showStory && (row.channel === "website" || row.channel === "whatsapp") && (
+              <LeadStoryTimeline channel={row.channel} id={row.id} onOpenConversation={onOpenConversation} />
+            )}
 
             <Section title="Contact">
               <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-4 gap-y-2 text-[14px]">

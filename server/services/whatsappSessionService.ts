@@ -239,6 +239,7 @@ export async function sendTemplateMessage(
       settings.businessAccountId,
       recipientPhone,
       await templateChatText(settings.businessAccountId, templateName, params, opts.language),
+      templateName,
     );
 
     return {
@@ -293,7 +294,8 @@ async function templateChatText(businessAccountId: string, templateName: string,
 async function storeOutgoingTemplateMessage(
   businessAccountId: string,
   recipientPhone: string,
-  text: string
+  text: string,
+  templateName?: string,
 ): Promise<void> {
   try {
     const cleanPhone = recipientPhone.replace(/\D/g, "");
@@ -301,6 +303,8 @@ async function storeOutgoingTemplateMessage(
       businessAccountId,
       senderPhone: cleanPhone,
       rawMessage: text,
+      // Which template it was (the lead's timeline lists templates sent).
+      ...(templateName ? { extractedData: { _template: templateName } } : {}),
       status: "message_only",
       direction: "outgoing",
     });

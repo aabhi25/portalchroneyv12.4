@@ -2640,6 +2640,7 @@ export default function GroupAdminDashboard() {
         } : undefined}
         journeyResponsesUrl={detailsLead ? `/api/group-admin/groups/${selectedGroupId}/journey-responses-by-lead/${detailsLead.id}` : undefined}
         showCalls={false}
+        showStory={false}
         accountName={detailsLead?.businessAccountName}
         noCrmText={canSyncLeads ? "No CRM is connected for this account." : "No CRM sync recorded for this lead."}
         showInternalIds={false}

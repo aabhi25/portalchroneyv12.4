@@ -53,6 +53,51 @@ router.get("/api/leads/unified", requireAuth, requireBusinessAccount, async (req
   }
 });
 
+/** The lead the timeline / story is about: a website or WhatsApp lead of this account. */
+function timelineAnchor(q: Record<string, unknown>): { channel: "website" | "whatsapp"; id: string } | null {
+  const channel = q.channel === "website" || q.channel === "whatsapp" ? q.channel : null;
+  const id = typeof q.id === "string" && /^[0-9a-f-]{8,64}$/i.test(q.id) ? q.id : null;
+  return channel && id ? { channel, id } : null;
+}
+
+/**
+ * GET /api/leads/timeline?channel=website|whatsapp&id=<lead id>
+ * The person's story across channels (oldest first) + the cached AI story and whether it's stale.
+ */
+router.get("/api/leads/timeline", requireAuth, requireBusinessAccount, async (req, res) => {
+  try {
+    const accountId = await leadAccount(req, res);
+    if (!accountId) return;
+    const anchor = timelineAnchor(req.query as Record<string, unknown>);
+    if (!anchor) return res.status(400).json({ error: "Pick a website or WhatsApp lead" });
+    const { getLeadTimeline } = await import("../services/leadTimelineService");
+    const result = await getLeadTimeline(accountId, anchor);
+    if (!result) return res.status(404).json({ error: "Lead not found" });
+    res.json(result);
+  } catch (error: any) {
+    console.error("[LeadTimeline] load failed:", error?.message);
+    res.status(500).json({ error: "Failed to load the lead's timeline" });
+  }
+});
+
+/**
+ * POST /api/leads/story { channel, id } — write (or rewrite) the AI story so far for the lead.
+ * 200 { story } | 200 { story: null } when there's no AI key / nothing to summarise.
+ */
+router.post("/api/leads/story", requireAuth, requireBusinessAccount, async (req, res) => {
+  try {
+    const accountId = await leadAccount(req, res);
+    if (!accountId) return;
+    const anchor = timelineAnchor((req.body || {}) as Record<string, unknown>);
+    if (!anchor) return res.status(400).json({ error: "Pick a website or WhatsApp lead" });
+    const { writeLeadStory } = await import("../services/leadTimelineService");
+    res.json({ story: await writeLeadStory(accountId, anchor) });
+  } catch (error: any) {
+    console.error("[LeadTimeline] story failed:", error?.message);
+    res.status(500).json({ error: "The AI couldn't write the summary. Please try again." });
+  }
+});
+
 /**
  * Leads table columns: the business's chosen columns (in order; null = default).
  */

@@ -414,6 +414,10 @@ export class WhatsappAutoReplyService {
       } catch (err) {
         console.error("[WhatsApp Auto-Reply] Cross-platform context error (non-fatal):", err);
       }
+      // An AI phone call with this number (e.g. they're replying to the call's WhatsApp follow-up).
+      const { recentCallContext } = await import("./leadTimelineService");
+      const callContext = await recentCallContext(businessAccountId, senderPhone);
+      if (callContext) crossPlatformContext = crossPlatformContext ? `${crossPlatformContext}\n\n${callContext}` : callContext;
 
       let flowContext = "";
       let recentFlowData: Record<string, any> | null = null;

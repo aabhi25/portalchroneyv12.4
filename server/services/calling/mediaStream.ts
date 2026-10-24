@@ -39,6 +39,8 @@ import {
 import type { PhoneEngine, PhoneEngineEvents, PhoneEngineFactory } from "./phoneBridge";
 import { CallAmbience } from "./ambience";
 
+// How long the call start waits for the lead's earlier activity (website / WhatsApp) before going without it.
+const PRIOR_HISTORY_WAIT_MS = 400;
 const LOG = "[Calling]";
 
 /** How far ahead of real time answer audio is sent (keeps 'clear' effective). */
@@ -469,6 +471,11 @@ export class CallMediaSession {
     const lead = call.leadId
       ? (await db.select().from(leads).where(and(eq(leads.id, call.leadId), eq(leads.businessAccountId, call.businessAccountId))).limit(1))[0] ?? null
       : null;
+    // What the lead already did on the website / WhatsApp (DB only, bounded: the call is live).
+    const priorHistory = lead ? await Promise.race([
+      import("../leadTimelineService").then((m) => m.leadHistoryBrief(call.businessAccountId, lead.id)),
+      new Promise<null>((r) => setTimeout(() => r(null), PRIOR_HISTORY_WAIT_MS).unref?.()),
+    ]).catch(() => null) : null;
     const meta = (call.metadata ?? {}) as Record<string, unknown>;
     const businessName = biz?.name || "our team";
     const customerName = lead?.name || (typeof meta.name === "string" ? meta.name : null);
@@ -487,6 +494,7 @@ export class CallMediaSession {
       leadEmail: lead?.email ?? null,
       callPurpose: (call.direction === "inbound" ? this.settings?.inboundCallPurpose : this.settings?.callPurpose) ?? null,
       staffNote: typeof meta.note === "string" ? meta.note : null,
+      priorHistory,
       transferAvailable,
       maxCallMinutes,
       timezone: this.settings?.callingHours?.timezone || "Asia/Kolkata",

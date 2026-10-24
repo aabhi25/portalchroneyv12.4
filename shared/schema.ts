@@ -1864,6 +1864,23 @@ export const aiCalls = pgTable("ai_calls", {
 
 export type AiCall = typeof aiCalls.$inferSelect;
 
+// The AI-written "story so far" for a lead (shared/leadTimeline.ts LeadStory), cached per lead and
+// rewritten when the person does something new on any channel (last_event_at is the newest event
+// it covered).
+export const leadStories = pgTable("lead_stories", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  leadKey: varchar("lead_key", { length: 80 }).notNull(), // "website:<id>" | "whatsapp:<id>"
+  // Whichever lead it is about; deleting the lead (any path, incl. retention) deletes its story.
+  websiteLeadId: varchar("website_lead_id").references(() => leads.id, { onDelete: "cascade" }),
+  whatsappLeadId: varchar("whatsapp_lead_id").references(() => whatsappLeads.id, { onDelete: "cascade" }),
+  story: jsonb("story").$type<Record<string, unknown>>().notNull(),
+  lastEventAt: timestamp("last_event_at"),
+  generatedAt: timestamp("generated_at").notNull().defaultNow(),
+}, (table) => ({
+  leadUnique: uniqueIndex("lead_stories_lead_unique").on(table.businessAccountId, table.leadKey),
+}));
+
 // Numbers the AI must never call for this business (asked not to be called, added by staff…).
 export const aiCallDoNotCall = pgTable("ai_call_do_not_call", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

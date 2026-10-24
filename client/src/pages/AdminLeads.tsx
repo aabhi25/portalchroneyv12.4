@@ -1687,6 +1687,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
         onViewJourney={liveDetailsLead && detailsCame === 'journey' ? () => { setJourneyDialogLeadId(liveDetailsLead.id); setJourneyDialogOpen(true); } : undefined}
         onOpenChannelPage={liveDetailsRow && CHANNEL_META[liveDetailsRow.channel].page && channel !== liveDetailsRow.channel ? () => { const page = CHANNEL_META[liveDetailsRow.channel].page!; setDetailsRow(null); setLocation(page); } : undefined}
         onDelete={liveDetailsLead && isSuperAdminImpersonating ? () => { const lead = liveDetailsLead; setDetailsRow(null); handleDeleteLead(lead); } : undefined}
+        onOpenConversation={handleViewConversation}
         showInternalIds
       />
 

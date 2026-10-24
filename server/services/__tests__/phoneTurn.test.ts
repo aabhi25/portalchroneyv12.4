@@ -122,6 +122,8 @@ async function main() {
   expect(/placement support$/.test(hq.primary) && keywordPatterns(hTerms).join(' ') === '%placement% %support%' && scores[0] >= 0.5 && scores[1] === 0 && scores[2] === 0, 'a Hindi placement question finds the English placement FAQ by keyword (enough to qualify)', scores);
   const plain = buildRetrievalQuery('What are the fees?', []);
   expect(plain.primary === 'What are the fees?' && queryTerms('What are the fees?').every((t) => t.weight === 1), 'English questions are unchanged');
+  const withHistory = buildPhoneInstructions({ direction: 'outbound', businessName: 'ArhamSecure', transferAvailable: false, maxCallMinutes: 5, timezone: 'Asia/Kolkata', leadCaptureOn: false, priorHistory: 'Asked about EMI on WhatsApp.' });
+  expect(/what they already did with us .*Asked about EMI on WhatsApp\..*don't ask again what they already told us/.test(withHistory), "an AI call is told what the lead already did on other channels");
   expect(/Never say the business does NOT have or offer something/.test(withPurpose), 'the AI may not say "we don\'t offer X" without the knowledge saying so');
   const { isWrappingUp } = await import('../calling/phonePrompt');
   expect(['Okay, thank you.', 'Thanks a lot', "Theek hai, main soch ke batata hoon", 'ठीक है, थैंक यू', "That's all for now", 'धन्यवाद जी'].every((t) => isWrappingUp(t)), 'winding down is recognised');
