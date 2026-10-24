@@ -193,23 +193,23 @@ async function main() {
     const human = ["Hello?", "Haan ji, boliye", "Yes, who is this?", "Rahul is not here, I am his wife", "I am available after 5"];
     for (const t of human) expect(!prompt.looksLikeVoicemail(t), `a person is not voicemail: "${t}"`);
     const o = prompt.buildOpeningLine({ direction: "outbound", customerName: "Rahul Sharma", businessName: "Acme Homes" });
-    expect(o.text === "Hi Rahul, I'm an AI assistant calling from Acme Homes. You'd enquired with us — is this a good time to talk for a minute?", "default outbound opening (unnamed assistant): first name, business, AI assistant", o.text);
+    expect(o.text === "Hi Rahul, I'm calling from Acme Homes. You'd enquired with us — is this a good time to talk for a minute?", "default outbound opening (unnamed assistant): first name, business, AI assistant", o.text);
     const named = prompt.buildOpeningLine({ direction: "inbound", businessName: "Acme", assistantName: "Riya" });
-    expect(named.text === "Thanks for calling Acme, this is Riya, an AI assistant. How can I help?", "named assistant greeting", named.text);
+    expect(named.text === "Thanks for calling Acme, this is Riya. How can I help?", "named assistant greeting", named.text);
     const ms0 = await import("../calling/mediaStream");
     for (const t of ["Please don't call me again", "Stop calling this number", "remove my number from your list", "mujhe call mat karo", "aage se phone mat karna", "मुझे दोबारा कॉल मत करना", "फोन मत करो"]) expect(prompt.askedNotToBeCalled(t), `opt-out understood: "${t}"`);
     for (const t of ["मुझे क्लास टेन मैथ्स के लिए ट्यूटर चाहिए। आप कैसे हेल्प करोगे?", "Can you call me tomorrow?", "Do you have weekend classes?", "mujhe call karna kal", "I don't know my number"]) expect(!prompt.askedNotToBeCalled(t), `not an opt-out: "${t}"`);
     for (const q of ["Could you share your email?", "कृपया अपना मोबाइल नंबर साझा करें।", "Thanks. Would you like a demo", "Aap apna time bataiye"]) expect(ms0.endsWithQuestion(q), `question detected: "${q}"`);
     for (const g of ["Thanks for calling, have a great day!", "धन्यवाद, आपका दिन शुभ हो।", "Okay, the team will call you tomorrow. Goodbye!"]) expect(!ms0.endsWithQuestion(g), `goodbye is not a question: "${g}"`);
     const noName = prompt.buildOpeningLine({ direction: "outbound", openingLine: "Hello {name}, {assistant} here from {business}!", customerName: null, businessName: "Acme" });
-    expect(noName.text === "Hello there, the AI assistant here from Acme!" && noName.custom, "custom opening with no name → 'Hello there'", noName.text);
+    expect(noName.text === "Hello there, the assistant here from Acme!" && noName.custom, "custom opening with no name → 'Hello there'", noName.text);
     const ib = prompt.buildOpeningLine({ direction: "inbound", businessName: "Acme" });
-    expect(ib.text.startsWith("Thanks for calling Acme") && prompt.mentionsAi(ib.text), "default inbound greeting discloses AI", ib.text);
+    expect(ib.text === "Thanks for calling Acme. How can I help?" && !prompt.mentionsAi(ib.text), "default inbound greeting doesn't announce an AI", ib.text);
     const now = new Date("2026-10-04T10:00:00Z");
     expect(prompt.parseCallbackTime("2026-10-05T18:00:00+05:30", now)?.toISOString() === "2026-10-05T12:30:00.000Z", "callback_time parsed (ISO with offset)");
     expect(prompt.parseCallbackTime("yesterday", now) === null && prompt.parseCallbackTime("2020-01-01T00:00:00Z", now) === null, "bad / past callback_time ignored");
     const ins = prompt.buildPhoneInstructions({ direction: "outbound", businessName: "Acme", customerName: "Rahul", customerPhone: "+919876543210", leadMessage: "Need a 2BHK", callPurpose: "Book a site visit", transferAvailable: false, maxCallMinutes: 5, timezone: "Asia/Kolkata", leadCaptureOn: false, now });
-    expect(/PHONE CALL MODE/.test(ins) && /Book a site visit/.test(ins) && /Need a 2BHK/.test(ins) && /AI assistant/.test(ins) && /never ask for it/.test(ins) && !/transfer_to_human/.test(ins), "instructions: purpose, lead message, AI disclosure, phone known, no transfer when unavailable");
+    expect(/PHONE CALL MODE/.test(ins) && /Book a site visit/.test(ins) && /Need a 2BHK/.test(ins) && /Don't bring up that you are an AI/.test(ins) && /directly ask whether you are a real person/.test(ins) && /never ask for it/.test(ins) && !/transfer_to_human/.test(ins), "instructions: purpose, lead message, no AI announcement but honest if asked, phone known, no transfer when unavailable");
     const tools = prompt.phoneTools({ transferAvailable: true, leadCaptureOn: false }).map((t: any) => t.function.name);
     expect(["end_call", "do_not_call", "transfer_to_human", "save_call_details"].every((n) => tools.includes(n)), "phone tools offered", tools);
     expect(!prompt.phoneTools({ transferAvailable: false, leadCaptureOn: true }).some((t: any) => ["transfer_to_human", "save_call_details"].includes(t.function.name)), "no transfer without a transfer line; no save_call_details when the lead form runs");
@@ -274,7 +274,7 @@ async function main() {
 
     expect(e.said.length === 0, "outbound: AI waits for the callee's hello first");
     await h.clock.advance(ms.HELLO_WAIT_MS + 10, h.settle);
-    expect(e.said.length === 1 && e.said[0].persist === true && /^Hi Rahul, I'm an AI assistant calling from Acme Homes/.test(e.said[0].text), "no hello within 2 s → opening line spoken (saved to the transcript)", e.said[0]);
+    expect(e.said.length === 1 && e.said[0].persist === true && /^Hi Rahul, I'm calling from Acme Homes/.test(e.said[0].text), "no hello within 2 s → opening line spoken (saved to the transcript)", e.said[0]);
 
     // opening audio: 1 s at 24 kHz → 16 kHz chunks, paced
     e.finishLine("line_1", 1000);
@@ -336,7 +336,7 @@ async function main() {
     let level = 0; for (let i = 0; i < quietPayload.length; i += 2) level = Math.max(level, Math.abs(quietPayload.readInt16LE(i)));
     expect(level > 0 && level < 3000, "…and it is quiet", level);
     await h.clock.advance(ms.HELLO_WAIT_MS, h.settle);
-    expect(/^Hi Rahul, this is Anika, an AI assistant from Acme Homes/.test(e.said[0]?.text || ""), "the named opening line", e.said[0]?.text);
+    expect(/^Hi Rahul, this is Anika from Acme Homes/.test(e.said[0]?.text || ""), "the named opening line", e.said[0]?.text);
     const beforeLine = h.ws.media().length;
     e.finishLine("line_amb", 500);
     await h.clock.advance(1500, h.settle);

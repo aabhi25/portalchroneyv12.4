@@ -838,7 +838,7 @@ export default function CallingSettings() {
             <CardDescription>It already knows everything you've trained it on. Tell it what each call is for: the AI follows the purpose first on every call.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
-            <Field label="Assistant's name (optional)" htmlFor="assistant-name" error={err("assistantName")} help="The AI introduces itself with this name and gives it when asked, for example Anika. Pick a name that suits the voice. It always says it's an AI assistant.">
+            <Field label="Assistant's name (optional)" htmlFor="assistant-name" error={err("assistantName")} help="The AI introduces itself with this name and gives it when asked, for example Anika. Pick a name that suits the voice. It doesn't say it's an AI unless the caller asks.">
               <Input id="assistant-name" className="max-w-xs" value={draft.assistantName} onChange={e => set("assistantName", e.target.value)} maxLength={40} placeholder="Anika" data-testid="input-assistant-name" />
             </Field>
             <div className="grid gap-5 sm:grid-cols-2">

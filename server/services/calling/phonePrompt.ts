@@ -4,22 +4,22 @@
  *
  * The phone call runs through the same chat brain as website voice mode (knowledge, lead
  * capture, identity, reply-language policy, gender). This module adds the PHONE layer:
- * spoken style, the purpose of an outbound lead call, AI disclosure, and the tools that
+ * spoken style, the purpose of the call, honesty when asked if it's an AI, and the tools that
  * end / hand over / record the call.
  */
 import type { CallDirection, CallOutcome } from "@shared/aiCalling";
 import { CALL_PURPOSE_MAX, DEFAULT_CALL_PURPOSE, DEFAULT_INBOUND_CALL_PURPOSE } from "@shared/aiCalling";
 
-export const DEFAULT_ASSISTANT_LABEL = "the AI assistant";
+export const DEFAULT_ASSISTANT_LABEL = "the assistant";
 
 export const DEFAULT_OUTBOUND_OPENING =
-  "Hi {name}, this is {assistant}, an AI assistant from {business}. You'd enquired with us — is this a good time to talk for a minute?";
+  "Hi {name}, this is {assistant} from {business}. You'd enquired with us — is this a good time to talk for a minute?";
 export const DEFAULT_INBOUND_GREETING =
-  "Thanks for calling {business}, this is {assistant}, an AI assistant. How can I help?";
-// Used when the business hasn't named its assistant (avoids "this is the AI assistant, an AI assistant").
+  "Thanks for calling {business}, this is {assistant}. How can I help?";
+// Used when the business hasn't named its assistant.
 const UNNAMED_OUTBOUND_OPENING =
-  "Hi {name}, I'm an AI assistant calling from {business}. You'd enquired with us — is this a good time to talk for a minute?";
-const UNNAMED_INBOUND_GREETING = "Thanks for calling {business}. I'm an AI assistant — how can I help?";
+  "Hi {name}, I'm calling from {business}. You'd enquired with us — is this a good time to talk for a minute?";
+const UNNAMED_INBOUND_GREETING = "Thanks for calling {business}. How can I help?";
 
 /** Outcomes the AI may set with end_call (do_not_call / transferred / voicemail have their own paths). */
 export const AI_END_OUTCOMES: CallOutcome[] = [
@@ -115,12 +115,13 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
   lines.push(input.direction === "outbound"
     ? `- YOU called this person on behalf of ${clean(input.businessName, 120) || "the business"} because they enquired with us. You already said the opening line (it is in the history). Never thank them for calling or "reaching out" — you called them.`
     : `- This person called ${clean(input.businessName, 120) || "the business"}. You already greeted them (it is in the history).`);
-  lines.push("- You are an AI assistant. If you have not clearly said so yet, say it briefly within your next reply (\"I'm an AI assistant for the team\"). If asked whether you are a human or a robot, say honestly that you are an AI assistant.");
+  // The business chose not to have the AI announce itself (2026-10-24); a direct question still gets the truth.
+  lines.push("- Speak as part of the team. Don't bring up that you are an AI. Only if they directly ask whether you are a real person, a robot or an AI, don't lie: say briefly that you're the team's AI assistant, then carry on helping.");
   // The business's purpose comes first: it decides what the call is for; the rules after it are how to speak.
   lines.push("");
   lines.push("🎯 PURPOSE OF THIS CALL — YOUR MAIN GOAL (the business's own words):");
   lines.push(clean(input.callPurpose, CALL_PURPOSE_MAX) || (input.direction === "outbound" ? DEFAULT_CALL_PURPOSE : DEFAULT_INBOUND_CALL_PURPOSE));
-  lines.push("- Follow this purpose in every reply and keep moving the conversation towards it. It decides WHAT you are trying to achieve; the rules below are about HOW to speak on a phone call. Only these come before it: saying honestly that you are an AI, never inventing facts, prices, offers or dates, and stopping when they ask not to be called again or clearly say they are not interested.");
+  lines.push("- Follow this purpose in every reply and keep moving the conversation towards it. It decides WHAT you are trying to achieve; the rules below are about HOW to speak on a phone call. Only these come before it: never inventing facts, prices, offers or dates, answering honestly if they ask whether you are an AI, and stopping when they ask not to be called again or clearly say they are not interested.");
   lines.push("");
   lines.push("HOW TO SPEAK ON THE CALL:");
   lines.push("- Speak like a polite person on the phone: 1 or 2 short sentences per reply, then let them talk. Ask one question at a time.");

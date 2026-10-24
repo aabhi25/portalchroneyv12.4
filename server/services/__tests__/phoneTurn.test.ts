@@ -73,7 +73,7 @@ async function main() {
 
   // ── live call 2026-10-17: "नहीं" to "is this a good time?", openers, repeated questions ──
   const { declinedToTalk, isUnsureCaller, phoneTurnHints, questionsIn, buildOpeningLine, buildPhoneInstructions } = await import('../calling/phonePrompt');
-  const opening = "Hi there, I'm an AI assistant calling from ArhamSecure. You'd enquired with us — is this a good time to talk for a minute?";
+  const opening = "Hi there, I'm calling from ArhamSecure. You'd enquired with us — is this a good time to talk for a minute?";
   expect(['नहीं।', 'No.', 'Nahi ji', 'abhi nahi', 'Not now.', 'busy'].every((t) => declinedToTalk(t, opening)), 'a no to "is this a good time?" is a decline');
   expect(['नहीं, अभी नहीं।', 'Nahi, abhi nahi.', "No, I'm busy right now.", 'Abhi thoda busy hoon.'].every((t) => declinedToTalk(t, opening)), 'several no-words together are still a decline');
   expect(dropEchoedClause('For your 2019 Swift, we offer comprehensive motor insurance.', 'Right, a 2019 Swift,') === 'We offer comprehensive motor insurance.', 'a short clause naming everything the opener named is dropped');
@@ -92,7 +92,7 @@ async function main() {
   expect(validOpener('जी, हमारे पास insurance options की बात करें तो,', ctx('कौन-कौन से हैं आपके पास?')) === null && validOpener('Right, we have a few plans,', ctx('What plans do you have?')) === null, 'an opener that starts the answer ("हमारे पास", "we have") is refused');
   expect(validOpener('अरे, options का आईडिया नहीं है…', ctx('पता नहीं आईडिया नहीं है मेरे को।')) === null, 'an opener echoing "I don\'t know" is refused');
   expect(dropEchoedClause('Health और Motor: दोनों मिलते हैं।', 'जी, health और motor,') === 'दोनों मिलते हैं।', 'a first clause ending in ":" that repeats the opener is dropped');
-  expect(/this is Anika, an AI assistant from ArhamSecure/.test(buildOpeningLine({ direction: 'outbound', businessName: 'ArhamSecure', assistantName: 'Anika' }).text), 'a named assistant still says it is an AI in the opening');
+  expect(/^Hi there, this is Anika from ArhamSecure\./.test(buildOpeningLine({ direction: 'outbound', businessName: 'ArhamSecure', assistantName: 'Anika' }).text), 'the default opening gives the name without announcing an AI');
   const named = buildPhoneInstructions({ direction: 'outbound', businessName: 'ArhamSecure', transferAvailable: false, maxCallMinutes: 5, timezone: 'Asia/Kolkata', leadCaptureOn: false, assistantName: 'Anika' });
   expect(/your name is Anika/.test(named) && /is this a good time/.test(named), 'phone rules carry the name and the "not a good time" rule');
   // A long purpose reaches the AI in full (a 1,318-character one lost its closing rules, 2026-10-24).
