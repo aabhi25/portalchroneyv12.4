@@ -83,6 +83,8 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import WhatsAppHub from "@/components/whatsapp/WhatsAppHub";
 import { JourneysRoutingNotice } from "@/components/whatsapp/JourneysRoutingNotice";
 import type { MeResponseDto } from "@shared/dto";
+import { WA_LIMITS, promptLimitFor, whatsappStepProblems } from "@shared/whatsappLimits";
+import { WaCharCounter } from "@/components/whatsapp/WaCharCounter";
 
 interface WhatsappSettings {
   whatsappEnabled: string;
@@ -2985,9 +2987,11 @@ interface SortableStepItemProps {
   onEdit: (step: WhatsappFlowStep) => void;
   onDelete: (step: WhatsappFlowStep) => void;
   onTogglePause: (step: WhatsappFlowStep) => void;
+  /** Number of things in this step over WhatsApp's limits. */
+  overLimit?: number;
 }
 
-function SortableStepItem({ step, index, onEdit, onDelete, onTogglePause }: SortableStepItemProps) {
+function SortableStepItem({ step, index, onEdit, onDelete, onTogglePause, overLimit = 0 }: SortableStepItemProps) {
   const {
     attributes,
     listeners,
@@ -3025,6 +3029,11 @@ function SortableStepItem({ step, index, onEdit, onDelete, onTogglePause }: Sort
         <div className="flex items-center gap-2">
           <Badge variant="outline" className={step.paused ? 'opacity-50' : ''}>{step.type}</Badge>
           {step.paused && <Badge variant="secondary" className="text-xs bg-amber-100 text-amber-700">Paused</Badge>}
+          {overLimit > 0 && (
+            <button type="button" onClick={() => onEdit(step)} title="Open this step to shorten it" data-testid={`badge-wa-too-long-${step.id}`}>
+              <Badge variant="secondary" className="text-xs bg-red-100 text-red-700 hover:bg-red-200">Too long for WhatsApp</Badge>
+            </button>
+          )}
         </div>
         <p className={`text-sm break-words ${step.paused ? 'text-gray-400 line-through' : 'text-gray-600'}`}>{step.prompt}</p>
       </div>
@@ -3487,6 +3496,16 @@ function FlowBuilderSection() {
   const [stepDependsOnFields, setStepDependsOnFields] = useState<string[]>([]);
   const [stepConditionalMappings, setStepConditionalMappings] = useState<{ key: string; items: { id: string; title: string; value: string; followUpPrompt?: string }[] }[]>([]);
   const [stepFallbackItems, setStepFallbackItems] = useState<{ id: string; title: string; value: string; followUpPrompt?: string }[]>([]);
+  // What the open step would send over WhatsApp's limits (Save is blocked while any remain).
+  const draftStepProblems = useMemo(() => whatsappStepProblems({
+    type: stepType,
+    prompt: stepPrompt,
+    options: stepType === "buttons" ? { buttons: stepButtons }
+      : stepType === "dropdown" && stepDependsOnFields.length > 0
+        ? { conditionalOptions: Object.fromEntries(stepConditionalMappings.map((m, i) => [`${m.key}#${i}`, m.items])), fallbackOptions: stepFallbackItems }
+        : stepType === "dropdown" ? { dropdownItems: stepDropdownItems }
+          : null,
+  }), [stepType, stepPrompt, stepButtons, stepDropdownItems, stepDependsOnFields, stepConditionalMappings, stepFallbackItems]);
   const conditionalExcelInputRef = useRef<HTMLInputElement | null>(null);
   const [conditionalExcelPreview, setConditionalExcelPreview] = useState<{
     fileName: string;
@@ -3535,6 +3554,11 @@ function FlowBuilderSection() {
     },
     enabled: !!selectedFlow,
   });
+
+  // Saved steps already over WhatsApp's limits, for the warning above the steps.
+  const stepsOverLimit = useMemo(() => (stepsData?.steps || [])
+    .map((step, index) => ({ step, index, problems: whatsappStepProblems(step) }))
+    .filter(o => o.problems.length > 0), [stepsData]);
 
   const getParentStepOptions = (fieldName: string): { id: string; title: string }[] => {
     const parentStep = (stepsData?.steps || []).find(s => s.saveToField === fieldName);
@@ -4118,6 +4142,25 @@ function FlowBuilderSection() {
               </Button>
             </div>
             
+            {stepsOverLimit.length > 0 && (
+              <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="wa-journey-over-limit">
+                <p className="font-medium">
+                  {stepsOverLimit.length === 1 ? "1 step is" : `${stepsOverLimit.length} steps are`} too long for WhatsApp. Customers see the text shortened ("…") until you fix {stepsOverLimit.length === 1 ? "it" : "them"}.
+                </p>
+                <ul className="mt-1 space-y-1">
+                  {stepsOverLimit.map(({ step, index, problems }) => (
+                    <li key={step.id} className="flex items-start justify-between gap-3 text-xs">
+                      <span>
+                        <strong>Step {index + 1}</strong>: {problems[0].message}
+                        {problems.length > 1 ? ` (and ${problems.length - 1} more)` : ""}
+                      </span>
+                      <button type="button" className="underline font-medium whitespace-nowrap" onClick={() => openStepDialog(step)}>Fix</button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {stepsData?.steps?.length === 0 ? (
               <p className="text-gray-500 text-sm">No steps yet. Add your first step to define the conversation flow.</p>
             ) : (
@@ -4142,6 +4185,7 @@ function FlowBuilderSection() {
                           setShowDeleteStepDialog(true);
                         }}
                         onTogglePause={(s) => togglePauseMutation.mutate(s)}
+                        overLimit={stepsOverLimit.find(o => o.step.id === step.id)?.problems.length}
                       />
                     ))}
                   </div>
@@ -4483,6 +4527,7 @@ function FlowBuilderSection() {
                 placeholder="Enter the message to send"
                 rows={3}
               />
+              <WaCharCounter value={stepPrompt} limit={promptLimitFor(stepType)} className="mt-1" />
             </div>
 
             {(stepType === "buttons" || stepType === "dropdown" || stepType === "input") && (
@@ -4640,6 +4685,10 @@ function FlowBuilderSection() {
                         <Trash2 className="h-4 w-4 text-red-500" />
                       </Button>
                     </div>
+                    <WaCharCounter value={btn.title} limit={WA_LIMITS.buttonTitle} className="pr-12 -mt-1" />
+                    {draftStepProblems.some(p => p.field === `button:${index}` && p.kind === "duplicate") && (
+                      <p className="text-[11px] text-red-600 -mt-1">Another button already says this; WhatsApp needs each button to be different.</p>
+                    )}
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-gray-500 whitespace-nowrap">Go to:</span>
                       <Select 
@@ -4694,12 +4743,15 @@ function FlowBuilderSection() {
                           <div className="flex-1 grid grid-cols-2 gap-2">
                             <div className="space-y-1">
                               <Label className="text-[10px] uppercase tracking-wide text-gray-500">Label (shown to customer)</Label>
-                              <Input
-                                value={item.title}
-                                onChange={(e) => updateDropdownItem(index, "title", e.target.value)}
-                                placeholder="e.g. Schedule Appointment"
-                                data-testid={`input-dropdown-label-${index}`}
-                              />
+                              <div>
+                                <Input
+                                  value={item.title}
+                                  onChange={(e) => updateDropdownItem(index, "title", e.target.value)}
+                                  placeholder="e.g. Schedule Appointment"
+                                  data-testid={`input-dropdown-label-${index}`}
+                                />
+                                <WaCharCounter value={item.title} limit={WA_LIMITS.rowTitle} />
+                              </div>
                             </div>
                             <div className="space-y-1">
                               <Label className="text-[10px] uppercase tracking-wide text-gray-500">Stored value (saved to lead)</Label>
@@ -4759,6 +4811,7 @@ function FlowBuilderSection() {
                                   placeholder='e.g. "Please specify your requirement"'
                                   className="text-sm"
                                 />
+                                <WaCharCounter value={item.followUpPrompt} limit={WA_LIMITS.textBody} />
                               </div>
                             </div>
                           )}
@@ -5028,21 +5081,24 @@ function FlowBuilderSection() {
                               <div key={ii} className="space-y-1">
                                 <div className="flex gap-2 items-start">
                                   <div className="flex-1 grid grid-cols-2 gap-2">
-                                    <Input
-                                      value={item.title}
-                                      onChange={e => {
-                                        const updated = [...stepConditionalMappings];
-                                        const title = e.target.value;
-                                        updated[mi].items[ii] = {
-                                          ...updated[mi].items[ii],
-                                          id: title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `opt_${ii}`,
-                                          title,
-                                        };
-                                        setStepConditionalMappings(updated);
-                                      }}
-                                      placeholder="Label (shown)"
-                                      className="text-sm"
-                                    />
+                                    <div>
+                                      <Input
+                                        value={item.title}
+                                        onChange={e => {
+                                          const updated = [...stepConditionalMappings];
+                                          const title = e.target.value;
+                                          updated[mi].items[ii] = {
+                                            ...updated[mi].items[ii],
+                                            id: title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `opt_${ii}`,
+                                            title,
+                                          };
+                                          setStepConditionalMappings(updated);
+                                        }}
+                                        placeholder="Label (shown)"
+                                        className="text-sm"
+                                      />
+                                      <WaCharCounter value={item.title} limit={WA_LIMITS.rowTitle} />
+                                    </div>
                                     <Input
                                       value={item.value}
                                       onChange={e => {
@@ -5132,21 +5188,24 @@ function FlowBuilderSection() {
                         <div key={fi} className="space-y-1">
                           <div className="flex gap-2 items-start">
                             <div className="flex-1 grid grid-cols-2 gap-2">
-                              <Input
-                                value={item.title}
-                                onChange={e => {
-                                  const updated = [...stepFallbackItems];
-                                  const title = e.target.value;
-                                  updated[fi] = {
-                                    ...updated[fi],
-                                    id: title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `fb_${fi}`,
-                                    title,
-                                  };
-                                  setStepFallbackItems(updated);
-                                }}
-                                placeholder="Label (shown)"
-                                className="text-sm"
-                              />
+                              <div>
+                                <Input
+                                  value={item.title}
+                                  onChange={e => {
+                                    const updated = [...stepFallbackItems];
+                                    const title = e.target.value;
+                                    updated[fi] = {
+                                      ...updated[fi],
+                                      id: title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `fb_${fi}`,
+                                      title,
+                                    };
+                                    setStepFallbackItems(updated);
+                                  }}
+                                  placeholder="Label (shown)"
+                                  className="text-sm"
+                                />
+                                <WaCharCounter value={item.title} limit={WA_LIMITS.rowTitle} />
+                              </div>
                               <Input
                                 value={item.value}
                                 onChange={e => {
@@ -5240,7 +5299,18 @@ function FlowBuilderSection() {
 
           </div>
           <div className="pt-4 border-t mt-4 flex-shrink-0">
-            <Button onClick={handleSaveStep} disabled={!stepPrompt} className="w-full">
+            {draftStepProblems.length > 0 && (
+              <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" data-testid="wa-limit-summary">
+                <p className="font-medium">
+                  {draftStepProblems.length === 1 ? "1 thing" : `${draftStepProblems.length} things`} won't work on WhatsApp. Fix {draftStepProblems.length === 1 ? "it" : "them"} to save this step.
+                </p>
+                <ul className="mt-1 list-disc pl-4 space-y-0.5">
+                  {draftStepProblems.slice(0, 5).map((p, i) => <li key={i}>{p.message}</li>)}
+                  {draftStepProblems.length > 5 && <li>and {draftStepProblems.length - 5} more</li>}
+                </ul>
+              </div>
+            )}
+            <Button onClick={handleSaveStep} disabled={!stepPrompt || draftStepProblems.length > 0} className="w-full">
               {editingStep ? "Update Step" : "Add Step"}
             </Button>
           </div>

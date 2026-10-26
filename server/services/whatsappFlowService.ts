@@ -1,4 +1,5 @@
 import { findPanInText, isValidPan, looksLikePanAttempt } from "@shared/pan";
+import { WA_LIMITS, matchShortenedOption, shortenForWhatsapp, whatsappOptionTitles } from "@shared/whatsappLimits";
 import { trackTimer } from "../lib/lifecycle";
 import { createOpenAI } from "../lib/openaiClient";
 import { db } from "../db";
@@ -3061,6 +3062,16 @@ Return only JSON: {"optionId":"one configured id" | null}`,
       }
     }
 
+    // A tap on an option whose label was shortened for WhatsApp comes back with the shortened
+    // label ("Explore MBA specialisa…"); map it to the option so the matching below finds it.
+    if (["buttons", "dropdown", "list"].includes(currentStep.type)) {
+      const tappedId = this.resolveShortenedTap(message, currentStep, collectedData);
+      if (tappedId) {
+        message = tappedId;
+        normalizedMessage = tappedId.toLowerCase();
+      }
+    }
+
     // Guard: discard interactive button responses that arrive at a non-interactive step.
     // This prevents delayed "Yes/No" button presses from poisoning phone/text fields.
     if (isInteractive) {
@@ -4214,6 +4225,31 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     return { ...step, options: { ...options, dropdownItems: resolvedItems } };
   }
 
+  /** Option id for a tap that carries an option's shortened WhatsApp label, else null. */
+  private resolveShortenedTap(message: string, step: WhatsappFlowStep, collectedData: Record<string, any>): string | null {
+    const resolvedStep = this.resolveStepOptions(step, collectedData);
+    const options = resolvedStep.options as FlowStepOptions | null;
+    const choices: { id: string; title: string }[] =
+      resolvedStep.type === "buttons" ? (options?.buttons || [])
+        : resolvedStep.type === "dropdown" ? (options?.dropdownItems || [])
+          : (options?.sections || []).flatMap(section => section.rows || []);
+    const index = matchShortenedOption(choices.map(c => c.title), message);
+    return index >= 0 ? choices[index].id : null;
+  }
+
+  /** Rows for a WhatsApp list: labels shortened to fit, the full label moved into the line under it. */
+  private toListRows(items: { id: string; title: string; description?: string }[]): { id: string; title: string; description?: string }[] {
+    const shown = whatsappOptionTitles(items.map(i => i.title), WA_LIMITS.rowTitle);
+    return items.map((item, i) => {
+      const description = item.description || (shown[i] !== item.title.trim() ? item.title.trim() : undefined);
+      return {
+        id: item.id,
+        title: shown[i],
+        ...(description ? { description: shortenForWhatsapp(description, WA_LIMITS.rowDescription) } : {}),
+      };
+    });
+  }
+
   private static readonly PAGE_NEXT_ID = "__page_next__";
   private static readonly PAGE_PREV_ID = "__page_prev__";
   private static readonly DROPDOWN_PAGE_KEY = "_dropdownPage";
@@ -4223,12 +4259,24 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     const options = resolvedStep.options as FlowStepOptions | null;
 
     switch (resolvedStep.type) {
-      case "buttons":
+      case "buttons": {
+        const buttons = options?.buttons || [];
+        // WhatsApp shows at most 3 buttons; more go out as a list instead of being dropped.
+        if (buttons.length > WA_LIMITS.buttonsMax) {
+          return {
+            type: "list",
+            text: resolvedStep.prompt,
+            sections: [{ title: "Options", rows: this.toListRows(buttons.slice(0, WA_LIMITS.listRows)) }],
+            buttonText: "Select Option",
+          };
+        }
+        const shown = whatsappOptionTitles(buttons.map(b => b.title), WA_LIMITS.buttonTitle);
         return {
           type: "buttons",
           text: resolvedStep.prompt,
-          buttons: options?.buttons || [],
+          buttons: buttons.map((b, i) => ({ id: b.id, title: shown[i] })),
         };
+      }
 
       case "dropdown": {
         const allItems = options?.dropdownItems || [];
@@ -4236,10 +4284,12 @@ Return only JSON: {"optionId":"one configured id" | null}`,
           return {
             type: "list",
             text: resolvedStep.prompt,
-            sections: [{ title: "Options", rows: allItems.map(i => ({ id: i.id, title: i.title })) }],
+            sections: [{ title: "Options", rows: this.toListRows(allItems) }],
             buttonText: "Select Option",
           };
         }
+        // Labels are shortened over the whole list so they stay different across pages.
+        const listRows = new Map(this.toListRows(allItems).map(r => [r.id, r]));
 
         const totalItems = allItems.length;
         const totalPages = totalItems <= 18 ? 2 : 2 + Math.ceil((totalItems - 18) / 8);
@@ -4255,11 +4305,11 @@ Return only JSON: {"optionId":"one configured id" | null}`,
         const pageItems = allItems.slice(startIndex, startIndex + itemsPerPage);
         const hasMore = startIndex + pageItems.length < totalItems;
 
-        const rows: { id: string; title: string }[] = [];
+        const rows: { id: string; title: string; description?: string }[] = [];
         if (!isFirstPage) {
           rows.push({ id: WhatsappFlowService.PAGE_PREV_ID, title: "← Back" });
         }
-        rows.push(...pageItems.map(i => ({ id: i.id, title: i.title })));
+        rows.push(...pageItems.map(i => listRows.get(i.id) || { id: i.id, title: i.title }));
         if (hasMore) {
           rows.push({ id: WhatsappFlowService.PAGE_NEXT_ID, title: "More options →" });
         }
@@ -4276,13 +4326,17 @@ Return only JSON: {"optionId":"one configured id" | null}`,
         };
       }
 
-      case "list":
+      case "list": {
+        const sections = options?.sections || [];
+        const rows = this.toListRows(sections.flatMap(s => s.rows || []));
+        let next = 0;
         return {
           type: "list",
           text: resolvedStep.prompt,
-          sections: options?.sections || [],
+          sections: sections.map(s => ({ title: s.title, rows: (s.rows || []).map(() => rows[next++]) })),
           buttonText: options?.buttonText || "Select",
         };
+      }
 
       case "upload":
         let uploadMessage = resolvedStep.prompt;

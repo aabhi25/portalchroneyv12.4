@@ -27,6 +27,7 @@ import {
   currentConversation, ensureCurrentMessage, CONVERSATION_FETCH_LIMIT, type ChatTurn, type KnownContact,
 } from "./leadCapture/channelLeadFields";
 import { storage } from "../storage";
+import { WA_LIMITS, shortenForWhatsapp, whatsappOptionTitles } from "@shared/whatsappLimits";
 import { resolveProfile } from "./customerProfileService";
 import { composeCrossPlatformContext, triggerSnapshotUpdate } from "./crossPlatformMemoryService";
 import { buildWhatsappHandoffContext, getHandoffKnownContact } from "./whatsappHandoffService";
@@ -2242,13 +2243,13 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
         content_type: "interactive",
         interactive: {
           type: "button",
-          body: { text: bodyText },
+          body: { text: shortenForWhatsapp(bodyText, WA_LIMITS.buttonBody) },
           action: {
-            buttons: buttons.slice(0, 3).map(btn => ({
+            buttons: whatsappOptionTitles(buttons.slice(0, WA_LIMITS.buttonsMax).map(btn => btn.title), WA_LIMITS.buttonTitle).map((title, i) => ({
               type: "reply",
               reply: {
-                id: btn.id,
-                title: btn.title.substring(0, 20)
+                id: buttons[i].id,
+                title
               }
             }))
           }
@@ -2323,15 +2324,15 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
         content_type: "interactive",
         interactive: {
           type: "list",
-          body: { text: bodyText },
+          body: { text: shortenForWhatsapp(bodyText, WA_LIMITS.textBody) },
           action: {
-            button: buttonText.substring(0, 20),
+            button: shortenForWhatsapp(buttonText, WA_LIMITS.listButton),
             sections: sections.map(section => ({
-              title: section.title.substring(0, 24),
-              rows: section.rows.slice(0, 10).map(row => ({
+              title: shortenForWhatsapp(section.title, WA_LIMITS.sectionTitle),
+              rows: section.rows.slice(0, WA_LIMITS.listRows).map(row => ({
                 id: row.id,
-                title: row.title.substring(0, 24),
-                description: row.description?.substring(0, 72)
+                title: shortenForWhatsapp(row.title, WA_LIMITS.rowTitle),
+                description: row.description ? shortenForWhatsapp(row.description, WA_LIMITS.rowDescription) : undefined
               }))
             }))
           }
