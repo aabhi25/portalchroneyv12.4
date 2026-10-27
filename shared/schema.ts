@@ -2906,6 +2906,8 @@ export interface MerittoSetupBackup {
   appliedAt: string;
   steps: Array<{ id: string; multipleChoiceOptions: string | null; branchingCondition: string | null; exitOnValue: string | null; skipOnValue: string | null }>;
   addedMappingIds: string[];
+  /** Chat-menu lead forms whose course dropdown was changed: their lead_form_fields before. */
+  forms?: Array<{ table: "menu_config" | "menu_item"; id: string; leadFormFields: string | null }>;
   /** The lists were loaded for the first time by this setup (Undo clears them again). */
   firstLoad: boolean;
 }

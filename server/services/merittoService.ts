@@ -39,6 +39,8 @@ export interface MerittoLeadContext extends LeadDataContext {
     dialCode?: string | null;
     /** 'verified' when the visitor confirmed the number (OTP or CAPTCHA), else 'unverified'. */
     mobileVerificationStatus?: string | null;
+    /** The answer to a lead form's "Program Name" / "Course" dropdown in this chat, if any. */
+    formCourse?: string | null;
   };
 }
 
@@ -100,6 +102,11 @@ export function buildMerittoPayload(mappings: MerittoFieldMapping[], context: Me
     }
     put(m, value);
   }
+
+  // The course mapping is empty (e.g. it reads a journey answer) but the visitor picked a course in a lead form.
+  const courseRow = sorted.find(m => m.merittoField.trim().toLowerCase() === "course");
+  const formCourse = context.meritto?.formCourse?.trim();
+  if (courseRow && formCourse && !keyOf(payload, "course") && !isMaskedValue(formCourse)) payload[courseRow.merittoField.trim()] = formCourse.slice(0, 1000);
 
   const fromLists: Record<string, string | undefined> = {};
   const courseKey = keyOf(payload, "course");

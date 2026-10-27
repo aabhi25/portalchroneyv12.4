@@ -84,6 +84,16 @@ async function main() {
     multipleChoiceOptions: JSON.stringify(oldOptions), branchingCondition: oldRoutes, exitOnValue: "B.Tech Smart & Sustainable Energy",
   } as any).returning();
 
+  // The chat menu's lead form, with a "Program Name" dropdown (one option also gates LeadSquared).
+  const oldForm = JSON.stringify({
+    name: { visible: true, required: true }, phone: { visible: true, required: true },
+    custom: [
+      { id: "f-prog", label: "Program Name", fieldType: "dropdown", options: ["BBA FinTech", "M.Tech Smart Energy", "Bachelor of Architecture (B.Arch)"], required: true, lsqQualifyValues: ["BBA FinTech", "M.Tech Smart Energy"] },
+      { id: "f-qual", label: "Highest Qualification", fieldType: "dropdown", options: ["12th", "Graduate"], required: false },
+    ],
+  });
+  const [menu] = await db.insert(schema.chatMenuConfigs).values({ businessAccountId: B, leadFormFields: oldForm } as any).returning();
+
   const mkLead = async (v: Partial<typeof schema.leads.$inferInsert>, courseAnswer?: string) => {
     let conversationId: string | null = null;
     if (courseAnswer) {
@@ -122,7 +132,9 @@ async function main() {
     // ── preview ──
     const plan = await planMerittoSetup(B, sheet);
     const q = plan.courseQuestions[0];
-    expect(plan.courseQuestions.length === 1 && q.stepId === courseStep.id, "finds the journey question saved as course", plan.courseQuestions.map(x => x.stepId));
+    const fq = plan.courseQuestions.find(x => x.kind === "form");
+    expect(plan.courseQuestions.length === 2 && q.stepId === courseStep.id && fq?.questionText === "Program Name", "finds the journey question saved as course and the form's Program Name dropdown (not Highest Qualification)", plan.courseQuestions.map(x => `${x.kind}:${x.questionText}`));
+    expect(fq?.renames.length === 2 && fq.removes.join() === "M.Tech Smart Energy", "form plan: 2 renamed, 1 removed", fq);
     expect(q.renames.length === 3 && q.renames.some(r => r.from === "BBA FinTech" && r.to === "BBA (Fintech)") && q.removes.length === 2 && q.adds.join() === "B.Sc. (Beauty & Wellness),Ph.D. (Engineering)", "plan: 3 renamed, 2 removed (incl. blank), 2 added", q);
     expect(plan.fields.map(f => `${f.field}:${f.action}`).join() === "campus:add,city:add,state:add,medium:add" && plan.resend === 1, "plan: adds campus, city, state, medium; one lead to send again", { fields: plan.fields, resend: plan.resend });
     expect((await getLead(typed.id)).merittoSyncStatus === "needs_attention" && JSON.parse((await db.select().from(schema.journeySteps).where(eq(schema.journeySteps.id, courseStep.id)))[0].multipleChoiceOptions!).length === 5, "preview changes nothing");
@@ -130,7 +142,12 @@ async function main() {
     // ── apply ──
     const before = calls.length;
     const result = await applyMerittoSetup(B, sheet.sheetUrl, async () => sheet);
-    expect(result.questionsChanged === 1 && result.fieldsAdded.join() === "campus,city,state,medium" && result.resending === 1, "apply: question changed, fields added, one lead being re-sent", result);
+    expect(result.questionsChanged === 2 && result.fieldsAdded.join() === "campus,city,state,medium" && result.resending === 1, "apply: journey question and form changed, fields added, one lead being re-sent", result);
+    const [menuAfter] = await db.select().from(schema.chatMenuConfigs).where(eq(schema.chatMenuConfigs.id, menu.id));
+    const formAfter = JSON.parse(menuAfter.leadFormFields!);
+    const prog = formAfter.custom.find((f: any) => f.id === "f-prog");
+    expect(JSON.stringify(prog.options) === JSON.stringify(sheet.programs.map(p => p.name)) && prog.lsqQualifyValues.join() === "BBA (Fintech)" && formAfter.custom[1].options.join() === "12th,Graduate",
+      "form: Program Name has Meritto's courses, its qualifying value renamed, other fields untouched", formAfter);
     const [step] = await db.select().from(schema.journeySteps).where(eq(schema.journeySteps.id, courseStep.id));
     expect(step.multipleChoiceOptions === JSON.stringify(sheet.programs.map(p => p.name)), "the course question now has exactly Meritto's courses", step.multipleChoiceOptions);
     const routes = JSON.parse(step.branchingCondition!).routes;
@@ -147,6 +164,17 @@ async function main() {
     const zb = calls.find(c => c.body.name === "Zoya")?.body ?? {};
     expect(r3.outcome === "created" && !zb.course && !zb.campus && !zb.city && !zb.state, "a course / city not in Meritto's lists is left out and the lead still goes", { r3, zb });
 
+    // A lead from the form only: its Program Name answer is sent as the course.
+    const [fconv] = await db.insert(schema.conversations).values({ businessAccountId: B } as any).returning();
+    for (const [role, content] of [["assistant", "Name"], ["user", "Neha"], ["assistant", "Mobile Number"], ["user", "9000033333"], ["assistant", "Program Name"], ["user", "Bachelor of Architecture (B.Arch)"]]) {
+      await db.insert(schema.messages).values({ conversationId: fconv.id, role, content, interactionSource: "form" } as any);
+      await new Promise(r => setTimeout(r, 5));
+    }
+    const formLead = (await db.insert(schema.leads).values({ businessAccountId: B, name: "Neha", phone: "9000033333", conversationId: fconv.id } as any).returning())[0];
+    const r4 = await syncLeadToMeritto(B, formLead.id, { manual: true });
+    const nb = calls.find(c => c.body.name === "Neha")?.body ?? {};
+    expect(r4.outcome === "created" && nb.course === "B. Arch" && nb.campus === "UG", "a form-only lead: Program Name sent as Meritto's course with campus", { r4, nb });
+
     const status = await getMerittoListsStatus(B);
     expect(status.programs === 5 && status.cities === 2 && status.canUndo, "lists saved and undo available", status);
 
@@ -154,7 +182,9 @@ async function main() {
     const undo = await undoMerittoSetup(B);
     const [back] = await db.select().from(schema.journeySteps).where(eq(schema.journeySteps.id, courseStep.id));
     const fields = (await db.select().from(schema.merittoFieldMappings).where(eq(schema.merittoFieldMappings.businessAccountId, B))).map(m => m.merittoField).sort();
-    expect(undo.questionsRestored === 1 && undo.fieldsRemoved === 4 && back.multipleChoiceOptions === JSON.stringify(oldOptions) && back.branchingCondition === oldRoutes && back.exitOnValue === "B.Tech Smart & Sustainable Energy",
+    const [menuBack] = await db.select().from(schema.chatMenuConfigs).where(eq(schema.chatMenuConfigs.id, menu.id));
+    expect(menuBack.leadFormFields === oldForm, "undo: the form's dropdown is put back", menuBack.leadFormFields);
+    expect(undo.questionsRestored === 2 && undo.fieldsRemoved === 4 && back.multipleChoiceOptions === JSON.stringify(oldOptions) && back.branchingCondition === oldRoutes && back.exitOnValue === "B.Tech Smart & Sustainable Energy",
       "undo: course options, routes and exit put back; added fields removed", { undo, back: back.multipleChoiceOptions });
     expect(fields.join() === "country_dial_code,course,mobile,name,source", "only the account's own fields remain", fields);
     const after = await getMerittoListsStatus(B);

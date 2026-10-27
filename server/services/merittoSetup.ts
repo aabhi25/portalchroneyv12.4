@@ -2,7 +2,8 @@
  * "Set up from Meritto sheet" on the Meritto settings page: loads Meritto's master data for the
  * account and lines the account up with it in one go —
  *  - the journey question saved as the course (a pick-one question) gets exactly Meritto's courses
- *    (options that match are renamed in place, so their routes stay; the rest are removed);
+ *    (options that match are renamed in place, so their routes stay; the rest are removed), and so
+ *    does a chat-menu lead form's dropdown labelled like "Program Name" or "Course";
  *  - the fields campus (from the course), state (from the city), city and medium are added when missing;
  *  - leads that failed to reach Meritto are sent again.
  * Preview shows the same plan without changing anything; Undo puts the journey options back and
@@ -11,12 +12,12 @@
 import crypto from "crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {
-  conversationJourneys, journeySteps, leads, merittoFieldMappings, merittoMasterLists,
+  chatMenuConfigs, chatMenuItems, conversationJourneys, journeySteps, leads, merittoFieldMappings, merittoMasterLists,
   type MerittoCity, type MerittoFieldMapping, type MerittoProgram, type MerittoSetupBackup,
 } from "@shared/schema";
 import { db } from "../db";
 import { storage } from "../storage";
-import { indexMerittoLists, loadMerittoSheet, type MerittoListsIndex, type MerittoSheet } from "./merittoMasterData";
+import { COURSE_FIELD_LABEL, indexMerittoLists, loadMerittoSheet, type MerittoListsIndex, type MerittoSheet } from "./merittoMasterData";
 
 // ── The lists while sending ──────────────────────────────────────────────────
 
@@ -53,7 +54,11 @@ export async function getMerittoListsStatus(businessAccountId: string) {
 // ── The plan ─────────────────────────────────────────────────────────────────
 
 export interface CourseQuestionPlan {
+  /** A journey question, or a dropdown in a chat-menu lead form. */
+  kind: "journey" | "form";
+  /** The journey step id, or "<menu_config|menu_item>:<row id>:<field id>" for a form. */
   stepId: string;
+  /** Journey name, or the form's name ("Chat menu form" / the menu item's title). */
   journeyName: string;
   questionText: string;
   renames: Array<{ from: string; to: string }>;
@@ -125,6 +130,34 @@ async function courseSteps(businessAccountId: string, courseKey: string) {
     ));
 }
 
+interface FormField { id: string; label: string; fieldType: string; options?: string[]; lsqQualifyValues?: string[] }
+type FormRow = { table: "menu_config" | "menu_item"; id: string; name: string; leadFormFields: string | null };
+
+const parseForm = (raw: string | null): { custom?: FormField[] } | null => {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return v && typeof v === "object" && Array.isArray(v.custom) ? v : null;
+  } catch {
+    return null;
+  }
+};
+
+/** The account's chat-menu lead forms (menu-level form and lead-form menu items). */
+async function leadForms(businessAccountId: string): Promise<FormRow[]> {
+  const configs = await db.select({ id: chatMenuConfigs.id, leadFormFields: chatMenuConfigs.leadFormFields })
+    .from(chatMenuConfigs).where(eq(chatMenuConfigs.businessAccountId, businessAccountId));
+  const items = await db.select({ id: chatMenuItems.id, title: chatMenuItems.title, leadFormFields: chatMenuItems.leadFormFields })
+    .from(chatMenuItems).where(and(eq(chatMenuItems.businessAccountId, businessAccountId), sql`${chatMenuItems.leadFormFields} IS NOT NULL`));
+  return [
+    ...configs.map(c => ({ table: "menu_config" as const, id: c.id, name: "Chat menu form", leadFormFields: c.leadFormFields })),
+    ...items.map(i => ({ table: "menu_item" as const, id: i.id, name: `Menu form: ${i.title}`, leadFormFields: i.leadFormFields })),
+  ];
+}
+
+const courseFieldsOf = (form: FormRow) =>
+  (parseForm(form.leadFormFields)?.custom ?? []).filter(f => f.fieldType === "dropdown" && COURSE_FIELD_LABEL.test(f.label || ""));
+
 function planOptions(current: string[], programs: MerittoProgram[]) {
   const index = indexMerittoLists(programs, []);
   const used = new Set<string>();
@@ -156,6 +189,11 @@ export async function planMerittoSetup(businessAccountId: string, sheet: Meritto
   const mappings = await db.select().from(merittoFieldMappings).where(eq(merittoFieldMappings.businessAccountId, businessAccountId));
   const courseKey = courseKeyFrom(mappings);
   const steps = sheet.programs.length ? await courseSteps(businessAccountId, courseKey) : [];
+  const forms = sheet.programs.length ? await leadForms(businessAccountId) : [];
+  const formQuestions: CourseQuestionPlan[] = forms.flatMap(form => courseFieldsOf(form).map(f => ({
+    kind: "form" as const, stepId: `${form.table}:${form.id}:${f.id}`, journeyName: form.name, questionText: f.label,
+    ...planOptions((f.options ?? []).map(o => String(o ?? "")), sheet.programs),
+  })));
   const have = new Set(mappings.map(m => m.merittoField.trim().toLowerCase()));
   const fields: FieldPlan[] = NEW_FIELDS
     .filter(f => !f.needs || (f.needs === "programs" ? sheet.programs.length : sheet.cities.length))
@@ -166,7 +204,10 @@ export async function planMerittoSetup(businessAccountId: string, sheet: Meritto
     cities: sheet.cities.length,
     levels: Array.from(new Set(sheet.programs.map(p => p.level))),
     courseKey,
-    courseQuestions: steps.map(s => ({ stepId: s.id, journeyName: s.journeyName, questionText: s.questionText, ...planOptions(parseOptions(s.multipleChoiceOptions), sheet.programs) })),
+    courseQuestions: [
+      ...steps.map(s => ({ kind: "journey" as const, stepId: s.id, journeyName: s.journeyName, questionText: s.questionText, ...planOptions(parseOptions(s.multipleChoiceOptions), sheet.programs) })),
+      ...formQuestions,
+    ],
     fields,
     resend: (await stuckLeadIds(businessAccountId)).length,
   };
@@ -212,7 +253,9 @@ export interface MerittoSetupResult {
 export async function applyMerittoSetup(businessAccountId: string, sheetUrl: string, load: (url: string) => Promise<MerittoSheet> = loadMerittoSheet): Promise<MerittoSetupResult> {
   const sheet = await load(sheetUrl);
   const plan = await planMerittoSetup(businessAccountId, sheet);
-  const steps = plan.courseQuestions.length ? await courseSteps(businessAccountId, plan.courseKey) : [];
+  const steps = plan.courseQuestions.some(q => q.kind === "journey") ? await courseSteps(businessAccountId, plan.courseKey) : [];
+  const forms = plan.courseQuestions.some(q => q.kind === "form") ? await leadForms(businessAccountId) : [];
+  const changedForms = forms.filter(f => plan.courseQuestions.some(q => q.kind === "form" && q.stepId.startsWith(`${f.table}:${f.id}:`)));
   const [existing] = await db.select().from(merittoMasterLists).where(eq(merittoMasterLists.businessAccountId, businessAccountId));
   const mappings = await db.select().from(merittoFieldMappings).where(eq(merittoFieldMappings.businessAccountId, businessAccountId));
   const lastOrder = mappings.reduce((max, m) => Math.max(max, m.sortOrder), 0);
@@ -225,6 +268,7 @@ export async function applyMerittoSetup(businessAccountId: string, sheetUrl: str
     appliedAt: now.toISOString(),
     steps: steps.map(s => ({ id: s.id, multipleChoiceOptions: s.multipleChoiceOptions, branchingCondition: s.branchingCondition, exitOnValue: s.exitOnValue, skipOnValue: s.skipOnValue })),
     addedMappingIds: toAdd.map(r => r.id),
+    forms: changedForms.map(f => ({ table: f.table, id: f.id, leadFormFields: f.leadFormFields })),
     firstLoad: !existing?.programs?.length && !existing?.cities?.length,
   };
 
@@ -232,7 +276,25 @@ export async function applyMerittoSetup(businessAccountId: string, sheetUrl: str
     const lists = { sheetUrl: sheet.sheetUrl, programs: sheet.programs as MerittoProgram[], cities: sheet.cities as MerittoCity[], setupBackup: backup, loadedAt: now, updatedAt: now };
     await tx.insert(merittoMasterLists).values({ businessAccountId, ...lists })
       .onConflictDoUpdate({ target: merittoMasterLists.businessAccountId, set: lists });
+    for (const form of changedForms) {
+      const parsed = parseForm(form.leadFormFields)!;
+      for (const field of parsed.custom ?? []) {
+        const q = plan.courseQuestions.find(x => x.kind === "form" && x.stepId === `${form.table}:${form.id}:${field.id}`);
+        if (!q) continue;
+        const renames = new Map(q.renames.map(r => [r.from.trim().toLowerCase(), r.to]));
+        for (const k of q.keeps) renames.set(k.trim().toLowerCase(), k);
+        field.options = q.options;
+        // Qualifying answers (LeadSquared gate) follow the renamed options.
+        if (Array.isArray(field.lsqQualifyValues)) {
+          field.lsqQualifyValues = Array.from(new Set(field.lsqQualifyValues.map(v => renames.get(String(v).trim().toLowerCase())).filter((v): v is string => !!v)));
+        }
+      }
+      const leadFormFields = JSON.stringify(parsed);
+      if (form.table === "menu_config") await tx.update(chatMenuConfigs).set({ leadFormFields, updatedAt: now }).where(eq(chatMenuConfigs.id, form.id));
+      else await tx.update(chatMenuItems).set({ leadFormFields, updatedAt: now }).where(eq(chatMenuItems.id, form.id));
+    }
     for (const q of plan.courseQuestions) {
+      if (q.kind !== "journey") continue;
       const step = steps.find(s => s.id === q.stepId);
       if (!step) continue;
       const renames = new Map(q.renames.map(r => [r.from.trim().toLowerCase(), r.to]));
@@ -284,6 +346,12 @@ export async function undoMerittoSetup(businessAccountId: string): Promise<{ que
         exitOnValue: s.exitOnValue, skipOnValue: s.skipOnValue, updatedAt: new Date(),
       }).where(eq(journeySteps.id, s.id));
       questionsRestored++;
+    }
+    for (const f of backup.forms ?? []) {
+      const table = f.table === "menu_config" ? chatMenuConfigs : chatMenuItems;
+      const done = await tx.update(table).set({ leadFormFields: f.leadFormFields, updatedAt: new Date() })
+        .where(and(eq(table.id, f.id), eq(table.businessAccountId, businessAccountId))).returning({ id: table.id });
+      questionsRestored += done.length;
     }
     if (backup.addedMappingIds.length) {
       const removed = await tx.delete(merittoFieldMappings).where(and(

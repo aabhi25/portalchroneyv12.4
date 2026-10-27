@@ -66,6 +66,7 @@ async function buildContext(lead: typeof leads.$inferSelect, businessAccountId: 
     }
   }
   const mobile = splitMobile(lead.phone);
+  const formCourse = lead.conversationId ? await formCourseAnswer(lead.conversationId).catch(() => null) : null;
   return {
     lead: {
       name: lead.name || null,
@@ -91,8 +92,29 @@ async function buildContext(lead: typeof leads.$inferSelect, businessAccountId: 
       mobileNumber: mobile.mobileNumber,
       dialCode: mobile.dialCode,
       mobileVerificationStatus: lead.phone ? (verified || captchaStatus === "verified" ? "verified" : "unverified") : null,
+      formCourse,
     },
   };
+}
+
+/**
+ * A lead form's answers are saved in the chat as question / answer messages (interaction_source
+ * 'form'): the latest answer to a question like "Program Name" or "Course".
+ */
+async function formCourseAnswer(conversationId: string): Promise<string | null> {
+  const { COURSE_FIELD_LABEL } = await import("./merittoMasterData");
+  const res: any = await db.execute(sql`
+    SELECT role, content FROM messages
+    WHERE conversation_id = ${conversationId} AND interaction_source = 'form'
+    ORDER BY created_at, id`);
+  const rows: Array<{ role: string; content: string }> = res?.rows ?? res ?? [];
+  let answer: string | null = null;
+  for (let i = 0; i < rows.length - 1; i++) {
+    if (rows[i].role === "assistant" && rows[i + 1].role === "user" && COURSE_FIELD_LABEL.test((rows[i].content || "").trim()) && (rows[i].content || "").length <= 60) {
+      answer = (rows[i + 1].content || "").trim() || answer;
+    }
+  }
+  return answer;
 }
 
 const hashOf = (payload: Record<string, string>) => crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex");

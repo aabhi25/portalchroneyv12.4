@@ -92,6 +92,13 @@ p = buildMerittoPayload(mappings, ctx("IDESCO++ Aesthetics International Diploma
 expect(!("course" in p) && !("campus" in p) && !("city" in p) && !("state" in p) && p.name === "Asha", "unknown course / city left out so the lead still goes", p);
 p = buildMerittoPayload(mappings, ctx("BSc Beauty and Welness", "Kolhāpur"), null);
 expect(p.course === "BSc Beauty and Welness" && !("campus" in p) && !("state" in p) && p.city === "Kolhāpur", "without lists: sent as before", p);
+const withForm = (c: MerittoLeadContext, formCourse: string): MerittoLeadContext => ({ ...c, meritto: { formCourse } });
+p = buildMerittoPayload(mappings, withForm(ctx(null, "Pune"), "Bachelor of Architecture (B.Arch)"), ix);
+expect(p.course === "B. Arch" && p.campus === "UG", "no journey answer: the lead form's Program Name is sent as the course, with campus", p);
+p = buildMerittoPayload(mappings, withForm(ctx("MBA FinTech", null), "Bachelor of Architecture (B.Arch)"), ix);
+expect(p.course === "MBA (FinTech)" && p.campus === "PG", "a journey answer wins over the form", p);
+p = buildMerittoPayload([row("name", "lead.name")], withForm(ctx(null, null), "B. Arch"), ix);
+expect(!("course" in p), "no course field mapped → the form answer isn't added", p);
 p = buildMerittoPayload([row("city", "session.city")], ctx(null, "Pune"), ix);
 expect(p.city === "Pune" && p.state === "Maharashtra", "a city always goes with its state (Meritto refuses it alone)", p);
 

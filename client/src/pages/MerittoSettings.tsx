@@ -51,7 +51,7 @@ interface SetupPlan {
   cities: number;
   levels: string[];
   courseKey: string;
-  courseQuestions: Array<{ stepId: string; journeyName: string; questionText: string; renames: { from: string; to: string }[]; keeps: string[]; removes: string[]; adds: string[] }>;
+  courseQuestions: Array<{ kind: "journey" | "form"; stepId: string; journeyName: string; questionText: string; renames: { from: string; to: string }[]; keeps: string[]; removes: string[]; adds: string[] }>;
   fields: Array<{ field: string; action: "add" | "keep"; sends: string }>;
   resend: number;
 }
@@ -348,7 +348,7 @@ export default function MerittoSettings() {
           <CardTitle className="flex items-center gap-2 text-lg"><FileSpreadsheet className="h-5 w-5 text-green-600" /> Meritto's lists</CardTitle>
           <CardDescription>
             Meritto only accepts its own course and city names. Paste the master data sheet Meritto shared (or the Meritto document that links to it):
-            the course question gets Meritto's courses, campus and state are filled in automatically, and leads that failed are sent again.
+            the course question and the form's Program / Course dropdown get Meritto's courses, campus and state are filled in automatically, and leads that failed are sent again.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -477,14 +477,17 @@ export default function MerittoSettings() {
           {plan && (
             <div className="max-h-[60vh] space-y-5 overflow-y-auto pr-1 text-sm" data-testid="meritto-setup-plan">
               <section>
-                <h3 className="mb-1.5 font-semibold">Course question</h3>
+                <h3 className="mb-1.5 font-semibold">Course questions</h3>
                 {plan.programs === 0 ? (
                   <p className="text-muted-foreground">The sheet has no course list, so no question changes.</p>
                 ) : plan.courseQuestions.length === 0 ? (
-                  <p className="text-muted-foreground">No pick-one journey question is saved as “{plan.courseKey}”, so no question changes. Courses typed in chat are still matched to Meritto's names when sent.</p>
+                  <p className="text-muted-foreground">No pick-one journey question saved as “{plan.courseKey}” and no form dropdown named like “Program” or “Course”, so no question changes. Courses typed in chat are still matched to Meritto's names when sent.</p>
                 ) : plan.courseQuestions.map(q => (
                   <div key={q.stepId} className="mb-3 rounded-md border p-3">
-                    <div className="mb-2"><span className="font-medium">{q.journeyName}</span> · <span className="text-muted-foreground">“{q.questionText}”</span></div>
+                    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                      <Badge variant="outline" className="text-[11px]">{q.kind === "form" ? "Form" : "Journey"}</Badge>
+                      <span className="font-medium">{q.journeyName}</span> · <span className="text-muted-foreground">“{q.questionText}”</span>
+                    </div>
                     {q.renames.length > 0 && (
                       <details open className="mb-2">
                         <summary className="cursor-pointer font-medium text-blue-700">Renamed to Meritto's name ({q.renames.length})</summary>
@@ -540,7 +543,7 @@ export default function MerittoSettings() {
           <DialogHeader>
             <DialogTitle>Undo the last setup?</DialogTitle>
             <DialogDescription>
-              The course question gets its old options back and the fields the setup added are removed.
+              The course questions and form dropdowns get their old options back and the fields the setup added are removed.
               {master?.appliedAt ? ` Setup was applied on ${new Date(master.appliedAt).toLocaleString()}.` : ""} Leads already sent to Meritto stay there.
             </DialogDescription>
           </DialogHeader>

@@ -11,6 +11,9 @@ import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 
 // ── Courses ──────────────────────────────────────────────────────────────────
 
+/** A lead-form question that asks for the course ("Program Name", "Course", "Programme interested in"). */
+export const COURSE_FIELD_LABEL = /\b(program(me)?|course)s?\b/i;
+
 const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
 const DEGREE_PHRASES: Array<[RegExp, string]> = [
