@@ -110,8 +110,13 @@ export function LeadDetailsSheet({
   const topics = (Array.isArray(listedInterests) ? listedInterests : storedTopics)
     .filter(t => !FUNNEL_MARKERS.includes(t) && !answerTexts.has(t.trim().toLowerCase()));
   const city = website ? website.city : typeof extracted.city === "string" ? extracted.city : null;
-  const syncedFields = website?.leadsquaredSyncPayload && typeof website.leadsquaredSyncPayload === "object"
-    ? Object.entries(website.leadsquaredSyncPayload as Record<string, unknown>) : [];
+  // What was last sent to each CRM ("_hash" and other internal keys left out). Hidden when phones are masked.
+  const sentFields = (payload: unknown) => payload && typeof payload === "object"
+    ? Object.entries(payload as Record<string, unknown>).filter(([k]) => !k.startsWith("_")) : [];
+  const syncedFieldLists = [
+    { crm: "leadsquared", label: "LeadSquared", fields: sentFields(website?.leadsquaredSyncPayload) },
+    { crm: "meritto", label: "Meritto", fields: sentFields(website?.merittoSyncPayload) },
+  ].filter(l => l.fields.length > 0);
 
   const copy = (text: string, what: string) => {
     navigator.clipboard?.writeText(text).then(
@@ -229,16 +234,16 @@ export function LeadDetailsSheet({
                   })}
                 </ul>
               )}
-              {syncedFields.length > 0 && (
-                <details className="mt-2 text-[12.5px]">
-                  <summary className="cursor-pointer text-gray-500">Fields sent to LeadSquared</summary>
+              {syncedFieldLists.map(list => (
+                <details key={list.crm} className="mt-2 text-[12.5px]" data-testid={`lead-sent-fields-${list.crm}`}>
+                  <summary className="cursor-pointer text-gray-500">Fields sent to {list.label}{list.crm === "meritto" ? " (last send)" : ""}</summary>
                   <div className="mt-2 max-h-48 space-y-1 overflow-y-auto rounded-lg bg-gray-50 p-3">
-                    {syncedFields.map(([k, v]) => (
+                    {list.fields.map(([k, v]) => (
                       <div key={k} className="flex gap-2"><span className="min-w-[130px] font-mono text-gray-500">{k}</span><span className="break-all text-gray-800">{v == null ? "—" : String(v)}</span></div>
                     ))}
                   </div>
                 </details>
-              )}
+              ))}
             </Section>
 
             {(topics.length > 0 || journeyAnswers.length > 0 || website?.message || extractedEntries.length > 0) && (

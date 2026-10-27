@@ -24768,6 +24768,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       phone: maskLeadPhone(lead.phone ?? null),
       leadsquaredSyncPayload: null,
       customCrmSyncPayload: null,
+      merittoSyncPayload: null,
     };
   };
 

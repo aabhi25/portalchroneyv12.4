@@ -219,7 +219,7 @@ function crmState(status: string | null | undefined, error: string | null | unde
 /** Same protection /api/leads applies to a website lead. */
 function protectWebsiteLead(lead: Lead, mask: boolean): Lead {
   if (!mask) return lead;
-  return { ...lead, phone: maskLeadPhone(lead.phone ?? null), leadsquaredSyncPayload: null, customCrmSyncPayload: null };
+  return { ...lead, phone: maskLeadPhone(lead.phone ?? null), leadsquaredSyncPayload: null, customCrmSyncPayload: null, merittoSyncPayload: null };
 }
 
 const maskIf = (mask: boolean, phone: string | null | undefined) => (mask ? maskLeadPhone(phone ?? null) : phone ?? null);
