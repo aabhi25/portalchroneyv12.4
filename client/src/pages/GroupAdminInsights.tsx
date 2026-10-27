@@ -32,7 +32,11 @@ interface GroupAssignment {
 interface LinkedAccount {
   id: string;
   name: string;
+  website?: string | null;
 }
+
+/** "https://www.example.com/" → "www.example.com" (shown under the account name). */
+const shortUrl = (url?: string | null) => (url || "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
 
 interface VisitorStats {
   totalVisitors: number;
@@ -358,36 +362,48 @@ export default function GroupAdminInsights() {
                     variant="outline"
                     role="combobox"
                     aria-expanded={accountComboboxOpen}
-                    className="w-full sm:w-[300px] justify-between"
+                    className="h-auto min-h-10 w-full sm:w-[520px] justify-between py-2 text-left"
+                    data-testid="button-select-account"
                   >
-                    {selectedAccountId
-                      ? linkedAccounts.find((account) => account.id === selectedAccountId)?.name
-                      : "Select a linked account"}
+                    {(() => {
+                      const selected = linkedAccounts.find((account) => account.id === selectedAccountId);
+                      if (!selected) return <span>Select a linked account</span>;
+                      return (
+                        <span className="min-w-0">
+                          <span className="block truncate font-medium">{selected.name}</span>
+                          {shortUrl(selected.website) && <span className="block truncate text-xs font-normal text-muted-foreground">{shortUrl(selected.website)}</span>}
+                        </span>
+                      );
+                    })()}
                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-[300px] p-0" align="start">
+                <PopoverContent className="w-[var(--radix-popover-trigger-width)] min-w-[280px] p-0" align="start">
                   <Command>
-                    <CommandInput placeholder="Search accounts..." />
-                    <CommandList className="max-h-[200px]">
+                    <CommandInput placeholder="Search by name or website..." />
+                    <CommandList className="max-h-[360px]">
                       <CommandEmpty>No account found.</CommandEmpty>
                       <CommandGroup>
                         {linkedAccounts.map((account) => (
                           <CommandItem
                             key={account.id}
-                            value={account.name}
+                            value={`${account.name} ${shortUrl(account.website)} ${account.id}`}
                             onSelect={() => {
                               setSelectedAccountId(account.id);
                               setAccountComboboxOpen(false);
                             }}
+                            className="py-2"
                           >
                             <Check
                               className={cn(
-                                "mr-2 h-4 w-4",
+                                "mr-2 h-4 w-4 shrink-0",
                                 selectedAccountId === account.id ? "opacity-100" : "opacity-0"
                               )}
                             />
-                            {account.name}
+                            <span className="min-w-0">
+                              <span className="block truncate">{account.name}</span>
+                              {shortUrl(account.website) && <span className="block truncate text-xs text-muted-foreground">{shortUrl(account.website)}</span>}
+                            </span>
                           </CommandItem>
                         ))}
                       </CommandGroup>

@@ -14827,7 +14827,7 @@ Return ONLY the refined instruction, nothing else.`
       const accounts = await Promise.all(
         accountIds.map(async (id) => {
           const account = await storage.getBusinessAccount(id);
-          return account ? { id: account.id, name: account.name } : null;
+          return account ? { id: account.id, name: account.name, website: account.website || null } : null;
         })
       );
       
