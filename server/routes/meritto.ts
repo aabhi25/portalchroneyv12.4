@@ -8,6 +8,7 @@ import { decrypt, encrypt } from "../services/encryptionService";
 import { MERITTO_DEFAULT_CREATE_URL, MERITTO_DEFAULT_MAPPINGS, MERITTO_DEFAULT_UPDATE_URL, MerittoService } from "../services/merittoService";
 import { getMerittoMappings, syncLeadToMeritto } from "../services/merittoSync";
 import { suggestMerittoRows } from "../services/merittoImport";
+import { applyMerittoSetup, getMerittoListsStatus, previewMerittoSetup, undoMerittoSetup } from "../services/merittoSetup";
 
 /**
  * Meritto (NoPaperForms) CRM settings for the business account in view: keys, auto-sync switch,
@@ -227,6 +228,49 @@ router.post("/api/meritto/field-mappings/import", requireAuth, requireBusinessAc
   } catch (error: any) {
     console.error("[Meritto] Copy from LeadSquared error:", error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Meritto's lists (courses, cities) and "Set up from Meritto sheet": status, preview, apply, undo.
+router.get("/api/meritto/master-data", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
+  try {
+    const businessAccountId = accountOf(req);
+    if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
+    res.json(await getMerittoListsStatus(businessAccountId));
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const sheetUrlOf = (req: Request) => (typeof req.body?.sheetUrl === "string" ? req.body.sheetUrl.trim() : "");
+
+router.post("/api/meritto/master-data/preview", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
+  try {
+    const businessAccountId = accountOf(req);
+    if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
+    res.json(await previewMerittoSetup(businessAccountId, sheetUrlOf(req)));
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.post("/api/meritto/master-data/apply", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
+  try {
+    const businessAccountId = accountOf(req);
+    if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
+    res.json(await applyMerittoSetup(businessAccountId, sheetUrlOf(req)));
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.post("/api/meritto/master-data/undo", requireAuth, requireBusinessAccount, requireIntegrationAdmin, async (req, res) => {
+  try {
+    const businessAccountId = accountOf(req);
+    if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
+    res.json(await undoMerittoSetup(businessAccountId));
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
   }
 });
 

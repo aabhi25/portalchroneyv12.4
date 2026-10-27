@@ -8,11 +8,17 @@
  * Which Meritto field gets which value is configured per account (meritto_field_mappings), like
  * LeadSquared's mappings. Meritto's reply format isn't fully documented, so it is read loosely: a
  * 2xx without an error flag is a success, and the lead id is looked for under the usual names.
+ *
+ * With the account's Meritto lists loaded (merittoMasterData.ts), course and city are sent in
+ * Meritto's exact spelling, and "meritto.campus" / "meritto.state" are filled from them. A course or
+ * city that isn't in the lists is left out: Meritto refuses the whole lead for an unknown dropdown
+ * value or a city without its state.
  */
 import { contactsHidden, HIDDEN_CONTACTS_MESSAGE, isMaskedValue } from "@shared/contactMasking";
 import type { MerittoFieldMapping } from "@shared/schema";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { resolveCrmContextValue, type LeadDataContext } from "./leadsquaredService";
+import type { MerittoListsIndex } from "./merittoMasterData";
 
 export const MERITTO_DEFAULT_CREATE_URL = "https://api.nopaperforms.io/lead/v1/create";
 export const MERITTO_DEFAULT_UPDATE_URL = "https://api.nopaperforms.io/lead/v1/update";
@@ -44,6 +50,8 @@ export interface MerittoResult {
   authError?: boolean;
   /** 408/429/5xx/network: worth retrying. */
   transient?: boolean;
+  /** Meritto already has this person (same mobile) and didn't say which lead it is. */
+  alreadyInMeritto?: boolean;
   payload?: Record<string, string>;
 }
 
@@ -67,12 +75,21 @@ function resolveMerittoValue(sourceField: string, context: MerittoLeadContext): 
   return resolveCrmContextValue(sourceField, context);
 }
 
+/** Filled from Meritto's lists after the other fields: the course's level, the city's state. */
+const FROM_LISTS = new Set(["meritto.campus", "meritto.state"]);
+
+/** The payload key Meritto uses for a field, whatever case the mapping wrote it in. */
+const keyOf = (payload: Record<string, string>, field: string) => Object.keys(payload).find(k => k.toLowerCase() === field);
+
 /** The JSON body for Meritto from the account's mappings. Hidden (masked) values are never sent. */
-export function buildMerittoPayload(mappings: MerittoFieldMapping[], context: MerittoLeadContext): Record<string, string> {
+export function buildMerittoPayload(mappings: MerittoFieldMapping[], context: MerittoLeadContext, lists?: MerittoListsIndex | null): Record<string, string> {
   const payload: Record<string, string> = {};
-  const sorted = [...mappings].sort((a, b) => a.sortOrder - b.sortOrder);
+  const sorted = [...mappings].sort((a, b) => a.sortOrder - b.sortOrder).filter(m => m.isEnabled === "true" && m.merittoField?.trim());
+  const put = (m: MerittoFieldMapping, value: string | undefined) => {
+    if (value !== undefined && String(value).trim() !== "") payload[m.merittoField.trim()] = String(value).trim().slice(0, 1000);
+  };
   for (const m of sorted) {
-    if (m.isEnabled !== "true" || !m.merittoField?.trim()) continue;
+    if (m.sourceType !== "custom" && m.sourceField && FROM_LISTS.has(m.sourceField)) continue;
     let value: string | undefined;
     if (m.sourceType === "custom") {
       value = m.customValue || undefined;
@@ -81,8 +98,29 @@ export function buildMerittoPayload(mappings: MerittoFieldMapping[], context: Me
       if (isMaskedValue(value)) continue; // would overwrite the real value in the CRM
       if (!value && m.fallbackValue) value = m.fallbackValue;
     }
-    if (value !== undefined && String(value).trim() !== "") payload[m.merittoField.trim()] = String(value).trim().slice(0, 1000);
+    put(m, value);
   }
+
+  const fromLists: Record<string, string | undefined> = {};
+  const courseKey = keyOf(payload, "course");
+  if (lists?.hasPrograms && courseKey) {
+    const program = lists.matchProgram(payload[courseKey]);
+    if (program) { payload[courseKey] = program.name; fromLists["meritto.campus"] = program.level; }
+    else delete payload[courseKey];
+  }
+  const cityKey = keyOf(payload, "city");
+  if (lists?.hasCities && cityKey) {
+    const city = lists.matchCity(payload[cityKey]);
+    if (city) { payload[cityKey] = city.city; fromLists["meritto.state"] = city.state; }
+    else delete payload[cityKey];
+  }
+  for (const m of sorted) {
+    if (m.sourceType === "custom" || !m.sourceField || !FROM_LISTS.has(m.sourceField)) continue;
+    put(m, fromLists[m.sourceField] || m.fallbackValue || undefined);
+  }
+  // Meritto refuses a city without its state.
+  const state = fromLists["meritto.state"];
+  if (state && cityKey && payload[cityKey] && !keyOf(payload, "state")) payload.state = state;
   return payload;
 }
 
@@ -119,7 +157,7 @@ function replySaysError(body: any): boolean {
 }
 
 const AUTH_WORDS = /unauthori[sz]ed|invalid (access|secret)|access[- ]key|secret[- ]key|authenticat/i;
-const DUPLICATE_WORDS = /duplicate|already (exist|regist)|exists/i;
+const DUPLICATE_WORDS = /duplicate|already (exist|regist)|exists|already (being )?used|already in use/i;
 
 export class MerittoService {
   constructor(private config: MerittoConfig) {}
@@ -154,23 +192,27 @@ export class MerittoService {
       if (DUPLICATE_WORDS.test(message) && leadId) {
         return { success: true, leadId, message: `Lead already in Meritto: ${message}`, payload };
       }
+      // "This Mobile number is already being used": the person is in Meritto already; sending again won't change that.
+      if (DUPLICATE_WORDS.test(message) && !url.endsWith("/update") && res.status < 500) {
+        return { success: true, alreadyInMeritto: true, message: `Already in Meritto: ${message}`, payload };
+      }
       const transient = res.status === 408 || res.status === 429 || res.status >= 500;
       return { success: false, transient, message: `Meritto: ${message}`, payload };
     }
     return { success: true, leadId, message: message || "Sent to Meritto", payload };
   }
 
-  async createLead(mappings: MerittoFieldMapping[], context: MerittoLeadContext): Promise<MerittoResult> {
+  async createLead(mappings: MerittoFieldMapping[], context: MerittoLeadContext, lists?: MerittoListsIndex | null): Promise<MerittoResult> {
     if (contactsHidden(context.lead)) return { success: false, message: HIDDEN_CONTACTS_MESSAGE };
-    const payload = buildMerittoPayload(mappings, context);
+    const payload = buildMerittoPayload(mappings, context, lists);
     if (!payload.mobile && !payload.email) {
       return { success: false, message: "Nothing to send: map the lead's mobile or email to Meritto's \"mobile\" / \"email\" fields." };
     }
     return this.post(this.config.createUrl || MERITTO_DEFAULT_CREATE_URL, payload);
   }
 
-  async updateLead(leadId: string, mappings: MerittoFieldMapping[], context: MerittoLeadContext): Promise<MerittoResult> {
-    const payload = { lead_id: leadId, ...buildMerittoPayload(mappings, context) };
+  async updateLead(leadId: string, mappings: MerittoFieldMapping[], context: MerittoLeadContext, lists?: MerittoListsIndex | null): Promise<MerittoResult> {
+    const payload = { lead_id: leadId, ...buildMerittoPayload(mappings, context, lists) };
     const result = await this.post(this.config.updateUrl || MERITTO_DEFAULT_UPDATE_URL, payload);
     return { ...result, leadId: result.leadId || leadId };
   }
@@ -194,6 +236,8 @@ export const MERITTO_DEFAULT_MAPPINGS: Array<Pick<MerittoFieldMapping, "merittoF
   { merittoField: "mobile", sourceType: "dynamic", sourceField: "meritto.mobileNumber", customValue: null, displayName: "Mobile", sortOrder: 3 },
   { merittoField: "country_dial_code", sourceType: "dynamic", sourceField: "meritto.dialCode", customValue: null, displayName: "Country dial code", sortOrder: 4, fallbackValue: "+91" },
   { merittoField: "city", sourceType: "dynamic", sourceField: "session.city", customValue: null, displayName: "City", sortOrder: 5 },
+  { merittoField: "state", sourceType: "dynamic", sourceField: "meritto.state", customValue: null, displayName: "State", sortOrder: 5 },
+  { merittoField: "campus", sourceType: "dynamic", sourceField: "meritto.campus", customValue: null, displayName: "Campus (programme level)", sortOrder: 5 },
   { merittoField: "mobile_verification_status", sourceType: "dynamic", sourceField: "meritto.mobileVerificationStatus", customValue: null, displayName: "Mobile verification status", sortOrder: 6 },
   { merittoField: "source", sourceType: "dynamic", sourceField: "session.utmSource", customValue: null, displayName: "Source", sortOrder: 7, fallbackValue: "AI Chroney" },
   { merittoField: "medium", sourceType: "dynamic", sourceField: "session.utmMedium", customValue: null, displayName: "Medium", sortOrder: 8, fallbackValue: "Chatbot" },

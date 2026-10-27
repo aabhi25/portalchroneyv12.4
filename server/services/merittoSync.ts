@@ -136,7 +136,9 @@ export async function syncLeadToMeritto(businessAccountId: string, leadId: strin
   const mappings = await getMerittoMappings(businessAccountId);
   const context = await buildContext(lead, businessAccountId);
   const { buildMerittoPayload } = await import("./merittoService");
-  const payload = buildMerittoPayload(mappings, context);
+  const { getMerittoListsIndex } = await import("./merittoSetup");
+  const lists = await getMerittoListsIndex(businessAccountId).catch(() => null);
+  const payload = buildMerittoPayload(mappings, context, lists);
   const hash = hashOf(payload);
   const lastHash = (lead.merittoSyncPayload as any)?._hash;
   const now = new Date();
@@ -149,15 +151,17 @@ export async function syncLeadToMeritto(businessAccountId: string, leadId: strin
 
   const isUpdate = !!lead.merittoLeadId;
   const result: MerittoResult = isUpdate
-    ? await service.updateLead(lead.merittoLeadId!, mappings, context)
-    : await service.createLead(mappings, context);
+    ? await service.updateLead(lead.merittoLeadId!, mappings, context, lists)
+    : await service.createLead(mappings, context, lists);
 
   if (result.success) {
     await record(lead.id, businessAccountId, {
       merittoSyncStatus: "synced",
       merittoSyncedAt: new Date(Math.max(now.getTime(), lead.updatedAt?.getTime() ?? 0)),
       merittoLeadId: result.leadId || lead.merittoLeadId || null,
-      merittoSyncError: result.leadId || isUpdate ? null : "Meritto did not return a lead id, so later changes can't be sent as updates",
+      merittoSyncError: result.leadId || isUpdate ? null
+        : result.alreadyInMeritto ? "Already in Meritto with this mobile number, so it wasn't added again. Later changes can't be sent as updates."
+        : "Meritto did not return a lead id, so later changes can't be sent as updates",
       merittoSyncPayload: { ...payload, _hash: hash },
       merittoRetryCount: 0,
       merittoNextRetryAt: null,

@@ -2899,6 +2899,31 @@ export const merittoFieldMappings = pgTable("meritto_field_mappings", {
 
 export type MerittoFieldMapping = typeof merittoFieldMappings.$inferSelect;
 
+export interface MerittoProgram { level: string; name: string }
+export interface MerittoCity { state: string; city: string }
+/** What "Set up from Meritto sheet" changed, so Undo can put it back. */
+export interface MerittoSetupBackup {
+  appliedAt: string;
+  steps: Array<{ id: string; multipleChoiceOptions: string | null; branchingCondition: string | null; exitOnValue: string | null; skipOnValue: string | null }>;
+  addedMappingIds: string[];
+  /** The lists were loaded for the first time by this setup (Undo clears them again). */
+  firstLoad: boolean;
+}
+
+// Meritto's master data for an account (its "Program master data" and "State and City" sheets):
+// course names → programme level (campus), city → state. Used to send Meritto's exact values.
+export const merittoMasterLists = pgTable("meritto_master_lists", {
+  businessAccountId: varchar("business_account_id").primaryKey().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  sheetUrl: text("sheet_url"),
+  programs: jsonb("programs").$type<MerittoProgram[]>(),
+  cities: jsonb("cities").$type<MerittoCity[]>(),
+  setupBackup: jsonb("setup_backup").$type<MerittoSetupBackup | null>(),
+  loadedAt: timestamp("loaded_at"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export type MerittoMasterLists = typeof merittoMasterLists.$inferSelect;
+
 // ERP Integration insert schemas
 export const insertErpConfigurationSchema = createInsertSchema(erpConfigurations).omit({
   id: true,
