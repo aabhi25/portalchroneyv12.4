@@ -11764,18 +11764,28 @@ Return ONLY the refined instruction, nothing else.`
         return res.status(404).json({ error: "Business account not found" });
       }
       
-      // Check if account is already linked
-      const alreadyLinked = await storage.isAccountLinked(businessAccountId);
-      if (alreadyLinked) {
-        return res.status(400).json({ error: "Account is already part of an account group" });
+      // An account is in one group at most. One in another group is moved here when the request says
+      // so (moveFromOtherGroup) — except a group's primary account, which would leave that group without one.
+      const current = await storage.getAccountGroupMembership(businessAccountId);
+      if (current?.groupId === groupId) {
+        return res.status(400).json({ error: "Account is already in this group" });
       }
-      
-      // Add account to group
-      await storage.addAccountToGroup({
-        groupId,
-        businessAccountId,
-        isPrimary: 'false',
-      });
+      if (current) {
+        if (current.isPrimary) {
+          return res.status(400).json({ error: `"${account.name}" is the primary account of "${current.groupName}". Make another account primary there, or delete that group, before moving it.` });
+        }
+        if (req.body?.moveFromOtherGroup !== true) {
+          return res.status(409).json({ error: `"${account.name}" is in "${current.groupName}". Adding it here removes it from that group.`, currentGroupName: current.groupName });
+        }
+        await storage.moveAccountToGroup(businessAccountId, groupId);
+        console.log(`[SuperAdmin Account Groups] Moved ${businessAccountId} from group ${current.groupId} to ${groupId}`);
+      } else {
+        await storage.addAccountToGroup({
+          groupId,
+          businessAccountId,
+          isPrimary: 'false',
+        });
+      }
       
       // Return updated group members
       const members = await storage.getGroupMembers(groupId);

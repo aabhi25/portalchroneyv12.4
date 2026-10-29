@@ -573,6 +573,8 @@ export interface IStorage {
   getLinkedAccounts(businessAccountId: string): Promise<(AccountGroupMember & { businessAccount: BusinessAccount })[]>;
   setPrimaryAccount(groupId: string, businessAccountId: string): Promise<void>;
   isAccountLinked(businessAccountId: string): Promise<boolean>;
+  getAccountGroupMembership(businessAccountId: string): Promise<{ groupId: string; groupName: string; isPrimary: boolean } | undefined>;
+  moveAccountToGroup(businessAccountId: string, toGroupId: string): Promise<void>;
   getAccountGroupForBusiness(businessAccountId: string): Promise<AccountGroup | undefined>;
   getGroupAggregatedInsights(accountIds: string[], dateFrom?: Date, dateTo?: Date): Promise<{
     totals: {
@@ -5021,6 +5023,25 @@ export class DatabaseStorage implements IStorage {
     return !!membership;
   }
   
+  /** The group an account is in (an account is in at most one group), with whether it is that group's primary. */
+  async getAccountGroupMembership(businessAccountId: string): Promise<{ groupId: string; groupName: string; isPrimary: boolean } | undefined> {
+    const [row] = await db
+      .select({ groupId: accountGroupMembers.groupId, groupName: accountGroups.name, isPrimary: accountGroupMembers.isPrimary })
+      .from(accountGroupMembers)
+      .innerJoin(accountGroups, eq(accountGroupMembers.groupId, accountGroups.id))
+      .where(eq(accountGroupMembers.businessAccountId, businessAccountId))
+      .limit(1);
+    return row ? { groupId: row.groupId, groupName: row.groupName, isPrimary: row.isPrimary === 'true' } : undefined;
+  }
+
+  /** Moves a (non-primary) account into another group: leaves its current group and joins the new one in one step. */
+  async moveAccountToGroup(businessAccountId: string, toGroupId: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      await tx.delete(accountGroupMembers).where(eq(accountGroupMembers.businessAccountId, businessAccountId));
+      await tx.insert(accountGroupMembers).values({ groupId: toGroupId, businessAccountId, isPrimary: 'false' });
+    });
+  }
+
   async getAccountGroupForBusiness(businessAccountId: string): Promise<AccountGroup | undefined> {
     const [membership] = await db
       .select()

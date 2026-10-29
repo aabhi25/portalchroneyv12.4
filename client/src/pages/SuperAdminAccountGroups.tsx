@@ -158,6 +158,7 @@ export default function SuperAdminAccountGroups({ groupId }: { groupId?: string 
   const [primaryAccountId, setPrimaryAccountId] = useState("");
   const [memberAccountIds, setMemberAccountIds] = useState<string[]>([]);
   const [newMemberId, setNewMemberId] = useState("");
+  const [newMemberSearch, setNewMemberSearch] = useState("");
   const [primarySearch, setPrimarySearch] = useState("");
   const [additionalSearch, setAdditionalSearch] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -285,20 +286,21 @@ export default function SuperAdminAccountGroups({ groupId }: { groupId?: string 
   });
 
   const addMemberMutation = useMutation({
-    mutationFn: async (data: { groupId: string; businessAccountId: string }) => {
+    mutationFn: async (data: { groupId: string; businessAccountId: string; moveFromOtherGroup?: boolean }) => {
       return await apiRequest<AccountGroup>(
         "POST",
         `/api/super-admin/account-groups/${data.groupId}/members`,
-        { businessAccountId: data.businessAccountId }
+        { businessAccountId: data.businessAccountId, moveFromOtherGroup: data.moveFromOtherGroup === true }
       );
     },
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/super-admin/account-groups"] });
       setIsAddMemberDialogOpen(false);
       setNewMemberId("");
+      const from = vars.moveFromOtherGroup ? groupOfAccount.get(vars.businessAccountId)?.name : undefined;
       toast({
-        title: "Account Linked",
-        description: "The account has been added to the group",
+        title: from ? "Account Moved" : "Account Linked",
+        description: from ? `The account left "${from}" and is now in this group` : "The account has been added to the group",
       });
     },
     onError: (error: Error) => {
@@ -569,22 +571,26 @@ export default function SuperAdminAccountGroups({ groupId }: { groupId?: string 
     addMemberMutation.mutate({
       groupId: selectedGroup.id,
       businessAccountId: newMemberId,
+      moveFromOtherGroup: groupOfAccount.has(newMemberId),
     });
   };
 
   const openAddMemberDialog = (group: AccountGroup) => {
     setSelectedGroup(group);
     setNewMemberId("");
+    setNewMemberSearch("");
     setIsAddMemberDialogOpen(true);
   };
 
+  // Every account not in this group. One in another group can be moved here (it leaves that group),
+  // except that group's primary account.
+  const groupOfAccount = new Map(accountGroups.flatMap(g => g.members.map(m => [m.businessAccountId, { name: g.name, isPrimary: m.isPrimary }] as const)));
   const availableForNewMember = selectedGroup
-    ? businessAccounts.filter(
-        account =>
-          !linkedAccountIds.has(account.id) ||
-          selectedGroup.members.some(m => m.businessAccountId === account.id)
-      ).filter(account => !selectedGroup.members.some(m => m.businessAccountId === account.id))
+    ? businessAccounts
+        .filter(account => !selectedGroup.members.some(m => m.businessAccountId === account.id))
+        .sort((a, b) => Number(groupOfAccount.has(a.id)) - Number(groupOfAccount.has(b.id)) || a.name.localeCompare(b.name))
     : [];
+  const newMemberCurrentGroup = newMemberId ? groupOfAccount.get(newMemberId) : undefined;
 
   return (
     <div>
@@ -931,18 +937,58 @@ export default function SuperAdminAccountGroups({ groupId }: { groupId?: string 
           </DialogHeader>
           <form onSubmit={handleAddMember}>
             <div className="py-4">
-              <Select value={newMemberId} onValueChange={setNewMemberId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select account to add" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableForNewMember.map((account) => (
-                    <SelectItem key={account.id} value={account.id}>
-                      {account.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {availableForNewMember.length > 0 && (() => {
+                const q = newMemberSearch.trim().toLowerCase();
+                const matches = q ? availableForNewMember.filter(a => a.name.toLowerCase().includes(q)) : availableForNewMember;
+                return (
+                  <div className="space-y-2">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        autoFocus
+                        placeholder="Search accounts..."
+                        value={newMemberSearch}
+                        onChange={(e) => setNewMemberSearch(e.target.value)}
+                        className="pl-9"
+                        data-testid="input-add-member-search"
+                      />
+                    </div>
+                    <div className="max-h-64 overflow-y-auto rounded-md border" role="listbox" aria-label="Accounts">
+                      {matches.map((account) => {
+                        const inGroup = groupOfAccount.get(account.id);
+                        const locked = !!inGroup?.isPrimary;
+                        return (
+                          <button
+                            type="button"
+                            key={account.id}
+                            role="option"
+                            aria-selected={newMemberId === account.id}
+                            disabled={locked}
+                            title={locked ? `Primary account of "${inGroup!.name}": change that group's primary first` : undefined}
+                            onClick={() => setNewMemberId(account.id)}
+                            className={`flex w-full items-center gap-2 p-2 text-left text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ${newMemberId === account.id ? "bg-primary/10 font-medium" : ""}`}
+                          >
+                            <Building2 className="w-4 h-4 shrink-0 text-muted-foreground" />
+                            <span className="flex-1 truncate">{account.name}</span>
+                            {inGroup && (
+                              <span className="shrink-0 max-w-[45%] truncate rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                                {locked ? "Primary of " : "In "}{inGroup.name}
+                              </span>
+                            )}
+                            {newMemberId === account.id && <Check className="w-4 h-4 shrink-0 text-primary" />}
+                          </button>
+                        );
+                      })}
+                      {matches.length === 0 && <div className="p-2 text-sm text-muted-foreground">No accounts found</div>}
+                    </div>
+                    {newMemberCurrentGroup && (
+                      <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200" data-testid="note-move-from-group">
+                        This account is in "{newMemberCurrentGroup.name}". Adding it here removes it from that group.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
               {availableForNewMember.length === 0 && (
                 <p className="text-sm text-muted-foreground mt-2">
                   No available accounts to add. All accounts are already linked.
@@ -957,7 +1003,7 @@ export default function SuperAdminAccountGroups({ groupId }: { groupId?: string 
                 type="submit" 
                 disabled={!newMemberId || addMemberMutation.isPending}
               >
-                {addMemberMutation.isPending ? "Adding..." : "Add Account"}
+                {addMemberMutation.isPending ? "Adding..." : newMemberCurrentGroup ? "Move Account" : "Add Account"}
               </Button>
             </DialogFooter>
           </form>
