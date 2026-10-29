@@ -21,6 +21,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { format, subDays, subMonths } from "date-fns";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { FaWhatsapp } from "react-icons/fa";
 import { 
   BarChart3, 
   MessageSquare, 
@@ -49,6 +50,7 @@ interface GroupInsights {
   dateTo?: string;
   totals: {
     leads: number;
+    whatsappLeads?: number;
     conversations: number;
     visitors: number;
     products: number;
@@ -58,6 +60,7 @@ interface GroupInsights {
     businessAccountId: string;
     businessName: string;
     leads: number;
+    whatsappLeads?: number;
     conversations: number;
     visitors: number;
     products: number;
@@ -234,6 +237,9 @@ export default function GroupInsightsPage() {
     enabled: !!groupId,
   });
 
+  // WhatsApp leads are shown only when the group has some in this period.
+  const showWhatsappLeads = (groupInsights?.totals.whatsappLeads ?? 0) > 0;
+
   const downloadPDF = async () => {
     if (!groupInsights || !group) return;
     try {
@@ -252,11 +258,13 @@ export default function GroupInsightsPage() {
           generatedText: format(new Date(), "MMM d, yyyy 'at' h:mm a"),
           totals: {
             leads: groupInsights.totals.leads,
+            whatsappLeads: groupInsights.totals.whatsappLeads ?? 0,
             conversations: groupInsights.totals.conversations,
           },
           accountBreakdown: groupInsights.accountBreakdown.map((a) => ({
             businessName: a.businessName,
             leads: a.leads,
+            whatsappLeads: a.whatsappLeads ?? 0,
             conversations: a.conversations,
           })),
         }),
@@ -520,16 +528,27 @@ export default function GroupInsightsPage() {
             </div>
           ) : groupInsights ? (
             <>
-              <div className="grid grid-cols-3 gap-4">
+              <div className={`grid gap-4 ${showWhatsappLeads ? "grid-cols-2 lg:grid-cols-4" : "grid-cols-3"}`}>
                 <Card>
                   <CardContent className="pt-6 text-center">
                     <div className="flex items-center justify-center gap-1.5 text-muted-foreground mb-2">
                       <Contact className="w-5 h-5 flex-shrink-0" />
-                      <span className="text-sm font-medium">Leads</span>
+                      <span className="text-sm font-medium">{showWhatsappLeads ? "Website leads" : "Leads"}</span>
                     </div>
                     <div className="text-3xl font-bold">{groupInsights.totals.leads}</div>
                   </CardContent>
                 </Card>
+                {showWhatsappLeads && (
+                  <Card>
+                    <CardContent className="pt-6 text-center">
+                      <div className="flex items-center justify-center gap-1.5 text-muted-foreground mb-2">
+                        <FaWhatsapp className="w-5 h-5 flex-shrink-0" />
+                        <span className="text-sm font-medium">WhatsApp leads</span>
+                      </div>
+                      <div className="text-3xl font-bold">{groupInsights.totals.whatsappLeads}</div>
+                    </CardContent>
+                  </Card>
+                )}
                 <Card>
                   <CardContent className="pt-6 text-center">
                     <div className="flex items-center justify-center gap-1.5 text-muted-foreground mb-2">
@@ -550,6 +569,9 @@ export default function GroupInsightsPage() {
                         ? ((groupInsights.totals.leads / groupInsights.totals.conversations) * 100).toFixed(1)
                         : "0"}%
                     </div>
+                    {showWhatsappLeads && (
+                      <p className="text-xs text-muted-foreground mt-1">Website leads ÷ conversations</p>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -563,7 +585,10 @@ export default function GroupInsightsPage() {
                         <thead className="bg-muted/50">
                           <tr>
                             <th className="text-left p-3 font-medium whitespace-nowrap">Account</th>
-                            <th className="text-center p-3 font-medium whitespace-nowrap">Leads</th>
+                            <th className="text-center p-3 font-medium whitespace-nowrap">{showWhatsappLeads ? "Website leads" : "Leads"}</th>
+                            {showWhatsappLeads && (
+                              <th className="text-center p-3 font-medium whitespace-nowrap">WhatsApp leads</th>
+                            )}
                             <th className="text-center p-3 font-medium whitespace-nowrap">Chats</th>
                             <th className="text-center p-3 font-medium whitespace-nowrap">Conv. Rate</th>
                           </tr>
@@ -578,6 +603,9 @@ export default function GroupInsightsPage() {
                                 </div>
                               </td>
                               <td className="text-center p-3 font-medium">{account.leads}</td>
+                              {showWhatsappLeads && (
+                                <td className="text-center p-3 font-medium">{account.whatsappLeads ?? 0}</td>
+                              )}
                               <td className="text-center p-3 font-medium">{account.conversations}</td>
                               <td className="text-center p-3 font-medium">
                                 {account.conversations > 0

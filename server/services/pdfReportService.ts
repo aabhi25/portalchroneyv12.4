@@ -5,8 +5,9 @@ export interface InsightsPdfData {
   groupName: string;
   dateRangeText: string;
   generatedText: string;
-  totals: { leads: number; conversations: number };
-  accountBreakdown: Array<{ businessName: string; leads: number; conversations: number }>;
+  // WhatsApp leads are printed only when there are some (same as the page).
+  totals: { leads: number; whatsappLeads?: number; conversations: number };
+  accountBreakdown: Array<{ businessName: string; leads: number; whatsappLeads?: number; conversations: number }>;
 }
 
 export interface AnalyticsPdfData {
@@ -69,13 +70,21 @@ export function renderInsightsPdf(data: InsightsPdfData): Buffer {
   const totalConvRate = data.totals.conversations > 0
     ? ((data.totals.leads / data.totals.conversations) * 100).toFixed(1)
     : "0";
-  doc.text(`Total Leads: ${data.totals.leads}`, 14, 58);
-  doc.text(`Total Conversations: ${data.totals.conversations}`, 14, 66);
-  doc.text(`Conversion Rate: ${totalConvRate}%`, 14, 74);
+  const showWhatsapp = (data.totals.whatsappLeads ?? 0) > 0;
+  let y = 58;
+  doc.text(`${showWhatsapp ? "Website Leads" : "Total Leads"}: ${data.totals.leads}`, 14, y);
+  if (showWhatsapp) {
+    y += 8;
+    doc.text(`WhatsApp Leads: ${data.totals.whatsappLeads}`, 14, y);
+  }
+  y += 8;
+  doc.text(`Total Conversations: ${data.totals.conversations}`, 14, y);
+  y += 8;
+  doc.text(`Conversion Rate: ${totalConvRate}%${showWhatsapp ? " (website leads / conversations)" : ""}`, 14, y);
 
   if (data.accountBreakdown.length > 0) {
     doc.setFontSize(14);
-    doc.text("Breakdown by Account", 14, 90);
+    doc.text("Breakdown by Account", 14, y + 16);
 
     const tableData = data.accountBreakdown
       .slice()
@@ -84,12 +93,16 @@ export function renderInsightsPdf(data: InsightsPdfData): Buffer {
         const rate = account.conversations > 0
           ? ((account.leads / account.conversations) * 100).toFixed(1) + "%"
           : "0%";
-        return [account.businessName, account.leads.toString(), account.conversations.toString(), rate];
+        return showWhatsapp
+          ? [account.businessName, account.leads.toString(), String(account.whatsappLeads ?? 0), account.conversations.toString(), rate]
+          : [account.businessName, account.leads.toString(), account.conversations.toString(), rate];
       });
 
     autoTable(doc, {
-      startY: 96,
-      head: [["Account", "Leads", "Chats", "Conv. Rate"]],
+      startY: y + 22,
+      head: [showWhatsapp
+        ? ["Account", "Website Leads", "WhatsApp Leads", "Chats", "Conv. Rate"]
+        : ["Account", "Leads", "Chats", "Conv. Rate"]],
       body: tableData,
       styles: { fontSize: 10 },
       headStyles: { fillColor: [124, 58, 237] },

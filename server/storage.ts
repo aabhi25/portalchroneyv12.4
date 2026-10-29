@@ -579,6 +579,7 @@ export interface IStorage {
   getGroupAggregatedInsights(accountIds: string[], dateFrom?: Date, dateTo?: Date): Promise<{
     totals: {
       leads: number;
+      whatsappLeads: number;
       conversations: number;
       visitors: number;
       products: number;
@@ -588,6 +589,7 @@ export interface IStorage {
       businessAccountId: string;
       businessName: string;
       leads: number;
+      whatsappLeads: number;
       conversations: number;
       visitors: number;
       products: number;
@@ -5513,6 +5515,7 @@ export class DatabaseStorage implements IStorage {
   async getGroupAggregatedInsights(accountIds: string[], dateFrom?: Date, dateTo?: Date): Promise<{
     totals: {
       leads: number;
+      whatsappLeads: number;
       conversations: number;
       visitors: number;
       products: number;
@@ -5522,6 +5525,7 @@ export class DatabaseStorage implements IStorage {
       businessAccountId: string;
       businessName: string;
       leads: number;
+      whatsappLeads: number;
       conversations: number;
       visitors: number;
       products: number;
@@ -5532,6 +5536,7 @@ export class DatabaseStorage implements IStorage {
       businessAccountId: string;
       businessName: string;
       leads: number;
+      whatsappLeads: number;
       conversations: number;
       visitors: number;
       products: number;
@@ -5539,6 +5544,7 @@ export class DatabaseStorage implements IStorage {
     }[] = [];
     
     let totalLeads = 0;
+    let totalWhatsappLeads = 0;
     let totalConversations = 0;
     let totalVisitors = 0;
     let totalProducts = 0;
@@ -5634,10 +5640,25 @@ export class DatabaseStorage implements IStorage {
       const { getPurgedAnalytics } = await import('./services/dataRetentionService');
       const purged = await getPurgedAnalytics([accountId], dateFrom, dateTo);
 
+      // WhatsApp leads, counted like the account's WhatsApp Insights page: incoming,
+      // not just a message, and (if the account requires PAN + email) qualified.
+      const { isQualificationRequired } = await import('./services/leadQualificationService');
+      const qualifiedOnly = await isQualificationRequired(accountId);
+      const waResult = await db.execute<{ n: number }>(sql`
+        SELECT COUNT(*)::int AS n FROM whatsapp_leads
+        WHERE business_account_id = ${accountId}
+          AND direction = 'incoming' AND status != 'message_only'
+          ${qualifiedOnly ? sql`AND qualified_at IS NOT NULL` : sql``}
+          ${dateFrom ? sql`AND received_at >= ${dateFrom}` : sql``}
+          ${dateTo ? sql`AND received_at <= ${dateTo}` : sql``}
+      `);
+      const whatsappLeadCount = Number(waResult.rows[0]?.n ?? 0);
+
       const accountMetrics = {
         businessAccountId: accountId,
         businessName: account.name,
         leads: (leadResult?.count || 0) + purged.leads.total,
+        whatsappLeads: whatsappLeadCount,
         conversations: (conversationResult?.count || 0) + purged.conversations.total,
         visitors: visitorCount,
         products: productResult?.count || 0,
@@ -5647,6 +5668,7 @@ export class DatabaseStorage implements IStorage {
       accountBreakdown.push(accountMetrics);
       
       totalLeads += accountMetrics.leads;
+      totalWhatsappLeads += accountMetrics.whatsappLeads;
       totalConversations += accountMetrics.conversations;
       totalVisitors += accountMetrics.visitors;
       totalProducts += accountMetrics.products;
@@ -5656,6 +5678,7 @@ export class DatabaseStorage implements IStorage {
     return {
       totals: {
         leads: totalLeads,
+        whatsappLeads: totalWhatsappLeads,
         conversations: totalConversations,
         visitors: totalVisitors,
         products: totalProducts,

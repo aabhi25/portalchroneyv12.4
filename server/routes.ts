@@ -11968,6 +11968,7 @@ Return ONLY the refined instruction, nothing else.`
           dateTo: dateTo?.toISOString(),
           totals: {
             leads: 0,
+            whatsappLeads: 0,
             conversations: 0,
             visitors: 0,
             products: 0,
@@ -12009,12 +12010,14 @@ Return ONLY the refined instruction, nothing else.`
         generatedText: String(body.generatedText || ""),
         totals: {
           leads: Number(body?.totals?.leads ?? 0),
+          whatsappLeads: Number(body?.totals?.whatsappLeads ?? 0),
           conversations: Number(body?.totals?.conversations ?? 0),
         },
         accountBreakdown: Array.isArray(body.accountBreakdown)
           ? body.accountBreakdown.map((a: any) => ({
               businessName: String(a?.businessName ?? "Unknown"),
               leads: Number(a?.leads ?? 0),
+              whatsappLeads: Number(a?.whatsappLeads ?? 0),
               conversations: Number(a?.conversations ?? 0),
             }))
           : [],
