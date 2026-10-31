@@ -4110,7 +4110,9 @@ export default function EmbedChat() {
     const scroll = () => requestAnimationFrame(() => setTimeout(() => {
       const container = messagesContainerRef.current;
       const end = messagesEndRef.current;
-      if (!container || !end) return;
+      // Not laid out yet (the chat loads hidden until the visitor opens it): the list watcher
+      // below puts it right once it has a real height.
+      if (!container || !end || container.clientHeight === 0) return;
       const target = end.offsetTop + 12 - container.clientHeight;
       container.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
     }, 60));
@@ -4141,6 +4143,39 @@ export default function EmbedChat() {
       }];
     });
   }, [activeFormStep]);
+
+  const hasVisitorMessage = messages.some(m => m.role === 'user');
+
+  // Whenever the message list changes size (the chat opening, a phone's keyboard, rotating),
+  // never leave the visitor looking at the empty space kept under the last message. On iPhones
+  // the chat is laid out while still hidden and tiny, so a "keep the newest question in view"
+  // scroll from that moment showed only blank space once the chat opened, with the welcome
+  // and its options scrolled out of sight above.
+  const observedListRef = useRef<HTMLDivElement | null>(null);
+  const listObserverRef = useRef<ResizeObserver | null>(null);
+  useEffect(() => {
+    const list = messagesContainerRef.current;
+    if (list === observedListRef.current) return;
+    listObserverRef.current?.disconnect();
+    listObserverRef.current = null;
+    observedListRef.current = list;
+    if (!list || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      const end = messagesEndRef.current;
+      if (!end || list.clientHeight === 0) return;
+      const contentBottom = end.offsetTop + 12;
+      if (contentBottom <= list.clientHeight) {
+        // The whole conversation fits: show it from the top.
+        if (list.scrollTop > 0) list.scrollTop = 0;
+      } else if (list.scrollTop > end.offsetTop - 48) {
+        // Only the empty space is showing: bring the newest message back into view.
+        list.scrollTop = Math.max(0, contentBottom - list.clientHeight);
+      }
+    });
+    observer.observe(list);
+    listObserverRef.current = observer;
+  });
+  useEffect(() => () => listObserverRef.current?.disconnect(), []);
 
   if (!businessAccountId) {
     return (
@@ -6093,10 +6128,12 @@ export default function EmbedChat() {
           overscrollBehavior: 'contain',
           overscrollBehaviorX: 'contain',
           WebkitOverflowScrolling: 'touch',
-          // Extra space so any message can scroll to top. During an avatar call the
-          // video panel takes that room: a padding this tall would push the
-          // composer off small widgets (a flex item can't shrink below its padding).
-          paddingBottom: avatarCallActive ? '48px' : '350px',
+          // Extra space so a message the visitor sends can scroll to the top. Not before
+          // they have sent anything: on phones it only made room to scroll the welcome and
+          // its options out of sight. During an avatar call the video panel takes that
+          // room: a padding this tall would push the composer off small widgets (a flex
+          // item can't shrink below its padding).
+          paddingBottom: avatarCallActive ? '48px' : hasVisitorMessage ? '350px' : '16px',
           overflowAnchor: 'none' // Prevent browser auto-adjusting scroll position
         }}
       >
