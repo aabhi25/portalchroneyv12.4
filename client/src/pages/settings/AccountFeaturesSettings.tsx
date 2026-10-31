@@ -1,3 +1,4 @@
+import { brandName } from "@/lib/brand";
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
@@ -448,7 +449,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           icon={Link2} tint="bg-sky-600" label="CRM"
           description="LeadSquared, Salesforce, Meritto or a custom CRM"
           below={featureStatus.data?.crm?.state === "off"
-            ? <p className="text-[12px] text-gray-500" data-testid="text-status-crm">No CRM set up: leads stay in AI Chroney only.</p>
+            ? <p className="text-[12px] text-gray-500" data-testid="text-status-crm">No CRM set up: leads stay in {brandName()} only.</p>
             : checklistLine("crm")}
         >
           {setUpButton("crm")}

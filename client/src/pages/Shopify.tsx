@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -634,7 +635,7 @@ export default function Shopify() {
               <ul className="list-disc list-inside mt-2 space-y-1">
                 <li>Automatically sync products from your Shopify store</li>
                 <li>Keep product information up-to-date with scheduled syncing</li>
-                <li>Chroney can answer customer questions about your Shopify products</li>
+                <li>{brandShort()} can answer customer questions about your Shopify products</li>
                 <li>No manual product entry required</li>
               </ul>
             </AlertDescription>

@@ -59,7 +59,8 @@ export const AGENCY_PERMISSIONS = [
   { key: "seeCosts", label: "See AI cost", hint: "Off: usage is shown as actions and % of limit only", default: true },
   { key: "seeStatement", label: "See our monthly bill", hint: "The statement of what we charge the agency", default: true },
   { key: "manageTeam", label: "Add agency staff logins", hint: "Only the agency's main login can do this", default: true },
-  { key: "editBranding", label: "Change the widget footer", hint: "Show the agency's name, or nothing", default: true },
+  { key: "editBranding", label: "Change the brand", hint: "Name, logo, colour and the widget footer", default: true },
+  { key: "setCustomDomain", label: "Set its own web address", hint: "e.g. app.agency.com for its portal and widget", default: false },
   { key: "setupConnectedApps", label: "Set up CRMs for clients", hint: "LeadSquared, Salesforce, Meritto and other connected apps", default: false },
 ] as const;
 
@@ -204,10 +205,19 @@ export function computeAgencyStatement(input: {
 // ── Brand shown to the agency's clients and their visitors ───────────────────
 
 export type WidgetFooterMode = "agency" | "hidden" | "platform";
+export type ClientLoginScope = "anywhere" | "agency_domain";
 
 export interface AgencyBranding {
   /** The name clients know the product by. */
   brandName: string;
+  /** Accent colour for the portal (#rrggbb); empty = ours. */
+  primaryColor: string;
+  /** One line under the name on the login page. */
+  loginTagline: string;
+  /** Where the agency's clients get help (shown instead of "contact support"). */
+  supportEmail: string;
+  /** "agency_domain": the agency's logins and clients may only log in at its own web address. */
+  clientLoginScope: ClientLoginScope;
   /** Widget footer: the agency's name and link, nothing, or ours. */
   widgetFooter: WidgetFooterMode;
   footerText: string;
@@ -221,8 +231,14 @@ export function resolveAgencyBranding(stored: unknown, agencyName = ""): AgencyB
   const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
   const mode: WidgetFooterMode = s.widgetFooter === "hidden" || s.widgetFooter === "platform" ? s.widgetFooter : "agency";
   const url = str(s.footerUrl, 300);
+  const color = str(s.primaryColor, 7);
+  const email = str(s.supportEmail, 200);
   return {
     brandName: str(s.brandName, 80) || agencyName,
+    primaryColor: /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : "",
+    loginTagline: str(s.loginTagline, 120),
+    supportEmail: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "",
+    clientLoginScope: s.clientLoginScope === "agency_domain" ? "agency_domain" : "anywhere",
     widgetFooter: mode,
     footerText: str(s.footerText, 80),
     footerUrl: /^https?:\/\//i.test(url) ? url : "",
@@ -248,4 +264,67 @@ export interface AgencyContextDto {
   permissions: AgencyPermissions;
   /** Set while the agency login is looking at one client's portal. */
   viewingClient: { businessAccountId: string; name: string } | null;
+}
+
+// ── The brand a page shows (ours, or an agency's) ────────────────────────────
+
+export interface PublicBrand {
+  isAgency: boolean;
+  /** Full name, e.g. "AI Chroney". */
+  name: string;
+  /** Short name used in sentences, e.g. "Chroney" ("Train Chroney"). */
+  shortName: string;
+  logoUrl: string;
+  primaryColor: string | null;
+  tagline: string | null;
+  supportEmail: string | null;
+  /** The agency's own web address once it points to us (no scheme), else null. */
+  domain: string | null;
+}
+
+export const PLATFORM_BRAND: PublicBrand = {
+  isAgency: false,
+  name: "AI Chroney",
+  shortName: "Chroney",
+  logoUrl: "/c_logo.png",
+  primaryColor: null,
+  tagline: null,
+  supportEmail: null,
+  domain: null,
+};
+
+export function agencyPublicBrand(agency: {
+  id: string;
+  name: string;
+  branding: unknown;
+  customDomain: string | null;
+  domainStatus: string;
+  logoUpdatedAt: Date | string | null;
+  hasLogo: boolean;
+}): PublicBrand {
+  const b = resolveAgencyBranding(agency.branding, agency.name);
+  const v = agency.logoUpdatedAt ? new Date(agency.logoUpdatedAt).getTime() : 0;
+  return {
+    isAgency: true,
+    name: b.brandName,
+    shortName: b.brandName,
+    // No logo uploaded: the portal shows the brand's initial instead of ours.
+    logoUrl: agency.hasLogo ? `/api/brand/logo/${agency.id}?v=${v}` : "",
+    primaryColor: b.primaryColor || null,
+    tagline: b.loginTagline || null,
+    supportEmail: b.supportEmail || null,
+    domain: agency.customDomain && agency.domainStatus === "verified" ? agency.customDomain : null,
+  };
+}
+
+/**
+ * A web address an agency may use: a full host name like "app.agency.com" (lowercase, no scheme,
+ * path or port). Returns null when it isn't one. Our own domains are refused by the server.
+ */
+export function normalizeDomain(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const d = input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/:\d+$/, "").replace(/\.$/, "");
+  if (d.length < 4 || d.length > 253) return null;
+  if (!/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(d)) return null;
+  return d;
 }

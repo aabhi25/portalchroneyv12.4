@@ -1,3 +1,4 @@
+import { brandName } from "@/lib/brand";
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
@@ -74,7 +75,7 @@ function Checklist({ checks }: { checks?: ChecklistStatus["checks"] }) {
 function StateBanner({ status, offText }: { status?: ChecklistStatus; offText: string }) {
   if (!status) return null;
   if (status.state === "ready") return <p className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">Ready{status.summary ? ` · ${status.summary}` : ""}</p>;
-  if (status.state === "off") return <p className="rounded-lg border bg-gray-50 p-3 text-sm text-gray-600">{offText}</p>;
+  if (status.state === "off") return <p className="rounded-lg border bg-gray-50 p-3 text-sm text-gray-600">{offText.replace("{brand}", brandName())}</p>;
   return <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{status.problem}</p>;
 }
 
@@ -136,7 +137,7 @@ const META: Record<SetupFeature, { icon: LucideIcon; title: string; description:
   crm: {
     icon: Link2, title: "Where leads go (CRM)", page: "/admin/settings/integrations", pageLabel: "Open Connected apps",
     description: "LeadSquared, Salesforce, Meritto or a custom CRM. Each is set up in Connected apps.",
-    offText: "No CRM is set up, so leads stay in AI Chroney only.",
+    offText: "No CRM is set up, so leads stay in {brand} only.", // {brand}: filled in when shown (agency brands)
   },
   visualSearch: {
     icon: Camera, title: "Visual product search", page: "/admin/vista/settings/visual-search", pageLabel: "Open Match strictness",

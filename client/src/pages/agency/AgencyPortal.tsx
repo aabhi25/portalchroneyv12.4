@@ -15,6 +15,7 @@ import {
   CredentialsDialog, FeatureSwitches, Panel, Stat, StatusPill, UsageBar, formatUsd, monthLabel, recentMonths,
 } from "@/components/agency/agencyUi";
 import { BrandForm, StatementView } from "@/pages/SuperAdminAgencyPage";
+import { DomainPanel, LogoPanel, type DomainInfo } from "@/components/agency/BrandingPanels";
 import {
   AGENCY_FEATURES,
   type AgencyBranding, type AgencyFeatureKey, type AgencyPermissions, type AgencyStatement,
@@ -37,6 +38,8 @@ interface Overview {
     aiCap: { monthlyAiCapUsd: number | null; action: string; warnAtPercent: number; percentUsed: number } | null;
     defaultClientLimitUsd: number | null;
     currency: string;
+    domain: DomainInfo;
+    logoUrl: string | null;
   };
   me: { username: string; role: "owner" | "staff" };
   month: string;
@@ -507,16 +510,51 @@ export function AgencyTeamPage() {
 export function AgencyBrandPage() {
   const { toast } = useToast();
   const { data: ov } = useAgencyOverview();
+  const refreshBrand = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/agency/overview"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+  };
+  const fail = (title: string) => (e: Error) => toast({ title, description: e.message, variant: "destructive" });
   const save = useMutation({
     mutationFn: (branding: AgencyBranding) => apiRequest("PUT", "/api/agency/branding", branding),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/agency/overview"] }); queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] }); toast({ title: "Saved" }); },
-    onError: (e: Error) => toast({ title: "Couldn't save", description: e.message, variant: "destructive" }),
+    onSuccess: () => { refreshBrand(); toast({ title: "Saved" }); },
+    onError: fail("Couldn't save"),
   });
+  const logo = useMutation({
+    mutationFn: (dataUrl: string | null) => apiRequest("PUT", "/api/agency/logo", { logo: dataUrl }),
+    onSuccess: () => { refreshBrand(); toast({ title: "Logo saved" }); },
+    onError: fail("Couldn't save the logo"),
+  });
+  const domain = useMutation({
+    mutationFn: (name: string | null) => apiRequest("PUT", "/api/agency/domain", { domain: name }),
+    onSuccess: () => { refreshBrand(); toast({ title: "Web address saved" }); },
+    onError: fail("Couldn't save the web address"),
+  });
+  const check = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/agency/domain/check"),
+    onSuccess: refreshBrand,
+    onError: fail("Couldn't check"),
+  });
+  const perms = ov?.agency.permissions;
   return (
-    <Frame icon={Palette} tint="bg-fuchsia-600" kind={ov?.agency.name ?? "Agency"} title="Brand" subtitle="What your clients' website visitors see at the bottom of the chat.">
-      <Panel>
-        {ov ? <BrandForm key={ov.agency.id} branding={ov.agency.branding} saving={save.isPending} onSave={(b) => save.mutate(b)} allowPlatform={false} /> : <p className="text-sm text-gray-500">Loading…</p>}
-      </Panel>
+    <Frame icon={Palette} tint="bg-fuchsia-600" kind={ov?.agency.name ?? "Agency"} title="Brand" subtitle="What your clients and their website visitors see.">
+      {!ov ? <p className="text-sm text-gray-500">Loading…</p> : (
+        <>
+          <Panel>
+            <BrandForm key={ov.agency.id} branding={ov.agency.branding} saving={save.isPending} onSave={(b) => save.mutate(b)} allowPlatform={false} />
+          </Panel>
+          <LogoPanel logoUrl={ov.agency.logoUrl} saving={logo.isPending} onSave={(d) => logo.mutate(d)} disabled={!perms?.editBranding} />
+          <DomainPanel
+            key={ov.agency.domain.name ?? "none"}
+            domain={ov.agency.domain}
+            canEdit={!!perms?.setCustomDomain}
+            saving={domain.isPending}
+            checking={check.isPending}
+            onSave={(n) => domain.mutate(n)}
+            onCheck={() => check.mutate()}
+          />
+        </>
+      )}
     </Frame>
   );
 }

@@ -17,6 +17,7 @@ import { AGENCY_TABS, agencyHref, accountHref, type AgencyTabKey } from "@/navig
 import {
   CredentialsDialog, FeatureSwitches, Panel, Stat, StatusPill, UsageBar, formatMoney, formatUsd, monthLabel, recentMonths,
 } from "@/components/agency/agencyUi";
+import { DomainPanel, LogoPanel, type DomainInfo } from "@/components/agency/BrandingPanels";
 import {
   AGENCY_FEATURES, AGENCY_PERMISSIONS,
   type AgencyBilling, type AgencyBranding, type AgencyFeatureKey, type AgencyPermissions, type AgencyStatement,
@@ -36,6 +37,8 @@ export interface AgencySettingsDto {
   billing: AgencyBilling;
   branding: AgencyBranding;
   notes: string;
+  domain: DomainInfo;
+  logoUrl: string | null;
 }
 
 interface ClientRow {
@@ -613,6 +616,35 @@ export function BrandForm({ branding, onSave, saving, showLeadSource = true, all
           </div>
         )}
       </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="brand-color">Brand colour</Label>
+          <div className="flex items-center gap-2">
+            <input type="color" aria-label="Pick colour" value={f.primaryColor || "#7c3aed"} onChange={e => setF({ ...f, primaryColor: e.target.value })} className="h-9 w-12 cursor-pointer rounded border border-black/10 bg-white" />
+            <Input id="brand-color" value={f.primaryColor} onChange={e => setF({ ...f, primaryColor: e.target.value })} placeholder="Ours" className="font-mono" data-testid="input-brand-color" />
+          </div>
+          <p className="text-[12px] text-gray-500">Login button, menu name and initial.</p>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="brand-tagline">Line under the name on the login page</Label>
+          <Input id="brand-tagline" value={f.loginTagline} onChange={e => setF({ ...f, loginTagline: e.target.value })} placeholder="Optional" maxLength={120} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="brand-support">Support email for clients</Label>
+          <Input id="brand-support" type="email" value={f.supportEmail} onChange={e => setF({ ...f, supportEmail: e.target.value })} placeholder="help@agency.com" />
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label>Where the agency and its clients log in</Label>
+        <Select value={f.clientLoginScope} onValueChange={(v) => setF({ ...f, clientLoginScope: v as AgencyBranding["clientLoginScope"] })}>
+          <SelectTrigger className="md:w-96" data-testid="select-login-scope"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="anywhere">At its own address or ours</SelectItem>
+            <SelectItem value="agency_domain">Only at its own address (once connected)</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-[12px] text-gray-500">They always see the agency's brand after logging in, wherever they log in.</p>
+      </div>
       <div className="space-y-1.5">
         <Label>Chat widget footer</Label>
         <Select value={f.widgetFooter} onValueChange={(v) => setF({ ...f, widgetFooter: v as AgencyBranding["widgetFooter"] })}>
@@ -648,10 +680,32 @@ export function BrandForm({ branding, onSave, saving, showLeadSource = true, all
 }
 
 function BrandTab({ detail }: { detail: AgencyDetail }) {
-  const save = useSaveAgency(detail.agency.id);
+  const id = detail.agency.id;
+  const save = useSaveAgency(id);
+  const { toast } = useToast();
+  const fail = (title: string) => (e: Error) => toast({ title, description: e.message, variant: "destructive" });
+  const logo = useMutation({
+    mutationFn: (dataUrl: string | null) => apiRequest("PUT", `/api/super-admin/agencies/${id}/logo`, { logo: dataUrl }),
+    onSuccess: () => { refresh(id); toast({ title: "Logo saved" }); },
+    onError: fail("Couldn't save the logo"),
+  });
+  const domain = useMutation({
+    mutationFn: (name: string | null) => apiRequest("PUT", `/api/super-admin/agencies/${id}/domain`, { domain: name }),
+    onSuccess: () => { refresh(id); toast({ title: "Web address saved" }); },
+    onError: fail("Couldn't save the web address"),
+  });
+  const check = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/super-admin/agencies/${id}/domain/check`),
+    onSuccess: () => refresh(id),
+    onError: fail("Couldn't check"),
+  });
   return (
-    <Panel title="Brand" subtitle="What the agency's clients and their website visitors see. A client can still hide the footer from its own widget settings.">
-      <BrandForm branding={detail.agency.branding} saving={save.isPending} onSave={(branding) => save.mutate({ branding })} />
-    </Panel>
+    <>
+      <Panel title="Brand" subtitle="What the agency's clients and their website visitors see. A client can still hide the footer from its own widget settings.">
+        <BrandForm branding={detail.agency.branding} saving={save.isPending} onSave={(branding) => save.mutate({ branding })} />
+      </Panel>
+      <LogoPanel logoUrl={detail.agency.logoUrl} saving={logo.isPending} onSave={(d) => logo.mutate(d)} />
+      <DomainPanel key={detail.agency.domain.name ?? "none"} domain={detail.agency.domain} canEdit saving={domain.isPending} checking={check.isPending} onSave={(n) => domain.mutate(n)} onCheck={() => check.mutate()} />
+    </>
   );
 }

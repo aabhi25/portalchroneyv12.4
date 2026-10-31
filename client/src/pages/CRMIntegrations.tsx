@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -61,7 +62,7 @@ export default function CRMIntegrations({ embedded = false }: { embedded?: boole
           <div className="mb-6">
             <h1 className="text-3xl font-bold mb-2">CRM Integrations</h1>
             <p className="text-muted-foreground">
-              Connect your favorite CRM to automatically sync leads captured by Chroney
+              Connect your favorite CRM to automatically sync leads captured by {brandShort()}
             </p>
           </div>
         )}

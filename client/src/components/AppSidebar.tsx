@@ -28,6 +28,8 @@ import { Badge } from "@/components/ui/badge";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
 import type { MeResponseDto } from "@shared/dto";
 import { AGENCY_NAV } from "@/pages/agency/AgencyPortal";
+import { BrandMark } from "@/components/BrandMark";
+import { useBrand } from "@/lib/brand";
 
 interface AppSidebarProps {
   user: MeResponseDto | null;
@@ -129,6 +131,7 @@ function SaNavItem({ area, isActive, onClick }: { area: SaArea; isActive: boolea
 
 export function AppSidebar({ user }: AppSidebarProps) {
   const [location, setLocation] = useLocation();
+  const brand = useBrand();
 
   const isSuperAdmin = user?.role === "super_admin";
   const isSuperAdminImpersonating = isSuperAdmin && !!user?.activeBusinessAccountId;
@@ -170,10 +173,14 @@ export function AppSidebar({ user }: AppSidebarProps) {
       <SidebarHeader className="p-4 border-b border-gray-100/80">
         <div className="flex items-center gap-2">
           <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 overflow-hidden">
-            <img src="/c_logo.png" className="w-10 h-10 object-contain" alt="AI Chroney" />
+            <BrandMark className="w-10 h-10" />
           </div>
           <div className="flex-1 min-w-0">
-            <h2 className="font-bold text-sm bg-gradient-to-r from-purple-700 to-indigo-600 bg-clip-text text-transparent">{user?.agency ? user.agency.brandName : "AI Chroney"}</h2>
+            {brand.primaryColor ? (
+              <h2 className="font-bold text-sm truncate" style={{ color: brand.primaryColor }} data-testid="sidebar-brand-name">{brand.name}</h2>
+            ) : (
+              <h2 className="font-bold text-sm truncate bg-gradient-to-r from-purple-700 to-indigo-600 bg-clip-text text-transparent" data-testid="sidebar-brand-name">{brand.name}</h2>
+            )}
             {user?.agency ? (
               <p className="text-xs text-gray-400 font-medium truncate">{agencyViewing ? user.businessAccount?.name : user.agency.agencyName}</p>
             ) : showBusinessNav && user?.businessAccountId && user?.businessAccount?.name ? (

@@ -1,3 +1,4 @@
+import { brandName } from "@/lib/brand";
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -337,7 +338,7 @@ export default function MerittoSettings() {
           <div className="text-sm">
             {settings.enabled
               ? <>On{settings.enabledAt ? ` since ${new Date(settings.enabledAt).toLocaleDateString()}` : ""}. Changes to a lead (email added, course chosen) are sent as updates.</>
-              : <>Off. Leads stay in AI Chroney until you switch it on (or use Sync on a lead).</>}
+              : <>Off. Leads stay in {brandName()} until you switch it on (or use Sync on a lead).</>}
           </div>
           <Switch checked={settings.enabled} disabled={!hasKeys || toggle.isPending} onCheckedChange={(v) => toggle.mutate(v)} data-testid="switch-meritto-autosync" />
         </CardContent>
@@ -378,7 +379,7 @@ export default function MerittoSettings() {
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <CardTitle className="flex items-center gap-2 text-lg"><TableProperties className="h-5 w-5 text-orange-600" /> Fields sent to Meritto</CardTitle>
-              <CardDescription>Each row is a field in Meritto's lead API (name, mobile, course, campus, …) and what AI Chroney puts in it.</CardDescription>
+              <CardDescription>Each row is a field in Meritto's lead API (name, mobile, course, campus, …) and what {brandName()} puts in it.</CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" size="sm" onClick={() => openCopy.mutate()} disabled={openCopy.isPending} data-testid="button-meritto-copy-lsq">

@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 /**
  * Train Chroney → Language: which languages the AI replies in (website, voice, WhatsApp,
  * Instagram, Facebook), plus the K-12 / TopScholar "follow the student's medium" options.
@@ -125,7 +126,7 @@ export default function AiLanguageSettingsPanel({ businessAccountId }: { busines
     mutationFn: () => apiRequest<{ settings: AiLanguageSettings }>("PUT", url, { settings: toSave }),
     onSuccess: (res) => {
       queryClient.setQueryData(businessAccountId ? [...QUERY_KEY, businessAccountId] : QUERY_KEY, res);
-      toast({ title: "Language settings saved", description: "Chroney uses them from the next message." });
+      toast({ title: "Language settings saved", description: `${brandShort()} uses them from the next message.` });
     },
     onError: (error: Error) => {
       toast({ title: "Couldn't save language settings", description: error.message || "Please try again.", variant: "destructive" });
@@ -162,7 +163,7 @@ export default function AiLanguageSettingsPanel({ businessAccountId }: { busines
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg"><Globe2 className="w-5 h-5 text-purple-600" /> Reply language</CardTitle>
           <CardDescription>
-            Choose which languages Chroney replies in. This applies to your website chat, voice and video calls, WhatsApp,
+            Choose which languages {brandShort()} replies in. This applies to your website chat, voice and video calls, WhatsApp,
             Instagram and Facebook.
           </CardDescription>
         </CardHeader>
@@ -172,14 +173,14 @@ export default function AiLanguageSettingsPanel({ businessAccountId }: { busines
               <RadioGroupItem value="any" id="lang-mode-any" className="mt-0.5" data-testid="lang-mode-any" />
               <div>
                 <div className="font-medium text-sm">Any language</div>
-                <div className="text-xs text-gray-500">Chroney replies in the language your customer writes in (how it works today).</div>
+                <div className="text-xs text-gray-500">{brandShort()} replies in the language your customer writes in (how it works today).</div>
               </div>
             </label>
             <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
               <RadioGroupItem value="restricted" id="lang-mode-restricted" className="mt-0.5" data-testid="lang-mode-restricted" />
               <div>
                 <div className="font-medium text-sm">Only these languages</div>
-                <div className="text-xs text-gray-500">Chroney replies only in the languages you pick below, even if the customer writes in another one.</div>
+                <div className="text-xs text-gray-500">{brandShort()} replies only in the languages you pick below, even if the customer writes in another one.</div>
               </div>
             </label>
           </RadioGroup>
@@ -187,7 +188,7 @@ export default function AiLanguageSettingsPanel({ businessAccountId }: { busines
           {restricted && (
             <div className="space-y-6">
               <div className="space-y-2">
-                <Label className="text-sm font-medium">Languages Chroney may reply in</Label>
+                <Label className="text-sm font-medium">Languages {brandShort()} may reply in</Label>
                 <LanguagePicker value={draft.allowed} onChange={setAllowed} testId="lang-allowed" />
                 {draft.allowed.length === 0 && <p className="text-xs text-red-600">Pick at least one language.</p>}
               </div>
@@ -214,7 +215,7 @@ export default function AiLanguageSettingsPanel({ businessAccountId }: { busines
                 <RadioGroup value={draft.unsupportedBehaviour} onValueChange={(v) => set({ unsupportedBehaviour: v as AiLanguageSettings["unsupportedBehaviour"] })} className="space-y-1">
                   <label className="flex items-start gap-2 text-sm cursor-pointer">
                     <RadioGroupItem value="default_with_note" className="mt-0.5" />
-                    <span>Answer in the default language, and say once which languages Chroney can help in <span className="text-gray-500">(recommended)</span></span>
+                    <span>Answer in the default language, and say once which languages {brandShort()} can help in <span className="text-gray-500">(recommended)</span></span>
                   </label>
                   <label className="flex items-start gap-2 text-sm cursor-pointer">
                     <RadioGroupItem value="ask_to_switch" className="mt-0.5" />

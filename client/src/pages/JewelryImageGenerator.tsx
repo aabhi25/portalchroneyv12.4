@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -1120,7 +1121,7 @@ export default function JewelryImageGenerator() {
                         AI is creating your image...
                       </p>
                       <p className="text-sm text-gray-500 mb-4">
-                        Chroney Vista is generating professional product photography
+                        {brandShort()} Vista is generating professional product photography
                       </p>
                       <div className="max-w-xs mx-auto">
                         <div className="relative h-2 bg-gray-200 rounded-full overflow-hidden">

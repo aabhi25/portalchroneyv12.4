@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { useState } from "react";
@@ -417,7 +418,7 @@ export default function TicketDetail() {
                 
                 <div className="flex items-center justify-between">
                   <p className="text-xs text-muted-foreground">
-                    Response will appear as Chroney in the chat widget
+                    Response will appear as {brandShort()} in the chat widget
                   </p>
                   <div className="flex gap-2">
                     {isEditingAIDraft && (

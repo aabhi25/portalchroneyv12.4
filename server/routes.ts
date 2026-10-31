@@ -8869,6 +8869,41 @@ If you cannot determine the category or the image doesn't match any category, re
         }
       }
 
+      // Agency web addresses: only that agency's people log in there; an agency can also require its
+      // people to use its address (clientLoginScope), so our address refuses them with a pointer.
+      {
+        const { agencyForHost, requestHost, brandForLogin } = await import("./services/agencyBrandService");
+        const { getAgencyLogin } = await import("./services/agencyService");
+        const { resolveAgencyBranding } = await import("@shared/agency");
+        const hostAgency = await agencyForHost(requestHost(req));
+        const userAgencyId = user.role === "agency_admin"
+          ? (await getAgencyLogin(user.id))?.agency.id ?? null
+          : user.businessAccountId ? (await storage.getBusinessAccount(user.businessAccountId))?.agencyId ?? null : null;
+        let refusal: string | null = null;
+        if (hostAgency && user.role !== "super_admin" && userAgencyId !== hostAgency.id) {
+          refusal = "Invalid credentials";
+        } else if (!hostAgency && userAgencyId) {
+          const brand = await brandForLogin({ agencyId: userAgencyId });
+          const agencyRow = await (await import("./services/agencyService")).getAgency(userAgencyId);
+          if (brand.domain && agencyRow && resolveAgencyBranding(agencyRow.branding, agencyRow.name).clientLoginScope === "agency_domain") {
+            refusal = `Please log in at https://${brand.domain}`;
+          }
+        }
+        if (refusal) {
+          await recordAuditEventSafely(req, {
+            action: "auth.login",
+            outcome: "denied",
+            actorUserId: user.id,
+            actorUsername: user.username,
+            actorRole: user.role,
+            businessAccountId: user.businessAccountId,
+            resourceType: "session",
+            metadata: { reason: refusal === "Invalid credentials" ? "wrong_agency_address" : "agency_address_required" },
+          });
+          return res.status(refusal === "Invalid credentials" ? 401 : 403).json({ error: refusal });
+        }
+      }
+
       if (user.role === "agency_admin") {
         const { getAgencyLogin } = await import("./services/agencyService");
         const login = await getAgencyLogin(user.id);
@@ -8966,9 +9001,12 @@ If you cannot determine the category or the image doesn't match any category, re
     const businessAccountId = sessionUser.agency ? sessionUser.agency.viewingClientId : (sessionUser.activeBusinessAccountId || user.businessAccountId);
     // Agency logins: the agency side, and while a client's portal is open they read as that client's login.
     const agencyFields = async () => {
-      if (!sessionUser.agency) return {};
+      const { brandForLogin } = await import("./services/agencyBrandService");
+      // Agency logins and agency clients see the agency's brand wherever they log in.
+      const brand = await brandForLogin({ agencyId: sessionUser.agency?.agencyId, businessAccountId });
+      if (!sessionUser.agency) return { brand };
       const { getAgencyContextDto } = await import("./services/agencyService");
-      return { role: sessionUser.role, agency: await getAgencyContextDto(sessionUser.agency) };
+      return { role: sessionUser.role, agency: await getAgencyContextDto(sessionUser.agency), brand };
     };
     
     // If user has a business account, include feature flags from the ACTIVE account
@@ -15713,7 +15751,7 @@ Format your response as JSON with this structure:
       const link = await storage.getOrCreatePublicChatLink(businessAccountId);
       
       // Return the link with the full URL using production domain
-      const baseUrl = 'https://portal.aichroney.com';
+      const baseUrl = await (await import('./services/agencyBrandService')).publicBaseUrlForAccount(req.user?.businessAccountId); // agency clients: the agency's own address
       
       res.json({
         ...link,
@@ -15732,7 +15770,7 @@ Format your response as JSON with this structure:
 
       const link = await storage.togglePublicChatLinkStatus(businessAccountId);
       
-      const baseUrl = 'https://portal.aichroney.com';
+      const baseUrl = await (await import('./services/agencyBrandService')).publicBaseUrlForAccount(req.user?.businessAccountId); // agency clients: the agency's own address
       
       res.json({
         ...link,
@@ -15754,7 +15792,7 @@ Format your response as JSON with this structure:
       
       const link = await storage.regeneratePublicChatLinkToken(businessAccountId, newToken);
       
-      const baseUrl = 'https://portal.aichroney.com';
+      const baseUrl = await (await import('./services/agencyBrandService')).publicBaseUrlForAccount(req.user?.businessAccountId); // agency clients: the agency's own address
       
       res.json({
         ...link,
@@ -15775,7 +15813,7 @@ Format your response as JSON with this structure:
       // Password can be null/empty to remove protection, or a string to set it
       const updatedLink = await storage.updatePublicChatLinkPassword(businessAccountId, password || null);
       
-      const baseUrl = 'https://portal.aichroney.com';
+      const baseUrl = await (await import('./services/agencyBrandService')).publicBaseUrlForAccount(req.user?.businessAccountId); // agency clients: the agency's own address
       
       res.json({
         ...updatedLink,
@@ -20549,10 +20587,12 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         websiteAnalysis: websiteAnalysis ? {
           analyzedContent: websiteAnalysis.analyzedContent ? JSON.parse(websiteAnalysis.analyzedContent) : null,
         } : null,
+        // Agency clients: never our name or logo (business name as default header, agency logo or a plain icon).
+        ...(businessAccount.agencyId ? { defaultAvatarUrl: (await (await import('./services/agencyBrandService')).brandForLogin({ agencyId: businessAccount.agencyId })).logoUrl || null } : {}),
         widgetSettings: widgetSettings ? {
           chatColor: widgetSettings.chatColor,
           chatColorEnd: widgetSettings.chatColorEnd,
-          widgetHeaderText: widgetSettings.widgetHeaderText,
+          widgetHeaderText: businessAccount.agencyId && widgetSettings.widgetHeaderText === "Hi Chroney" ? businessAccount.name : widgetSettings.widgetHeaderText,
           currency: widgetSettings.currency,
           avatarType: widgetSettings.avatarType,
           avatarUrl: widgetSettings.avatarUrl,
@@ -27175,18 +27215,29 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       }
 
       // Agency clients: the widget footer names the agency (or nothing) instead of us.
+      // Agency clients never show our name or logo: the default header becomes the business's name
+      // and the default avatar the agency's logo (or a plain icon).
       let agencyFooter: ReturnType<typeof import("@shared/agency").agencyWidgetFooter> = null;
+      let agencyWidget: { widgetHeaderText?: string; defaultAvatarUrl: string | null } | null = null;
       if (businessAccount?.agencyId) {
         const { getAgency } = await import("./services/agencyService");
+        const { brandOfAgency } = await import("./services/agencyBrandService");
         const { agencyWidgetFooter, resolveAgencyBranding } = await import("@shared/agency");
         const agency = await getAgency(businessAccount.agencyId);
-        if (agency) agencyFooter = agencyWidgetFooter(resolveAgencyBranding(agency.branding, agency.name));
+        if (agency) {
+          agencyFooter = agencyWidgetFooter(resolveAgencyBranding(agency.branding, agency.name));
+          agencyWidget = {
+            ...(settings.widgetHeaderText === "Hi Chroney" ? { widgetHeaderText: businessAccount.name } : {}),
+            defaultAvatarUrl: brandOfAgency(agency).logoUrl || null,
+          };
+        }
       }
 
       res.json({
         ...publicSettings,
         ...(agencyFooter?.hidden ? { poweredByEnabled: "false" } : {}),
         ...(agencyFooter && !agencyFooter.hidden ? { poweredByText: agencyFooter.text, poweredByUrl: agencyFooter.url } : {}),
+        ...(agencyWidget ?? {}),
         voiceModeEnabled,
         visualSearchEnabled,
         chatMode,
@@ -27244,6 +27295,10 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       // The settings / Home test-chat page is loading: warm the business context for the
       // first test message (fire-and-forget; same currency symbols as POST /api/chat/stream).
       warmChatContextOnOpen(businessAccountId, settings, businessAccount, HOME_CHAT_CURRENCY_SYMBOLS, 'INR');
+      // Agency clients: our default header text is shown as the business's name instead.
+      if (businessAccount?.agencyId && settings.widgetHeaderText === "Hi Chroney") {
+        settings = { ...settings, widgetHeaderText: businessAccount.name };
+      }
       const voiceModeEnabled = businessAccount?.voiceModeEnabled === "true";
       const visualSearchEnabled = businessAccount?.visualSearchEnabled === "true";
 

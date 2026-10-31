@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { integrationPath } from "@/pages/settings/settingsPaths";
@@ -391,7 +392,7 @@ export default function SalesforceSettings({ embedded = false }: { embedded?: bo
       {activeSection === 'sync' && (
         <div className="space-y-6">
           <Card>
-            <CardHeader><CardTitle>Auto-Sync to Salesforce</CardTitle><CardDescription>When enabled, leads captured by Chroney are automatically synced to Salesforce in real time.</CardDescription></CardHeader>
+            <CardHeader><CardTitle>Auto-Sync to Salesforce</CardTitle><CardDescription>When enabled, leads captured by {brandShort()} are automatically synced to Salesforce in real time.</CardDescription></CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between p-4 rounded-lg border bg-muted/30">
                 <div>

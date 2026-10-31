@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState, useEffect, useRef } from "react";
 import { HideInHub } from "@/components/hub/HideInHub";
 import { LiveAvatarStatusCard } from "@/components/LiveAvatarStatusCard";
@@ -2306,7 +2307,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                 <Card className="shadow-lg border border-gray-200 bg-white">
                   <CardHeader className="border-b bg-gradient-to-r from-purple-50/50 to-pink-50/50">
                     <CardTitle className="text-lg">AI Personality</CardTitle>
-                    <CardDescription>How should Chroney interact?</CardDescription>
+                    <CardDescription>How should {brandShort()} interact?</CardDescription>
                   </CardHeader>
                   <CardContent className="pt-6">
                     <RadioGroup value={personality} onValueChange={setPersonality} className="space-y-3">
@@ -3883,7 +3884,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                                       </div>
                                       <div>
                                         <p className="text-sm font-medium text-gray-800">AI-Powered Nudges Active</p>
-                                        <p className="text-xs text-gray-500">Chroney will analyze the conversation and generate contextual follow-up questions</p>
+                                        <p className="text-xs text-gray-500">{brandShort()} will analyze the conversation and generate contextual follow-up questions</p>
                                       </div>
                                     </div>
                                     <div className="mt-3 text-xs text-gray-500 bg-white/60 rounded p-2">
@@ -4229,7 +4230,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                     <CardTitle className="text-lg flex items-center gap-2">
                       🎤 Voice Selection
                     </CardTitle>
-                    <CardDescription>Choose Chroney's voice for voice mode conversations</CardDescription>
+                    <CardDescription>Choose {brandShort()}'s voice for voice mode conversations</CardDescription>
                   </CardHeader>
                   <CardContent className="pt-6">
                     <RadioGroup value={voiceSelection} onValueChange={setVoiceSelection} className="space-y-3">

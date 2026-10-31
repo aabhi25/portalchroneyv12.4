@@ -11,6 +11,7 @@ import {
   resolveAgencyBilling,
   resolveAgencyBranding,
   resolveAgencyPermissions,
+  normalizeDomain,
   AGENCY_PERMISSIONS,
   type AgencyPermissionKey,
 } from "@shared/agency";
@@ -27,6 +28,15 @@ import {
   upsertLimit,
   usdInrRate,
 } from "../services/aiBudgetService";
+import {
+  agencyForHost,
+  brandForHost,
+  checkDomainDns,
+  clearAgencyHostCache,
+  domainTarget,
+  isPlatformDomain,
+  requestHost,
+} from "../services/agencyBrandService";
 import {
   accountFeatures,
   buildAgencyStatement,
@@ -103,9 +113,114 @@ function agencySettings(agency: Agency) {
     billing: resolveAgencyBilling(agency.billing),
     branding: resolveAgencyBranding(agency.branding, agency.name),
     notes: agency.notes ?? "",
+    domain: {
+      name: agency.customDomain,
+      status: agency.domainStatus,
+      checkedAt: agency.domainCheckedAt,
+      verifiedAt: agency.domainVerifiedAt,
+      message: agency.domainCheckMessage,
+      target: domainTarget(),
+    },
+    logoUrl: agency.logoData ? `/api/brand/logo/${agency.id}?v=${agency.logoUpdatedAt ? new Date(agency.logoUpdatedAt).getTime() : 0}` : null,
     createdAt: agency.createdAt,
   };
 }
+
+// ── own web address and logo (shared by super admin and agency routes) ───────
+
+async function setDomain(agency: Agency, input: unknown): Promise<{ error?: string; agency?: Agency }> {
+  if (input === null || input === "") {
+    const [after] = await db.update(agencies).set({
+      customDomain: null, domainStatus: "none", domainCheckedAt: null, domainVerifiedAt: null, domainCheckMessage: null, updatedAt: new Date(),
+    }).where(eq(agencies.id, agency.id)).returning();
+    clearAgencyHostCache();
+    return { agency: after };
+  }
+  const domain = normalizeDomain(input);
+  if (!domain) return { error: "Enter a web address like app.youragency.com" };
+  if (isPlatformDomain(domain)) return { error: "That address can't be used" };
+  const [taken] = await db.select({ id: agencies.id }).from(agencies).where(eq(agencies.customDomain, domain)).limit(1);
+  if (taken && taken.id !== agency.id) return { error: "That address is already used by another agency" };
+  if (domain === agency.customDomain) return { agency };
+  const [after] = await db.update(agencies).set({
+    customDomain: domain, domainStatus: "pending", domainCheckedAt: null, domainVerifiedAt: null,
+    domainCheckMessage: `Add a CNAME record for ${domain} pointing to ${domainTarget()}, then check.`, updatedAt: new Date(),
+  }).where(eq(agencies.id, agency.id)).returning();
+  clearAgencyHostCache();
+  return { agency: after };
+}
+
+async function checkDomain(agency: Agency): Promise<Agency> {
+  if (!agency.customDomain) return agency;
+  const result = await checkDomainDns(agency.customDomain);
+  const now = new Date();
+  const [after] = await db.update(agencies).set({
+    domainStatus: result.ok ? "verified" : "pending",
+    domainCheckedAt: now,
+    domainVerifiedAt: result.ok ? (agency.domainVerifiedAt ?? now) : null,
+    domainCheckMessage: result.message,
+  }).where(eq(agencies.id, agency.id)).returning();
+  clearAgencyHostCache();
+  return after;
+}
+
+const LOGO_MAX_BYTES = 300 * 1024;
+
+async function setLogo(agency: Agency, input: unknown): Promise<{ error?: string; agency?: Agency }> {
+  if (input === null || input === "") {
+    const [after] = await db.update(agencies).set({ logoData: null, logoUpdatedAt: new Date(), updatedAt: new Date() }).where(eq(agencies.id, agency.id)).returning();
+    clearAgencyHostCache();
+    return { agency: after };
+  }
+  const m = typeof input === "string" ? /^data:image\/(png|jpeg|webp|svg\+xml);base64,([a-z0-9+/=]+)$/i.exec(input) : null;
+  if (!m) return { error: "Upload a PNG, JPG, WebP or SVG image" };
+  if (Buffer.from(m[2], "base64").length > LOGO_MAX_BYTES) return { error: "The logo must be 300 KB or smaller" };
+  const [after] = await db.update(agencies).set({ logoData: input as string, logoUpdatedAt: new Date(), updatedAt: new Date() }).where(eq(agencies.id, agency.id)).returning();
+  clearAgencyHostCache();
+  return { agency: after };
+}
+
+// ── public: brand for the address, logos, certificate check ──────────────────
+
+/** The brand of the web address the page is on (login page, before anyone logs in). */
+router.get("/api/brand", async (req, res) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await brandForHost(requestHost(req)));
+  } catch (error) {
+    console.error("[Brand] error:", error);
+    res.status(500).json({ error: "Failed to load brand" });
+  }
+});
+
+router.get("/api/brand/logo/:agencyId", async (req, res) => {
+  try {
+    const [row] = await db.select({ logo: agencies.logoData }).from(agencies).where(eq(agencies.id, req.params.agencyId)).limit(1);
+    const m = row?.logo ? /^data:(image\/[a-z+]+);base64,(.+)$/i.exec(row.logo) : null;
+    if (!m) return res.status(404).end();
+    res.setHeader("Content-Type", m[1]);
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    // SVGs never run scripts from here.
+    res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:");
+    res.end(Buffer.from(m[2], "base64"));
+  } catch (error) {
+    console.error("[Brand] logo error:", error);
+    res.status(500).end();
+  }
+});
+
+/** For the certificate service in front of the app: may a certificate be issued for this address? */
+router.get("/api/domains/tls-check", async (req, res) => {
+  try {
+    const domain = normalizeDomain(req.query.domain);
+    if (domain && await agencyForHost(domain)) return res.status(200).send("ok");
+    res.status(404).send("unknown");
+  } catch (error) {
+    console.error("[Brand] tls-check error:", error);
+    res.status(500).send("error");
+  }
+});
 
 /** Client rows for agency and super admin pages. Costs are left out when `withCost` is false. */
 async function clientRows(agencyId: string, month: string, withCost: boolean) {
@@ -291,6 +406,7 @@ router.patch("/api/super-admin/agencies/:id", requireAuth, requireRole("super_ad
     if (b.branding !== undefined) updates.branding = resolveAgencyBranding(b.branding, b.name ?? agency.name) as unknown as Record<string, unknown>;
     if (b.notes !== undefined) updates.notes = b.notes;
     const [after] = await db.update(agencies).set(updates).where(eq(agencies.id, agency.id)).returning();
+    clearAgencyHostCache();
     const capChanged = (b.monthlyAiCapUsd !== undefined && Number(agency.monthlyAiCapUsd ?? -1) !== Number(after.monthlyAiCapUsd ?? -1))
       || (b.aiCapWarnAtPercent !== undefined && agency.aiCapWarnAtPercent !== after.aiCapWarnAtPercent);
     if (capChanged) await aiBudgetService.rearmAgency(agency.id);
@@ -320,6 +436,7 @@ router.delete("/api/super-admin/agencies/:id", requireAuth, requireRole("super_a
       if (logins.length) await tx.delete(users).where(inArray(users.id, logins.map(l => l.userId)));
       await tx.delete(agencies).where(eq(agencies.id, agency.id));
     });
+    clearAgencyHostCache();
     await aiBudgetService.refresh();
     await recordAuditEventSafely(req, {
       action: "agency.deleted", outcome: "success", resourceType: "agency", resourceId: agency.id,
@@ -438,6 +555,45 @@ router.delete("/api/super-admin/agencies/:id/accounts/:accountId", requireAuth, 
   }
 });
 
+router.put("/api/super-admin/agencies/:id/domain", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const agency = await getAgency(req.params.id);
+    if (!agency) return res.status(404).json({ error: "Agency not found" });
+    const r = await setDomain(agency, req.body?.domain ?? null);
+    if (r.error) return res.status(400).json({ error: r.error });
+    await recordAuditEventSafely(req, { action: "agency.domain_changed", outcome: "success", resourceType: "agency", resourceId: agency.id, metadata: { domain: r.agency!.customDomain } });
+    res.json({ agency: agencySettings(r.agency!) });
+  } catch (error) {
+    console.error("[Agencies] domain error:", error);
+    res.status(500).json({ error: "Failed to save the web address" });
+  }
+});
+
+router.post("/api/super-admin/agencies/:id/domain/check", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const agency = await getAgency(req.params.id);
+    if (!agency) return res.status(404).json({ error: "Agency not found" });
+    res.json({ agency: agencySettings(await checkDomain(agency)) });
+  } catch (error) {
+    console.error("[Agencies] domain check error:", error);
+    res.status(500).json({ error: "Failed to check the web address" });
+  }
+});
+
+router.put("/api/super-admin/agencies/:id/logo", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const agency = await getAgency(req.params.id);
+    if (!agency) return res.status(404).json({ error: "Agency not found" });
+    const r = await setLogo(agency, req.body?.logo ?? null);
+    if (r.error) return res.status(400).json({ error: r.error });
+    await recordAuditEventSafely(req, { action: "agency.logo_changed", outcome: "success", resourceType: "agency", resourceId: agency.id });
+    res.json({ agency: agencySettings(r.agency!) });
+  } catch (error) {
+    console.error("[Agencies] logo error:", error);
+    res.status(500).json({ error: "Failed to save the logo" });
+  }
+});
+
 router.get("/api/super-admin/agencies/:id/statement", requireAuth, requireRole("super_admin"), async (req, res) => {
   try {
     const agency = await getAgency(req.params.id);
@@ -506,6 +662,8 @@ router.get("/api/agency/overview", requireAuth, requireAgencyAdmin, async (req, 
         },
         defaultClientLimitUsd: perms.seeCosts ? s.defaultClientLimitUsd : null,
         currency: s.billing.currency,
+        domain: s.domain,
+        logoUrl: s.logoUrl,
       },
       me: { username: req.user!.username, role: req.user!.agency!.adminRole },
       month,
@@ -829,11 +987,52 @@ router.put("/api/agency/branding", requireAuth, requireAgencyAdmin, async (req, 
     const current = resolveAgencyBranding(agency.branding, agency.name);
     const next = resolveAgencyBranding({ ...current, ...(req.body ?? {}) }, agency.name);
     await db.update(agencies).set({ branding: next as unknown as Record<string, unknown>, updatedAt: new Date() }).where(eq(agencies.id, agency.id));
+    clearAgencyHostCache();
     await recordAuditEventSafely(req, { action: "agency.branding_changed", outcome: "success", resourceType: "agency", resourceId: agency.id, metadata: { widgetFooter: next.widgetFooter } });
     res.json({ branding: next });
   } catch (error) {
     console.error("[Agency] branding error:", error);
     res.status(500).json({ error: "Failed to save" });
+  }
+});
+
+router.put("/api/agency/domain", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res, "setCustomDomain");
+    if (!agency) return;
+    const r = await setDomain(agency, req.body?.domain ?? null);
+    if (r.error) return res.status(400).json({ error: r.error });
+    await recordAuditEventSafely(req, { action: "agency.domain_changed", outcome: "success", resourceType: "agency", resourceId: agency.id, metadata: { domain: r.agency!.customDomain } });
+    res.json({ domain: agencySettings(r.agency!).domain });
+  } catch (error) {
+    console.error("[Agency] domain error:", error);
+    res.status(500).json({ error: "Failed to save the web address" });
+  }
+});
+
+router.post("/api/agency/domain/check", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    // Checking is read-only, so any agency login may do it (setting the address needs the permission).
+    const agency = await agencyAllowed(req, res);
+    if (!agency) return;
+    res.json({ domain: agencySettings(await checkDomain(agency)).domain });
+  } catch (error) {
+    console.error("[Agency] domain check error:", error);
+    res.status(500).json({ error: "Failed to check the web address" });
+  }
+});
+
+router.put("/api/agency/logo", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res, "editBranding");
+    if (!agency) return;
+    const r = await setLogo(agency, req.body?.logo ?? null);
+    if (r.error) return res.status(400).json({ error: r.error });
+    await recordAuditEventSafely(req, { action: "agency.logo_changed", outcome: "success", resourceType: "agency", resourceId: agency.id });
+    res.json({ logoUrl: agencySettings(r.agency!).logoUrl });
+  } catch (error) {
+    console.error("[Agency] logo error:", error);
+    res.status(500).json({ error: "Failed to save the logo" });
   }
 });
 

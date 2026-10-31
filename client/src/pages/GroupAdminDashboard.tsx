@@ -1,3 +1,4 @@
+import { brandName } from "@/lib/brand";
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { isMaskedValue } from "@shared/contactMasking";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
@@ -2395,7 +2396,7 @@ export default function GroupAdminDashboard() {
             </DialogTitle>
             <DialogDescription>
               {deleteTarget === 'leads'
-                ? "The selected leads are permanently removed from AI Chroney. Their conversations are kept, and leads already sent to LeadSquared or Salesforce stay in the CRM."
+                ? `The selected leads are permanently removed from ${brandName()}. Their conversations are kept, and leads already sent to LeadSquared or Salesforce stay in the CRM.`
                 : "The selected conversations and all their messages, journey answers and form data are permanently removed. Leads captured in them are kept but lose their chat link."}
               {" "}This cannot be undone.
             </DialogDescription>

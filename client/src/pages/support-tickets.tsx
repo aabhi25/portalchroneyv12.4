@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import WebsiteNavTabs from "@/components/WebsiteNavTabs";
@@ -302,7 +303,7 @@ export default function SupportTickets() {
                       <li>Click on any ticket to see full conversation history and AI analysis</li>
                       <li>Review AI's suggested response (if available)</li>
                       <li>Either approve AI suggestion, edit it, or write your own response</li>
-                      <li>Your response appears as Chroney in the chat widget - seamless for customers</li>
+                      <li>Your response appears as {brandShort()} in the chat widget - seamless for customers</li>
                       <li>Click "Resolve Ticket" when issue is handled</li>
                       <li>AI learns from your corrections to improve future auto-resolutions</li>
                     </ol>

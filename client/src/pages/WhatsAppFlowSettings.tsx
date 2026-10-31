@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -402,7 +403,7 @@ export default function WhatsAppFlowSettings() {
             <div>
               <Label>Use Master Training Instructions</Label>
               <p className="text-sm text-gray-500">
-                Apply custom AI instructions (from Train Chroney) in WhatsApp flow responses
+                Apply custom AI instructions (from Train {brandShort()}) in WhatsApp flow responses
               </p>
             </div>
             <Switch

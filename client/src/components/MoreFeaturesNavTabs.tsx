@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useLocation } from "wouter";
 import { useInHubFrame } from "@/components/hub/hubContext";
 import { Sparkles, ClipboardList, Percent, Lightbulb, LayoutGrid, MoreHorizontal } from "lucide-react";
@@ -34,7 +35,7 @@ export default function MoreFeaturesNavTabs() {
             }`}
           >
             <Icon className={`w-4 h-4 ${isActive ? "text-purple-600" : "text-gray-400"}`} />
-            {tab.label}
+            {tab.label.replace("Chroney", brandShort())}
           </button>
         );
       })}

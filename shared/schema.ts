@@ -202,6 +202,15 @@ export const agencies = pgTable("agencies", {
   billing: jsonb("billing").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`), // AgencyBilling
   branding: jsonb("branding").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`), // AgencyBranding
   notes: text("notes"),
+  // The agency's own web address for its portal and widget (e.g. "app.agency.com"); null = none.
+  customDomain: text("custom_domain").unique(),
+  domainStatus: text("domain_status").notNull().default("none"), // 'none' | 'pending' | 'verified' (DNS points to us)
+  domainCheckedAt: timestamp("domain_checked_at"),
+  domainVerifiedAt: timestamp("domain_verified_at"),
+  domainCheckMessage: text("domain_check_message"), // last check's result in plain words
+  // Logo as a data: URL (PNG/JPEG/WebP/SVG, small), served by /api/brand/logo/:agencyId.
+  logoData: text("logo_data"),
+  logoUpdatedAt: timestamp("logo_updated_at"),
   createdBy: varchar("created_by"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

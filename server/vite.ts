@@ -86,7 +86,8 @@ export async function setupVite(app: Express, server: Server) {
         `src="${mainEntry}"`,
         `src="${mainEntry}?v=${nanoid()}"`,
       );
-      const page = await vite.transformIndexHtml(url, template);
+      let page = await vite.transformIndexHtml(url, template);
+      if (!isEmbedRoute) page = await brandPage(req, page);
       res.status(200).set({ "Content-Type": "text/html" }).end(page);
     } catch (e) {
       vite.ssrFixStacktrace(e as Error);
@@ -105,7 +106,8 @@ export function serveStatic(app: Express) {
     );
   }
 
-  app.use(express.static(distPath));
+  // index: false so "/" reaches the handler below, which puts an agency's name and icon in the page.
+  app.use(express.static(distPath, { index: false }));
   
   // Serve embed bundle for embed routes if it exists
   if (fs.existsSync(embedDistPath)) {
@@ -120,7 +122,18 @@ export function serveStatic(app: Express) {
     if (isEmbedRoute && fs.existsSync(path.resolve(embedDistPath, "embed.html"))) {
       res.sendFile(path.resolve(embedDistPath, "embed.html"));
     } else {
-      res.sendFile(path.resolve(distPath, "index.html"));
+      indexHtml ??= fs.readFileSync(path.resolve(distPath, "index.html"), "utf-8");
+      brandPage(req, indexHtml)
+        .then((page) => res.status(200).set({ "Content-Type": "text/html", "Cache-Control": "no-cache" }).end(page))
+        .catch(() => res.sendFile(path.resolve(distPath, "index.html")));
     }
   });
+}
+
+let indexHtml: string | null = null;
+
+/** On an agency's own web address, the page title and icon are the agency's (before the app loads). */
+async function brandPage(req: express.Request, html: string): Promise<string> {
+  const { brandForHost, brandHtml, requestHost } = await import("./services/agencyBrandService");
+  return brandHtml(html, await brandForHost(requestHost(req)));
 }

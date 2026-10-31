@@ -1,3 +1,4 @@
+import { brandName } from "@/lib/brand";
 import { useState, useEffect, useRef } from "react";
 import { SuperAdminBadge } from "@/components/hub/SuperAdminBadge";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -378,7 +379,7 @@ export default function Settings({ section, embedded = false }: { section?: "acc
                 Lead privacy
               </CardTitle>
               <CardDescription className="mt-1">
-                These are set for your account by your AI Chroney administrator. Contact support to change them.
+                These are set for your account by your {brandName()} administrator. Contact support to change them.
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-6 space-y-4">

@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useMutation } from "@tanstack/react-query";
@@ -109,7 +110,7 @@ export default function ResetPassword() {
               <Sparkles className="w-5 h-5 text-white" />
             </div>
             <h2 className="text-xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
-              Hi Chroney
+              Hi {brandShort()}
             </h2>
           </div>
 

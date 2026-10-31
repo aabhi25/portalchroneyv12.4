@@ -1,3 +1,5 @@
+import { getBrand } from "@/lib/brand";
+
 /**
  * Public origin used by generated widget/embed snippets.
  *
@@ -7,6 +9,10 @@
  * snippets without changing source code between builds.
  */
 export function getPublicWidgetOrigin(): string {
+  // Agency clients: install codes load the widget from the agency's own web address.
+  const agencyDomain = getBrand().domain;
+  if (agencyDomain) return `https://${agencyDomain}`;
+
   const configured = import.meta.env.VITE_PUBLIC_WIDGET_URL?.trim();
   if (configured) {
     return configured.replace(/\/+$/, "");

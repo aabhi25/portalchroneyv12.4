@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -376,7 +377,7 @@ export default function About() {
       setPageToDelete(null);
       toast({
         title: "Page Deleted",
-        description: "Analyzed page removed successfully. Chroney will no longer use this content.",
+        description: `Analyzed page removed successfully. ${brandShort()} will no longer use this content.`,
       });
     },
     onError: (error) => {
@@ -556,7 +557,7 @@ export default function About() {
                 Website scan
               </h1>
               <p className="text-gray-500 text-sm max-w-2xl">
-                Empower Chroney AI to understand your business deeply and provide intelligent, context-aware responses
+                Empower {brandShort()} AI to understand your business deeply and provide intelligent, context-aware responses
               </p>
             </div>
 
@@ -746,7 +747,7 @@ export default function About() {
                 <div className="flex gap-2">
                   <div className="flex-shrink-0 w-6 h-6 rounded-full bg-purple-600 text-white flex items-center justify-center text-xs font-bold">2</div>
                   <div>
-                    <p className="text-xs font-semibold text-purple-900">Chroney Gets Smarter</p>
+                    <p className="text-xs font-semibold text-purple-900">{brandShort()} Gets Smarter</p>
                     <p className="text-xs text-purple-700">Uses extracted data to provide context-aware, accurate responses</p>
                   </div>
                 </div>
@@ -1355,7 +1356,7 @@ export default function About() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Analyzed Page</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this analyzed page? Chroney will no longer use this content. This action cannot be undone.
+              Are you sure you want to delete this analyzed page? {brandShort()} will no longer use this content. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

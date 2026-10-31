@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
@@ -919,7 +920,7 @@ export default function WhatsAppCampaignAutomationForm({ id }: { id?: string }) 
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
           <p className="font-medium text-emerald-950">How this automation decides</p>
           <p className="mt-1 text-sm text-emerald-900">
-            On each run, Chroney checks every row in this order:
+            On each run, {brandShort()} checks every row in this order:
           </p>
           <ol className="mt-3 grid gap-2 text-sm text-emerald-950 sm:grid-cols-2">
             <li className="flex gap-2"><span className="font-semibold">1.</span><span>The row has a mobile number and a record ID.</span></li>

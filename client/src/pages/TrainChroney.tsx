@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState, useEffect, useRef, useReducer, useMemo } from "react";
 import {
   createDefaultLeadTrainingConfig,
@@ -1205,7 +1206,7 @@ export default function TrainChroney({ only }: { only?: "lead-training" } = {}) 
               </div>
               <div>
                 <h1 className="text-3xl font-bold text-foreground">
-                  Train Chroney
+                  Train {brandShort()}
                 </h1>
                 <p className="text-sm text-muted-foreground mt-0.5">
                   Teach your AI assistant how to respond to customers
@@ -1652,7 +1653,7 @@ export default function TrainChroney({ only }: { only?: "lead-training" } = {}) 
                       </div>
                       <h3 className="text-sm font-medium text-foreground mb-1">No instructions yet</h3>
                       <p className="text-sm text-muted-foreground">
-                        Add your first instruction above to start training Chroney
+                        Add your first instruction above to start training {brandShort()}
                       </p>
                     </div>
                   </CardContent>
@@ -1843,7 +1844,7 @@ export default function TrainChroney({ only }: { only?: "lead-training" } = {}) 
                   <div className="flex-1 min-w-[12rem]">
                     <CardTitle className="text-xl">Smart Lead Training</CardTitle>
                     <CardDescription className="mt-1">
-                      Configure which contact information Chroney should collect
+                      Configure which contact information {brandShort()} should collect
                     </CardDescription>
                   </div>
                   {/* Auto-save status: Saving… / Saved / Not saved — retry */}
@@ -1890,7 +1891,7 @@ export default function TrainChroney({ only }: { only?: "lead-training" } = {}) 
                 {/* Nothing saved yet: these are defaults the chat is not using. */}
                 {leadConfigMeta?.source === 'default' && !hasUnsavedChanges(leadAutosave) && (
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-blue-200 bg-blue-50 dark:border-blue-900/50 dark:bg-blue-950/20 px-3 py-2 text-xs text-blue-900 dark:text-blue-200" data-testid="lead-config-defaults-info">
-                    <span>Lead capture isn't set up yet — these are the suggested defaults. Chroney starts using them once you save or change a setting.</span>
+                    <span>Lead capture isn't set up yet — these are the suggested defaults. {brandShort()} starts using them once you save or change a setting.</span>
                     <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { markLeadConfigEdited(); setLeadConfig((prev) => ({ ...prev })); }} data-testid="button-lead-save-defaults">
                       Save these settings
                     </Button>
@@ -2184,7 +2185,7 @@ export default function TrainChroney({ only }: { only?: "lead-training" } = {}) 
                               ) : (
                                 <div className="px-3 py-2.5">
                                   <p className="text-[11px] text-muted-foreground leading-snug">
-                                    Chroney sends a 6-digit code to confirm the mobile number before saving the lead to your CRM. Choose SMS, WhatsApp, or both in the OTP settings.
+                                    {brandShort()} sends a 6-digit code to confirm the mobile number before saving the lead to your CRM. Choose SMS, WhatsApp, or both in the OTP settings.
                                   </p>
                                 </div>
                               )}
@@ -2689,7 +2690,7 @@ export default function TrainChroney({ only }: { only?: "lead-training" } = {}) 
                       Your instructions look great. No conflicts or improvements detected.
                     </p>
                     <p className="text-xs text-muted-foreground mt-2">
-                      Note: Core conversation best practices (checking history, extracting contact info, acknowledging shared information) are built into Chroney and always followed automatically.
+                      Note: Core conversation best practices (checking history, extracting contact info, acknowledging shared information) are built into {brandShort()} and always followed automatically.
                     </p>
                   </div>
                 )}

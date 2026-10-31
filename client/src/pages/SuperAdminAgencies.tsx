@@ -53,7 +53,6 @@ export default function SuperAdminAgencies() {
   return (
     <>
       <Panel
-        title="Agencies"
         subtitle="Digital marketing agencies that resell the product to their own clients, each with its own plan, limits, price and brand."
         actions={<Button onClick={() => setOpen(true)} data-testid="button-new-agency"><Plus className="mr-1 h-4 w-4" />New agency</Button>}
       >

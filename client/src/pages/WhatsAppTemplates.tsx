@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -468,7 +469,7 @@ export default function WhatsAppTemplates() {
             <DialogTitle>{editing ? "Edit template" : "Add a template"}</DialogTitle>
             <DialogDescription>
               {editing
-                ? "Changes here update Chroney's copy. The name and language must match the template approved on your WhatsApp account."
+                ? `Changes here update ${brandShort()}'s copy. The name and language must match the template approved on your WhatsApp account.`
                 : "Enter a template exactly as it was approved on your WhatsApp account. It starts as “Not verified” until its approval is confirmed."}
             </DialogDescription>
           </DialogHeader>
@@ -639,7 +640,7 @@ export default function WhatsAppTemplates() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete template?</AlertDialogTitle>
             <AlertDialogDescription>
-              <strong>{deleteTarget?.name}</strong> will be removed from Chroney and won't come back on future imports. Past campaign history is kept. It isn't deleted from your WhatsApp account.
+              <strong>{deleteTarget?.name}</strong> will be removed from {brandShort()} and won't come back on future imports. Past campaign history is kept. It isn't deleted from your WhatsApp account.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

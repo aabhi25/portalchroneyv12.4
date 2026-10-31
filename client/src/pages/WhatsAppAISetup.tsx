@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -395,7 +396,7 @@ export default function WhatsAppAISetup() {
           </div>
 
           <div className="space-y-3 pt-2 border-t">
-            <Label className="text-sm">How should these work with your Train Chroney instructions?</Label>
+            <Label className="text-sm">How should these work with your Train {brandShort()} instructions?</Label>
             <RadioGroup
               value={instructionsMode}
               onValueChange={(v) => handleInstructionsMode(v as InstructionsMode)}
@@ -411,7 +412,7 @@ export default function WhatsAppAISetup() {
                 <Label htmlFor="instructions-mode-add" className="font-normal cursor-pointer">
                   <span className="block text-sm font-medium text-gray-900">Add to my main instructions</span>
                   <span className="block text-xs text-muted-foreground">
-                    Train Chroney instructions and these both apply
+                    Train {brandShort()} instructions and these both apply
                   </span>
                 </Label>
               </div>
@@ -425,7 +426,7 @@ export default function WhatsAppAISetup() {
                 <Label htmlFor="instructions-mode-replace" className="font-normal cursor-pointer">
                   <span className="block text-sm font-medium text-gray-900">Use instead of my main instructions</span>
                   <span className="block text-xs text-muted-foreground">
-                    Train Chroney instructions are not used on WhatsApp
+                    Train {brandShort()} instructions are not used on WhatsApp
                   </span>
                 </Label>
               </div>
@@ -435,9 +436,9 @@ export default function WhatsAppAISetup() {
           <div className="space-y-1 pt-2 border-t">
             <div className="flex items-center justify-between gap-4 py-2">
               <div>
-                <div className="font-medium text-sm text-gray-900">Use Train Chroney instructions</div>
+                <div className="font-medium text-sm text-gray-900">Use Train {brandShort()} instructions</div>
                 <div className="text-sm text-muted-foreground">
-                  Apply the instructions from Train Chroney to WhatsApp replies.
+                  Apply the instructions from Train {brandShort()} to WhatsApp replies.
                 </div>
               </div>
               <Switch

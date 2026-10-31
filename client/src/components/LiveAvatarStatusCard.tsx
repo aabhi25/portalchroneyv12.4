@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useQuery } from "@tanstack/react-query";
 import { Video } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,7 +29,7 @@ export function LiveAvatarStatusCard() {
     <Card className="shadow-lg border border-gray-200 bg-white" data-testid="card-live-avatar-status">
       <CardHeader className="border-b bg-gradient-to-r from-purple-50/50 to-pink-50/50">
         <CardTitle className="text-lg flex items-center gap-2"><Video className="h-5 w-5" /> Live AI avatar</CardTitle>
-        <CardDescription>A lip-synced video avatar for voice conversations. Managed by the Chroney team — contact us to change it.</CardDescription>
+        <CardDescription>A lip-synced video avatar for voice conversations. Managed by the {brandShort()} team — contact us to change it.</CardDescription>
       </CardHeader>
       <CardContent className="pt-4 text-sm space-y-1">
         {data.enabled ? (

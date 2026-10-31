@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { useBrand } from "@/lib/brand";
+import { BrandMark } from "@/components/BrandMark";
 import { Sparkles, Mail, Lock, Shield, Zap, AlertCircle } from "lucide-react";
 import {
   Dialog,
@@ -17,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 
 export default function Login({ onLogin }: { onLogin: (user: any) => void }) {
+  const brand = useBrand();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [forgotPasswordEmail, setForgotPasswordEmail] = useState("");
@@ -126,12 +129,19 @@ export default function Login({ onLogin }: { onLogin: (user: any) => void }) {
           <div className="w-full max-w-md">
             <div className="relative bg-white/10 backdrop-blur-2xl rounded-3xl p-8 shadow-2xl border border-white/20">
               <div className="flex items-center gap-3 mb-8">
-                <div className="w-16 h-16 flex items-center justify-center overflow-hidden">
-                  <img src="/c_logo.png" className="w-24 h-24 object-contain scale-150" alt="AI Chroney" style={{ mixBlendMode: 'screen' }} />
+                {brand.isAgency ? (
+                  <BrandMark className="w-14 h-14" />
+                ) : (
+                  <div className="w-16 h-16 flex items-center justify-center overflow-hidden">
+                    <img src="/c_logo.png" className="w-24 h-24 object-contain scale-150" alt="AI Chroney" style={{ mixBlendMode: 'screen' }} />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <h2 className="text-2xl font-bold text-white" data-testid="login-brand-name">
+                    {brand.name}
+                  </h2>
+                  {brand.tagline && <p className="text-sm text-white/70">{brand.tagline}</p>}
                 </div>
-                <h2 className="text-2xl font-bold text-white">
-                  AI Chroney
-                </h2>
               </div>
 
               <div className="mb-8">
@@ -187,6 +197,7 @@ export default function Login({ onLogin }: { onLogin: (user: any) => void }) {
 
                 <Button
                   type="submit"
+                  style={brand.primaryColor ? { background: brand.primaryColor } : undefined}
                   className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-purple-700 hover:from-purple-700 hover:via-pink-700 hover:to-purple-800 text-white border-0 shadow-xl h-12 text-base font-semibold mt-6 transition-all duration-300 hover:shadow-2xl hover:shadow-purple-500/50 hover:scale-[1.02] active:scale-[0.98]"
                   disabled={loginMutation.isPending}
                   data-testid="button-login"
@@ -285,11 +296,18 @@ export default function Login({ onLogin }: { onLogin: (user: any) => void }) {
                 </div>
               </div>
 
-              <div className="mt-6 pt-6 border-t border-white/10 text-center">
-                <p className="text-xs text-white/50">
-                  Powered by <span className="font-semibold text-white/70">KnightLabs AI</span>
-                </p>
-              </div>
+              {!brand.isAgency && (
+                <div className="mt-6 pt-6 border-t border-white/10 text-center">
+                  <p className="text-xs text-white/50">
+                    Powered by <span className="font-semibold text-white/70">KnightLabs AI</span>
+                  </p>
+                </div>
+              )}
+              {brand.isAgency && brand.supportEmail && (
+                <div className="mt-6 pt-6 border-t border-white/10 text-center">
+                  <p className="text-xs text-white/60">Need help? <span className="select-all font-medium text-white/80">{brand.supportEmail}</span></p>
+                </div>
+              )}
             </div>
           </div>
         </div>

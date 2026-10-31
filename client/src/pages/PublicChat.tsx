@@ -117,6 +117,8 @@ interface ConversationItem {
 }
 
 interface PublicChatData {
+  /** Agency clients: their agency's logo, or null for a plain icon (never ours). */
+  defaultAvatarUrl?: string | null;
   businessAccount: {
     id: string;
     name: string;
@@ -1287,7 +1289,9 @@ export default function PublicChat() {
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <img src="/c_logo.png" alt="AI Chroney" className="w-5 h-5 object-contain" />
+                data?.defaultAvatarUrl === null
+                  ? <Sparkles className="w-5 h-5 text-white" />
+                  : <img src={data?.defaultAvatarUrl ?? "/c_logo.png"} alt="" className="w-5 h-5 object-contain" />
               )}
             </div>
             <div className="flex-1">

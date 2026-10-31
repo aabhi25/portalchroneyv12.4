@@ -257,6 +257,8 @@ interface WidgetSettings {
   poweredByEnabled?: string;
   /** Agency clients: the name and link the footer shows instead of ours. */
   poweredByText?: string;
+  /** Agency clients: the avatar when none is chosen (agency logo); null = a plain icon, never ours. */
+  defaultAvatarUrl?: string | null;
   poweredByUrl?: string;
   jobPortalEnabled?: boolean;
   k12EducationEnabled?: boolean;
@@ -4798,7 +4800,7 @@ export default function EmbedChat() {
               className="w-full h-full object-cover"
             />
           ) : (
-            <img src="/c_logo.png" alt="AI Chroney" className="w-5 h-5 object-contain" />
+            <DefaultAvatar url={settings?.defaultAvatarUrl} size="w-5 h-5" />
           )}
         </div>
         <div ref={titleBoxRef} className="flex-1 min-w-0">
@@ -6170,7 +6172,7 @@ export default function EmbedChat() {
                     className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-1 border border-gray-200 overflow-hidden"
                     style={{ background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})` }}
                   >
-                    <img src="/c_logo.png" alt="AI Chroney" className="w-6 h-6 object-contain" />
+                    <DefaultAvatar url={settings?.defaultAvatarUrl} size="w-6 h-6" />
                   </div>
                 )
               )}
@@ -7555,4 +7557,10 @@ export default function EmbedChat() {
       </AnimatePresence>
     </div>
   );
+}
+
+/** The assistant's picture when the business chose none: our logo, an agency's logo, or (agency without a logo) a plain icon. */
+function DefaultAvatar({ url, size }: { url: string | null | undefined; size: string }) {
+  if (url === null) return <Sparkles className={`${size} text-white`} />;
+  return <img src={url ?? "/c_logo.png"} alt="" className={`${size} object-contain`} />;
 }

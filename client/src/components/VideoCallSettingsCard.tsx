@@ -1,3 +1,4 @@
+import { brandName } from "@/lib/brand";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ChevronDown, Loader2, Video } from "lucide-react";
@@ -356,7 +357,7 @@ export function VideoCallSettingsPage() {
   return (
     <div className="rounded-2xl border border-black/[0.07] bg-white p-5" data-testid="page-video-call-settings">
       {!isLoading && data && !data.avatarEnabled ? (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground"><Video className="h-4 w-4" /> The live video avatar isn't on for this account. Contact the AI Chroney team to add it.</p>
+        <p className="flex items-center gap-2 text-sm text-muted-foreground"><Video className="h-4 w-4" /> The live video avatar isn't on for this account. Contact the {brandName()} team to add it.</p>
       ) : (
         <VideoCallSettingsCard endpoint="/api/avatar/video-call" />
       )}

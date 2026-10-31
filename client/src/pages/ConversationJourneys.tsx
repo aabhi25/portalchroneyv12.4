@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1470,7 +1471,7 @@ export default function ConversationJourneys() {
                           Journey-Specific Training
                         </CardTitle>
                       <CardDescription className="text-sm">
-                        Optional conversational guidelines that work alongside your global Train Chroney instructions when this journey is active
+                        Optional conversational guidelines that work alongside your global Train {brandShort()} instructions when this journey is active
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-4">
@@ -1814,7 +1815,7 @@ export default function ConversationJourneys() {
                     <p className="text-sm whitespace-pre-wrap">{parsedScriptData.conversationalGuidelines}</p>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    These journey-specific instructions will work alongside your global Train Chroney instructions when this journey is active.
+                    These journey-specific instructions will work alongside your global Train {brandShort()} instructions when this journey is active.
                   </p>
                 </div>
               )}

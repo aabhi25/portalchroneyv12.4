@@ -1,3 +1,4 @@
+import { brandName } from "@/lib/brand";
 import { useState } from "react";
 import { SuperAdminBadge } from "@/components/hub/SuperAdminBadge";
 import { useQuery } from "@tanstack/react-query";
@@ -111,7 +112,7 @@ export default function DataRetentionSettings({ user }: { user: MeResponseDto | 
 
           {!isSuperAdminImpersonating && !isLoading && !isError && (
             <p className="text-xs text-muted-foreground mt-4">
-              This policy is managed by your AI Chroney administrator.
+              This policy is managed by your {brandName()} administrator.
             </p>
           )}
 

@@ -1,3 +1,4 @@
+import { brandName } from "@/lib/brand";
 import { useEffect } from "react";
 import { useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
@@ -258,7 +259,7 @@ export default function PublicDemo() {
 
         <footer className="mt-8 sm:mt-12 text-center text-xs sm:text-sm text-muted-foreground pb-6 sm:pb-8 w-full">
           <Separator className="mb-4" />
-          <p>Powered by AI Chroney - Intelligent Business Chat Platform</p>
+          <p>Powered by {brandName()} - Intelligent Business Chat Platform</p>
         </footer>
       </div>
     </div>

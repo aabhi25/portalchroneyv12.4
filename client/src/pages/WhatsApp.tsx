@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { HideInHub } from "@/components/hub/HideInHub";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
@@ -4413,7 +4414,7 @@ function FlowBuilderSection() {
                 <div className="space-y-1">
                   <Label htmlFor="adaptive-flow-mode" className="cursor-pointer">Adaptive guided journey</Label>
                   <p className="text-xs text-muted-foreground">
-                    Let customers type configured choices in their own words or upload configured documents before the upload step. Chroney keeps the existing validation and returns to the next missing step.
+                    Let customers type configured choices in their own words or upload configured documents before the upload step. {brandShort()} keeps the existing validation and returns to the next missing step.
                   </p>
                 </div>
                 <Switch

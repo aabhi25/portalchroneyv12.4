@@ -274,7 +274,104 @@ async function main() {
   expect((await call("DELETE", `/api/agency/team/${staffId}`, OW)).status === 200, "owner removes the staff login");
   expect((await call("GET", "/api/agency/clients", ST)).status === 401, "removed login's session ends");
 
-  // ── 12. Pause and delete ───────────────────────────────────────────────
+  // ── 12. Own web address, logo and brand (phase 2) ──────────────────────
+  {
+    const brandSvc = await import("../agencyBrandService");
+    const domain = `app.leaf-${stamp}.test`;
+    const onHost = (h: string) => ({ "x-forwarded-host": h });
+    async function hostCall(method: string, path: string, host: string, cookie?: string, body?: unknown) {
+      const res = await fetch(base + path, {
+        method,
+        headers: { ...onHost(host), ...(body !== undefined ? { "content-type": "application/json" } : {}), ...(cookie ? { cookie } : {}) },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      let json: any = null;
+      try { json = await res.json(); } catch { /* empty */ }
+      return { status: res.status, json, setCookie: res.headers.get("set-cookie") };
+    }
+
+    // DNS check rules, with a fake resolver.
+    const target = brandSvc.domainTarget();
+    const fake = (cname: string[], a: Record<string, string[]>) => ({ resolveCname: async () => cname, resolve4: async (h: string) => a[h] ?? [] }) as any;
+    expect((await brandSvc.checkDomainDns("app.x.test", fake([`${target}.`], {}))).ok, "DNS: CNAME to our address counts");
+    expect((await brandSvc.checkDomainDns("app.x.test", fake([], { [target]: ["1.2.3.4"], "app.x.test": ["1.2.3.4"] }))).ok, "DNS: same server address counts");
+    const missing = await brandSvc.checkDomainDns("app.x.test", fake([], {}));
+    expect(!missing.ok && /No DNS record/.test(missing.message), "DNS: nothing yet → tells them what to add", missing.message);
+    const wrong = await brandSvc.checkDomainDns("app.x.test", fake(["elsewhere.example.com"], {}));
+    expect(!wrong.ok && /not to/.test(wrong.message), "DNS: wrong target → says so", wrong.message);
+    expect(shared.normalizeDomain("https://App.Leaf.test/login") === "app.leaf.test" && shared.normalizeDomain("not a domain") === null, "domain input cleaned up");
+
+    // Settings: domain and logo. Agencies need the permission to set the address.
+    await call("PATCH", `/api/super-admin/agencies/${agencyId}`, SA, { status: "active", branding: { brandName: "LeafBot", widgetFooter: "agency", primaryColor: "#0F766E", loginTagline: "Your AI desk", supportEmail: "help@leaf.test" } });
+    const noPerm = await call("PUT", "/api/agency/domain", OW, { domain });
+    expect(noPerm.status === 403, "agency can't set its address without the permission", noPerm.status);
+    expect((await call("PUT", `/api/super-admin/agencies/${agencyId}/domain`, SA, { domain: "nope" })).status === 400, "invalid address refused");
+    expect((await call("PUT", `/api/super-admin/agencies/${agencyId}/domain`, SA, { domain: "clients.aichroney.com" })).status === 400, "our own domain refused");
+    const setD = await call("PUT", `/api/super-admin/agencies/${agencyId}/domain`, SA, { domain: `https://${domain.toUpperCase()}/` });
+    expect(setD.status === 200 && setD.json.agency.domain.name === domain && setD.json.agency.domain.status === "pending", "address saved, waiting for DNS", setD.json?.agency?.domain);
+    expect((await call("PUT", `/api/super-admin/agencies/${otherId}/domain`, SA, { domain })).status === 400, "another agency can't take the same address");
+    expect((await call("PUT", `/api/super-admin/agencies/${agencyId}/logo`, SA, { logo: "data:text/html;base64,PGgxPg==" })).status === 400, "logo must be an image");
+    const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const setL = await call("PUT", `/api/super-admin/agencies/${agencyId}/logo`, SA, { logo: png });
+    expect(setL.status === 200 && setL.json.agency.logoUrl?.startsWith(`/api/brand/logo/${agencyId}`), "logo saved", setL.json?.agency?.logoUrl);
+    const logoRes = await fetch(base + setL.json.agency.logoUrl);
+    expect(logoRes.status === 200 && logoRes.headers.get("content-type") === "image/png" && /default-src 'none'/.test(logoRes.headers.get("content-security-policy") || ""), "logo served as an image, scripts blocked");
+
+    // Brand by address.
+    const plain = await call("GET", "/api/brand");
+    expect(plain.json.isAgency === false && plain.json.name === "AI Chroney", "our address: our brand");
+    const onAgency = await hostCall("GET", "/api/brand", domain);
+    expect(onAgency.json.isAgency && onAgency.json.name === "LeafBot" && onAgency.json.primaryColor === "#0f766e" && onAgency.json.tagline === "Your AI desk" && onAgency.json.logoUrl.startsWith("/api/brand/logo/"), "agency address: agency brand", onAgency.json);
+    expect((await fetch(`${base}/api/domains/tls-check?domain=${domain}`)).status === 200 && (await fetch(`${base}/api/domains/tls-check?domain=evil.test`)).status === 404, "certificate check: only agency addresses");
+    const html = brandSvc.brandHtml('<head><title>Hi Chroney - AI Assistant</title><meta name="description" content="Chat with Hi Chroney" /><link rel="icon" href="/favicon.ico" /></head>', onAgency.json);
+    expect(html.includes("<title>LeafBot</title>") && !html.includes("Chroney") && html.includes('rel="icon" href="/api/brand/logo/'), "page title and icon are the agency's", html);
+    expect(brandSvc.brandHtml("<title>Hi Chroney</title>", shared.PLATFORM_BRAND) === "<title>Hi Chroney</title>", "our pages unchanged");
+
+    // Logins on the agency's address: only its people (and super admins).
+    const ocLoginElsewhere = await hostCall("POST", "/api/auth/login", domain, undefined, { username: `oc-${stamp}@c.test`, password: oc.json.credentials.tempPassword });
+    expect(ocLoginElsewhere.status === 401, "another agency's client can't log in on this address", ocLoginElsewhere.status);
+    const c1OnDomain = await hostCall("POST", "/api/auth/login", domain, undefined, { username: `one-${stamp}@c.test`, password: c1.json.credentials.tempPassword });
+    expect(c1OnDomain.status === 200, "own client logs in on the agency address", c1OnDomain.status);
+    const directUser = `direct-${stamp}@c.test`;
+    await db.insert(schema.users).values({ username: directUser, passwordHash: await hashPassword("Direct-pass-1"), role: "business_user", businessAccountId: direct.id } as any);
+    expect((await hostCall("POST", "/api/auth/login", domain, undefined, { username: directUser, password: "Direct-pass-1" })).status === 401, "our direct customer can't log in on an agency address");
+    expect((await login(directUser, "Direct-pass-1")).status === 200, "…but still logs in on ours");
+
+    // Client brand after login (anywhere), widget defaults, public link.
+    const c1Me = await call("GET", "/api/auth/me", clientLogin.cookie);
+    expect(c1Me.json.brand?.isAgency && c1Me.json.brand.name === "LeafBot" && c1Me.json.brand.domain === null, "client sees the agency brand (address not connected yet)", c1Me.json.brand);
+    const directMe = await call("GET", "/api/auth/me", (await login(directUser, "Direct-pass-1")).cookie);
+    expect(directMe.json.brand?.isAgency === false, "direct customer: our brand");
+    await db.update(schema.agencies).set({ domainStatus: "verified", domainVerifiedAt: new Date() }).where(eq(schema.agencies.id, agencyId));
+    brandSvc.clearAgencyHostCache();
+    const c1Me2 = await call("GET", "/api/auth/me", clientLogin.cookie);
+    expect(c1Me2.json.brand.domain === domain, "connected address reaches the client's portal (install codes)", c1Me2.json.brand.domain);
+    const link = await call("GET", "/api/public-chat-link", clientLogin.cookie);
+    expect(link.status === 200 && link.json.url.startsWith(`https://${domain}/public-chat/`), "public chat link uses the agency address", link.json?.url);
+    pub = await call("GET", `/api/widget-settings/public?businessAccountId=${c1Id}`);
+    expect(pub.json.widgetHeaderText === `Client One ${stamp}` && pub.json.defaultAvatarUrl?.startsWith("/api/brand/logo/"), "widget: business name as header, agency logo as picture", { h: pub.json.widgetHeaderText, a: pub.json.defaultAvatarUrl });
+    await call("PUT", `/api/super-admin/agencies/${agencyId}/logo`, SA, { logo: null });
+    pub = await call("GET", `/api/widget-settings/public?businessAccountId=${c1Id}`);
+    expect(pub.json.defaultAvatarUrl === null, "widget: no agency logo → plain icon, never ours", pub.json.defaultAvatarUrl);
+    const pubDirect2 = await call("GET", `/api/widget-settings/public?businessAccountId=${direct.id}`);
+    expect(pubDirect2.json.widgetHeaderText === "Hi Chroney" && pubDirect2.json.defaultAvatarUrl === undefined, "widget: direct customer unchanged");
+
+    // "Only at its own address": our address refuses them with a pointer.
+    await call("PATCH", `/api/super-admin/agencies/${agencyId}`, SA, { branding: { brandName: "LeafBot", widgetFooter: "agency", clientLoginScope: "agency_domain" } });
+    const refused = await login(`one-${stamp}@c.test`, c1.json.credentials.tempPassword);
+    expect(refused.status === 403 && refused.json.error === `Please log in at https://${domain}`, "own-address-only: our address points them to theirs", refused.json);
+    expect((await hostCall("POST", "/api/auth/login", domain, undefined, { username: `one-${stamp}@c.test`, password: c1.json.credentials.tempPassword })).status === 200, "own-address-only: their address works");
+    expect((await login(`two-${stamp}@c.test`, c2.json.credentials.tempPassword)).status === 403, "own-address-only: applies to every client");
+    await call("PATCH", `/api/super-admin/agencies/${agencyId}`, SA, { branding: { brandName: "LeafBot", widgetFooter: "agency", clientLoginScope: "anywhere" } });
+
+    // Agency with the permission sets its own address.
+    await call("PATCH", `/api/super-admin/agencies/${agencyId}`, SA, { permissions: { setCustomDomain: true } });
+    const own = await call("PUT", "/api/agency/domain", OW, { domain: `portal.leaf-${stamp}.test` });
+    expect(own.status === 200 && own.json.domain.name === `portal.leaf-${stamp}.test` && own.json.domain.status === "pending", "agency with the permission sets its address", own.json);
+    expect((await hostCall("GET", "/api/brand", domain)).json.isAgency === false, "old address no longer branded");
+  }
+
+  // ── 13. Pause and delete ───────────────────────────────────────────────
   const pauseClient = await call("PATCH", `/api/agency/clients/${c2Id}/status`, OW, { status: "suspended" });
   expect(pauseClient.status === 200, "agency pauses a client");
   await call("PATCH", `/api/super-admin/agencies/${agencyId}`, SA, { status: "suspended" });

@@ -59,6 +59,8 @@ import SuperAdminAgencies from "@/pages/SuperAdminAgencies";
 import SuperAdminAgencyPage from "@/pages/SuperAdminAgencyPage";
 import { AgencyClientsPage, AgencyClientPage, AgencyStatementPage, AgencyTeamPage, AgencyBrandPage } from "@/pages/agency/AgencyPortal";
 import { AgencyViewingBanner } from "@/components/agency/AgencyViewingBanner";
+import { setBrand, useBrand } from "@/lib/brand";
+import type { PublicBrand } from "@shared/agency";
 import { LiveAvatarPlatformCard } from "@/components/LiveAvatarPlatformCard";
 import { GeminiPlatformKeyCard } from "@/components/photoSearch/GeminiKeyEditor";
 import { SuperAdminFrame, isSuperAdminHome } from "@/components/superadmin/SuperAdminFrame";
@@ -149,6 +151,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
   const [location, setLocation] = useLocation();
   const [user, setUser] = useState<MeResponseDto | null>(currentUser);
   const isInitialLoad = useRef(true);
+  const brand = useBrand();
 
   useEffect(() => {
     if (isInitialLoad.current) {
@@ -243,7 +246,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
         <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4 lg:hidden sticky top-0 z-10">
           <SidebarTrigger className="-ml-1" />
           <div className="flex items-center gap-2">
-            <h1 className="text-lg font-semibold">AI Chroney</h1>
+            <h1 className="text-lg font-semibold">{brand.name}</h1>
           </div>
         </header>
         <div className="flex-1 overflow-auto">
@@ -531,6 +534,14 @@ function AppWithProviders() {
     refetchOnReconnect: false,
     enabled: !isPublicRoute,
   });
+
+  // The brand to show: an agency's own web address wins; otherwise the login's (agency logins and
+  // agency clients see their agency's brand anywhere), else ours.
+  const { data: hostBrand } = useQuery<PublicBrand>({ queryKey: ["/api/brand"], enabled: !isPublicRoute, staleTime: Infinity, retry: false });
+  useEffect(() => {
+    if (isPublicRoute) return;
+    setBrand(hostBrand?.isAgency ? hostBrand : currentUser?.brand ?? hostBrand ?? null);
+  }, [isPublicRoute, hostBrand, currentUser]);
 
   // Render public routes immediately without auth check
   if (isPublicRoute) {

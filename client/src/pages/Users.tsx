@@ -1,3 +1,4 @@
+import { brandName } from "@/lib/brand";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -210,7 +211,7 @@ export default function UsersPage() {
               <Sparkles className="w-4 h-4 text-white" />
             </div>
             <div>
-              <h1 className="text-[15px] font-semibold text-white leading-tight">AI Chroney</h1>
+              <h1 className="text-[15px] font-semibold text-white leading-tight">{brandName()}</h1>
               <p className="text-[11px] text-white/90 leading-tight mt-0.5">Users Management</p>
             </div>
           </div>

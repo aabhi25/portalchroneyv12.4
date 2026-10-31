@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { Sparkles, Zap, Send, Loader2, Share2, Mic as MicIcon, Volume2 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -203,7 +204,7 @@ export default function Home() {
       setMessages([{
         id: '1',
         role: 'assistant',
-        content: "⚠️ Chroney is currently offline. Please configure your OpenAI API key in Settings to enable the chat functionality.",
+        content: `⚠️ ${brandShort()} is currently offline. Please configure your OpenAI API key in Settings to enable the chat functionality.`,
         timestamp: new Date()
       }]);
       setIsOnline(false);
@@ -254,7 +255,7 @@ export default function Home() {
         setMessages([{
           id: '1',
           role: 'assistant',
-          content: "Sup, human? Chroney reporting for duty 🤖. Tell me what you want—products, FAQs, or capture a lead—I'm here to help!",
+          content: `Sup, human? ${brandShort()} reporting for duty 🤖. Tell me what you want—products, FAQs, or capture a lead—I'm here to help!`,
           timestamp: new Date()
         }]);
       }
@@ -264,7 +265,7 @@ export default function Home() {
       setMessages([{
         id: '1',
         role: 'assistant',
-        content: "Sup, human? Chroney reporting for duty 🤖. Tell me what you want—products, FAQs, or capture a lead—I'm here to help!",
+        content: `Sup, human? ${brandShort()} reporting for duty 🤖. Tell me what you want—products, FAQs, or capture a lead—I'm here to help!`,
         timestamp: new Date()
       }]);
     }

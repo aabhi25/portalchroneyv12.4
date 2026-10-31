@@ -1,3 +1,4 @@
+import { brandShort } from "@/lib/brand";
 import { useLocation } from "wouter";
 import { useInHubFrame } from "@/components/hub/hubContext";
 import { Brain, Route, HelpCircle, Building2, FileText, Globe, GraduationCap, Zap } from "lucide-react";
@@ -36,7 +37,7 @@ export default function TrainingNavTabs() {
             }`}
           >
             <Icon className={`w-4 h-4 ${isActive ? "text-purple-600" : "text-gray-400"}`} />
-            {tab.label}
+            {tab.label.replace("Chroney", brandShort())}
           </button>
         );
       })}
