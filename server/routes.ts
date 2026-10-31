@@ -107,6 +107,7 @@ import dataRetentionRoutes from "./routes/dataRetention";
 import merittoRoutes from "./routes/meritto";
 import accountSetupRoutes from "./routes/accountSetup";
 import aiUsageRoutes from "./routes/aiUsage";
+import agencyRoutes from "./routes/agencies";
 import avatarRoutes from "./routes/avatar";
 import photoSearchRoutes from "./routes/photoSearch";
 import { productHasGeminiFingerprint } from "./services/visualSearchEngine";
@@ -643,6 +644,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(merittoRoutes);
   app.use(accountSetupRoutes);
   app.use(aiUsageRoutes);
+  app.use(agencyRoutes);
   // Live AI avatar (super-admin settings, widget sessions). Close avatar sessions
   // a previous process left open (billed to their last heartbeat).
   app.use(avatarRoutes);
@@ -8867,6 +8869,23 @@ If you cannot determine the category or the image doesn't match any category, re
         }
       }
 
+      if (user.role === "agency_admin") {
+        const { getAgencyLogin } = await import("./services/agencyService");
+        const login = await getAgencyLogin(user.id);
+        if (!login || login.agency.status !== "active") {
+          await recordAuditEventSafely(req, {
+            action: "auth.login",
+            outcome: "denied",
+            actorUserId: user.id,
+            actorUsername: user.username,
+            actorRole: user.role,
+            resourceType: "session",
+            metadata: { reason: "agency_inactive" },
+          });
+          return res.status(403).json({ error: "This agency login is not active. Please contact support." });
+        }
+      }
+
       const sessionToken = await createSession(user.id);
 
       // Update last login
@@ -8944,7 +8963,13 @@ If you cannot determine the category or the image doesn't match any category, re
     }
     
     // CRITICAL FIX: Use activeBusinessAccountId if user has switched accounts via multi-account linking
-    const businessAccountId = sessionUser.activeBusinessAccountId || user.businessAccountId;
+    const businessAccountId = sessionUser.agency ? sessionUser.agency.viewingClientId : (sessionUser.activeBusinessAccountId || user.businessAccountId);
+    // Agency logins: the agency side, and while a client's portal is open they read as that client's login.
+    const agencyFields = async () => {
+      if (!sessionUser.agency) return {};
+      const { getAgencyContextDto } = await import("./services/agencyService");
+      return { role: sessionUser.role, agency: await getAgencyContextDto(sessionUser.agency) };
+    };
     
     // If user has a business account, include feature flags from the ACTIVE account
     const { isTopscholarAccount } = await import("./services/topscholar/config");
@@ -8955,9 +8980,9 @@ If you cannot determine the category or the image doesn't match any category, re
         getAvatarSettingsRow(businessAccountId).catch(() => null),
       ]);
       const dto = businessAccount ? toBusinessAccountDto(businessAccount) : null;
-      res.json(toMeResponseDto(user, dto, sessionUser.activeBusinessAccountId, isTopscholarAccount(businessAccountId), avatarRow?.enabled === true));
+      res.json({ ...toMeResponseDto(user, dto, sessionUser.activeBusinessAccountId, isTopscholarAccount(businessAccountId), avatarRow?.enabled === true), ...(await agencyFields()) });
     } else {
-      res.json(toMeResponseDto(user, null, sessionUser.activeBusinessAccountId, false));
+      res.json({ ...toMeResponseDto(user, null, sessionUser.activeBusinessAccountId, false), ...(await agencyFields()) });
     }
   });
 
@@ -27149,8 +27174,19 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         console.error('[Widget Settings] WhatsApp number fallback failed (non-fatal):', err);
       }
 
+      // Agency clients: the widget footer names the agency (or nothing) instead of us.
+      let agencyFooter: ReturnType<typeof import("@shared/agency").agencyWidgetFooter> = null;
+      if (businessAccount?.agencyId) {
+        const { getAgency } = await import("./services/agencyService");
+        const { agencyWidgetFooter, resolveAgencyBranding } = await import("@shared/agency");
+        const agency = await getAgency(businessAccount.agencyId);
+        if (agency) agencyFooter = agencyWidgetFooter(resolveAgencyBranding(agency.branding, agency.name));
+      }
+
       res.json({
         ...publicSettings,
+        ...(agencyFooter?.hidden ? { poweredByEnabled: "false" } : {}),
+        ...(agencyFooter && !agencyFooter.hidden ? { poweredByText: agencyFooter.text, poweredByUrl: agencyFooter.url } : {}),
         voiceModeEnabled,
         visualSearchEnabled,
         chatMode,

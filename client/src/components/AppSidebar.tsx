@@ -27,6 +27,7 @@ import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Spa
 import { Badge } from "@/components/ui/badge";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
 import type { MeResponseDto } from "@shared/dto";
+import { AGENCY_NAV } from "@/pages/agency/AgencyPortal";
 
 interface AppSidebarProps {
   user: MeResponseDto | null;
@@ -132,7 +133,10 @@ export function AppSidebar({ user }: AppSidebarProps) {
   const isSuperAdmin = user?.role === "super_admin";
   const isSuperAdminImpersonating = isSuperAdmin && !!user?.activeBusinessAccountId;
   const isGroupAdmin = user?.role === "account_group_admin";
-  const showBusinessNav = (!isSuperAdmin && !isGroupAdmin) || isSuperAdminImpersonating;
+  const isAgencyAdmin = user?.role === "agency_admin";
+  // An agency login with a client's portal open reads as that client (role business_user).
+  const agencyViewing = !!user?.agency?.viewingClient;
+  const showBusinessNav = (!isSuperAdmin && !isGroupAdmin && !isAgencyAdmin) || isSuperAdminImpersonating;
   
   const isTopscholar = user?.businessAccount?.isTopscholar === true;
   
@@ -169,8 +173,10 @@ export function AppSidebar({ user }: AppSidebarProps) {
             <img src="/c_logo.png" className="w-10 h-10 object-contain" alt="AI Chroney" />
           </div>
           <div className="flex-1 min-w-0">
-            <h2 className="font-bold text-sm bg-gradient-to-r from-purple-700 to-indigo-600 bg-clip-text text-transparent">AI Chroney</h2>
-            {showBusinessNav && user?.businessAccountId && user?.businessAccount?.name ? (
+            <h2 className="font-bold text-sm bg-gradient-to-r from-purple-700 to-indigo-600 bg-clip-text text-transparent">{user?.agency ? user.agency.brandName : "AI Chroney"}</h2>
+            {user?.agency ? (
+              <p className="text-xs text-gray-400 font-medium truncate">{agencyViewing ? user.businessAccount?.name : user.agency.agencyName}</p>
+            ) : showBusinessNav && user?.businessAccountId && user?.businessAccount?.name ? (
               <AccountSwitcher 
                 businessName={user.businessAccount.name}
                 businessAccountId={user.businessAccountId}
@@ -417,6 +423,33 @@ export function AppSidebar({ user }: AppSidebarProps) {
               </SidebarGroup>
             ))}
           </>
+        ) : isAgencyAdmin ? (
+          <SidebarGroup>
+            <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-gray-400 font-semibold px-3 mb-1">Agency</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu className="space-y-0.5">
+                {AGENCY_NAV.filter(n => !n.perm || user?.agency?.permissions[n.perm]).map(n => {
+                  const Icon = n.icon;
+                  const isActive = n.href === "/agency" ? location === "/agency" || location.startsWith("/agency/clients") : location.startsWith(n.href);
+                  return (
+                    <SidebarMenuItem key={n.key}>
+                      <SidebarMenuButton
+                        onClick={() => setLocation(n.href)}
+                        isActive={isActive}
+                        data-testid={`link-agency-${n.key}`}
+                        className={`group/nav relative transition-all duration-200 ${isActive ? "bg-purple-50 text-purple-700 font-medium border border-purple-100/60" : "hover:bg-gray-50/80"}`}
+                      >
+                        <div className={`flex items-center justify-center w-7 h-7 rounded-lg ${n.tint}`}>
+                          <Icon className="w-3.5 h-3.5 text-white" />
+                        </div>
+                        <span className="text-[14px]">{n.label}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
         ) : isGroupAdmin ? (
           <SidebarGroup>
             <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-gray-400 font-semibold px-3 mb-1">Group Admin</SidebarGroupLabel>

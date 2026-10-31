@@ -1,4 +1,5 @@
 import type { User } from "../schema";
+import type { AgencyContextDto } from "../agency";
 import type { BusinessAccountDto, ProductTier, SystemMode } from "./businessAccount";
 
 // Never sent to the browser: the password hash and the temporary password itself.
@@ -7,6 +8,8 @@ type SafeUser = Omit<User, "passwordHash" | "tempPassword">;
 // MeResponseDto - Response type for /api/auth/me endpoint
 export type MeResponseDto = SafeUser & {
   activeBusinessAccountId?: string | null; // For multi-account switching
+  // Agency logins only (role 'agency_admin'; 'business_user' while a client's portal is open).
+  agency?: AgencyContextDto;
   // Browser only: a super admin who switched to "Business user view" (client/src/lib/businessUserView.ts).
   // `role` then reads "business_user"; the server never sets this.
   viewingAsBusinessUser?: boolean;

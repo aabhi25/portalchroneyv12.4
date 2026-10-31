@@ -55,6 +55,10 @@ import SuperAdminLiveLogs from "@/pages/SuperAdminLiveLogs";
 import SuperAdminAuditLogs from "@/pages/SuperAdminAuditLogs";
 import SuperAdminToday from "@/pages/SuperAdminToday";
 import SuperAdminGroupPage from "@/pages/SuperAdminGroupPage";
+import SuperAdminAgencies from "@/pages/SuperAdminAgencies";
+import SuperAdminAgencyPage from "@/pages/SuperAdminAgencyPage";
+import { AgencyClientsPage, AgencyClientPage, AgencyStatementPage, AgencyTeamPage, AgencyBrandPage } from "@/pages/agency/AgencyPortal";
+import { AgencyViewingBanner } from "@/components/agency/AgencyViewingBanner";
 import { LiveAvatarPlatformCard } from "@/components/LiveAvatarPlatformCard";
 import { GeminiPlatformKeyCard } from "@/components/photoSearch/GeminiKeyEditor";
 import { SuperAdminFrame, isSuperAdminHome } from "@/components/superadmin/SuperAdminFrame";
@@ -233,8 +237,9 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
       <SidebarInset>
         {/* Show impersonation banner for SuperAdmins */}
         {(user?.role === "super_admin" || user?.viewingAsBusinessUser) && <ImpersonationBanner />}
+        {user?.agency?.viewingClient && <AgencyViewingBanner user={user} />}
         {/* Monthly AI limit: full details for super admins viewing as an account; business users only learn when AI replies are paused. */}
-        {(user?.role !== "account_group_admin" && (user?.role !== "super_admin" || isSuperAdminImpersonating)) && <UsageLimitBanner showSpend={user?.role === "super_admin"} />}
+        {(user?.role !== "account_group_admin" && user?.role !== "agency_admin" && (user?.role !== "super_admin" || isSuperAdminImpersonating)) && <UsageLimitBanner showSpend={user?.role === "super_admin"} />}
         <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4 lg:hidden sticky top-0 z-10">
           <SidebarTrigger className="-ml-1" />
           <div className="flex items-center gap-2">
@@ -273,6 +278,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/super-admin/ai-providers/photo-search">{() => <GeminiPlatformKeyCard />}</Route>
                 <Route path="/super-admin/account-groups">{() => <SuperAdminAccountGroups />}</Route>
                 <Route path="/super-admin/account-groups/:groupId/:tab?">{({ groupId, tab }) => <SuperAdminGroupPage key={groupId} groupId={groupId} tab={tab} />}</Route>
+                <Route path="/super-admin/agencies">{() => <SuperAdminAgencies />}</Route>
+                <Route path="/super-admin/agencies/:agencyId/:tab?">{({ agencyId, tab }) => <SuperAdminAgencyPage key={agencyId} agencyId={agencyId} tab={tab} />}</Route>
                 <Route path="/super-admin/settings">{() => <SuperAdminSettings section="account" />}</Route>
                 <Route path="/super-admin/backups">{() => <SuperAdminSettings section="backups" />}</Route>
                 <Route path="/super-admin/backups/download">{() => <SuperAdminSettings section="download" />}</Route>
@@ -288,6 +295,27 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/super-admin/chat-apis">{() => <Redirect to="/super-admin/ai-providers" replace />}</Route>
                 <Route path="/super-admin/r2-storage">{() => <Redirect to="/super-admin/backups/storage" replace />}</Route>
                 <Route path="/super-admin/audit-logs" component={SuperAdminAuditLogs} />
+              </>
+            ) : user?.role === "agency_admin" ? (
+              <>
+                <Route path="/">
+                  {(() => {
+                    if (isInitialLoad.current) {
+                      const lastPath = sessionStorage.getItem("lastPath");
+                      if (lastPath && lastPath.startsWith("/agency")) {
+                        return <Redirect to={lastPath} />;
+                      }
+                    }
+                    return <Redirect to="/agency" />;
+                  })()}
+                </Route>
+                <Route path="/agency">{() => <AgencyClientsPage />}</Route>
+                <Route path="/agency/clients/:id">{({ id }) => <AgencyClientPage key={id} clientId={id} />}</Route>
+                <Route path="/agency/statement">{() => <AgencyStatementPage />}</Route>
+                <Route path="/agency/team">{() => <AgencyTeamPage />}</Route>
+                <Route path="/agency/brand">{() => <AgencyBrandPage />}</Route>
+                <Route path={SETTINGS_PATHS.root}>{() => <SettingsHub user={user} />}</Route>
+                <Route path={`${SETTINGS_PATHS.root}/*`}>{() => <SettingsHub user={user} />}</Route>
               </>
             ) : user?.role === "account_group_admin" ? (
               <>

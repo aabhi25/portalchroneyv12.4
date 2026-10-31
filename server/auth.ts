@@ -4,6 +4,7 @@ import type { Request, Response, NextFunction } from "express";
 import { db } from "./db";
 import { sessions, users, accountGroupAdmins, accountGroupMembers, accountGroups } from "@shared/schema";
 import { eq, and, gt, inArray } from "drizzle-orm";
+import { loadAgencySession, type AgencySession } from "./services/agencyService";
 
 const SALT_ROUNDS = 12;
 const SESSION_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
@@ -89,6 +90,12 @@ declare global {
         mustChangePassword: string;
         tempPasswordExpiry: Date | null;
         lastLoginAt: Date | null;
+        /**
+         * Set for agency logins (users.role 'agency_admin'). While such a login has a client's
+         * portal open, `role` reads 'business_user' and `businessAccountId` is that client, so the
+         * business routes treat it as the client; agency routes look at this instead of `role`.
+         */
+        agency?: AgencySession;
       };
       sessionToken?: string;
     }
@@ -121,6 +128,17 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     lastLoginAt: user.lastLoginAt,
   };
 
+  if (user.role === "agency_admin") {
+    const agency = await loadAgencySession(user.id, user.activeBusinessAccountId);
+    if (!agency) {
+      return res.status(403).json({ error: "This agency login is not active. Please contact support." });
+    }
+    req.user.agency = agency;
+    req.user.businessAccountId = agency.viewingClientId;
+    req.user.activeBusinessAccountId = agency.viewingClientId;
+    if (agency.viewingClientId) req.user.role = "business_user";
+  }
+
   next();
 }
 
@@ -147,8 +165,20 @@ export function requireIntegrationAdmin(req: Request, res: Response, next: NextF
   if (!req.user) {
     return res.status(401).json({ error: "Authentication required" });
   }
-  if (req.user.role !== "super_admin") {
-    return res.status(403).json({ error: "Connected apps are set up by the Chroney team. Please contact them to change these settings." });
+  const agencyMaySetUp = !!req.user.agency?.viewingClientId && req.user.agency.permissions.setupConnectedApps;
+  if (req.user.role !== "super_admin" && !agencyMaySetUp) {
+    return res.status(403).json({ error: "Connected apps are set up by your account manager. Please contact them to change these settings." });
+  }
+  next();
+}
+
+/** An agency login (also while it has a client's portal open). */
+export function requireAgencyAdmin(req: Request, res: Response, next: NextFunction) {
+  if (!req.user) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+  if (!req.user.agency) {
+    return res.status(403).json({ error: "Agency access required" });
   }
   next();
 }

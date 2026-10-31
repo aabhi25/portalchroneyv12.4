@@ -173,9 +173,53 @@ export const businessAccounts = pgTable("business_accounts", {
   visionWarehouseSyncAnalyzeOpName: text("vision_warehouse_sync_analyze_op_name"), // Current analyze operation name (for cancellation)
   visionWarehouseSyncIndexOpName: text("vision_warehouse_sync_index_op_name"), // Current index operation name (for cancellation)
   visionWarehouseSyncIndexOpType: text("vision_warehouse_sync_index_op_type"), // Type of index operation: create_index, create_endpoint, deploy_index, update_index
+  // The reseller agency this account belongs to (null = our direct customer). See shared/agency.ts.
+  agencyId: varchar("agency_id").references((): any => agencies.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  index("business_accounts_agency_idx").on(table.agencyId),
+]);
+
+// Agencies (resellers): a digital marketing agency with its own logins above its client accounts.
+// A super admin configures per agency what it may resell and do, its AI cap, our price and its brand
+// (shared/agency.ts has the catalogues and defaults). Direct customers have no agency.
+export const agencies = pgTable("agencies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  status: text("status").notNull().default("active"), // 'active' | 'suspended' (suspended: agency logins refused)
+  maxAccounts: integer("max_accounts"), // null = no limit
+  allowedFeatures: jsonb("allowed_features").$type<string[]>().notNull().default(sql`'[]'::jsonb`), // AgencyFeatureKey[]
+  permissions: jsonb("permissions").$type<Record<string, boolean>>().notNull().default(sql`'{}'::jsonb`), // AgencyPermissions (missing = default)
+  // Total monthly AI spend of all the agency's clients (USD, IST calendar month). null = no cap.
+  monthlyAiCapUsd: numeric("monthly_ai_cap_usd", { precision: 12, scale: 2 }),
+  aiCapAction: text("ai_cap_action").notNull().default("block"), // 'warn' | 'block'
+  aiCapWarnAtPercent: integer("ai_cap_warn_at_percent").notNull().default(80),
+  aiCapWarnNotifiedMonth: text("ai_cap_warn_notified_month"), // IST "YYYY-MM" the warning was last recorded
+  aiCapLimitNotifiedMonth: text("ai_cap_limit_notified_month"),
+  // Monthly AI limit given to each new client account (USD); null = none.
+  defaultClientLimitUsd: numeric("default_client_limit_usd", { precision: 12, scale: 2 }),
+  billing: jsonb("billing").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`), // AgencyBilling
+  branding: jsonb("branding").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`), // AgencyBranding
+  notes: text("notes"),
+  createdBy: varchar("created_by"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// Agency logins. A user belongs to one agency; the owner can add staff (when the agency may).
+export const agencyAdmins = pgTable("agency_admins", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  agencyId: varchar("agency_id").notNull().references(() => agencies.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }).unique(),
+  role: text("role").notNull().default("staff"), // 'owner' | 'staff'
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  index("agency_admins_agency_idx").on(table.agencyId),
+]);
+
+export type Agency = typeof agencies.$inferSelect;
+export type AgencyAdmin = typeof agencyAdmins.$inferSelect;
 
 // Users table with roles and business account association
 // One user per business account (1:1 relationship)
@@ -186,7 +230,7 @@ export const users = pgTable("users", {
   tempPassword: text("temp_password"), // Temporary password for viewing/copying
   tempPasswordExpiry: timestamp("temp_password_expiry"), // When temp password expires
   mustChangePassword: text("must_change_password").notNull().default("false"), // 'true' | 'false' - Force password change on next login
-  role: text("role").notNull(), // 'super_admin' | 'business_user' | 'account_group_admin'
+  role: text("role").notNull(), // 'super_admin' | 'business_user' | 'account_group_admin' | 'agency_admin'
   businessAccountId: varchar("business_account_id").unique().references(() => businessAccounts.id, { onDelete: "cascade" }), // Unique constraint enforces 1:1 relationship (nulls allowed for superadmins)
   lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

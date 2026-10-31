@@ -980,7 +980,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
   const businessName = settings?.businessName || '';
   const businessWebsite = settings?.businessWebsite || '';
   
-  const embedCode = `<!-- AI Chroney Widget -->
+  const embedCode = `<!-- Chat widget -->
 <!-- Business: ${businessName}${businessWebsite ? ` | Website: ${businessWebsite}` : ''} -->
 <script src="${widgetDomain}/widget-loader.js" data-business-id="${businessId}"></script>`;
 
@@ -1005,7 +1005,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
   // mandatory and the tutor refuses to answer when it is missing. data-chapter is
   // OPTIONAL — when supplied it narrows answers to a single chapter on top of the
   // subject; omit it for whole-subject scope.
-  const k12EmbedCode = `<!-- AI Chroney Widget (subject-scoped for student portals) -->
+  const k12EmbedCode = `<!-- Chat widget (subject-scoped for student portals) -->
 <!-- Replace the placeholders with the logged-in student's values from your portal -->
 <!-- All scope attributes are required — data-subject is mandatory -->
 <!-- data-chapter is optional — it narrows answers to one chapter; omit for whole-subject -->
@@ -1031,7 +1031,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
   // signed token" is enabled. Your portal builds the token on its server with the
   // shared secret; include `chapter` in the signed payload to narrow answers to a
   // single chapter (omit it for whole-subject scope).
-  const k12SecureEmbedCode = `<!-- AI Chroney Widget (secure mode — server-signed launch token) -->
+  const k12SecureEmbedCode = `<!-- Chat widget (secure mode — server-signed launch token) -->
 <!-- Build the token on YOUR server (see the integration guide in TopScholar admin) -->
 <!-- The token seals board, medium, grade, subject, chapter (optional), studentId and name -->
 <!-- INLINE MODE (optional): add data-mode="inline" + data-container="ai-tutor" to -->
@@ -1046,7 +1046,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
   // the configured staging origin instead of production. Embed this on your staging portal
   // so every chat request hits the dev server — logs, doubt sync, and token issues can
   // all be diagnosed in real time before switching to the production snippet.
-  const k12DevSecureEmbedCode = `<!-- AI Chroney Widget — STAGING ONLY -->
+  const k12DevSecureEmbedCode = `<!-- Chat widget — STAGING ONLY -->
  <!-- Use on your staging portal — swap for the Secure Embed Code above in production -->
 <!-- Build the signed token on your server exactly as you would for production -->
  <script src="${widgetDomain}/widget-loader.js" data-business-id="${businessId}"
@@ -1677,7 +1677,7 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <div>
-                          <Label className="text-sm font-semibold text-gray-700">Powered by AI Chroney</Label>
+                          <Label className="text-sm font-semibold text-gray-700">"Powered by" badge</Label>
                           <p className="text-xs text-gray-500 mt-0.5">Show branding badge at the bottom of the widget</p>
                         </div>
                         <Switch

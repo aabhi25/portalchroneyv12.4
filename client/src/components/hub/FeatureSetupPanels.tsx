@@ -172,7 +172,7 @@ export function FeatureSetupPanel({ feature, onOpenChange, businessAccountId, bu
   });
 
   if (!feature || !meta) return null;
-  const embedCode = `<!-- AI Chroney Widget -->\n<script src="${getPublicWidgetOrigin()}/widget-loader.js" data-business-id="${businessAccountId}"></script>`;
+  const embedCode = `<!-- Chat widget -->\n<script src="${getPublicWidgetOrigin()}/widget-loader.js" data-business-id="${businessAccountId}"></script>`;
 
   return (
     <SetupPanel

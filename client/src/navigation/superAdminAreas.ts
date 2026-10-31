@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  Building2, Link2, Presentation, Sunrise, ClipboardList, Gauge, Bot, Database, Server, ScrollText, UserCog,
+  Building2, Link2, Handshake, Presentation, Sunrise, ClipboardList, Gauge, Bot, Database, Server, ScrollText, UserCog,
 } from "lucide-react";
 
 /**
@@ -49,6 +49,13 @@ export const SA_AREAS: SaArea[] = [
     tabs: [{ key: "all", label: "All groups", href: "/super-admin/account-groups" }],
     detail: /^\/super-admin\/account-groups\/[^/]+/,
     formerly: "Group admins · group training · group insights · LeadSquared sync",
+  },
+  {
+    id: "agencies", label: "Agencies", kind: "Customers", icon: Handshake, tint: "bg-teal-600", group: "Customers",
+    href: "/super-admin/agencies",
+    tabs: [{ key: "all", label: "All agencies", href: "/super-admin/agencies" }],
+    detail: /^\/super-admin\/agencies\/[^/]+/,
+    formerly: "Resellers · partners · white label · digital marketing agencies",
   },
   {
     id: "demos", label: "Demo pages", kind: "Customers", icon: Presentation, tint: "bg-amber-500", group: "Customers",
@@ -168,4 +175,17 @@ export type GroupTabKey = typeof GROUP_TABS[number]["key"];
 
 export function groupHref(id: string, tab: GroupTabKey = "overview"): string {
   return tab === "overview" ? `/super-admin/account-groups/${id}` : `/super-admin/account-groups/${id}/${tab}`;
+}
+
+/** Tabs on one agency's page (/super-admin/agencies/:id/...). */
+export const AGENCY_TABS = [
+  { key: "overview", label: "Clients & logins" },
+  { key: "plan", label: "Plan & limits" },
+  { key: "billing", label: "Billing" },
+  { key: "brand", label: "Brand" },
+] as const;
+export type AgencyTabKey = typeof AGENCY_TABS[number]["key"];
+
+export function agencyHref(id: string, tab: AgencyTabKey = "overview"): string {
+  return tab === "overview" ? `/super-admin/agencies/${id}` : `/super-admin/agencies/${id}/${tab}`;
 }

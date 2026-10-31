@@ -255,6 +255,9 @@ interface WidgetSettings {
   footerLabelEnabled?: string;
   footerLabelText?: string;
   poweredByEnabled?: string;
+  /** Agency clients: the name and link the footer shows instead of ours. */
+  poweredByText?: string;
+  poweredByUrl?: string;
   jobPortalEnabled?: boolean;
   k12EducationEnabled?: boolean;
   k12ImageUploadEnabled?: boolean;
@@ -7291,14 +7294,30 @@ export default function EmbedChat() {
               {settings?.poweredByEnabled !== "false" && (
                 <span>
                   Powered by{' '}
-                  <a
-                    href="https://aichroney.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: '#9333ea', textDecoration: 'none', fontWeight: 500 }}
-                  >
-                    AI Chroney
-                  </a>
+                  {/* Agency clients show the agency's name (and link, if it gave one) instead of ours. */}
+                  {settings?.poweredByText ? (
+                    settings.poweredByUrl ? (
+                      <a
+                        href={settings.poweredByUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: '#9333ea', textDecoration: 'none', fontWeight: 500 }}
+                      >
+                        {settings.poweredByText}
+                      </a>
+                    ) : (
+                      <span style={{ fontWeight: 500 }}>{settings.poweredByText}</span>
+                    )
+                  ) : (
+                    <a
+                      href="https://aichroney.com"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: '#9333ea', textDecoration: 'none', fontWeight: 500 }}
+                    >
+                      AI Chroney
+                    </a>
+                  )}
                 </span>
               )}
             </p>

@@ -13,7 +13,7 @@ import { HubFrameContext } from "./hubContext";
 export function usesHubLayout(user: MeResponseDto | null | undefined): boolean {
   const role = user?.role;
   const isSuperAdminViewing = role === "super_admin" && !!user?.activeBusinessAccountId;
-  const isBusinessView = (role !== "super_admin" && role !== "account_group_admin") || isSuperAdminViewing;
+  const isBusinessView = (role !== "super_admin" && role !== "account_group_admin" && role !== "agency_admin") || isSuperAdminViewing;
   // K12 tutors and job portals keep their own menus.
   const special = user?.businessAccount?.k12EducationEnabled === true || user?.businessAccount?.jobPortalEnabled === true;
   return isBusinessView && !special;

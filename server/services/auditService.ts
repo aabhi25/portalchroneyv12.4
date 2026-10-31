@@ -51,7 +51,7 @@ export async function recordAuditEvent(
   const [event] = await writer.insert(auditEvents).values({
     actorUserId: input.actorUserId ?? user?.id ?? null,
     actorUsername: input.actorUsername ?? user?.username ?? null,
-    actorRole: input.actorRole ?? user?.role ?? null,
+    actorRole: input.actorRole ?? (user?.agency ? "agency_admin" : user?.role) ?? null,
     businessAccountId: input.businessAccountId ?? user?.businessAccountId ?? null,
     sessionFingerprint: sessionFingerprint(req.sessionToken || req.cookies?.session),
     action: input.action,

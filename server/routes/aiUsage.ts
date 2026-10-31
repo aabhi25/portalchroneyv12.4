@@ -5,6 +5,7 @@ import { storage } from "../storage";
 import { resolveAuthorizedLeadAccountId } from "../lib/leadAccess";
 import { recordAuditEventSafely } from "../services/auditService";
 import {
+  aiBudgetService,
   deleteLimit,
   getLimitStatus,
   isValidMonthKey,
@@ -66,7 +67,7 @@ router.get("/api/usage/summary", requireAuth, requireRole("super_admin"), async 
 router.get("/api/usage/limit-status", requireAuth, async (req, res) => {
   try {
     const user = req.user!;
-    if (user.role === "account_group_admin" || (user.role === "super_admin" && !user.activeBusinessAccountId)) {
+    if (user.role === "account_group_admin" || user.role === "agency_admin" || (user.role === "super_admin" && !user.activeBusinessAccountId)) {
       return res.json({ limit: null });
     }
     if (user.role !== "super_admin") {
@@ -74,7 +75,8 @@ router.get("/api/usage/limit-status", requireAuth, async (req, res) => {
       const own = await resolveAuthorizedLeadAccountId(user);
       if (!own) return res.json({ limit: null, aiPaused: false });
       const status = await getLimitStatus(own);
-      const aiPaused = status.limit?.level === "exceeded" && status.limit?.action === "block";
+      const aiPaused = (status.limit?.level === "exceeded" && status.limit?.action === "block")
+        || (await aiBudgetService.isBlockedAsync(own) && aiBudgetService.isAgencyCapBlocked(own));
       return res.json({ limit: null, aiPaused });
     }
     const accountId = resolveUsageAccount(req, res, undefined);

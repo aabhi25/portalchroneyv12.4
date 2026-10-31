@@ -44,7 +44,8 @@ export function getSettingsAccess(user: MeResponseDto | null) {
   const isSuperAdmin = role === "super_admin";
   const isSuperAdminImpersonating = isSuperAdmin && !!user?.activeBusinessAccountId;
   const isGroupAdmin = role === "account_group_admin";
-  const isBusinessView = (!isSuperAdmin && !isGroupAdmin) || isSuperAdminImpersonating;
+  const isAgencyAdmin = role === "agency_admin";
+  const isBusinessView = (!isSuperAdmin && !isGroupAdmin && !isAgencyAdmin) || isSuperAdminImpersonating;
 
   const ba = user?.businessAccount;
   const productTier = ba?.productTier || "chroney";
@@ -67,7 +68,7 @@ export function getSettingsAccess(user: MeResponseDto | null) {
 
   return {
     activeBusinessAccountId: isSuperAdminImpersonating ? user!.activeBusinessAccountId! : null,
-    isSuperAdminImpersonating, isGroupAdmin, isBusinessView,
+    isSuperAdminImpersonating, isGroupAdmin, isAgencyAdmin, isBusinessView,
     hasChroney, hasWhatsapp, hasInstagram, hasFacebook, hasJewelry, hasWebsiteChat, integrations,
   };
 }
@@ -75,8 +76,8 @@ export function getSettingsAccess(user: MeResponseDto | null) {
 export function buildSettingsGroups(user: MeResponseDto | null): SettingsGroup[] {
   const a = getSettingsAccess(user);
 
-  // Group admins have their own dashboard; they only get personal account settings here.
-  if (a.isGroupAdmin) {
+  // Group and agency admins have their own pages; they only get personal account settings here.
+  if (a.isGroupAdmin || a.isAgencyAdmin) {
     return [
       {
         id: "account",

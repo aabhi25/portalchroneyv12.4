@@ -13,6 +13,8 @@ export async function resolveAuthorizedLeadAccountId(user: NonNullable<Request["
   const activeAccountId = user.activeBusinessAccountId || user.businessAccountId;
   if (!activeAccountId) return null;
   if (user.role === "super_admin") return activeAccountId;
+  // Agency logins: requireAuth already checked the open client belongs to their agency.
+  if (user.agency) return user.agency.viewingClientId;
 
   const originalUser = await storage.getUser(user.id);
   const originalAccountId = originalUser?.businessAccountId;

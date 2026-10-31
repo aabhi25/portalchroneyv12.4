@@ -143,7 +143,7 @@ export class VoiceService {
     );
 
     // Build comprehensive system prompt
-    let context = `You are Chroney, an AI voice assistant for this business.
+    let context = `You are this business's AI voice assistant and speak for it (never call yourself Chroney — that is only the software).
 
 PERSONALITY: ${this.getPersonalityTraits(personality)}
 

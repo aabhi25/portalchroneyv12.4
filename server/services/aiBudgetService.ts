@@ -24,10 +24,16 @@
  * plus a lazy refresh when a check finds it stale) and incremented locally as
  * aiUsageLogger records each event, so it is exact within this process and at
  * most ~60s behind usage recorded by other processes.
+ *
+ * ── Agency caps ──────────────────────────────────────────────────────────────
+ * An agency (reseller, agencies table) can have one monthly cap over the total
+ * spend of all its client accounts. It works like an account limit: warn/block,
+ * the same thresholds recorded once per month (on the agencies row), and when a
+ * "block" cap is reached every client account of that agency is refused.
  */
 import { and, eq, gte, inArray, lt, or, isNull, ne, sql } from "drizzle-orm";
 import { db } from "../db";
-import { aiUsageEvents, aiUsageLimits, type AiUsageLimit } from "@shared/schema";
+import { agencies, aiUsageEvents, aiUsageLimits, businessAccounts, type AiUsageLimit } from "@shared/schema";
 import { setAiBudgetGuard, type AiBudgetDecision, type AiBudgetGuard } from "../lib/openaiClient";
 import { recordSystemAuditEvent } from "./auditService";
 
@@ -206,6 +212,10 @@ export type ThresholdKind = "warn" | "limit";
 export class AiBudgetService implements AiBudgetGuard {
   private limits = new Map<string, LimitInfo>();
   private spend = new Map<string, { month: string; usd: number }>();
+  /** Capped agencies: their cap, which accounts belong to them, and their month-to-date total. */
+  private agencyCaps = new Map<string, LimitInfo>();
+  private agencyOf = new Map<string, string>();
+  private agencySpend = new Map<string, { month: string; usd: number }>();
   private loadedAt = 0;
   private loading: Promise<void> | null = null;
   private timer: NodeJS.Timeout | null = null;
@@ -240,6 +250,8 @@ export class AiBudgetService implements AiBudgetGuard {
   }
 
   private decide(businessAccountId: string): AiBudgetDecision {
+    const agencyDecision = this.decideAgency(businessAccountId);
+    if (agencyDecision) return agencyDecision;
     const limit = this.limits.get(businessAccountId);
     if (!limit || limit.action !== "block") return { blocked: false };
     const spentUsd = this.monthSpend(businessAccountId);
@@ -259,6 +271,33 @@ export class AiBudgetService implements AiBudgetGuard {
     return s && s.month === istMonthKey(this.now()) ? s.usd : 0;
   }
 
+  private agencyMonthSpend(agencyId: string): number {
+    const s = this.agencySpend.get(agencyId);
+    return s && s.month === istMonthKey(this.now()) ? s.usd : 0;
+  }
+
+  /** A blocking decision when the account's agency has used up a "block" cap; null otherwise. */
+  private decideAgency(businessAccountId: string): AiBudgetDecision | null {
+    const agencyId = this.agencyOf.get(businessAccountId);
+    const cap = agencyId ? this.agencyCaps.get(agencyId) : undefined;
+    if (!agencyId || !cap || cap.action !== "block") return null;
+    const spentUsd = this.agencyMonthSpend(agencyId);
+    if (spentUsd < cap.monthlyLimitUsd) return null;
+    const key = `agency:${agencyId}`;
+    const last = this.lastBlockLog.get(key) || 0;
+    if (this.now() - last > 60_000) {
+      this.lastBlockLog.set(key, this.now());
+      console.warn(`[AIBudget] Agency AI cap reached for agency ${agencyId} ($${spentUsd.toFixed(2)} / $${cap.monthlyLimitUsd.toFixed(2)}) — AI calls of its clients refused`);
+    }
+    return { blocked: true, limitUsd: cap.monthlyLimitUsd, spentUsd };
+  }
+
+  /** Cache-only: true when the account's agency cap is what stops AI right now. */
+  isAgencyCapBlocked(businessAccountId: string | null | undefined): boolean {
+    if (!businessAccountId || !this.loadedAt) return false;
+    return this.decideAgency(businessAccountId)?.blocked === true;
+  }
+
   /** Reloads limits and month-to-date spend of limited accounts (concurrent calls share one load). */
   refresh(): Promise<void> {
     if (this.loading) return this.loading;
@@ -268,12 +307,39 @@ export class AiBudgetService implements AiBudgetGuard {
         const month = istMonthKey(this.now());
         const limits = new Map<string, LimitInfo>();
         for (const r of rows) limits.set(r.businessAccountId, toLimitInfo(r));
-        const spend = await getMonthSpend(Array.from(limits.keys()), month);
+        // Agencies with a cap and their client accounts (all of them count towards the cap).
+        const capRows = await db
+          .select({ id: agencies.id, cap: agencies.monthlyAiCapUsd, action: agencies.aiCapAction, warn: agencies.aiCapWarnAtPercent })
+          .from(agencies)
+          .where(sql`${agencies.monthlyAiCapUsd} is not null`);
+        const agencyCaps = new Map<string, LimitInfo>();
+        for (const r of capRows) {
+          agencyCaps.set(r.id, { monthlyLimitUsd: Number(r.cap), warnAtPercent: r.warn, action: r.action === "warn" ? "warn" : "block" });
+        }
+        const agencyOf = new Map<string, string>();
+        if (agencyCaps.size > 0) {
+          const members = await db
+            .select({ id: businessAccounts.id, agencyId: businessAccounts.agencyId })
+            .from(businessAccounts)
+            .where(inArray(businessAccounts.agencyId, Array.from(agencyCaps.keys())));
+          for (const m of members) if (m.agencyId) agencyOf.set(m.id, m.agencyId);
+        }
+        const ids = new Set([...Array.from(limits.keys()), ...Array.from(agencyOf.keys())]);
+        const spend = await getMonthSpend(Array.from(ids), month);
+        const agencySpend = new Map<string, { month: string; usd: number }>();
+        for (const agencyId of Array.from(agencyCaps.keys())) agencySpend.set(agencyId, { month, usd: 0 });
+        for (const [accountId, agencyId] of Array.from(agencyOf.entries())) {
+          agencySpend.get(agencyId)!.usd += spend.get(accountId) ?? 0;
+        }
         this.limits = limits;
         this.spend = new Map(Array.from(limits.keys()).map((id) => [id, { month, usd: spend.get(id) ?? 0 }]));
+        this.agencyCaps = agencyCaps;
+        this.agencyOf = agencyOf;
+        this.agencySpend = agencySpend;
         this.loadedAt = this.now();
         this.stats.refreshes++;
         for (const id of Array.from(limits.keys())) this.evaluate(id);
+        for (const agencyId of Array.from(agencyCaps.keys())) this.evaluateAgency(agencyId);
       } finally {
         this.loading = null;
       }
@@ -283,8 +349,15 @@ export class AiBudgetService implements AiBudgetGuard {
 
   /** Called by aiUsageLogger after each recorded event. */
   recordSpend(businessAccountId: string, costUsd: number): void {
-    if (!this.limits.has(businessAccountId) || !(costUsd > 0)) return;
+    if (!(costUsd > 0)) return;
     const month = istMonthKey(this.now());
+    const agencyId = this.agencyOf.get(businessAccountId);
+    if (agencyId && this.agencyCaps.has(agencyId)) {
+      const cur = this.agencySpend.get(agencyId);
+      this.agencySpend.set(agencyId, { month, usd: (cur && cur.month === month ? cur.usd : 0) + costUsd });
+      this.evaluateAgency(agencyId);
+    }
+    if (!this.limits.has(businessAccountId)) return;
     const cur = this.spend.get(businessAccountId);
     const base = cur && cur.month === month ? cur.usd : 0;
     this.spend.set(businessAccountId, { month, usd: base + costUsd });
@@ -309,6 +382,53 @@ export class AiBudgetService implements AiBudgetGuard {
         console.error("[AIBudget] Failed to record threshold event:", err instanceof Error ? err.message : err);
       });
     }
+  }
+
+  /** Agency cap thresholds, recorded once per threshold per month like account limits. */
+  private evaluateAgency(agencyId: string): void {
+    const cap = this.agencyCaps.get(agencyId);
+    if (!cap) return;
+    const spentUsd = this.agencyMonthSpend(agencyId);
+    const level = limitLevel(spentUsd, cap);
+    if (level === "ok") return;
+    const month = istMonthKey(this.now());
+    const kinds: ThresholdKind[] = level === "exceeded" ? ["warn", "limit"] : ["warn"];
+    for (const kind of kinds) {
+      const key = `agency:${agencyId}|${kind}|${month}`;
+      if (this.notified.has(key)) continue;
+      this.notified.add(key);
+      void this.notifyAgency(agencyId, kind, month, spentUsd, cap).catch((err) => {
+        this.notified.delete(key);
+        console.error("[AIBudget] Failed to record agency threshold event:", err instanceof Error ? err.message : err);
+      });
+    }
+  }
+
+  private async notifyAgency(agencyId: string, kind: ThresholdKind, month: string, spentUsd: number, cap: LimitInfo): Promise<void> {
+    const column = kind === "warn" ? agencies.aiCapWarnNotifiedMonth : agencies.aiCapLimitNotifiedMonth;
+    const set = kind === "warn" ? { aiCapWarnNotifiedMonth: month } : { aiCapLimitNotifiedMonth: month };
+    const claimed = await db
+      .update(agencies)
+      .set(set)
+      .where(and(eq(agencies.id, agencyId), or(isNull(column), ne(column, month))))
+      .returning({ id: agencies.id });
+    if (claimed.length === 0) return;
+    this.stats.notifications++;
+    console.warn(`[AIBudget] Agency ${kind === "warn" ? `warning threshold (${cap.warnAtPercent}%)` : "cap (100%)"} reached for agency ${agencyId}: $${spentUsd.toFixed(2)} of $${cap.monthlyLimitUsd.toFixed(2)} (${month} IST)`);
+    await recordSystemAuditEvent({
+      action: kind === "warn" ? "agency.ai_cap_warn_reached" : "agency.ai_cap_reached",
+      outcome: "success",
+      resourceType: "agency",
+      resourceId: agencyId,
+      metadata: {
+        month,
+        timezone: USAGE_TIMEZONE,
+        spentUsd: Math.round(spentUsd * 10000) / 10000,
+        capUsd: cap.monthlyLimitUsd,
+        warnAtPercent: cap.warnAtPercent,
+        capAction: cap.action,
+      },
+    });
   }
 
   private async notify(businessAccountId: string, kind: ThresholdKind, month: string, spentUsd: number, limit: LimitInfo): Promise<void> {
@@ -356,6 +476,14 @@ export class AiBudgetService implements AiBudgetGuard {
     this.timer = null;
   }
 
+  /** A new/changed agency cap: let its thresholds fire again (this process and the DB guard). */
+  async rearmAgency(agencyId: string): Promise<void> {
+    for (const key of Array.from(this.notified)) {
+      if (key.startsWith(`agency:${agencyId}|`)) this.notified.delete(key);
+    }
+    await db.update(agencies).set({ aiCapWarnNotifiedMonth: null, aiCapLimitNotifiedMonth: null }).where(eq(agencies.id, agencyId));
+  }
+
   /** A new/changed limit: forget this process's memo so its thresholds can fire again. */
   rearm(businessAccountId: string): void {
     for (const key of Array.from(this.notified)) {
@@ -367,6 +495,9 @@ export class AiBudgetService implements AiBudgetGuard {
   reset(): void {
     this.limits.clear();
     this.spend.clear();
+    this.agencyCaps.clear();
+    this.agencyOf.clear();
+    this.agencySpend.clear();
     this.notified.clear();
     this.loadedAt = 0;
   }
