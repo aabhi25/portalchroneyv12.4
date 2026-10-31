@@ -1,11 +1,12 @@
 import type { LucideIcon } from "lucide-react";
-import { UserCog, Gauge, Link2, ToggleRight } from "lucide-react";
+import { UserCog, Gauge, Link2, ToggleRight, UsersRound } from "lucide-react";
 import type { MeResponseDto } from "@shared/dto";
 import Settings from "@/pages/Settings";
 import { UsageDashboard } from "@/components/usage/UsageDashboard";
 import AccountFeaturesSettings from "./AccountFeaturesSettings";
 import IntegrationsSettings, { visibleIntegrationTabs, type IntegrationsAccess } from "./IntegrationsSettings";
 import { SETTINGS_PATHS } from "./settingsPaths";
+import { AccountLoginsPanel } from "@/pages/agency/AgencyExtras";
 
 export type SettingsGroupId = "account" | "integrations";
 
@@ -112,6 +113,19 @@ export function buildSettingsGroups(user: MeResponseDto | null): SettingsGroup[]
         path: SETTINGS_PATHS.account,
         render: () => <Settings section="account" embedded />,
       },
+      // An agency client's main login, when its agency lets clients add their own logins.
+      ...(user?.canManageAccountLogins ? [
+        {
+          key: "logins",
+          label: "Logins",
+          description: "Colleagues who can log in to this account",
+          icon: UsersRound,
+          path: SETTINGS_PATHS.logins,
+          render: () => (
+            <AccountLoginsPanel base="/api/account/logins" canAdd canReset={false} emailReady={false} welcomeByDefault title="Logins to this account" />
+          ),
+        },
+      ] satisfies SettingsItem[] : []),
       // Super admins only (viewing as the account); business users never see these.
       ...(a.activeBusinessAccountId ? [
         {

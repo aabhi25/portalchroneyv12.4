@@ -371,7 +371,162 @@ async function main() {
     expect((await hostCall("GET", "/api/brand", domain)).json.isAgency === false, "old address no longer branded");
   }
 
-  // ── 13. Pause and delete ───────────────────────────────────────────────
+  // ── 13. Packages, client logins, prepaid credits, branded email (phase 3) ──
+  {
+    const http = await import("http");
+    const directUser = `direct-${stamp}@c.test`; // created in section 12
+    // Fake email service: records requests; can be told to refuse.
+    const mails: { path: string; auth: string; body: any }[] = [];
+    let refuse = false;
+    const fake = http.createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        mails.push({ path: req.url || "", auth: String(req.headers.authorization || req.headers["api-key"] || ""), body: raw ? JSON.parse(raw) : null });
+        res.writeHead(refuse ? 401 : 200, { "content-type": "application/json" });
+        res.end(refuse ? '{"message":"bad key"}' : '{"id":"m1"}');
+      });
+    });
+    await new Promise<void>((r) => fake.listen(0, "127.0.0.1", () => r()));
+    process.env.EMAIL_PROVIDER_BASE_URL = `http://127.0.0.1:${(fake.address() as AddressInfo).port}`;
+
+    // Pure: statement with credits, credit usage, email view.
+    const billing = shared.resolveAgencyBilling({ model: "per_account", currency: "INR", pricePerAccount: 1000, includedAiPerAccount: 100, aiMarkupPercent: 20 });
+    const stc = shared.computeAgencyStatement({ month: "2026-10", billing, usdToInr: 84, creditsEnabled: true, accounts: [{ businessAccountId: "a", name: "A", status: "active", aiCostUsd: 2 }] });
+    expect(stc.aiCharges === 0 && Math.abs(stc.aiFromCredits - 168 * 1.2) < 0.01 && stc.total === 1000, "statement with credits: AI paid from credits, not billed", stc);
+    expect(Math.abs(shared.creditUsage(1, billing, 84) - 100.8) < 1e-9, "credit usage: converted plus markup");
+    expect(shared.agencyEmailView({ provider: "resend", apiKeyEnc: "x", fromEmail: "a@b.co" }).ready && !shared.agencyEmailView({ provider: "resend", fromEmail: "a@b.co" }).ready, "email ready only with provider, key and sender");
+
+    await call("PATCH", `/api/super-admin/agencies/${agencyId}`, SA, { maxAccounts: 6, maxLoginsPerClient: 3, permissions: { managePackages: true, manageClientLogins: true } });
+
+    // Packages.
+    expect((await call("POST", "/api/agency/packages", OW, { name: "Bad", features: ["instagramEnabled"] })).status === 400, "package with a feature outside the plan refused");
+    expect((await call("POST", "/api/agency/packages", OW, { name: "Big", features: ["chroneyEnabled"], monthlyLimitUsd: 500 })).status === 400, "package AI limit above the agency cap refused");
+    expect((await call("POST", "/api/agency/packages", OW, { name: "Many", features: [], maxLogins: 9 })).status === 400, "package logins above the plan refused");
+    const starter = await call("POST", "/api/agency/packages", OW, { name: "Starter", features: ["chroneyEnabled"], monthlyLimitUsd: 3, maxLogins: 2, price: 1999 });
+    expect(starter.status === 200, "package created", starter.json);
+    const pkgId: string = starter.json.package.id;
+    const pc = await call("POST", "/api/agency/clients", OW, { name: `Pkg Client ${stamp}`, website: "https://pkg.test", username: `pkg-${stamp}@c.test`, features: ["whatsappEnabled"], packageId: pkgId });
+    expect(pc.status === 200, "client created on a package", pc.json);
+    const pcId: string = pc.json.client.id;
+    let [pcRow] = await db.select().from(schema.businessAccounts).where(eq(schema.businessAccounts.id, pcId));
+    let [pcLim] = await db.select().from(schema.aiUsageLimits).where(eq(schema.aiUsageLimits.businessAccountId, pcId));
+    expect(pcRow.agencyPackageId === pkgId && pcRow.chroneyEnabled === "true" && pcRow.whatsappEnabled === "false" && Number(pcLim?.monthlyLimitUsd) === 3, "package sets features and AI limit (overrides the form)", { pkg: pcRow.agencyPackageId, wa: pcRow.whatsappEnabled, lim: pcLim?.monthlyLimitUsd });
+    const edit = await call("PUT", `/api/agency/packages/${pkgId}`, OW, { name: "Starter", features: ["chroneyEnabled", "whatsappEnabled"], monthlyLimitUsd: 4, maxLogins: 2, applyToClients: true });
+    expect(edit.status === 200 && edit.json.updatedClients === 1, "package edit updates its clients", edit.json);
+    [pcRow] = await db.select().from(schema.businessAccounts).where(eq(schema.businessAccounts.id, pcId));
+    [pcLim] = await db.select().from(schema.aiUsageLimits).where(eq(schema.aiUsageLimits.businessAccountId, pcId));
+    expect(pcRow.whatsappEnabled === "true" && Number(pcLim.monthlyLimitUsd) === 4, "client now has the package's new features and limit");
+    const list = await call("GET", "/api/agency/packages", OW);
+    expect(list.json.packages.find((p: any) => p.id === pkgId)?.clients === 1, "package shows its client count");
+    expect((await call("PUT", `/api/agency/clients/${c1Id}/package`, OW, { packageId: pkgId })).status === 200, "package applied to an existing client");
+    const [c1p] = await db.select().from(schema.businessAccounts).where(eq(schema.businessAccounts.id, c1Id));
+    expect(c1p.agencyPackageId === pkgId && c1p.whatsappEnabled === "true", "existing client follows the package");
+    expect((await call("GET", "/api/agency/packages", OW2)).json.packages.length === 0, "another agency doesn't see these packages");
+    expect((await call("PUT", `/api/agency/clients/${c1Id}/package`, OW2, { packageId: pkgId })).status === 404, "another agency can't apply them");
+
+    // Client logins: package allows 2 (main included).
+    const l1 = await call("POST", `/api/agency/clients/${pcId}/logins`, OW, { username: `pkg2-${stamp}@c.test` });
+    expect(l1.status === 200 && l1.json.credentials.tempPassword, "extra login added", l1.json);
+    const l2 = await call("POST", `/api/agency/clients/${pcId}/logins`, OW, { username: `pkg3-${stamp}@c.test` });
+    expect(l2.status === 403, "login limit from the package enforced", l2.json);
+    const logins = (await call("GET", `/api/agency/clients/${pcId}/logins`, OW)).json;
+    const main = logins.logins.find((l: any) => l.isMain);
+    const member = logins.logins.find((l: any) => !l.isMain);
+    expect(logins.logins.length === 2 && main.username === `pkg-${stamp}@c.test` && logins.max === 2, "logins listed, main login marked", logins);
+    expect((await call("DELETE", `/api/agency/clients/${pcId}/logins/${main.userId}`, OW)).status === 400, "main login can't be removed");
+    const memberLogin = await login(`pkg2-${stamp}@c.test`, l1.json.credentials.tempPassword);
+    const memberMe = await call("GET", "/api/auth/me", memberLogin.cookie);
+    expect(memberLogin.status === 200 && memberMe.json.businessAccount?.id === pcId && memberMe.json.accountRole === "member", "extra login opens the same account", { s: memberLogin.status, a: memberMe.json.businessAccount?.id });
+    expect((await storage.getUserByBusinessAccountId(pcId))?.username === `pkg-${stamp}@c.test`, "the account's main login stays the main one");
+    const reset2 = await call("POST", `/api/agency/clients/${pcId}/reset-password`, OW);
+    expect(reset2.json.username === `pkg-${stamp}@c.test`, "client password reset targets the main login");
+
+    // Clients managing their own logins (off by default).
+    const mainLogin = await login(`pkg-${stamp}@c.test`, reset2.json.tempPassword);
+    expect((await call("GET", "/api/account/logins", mainLogin.cookie)).status === 403, "self-service logins off by default");
+    expect((await call("GET", "/api/auth/me", mainLogin.cookie)).json.canManageAccountLogins === false, "me: can't manage logins yet");
+    await call("PATCH", `/api/super-admin/agencies/${agencyId}`, SA, { permissions: { clientsManageLogins: true } });
+    const self = await call("GET", "/api/account/logins", mainLogin.cookie);
+    expect(self.status === 200 && self.json.logins.length === 2, "client's main login sees its logins", self.status);
+    expect((await call("GET", "/api/auth/me", mainLogin.cookie)).json.canManageAccountLogins === true, "me: main login can manage logins");
+    expect((await call("GET", "/api/account/logins", memberLogin.cookie)).status === 403, "an extra login can't manage logins");
+    expect((await call("GET", "/api/account/logins", (await login(directUser, "Direct-pass-1")).cookie)).status === 403, "direct customers can't use it");
+    expect((await call("POST", "/api/account/logins", mainLogin.cookie, { username: `pkg4-${stamp}@c.test` })).status === 403, "self-service respects the login limit");
+    expect((await call("DELETE", `/api/account/logins/${member.userId}`, mainLogin.cookie)).status === 200, "client removes its colleague");
+    expect((await call("POST", "/api/account/logins", mainLogin.cookie, { username: `pkg4-${stamp}@c.test` })).status === 200, "…and adds another");
+
+    // Prepaid credits.
+    await call("PATCH", `/api/super-admin/agencies/${agencyId}`, SA, { creditsEnabled: true, creditLowThreshold: 200 });
+    let cr = await call("GET", `/api/super-admin/agencies/${agencyId}/credits`, SA);
+    expect(cr.json.enabled && cr.json.balance === 0 && cr.json.startedAt, "credits on, starting at zero", cr.json);
+    expect((await aiBudgetService.check(c2Id)).blocked, "no credits → clients' AI paused");
+    expect((await call("POST", `/api/super-admin/agencies/${agencyId}/credits`, SA, { amount: 0 })).status === 400, "zero top-up refused");
+    cr = await call("POST", `/api/super-admin/agencies/${agencyId}/credits`, SA, { amount: 1000, note: "Payment 1" });
+    expect(cr.json.balance === 1000 && cr.json.entries.length === 1, "top-up added", cr.json);
+    expect(!(await aiBudgetService.check(c2Id)).blocked, "with credits → AI runs");
+    await db.insert(schema.aiUsageEvents).values([{ businessAccountId: pcId, category: "chat", model: "gpt-4o-mini", costUsd: "5.000000" }] as any);
+    aiBudgetService.recordSpend(pcId, 5);
+    const rate = Number(process.env.USD_INR_RATE) || 84;
+    cr = await call("GET", "/api/agency/credits", OW);
+    expect(Math.abs(cr.json.used - 5 * rate * 1.2) < 0.02 && Math.abs(cr.json.balance - (1000 - 5 * rate * 1.2)) < 0.02, "AI use taken from credits with the markup", cr.json);
+    expect(cr.json.low === false, "not low yet");
+    await db.insert(schema.aiUsageEvents).values([{ businessAccountId: c1Id, category: "chat", model: "gpt-4o-mini", costUsd: "8.000000" }] as any);
+    await aiBudgetService.refresh();
+    expect((await aiBudgetService.check(c2Id)).blocked && (await aiBudgetService.check(pcId)).blocked, "credits used up → every client paused");
+    expect(!(await aiBudgetService.check(ocId)).blocked && !(await aiBudgetService.check(direct.id)).blocked, "other agency and direct customer unaffected");
+    const ovCredits = await call("GET", "/api/agency/overview", OW);
+    expect(ovCredits.json.credits.balance < 0 && ovCredits.json.credits.low, "agency sees the balance and the warning", ovCredits.json.credits);
+    const stCred = await call("GET", "/api/agency/statement", OW);
+    expect(stCred.json.aiCharges === 0 && stCred.json.aiFromCredits > 0, "statement: AI paid from credits", { c: stCred.json.aiCharges, f: stCred.json.aiFromCredits });
+    expect((await call("POST", `/api/super-admin/agencies/${agencyId}/credits`, OW, { amount: 99999 })).status === 403, "agencies can't top themselves up");
+    await call("PATCH", `/api/super-admin/agencies/${agencyId}`, SA, { creditsEnabled: false });
+    expect(!(await aiBudgetService.check(c2Id)).blocked, "credits off → AI back to normal billing");
+
+    // Branded email.
+    const before = await call("GET", "/api/agency/email", OW);
+    expect(!before.json.ready, "email not set up at first");
+    expect((await call("PUT", "/api/agency/email", OW, { provider: "resend", fromEmail: "not-an-email" })).status === 400, "bad sender refused");
+    const saved = await call("PUT", "/api/agency/email", OW, { provider: "resend", apiKey: "re_test_secret_1234", fromEmail: "hello@leaf.test", fromName: "LeafBot", replyTo: "help@leaf.test" });
+    expect(saved.status === 200 && saved.json.ready && saved.json.hasKey && saved.json.apiKeyLast4 === "1234", "email settings saved", saved.json);
+    expect(!JSON.stringify(saved.json).includes("re_test_secret") && !JSON.stringify((await call("GET", `/api/super-admin/agencies/${agencyId}`, SA)).json).includes("re_test_secret"), "the API key never comes back");
+    const [stored] = await db.select().from(schema.agencies).where(eq(schema.agencies.id, agencyId));
+    expect(!JSON.stringify(stored.emailSettings).includes("re_test_secret"), "the API key is stored encrypted");
+    const t = await call("POST", "/api/agency/email/test", OW, { to: "owner@leaf.test" });
+    const tm = mails.at(-1)!;
+    expect(t.json.ok && tm.path === "/emails" && tm.auth === "Bearer re_test_secret_1234" && tm.body.from === "LeafBot <hello@leaf.test>" && tm.body.reply_to === "help@leaf.test", "test email sent through Resend", { ok: t.json, tm });
+    const ec = await call("POST", "/api/agency/clients", OW, { name: `Mail Client ${stamp}`, website: "https://mail.test", username: `mail-${stamp}@c.test`, features: [], sendEmail: true });
+    const wm = mails.at(-1)!;
+    expect(ec.json.email?.ok && wm.body.to[0] === `mail-${stamp}@c.test` && wm.body.text.includes(ec.json.credentials.tempPassword) && !wm.body.text.includes("Chroney"), "login details emailed in the agency's name", { e: ec.json.email, subj: wm.body.subject });
+    const n0 = mails.length;
+    await call("POST", "/api/auth/forgot-password", undefined, { email: `mail-${stamp}@c.test` });
+    const rm = mails.at(-1)!;
+    expect(mails.length === n0 + 1 && /\/reset-password\?token=/.test(rm.body.text) && rm.body.subject.includes("LeafBot"), "password reset emailed in the agency's name", rm.body.subject);
+    const n1 = mails.length;
+    await call("POST", "/api/auth/forgot-password", undefined, { email: directUser });
+    expect(mails.length === n1, "direct customers: no email (unchanged)");
+    await call("PUT", `/api/super-admin/agencies/${agencyId}/email`, SA, { provider: "sendgrid" });
+    await call("POST", "/api/agency/email/test", OW, { to: "owner@leaf.test" });
+    expect(mails.at(-1)!.path === "/v3/mail/send" && mails.at(-1)!.body.from.email === "hello@leaf.test", "SendGrid format");
+    await call("PUT", `/api/super-admin/agencies/${agencyId}/email`, SA, { provider: "brevo" });
+    await call("POST", "/api/agency/email/test", OW, { to: "owner@leaf.test" });
+    expect(mails.at(-1)!.path === "/v3/smtp/email" && mails.at(-1)!.auth === "re_test_secret_1234", "Brevo format");
+    refuse = true;
+    const bad = await call("POST", "/api/agency/email/test", OW, { to: "owner@leaf.test" });
+    expect(bad.json.ok === false && /refused/.test(bad.json.error), "a refusal is reported in plain words", bad.json);
+    refuse = false;
+    await call("PATCH", `/api/super-admin/agencies/${agencyId}`, SA, { permissions: { editEmail: false } });
+    expect((await call("PUT", "/api/agency/email", OW, { fromName: "X" })).status === 403, "email settings follow the permission");
+
+    // Package deleted: clients keep their settings.
+    expect((await call("DELETE", `/api/agency/packages/${pkgId}`, OW)).status === 200, "package deleted");
+    [pcRow] = await db.select().from(schema.businessAccounts).where(eq(schema.businessAccounts.id, pcId));
+    expect(pcRow.agencyPackageId === null && pcRow.whatsappEnabled === "true", "client keeps its features after the package is deleted");
+    fake.close();
+    delete process.env.EMAIL_PROVIDER_BASE_URL;
+  }
+
+  // ── 14. Pause and delete ───────────────────────────────────────────────
   const pauseClient = await call("PATCH", `/api/agency/clients/${c2Id}/status`, OW, { status: "suspended" });
   expect(pauseClient.status === 200, "agency pauses a client");
   await call("PATCH", `/api/super-admin/agencies/${agencyId}`, SA, { status: "suspended" });

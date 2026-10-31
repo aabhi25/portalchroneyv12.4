@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Building2, ChevronRight, KeyRound, Plus, Receipt, Trash2, UsersRound, Palette, ExternalLink, Pause, Play } from "lucide-react";
+import { Building2, ChevronRight, Plus, Receipt, Trash2, UsersRound, Palette, ExternalLink, Pause, Play, Package, Mail } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -12,13 +12,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import {
-  CredentialsDialog, FeatureSwitches, Panel, Stat, StatusPill, UsageBar, formatUsd, monthLabel, recentMonths,
+  CredentialsDialog, FeatureSwitches, Panel, Stat, StatusPill, UsageBar, formatMoney, formatUsd, monthLabel, recentMonths,
 } from "@/components/agency/agencyUi";
 import { BrandForm, StatementView } from "@/pages/SuperAdminAgencyPage";
 import { DomainPanel, LogoPanel, type DomainInfo } from "@/components/agency/BrandingPanels";
+import { AccountLoginsPanel, CreditsSummary, EmailSettingsPanel, PackageDialog, PackagesList, type CreditsView } from "@/pages/agency/AgencyExtras";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   AGENCY_FEATURES,
-  type AgencyBranding, type AgencyFeatureKey, type AgencyPermissions, type AgencyStatement,
+  type AgencyBranding, type AgencyFeatureKey, type AgencyPackageDto, type AgencyPermissions, type AgencyStatement, type AgencyEmailView,
 } from "@shared/agency";
 
 /**
@@ -40,7 +42,11 @@ interface Overview {
     currency: string;
     domain: DomainInfo;
     logoUrl: string | null;
+    maxLoginsPerClient: number | null;
+    emailReady: boolean;
+    welcomeByDefault: boolean;
   };
+  credits: CreditsView | null;
   me: { username: string; role: "owner" | "staff" };
   month: string;
   clients: number;
@@ -57,6 +63,8 @@ interface ClientRow {
   status: string;
   createdAt: string;
   login: { username: string; lastLoginAt: string | null } | null;
+  loginCount: number;
+  packageId: string | null;
   features: Record<AgencyFeatureKey, boolean>;
   actions: number;
   spentUsd: number | null;
@@ -66,10 +74,16 @@ interface ClientRow {
 
 export const AGENCY_NAV: { key: string; label: string; href: string; icon: LucideIcon; tint: string; perm?: keyof AgencyPermissions }[] = [
   { key: "clients", label: "Clients", href: "/agency", icon: Building2, tint: "bg-teal-600" },
+  { key: "packages", label: "Packages", href: "/agency/packages", icon: Package, tint: "bg-amber-500" },
   { key: "statement", label: "Monthly bill", href: "/agency/statement", icon: Receipt, tint: "bg-emerald-600", perm: "seeStatement" },
   { key: "team", label: "Team", href: "/agency/team", icon: UsersRound, tint: "bg-indigo-600" },
   { key: "brand", label: "Brand", href: "/agency/brand", icon: Palette, tint: "bg-fuchsia-600", perm: "editBranding" },
+  { key: "email", label: "Email", href: "/agency/email", icon: Mail, tint: "bg-sky-600", perm: "editEmail" },
 ];
+
+export function useAgencyPackages() {
+  return useQuery<{ packages: AgencyPackageDto[] }>({ queryKey: ["/api/agency/packages"] });
+}
 
 export function useAgencyOverview() {
   return useQuery<Overview>({ queryKey: ["/api/agency/overview"] });
@@ -103,6 +117,7 @@ export function AgencyClientsPage() {
   const { data, isLoading } = useQuery<{ month: string; clients: ClientRow[] }>({ queryKey: ["/api/agency/clients"] });
   const [open, setOpen] = useState(false);
   const [creds, setCreds] = useState<{ username: string; tempPassword: string } | null>(null);
+  const [credsEmail, setCredsEmail] = useState<{ ok: boolean; error?: string } | null>(null);
   const perms = ov?.agency.permissions;
   const clients = data?.clients ?? [];
   const atLimit = ov?.agency.maxAccounts !== null && ov?.agency.maxAccounts !== undefined && ov.clients >= ov.agency.maxAccounts;
@@ -130,6 +145,13 @@ export function AgencyClientsPage() {
           <Stat label="Active clients" value={ov.activeClients} hint={`${ov.clients - ov.activeClients} paused`} />
           <Stat label={`AI actions in ${monthLabel(ov.month)}`} value={ov.actions.toLocaleString("en-IN")} hint="Replies, summaries, calls and other AI work" />
           {ov.spentUsd !== null && <Stat label="AI cost this month" value={formatUsd(ov.spentUsd)} hint={ov.agency.currency === "INR" ? `≈ ₹${Math.round(ov.spentUsd * ov.usdInrRate).toLocaleString("en-IN")}` : undefined} />}
+          {ov.credits && (
+            <div className="rounded-2xl border border-black/[0.06] bg-white px-4 py-3">
+              <p className="text-[12px] text-gray-500">Prepaid AI credits</p>
+              <p className={`mt-1 text-[22px] font-semibold tabular-nums ${ov.credits.balance <= 0 ? "text-red-600" : ov.credits.low ? "text-amber-700" : "text-gray-900"}`} data-testid="overview-credits">{formatMoney(ov.credits.balance, ov.credits.currency)}</p>
+              <p className="text-[12px] text-gray-500">{ov.credits.balance <= 0 ? "AI is paused for every client. Ask your account manager to top up." : ov.credits.low ? "Running low. Ask your account manager to top up." : "Left for AI use"}</p>
+            </div>
+          )}
           {ov.agency.aiCap && (
             <div className="rounded-2xl border border-black/[0.06] bg-white px-4 py-3">
               <p className="text-[12px] text-gray-500">Your monthly AI cap</p>
@@ -197,10 +219,10 @@ export function AgencyClientsPage() {
           open={open}
           onOpenChange={setOpen}
           overview={ov}
-          onCreated={(c) => { setOpen(false); setCreds(c); }}
+          onCreated={(c, email) => { setOpen(false); setCreds(c); setCredsEmail(email); }}
         />
       )}
-      <CredentialsDialog credentials={creds} title="Client created" onClose={() => setCreds(null)} />
+      <CredentialsDialog credentials={creds} email={credsEmail} title="Client created" onClose={() => setCreds(null)} />
     </Frame>
   );
 }
@@ -209,9 +231,12 @@ function NewClientDialog({ open, onOpenChange, overview, onCreated }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   overview: Overview;
-  onCreated: (creds: { username: string; tempPassword: string }) => void;
+  onCreated: (creds: { username: string; tempPassword: string }, email: { ok: boolean; error?: string } | null) => void;
 }) {
   const { toast } = useToast();
+  const { data: pkgs } = useAgencyPackages();
+  const [packageId, setPackageId] = useState("none");
+  const [sendEmail, setSendEmail] = useState(overview.agency.emailReady && overview.agency.welcomeByDefault);
   const allowed = overview.agency.allowedFeatures;
   const seeCosts = overview.agency.permissions.seeCosts;
   const [name, setName] = useState("");
@@ -221,8 +246,10 @@ function NewClientDialog({ open, onOpenChange, overview, onCreated }: {
   const [limit, setLimit] = useState(overview.agency.defaultClientLimitUsd !== null ? String(overview.agency.defaultClientLimitUsd) : "");
 
   const create = useMutation({
-    mutationFn: () => apiRequest<{ credentials: { username: string; tempPassword: string } }>("POST", "/api/agency/clients", {
+    mutationFn: () => apiRequest<{ credentials: { username: string; tempPassword: string }; email: { ok: boolean; error?: string } | null }>("POST", "/api/agency/clients", {
       name,
+      ...(packageId !== "none" ? { packageId } : {}),
+      sendEmail: overview.agency.emailReady && sendEmail,
       website: /^https?:\/\//i.test(website.trim()) ? website.trim() : `https://${website.trim()}`,
       username,
       features: Object.entries(features).filter(([, on]) => on).map(([k]) => k),
@@ -232,7 +259,7 @@ function NewClientDialog({ open, onOpenChange, overview, onCreated }: {
       queryClient.invalidateQueries({ queryKey: ["/api/agency/clients"] });
       queryClient.invalidateQueries({ queryKey: ["/api/agency/overview"] });
       setName(""); setWebsite(""); setUsername("");
-      onCreated(res.credentials);
+      onCreated(res.credentials, res.email);
     },
     onError: (e: Error) => toast({ title: "Couldn't create the client", description: e.message, variant: "destructive" }),
   });
@@ -257,17 +284,37 @@ function NewClientDialog({ open, onOpenChange, overview, onCreated }: {
             <Label htmlFor="client-login">Client's login email</Label>
             <Input id="client-login" type="email" value={username} onChange={e => setUsername(e.target.value)} placeholder="owner@client.com" data-testid="input-client-login" />
           </div>
-          {seeCosts && overview.agency.permissions.setLimits && (
+          {(pkgs?.packages.length ?? 0) > 0 && (
+            <div className="space-y-1.5">
+              <Label>Package</Label>
+              <Select value={packageId} onValueChange={setPackageId}>
+                <SelectTrigger data-testid="select-new-client-package"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No package (choose below)</SelectItem>
+                  {pkgs!.packages.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {packageId !== "none" && <p className="text-[12px] text-gray-500">The package sets the features and AI limit.</p>}
+            </div>
+          )}
+          {overview.agency.emailReady && (
+            <label className="flex items-center gap-2 text-[13px] text-gray-700">
+              <Checkbox checked={sendEmail} onCheckedChange={(v) => setSendEmail(v === true)} />Email the login details to the client
+            </label>
+          )}
+          {packageId === "none" && seeCosts && overview.agency.permissions.setLimits && (
             <div className="space-y-1.5">
               <Label htmlFor="client-limit">Monthly AI limit ($)</Label>
               <Input id="client-limit" inputMode="decimal" value={limit} onChange={e => setLimit(e.target.value)} placeholder="No limit" />
               <p className="text-[12px] text-gray-500">The client's AI pauses when it reaches this in a month.</p>
             </div>
           )}
-          <div>
-            <Label>Switch on</Label>
-            <FeatureSwitches value={features} only={allowed} onChange={(k, on) => setFeatures({ ...features, [k]: on })} testIdPrefix="new-client-feature" />
-          </div>
+          {packageId === "none" && (
+            <div>
+              <Label>Switch on</Label>
+              <FeatureSwitches value={features} only={allowed} onChange={(k, on) => setFeatures({ ...features, [k]: on })} testIdPrefix="new-client-feature" />
+            </div>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button type="submit" disabled={!name.trim() || !website.trim() || !username.trim() || create.isPending} data-testid="button-create-client">
@@ -286,7 +333,6 @@ export function AgencyClientPage({ clientId }: { clientId: string }) {
   const { toast } = useToast();
   const { data: ov } = useAgencyOverview();
   const { data, isLoading } = useQuery<{ month: string; client?: ClientRow }>({ queryKey: [`/api/agency/clients/${clientId}`] });
-  const [creds, setCreds] = useState<{ username: string; tempPassword: string } | null>(null);
   const [limitDraft, setLimitDraft] = useState<string | null>(null);
   const [details, setDetails] = useState<{ name: string; website: string } | null>(null);
   const perms = ov?.agency.permissions;
@@ -319,11 +365,6 @@ export function AgencyClientPage({ clientId }: { clientId: string }) {
     mutationFn: (d: { name: string; website: string }) => apiRequest("PATCH", `/api/agency/clients/${clientId}`, d),
     onSuccess: () => { setDetails(null); refresh(); toast({ title: "Saved" }); },
     onError: fail("Couldn't save"),
-  });
-  const reset = useMutation({
-    mutationFn: () => apiRequest<{ username: string; tempPassword: string }>("POST", `/api/agency/clients/${clientId}/reset-password`),
-    onSuccess: setCreds,
-    onError: fail("Couldn't reset the password"),
   });
   const opening = useMutation({ mutationFn: () => openClient(clientId), onError: fail("Couldn't open the client") });
 
@@ -389,17 +430,15 @@ export function AgencyClientPage({ clientId }: { clientId: string }) {
               </div>
             </Panel>
 
-            <Panel title="Login">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-[14px] text-gray-900">{c.login?.username ?? "No login"}</p>
-                  <p className="text-[12px] text-gray-500">{c.login?.lastLoginAt ? `Last login ${new Date(c.login.lastLoginAt).toLocaleDateString("en-IN")}` : "Hasn't logged in yet"}</p>
-                </div>
-                {perms?.resetClientLogins && c.login && (
-                  <Button variant="outline" onClick={() => reset.mutate()} disabled={reset.isPending}><KeyRound className="mr-1 h-4 w-4" />New temporary password</Button>
-                )}
-              </div>
-            </Panel>
+            <ClientPackagePanel clientId={clientId} packageId={c.packageId} canEdit={!!perms?.editFeatures} onChanged={refresh} />
+
+            <AccountLoginsPanel
+              base={`/api/agency/clients/${clientId}/logins`}
+              canAdd={!!perms?.manageClientLogins}
+              canReset={!!perms?.resetClientLogins}
+              emailReady={ov.agency.emailReady}
+              welcomeByDefault={ov.agency.welcomeByDefault}
+            />
 
             {perms?.createAccounts && (
               <Panel title="Details">
@@ -419,7 +458,6 @@ export function AgencyClientPage({ clientId }: { clientId: string }) {
           </div>
         </div>
       )}
-      <CredentialsDialog credentials={creds} title="New temporary password" onClose={() => setCreds(null)} />
     </Frame>
   );
 }
@@ -450,6 +488,11 @@ export function AgencyStatementPage() {
         {isLoading || !data ? <p className="text-sm text-gray-500">Loading…</p> : <StatementView statement={data} />}
         {data?.notes && <p className="mt-4 rounded-xl bg-gray-50 px-4 py-3 text-[13px] text-gray-600">{data.notes}</p>}
       </Panel>
+      {ov?.credits && (
+        <Panel title="Prepaid AI credits" subtitle="AI use is paid from these credits. Your account manager adds top-ups.">
+          <CreditsSummary credits={ov.credits} />
+        </Panel>
+      )}
     </Frame>
   );
 }
@@ -555,6 +598,96 @@ export function AgencyBrandPage() {
           />
         </>
       )}
+    </Frame>
+  );
+}
+
+// ── Packages ─────────────────────────────────────────────────────────────────
+
+export function AgencyPackagesPage() {
+  const { toast } = useToast();
+  const { data: ov } = useAgencyOverview();
+  const { data } = useAgencyPackages();
+  const [editing, setEditing] = useState<AgencyPackageDto | null | "new">(null);
+  const canEdit = !!ov?.agency.permissions.managePackages;
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/agency/packages"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/agency/clients"] });
+  };
+  const del = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/agency/packages/${id}`),
+    onSuccess: () => { refresh(); toast({ title: "Package deleted", description: "Clients on it keep their features and limit." }); },
+    onError: (e: Error) => toast({ title: "Couldn't delete", description: e.message, variant: "destructive" }),
+  });
+  return (
+    <Frame
+      icon={Package}
+      tint="bg-amber-500"
+      kind={ov?.agency.name ?? "Agency"}
+      title="Packages"
+      subtitle="Bundles you sell, like Starter or Pro. Pick one when you add or edit a client."
+      actions={canEdit ? <Button onClick={() => setEditing("new")} data-testid="button-new-package"><Plus className="mr-1 h-4 w-4" />New package</Button> : undefined}
+    >
+      <Panel>
+        {data && ov ? (
+          <PackagesList packages={data.packages} currency={ov.agency.currency} canEdit={canEdit} onEdit={setEditing} onDelete={(p) => del.mutate(p.id)} />
+        ) : <p className="text-sm text-gray-500">Loading…</p>}
+      </Panel>
+      {editing && ov && (
+        <PackageDialog
+          key={editing === "new" ? "new" : editing.id}
+          open
+          onOpenChange={(o) => { if (!o) setEditing(null); }}
+          initial={editing === "new" ? null : editing}
+          allowed={ov.agency.allowedFeatures}
+          currency={ov.agency.currency}
+          onSaved={refresh}
+        />
+      )}
+    </Frame>
+  );
+}
+
+function ClientPackagePanel({ clientId, packageId, canEdit, onChanged }: { clientId: string; packageId: string | null; canEdit: boolean; onChanged: () => void }) {
+  const { toast } = useToast();
+  const { data } = useAgencyPackages();
+  const apply = useMutation({
+    mutationFn: (pid: string | null) => apiRequest("PUT", `/api/agency/clients/${clientId}/package`, { packageId: pid }),
+    onSuccess: (_r, pid) => { onChanged(); toast({ title: pid ? "Package applied" : "Package removed", description: pid ? "Features and AI limit now follow the package." : "The client keeps its current features and limit." }); },
+    onError: (e: Error) => toast({ title: "Couldn't change the package", description: e.message, variant: "destructive" }),
+  });
+  const pkgs = data?.packages ?? [];
+  if (pkgs.length === 0 && !packageId) return null;
+  return (
+    <Panel title="Package" subtitle="Applying a package sets the features and the monthly AI limit.">
+      <Select value={packageId ?? "none"} onValueChange={(v) => apply.mutate(v === "none" ? null : v)} disabled={!canEdit || apply.isPending}>
+        <SelectTrigger data-testid="select-client-package"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="none">No package</SelectItem>
+          {pkgs.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </Panel>
+  );
+}
+
+// ── Email ────────────────────────────────────────────────────────────────────
+
+export function AgencyEmailPage() {
+  const { data: ov } = useAgencyOverview();
+  const { data } = useQuery<AgencyEmailView>({ queryKey: ["/api/agency/email"] });
+  return (
+    <Frame icon={Mail} tint="bg-sky-600" kind={ov?.agency.name ?? "Agency"} title="Email" subtitle="Send login and password emails to your clients in your own name.">
+      {data && ov ? (
+        <EmailSettingsPanel
+          key={`${data.provider}-${data.apiKeyLast4}-${data.fromEmail}`}
+          base="/api/agency/email"
+          view={data}
+          canEdit={!!ov.agency.permissions.editEmail}
+          defaultTestTo={ov.me.username}
+          onSaved={() => { queryClient.invalidateQueries({ queryKey: ["/api/agency/email"] }); queryClient.invalidateQueries({ queryKey: ["/api/agency/overview"] }); }}
+        />
+      ) : <p className="text-sm text-gray-500">Loading…</p>}
     </Frame>
   );
 }

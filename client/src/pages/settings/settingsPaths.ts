@@ -15,6 +15,7 @@ export const SETTINGS_PATHS = {
   usage: `${SETTINGS_ROOT}/usage`,
   features: `${SETTINGS_ROOT}/features`,
   integrations: `${SETTINGS_ROOT}/integrations`,
+  logins: `${SETTINGS_ROOT}/logins`,
 
   // These belong to one area and live in that area's Settings tab (see navigation/hubAreas.ts).
   website: "/admin/website/settings/appearance",

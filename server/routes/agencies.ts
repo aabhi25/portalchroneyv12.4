@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "../db";
-import { agencies, agencyAdmins, aiUsageEvents, aiUsageLimits, businessAccounts, sessions, users, type Agency } from "@shared/schema";
+import { agencies, agencyAdmins, agencyCreditEntries, agencyPackages, aiUsageEvents, aiUsageLimits, businessAccounts, sessions, users, type Agency, type AgencyPackage } from "@shared/schema";
 import {
   AGENCY_FEATURE_KEYS,
   cleanFeatureList,
@@ -12,7 +12,10 @@ import {
   resolveAgencyBranding,
   resolveAgencyPermissions,
   normalizeDomain,
+  agencyEmailView,
+  EMAIL_PROVIDERS,
   AGENCY_PERMISSIONS,
+  type AgencyPackageDto,
   type AgencyPermissionKey,
 } from "@shared/agency";
 import { requireAgencyAdmin, requireAuth, requireRole, hashPassword } from "../auth";
@@ -21,6 +24,7 @@ import { recordAuditEventSafely } from "../services/auditService";
 import {
   aiBudgetService,
   deleteLimit,
+  getAgencyCreditStatus,
   isValidMonthKey,
   istMonthKey,
   istMonthRange,
@@ -37,8 +41,11 @@ import {
   isPlatformDomain,
   requestHost,
 } from "../services/agencyBrandService";
+import { loginDetailsEmail, nextEmailSettings, sendAgencyEmail, testEmail } from "../services/agencyEmailService";
 import {
   accountFeatures,
+  countAccountLogins,
+  maxLoginsFor,
   buildAgencyStatement,
   countAgencyAccounts,
   EMAIL_RE,
@@ -122,6 +129,10 @@ function agencySettings(agency: Agency) {
       target: domainTarget(),
     },
     logoUrl: agency.logoData ? `/api/brand/logo/${agency.id}?v=${agency.logoUpdatedAt ? new Date(agency.logoUpdatedAt).getTime() : 0}` : null,
+    maxLoginsPerClient: agency.maxLoginsPerClient,
+    creditsEnabled: agency.creditsEnabled,
+    creditLowThreshold: agency.creditLowThreshold === null ? null : Number(agency.creditLowThreshold),
+    email: agencyEmailView(agency.emailSettings),
     createdAt: agency.createdAt,
   };
 }
@@ -227,7 +238,7 @@ async function clientRows(agencyId: string, month: string, withCost: boolean) {
   const rows = await listAgencyAccounts(agencyId);
   const ids = rows.map(r => r.account.id);
   const [usage, limits] = await Promise.all([monthUsage(ids, month), limitsFor(ids)]);
-  return rows.map(({ account, login }) => {
+  return rows.map(({ account, login, loginCount }) => {
     const u = usage.get(account.id) ?? { costUsd: 0, actions: 0 };
     const limit = limits.get(account.id) ?? null;
     return {
@@ -237,6 +248,8 @@ async function clientRows(agencyId: string, month: string, withCost: boolean) {
       status: account.status,
       createdAt: account.createdAt,
       login: login ? { username: login.username, lastLoginAt: login.lastLoginAt } : null,
+      loginCount,
+      packageId: account.agencyPackageId,
       features: accountFeatures(account as unknown as Record<string, unknown>),
       actions: u.actions,
       spentUsd: withCost ? Math.round(u.costUsd * 10000) / 10000 : null,
@@ -302,6 +315,9 @@ const settingsBody = z.object({
   billing: z.record(z.unknown()),
   branding: z.record(z.unknown()),
   notes: z.string().max(5000),
+  maxLoginsPerClient: z.union([z.null(), z.coerce.number().int().min(1).max(1000)]),
+  creditsEnabled: z.boolean(),
+  creditLowThreshold: z.union([z.null(), money]),
 }).partial();
 
 // ── super admin ──────────────────────────────────────────────────────────────
@@ -405,12 +421,20 @@ router.patch("/api/super-admin/agencies/:id", requireAuth, requireRole("super_ad
     if (b.billing !== undefined) updates.billing = resolveAgencyBilling(b.billing) as unknown as Record<string, unknown>;
     if (b.branding !== undefined) updates.branding = resolveAgencyBranding(b.branding, b.name ?? agency.name) as unknown as Record<string, unknown>;
     if (b.notes !== undefined) updates.notes = b.notes;
+    if (b.maxLoginsPerClient !== undefined) updates.maxLoginsPerClient = b.maxLoginsPerClient;
+    if (b.creditLowThreshold !== undefined) updates.creditLowThreshold = b.creditLowThreshold === null ? null : b.creditLowThreshold.toFixed(2);
+    if (b.creditsEnabled !== undefined) {
+      updates.creditsEnabled = b.creditsEnabled;
+      // Credits count AI use from the moment they are first switched on.
+      // The database clock, like ai_usage_events.occurred_at, so the two always compare correctly.
+      if (b.creditsEnabled && !agency.creditsStartedAt) updates.creditsStartedAt = sql`now()` as unknown as Date;
+    }
     const [after] = await db.update(agencies).set(updates).where(eq(agencies.id, agency.id)).returning();
     clearAgencyHostCache();
     const capChanged = (b.monthlyAiCapUsd !== undefined && Number(agency.monthlyAiCapUsd ?? -1) !== Number(after.monthlyAiCapUsd ?? -1))
       || (b.aiCapWarnAtPercent !== undefined && agency.aiCapWarnAtPercent !== after.aiCapWarnAtPercent);
     if (capChanged) await aiBudgetService.rearmAgency(agency.id);
-    if (b.monthlyAiCapUsd !== undefined || b.aiCapAction !== undefined || b.aiCapWarnAtPercent !== undefined) await aiBudgetService.refresh();
+    if (b.monthlyAiCapUsd !== undefined || b.aiCapAction !== undefined || b.aiCapWarnAtPercent !== undefined || b.creditsEnabled !== undefined || b.billing !== undefined) await aiBudgetService.refresh();
     await recordAuditEventSafely(req, {
       action: "agency.updated", outcome: "success", resourceType: "agency", resourceId: agency.id,
       metadata: { changed: Object.keys(b) },
@@ -664,7 +688,11 @@ router.get("/api/agency/overview", requireAuth, requireAgencyAdmin, async (req, 
         currency: s.billing.currency,
         domain: s.domain,
         logoUrl: s.logoUrl,
+        maxLoginsPerClient: s.maxLoginsPerClient,
+        emailReady: s.email.ready,
+        welcomeByDefault: s.email.welcomeByDefault,
       },
+      credits: agency.creditsEnabled ? await creditsView(agency) : null,
       me: { username: req.user!.username, role: req.user!.agency!.adminRole },
       month,
       clients: rows.length,
@@ -702,10 +730,20 @@ router.post("/api/agency/clients", requireAuth, requireAgencyAdmin, async (req, 
       username: emailSchema,
       features: z.array(z.string()).default([]),
       monthlyLimitUsd: z.union([z.null(), money]).optional(),
+      packageId: z.string().optional(),
+      sendEmail: z.boolean().optional(),
     }).safeParse(req.body ?? {});
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid client" });
     const b = parsed.data;
     const s = agencySettings(agency);
+    // A package sets the features and AI limit.
+    let pkg: AgencyPackage | null = null;
+    if (b.packageId) {
+      pkg = await ownPackage(agency.id, b.packageId);
+      if (!pkg) return res.status(400).json({ error: "That package doesn't exist" });
+      b.features = cleanFeatureList(pkg.features).filter(f => s.allowedFeatures.includes(f));
+      b.monthlyLimitUsd = pkg.monthlyLimitUsd === null ? null : Number(pkg.monthlyLimitUsd);
+    }
     if (s.maxAccounts !== null && await countAgencyAccounts(agency.id) >= s.maxAccounts) {
       return res.status(403).json({ error: `Your plan allows ${s.maxAccounts} client account${s.maxAccounts === 1 ? "" : "s"}. Please contact your account manager for more.` });
     }
@@ -726,7 +764,7 @@ router.post("/api/agency/clients", requireAuth, requireAgencyAdmin, async (req, 
     const passwordHash = await hashPassword(tempPassword);
     const account = await db.transaction(async (tx) => {
       const [acct] = await tx.insert(businessAccounts).values({
-        name: b.name, website: b.website, status: "active", productTier: "chroney", agencyId: agency.id, ...flags,
+        name: b.name, website: b.website, status: "active", productTier: "chroney", agencyId: agency.id, agencyPackageId: pkg?.id ?? null, ...flags,
       }).returning();
       await tx.insert(users).values({
         username: b.username, passwordHash, tempPassword, tempPasswordExpiry, mustChangePassword: "true",
@@ -740,9 +778,10 @@ router.post("/api/agency/clients", requireAuth, requireAgencyAdmin, async (req, 
     await aiBudgetService.refresh();
     await recordAuditEventSafely(req, {
       action: "agency.client_created", outcome: "success", businessAccountId: account.id, resourceType: "business_account", resourceId: account.id,
-      metadata: { agencyId: agency.id, name: account.name, username: b.username, features: Array.from(chosen), limitUsd },
+      metadata: { agencyId: agency.id, name: account.name, username: b.username, features: Array.from(chosen), limitUsd, packageId: pkg?.id ?? null },
     });
-    res.json({ client: { id: account.id, name: account.name }, credentials: { username: b.username, tempPassword } });
+    const email = b.sendEmail ? await sendAgencyEmail(agency, loginDetailsEmail(agency, { to: b.username, tempPassword, businessName: account.name })) : null;
+    res.json({ client: { id: account.id, name: account.name }, credentials: { username: b.username, tempPassword }, email });
   } catch (error) {
     console.error("[Agency] create client error:", error);
     res.status(500).json({ error: "Failed to create client" });
@@ -874,7 +913,9 @@ router.post("/api/agency/clients/:id/reset-password", requireAuth, requireAgency
     if (!user) return res.status(404).json({ error: "This client has no login" });
     const tempPassword = await resetPassword(user.id);
     await recordAuditEventSafely(req, { action: "agency.client_password_reset", outcome: "success", businessAccountId: account.id, resourceType: "user", resourceId: user.id });
-    res.json({ username: user.username, tempPassword });
+    const agency = (await getAgency(req.user!.agency!.agencyId))!;
+    const email = req.body?.sendEmail === true ? await sendAgencyEmail(agency, loginDetailsEmail(agency, { to: user.username, tempPassword, businessName: account.name })) : null;
+    res.json({ username: user.username, tempPassword, email });
   } catch (error) {
     console.error("[Agency] reset password error:", error);
     res.status(500).json({ error: "Failed to reset password" });
@@ -1033,6 +1074,481 @@ router.put("/api/agency/logo", requireAuth, requireAgencyAdmin, async (req, res)
   } catch (error) {
     console.error("[Agency] logo error:", error);
     res.status(500).json({ error: "Failed to save the logo" });
+  }
+});
+
+// ── Packages (phase 3) ───────────────────────────────────────────────────────
+
+async function ownPackage(agencyId: string, packageId: string): Promise<AgencyPackage | null> {
+  const [pkg] = await db.select().from(agencyPackages).where(and(eq(agencyPackages.id, packageId), eq(agencyPackages.agencyId, agencyId))).limit(1);
+  return pkg ?? null;
+}
+
+async function listPackages(agencyId: string): Promise<AgencyPackageDto[]> {
+  const pkgs = await db.select().from(agencyPackages).where(eq(agencyPackages.agencyId, agencyId)).orderBy(agencyPackages.sortOrder, agencyPackages.createdAt);
+  const counts = await db
+    .select({ id: businessAccounts.agencyPackageId, n: sql<number>`count(*)::int` })
+    .from(businessAccounts)
+    .where(eq(businessAccounts.agencyId, agencyId))
+    .groupBy(businessAccounts.agencyPackageId);
+  const countOf = new Map(counts.map(c => [c.id, Number(c.n)]));
+  return pkgs.map(p => ({
+    id: p.id,
+    name: p.name,
+    description: p.description ?? "",
+    features: cleanFeatureList(p.features),
+    monthlyLimitUsd: p.monthlyLimitUsd === null ? null : Number(p.monthlyLimitUsd),
+    maxLogins: p.maxLogins,
+    price: p.price === null ? null : Number(p.price),
+    clients: countOf.get(p.id) ?? 0,
+  }));
+}
+
+const packageBody = z.object({
+  name: z.string().trim().min(1, "Give the package a name").max(80),
+  description: z.string().trim().max(300).default(""),
+  features: z.array(z.string()).default([]),
+  monthlyLimitUsd: z.union([z.null(), z.coerce.number().finite().positive().max(1_000_000)]).default(null),
+  maxLogins: z.union([z.null(), z.coerce.number().int().min(1).max(1000)]).default(null),
+  price: z.union([z.null(), money]).default(null),
+  sortOrder: z.coerce.number().int().min(0).max(1000).default(0),
+  applyToClients: z.boolean().default(true),
+});
+
+/** Puts a package's features (within what the agency may resell) and AI limit on a client. */
+async function applyPackage(agency: Agency, accountId: string, pkg: AgencyPackage | null, actorId: string) {
+  const allowed = new Set(cleanFeatureList(agency.allowedFeatures));
+  const updates: Record<string, unknown> = { agencyPackageId: pkg?.id ?? null, updatedAt: new Date() };
+  if (pkg) {
+    const on = new Set(cleanFeatureList(pkg.features));
+    for (const k of Array.from(allowed)) updates[k] = on.has(k) ? "true" : "false";
+  }
+  await db.update(businessAccounts).set(updates).where(eq(businessAccounts.id, accountId));
+  if (pkg) {
+    if (pkg.monthlyLimitUsd === null) await deleteLimit(accountId);
+    else await upsertLimit({ businessAccountId: accountId, monthlyLimitUsd: Number(pkg.monthlyLimitUsd), warnAtPercent: 80, action: "block", updatedBy: actorId });
+  }
+}
+
+function checkPackage(agency: Agency, b: z.infer<typeof packageBody>): string | null {
+  const allowed = cleanFeatureList(agency.allowedFeatures);
+  if (b.features.some(f => !allowed.includes(f as never))) return "Some of those features aren't in your plan";
+  const cap = agency.monthlyAiCapUsd === null ? null : Number(agency.monthlyAiCapUsd);
+  if (b.monthlyLimitUsd !== null && cap !== null && b.monthlyLimitUsd > cap) return "The package's AI limit can't be above your agency's AI cap";
+  if (b.maxLogins !== null && agency.maxLoginsPerClient !== null && b.maxLogins > agency.maxLoginsPerClient) return `Your plan allows up to ${agency.maxLoginsPerClient} logins per client`;
+  return null;
+}
+
+router.get("/api/agency/packages", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res);
+    if (!agency) return;
+    res.json({ packages: await listPackages(agency.id) });
+  } catch (error) {
+    console.error("[Agency] packages error:", error);
+    res.status(500).json({ error: "Failed to load packages" });
+  }
+});
+
+router.post("/api/agency/packages", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res, "managePackages");
+    if (!agency) return;
+    const parsed = packageBody.safeParse(req.body ?? {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid package" });
+    const err = checkPackage(agency, parsed.data);
+    if (err) return res.status(400).json({ error: err });
+    const b = parsed.data;
+    const [pkg] = await db.insert(agencyPackages).values({
+      agencyId: agency.id, name: b.name, description: b.description, features: cleanFeatureList(b.features),
+      monthlyLimitUsd: b.monthlyLimitUsd === null ? null : b.monthlyLimitUsd.toFixed(2), maxLogins: b.maxLogins,
+      price: b.price === null ? null : b.price.toFixed(2), sortOrder: b.sortOrder,
+    }).returning();
+    await recordAuditEventSafely(req, { action: "agency.package_created", outcome: "success", resourceType: "agency_package", resourceId: pkg.id, metadata: { agencyId: agency.id, name: pkg.name } });
+    res.json({ package: pkg });
+  } catch (error) {
+    console.error("[Agency] create package error:", error);
+    res.status(500).json({ error: "Failed to save the package" });
+  }
+});
+
+router.put("/api/agency/packages/:pid", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res, "managePackages");
+    if (!agency) return;
+    const existing = await ownPackage(agency.id, req.params.pid);
+    if (!existing) return res.status(404).json({ error: "Package not found" });
+    const parsed = packageBody.safeParse(req.body ?? {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid package" });
+    const err = checkPackage(agency, parsed.data);
+    if (err) return res.status(400).json({ error: err });
+    const b = parsed.data;
+    const [pkg] = await db.update(agencyPackages).set({
+      name: b.name, description: b.description, features: cleanFeatureList(b.features),
+      monthlyLimitUsd: b.monthlyLimitUsd === null ? null : b.monthlyLimitUsd.toFixed(2), maxLogins: b.maxLogins,
+      price: b.price === null ? null : b.price.toFixed(2), sortOrder: b.sortOrder, updatedAt: new Date(),
+    }).where(eq(agencyPackages.id, existing.id)).returning();
+    let updatedClients = 0;
+    if (b.applyToClients) {
+      const on = await db.select({ id: businessAccounts.id }).from(businessAccounts).where(and(eq(businessAccounts.agencyId, agency.id), eq(businessAccounts.agencyPackageId, pkg.id)));
+      for (const c of on) await applyPackage(agency, c.id, pkg, req.user!.id);
+      updatedClients = on.length;
+      await aiBudgetService.refresh();
+    }
+    await recordAuditEventSafely(req, { action: "agency.package_updated", outcome: "success", resourceType: "agency_package", resourceId: pkg.id, metadata: { agencyId: agency.id, updatedClients } });
+    res.json({ package: pkg, updatedClients });
+  } catch (error) {
+    console.error("[Agency] update package error:", error);
+    res.status(500).json({ error: "Failed to save the package" });
+  }
+});
+
+router.delete("/api/agency/packages/:pid", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res, "managePackages");
+    if (!agency) return;
+    const existing = await ownPackage(agency.id, req.params.pid);
+    if (!existing) return res.status(404).json({ error: "Package not found" });
+    // Clients on it keep their features and limit; they just no longer show the package.
+    await db.delete(agencyPackages).where(eq(agencyPackages.id, existing.id));
+    await recordAuditEventSafely(req, { action: "agency.package_deleted", outcome: "success", resourceType: "agency_package", resourceId: existing.id, metadata: { agencyId: agency.id, name: existing.name } });
+    res.json({ deleted: true });
+  } catch (error) {
+    console.error("[Agency] delete package error:", error);
+    res.status(500).json({ error: "Failed to delete the package" });
+  }
+});
+
+router.put("/api/agency/clients/:id/package", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res, "editFeatures");
+    if (!agency) return;
+    const account = await ownClient(req, res);
+    if (!account) return;
+    const packageId = req.body?.packageId ?? null;
+    const pkg = packageId ? await ownPackage(agency.id, String(packageId)) : null;
+    if (packageId && !pkg) return res.status(400).json({ error: "That package doesn't exist" });
+    await applyPackage(agency, account.id, pkg, req.user!.id);
+    await aiBudgetService.refresh();
+    await recordAuditEventSafely(req, { action: "agency.client_package_changed", outcome: "success", businessAccountId: account.id, resourceType: "business_account", resourceId: account.id, metadata: { packageId: pkg?.id ?? null } });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("[Agency] client package error:", error);
+    res.status(500).json({ error: "Failed to apply the package" });
+  }
+});
+
+router.get("/api/super-admin/agencies/:id/packages", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    res.json({ packages: await listPackages(req.params.id) });
+  } catch (error) {
+    console.error("[Agencies] packages error:", error);
+    res.status(500).json({ error: "Failed to load packages" });
+  }
+});
+
+// ── Prepaid credits (phase 3) ────────────────────────────────────────────────
+
+async function creditsView(agency: Agency) {
+  const status = await getAgencyCreditStatus(agency.id);
+  const entries = await db.select().from(agencyCreditEntries).where(eq(agencyCreditEntries.agencyId, agency.id)).orderBy(sql`${agencyCreditEntries.createdAt} desc`).limit(100);
+  const low = agency.creditLowThreshold === null ? null : Number(agency.creditLowThreshold);
+  return {
+    ...status,
+    currency: resolveAgencyBilling(agency.billing).currency,
+    startedAt: agency.creditsStartedAt,
+    lowThreshold: low,
+    low: status.enabled && low !== null && status.balance <= low,
+    entries: entries.map(e => ({ id: e.id, amount: Number(e.amount), note: e.note ?? "", createdAt: e.createdAt })),
+  };
+}
+
+router.get("/api/super-admin/agencies/:id/credits", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const agency = await getAgency(req.params.id);
+    if (!agency) return res.status(404).json({ error: "Agency not found" });
+    res.json(await creditsView(agency));
+  } catch (error) {
+    console.error("[Agencies] credits error:", error);
+    res.status(500).json({ error: "Failed to load credits" });
+  }
+});
+
+router.post("/api/super-admin/agencies/:id/credits", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const agency = await getAgency(req.params.id);
+    if (!agency) return res.status(404).json({ error: "Agency not found" });
+    const parsed = z.object({
+      amount: z.coerce.number().finite().refine(n => n !== 0, "Enter an amount").refine(n => Math.abs(n) <= 10_000_000, "That amount is too large"),
+      note: z.string().trim().max(300).default(""),
+    }).safeParse(req.body ?? {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid amount" });
+    await db.insert(agencyCreditEntries).values({ agencyId: agency.id, amount: parsed.data.amount.toFixed(2), note: parsed.data.note || null, createdBy: req.user!.id });
+    await aiBudgetService.refresh();
+    await recordAuditEventSafely(req, { action: parsed.data.amount > 0 ? "agency.credits_added" : "agency.credits_corrected", outcome: "success", resourceType: "agency", resourceId: agency.id, metadata: { amount: parsed.data.amount, note: parsed.data.note } });
+    res.json(await creditsView(agency));
+  } catch (error) {
+    console.error("[Agencies] add credits error:", error);
+    res.status(500).json({ error: "Failed to add credits" });
+  }
+});
+
+router.get("/api/agency/credits", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res);
+    if (!agency) return;
+    res.json(await creditsView(agency));
+  } catch (error) {
+    console.error("[Agency] credits error:", error);
+    res.status(500).json({ error: "Failed to load credits" });
+  }
+});
+
+// ── Logins of a client account (phase 3) ─────────────────────────────────────
+
+async function accountLogins(accountId: string) {
+  const rows = await db
+    .select({ userId: users.id, username: users.username, accountRole: users.accountRole, lastLoginAt: users.lastLoginAt, createdAt: users.createdAt })
+    .from(users)
+    .where(eq(users.businessAccountId, accountId))
+    .orderBy(users.createdAt);
+  // The main login: the first 'owner', else the oldest.
+  const ownerIdx = Math.max(0, rows.findIndex(r => r.accountRole === "owner"));
+  return rows.map((r, i) => ({ ...r, isMain: i === ownerIdx }));
+}
+
+/** Adds an extra login to a client account, within its login limit. */
+async function addAccountLogin(agency: Agency, account: { id: string; name: string; agencyPackageId: string | null }, username: string, sendEmail: boolean) {
+  const max = await maxLoginsFor(agency, account.agencyPackageId);
+  if (max !== null && await countAccountLogins(account.id) >= max) {
+    return { error: `This account can have ${max} login${max === 1 ? "" : "s"}.`, status: 403 };
+  }
+  if (await storage.getUserByUsername(username)) return { error: "That email is already used by another login", status: 409 };
+  const tempPassword = generateTempPassword();
+  const tempPasswordExpiry = new Date();
+  tempPasswordExpiry.setDate(tempPasswordExpiry.getDate() + 30);
+  const [user] = await db.insert(users).values({
+    username, passwordHash: await hashPassword(tempPassword), tempPassword, tempPasswordExpiry, mustChangePassword: "true",
+    role: "business_user", businessAccountId: account.id, accountRole: "member",
+  }).returning();
+  const email = sendEmail ? await sendAgencyEmail(agency, loginDetailsEmail(agency, { to: username, tempPassword, businessName: account.name })) : null;
+  return { user, credentials: { username, tempPassword }, email };
+}
+
+router.get("/api/agency/clients/:id/logins", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res);
+    if (!agency) return;
+    const account = await ownClient(req, res);
+    if (!account) return;
+    res.json({ logins: await accountLogins(account.id), max: await maxLoginsFor(agency, account.agencyPackageId) });
+  } catch (error) {
+    console.error("[Agency] client logins error:", error);
+    res.status(500).json({ error: "Failed to load logins" });
+  }
+});
+
+router.post("/api/agency/clients/:id/logins", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res, "manageClientLogins");
+    if (!agency) return;
+    const account = await ownClient(req, res);
+    if (!account) return;
+    const parsed = z.object({ username: emailSchema, sendEmail: z.boolean().default(false) }).safeParse(req.body ?? {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid email" });
+    const r = await addAccountLogin(agency, account, parsed.data.username, parsed.data.sendEmail);
+    if ("error" in r) return res.status(r.status!).json({ error: r.error });
+    await recordAuditEventSafely(req, { action: "agency.client_login_added", outcome: "success", businessAccountId: account.id, resourceType: "user", resourceId: r.user.id, metadata: { username: r.user.username } });
+    res.json({ credentials: r.credentials, email: r.email });
+  } catch (error) {
+    console.error("[Agency] add client login error:", error);
+    res.status(500).json({ error: "Failed to add the login" });
+  }
+});
+
+router.delete("/api/agency/clients/:id/logins/:userId", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    if (!await agencyAllowed(req, res, "manageClientLogins")) return;
+    const account = await ownClient(req, res);
+    if (!account) return;
+    const target = (await accountLogins(account.id)).find(l => l.userId === req.params.userId);
+    if (!target) return res.status(404).json({ error: "Login not found" });
+    if (target.isMain) return res.status(400).json({ error: "The main login can't be removed" });
+    await db.delete(users).where(and(eq(users.id, target.userId), eq(users.businessAccountId, account.id)));
+    await recordAuditEventSafely(req, { action: "agency.client_login_removed", outcome: "success", businessAccountId: account.id, resourceType: "user", resourceId: target.userId, metadata: { username: target.username } });
+    res.json({ removed: true });
+  } catch (error) {
+    console.error("[Agency] remove client login error:", error);
+    res.status(500).json({ error: "Failed to remove the login" });
+  }
+});
+
+router.post("/api/agency/clients/:id/logins/:userId/reset-password", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res, "resetClientLogins");
+    if (!agency) return;
+    const account = await ownClient(req, res);
+    if (!account) return;
+    const target = (await accountLogins(account.id)).find(l => l.userId === req.params.userId);
+    if (!target) return res.status(404).json({ error: "Login not found" });
+    const tempPassword = await resetPassword(target.userId);
+    const email = req.body?.sendEmail === true ? await sendAgencyEmail(agency, loginDetailsEmail(agency, { to: target.username, tempPassword, businessName: account.name })) : null;
+    await recordAuditEventSafely(req, { action: "agency.client_password_reset", outcome: "success", businessAccountId: account.id, resourceType: "user", resourceId: target.userId });
+    res.json({ username: target.username, tempPassword, email });
+  } catch (error) {
+    console.error("[Agency] reset client login error:", error);
+    res.status(500).json({ error: "Failed to reset the password" });
+  }
+});
+
+/**
+ * A client's main login managing its own colleagues, when its agency allows it
+ * (permission clientsManageLogins). Direct customers and other logins get 403.
+ */
+async function selfServiceAccount(req: Request, res: Response) {
+  const user = req.user!;
+  if (user.role !== "business_user" || user.agency || !user.businessAccountId) {
+    res.status(403).json({ error: "Not available" });
+    return null;
+  }
+  const me = await storage.getUser(user.id);
+  const account = await storage.getBusinessAccount(user.businessAccountId);
+  const agency = account?.agencyId ? await getAgency(account.agencyId) : null;
+  if (!me || me.businessAccountId !== user.businessAccountId || !account || !agency || agency.status !== "active" || !resolveAgencyPermissions(agency.permissions).clientsManageLogins) {
+    res.status(403).json({ error: "Not available" });
+    return null;
+  }
+  const main = (await accountLogins(account.id)).find(l => l.isMain);
+  if (main?.userId !== me.id) {
+    res.status(403).json({ error: "Only the account's main login can manage logins" });
+    return null;
+  }
+  return { agency, account };
+}
+
+router.get("/api/account/logins", requireAuth, async (req, res) => {
+  try {
+    const ctx = await selfServiceAccount(req, res);
+    if (!ctx) return;
+    res.json({
+      logins: await accountLogins(ctx.account.id),
+      max: await maxLoginsFor(ctx.agency, ctx.account.agencyPackageId),
+      emailReady: agencyEmailView(ctx.agency.emailSettings).ready,
+    });
+  } catch (error) {
+    console.error("[Account] logins error:", error);
+    res.status(500).json({ error: "Failed to load logins" });
+  }
+});
+
+router.post("/api/account/logins", requireAuth, async (req, res) => {
+  try {
+    const ctx = await selfServiceAccount(req, res);
+    if (!ctx) return;
+    const parsed = z.object({ username: emailSchema, sendEmail: z.boolean().default(false) }).safeParse(req.body ?? {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid email" });
+    const r = await addAccountLogin(ctx.agency, ctx.account, parsed.data.username, parsed.data.sendEmail);
+    if ("error" in r) return res.status(r.status!).json({ error: r.error });
+    await recordAuditEventSafely(req, { action: "account.login_added", outcome: "success", businessAccountId: ctx.account.id, resourceType: "user", resourceId: r.user.id, metadata: { username: r.user.username } });
+    res.json({ credentials: r.credentials, email: r.email });
+  } catch (error) {
+    console.error("[Account] add login error:", error);
+    res.status(500).json({ error: "Failed to add the login" });
+  }
+});
+
+router.delete("/api/account/logins/:userId", requireAuth, async (req, res) => {
+  try {
+    const ctx = await selfServiceAccount(req, res);
+    if (!ctx) return;
+    const target = (await accountLogins(ctx.account.id)).find(l => l.userId === req.params.userId);
+    if (!target) return res.status(404).json({ error: "Login not found" });
+    if (target.isMain) return res.status(400).json({ error: "The main login can't be removed" });
+    await db.delete(users).where(and(eq(users.id, target.userId), eq(users.businessAccountId, ctx.account.id)));
+    await recordAuditEventSafely(req, { action: "account.login_removed", outcome: "success", businessAccountId: ctx.account.id, resourceType: "user", resourceId: target.userId, metadata: { username: target.username } });
+    res.json({ removed: true });
+  } catch (error) {
+    console.error("[Account] remove login error:", error);
+    res.status(500).json({ error: "Failed to remove the login" });
+  }
+});
+
+// ── Branded email settings (phase 3) ─────────────────────────────────────────
+
+const emailBody = z.object({
+  provider: z.enum(["", ...EMAIL_PROVIDERS.map(p => p.key)] as [string, ...string[]]).optional(),
+  apiKey: z.string().max(500).optional(),
+  fromEmail: z.union([z.literal(""), z.string().trim().regex(EMAIL_RE, "Enter a valid sender email")]).optional(),
+  fromName: z.string().max(80).optional(),
+  replyTo: z.union([z.literal(""), z.string().trim().regex(EMAIL_RE, "Enter a valid reply-to email")]).optional(),
+  welcomeByDefault: z.boolean().optional(),
+});
+
+async function saveEmail(agency: Agency, body: unknown) {
+  const parsed = emailBody.safeParse(body ?? {});
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid email settings" };
+  const next = nextEmailSettings(agency.emailSettings, parsed.data as Record<string, unknown>);
+  const [after] = await db.update(agencies).set({ emailSettings: next, updatedAt: new Date() }).where(eq(agencies.id, agency.id)).returning();
+  return { agency: after };
+}
+
+router.get("/api/agency/email", requireAuth, requireAgencyAdmin, async (req, res) => {
+  const agency = await agencyAllowed(req, res);
+  if (!agency) return;
+  res.json(agencyEmailView(agency.emailSettings));
+});
+
+router.put("/api/agency/email", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res, "editEmail");
+    if (!agency) return;
+    const r = await saveEmail(agency, req.body);
+    if (r.error) return res.status(400).json({ error: r.error });
+    await recordAuditEventSafely(req, { action: "agency.email_settings_changed", outcome: "success", resourceType: "agency", resourceId: agency.id, metadata: { provider: agencyEmailView(r.agency!.emailSettings).provider } });
+    res.json(agencyEmailView(r.agency!.emailSettings));
+  } catch (error) {
+    console.error("[Agency] email settings error:", error);
+    res.status(500).json({ error: "Failed to save email settings" });
+  }
+});
+
+router.post("/api/agency/email/test", requireAuth, requireAgencyAdmin, async (req, res) => {
+  try {
+    const agency = await agencyAllowed(req, res, "editEmail");
+    if (!agency) return;
+    const to = String(req.body?.to ?? req.user!.username).trim();
+    if (!EMAIL_RE.test(to)) return res.status(400).json({ error: "Enter an email address to send the test to" });
+    res.json(await sendAgencyEmail(agency, testEmail(agency, to)));
+  } catch (error) {
+    console.error("[Agency] test email error:", error);
+    res.status(500).json({ error: "Failed to send the test email" });
+  }
+});
+
+router.put("/api/super-admin/agencies/:id/email", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const agency = await getAgency(req.params.id);
+    if (!agency) return res.status(404).json({ error: "Agency not found" });
+    const r = await saveEmail(agency, req.body);
+    if (r.error) return res.status(400).json({ error: r.error });
+    await recordAuditEventSafely(req, { action: "agency.email_settings_changed", outcome: "success", resourceType: "agency", resourceId: agency.id });
+    res.json(agencyEmailView(r.agency!.emailSettings));
+  } catch (error) {
+    console.error("[Agencies] email settings error:", error);
+    res.status(500).json({ error: "Failed to save email settings" });
+  }
+});
+
+router.post("/api/super-admin/agencies/:id/email/test", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const agency = await getAgency(req.params.id);
+    if (!agency) return res.status(404).json({ error: "Agency not found" });
+    const to = String(req.body?.to ?? "").trim();
+    if (!EMAIL_RE.test(to)) return res.status(400).json({ error: "Enter an email address to send the test to" });
+    res.json(await sendAgencyEmail(agency, testEmail(agency, to)));
+  } catch (error) {
+    console.error("[Agencies] test email error:", error);
+    res.status(500).json({ error: "Failed to send the test email" });
   }
 });
 

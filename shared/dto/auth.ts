@@ -12,6 +12,8 @@ export type MeResponseDto = SafeUser & {
   agency?: AgencyContextDto;
   // The brand this login sees (an agency's for agency logins and agency clients, else ours).
   brand?: PublicBrand;
+  // An agency client's main login may add colleagues (its agency allows it).
+  canManageAccountLogins?: boolean;
   // Browser only: a super admin who switched to "Business user view" (client/src/lib/businessUserView.ts).
   // `role` then reads "business_user"; the server never sets this.
   viewingAsBusinessUser?: boolean;

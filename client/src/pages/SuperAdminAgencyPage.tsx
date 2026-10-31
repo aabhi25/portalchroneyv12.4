@@ -18,9 +18,10 @@ import {
   CredentialsDialog, FeatureSwitches, Panel, Stat, StatusPill, UsageBar, formatMoney, formatUsd, monthLabel, recentMonths,
 } from "@/components/agency/agencyUi";
 import { DomainPanel, LogoPanel, type DomainInfo } from "@/components/agency/BrandingPanels";
+import { EmailSettingsPanel, PackagesList, SuperAdminCreditsPanel } from "@/pages/agency/AgencyExtras";
 import {
   AGENCY_FEATURES, AGENCY_PERMISSIONS,
-  type AgencyBilling, type AgencyBranding, type AgencyFeatureKey, type AgencyPermissions, type AgencyStatement,
+  type AgencyBilling, type AgencyBranding, type AgencyEmailView, type AgencyFeatureKey, type AgencyPackageDto, type AgencyPermissions, type AgencyStatement,
 } from "@shared/agency";
 
 export interface AgencySettingsDto {
@@ -39,6 +40,10 @@ export interface AgencySettingsDto {
   notes: string;
   domain: DomainInfo;
   logoUrl: string | null;
+  maxLoginsPerClient: number | null;
+  creditsEnabled: boolean;
+  creditLowThreshold: number | null;
+  email: AgencyEmailView;
 }
 
 interface ClientRow {
@@ -47,6 +52,7 @@ interface ClientRow {
   website: string;
   status: string;
   login: { username: string; lastLoginAt: string | null } | null;
+  loginCount: number;
   features: Record<AgencyFeatureKey, boolean>;
   actions: number;
   spentUsd: number | null;
@@ -213,7 +219,7 @@ function OverviewTab({ detail }: { detail: AgencyDetail }) {
                   <tr key={c.id} className="border-b border-black/[0.04] last:border-0">
                     <td className="py-3 pr-3">
                       <button type="button" className="text-left font-medium text-gray-900 hover:underline" onClick={() => setLocation(accountHref(c.id))}>{c.name}</button>
-                      <p className="text-[12px] text-gray-500">{c.login?.username ?? "No login"}</p>
+                      <p className="text-[12px] text-gray-500">{c.login?.username ?? "No login"}{c.loginCount > 1 ? ` + ${c.loginCount - 1} more` : ""}</p>
                     </td>
                     <td className="py-3 pr-3 text-[13px] text-gray-600">{AGENCY_FEATURES.filter(f => c.features[f.key]).map(f => f.label).join(", ") || "—"}</td>
                     <td className="py-3 pr-3">
@@ -325,8 +331,10 @@ function PlanTab({ detail }: { detail: AgencyDetail }) {
     aiCapAction: agency.aiCapAction,
     aiCapWarnAtPercent: String(agency.aiCapWarnAtPercent),
     defaultClientLimit: agency.defaultClientLimitUsd === null ? "" : String(agency.defaultClientLimitUsd),
+    maxLogins: agency.maxLoginsPerClient === null ? "" : String(agency.maxLoginsPerClient),
     notes: agency.notes,
   }));
+  const { data: pkgs } = useQuery<{ packages: AgencyPackageDto[] }>({ queryKey: [`/api/super-admin/agencies/${agency.id}/packages`] });
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [confirmName, setConfirmName] = useState("");
   const del = useMutation({
@@ -345,13 +353,14 @@ function PlanTab({ detail }: { detail: AgencyDetail }) {
     aiCapAction: form.aiCapAction,
     aiCapWarnAtPercent: Number(form.aiCapWarnAtPercent) || 80,
     defaultClientLimitUsd: toNum(form.defaultClientLimit),
+    maxLoginsPerClient: toNum(form.maxLogins),
     notes: form.notes,
   });
 
   return (
     <>
       <Panel title="Agency" subtitle="Pausing an agency stops its logins. Its clients keep working unless you pause them too.">
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <div className="space-y-1.5">
             <Label htmlFor="plan-name">Name</Label>
             <Input id="plan-name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
@@ -366,6 +375,11 @@ function PlanTab({ detail }: { detail: AgencyDetail }) {
           <div className="space-y-1.5">
             <Label htmlFor="plan-max">Most client accounts</Label>
             <Input id="plan-max" inputMode="numeric" value={form.maxAccounts} onChange={e => setForm({ ...form, maxAccounts: e.target.value.replace(/[^\d]/g, "") })} placeholder="No limit" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="plan-logins">Logins per client account</Label>
+            <Input id="plan-logins" inputMode="numeric" value={form.maxLogins} onChange={e => setForm({ ...form, maxLogins: e.target.value.replace(/[^\d]/g, "") })} placeholder="No limit" data-testid="input-max-logins" />
+            <p className="text-[12px] text-gray-500">The main login included. A package can set fewer.</p>
           </div>
         </div>
       </Panel>
@@ -422,6 +436,10 @@ function PlanTab({ detail }: { detail: AgencyDetail }) {
           </div>
         </Panel>
       </div>
+
+      <Panel title="Its packages" subtitle="Bundles the agency sells its clients (it manages these itself).">
+        <PackagesList packages={pkgs?.packages ?? []} currency={agency.billing.currency} canEdit={false} />
+      </Panel>
 
       <Panel title="Notes" subtitle="Only you see these: contract, contacts, anything agreed.">
         <Textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={3} />
@@ -482,7 +500,9 @@ export function StatementView({ statement }: { statement: AgencyStatement }) {
       </div>
       <dl className="ml-auto max-w-sm space-y-1 text-[14px]">
         <div className="flex justify-between"><dt className="text-gray-500">Account fees ({statement.accounts} active)</dt><dd className="tabular-nums">{formatMoney(statement.accountFees, c)}</dd></div>
-        <div className="flex justify-between"><dt className="text-gray-500">AI above allowance</dt><dd className="tabular-nums">{formatMoney(statement.aiCharges, c)}</dd></div>
+        {statement.aiFromCredits > 0
+          ? <div className="flex justify-between"><dt className="text-gray-500">AI (paid from prepaid credits)</dt><dd className="tabular-nums text-gray-500">{formatMoney(statement.aiFromCredits, c)}</dd></div>
+          : <div className="flex justify-between"><dt className="text-gray-500">AI above allowance</dt><dd className="tabular-nums">{formatMoney(statement.aiCharges, c)}</dd></div>}
         {statement.monthlyFee > 0 && <div className="flex justify-between"><dt className="text-gray-500">Monthly fee</dt><dd className="tabular-nums">{formatMoney(statement.monthlyFee, c)}</dd></div>}
         <div className="flex justify-between border-t border-black/[0.08] pt-1 font-semibold"><dt>Total</dt><dd className="tabular-nums" data-testid="statement-total">{formatMoney(statement.total, c)}</dd></div>
       </dl>
@@ -520,6 +540,12 @@ function BillingTab({ detail }: { detail: AgencyDetail }) {
 
   return (
     <>
+      <SuperAdminCreditsPanel
+        agencyId={agency.id}
+        enabled={agency.creditsEnabled}
+        lowThreshold={agency.creditLowThreshold}
+        onSettings={(body) => save.mutate(body, { onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/super-admin/agencies/${agency.id}/credits`] }) })}
+      />
       <Panel title="What we charge this agency" subtitle="The agency sets its own prices for its clients; this is only our bill to the agency.">
         <div className="grid gap-4 md:grid-cols-3">
           <div className="space-y-1.5">
@@ -706,6 +732,14 @@ function BrandTab({ detail }: { detail: AgencyDetail }) {
       </Panel>
       <LogoPanel logoUrl={detail.agency.logoUrl} saving={logo.isPending} onSave={(d) => logo.mutate(d)} />
       <DomainPanel key={detail.agency.domain.name ?? "none"} domain={detail.agency.domain} canEdit saving={domain.isPending} checking={check.isPending} onSave={(n) => domain.mutate(n)} onCheck={() => check.mutate()} />
+      <EmailSettingsPanel
+        key={`${detail.agency.email.provider}-${detail.agency.email.apiKeyLast4}-${detail.agency.email.fromEmail}`}
+        base={`/api/super-admin/agencies/${id}/email`}
+        view={detail.agency.email}
+        canEdit
+        defaultTestTo=""
+        onSaved={() => refresh(id)}
+      />
     </>
   );
 }

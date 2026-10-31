@@ -62,6 +62,10 @@ export const AGENCY_PERMISSIONS = [
   { key: "editBranding", label: "Change the brand", hint: "Name, logo, colour and the widget footer", default: true },
   { key: "setCustomDomain", label: "Set its own web address", hint: "e.g. app.agency.com for its portal and widget", default: false },
   { key: "setupConnectedApps", label: "Set up CRMs for clients", hint: "LeadSquared, Salesforce, Meritto and other connected apps", default: false },
+  { key: "managePackages", label: "Create packages", hint: "Bundles like Starter / Pro to apply to clients", default: true },
+  { key: "manageClientLogins", label: "Add logins to client accounts", hint: "Up to the logins allowed per client", default: true },
+  { key: "clientsManageLogins", label: "Clients add their own logins", hint: "A client's main login can add colleagues, up to the limit", default: false },
+  { key: "editEmail", label: "Send emails in its own name", hint: "Connect its email service for login and password emails", default: true },
 ] as const;
 
 export type AgencyPermissionKey = typeof AGENCY_PERMISSIONS[number]["key"];
@@ -149,6 +153,8 @@ export interface AgencyStatement {
   monthlyFee: number;
   total: number;
   aiCostUsd: number;
+  /** AI use paid from prepaid credits this month (agency currency); 0 when credits are off. */
+  aiFromCredits: number;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -164,11 +170,14 @@ export function computeAgencyStatement(input: {
   billing: AgencyBilling;
   usdToInr: number;
   accounts: { businessAccountId: string; name: string; status: string; aiCostUsd: number }[];
+  /** Prepaid credits on: AI use (with markup, no allowance) is paid from credits, not billed. */
+  creditsEnabled?: boolean;
 }): AgencyStatement {
   const { billing } = input;
   const rate = billing.currency === "INR" ? input.usdToInr : 1;
   const markup = 1 + billing.aiMarkupPercent / 100;
-  const included = billing.model === "usage" ? 0 : billing.includedAiPerAccount;
+  const credits = !!input.creditsEnabled;
+  const included = billing.model === "usage" || credits ? 0 : billing.includedAiPerAccount;
   const charging = billing.model !== "custom";
   const lines: StatementLine[] = input.accounts.map(a => {
     const aiCost = a.aiCostUsd * rate;
@@ -181,13 +190,14 @@ export function computeAgencyStatement(input: {
       aiCostUsd: round2(a.aiCostUsd),
       aiCost: round2(aiCost),
       aiOverage: round2(aiOverage),
-      amount: charging ? round2(fee + aiOverage * markup) : 0,
+      amount: charging ? round2(fee + (credits ? 0 : aiOverage * markup)) : 0,
     };
   });
   const activeCount = input.accounts.filter(a => a.status === "active").length;
   const accountFees = charging ? round2(activeCount * billing.pricePerAccount) : 0;
-  const aiCharges = charging ? round2(lines.reduce((s, l) => s + l.aiOverage * markup, 0)) : 0;
+  const aiCharges = charging && !credits ? round2(lines.reduce((s, l) => s + l.aiOverage * markup, 0)) : 0;
   return {
+    aiFromCredits: credits ? round2(lines.reduce((s, l) => s + l.aiCost * markup, 0)) : 0,
     month: input.month,
     currency: billing.currency,
     model: billing.model,
@@ -327,4 +337,66 @@ export function normalizeDomain(input: unknown): string | null {
   if (d.length < 4 || d.length > 253) return null;
   if (!/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(d)) return null;
   return d;
+}
+
+// ── Prepaid credits ──────────────────────────────────────────────────────────
+
+/** What AI use costs the agency's credits (agency currency): our cost, converted, plus the markup. */
+export function creditUsage(costUsd: number, billing: AgencyBilling, usdToInr: number): number {
+  const rate = billing.currency === "INR" ? usdToInr : 1;
+  return costUsd * rate * (1 + billing.aiMarkupPercent / 100);
+}
+
+// ── Packages ─────────────────────────────────────────────────────────────────
+
+export interface AgencyPackageDto {
+  id: string;
+  name: string;
+  description: string;
+  features: AgencyFeatureKey[];
+  monthlyLimitUsd: number | null;
+  maxLogins: number | null;
+  price: number | null;
+  clients: number;
+}
+
+// ── Branded email ────────────────────────────────────────────────────────────
+
+export const EMAIL_PROVIDERS = [
+  { key: "resend", label: "Resend", hint: "API key from resend.com › API Keys" },
+  { key: "sendgrid", label: "SendGrid", hint: "API key with Mail Send permission" },
+  { key: "brevo", label: "Brevo", hint: "API key from Brevo › SMTP & API" },
+] as const;
+export type EmailProvider = typeof EMAIL_PROVIDERS[number]["key"];
+
+/** Email settings as the portal sees them (the key itself never leaves the server). */
+export interface AgencyEmailView {
+  provider: EmailProvider | "";
+  hasKey: boolean;
+  apiKeyLast4: string;
+  fromEmail: string;
+  fromName: string;
+  replyTo: string;
+  /** Tick "email the login details" by default when adding clients and logins. */
+  welcomeByDefault: boolean;
+  /** Ready to send: provider, key and sender address set. */
+  ready: boolean;
+}
+
+export function agencyEmailView(stored: unknown): AgencyEmailView {
+  const s = stored && typeof stored === "object" ? stored as Record<string, unknown> : {};
+  const str = (v: unknown, max = 200) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  const provider = EMAIL_PROVIDERS.some(p => p.key === s.provider) ? s.provider as EmailProvider : "";
+  const fromEmail = str(s.fromEmail);
+  const hasKey = typeof s.apiKeyEnc === "string" && s.apiKeyEnc.length > 0;
+  return {
+    provider,
+    hasKey,
+    apiKeyLast4: str(s.apiKeyLast4, 4),
+    fromEmail,
+    fromName: str(s.fromName, 80),
+    replyTo: str(s.replyTo),
+    welcomeByDefault: s.welcomeByDefault !== false,
+    ready: !!provider && hasKey && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromEmail),
+  };
 }

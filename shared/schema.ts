@@ -175,6 +175,7 @@ export const businessAccounts = pgTable("business_accounts", {
   visionWarehouseSyncIndexOpType: text("vision_warehouse_sync_index_op_type"), // Type of index operation: create_index, create_endpoint, deploy_index, update_index
   // The reseller agency this account belongs to (null = our direct customer). See shared/agency.ts.
   agencyId: varchar("agency_id").references((): any => agencies.id, { onDelete: "set null" }),
+  agencyPackageId: varchar("agency_package_id").references((): any => agencyPackages.id, { onDelete: "set null" }), // the agency package applied, if any
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [
@@ -211,6 +212,15 @@ export const agencies = pgTable("agencies", {
   // Logo as a data: URL (PNG/JPEG/WebP/SVG, small), served by /api/brand/logo/:agencyId.
   logoData: text("logo_data"),
   logoUpdatedAt: timestamp("logo_updated_at"),
+  // Most logins per client account (the main login included); null = no limit. A package can set its own.
+  maxLoginsPerClient: integer("max_logins_per_client"),
+  // Prepaid AI credits (agency currency): AI use since credits_started_at is taken from the top-ups;
+  // at zero every client's AI pauses. See shared/agency.ts creditUsage().
+  creditsEnabled: boolean("credits_enabled").notNull().default(false),
+  creditsStartedAt: timestamp("credits_started_at"),
+  creditLowThreshold: numeric("credit_low_threshold", { precision: 12, scale: 2 }),
+  // Branded email: { provider, apiKeyEnc, apiKeyLast4, fromEmail, fromName, replyTo, welcomeByDefault }.
+  emailSettings: jsonb("email_settings").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
   createdBy: varchar("created_by"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -227,11 +237,42 @@ export const agencyAdmins = pgTable("agency_admins", {
   index("agency_admins_agency_idx").on(table.agencyId),
 ]);
 
+// Packages an agency sells its clients (e.g. "Starter", "Pro"): features, AI limit, logins, its price.
+export const agencyPackages = pgTable("agency_packages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  agencyId: varchar("agency_id").notNull().references(() => agencies.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  features: jsonb("features").$type<string[]>().notNull().default(sql`'[]'::jsonb`), // AgencyFeatureKey[]
+  monthlyLimitUsd: numeric("monthly_limit_usd", { precision: 12, scale: 2 }), // null = no AI limit
+  maxLogins: integer("max_logins"), // null = the agency's default
+  price: numeric("price", { precision: 12, scale: 2 }), // what the agency charges its client per month (for its own reference)
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  index("agency_packages_agency_idx").on(table.agencyId),
+]);
+
+// Prepaid credit top-ups and corrections for an agency (agency currency; negative = correction).
+export const agencyCreditEntries = pgTable("agency_credit_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  agencyId: varchar("agency_id").notNull().references(() => agencies.id, { onDelete: "cascade" }),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  note: text("note"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  index("agency_credit_entries_agency_idx").on(table.agencyId),
+]);
+
+export type AgencyPackage = typeof agencyPackages.$inferSelect;
+export type AgencyCreditEntry = typeof agencyCreditEntries.$inferSelect;
 export type Agency = typeof agencies.$inferSelect;
 export type AgencyAdmin = typeof agencyAdmins.$inferSelect;
 
-// Users table with roles and business account association
-// One user per business account (1:1 relationship)
+// Users table with roles and business account association.
+// A business account has one main login (account_role 'owner') and may have more ('member').
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
@@ -240,10 +281,13 @@ export const users = pgTable("users", {
   tempPasswordExpiry: timestamp("temp_password_expiry"), // When temp password expires
   mustChangePassword: text("must_change_password").notNull().default("false"), // 'true' | 'false' - Force password change on next login
   role: text("role").notNull(), // 'super_admin' | 'business_user' | 'account_group_admin' | 'agency_admin'
-  businessAccountId: varchar("business_account_id").unique().references(() => businessAccounts.id, { onDelete: "cascade" }), // Unique constraint enforces 1:1 relationship (nulls allowed for superadmins)
+  businessAccountId: varchar("business_account_id").references(() => businessAccounts.id, { onDelete: "cascade" }), // null for super admins, group and agency logins
+  accountRole: text("account_role").notNull().default("owner"), // business logins: 'owner' (the main login) | 'member' (extra login, same access)
   lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => [
+  index("users_business_account_idx").on(table.businessAccountId),
+]);
 
 // Sessions table for authentication
 export const sessions = pgTable("sessions", {

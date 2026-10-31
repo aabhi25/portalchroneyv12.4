@@ -753,8 +753,14 @@ export class DatabaseStorage implements IStorage {
     return user || undefined;
   }
 
+  /** The account's main login (account_role 'owner', else the oldest login). */
   async getUserByBusinessAccountId(businessAccountId: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.businessAccountId, businessAccountId));
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.businessAccountId, businessAccountId))
+      .orderBy(sql`case when ${users.accountRole} = 'owner' then 0 else 1 end`, users.createdAt)
+      .limit(1);
     return user || undefined;
   }
 
@@ -849,7 +855,8 @@ export class DatabaseStorage implements IStorage {
     return await db
       .select()
       .from(users)
-      .where(eq(users.businessAccountId, businessAccountId));
+      .where(eq(users.businessAccountId, businessAccountId))
+      .orderBy(users.createdAt);
   }
 
   // Business Account methods

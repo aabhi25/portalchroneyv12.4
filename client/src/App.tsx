@@ -57,7 +57,7 @@ import SuperAdminToday from "@/pages/SuperAdminToday";
 import SuperAdminGroupPage from "@/pages/SuperAdminGroupPage";
 import SuperAdminAgencies from "@/pages/SuperAdminAgencies";
 import SuperAdminAgencyPage from "@/pages/SuperAdminAgencyPage";
-import { AgencyClientsPage, AgencyClientPage, AgencyStatementPage, AgencyTeamPage, AgencyBrandPage } from "@/pages/agency/AgencyPortal";
+import { AgencyClientsPage, AgencyClientPage, AgencyStatementPage, AgencyTeamPage, AgencyBrandPage, AgencyPackagesPage, AgencyEmailPage } from "@/pages/agency/AgencyPortal";
 import { AgencyViewingBanner } from "@/components/agency/AgencyViewingBanner";
 import { setBrand, useBrand } from "@/lib/brand";
 import type { PublicBrand } from "@shared/agency";
@@ -317,6 +317,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/agency/statement">{() => <AgencyStatementPage />}</Route>
                 <Route path="/agency/team">{() => <AgencyTeamPage />}</Route>
                 <Route path="/agency/brand">{() => <AgencyBrandPage />}</Route>
+                <Route path="/agency/packages">{() => <AgencyPackagesPage />}</Route>
+                <Route path="/agency/email">{() => <AgencyEmailPage />}</Route>
                 <Route path={SETTINGS_PATHS.root}>{() => <SettingsHub user={user} />}</Route>
                 <Route path={`${SETTINGS_PATHS.root}/*`}>{() => <SettingsHub user={user} />}</Route>
               </>

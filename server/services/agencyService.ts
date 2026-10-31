@@ -6,7 +6,7 @@
  */
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
-import { agencies, agencyAdmins, businessAccounts, users, type Agency } from "@shared/schema";
+import { agencies, agencyAdmins, agencyPackages, businessAccounts, users, type Agency } from "@shared/schema";
 import {
   AGENCY_FEATURE_KEYS,
   computeAgencyStatement,
@@ -123,12 +123,21 @@ export async function listAgencyAccounts(agencyId: string) {
   const ids = accounts.map(a => a.id);
   const logins = ids.length
     ? await db
-        .select({ businessAccountId: users.businessAccountId, username: users.username, lastLoginAt: users.lastLoginAt })
+        .select({ businessAccountId: users.businessAccountId, username: users.username, lastLoginAt: users.lastLoginAt, accountRole: users.accountRole })
         .from(users)
         .where(inArray(users.businessAccountId, ids))
+        .orderBy(users.createdAt)
     : [];
-  const loginOf = new Map(logins.map(l => [l.businessAccountId!, l]));
-  return accounts.map(a => ({ account: a, login: loginOf.get(a.id) ?? null }));
+  // The main login ('owner', else the oldest) and how many logins each account has.
+  const loginOf = new Map<string, (typeof logins)[number]>();
+  const loginCount = new Map<string, number>();
+  for (const l of logins) {
+    const id = l.businessAccountId!;
+    loginCount.set(id, (loginCount.get(id) ?? 0) + 1);
+    const cur = loginOf.get(id);
+    if (!cur || (cur.accountRole !== "owner" && l.accountRole === "owner")) loginOf.set(id, l);
+  }
+  return accounts.map(a => ({ account: a, login: loginOf.get(a.id) ?? null, loginCount: loginCount.get(a.id) ?? 0 }));
 }
 
 /** Feature switches of an account as { key: boolean } for the resellable catalogue. */
@@ -148,6 +157,7 @@ export async function buildAgencyStatement(agency: Agency, month: string): Promi
   const spend = await getMonthSpend(rows.map(r => r.account.id), month);
   return computeAgencyStatement({
     month,
+    creditsEnabled: agency.creditsEnabled,
     billing: resolveAgencyBilling(agency.billing),
     usdToInr: usdInrRate(),
     accounts: rows.map(r => ({
@@ -166,3 +176,17 @@ export function generateTempPassword(): string {
 }
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Most logins a client account may have: its package's number, else the agency's; null = no limit. */
+export async function maxLoginsFor(agency: Agency, packageId: string | null): Promise<number | null> {
+  if (packageId) {
+    const [pkg] = await db.select({ max: agencyPackages.maxLogins }).from(agencyPackages).where(eq(agencyPackages.id, packageId)).limit(1);
+    if (pkg?.max !== null && pkg?.max !== undefined) return pkg.max;
+  }
+  return agency.maxLoginsPerClient;
+}
+
+export async function countAccountLogins(businessAccountId: string): Promise<number> {
+  const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(users).where(eq(users.businessAccountId, businessAccountId));
+  return Number(row?.n ?? 0);
+}

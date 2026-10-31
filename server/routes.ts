@@ -9004,7 +9004,19 @@ If you cannot determine the category or the image doesn't match any category, re
       const { brandForLogin } = await import("./services/agencyBrandService");
       // Agency logins and agency clients see the agency's brand wherever they log in.
       const brand = await brandForLogin({ agencyId: sessionUser.agency?.agencyId, businessAccountId });
-      if (!sessionUser.agency) return { brand };
+      if (!sessionUser.agency) {
+        // An agency client's main login may add colleagues when its agency allows it.
+        let canManageAccountLogins = false;
+        if (brand.isAgency && businessAccountId && user.businessAccountId === businessAccountId) {
+          const acct = await storage.getBusinessAccount(businessAccountId);
+          const { getAgency } = await import("./services/agencyService");
+          const { resolveAgencyPermissions } = await import("@shared/agency");
+          const agency = acct?.agencyId ? await getAgency(acct.agencyId) : null;
+          const main = await storage.getUserByBusinessAccountId(businessAccountId);
+          canManageAccountLogins = !!agency && resolveAgencyPermissions(agency.permissions).clientsManageLogins && main?.id === user.id;
+        }
+        return { brand, canManageAccountLogins };
+      }
       const { getAgencyContextDto } = await import("./services/agencyService");
       return { role: sessionUser.role, agency: await getAgencyContextDto(sessionUser.agency), brand };
     };
@@ -21239,6 +21251,8 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
       const tempPasswordExpiry = new Date();
       tempPasswordExpiry.setDate(tempPasswordExpiry.getDate() + 30);
 
+      // An account that already has a main login gets an extra ('member') login.
+      const hasOwner = !!(await storage.getUserByBusinessAccountId(businessAccountId));
       const user = await storage.createUserWithTempPassword({
         username,
         passwordHash,
@@ -21247,6 +21261,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         mustChangePassword: "true",
         role: "business_user",
         businessAccountId,
+        accountRole: hasOwner ? "member" : "owner",
       });
 
       res.json({
@@ -21410,6 +21425,22 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         expiresAt,
       });
 
+      // Agency people (agency logins and its clients' logins) get the reset link by email in the
+      // agency's name, when the agency has set up its email. Everyone else: not sent yet (logged).
+      {
+        const { getAgencyLogin, getAgency } = await import("./services/agencyService");
+        const agencyId = user.role === "agency_admin"
+          ? (await getAgencyLogin(user.id))?.agency.id ?? null
+          : user.businessAccountId ? (await storage.getBusinessAccount(user.businessAccountId))?.agencyId ?? null : null;
+        const agency = agencyId ? await getAgency(agencyId) : null;
+        if (agency) {
+          const { sendAgencyEmail, passwordResetEmail } = await import("./services/agencyEmailService");
+          const sent = await sendAgencyEmail(agency, passwordResetEmail(agency, { to: user.username, token: resetToken }));
+          if (sent.ok) {
+            return res.json({ success: true, message: "If an account exists with this email, a password reset link has been sent" });
+          }
+        }
+      }
       // TODO: Implement password reset email functionality
       // Password reset tokens are generated and stored, but email sending is not yet implemented
       console.log(`[Password Reset] Token generated for ${user.username}: ${resetToken}`);

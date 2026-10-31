@@ -30,10 +30,17 @@
  * spend of all its client accounts. It works like an account limit: warn/block,
  * the same thresholds recorded once per month (on the agencies row), and when a
  * "block" cap is reached every client account of that agency is refused.
+ *
+ * ── Agency prepaid credits ───────────────────────────────────────────────────
+ * An agency with credits on pays AI use from its top-ups (agency_credit_entries):
+ * balance = top-ups − AI use since credits_started_at (our cost, converted, plus
+ * the agency's markup; shared/agency.ts creditUsage). At zero or below, every
+ * client of the agency is refused, like a reached "block" cap.
  */
 import { and, eq, gte, inArray, lt, or, isNull, ne, sql } from "drizzle-orm";
 import { db } from "../db";
-import { agencies, aiUsageEvents, aiUsageLimits, businessAccounts, type AiUsageLimit } from "@shared/schema";
+import { agencies, agencyCreditEntries, aiUsageEvents, aiUsageLimits, businessAccounts, type AiUsageLimit } from "@shared/schema";
+import { creditUsage, resolveAgencyBilling, type AgencyBilling } from "@shared/agency";
 import { setAiBudgetGuard, type AiBudgetDecision, type AiBudgetGuard } from "../lib/openaiClient";
 import { recordSystemAuditEvent } from "./auditService";
 
@@ -135,6 +142,41 @@ export async function getMonthSpend(accountIds: string[], month: string): Promis
   return out;
 }
 
+/** AI spend (USD) per account since a moment (prepaid credits). */
+export async function getSpendSince(accountIds: string[], since: Date): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (accountIds.length === 0) return out;
+  const rows = await db
+    .select({ id: aiUsageEvents.businessAccountId, cost: sql<string>`coalesce(sum(${aiUsageEvents.costUsd}), 0)` })
+    .from(aiUsageEvents)
+    .where(and(inArray(aiUsageEvents.businessAccountId, accountIds), gte(aiUsageEvents.occurredAt, sql`${pgUtc(since)}::timestamp`)))
+    .groupBy(aiUsageEvents.businessAccountId);
+  for (const r of rows) out.set(r.id, Number(r.cost) || 0);
+  return out;
+}
+
+export interface AgencyCreditStatus {
+  enabled: boolean;
+  /** Top-ups and corrections (agency currency). */
+  added: number;
+  /** AI use taken from credits since they were switched on (agency currency). */
+  used: number;
+  balance: number;
+}
+
+/** Credit balance of an agency, straight from the DB. */
+export async function getAgencyCreditStatus(agencyId: string): Promise<AgencyCreditStatus> {
+  const [agency] = await db.select().from(agencies).where(eq(agencies.id, agencyId)).limit(1);
+  if (!agency?.creditsEnabled) return { enabled: false, added: 0, used: 0, balance: 0 };
+  const [sum] = await db.select({ total: sql<string>`coalesce(sum(${agencyCreditEntries.amount}), 0)` }).from(agencyCreditEntries).where(eq(agencyCreditEntries.agencyId, agencyId));
+  const members = await db.select({ id: businessAccounts.id }).from(businessAccounts).where(eq(businessAccounts.agencyId, agencyId));
+  const spend = await getSpendSince(members.map(m => m.id), agency.creditsStartedAt ?? agency.createdAt);
+  const costUsd = Array.from(spend.values()).reduce((a, b) => a + b, 0);
+  const added = Number(sum?.total ?? 0);
+  const used = creditUsage(costUsd, resolveAgencyBilling(agency.billing), usdInrRate());
+  return { enabled: true, added: Math.round(added * 100) / 100, used: Math.round(used * 100) / 100, balance: Math.round((added - used) * 100) / 100 };
+}
+
 // ── limit CRUD ───────────────────────────────────────────────────────────────
 
 export async function getLimit(businessAccountId: string): Promise<AiUsageLimit | null> {
@@ -216,6 +258,8 @@ export class AiBudgetService implements AiBudgetGuard {
   private agencyCaps = new Map<string, LimitInfo>();
   private agencyOf = new Map<string, string>();
   private agencySpend = new Map<string, { month: string; usd: number }>();
+  /** Agencies with prepaid credits on: their pricing and remaining balance (agency currency). */
+  private agencyCredits = new Map<string, { billing: AgencyBilling; balance: number }>();
   private loadedAt = 0;
   private loading: Promise<void> | null = null;
   private timer: NodeJS.Timeout | null = null;
@@ -279,6 +323,16 @@ export class AiBudgetService implements AiBudgetGuard {
   /** A blocking decision when the account's agency has used up a "block" cap; null otherwise. */
   private decideAgency(businessAccountId: string): AiBudgetDecision | null {
     const agencyId = this.agencyOf.get(businessAccountId);
+    const credits = agencyId ? this.agencyCredits.get(agencyId) : undefined;
+    if (agencyId && credits && credits.balance <= 0) {
+      const key = `credits:${agencyId}`;
+      const last = this.lastBlockLog.get(key) || 0;
+      if (this.now() - last > 60_000) {
+        this.lastBlockLog.set(key, this.now());
+        console.warn(`[AIBudget] Agency ${agencyId} is out of prepaid credits (balance ${credits.balance.toFixed(2)}) — AI calls of its clients refused`);
+      }
+      return { blocked: true, limitUsd: 0, spentUsd: 0 };
+    }
     const cap = agencyId ? this.agencyCaps.get(agencyId) : undefined;
     if (!agencyId || !cap || cap.action !== "block") return null;
     const spentUsd = this.agencyMonthSpend(agencyId);
@@ -290,6 +344,14 @@ export class AiBudgetService implements AiBudgetGuard {
       console.warn(`[AIBudget] Agency AI cap reached for agency ${agencyId} ($${spentUsd.toFixed(2)} / $${cap.monthlyLimitUsd.toFixed(2)}) — AI calls of its clients refused`);
     }
     return { blocked: true, limitUsd: cap.monthlyLimitUsd, spentUsd };
+  }
+
+  /** Cache-only: true when the account's agency has prepaid credits on and none left. */
+  isOutOfCredits(businessAccountId: string | null | undefined): boolean {
+    if (!businessAccountId || !this.loadedAt) return false;
+    const agencyId = this.agencyOf.get(businessAccountId);
+    const credits = agencyId ? this.agencyCredits.get(agencyId) : undefined;
+    return !!credits && credits.balance <= 0;
   }
 
   /** Cache-only: true when the account's agency cap is what stops AI right now. */
@@ -316,13 +378,35 @@ export class AiBudgetService implements AiBudgetGuard {
         for (const r of capRows) {
           agencyCaps.set(r.id, { monthlyLimitUsd: Number(r.cap), warnAtPercent: r.warn, action: r.action === "warn" ? "warn" : "block" });
         }
+        // Agencies with prepaid credits: their top-ups, and the AI use since credits started.
+        const creditRows = await db
+          .select({ id: agencies.id, billing: agencies.billing, startedAt: agencies.creditsStartedAt, createdAt: agencies.createdAt })
+          .from(agencies)
+          .where(eq(agencies.creditsEnabled, true));
+        const watched = Array.from(new Set([...Array.from(agencyCaps.keys()), ...creditRows.map(r => r.id)]));
         const agencyOf = new Map<string, string>();
-        if (agencyCaps.size > 0) {
+        if (watched.length > 0) {
           const members = await db
             .select({ id: businessAccounts.id, agencyId: businessAccounts.agencyId })
             .from(businessAccounts)
-            .where(inArray(businessAccounts.agencyId, Array.from(agencyCaps.keys())));
+            .where(inArray(businessAccounts.agencyId, watched));
           for (const m of members) if (m.agencyId) agencyOf.set(m.id, m.agencyId);
+        }
+        const agencyCredits = new Map<string, { billing: AgencyBilling; balance: number }>();
+        if (creditRows.length > 0) {
+          const sums = await db
+            .select({ agencyId: agencyCreditEntries.agencyId, total: sql<string>`coalesce(sum(${agencyCreditEntries.amount}), 0)` })
+            .from(agencyCreditEntries)
+            .where(inArray(agencyCreditEntries.agencyId, creditRows.map(r => r.id)))
+            .groupBy(agencyCreditEntries.agencyId);
+          const added = new Map(sums.map(r => [r.agencyId, Number(r.total) || 0]));
+          for (const r of creditRows) {
+            const accountIds = Array.from(agencyOf.entries()).filter(([, a]) => a === r.id).map(([id]) => id);
+            const spent = await getSpendSince(accountIds, r.startedAt ?? r.createdAt);
+            const costUsd = Array.from(spent.values()).reduce((a, b) => a + b, 0);
+            const billing = resolveAgencyBilling(r.billing);
+            agencyCredits.set(r.id, { billing, balance: (added.get(r.id) ?? 0) - creditUsage(costUsd, billing, usdInrRate()) });
+          }
         }
         const ids = new Set([...Array.from(limits.keys()), ...Array.from(agencyOf.keys())]);
         const spend = await getMonthSpend(Array.from(ids), month);
@@ -336,6 +420,7 @@ export class AiBudgetService implements AiBudgetGuard {
         this.agencyCaps = agencyCaps;
         this.agencyOf = agencyOf;
         this.agencySpend = agencySpend;
+        this.agencyCredits = agencyCredits;
         this.loadedAt = this.now();
         this.stats.refreshes++;
         for (const id of Array.from(limits.keys())) this.evaluate(id);
@@ -352,6 +437,8 @@ export class AiBudgetService implements AiBudgetGuard {
     if (!(costUsd > 0)) return;
     const month = istMonthKey(this.now());
     const agencyId = this.agencyOf.get(businessAccountId);
+    const credits = agencyId ? this.agencyCredits.get(agencyId) : undefined;
+    if (credits) credits.balance -= creditUsage(costUsd, credits.billing, usdInrRate());
     if (agencyId && this.agencyCaps.has(agencyId)) {
       const cur = this.agencySpend.get(agencyId);
       this.agencySpend.set(agencyId, { month, usd: (cur && cur.month === month ? cur.usd : 0) + costUsd });
@@ -498,6 +585,7 @@ export class AiBudgetService implements AiBudgetGuard {
     this.agencyCaps.clear();
     this.agencyOf.clear();
     this.agencySpend.clear();
+    this.agencyCredits.clear();
     this.notified.clear();
     this.loadedAt = 0;
   }

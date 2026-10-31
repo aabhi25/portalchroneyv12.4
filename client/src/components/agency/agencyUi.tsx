@@ -112,10 +112,12 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 }
 
 /** Shows a new login's temporary password once. */
-export function CredentialsDialog({ credentials, title, onClose }: {
+export function CredentialsDialog({ credentials, title, onClose, email }: {
   credentials: { username: string; tempPassword: string } | null;
   title: string;
   onClose: () => void;
+  /** Result of emailing the login details, when that was asked for. */
+  email?: { ok: boolean; error?: string } | null;
 }) {
   return (
     <Dialog open={!!credentials} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -130,6 +132,9 @@ export function CredentialsDialog({ credentials, title, onClose }: {
           <div className="space-y-2">
             <CopyRow label="Login (email)" value={credentials.username} />
             <CopyRow label="Temporary password" value={credentials.tempPassword} />
+            {email && (email.ok
+              ? <p className="rounded-xl bg-emerald-50 px-3 py-2 text-[13px] text-emerald-800" data-testid="text-email-sent">Login details emailed to {credentials.username}.</p>
+              : <p className="rounded-xl bg-amber-50 px-3 py-2 text-[13px] text-amber-800" data-testid="text-email-failed">The email wasn't sent: {email.error}</p>)}
           </div>
         )}
         <DialogFooter>
