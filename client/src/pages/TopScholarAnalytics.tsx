@@ -185,7 +185,11 @@ interface ScopeOption {
 
 const ALL = "__all__";
 const CUSTOM = "custom";
+const TODAY = "today";
+const YESTERDAY = "yesterday";
 const RANGES: { value: string; label: string; days: number | null }[] = [
+  { value: TODAY, label: "Today", days: null },
+  { value: YESTERDAY, label: "Yesterday", days: null },
   { value: "7", label: "Last 7 days", days: 7 },
   { value: "30", label: "Last 30 days", days: 30 },
   { value: "90", label: "Last 90 days", days: 90 },
@@ -336,6 +340,13 @@ export default function TopScholarAnalytics() {
         // rather than only the midnight instant.
         to: customRange?.to ? endOfDay(customRange.to).toISOString() : undefined,
       };
+    }
+    if (rangeKey === TODAY) {
+      return { from: startOfDay(new Date()).toISOString(), to: undefined };
+    }
+    if (rangeKey === YESTERDAY) {
+      const yesterday = subDays(new Date(), 1);
+      return { from: startOfDay(yesterday).toISOString(), to: endOfDay(yesterday).toISOString() };
     }
     const preset = RANGES.find((r) => r.value === rangeKey);
     return {
@@ -622,7 +633,7 @@ export default function TopScholarAnalytics() {
                     <XAxis dataKey="bucket" tick={{ fontSize: 11 }} tickFormatter={(d) => format(new Date(d), "MMM d")} />
                     <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                     <Tooltip labelFormatter={(d) => format(new Date(d as string), "MMM d, yyyy")} />
-                    <Line type="monotone" dataKey="activeStudents" name="Active students" stroke="#10b981" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="activeStudents" name="Active students" stroke="#10b981" strokeWidth={2} dot={ad.daily.length < 3} />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
@@ -747,8 +758,8 @@ export default function TopScholarAnalytics() {
                 <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                 <Tooltip labelFormatter={(d) => format(new Date(d as string), bucket === "month" ? "MMMM yyyy" : "MMM d, yyyy")} />
                 <Legend />
-                <Line type="monotone" dataKey="questions" name="Doubts" stroke="#6366f1" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="conversations" name="Chat Sessions" stroke="#06b6d4" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="questions" name="Doubts" stroke="#6366f1" strokeWidth={2} dot={trendsQ.data.length < 3} />
+                <Line type="monotone" dataKey="conversations" name="Chat Sessions" stroke="#06b6d4" strokeWidth={2} dot={trendsQ.data.length < 3} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
