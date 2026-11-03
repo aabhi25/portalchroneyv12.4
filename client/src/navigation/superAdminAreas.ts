@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  Building2, Link2, Handshake, Presentation, Sunrise, ClipboardList, Gauge, Bot, Database, Server, ScrollText, UserCog,
+  Building2, Link2, Handshake, Presentation, ReceiptText, Sunrise, ClipboardList, Gauge, Bot, Database, Server, ScrollText, UserCog,
 } from "lucide-react";
 
 /**
@@ -56,6 +56,17 @@ export const SA_AREAS: SaArea[] = [
     tabs: [{ key: "all", label: "All agencies", href: "/super-admin/agencies" }],
     detail: /^\/super-admin\/agencies\/[^/]+/,
     formerly: "Resellers · partners · white label · digital marketing agencies",
+  },
+  {
+    id: "billing", label: "Invoices & billing", kind: "Customers", icon: ReceiptText, tint: "bg-rose-600", group: "Customers",
+    href: "/super-admin/billing",
+    tabs: [
+      { key: "invoices", label: "Invoices", href: "/super-admin/billing" },
+      { key: "schedule", label: "Billing list", href: "/super-admin/billing/schedule" },
+      { key: "company", label: "Our details", href: "/super-admin/billing/company" },
+    ],
+    detail: /^\/super-admin\/billing\/invoices\/[^/]+/,
+    formerly: "Invoice generator · GST invoice · tax invoice · vendor list · billing period · bank details",
   },
   {
     id: "demos", label: "Demo pages", kind: "Customers", icon: Presentation, tint: "bg-amber-500", group: "Customers",
@@ -175,6 +186,11 @@ export type GroupTabKey = typeof GROUP_TABS[number]["key"];
 
 export function groupHref(id: string, tab: GroupTabKey = "overview"): string {
   return tab === "overview" ? `/super-admin/account-groups/${id}` : `/super-admin/account-groups/${id}/${tab}`;
+}
+
+/** One invoice's page: "new" starts one (optionally from a billing-list customer). */
+export function invoiceHref(id: string | "new", customerId?: string): string {
+  return `/super-admin/billing/invoices/${id}${customerId ? `?customer=${customerId}` : ""}`;
 }
 
 /** Tabs on one agency's page (/super-admin/agencies/:id/...). */

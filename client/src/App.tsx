@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 import { Switch, Route, useLocation, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -57,6 +57,12 @@ import SuperAdminToday from "@/pages/SuperAdminToday";
 import SuperAdminGroupPage from "@/pages/SuperAdminGroupPage";
 import SuperAdminAgencies from "@/pages/SuperAdminAgencies";
 import SuperAdminAgencyPage from "@/pages/SuperAdminAgencyPage";
+// Invoices & billing load on first visit (the PDF printing pulls in react-dom/server).
+const BillingInvoices = lazy(() => import("@/pages/billing/InvoicesListPage"));
+const BillingList = lazy(() => import("@/pages/billing/BillingListPage"));
+const BillingCompany = lazy(() => import("@/pages/billing/BillingCompanyPage"));
+const InvoiceEditor = lazy(() => import("@/pages/billing/InvoiceEditorPage"));
+const billingPage = (page: ReactNode) => <Suspense fallback={<p className="text-sm text-gray-500">Loading…</p>}>{page}</Suspense>;
 import { AgencyClientsPage, AgencyClientPage, AgencyStatementPage, AgencyTeamPage, AgencyBrandPage, AgencyPackagesPage, AgencyEmailPage } from "@/pages/agency/AgencyPortal";
 import { AgencyViewingBanner } from "@/components/agency/AgencyViewingBanner";
 import { setBrand, useBrand } from "@/lib/brand";
@@ -283,6 +289,10 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/super-admin/account-groups/:groupId/:tab?">{({ groupId, tab }) => <SuperAdminGroupPage key={groupId} groupId={groupId} tab={tab} />}</Route>
                 <Route path="/super-admin/agencies">{() => <SuperAdminAgencies />}</Route>
                 <Route path="/super-admin/agencies/:agencyId/:tab?">{({ agencyId, tab }) => <SuperAdminAgencyPage key={agencyId} agencyId={agencyId} tab={tab} />}</Route>
+                <Route path="/super-admin/billing">{() => billingPage(<BillingInvoices />)}</Route>
+                <Route path="/super-admin/billing/schedule">{() => billingPage(<BillingList />)}</Route>
+                <Route path="/super-admin/billing/company">{() => billingPage(<BillingCompany />)}</Route>
+                <Route path="/super-admin/billing/invoices/:invoiceId">{({ invoiceId }) => billingPage(<InvoiceEditor key={invoiceId} invoiceId={invoiceId} />)}</Route>
                 <Route path="/super-admin/settings">{() => <SuperAdminSettings section="account" />}</Route>
                 <Route path="/super-admin/backups">{() => <SuperAdminSettings section="backups" />}</Route>
                 <Route path="/super-admin/backups/download">{() => <SuperAdminSettings section="download" />}</Route>

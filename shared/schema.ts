@@ -271,6 +271,77 @@ export type AgencyCreditEntry = typeof agencyCreditEntries.$inferSelect;
 export type Agency = typeof agencies.$inferSelect;
 export type AgencyAdmin = typeof agencyAdmins.$inferSelect;
 
+// Invoices we raise (super admin › Billing). See shared/invoice.ts for the settings shapes and sums.
+// Our own company details ("Billed by"); there can be more than one (e.g. AI Chroney and Knightlabs).
+export const invoiceSellers = pgTable("invoice_sellers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  label: text("label").notNull(), // name in the picker, e.g. "Knightlabs AI LLP"
+  settings: jsonb("settings").$type<Record<string, unknown>>().notNull().default({}), // InvoiceSellerSettings
+  logoData: text("logo_data"), // data: URL (PNG/JPEG/WebP/SVG, small)
+  isDefault: boolean("is_default").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// The billing list: who we bill, how often and from when, with the lines to start each invoice from.
+export const billingCustomers = pgTable("billing_customers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").references(() => businessAccounts.id, { onDelete: "set null" }), // null = not a Chroney account
+  sellerId: varchar("seller_id").references(() => invoiceSellers.id, { onDelete: "set null" }),
+  code: text("code").notNull().default(""), // short code for invoice numbers, e.g. "J"
+  billedTo: jsonb("billed_to").$type<Record<string, unknown>>().notNull().default({}), // InvoiceParty
+  cycle: text("cycle").notNull().default("monthly"), // BillingCycle
+  startDate: date("start_date").notNull(), // first day of the first billing period
+  timing: text("timing").notNull().default("after"), // 'after' (bill once the period ends) | 'before' (in advance)
+  raiseAfterDays: integer("raise_after_days").notNull().default(1),
+  dueDays: integer("due_days"), // null = the seller's default
+  currency: text("currency"), // null = the seller's default
+  lines: jsonb("lines").$type<Record<string, unknown>[]>().notNull().default([]), // InvoiceLine[] to start from
+  notes: text("notes"), // null = the seller's default
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  index("billing_customers_account_idx").on(table.businessAccountId),
+]);
+
+// One invoice, with its own copy of the seller and customer details (later edits never change it).
+export const invoices = pgTable("invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  number: text("number").notNull(),
+  status: text("status").notNull().default("draft"), // InvoiceStatus
+  sellerId: varchar("seller_id").references(() => invoiceSellers.id, { onDelete: "set null" }),
+  customerId: varchar("customer_id").references(() => billingCustomers.id, { onDelete: "set null" }),
+  businessAccountId: varchar("business_account_id").references(() => businessAccounts.id, { onDelete: "set null" }),
+  invoiceDate: date("invoice_date").notNull(),
+  dueDate: date("due_date"),
+  periodStart: date("period_start"),
+  periodEnd: date("period_end"),
+  currency: text("currency").notNull().default("INR"),
+  seller: jsonb("seller").$type<Record<string, unknown>>().notNull().default({}), // { party, bank, logoData }
+  billedTo: jsonb("billed_to").$type<Record<string, unknown>>().notNull().default({}), // InvoiceParty
+  placeOfSupply: text("place_of_supply").notNull().default(""),
+  countryOfSupply: text("country_of_supply").notNull().default("India"),
+  lines: jsonb("lines").$type<Record<string, unknown>[]>().notNull().default([]), // InvoiceLine[]
+  options: jsonb("options").$type<Record<string, unknown>>().notNull().default({}), // InvoiceOptions
+  notes: text("notes").notNull().default(""),
+  terms: text("terms").notNull().default(""),
+  amount: numeric("amount", { precision: 14, scale: 2 }).notNull().default("0"), // before tax
+  tax: numeric("tax", { precision: 14, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 14, scale: 2 }).notNull().default("0"),
+  paidAt: timestamp("paid_at"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  index("invoices_customer_idx").on(table.customerId),
+  index("invoices_date_idx").on(table.invoiceDate),
+]);
+
+export type InvoiceSeller = typeof invoiceSellers.$inferSelect;
+export type BillingCustomer = typeof billingCustomers.$inferSelect;
+export type Invoice = typeof invoices.$inferSelect;
+
 // Users table with roles and business account association.
 // A business account has one main login (account_role 'owner') and may have more ('member').
 export const users = pgTable("users", {
