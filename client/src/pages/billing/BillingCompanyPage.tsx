@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Panel } from "@/components/agency/agencyUi";
 import { BankFields, CurrencySelect, Field, PartyFields } from "@/components/billing/billingUi";
+import { ReadInvoiceButton } from "@/components/billing/ReadInvoiceDialog";
 import {
   INVOICE_NUMBER_TOKENS, nextInvoiceNumber, todayIst, type InvoiceOptions, type InvoiceSellerSettings,
 } from "@shared/invoice";
@@ -143,6 +144,21 @@ function SellerForm({ seller, onDeleted }: { seller: SellerDto; onDeleted: () =>
         subtitle='Shown on every new invoice as "Billed by". Invoices already made keep the details they were made with.'
         actions={(
           <>
+            <ReadInvoiceButton
+              label="Fill from one of our invoices"
+              sections={["seller"]}
+              onApply={r => {
+                // The company, bank, currency and terms; not the notes, which belong to that one invoice.
+                setS(prev => ({
+                  ...prev,
+                  party: r.seller.name ? r.seller : prev.party,
+                  bank: r.bank.accountNumber || r.bank.bankName ? r.bank : prev.bank,
+                  currency: r.currency ?? prev.currency,
+                  terms: r.terms || prev.terms,
+                }));
+                toast({ title: "Filled in from the invoice", description: "Check the details, then press Save details. The logo isn't copied: upload it separately." });
+              }}
+            />
             {!seller.isDefault && <Button type="button" variant="outline" size="sm" onClick={() => save.mutate({ isDefault: true })}><Star className="mr-1 h-4 w-4" />Use by default</Button>}
             <Button type="button" variant="ghost" size="sm" className="text-red-600" onClick={() => setConfirmDelete(true)}><Trash2 className="mr-1 h-4 w-4" />Delete</Button>
           </>

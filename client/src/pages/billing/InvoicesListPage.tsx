@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Download, MoreHorizontal, Plus, Search } from "lucide-react";
+import { Download, MoreHorizontal, Plus, Search, Sparkles } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -75,7 +75,12 @@ export default function InvoicesListPage() {
 
   return (
     <Panel
-      actions={<Button onClick={() => setLocation(invoiceHref("new"))} data-testid="button-new-invoice"><Plus className="mr-1 h-4 w-4" />New invoice</Button>}
+      actions={(
+        <>
+          <Button variant="outline" onClick={() => setLocation(`${invoiceHref("new")}?read=1`)} data-testid="button-read-invoice-list"><Sparkles className="mr-1 h-4 w-4" />Read an invoice PDF</Button>
+          <Button onClick={() => setLocation(invoiceHref("new"))} data-testid="button-new-invoice"><Plus className="mr-1 h-4 w-4" />New invoice</Button>
+        </>
+      )}
       title="Invoices"
       subtitle="Every invoice made here. Open one to change it, or download it as a PDF."
     >

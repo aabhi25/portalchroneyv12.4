@@ -27,6 +27,7 @@ import {
 } from "@shared/invoice";
 import { requireAuth, requireRole } from "../auth";
 import { recordAuditEventSafely } from "../services/auditService";
+import { InvoiceReadError, readInvoiceFile } from "../services/invoiceReaderService";
 
 /**
  * Invoices we raise, for super admins only (super admin › Billing):
@@ -270,6 +271,24 @@ router.delete("/api/super-admin/billing/customers/:id", ...superAdmin, async (re
     await recordAuditEventSafely(req, { action: "billing.customer_deleted", outcome: "success", resourceType: "billing_customer", resourceId: c.id });
     res.json({ deleted: true });
   } catch (error) { fail(res, "customer delete", error, "Failed to delete"); }
+});
+
+// ── reading an existing invoice with AI ──────────────────────────────────────
+
+/** Reads an uploaded invoice (PDF or photo) and returns what it found; nothing is saved. */
+router.post("/api/super-admin/billing/read-invoice", ...superAdmin, async (req, res) => {
+  try {
+    const file = typeof req.body?.file === "string" ? req.body.file : "";
+    const result = await readInvoiceFile(file);
+    await recordAuditEventSafely(req, {
+      action: "billing.invoice_read", outcome: "success", resourceType: "invoice",
+      metadata: { name: String(req.body?.name ?? "").slice(0, 120), number: result.number, lines: result.lines.length },
+    });
+    res.json({ result });
+  } catch (error) {
+    if (error instanceof InvoiceReadError) return res.status(error.status).json({ error: error.message });
+    fail(res, "read invoice", error, "Couldn't read the invoice. Please try again.");
+  }
 });
 
 // ── invoices ─────────────────────────────────────────────────────────────────

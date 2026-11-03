@@ -553,3 +553,65 @@ export function blankInvoice(sellerId: string | null, s: InvoiceSellerSettings, 
     options: { ...s.options }, notes: s.notes, terms: s.terms,
   };
 }
+
+// ── reading an existing invoice (PDF or photo) with AI ───────────────────────
+
+/** What the AI read from an uploaded invoice, already cleaned; the pages choose what to apply. */
+export interface InvoiceReadResult {
+  number: string;
+  invoiceDate: string | null;
+  dueDate: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  currency: string | null;
+  /** The company that issued it ("Billed by", "From", the vendor). */
+  seller: InvoiceParty;
+  bank: InvoiceBank;
+  billedTo: InvoiceParty;
+  placeOfSupply: string;
+  countryOfSupply: string;
+  taxMode: InvoiceTaxMode;
+  taxLabels: [string, string];
+  lines: InvoiceLine[];
+  notes: string;
+  terms: string;
+  /** The grand total printed on it, to check the lines against. */
+  printedTotal: number | null;
+  /** Plain checks for the person to glance at (e.g. "Lines add up to the printed total"). */
+  checks: { ok: boolean; text: string }[];
+}
+
+export type InvoiceReadSection = "seller" | "billedTo" | "details" | "lines" | "notes";
+
+export const INVOICE_READ_SECTIONS: { key: InvoiceReadSection; label: string }[] = [
+  { key: "seller", label: "Billed by and bank details" },
+  { key: "billedTo", label: "Billed to" },
+  { key: "details", label: "Number, dates, period, currency and tax" },
+  { key: "lines", label: "Lines" },
+  { key: "notes", label: "Notes and terms" },
+];
+
+const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/;
+const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+
+/** Checks a read invoice: do the lines add up, do the GSTIN and IFSC look right. */
+export function invoiceReadChecks(r: Omit<InvoiceReadResult, "checks">): { ok: boolean; text: string }[] {
+  const out: { ok: boolean; text: string }[] = [];
+  const code = r.currency ?? "INR";
+  if (r.lines.length && r.printedTotal !== null) {
+    const t = computeInvoiceTotals(r.lines, r.taxMode).total;
+    const diff = Math.abs(t - r.printedTotal);
+    out.push(diff <= 1
+      ? { ok: true, text: `The lines add up to the total printed on it (${formatInvoiceMoney(r.printedTotal, code)}).` }
+      : { ok: false, text: `The lines add up to ${formatInvoiceMoney(t, code)}, but the total printed on it is ${formatInvoiceMoney(r.printedTotal, code)}. Check the lines and tax.` });
+  } else if (!r.lines.length) {
+    out.push({ ok: false, text: "No lines were found." });
+  }
+  for (const [who, p] of [["Billed by", r.seller], ["Billed to", r.billedTo]] as const) {
+    if (p.gstin && !GSTIN_RE.test(p.gstin)) out.push({ ok: false, text: `${who} GSTIN "${p.gstin}" doesn't look like a valid GSTIN.` });
+  }
+  if (r.bank.ifsc && !IFSC_RE.test(r.bank.ifsc)) out.push({ ok: false, text: `IFSC "${r.bank.ifsc}" doesn't look right.` });
+  if (!r.seller.name) out.push({ ok: false, text: "The company that issued it wasn't found." });
+  if (!r.billedTo.name) out.push({ ok: false, text: "Who it's billed to wasn't found." });
+  return out;
+}

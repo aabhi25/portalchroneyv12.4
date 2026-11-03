@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Panel, Stat } from "@/components/agency/agencyUi";
 import { CurrencySelect, Field, InvoiceStatusPill, LinesEditor, PartyFields, blankLine } from "@/components/billing/billingUi";
 import { invoiceHref } from "@/navigation/superAdminAreas";
+import { ReadInvoiceButton } from "@/components/billing/ReadInvoiceDialog";
 import { SELLERS_KEY, type SellerDto } from "@/pages/billing/BillingCompanyPage";
 import {
   BILLING_CYCLES, emptyParty, formatInvoiceDate, formatInvoiceMoney, formatPeriod, todayIst,
@@ -200,6 +201,17 @@ function CustomerDialog({ customer, onClose }: { customer: BillingCustomerDto | 
           <DialogDescription>Who we bill, how often and from when. Invoices copy these details, and each can still be changed.</DialogDescription>
         </DialogHeader>
         <form className="space-y-5" onSubmit={e => { e.preventDefault(); save.mutate(); }}>
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-violet-50/60 px-3 py-2">
+            <p className="text-[13px] text-gray-700">Have an invoice for this customer? Let AI fill in their details and usual lines.</p>
+            <ReadInvoiceButton
+              sections={["billedTo", "lines"]}
+              onApply={(r, chosen) => setF(prev => ({
+                ...prev,
+                ...(chosen.has("billedTo") && r.billedTo.name ? { billedTo: r.billedTo } : {}),
+                ...(chosen.has("lines") && r.lines.length ? { lines: r.lines, currency: r.currency ?? prev.currency } : {}),
+              }))}
+            />
+          </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <Field label="Chroney account (optional)" className="sm:col-span-2" hint="Fills in the name; leave empty for anyone else.">
               <SearchableSelect

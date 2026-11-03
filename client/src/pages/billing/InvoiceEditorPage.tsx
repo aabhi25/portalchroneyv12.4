@@ -16,13 +16,14 @@ import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { Panel } from "@/components/agency/agencyUi";
 import { CurrencySelect, Field, InvoiceStatusPill, LinesEditor, PartyFields } from "@/components/billing/billingUi";
 import { InvoiceDocument, printInvoice } from "@/components/billing/InvoiceDocument";
+import { ReadInvoiceButton } from "@/components/billing/ReadInvoiceDialog";
 import { invoiceHref } from "@/navigation/superAdminAreas";
 import { SELLERS_KEY, type SellerDto } from "@/pages/billing/BillingCompanyPage";
 import { CUSTOMERS_KEY, type BillingCustomerDto } from "@/pages/billing/BillingListPage";
 import { INVOICES_KEY } from "@/pages/billing/InvoicesListPage";
 import {
   INVOICE_STATUSES, INVOICE_STATUS_LABEL, addDays, computeInvoiceTotals, formatInvoiceMoney, placeOfSupplyFor, suggestTaxMode,
-  type InvoiceDto, type InvoiceOptions, type InvoiceStatus, type InvoiceTaxMode,
+  type InvoiceDto, type InvoiceOptions, type InvoiceReadResult, type InvoiceReadSection, type InvoiceStatus, type InvoiceTaxMode,
 } from "@shared/invoice";
 
 const TAX_CHOICES: { key: string; label: string; mode: InvoiceTaxMode; labels: [string, string] }[] = [
@@ -43,6 +44,7 @@ export default function InvoiceEditorPage({ invoiceId }: { invoiceId: string }) 
   const isNew = invoiceId === "new";
   const search = useSearch();
   const customerParam = new URLSearchParams(search).get("customer");
+  const openReader = new URLSearchParams(search).get("read") === "1";
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -109,6 +111,50 @@ export default function InvoiceEditorPage({ invoiceId }: { invoiceId: string }) 
 
   const dirty = !!inv && JSON.stringify(inv) !== saved;
   const sellers = sellersData?.sellers ?? [];
+
+  /** Fills the form from an invoice the AI read; matches our saved companies and billing-list customers. */
+  const applyRead = (r: InvoiceReadResult, chosen: Set<InvoiceReadSection>) => {
+    const same = (a: { gstin: string; name: string }, b: { gstin: string; name: string }) =>
+      (!!a.gstin && a.gstin === b.gstin) || (!!a.name.trim() && a.name.trim().toLowerCase() === b.name.trim().toLowerCase());
+    const ourCompany = chosen.has("seller") ? sellers.find(s => same(s.settings.party, r.seller)) : undefined;
+    const customer = chosen.has("billedTo") ? (customersData?.customers ?? []).find(c => same(c.billedTo, r.billedTo)) : undefined;
+    setInv(prev => {
+      if (!prev) return prev;
+      const next: InvoiceDto = { ...prev, options: { ...prev.options } };
+      if (chosen.has("seller")) {
+        if (ourCompany) {
+          next.sellerId = ourCompany.id;
+          next.seller = { party: ourCompany.settings.party, bank: ourCompany.settings.bank, logoData: ourCompany.logoData };
+        } else {
+          next.seller = { ...prev.seller, party: r.seller, bank: r.bank };
+        }
+      }
+      if (chosen.has("billedTo")) {
+        next.billedTo = r.billedTo;
+        if (customer) { next.customerId = customer.id; next.businessAccountId = customer.businessAccountId ?? prev.businessAccountId; }
+      }
+      if (chosen.has("details")) {
+        if (r.number) next.number = r.number;
+        if (r.invoiceDate) next.invoiceDate = r.invoiceDate;
+        if (r.dueDate) next.dueDate = r.dueDate;
+        if (r.periodStart) next.periodStart = r.periodStart;
+        if (r.periodEnd) next.periodEnd = r.periodEnd;
+        if (r.currency) next.currency = r.currency;
+        if (r.placeOfSupply) next.placeOfSupply = r.placeOfSupply;
+        if (r.countryOfSupply) next.countryOfSupply = r.countryOfSupply;
+        next.options.taxMode = r.taxMode;
+        next.options.taxLabels = r.taxLabels;
+      }
+      if (chosen.has("lines") && r.lines.length) next.lines = r.lines;
+      if (chosen.has("notes")) {
+        if (r.notes) next.notes = r.notes;
+        if (r.terms) next.terms = r.terms;
+      }
+      return next;
+    });
+    const matched = [ourCompany && `Billed by: your saved "${ourCompany.label}"`, customer && `Billed to: "${customer.billedTo.name}" from the billing list`].filter(Boolean);
+    toast({ title: "Filled in from the invoice", description: [...matched, "Check the details, then save."].join(". ") });
+  };
   const totals = inv ? computeInvoiceTotals(inv.lines, inv.options.taxMode, inv.options.roundTotal) : null;
 
   return (
@@ -128,6 +174,7 @@ export default function InvoiceEditorPage({ invoiceId }: { invoiceId: string }) 
         back={{ label: "Invoices", href: "/super-admin/billing" }}
         actions={inv ? (
           <>
+            <ReadInvoiceButton sections={["seller", "billedTo", "details", "lines", "notes"]} onApply={applyRead} startOpen={isNew && openReader} />
             <Button variant="outline" onClick={() => printInvoice(inv)} data-testid="button-download-pdf"><Download className="mr-1 h-4 w-4" />Download PDF</Button>
             <Button onClick={() => save.mutate(inv)} disabled={save.isPending || (!dirty && !isNew)} data-testid="button-save-invoice">{save.isPending ? "Saving…" : isNew ? "Save invoice" : "Save changes"}</Button>
             {!isNew && (
