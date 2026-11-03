@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Download, MoreHorizontal, Plus, Search, Sparkles } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -39,7 +39,9 @@ export default function InvoicesListPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { data, isLoading } = useQuery<{ today: string; invoices: InvoiceRow[] }>({ queryKey: INVOICES_KEY });
-  const [q, setQ] = useState("");
+  const search = useSearch();
+  // ?q= comes from Revenue › By customer.
+  const [q, setQ] = useState(() => new URLSearchParams(search).get("q") ?? "");
   const [filter, setFilter] = useState<InvoiceStatus | "all" | "unpaid">("all");
 
   const setStatus = useMutation({

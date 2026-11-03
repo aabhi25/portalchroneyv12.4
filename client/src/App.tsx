@@ -61,6 +61,7 @@ import SuperAdminAgencyPage from "@/pages/SuperAdminAgencyPage";
 const BillingInvoices = lazy(() => import("@/pages/billing/InvoicesListPage"));
 const BillingList = lazy(() => import("@/pages/billing/BillingListPage"));
 const BillingCompany = lazy(() => import("@/pages/billing/BillingCompanyPage"));
+const BillingRevenue = lazy(() => import("@/pages/billing/RevenuePage"));
 const InvoiceEditor = lazy(() => import("@/pages/billing/InvoiceEditorPage"));
 const billingPage = (page: ReactNode) => <Suspense fallback={<p className="text-sm text-gray-500">Loading…</p>}>{page}</Suspense>;
 import { AgencyClientsPage, AgencyClientPage, AgencyStatementPage, AgencyTeamPage, AgencyBrandPage, AgencyPackagesPage, AgencyEmailPage } from "@/pages/agency/AgencyPortal";
@@ -291,6 +292,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/super-admin/agencies/:agencyId/:tab?">{({ agencyId, tab }) => <SuperAdminAgencyPage key={agencyId} agencyId={agencyId} tab={tab} />}</Route>
                 <Route path="/super-admin/billing">{() => billingPage(<BillingInvoices />)}</Route>
                 <Route path="/super-admin/billing/schedule">{() => billingPage(<BillingList />)}</Route>
+                <Route path="/super-admin/billing/revenue">{() => billingPage(<BillingRevenue />)}</Route>
                 <Route path="/super-admin/billing/company">{() => billingPage(<BillingCompany />)}</Route>
                 <Route path="/super-admin/billing/invoices/:invoiceId">{({ invoiceId }) => billingPage(<InvoiceEditor key={invoiceId} invoiceId={invoiceId} />)}</Route>
                 <Route path="/super-admin/settings">{() => <SuperAdminSettings section="account" />}</Route>

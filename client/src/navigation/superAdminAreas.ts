@@ -63,10 +63,11 @@ export const SA_AREAS: SaArea[] = [
     tabs: [
       { key: "invoices", label: "Invoices", href: "/super-admin/billing" },
       { key: "schedule", label: "Billing list", href: "/super-admin/billing/schedule" },
+      { key: "revenue", label: "Revenue", href: "/super-admin/billing/revenue" },
       { key: "company", label: "Our details", href: "/super-admin/billing/company" },
     ],
     detail: /^\/super-admin\/billing\/invoices\/[^/]+/,
-    formerly: "Invoice generator · GST invoice · tax invoice · vendor list · billing period · bank details",
+    formerly: "Invoice generator · GST invoice · tax invoice · vendor list · billing period · bank details · revenue · monthly revenue · yearly revenue",
   },
   {
     id: "demos", label: "Demo pages", kind: "Customers", icon: Presentation, tint: "bg-amber-500", group: "Customers",
