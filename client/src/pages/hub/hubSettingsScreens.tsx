@@ -33,6 +33,7 @@ const SCREENS: Partial<Record<`${HubAreaId}/${string}`, (user: MeResponseDto | n
   "website/behaviour": widget("behavior"),
   "website/shopping": widget("shopping"),
   "website/nudges": widget("nudges"),
+  "website/message-nudges": widget("message-nudges"),
   "website/install": widget("embed"),
   "website/lead-capture": () => <TrainChroney only="lead-training" />,
   "website/verification": () => <OtpSettings embedded />,

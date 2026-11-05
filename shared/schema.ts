@@ -947,6 +947,8 @@ export const widgetSettings = pgTable("widget_settings", {
   proactiveNudgeBgColor: text("proactive_nudge_bg_color").notNull().default("#ffffff"),
   proactiveNudgeBgColorEnd: text("proactive_nudge_bg_color_end").notNull().default("#ffffff"),
   proactiveNudgeTextColor: text("proactive_nudge_text_color").notNull().default("#1f2937"),
+  messageNudgeEnabled: text("message_nudge_enabled").notNull().default("false"), // 'true' | 'false' - Message nudges: bubbles above the chat button that continue as the chat's first messages
+  messageNudgeItems: jsonb("message_nudge_items"), // Always 3 slots: [{message: string, delay: number}] - delay is seconds after the previous message (see shared/messageNudges.ts)
   
   // Center Banner settings - personalized popup that opens in center of screen
   centerBannerEnabled: text("center_banner_enabled").notNull().default("false"), // 'true' | 'false' - Enable/disable center banner

@@ -1,0 +1,2 @@
+ALTER TABLE "widget_settings" ADD COLUMN IF NOT EXISTS "message_nudge_enabled" text DEFAULT 'false' NOT NULL;--> statement-breakpoint
+ALTER TABLE "widget_settings" ADD COLUMN IF NOT EXISTS "message_nudge_items" jsonb;

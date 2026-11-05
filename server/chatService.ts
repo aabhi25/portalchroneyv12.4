@@ -1,3 +1,4 @@
+import { saveShownMessageNudges } from "./services/messageNudgeService";
 import OpenAI from 'openai';
 import { llamaService, LlamaService, contactInfoSaidInChat, type StreamPromptOptions, type StreamTurnOptions } from './llamaService';
 import { aiTools, selectRelevantTools, classifyOrderLookupIntent, classifyReturnExchangeIntent } from './aiTools';
@@ -87,6 +88,8 @@ export interface ChatContext {
    * instead of resolving or creating another conversation.
    */
   existingConversationId?: string;
+  /** Which message nudges the visitor saw before this first reply (numbers only; see saveShownMessageNudges). */
+  shownMessageNudges?: unknown;
   personality?: string;
   responseLength?: string;
   companyDescription?: string;
@@ -3413,7 +3416,8 @@ Response:`;
       // SPEED: the AI check (one LLM round trip) only runs when cheap local heuristics flag the
       // message (links, keyboard mashing, no vowels, repeated characters, symbols, test inputs…);
       // ordinary greetings and questions skip it — the AI answers "OK" for those anyway.
-      const spamEligible = isFirstMessage && !!context.openaiApiKey && !userMessage.startsWith('[RESUME_UPLOAD]') && !userMessage.startsWith('[JOB_APPLY]') && !userMessage.startsWith('[IMAGE_UPLOAD]') && !context.resumeText && !context.imageText;
+      const repliesToMessageNudge = Array.isArray(context.shownMessageNudges) && context.shownMessageNudges.length > 0;
+      const spamEligible = isFirstMessage && !repliesToMessageNudge && !!context.openaiApiKey && !userMessage.startsWith('[RESUME_UPLOAD]') && !userMessage.startsWith('[JOB_APPLY]') && !userMessage.startsWith('[IMAGE_UPLOAD]') && !context.resumeText && !context.imageText;
       const spamFlag = spamEligible ? (smallTalkKind(userMessage) ? null : spamCheckReason(userMessage)) : null;
       if (!spamEligible) timing.stage('spam', 'n/a');
       else if (!spamFlag) timing.stage('spam', 'skipped');
@@ -3447,6 +3451,12 @@ Response:`;
       // Memory must hold THIS conversation's history (reload from the DB when needed).
       await this.ensureHistoryLoaded(context.userId, conversationId);
       timing.stage('history', (historyResumed - historyStarted) + (Date.now() - historyResumed));
+
+      // The message nudges the visitor saw open this chat: saved before the reply, and the AI reads them.
+      if (repliesToMessageNudge && isFirstMessage) {
+        const nudgeTexts = await saveShownMessageNudges(context.businessAccountId, conversationId, context.shownMessageNudges);
+        for (const text of nudgeTexts) conversationMemory.storeMessage(context.userId, 'assistant', text);
+      }
 
       // Yield conversationId first so client can store it for persistence
       yield { type: 'conversation_id' as const, data: conversationId };

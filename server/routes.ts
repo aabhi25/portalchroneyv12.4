@@ -119,6 +119,8 @@ import { registerCampaignInsightsRoutes } from "./routes/campaignInsights";
 import { registerCampaignSendRoutes } from "./routes/campaignSend";
 import { replyLanguage as replyLanguageInfo, replyLanguageName } from "@shared/replyLanguages";
 import { getLanguagePolicy } from "./services/language/languagePolicy";
+import { normalizeMessageNudgeItems } from "@shared/messageNudges";
+import { saveShownMessageNudges } from "./services/messageNudgeService";
 import { decideChatReplyLanguage, greetingLanguages, localizeFixedText, pickAllowed, publicReplyLanguages, websiteReplyLanguage } from "./services/language/chatLanguage";
 import { avatarSessionManager } from "./services/avatar/sessionManager";
 import { getPublicAvatarConfig } from "./services/avatar/settingsService";
@@ -1883,6 +1885,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       let streamedConversationId: string | null = null;
       for await (const chunk of chatService.streamMessage(message, {
         existingConversationId: widgetExistingConversationId,
+        shownMessageNudges: req.body.shownMessageNudges,
         userId: widgetUserId,
         businessAccountId,
         personality,
@@ -4798,34 +4801,6 @@ Return JSON:
 
     } catch (error: any) {
       console.error('[SmartNudge] Error:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Save nudge message to conversation history
-  app.post("/api/chat/widget/save-nudge", async (req, res) => {
-    try {
-      const { conversationId, message } = req.body;
-      
-      if (!conversationId || !message) {
-        return res.status(400).json({ error: "conversationId and message required" });
-      }
-      
-      // Save the nudge as an assistant message
-      await storage.createMessage({
-        conversationId,
-        role: 'assistant',
-        content: message
-      });
-      
-      // Update conversation timestamp
-      await storage.updateConversationTimestamp(conversationId);
-      
-      console.log(`[SaveNudge] Saved nudge to conversation ${conversationId}`);
-      
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error('[SaveNudge] Error:', error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -16505,6 +16480,9 @@ Important:
         return res.status(400).json({ error: 'Missing conversationId or journeyId' });
       }
 
+      // Message nudges the visitor saw come before their first answer in the chat history.
+      await saveShownMessageNudges(businessAccountId, activeConversationId, req.body.shownMessageNudges);
+
       // The form the visitor is answering must be the one in progress for this chat: none in
       // progress (or lost by a restart: it is loaded back from the database) → start it; another
       // form in progress (a different one started from the menu) → that one is abandoned.
@@ -27390,6 +27368,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         inactivityNudgeEnabled, inactivityNudgeDelay, inactivityNudgeMessage, inactivityNudgeMessages, smartNudgeEnabled,
         proactiveNudgeEnabled, proactiveNudgeDelay, proactiveNudgeMessage, proactiveNudgeMessages, proactiveNudgeRepeat,
         proactiveNudgeBgColor, proactiveNudgeBgColorEnd, proactiveNudgeTextColor,
+        messageNudgeEnabled, messageNudgeItems,
         centerBannerEnabled, centerBannerDelay, centerBannerTitle, centerBannerDescription,
         centerBannerButtonText, centerBannerShowOnce, centerBannerBackgroundStyle,
         centerBannerStartColor, centerBannerEndColor, centerBannerTextColor, centerBannerImageUrl,
@@ -27443,6 +27422,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         proactiveNudgeEnabled: string; proactiveNudgeDelay: string; proactiveNudgeMessage: string;
         proactiveNudgeMessages: { message: string; delay: number }[]; proactiveNudgeRepeat: string;
         proactiveNudgeBgColor: string; proactiveNudgeBgColorEnd: string; proactiveNudgeTextColor: string;
+        messageNudgeEnabled: string; messageNudgeItems: { message: string; delay: number }[];
         centerBannerEnabled: string; centerBannerDelay: string; centerBannerTitle: string;
         centerBannerDescription: string; centerBannerButtonText: string; centerBannerShowOnce: string;
         centerBannerBackgroundStyle: string; centerBannerStartColor: string; centerBannerEndColor: string;
@@ -27536,6 +27516,8 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       if (proactiveNudgeBgColor !== undefined) updateData.proactiveNudgeBgColor = proactiveNudgeBgColor;
       if (proactiveNudgeBgColorEnd !== undefined) updateData.proactiveNudgeBgColorEnd = proactiveNudgeBgColorEnd;
       if (proactiveNudgeTextColor !== undefined) updateData.proactiveNudgeTextColor = proactiveNudgeTextColor;
+      if (messageNudgeEnabled !== undefined) updateData.messageNudgeEnabled = messageNudgeEnabled === "true" ? "true" : "false";
+      if (messageNudgeItems !== undefined) updateData.messageNudgeItems = normalizeMessageNudgeItems(messageNudgeItems);
       
       // Center Banner settings
       if (centerBannerEnabled !== undefined) updateData.centerBannerEnabled = centerBannerEnabled;

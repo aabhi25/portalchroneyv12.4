@@ -1,3 +1,4 @@
+import { shownMessageNudges } from "@shared/messageNudges";
 import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, GitCompare, Briefcase, Lock, Video, GraduationCap, Undo2, Globe, ChevronRight, Check } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -173,6 +174,10 @@ interface ChatMessage {
   timestamp: Date;
   /** "Still there?" nudge: shown as a soft line, never saved or sent to the AI. */
   isNudge?: boolean;
+  /** A message nudge the visitor saw on the website (its number in the settings), not saved until they reply. */
+  messageNudgeIndex?: number;
+  /** The greeting is a start-up journey's first question, so it stays after message nudges. */
+  isStartupQuestion?: boolean;
   products?: any[];
   productPagination?: ProductPagination;
   productSearchQuery?: string;
@@ -234,6 +239,8 @@ interface WidgetSettings {
   proactiveNudgeEnabled?: string;
   proactiveNudgeDelay?: string;
   proactiveNudgeMessage?: string;
+  messageNudgeEnabled?: string;
+  messageNudgeItems?: { message: string; delay: number }[];
   languageSelectorEnabled?: string;
   availableLanguages?: string;
   /** Reply languages the business allows (Train Chroney → Language). null = any language. */
@@ -660,6 +667,7 @@ export default function EmbedChat() {
   const [conversationsList, setConversationsList] = useState<Array<{id: string; title: string; updatedAt: string; messageCount: number}>>([]);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
   const [activeFormStep, setActiveFormStep] = useState<FormStepData | null>(null);
+  const [shownMessageNudgeIndexes, setShownMessageNudgeIndexes] = useState<number[]>([]);
   // Text typed in the answer box to narrow a long list of form options.
   const [formChoiceSearch, setFormChoiceSearch] = useState("");
   const [activeJourneyId, setActiveJourneyId] = useState<string | null>(null);
@@ -1621,7 +1629,8 @@ export default function EmbedChat() {
   
   // Determine if conversation starters should be visible
   const userMessages = messages.filter(m => m.role === 'user');
-  const shouldShowStarters = showStarters && userMessages.length === 0 && !isLoading;
+  const opensWithMessageNudges = messages.some(m => m.messageNudgeIndex !== undefined);
+  const shouldShowStarters = showStarters && userMessages.length === 0 && !isLoading && !opensWithMessageNudges;
   
   // WhatsApp click-to-chat in the header (Settings → Chat widget → Widget Launcher).
   const waHeaderDigits = String(settings?.whatsappWidgetNumber || '').replace(/[^\d]/g, '');
@@ -1879,6 +1888,7 @@ export default function EmbedChat() {
     setActiveJourneyId(null);
     setIsFormJourneyComplete(false); // Reset journey complete state for new conversation
     setChatEnded(false);
+    setShownMessageNudgeIndexes([]);
     
     // Reset inactivity nudge state to prevent old nudges from appearing
     inactivityNudgeSentRef.current = false;
@@ -2009,6 +2019,54 @@ export default function EmbedChat() {
   };
   const currencySymbol = currencySymbols[currency] || "$";
 
+  // Message nudges the visitor saw open the chat, in place of the greeting and its extras. Closing
+  // them brings the normal greeting back. A chat already under way is never touched.
+  useEffect(() => {
+    if (!settings || isRestoringHistory || anyPreChatGateActive || externalGuidanceModeRef.current) return;
+    const nudges = settings.messageNudgeEnabled === 'true'
+      ? shownMessageNudges(settings.messageNudgeItems, shownMessageNudgeIndexes)
+      : [];
+    const hadNudges = messages.some(m => m.messageNudgeIndex !== undefined);
+    if (nudges.length === 0 && !hadNudges) return;
+    if (messages.some(m => m.role === 'user' || (m.id !== '1' && !m.formStepId && m.messageNudgeIndex === undefined))) return;
+    setMessages(prev => {
+      const others = prev.filter(m => m.messageNudgeIndex === undefined && (nudges.length === 0 || m.id !== '1' || m.isStartupQuestion));
+      const carried: ChatMessage[] = nudges.map(({ index, text }) => ({
+        id: `message-nudge-${index}`,
+        role: 'assistant',
+        content: text,
+        timestamp: prev.find(m => m.messageNudgeIndex === index)?.timestamp ?? new Date(),
+        messageNudgeIndex: index,
+      }));
+      return [...carried, ...others];
+    });
+    if (nudges.length === 0) {
+      setIntroLoaded(false);
+      if (menuEnabled) setIsMenuMode(true); // closed: the chat opens as it normally would
+    } else if (nudges.length !== messages.filter(m => m.messageNudgeIndex !== undefined).length) {
+      // The messages open the chat, so its menu start screen stays out of the way.
+      menuModeDecidedRef.current = true;
+      setIsMenuMode(false);
+    }
+  }, [settings, isRestoringHistory, anyPreChatGateActive, shownMessageNudgeIndexes, messages.length]);
+
+  // Opened with message nudges: show the latest message (the chat was hidden until now).
+  useEffect(() => {
+    if (!chatOnScreen || !opensWithMessageNudges || userMessages.length > 0) return;
+    const timer = setTimeout(() => {
+      const container = messagesContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+    }, 60);
+    return () => clearTimeout(timer);
+  }, [chatOnScreen, opensWithMessageNudges]);
+
+  // The numbers of the message nudges to save with the visitor's first reply (none after that).
+  const messageNudgesToSave = () => {
+    if (messages.some(m => m.role === 'user')) return undefined;
+    const indexes = messages.filter(m => m.messageNudgeIndex !== undefined).map(m => m.messageNudgeIndex);
+    return indexes.length > 0 ? indexes : undefined;
+  };
+
   // Load intro message on mount and when language changes (only for chat modes, not voice-only)
   // Skip if history is being restored or has been restored with messages
   useEffect(() => {
@@ -2071,8 +2129,16 @@ export default function EmbedChat() {
                     role: 'assistant',
                     content: data.intro,
                     timestamp: new Date(),
-                    quickReplies: journeyOptions
+                    quickReplies: journeyOptions,
+                    isStartupQuestion: !!data.startFromScratch
                   }];
+                }
+                // Message nudges open the chat instead of a greeting; a start-up journey's first
+                // question still follows them.
+                if (prev.some(m => m.messageNudgeIndex !== undefined)) {
+                  return data.startFromScratch && !prev.some(m => m.id === '1')
+                    ? [...prev, { id: '1', role: 'assistant', content: data.intro, timestamp: new Date(), quickReplies: journeyOptions, isStartupQuestion: true }]
+                    : prev;
                 }
                 // If first message exists and is assistant (intro), update it
                 if (prev[0]?.role === 'assistant' && prev[0]?.id === '1') {
@@ -2394,6 +2460,12 @@ export default function EmbedChat() {
         }
       }
       
+      // Which message nudges the visitor has seen on the website (nothing after they closed them).
+      if (event.data && event.data.type === 'MESSAGE_NUDGES_SHOWN' && Array.isArray(event.data.indexes)) {
+        setShownMessageNudgeIndexes(event.data.indexes);
+        return;
+      }
+
       // Handle proactive guidance messages (for demo pages)
       if (event.data && event.data.type === 'PROACTIVE_GUIDANCE') {
         const { message: guidanceMessage, clearHistory, cleanMode, conversationStarters: ruleStarters } = event.data;
@@ -3420,6 +3492,7 @@ export default function EmbedChat() {
           sessionId: sessionIdRef.current,
           // This chat (e.g. the one a form started): the server carries on in it.
           conversationId: conversationIdRef.current || undefined,
+          shownMessageNudges: messageNudgesToSave(),
           language: selectedLanguage !== 'auto' ? selectedLanguage : undefined,
           // Starting point when the first messages don't show a clear language (e.g. "5 lakh?").
           browserLanguage: typeof navigator !== 'undefined' ? navigator.language : undefined,
@@ -4693,6 +4766,7 @@ export default function EmbedChat() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           conversationId: conversationIdRef.current || null, 
+          shownMessageNudges: messageNudgesToSave(),
           answer: value, 
           businessAccountId,
           journeyId: activeJourneyId,
@@ -6710,7 +6784,7 @@ export default function EmbedChat() {
 
         {/* Quick Browse Buttons - Show after intro message (hide only when user sends first message) */}
         {/* Wait for proactive guidance check to complete before showing */}
-        {settings?.quickBrowseEnabled === 'true' && settings?.quickBrowseButtons && userMessages.length === 0 && !isLoading && !cleanModeEnabled && proactiveGuidanceChecked && (() => {
+        {settings?.quickBrowseEnabled === 'true' && settings?.quickBrowseButtons && userMessages.length === 0 && !isLoading && !cleanModeEnabled && proactiveGuidanceChecked && !opensWithMessageNudges && (() => {
           // Parse quickBrowseButtons if it's a JSON string
           let buttons = settings.quickBrowseButtons;
           if (typeof buttons === 'string') {
@@ -6732,7 +6806,7 @@ export default function EmbedChat() {
 
         {/* Product Carousel - Show featured products after intro (hide only when user sends first message) */}
         {/* Wait for proactive guidance check to complete before showing */}
-        {featuredProducts.length > 0 && userMessages.length === 0 && !isLoading && !cleanModeEnabled && proactiveGuidanceChecked && (
+        {featuredProducts.length > 0 && userMessages.length === 0 && !isLoading && !cleanModeEnabled && proactiveGuidanceChecked && !opensWithMessageNudges && (
           <Suspense fallback={<LazyLoadingFallback />}>
             <ProductCarousel
               products={featuredProducts}

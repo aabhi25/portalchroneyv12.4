@@ -778,6 +778,8 @@
             proactiveNudgeBgColor: settings.proactiveNudgeBgColor || '#ffffff',
             proactiveNudgeBgColorEnd: settings.proactiveNudgeBgColorEnd || '#ffffff',
             proactiveNudgeTextColor: settings.proactiveNudgeTextColor || '#1f2937',
+            messageNudgeEnabled: settings.messageNudgeEnabled || 'false',
+            messageNudgeItems: settings.messageNudgeItems || [],
             centerBannerEnabled: settings.centerBannerEnabled || 'false',
             centerBannerDelay: settings.centerBannerDelay || '10',
             centerBannerTitle: settings.centerBannerTitle || 'Need Help?',
@@ -2980,6 +2982,7 @@
         const visible = iframe.style.display !== 'none' && getComputedStyle(iframe).display !== 'none';
         if (!force && visible === lastReportedVisibility) return;
         lastReportedVisibility = visible;
+        if (visible && HiChroneyWidget._endMessageNudges) HiChroneyWidget._endMessageNudges();
         try {
           if (iframe.contentWindow) iframe.contentWindow.postMessage({ type: 'HICHRONEY_WIDGET_VISIBILITY', visible }, '*');
         } catch (e) {}
@@ -3027,6 +3030,8 @@
             conversationId: String(event.data.conversationId),
             visitorToken: event.data.visitorToken ? String(event.data.visitorToken) : null
           };
+          // A chat is going already: no message nudges on top of it.
+          if (HiChroneyWidget._endMessageNudges) HiChroneyWidget._endMessageNudges();
           return;
         }
 
@@ -4534,6 +4539,22 @@
         allNudgeMessages.push(...this.config.proactiveNudgeMessages);
       }
       
+      // Message nudges (their own feature, further down) take the place of this bubble while on.
+      const messageNudgeDismissedKey = `hichroney-message-nudges-dismissed-${this.config.businessAccountId}`;
+      const messageNudgeDismissed = (() => {
+        try {
+          const at = parseInt(localStorage.getItem(messageNudgeDismissedKey) || '0', 10);
+          return at > 0 && Date.now() - at < 24 * 60 * 60 * 1000;
+        } catch (e) { return false; }
+      })();
+      const messageNudgeFeatureOn = this.config.messageNudgeEnabled === 'true' && this.config.chatMode !== 'voice-only';
+      const messageNudgeItems = messageNudgeFeatureOn && !messageNudgeDismissed && Array.isArray(this.config.messageNudgeItems)
+        ? this.config.messageNudgeItems
+            .slice(0, 3)
+            .map((item, index) => ({ message: item && item.message, delay: item && item.delay, index }))
+            .filter((item) => typeof item.message === 'string' && item.message.trim())
+        : [];
+
       console.log('[Hi Chroney] Proactive nudge sequence:', allNudgeMessages.length, 'messages');
       
       // Check if nudge was already shown this session (skip if repeat is enabled)
@@ -4745,7 +4766,7 @@
       // itself after a few seconds, or as soon as they scroll or tap elsewhere. The repeating
       // sequence below is for computers only.
       const phoneGreeting = window.innerWidth <= 480;
-      if (phoneGreeting && this.config.proactiveNudgeEnabled === 'true' && !proactiveNudgeShown && !isOpen) {
+      if (phoneGreeting && !messageNudgeFeatureOn && this.config.proactiveNudgeEnabled === 'true' && !proactiveNudgeShown && !isOpen) {
         const firstGreeting = allNudgeMessages[0];
         const visitorIsBusy = () => {
           const active = document.activeElement;
@@ -4794,7 +4815,7 @@
         proactiveNudgeTimers.push(setTimeout(() => whenVisitorActive(tryShowPhoneGreeting), (parseInt(firstGreeting.delay, 10) || 30) * 1000));
       } else
       // Start sequential nudge messages with repeat support
-      if (!phoneGreeting && this.config.proactiveNudgeEnabled === 'true' && !proactiveNudgeShown && !isOpen) {
+      if (!phoneGreeting && !messageNudgeFeatureOn && this.config.proactiveNudgeEnabled === 'true' && !proactiveNudgeShown && !isOpen) {
         const chatColor = this.config.chatColor;
         const chatColorEnd = this.config.chatColorEnd;
         
@@ -4845,6 +4866,190 @@
         }
       });
       
+      // ============================================================
+      // MESSAGE NUDGES - bubbles above the chat button, one after another. The chat always knows
+      // which ones were shown: however it gets opened, it starts with exactly those messages.
+      // ============================================================
+      if (messageNudgeItems.length > 0 && !this.config.proactiveGuidanceActive) {
+        const messageNudgeVisitKey = `hichroney-message-nudges-${this.config.businessAccountId}`;
+        let nudgeVisit = {};
+        try { nudgeVisit = JSON.parse(sessionStorage.getItem(messageNudgeVisitKey) || '{}') || {}; } catch (e) {}
+        // Once per visit: on another page the shown ones stay shown and the rest carry on.
+        let nudgesShown = Array.isArray(nudgeVisit.shown) ? nudgeVisit.shown : [];
+        let nudgesEnded = nudgeVisit.ended === true;
+        let nudgeTimers = [];
+        let nudgeStack = null;
+        let hidePhoneNudge = () => {};
+
+        const saveNudgeVisit = () => {
+          try { sessionStorage.setItem(messageNudgeVisitKey, JSON.stringify({ shown: nudgesShown, ended: nudgesEnded })); } catch (e) {}
+        };
+        const tellChatWhichNudges = () => sendMessageToIframe({ type: 'MESSAGE_NUDGES_SHOWN', indexes: nudgesShown.slice() });
+        const removeNudgeStack = () => {
+          hidePhoneNudge();
+          if (nudgeStack && nudgeStack.parentNode) nudgeStack.parentNode.removeChild(nudgeStack);
+          nudgeStack = null;
+        };
+        // The chat was opened, or the visitor already has a chat going: no more bubbles.
+        const endMessageNudges = () => {
+          nudgeTimers.forEach(clearTimeout);
+          nudgeTimers = [];
+          nudgesEnded = true;
+          saveNudgeVisit();
+          removeNudgeStack();
+        };
+        HiChroneyWidget._endMessageNudges = endMessageNudges;
+
+        const dismissMessageNudges = () => {
+          nudgesShown = [];
+          endMessageNudges();
+          tellChatWhichNudges();
+          try { localStorage.setItem(messageNudgeDismissedKey, String(Date.now())); } catch (e) {}
+        };
+
+        const showMessageNudge = (item) => {
+          const isPhone = window.innerWidth <= 480;
+          if (!nudgeStack) {
+            const buttonHeight = isPhone ? 56 : bubbleSize;
+            const baseOffset = (parseInt(this.config.pillBottomOffset, 10) || 20) + buttonHeight + 10;
+            const sideOffset = parseInt(this.config.pillSideOffset, 10) || 20;
+            nudgeStack = document.createElement('div');
+            nudgeStack.id = 'hichroney-message-nudges';
+            const edge = verticalPos === 'bottom' && isPhone
+              ? `bottom: calc(${baseOffset + (HiChroneyWidget._bottomLift || 0)}px + env(safe-area-inset-bottom, 0px));`
+              : `${verticalPos === 'bottom' ? 'bottom' : 'top'}: ${baseOffset}px;`;
+            nudgeStack.style.cssText = `
+              position: fixed;
+              ${edge}
+              ${horizontalPos === 'right' ? 'right' : 'left'}: ${Math.max(sideOffset - 12, 0)}px;
+              display: flex;
+              flex-direction: column;
+              gap: 8px;
+              width: ${isPhone ? 'calc(100vw - 8px)' : '324px'};
+              max-width: calc(100vw - 8px);
+              max-height: calc(100vh - ${baseOffset + 16}px);
+              overflow-y: auto;
+              padding: 12px;
+              box-sizing: border-box;
+              z-index: 999998;
+            `;
+            if (verticalPos === 'bottom' && isPhone) nudgeStack.dataset.baseBottom = String(baseOffset);
+            document.body.appendChild(nudgeStack);
+          }
+          if (isPhone) nudgeStack.innerHTML = ''; // one at a time
+
+          const bubble = document.createElement('div');
+          bubble.style.cssText = `
+            position: relative;
+            flex-shrink: 0;
+            padding: 12px 34px 12px 14px;
+            background: #ffffff;
+            color: #1f2937;
+            border-radius: 14px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+            cursor: pointer;
+            box-sizing: border-box;
+            opacity: 0;
+            transform: translateY(12px);
+            transition: transform 0.25s ease-out, opacity 0.25s ease-out;
+          `;
+          const escaped = String(item.message).trim().replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+          const text = document.createElement('div');
+          text.innerHTML = parseBoldMarkdown(escaped);
+          bubble.appendChild(text);
+
+          const close = document.createElement('button');
+          close.type = 'button';
+          close.setAttribute('aria-label', 'Close');
+          close.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+          close.style.cssText = 'position:absolute;top:8px;right:8px;width:20px;height:20px;padding:0;border:none;background:transparent;color:#9ca3af;cursor:pointer;display:flex;align-items:center;justify-content:center;';
+          close.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dismissMessageNudges();
+          });
+          bubble.appendChild(close);
+          bubble.addEventListener('click', () => {
+            if (!isOpen) button.click();
+            endMessageNudges();
+          });
+
+          nudgeStack.appendChild(bubble);
+          nudgeStack.scrollTop = nudgeStack.scrollHeight;
+          setTimeout(() => {
+            bubble.style.opacity = '1';
+            bubble.style.transform = 'translateY(0)';
+          }, 50);
+
+          nudgesShown.push(item.index);
+          saveNudgeVisit();
+          tellChatWhichNudges();
+
+          // Phones: it steps aside after a few seconds, or as soon as they scroll or tap elsewhere.
+          // It stays one of the messages the chat opens with.
+          if (isPhone) {
+            hidePhoneNudge();
+            const scrollStart = window.scrollY;
+            const onScroll = () => { if (Math.abs(window.scrollY - scrollStart) > 40) hide(); };
+            const onTouch = (e) => { if (!nudgeStack || !nudgeStack.contains(e.target)) hide(); };
+            let hideTimer = null;
+            const hide = () => {
+              clearTimeout(hideTimer);
+              window.removeEventListener('scroll', onScroll);
+              document.removeEventListener('touchstart', onTouch, true);
+              hidePhoneNudge = () => {};
+              if (bubble.parentNode) bubble.parentNode.removeChild(bubble);
+            };
+            hidePhoneNudge = hide;
+            hideTimer = setTimeout(hide, 7000);
+            setTimeout(() => {
+              if (hidePhoneNudge !== hide) return;
+              window.addEventListener('scroll', onScroll, { passive: true });
+              document.addEventListener('touchstart', onTouch, true);
+            }, 400);
+          }
+        };
+
+        // Waits for a moment that doesn't get in the way: not in a background tab, not while they
+        // type in the website's own form, not on top of a banner.
+        const whenFreeForNudge = (fn) => {
+          const attempt = () => {
+            if (nudgesEnded || isOpen) return;
+            const active = document.activeElement;
+            const typing = active && active !== document.body &&
+              (/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName) || active.isContentEditable);
+            const vv = window.visualViewport;
+            const keyboardOpen = !!(vv && vv.height < window.innerHeight * 0.75);
+            const bannerOpen = document.getElementById('hichroney-center-banner') || document.getElementById('hichroney-reengagement-popup');
+            if (document.hidden || typing || keyboardOpen || bannerOpen) {
+              nudgeTimers.push(setTimeout(attempt, 3000));
+              return;
+            }
+            fn();
+          };
+          whenVisitorActive(attempt);
+        };
+
+        if (nudgesShown.length > 0) tellChatWhichNudges();
+
+        // Each message waits its own delay after the one before it.
+        const remainingNudges = messageNudgeItems.filter((item) => !nudgesShown.includes(item.index));
+        const scheduleNudge = (position) => {
+          const item = remainingNudges[position];
+          if (!item) return;
+          nudgeTimers.push(setTimeout(() => whenFreeForNudge(() => {
+            showMessageNudge(item);
+            scheduleNudge(position + 1);
+          }), (parseInt(item.delay, 10) || 20) * 1000));
+        };
+        if (!nudgesEnded && !isOpen) scheduleNudge(0);
+        button.addEventListener('click', endMessageNudges);
+      }
+
       // ============================================================
       // CENTER BANNER POPUP - Personalized Engagement Modal
       // ============================================================
@@ -5519,10 +5724,12 @@
             container.style.removeProperty('bottom');
           }
           // Move the greeting bubble along with the button.
-          const nudge = document.getElementById('hichroney-proactive-nudge');
-          if (nudge && nudge.dataset.baseBottom) {
-            nudge.style.bottom = `calc(${parseInt(nudge.dataset.baseBottom, 10) + lift}px + env(safe-area-inset-bottom, 0px))`;
-          }
+          ['hichroney-proactive-nudge', 'hichroney-message-nudges'].forEach((nudgeId) => {
+            const nudge = document.getElementById(nudgeId);
+            if (nudge && nudge.dataset.baseBottom) {
+              nudge.style.bottom = `calc(${parseInt(nudge.dataset.baseBottom, 10) + lift}px + env(safe-area-inset-bottom, 0px))`;
+            }
+          });
           console.log('[Hi Chroney] Bottom bar lift:', lift);
         };
         let liftTimer = null;
