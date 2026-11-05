@@ -7,7 +7,7 @@ import { hasManyChoices, isChoiceQuestion, pickChoice, validateFormAnswer, type 
  * the chat input normally is, so a form reads like a conversation: the question is a chat
  * bubble, the visitor types (or taps an option above) and the answer appears as their bubble.
  */
-export function ChatFormAnswerBar({ step, onSubmit, isSubmitting, chatColor, chatColorEnd, isMobile, onSearch }: {
+export function ChatFormAnswerBar({ step, onSubmit, isSubmitting, chatColor, chatColorEnd, isMobile, onSearch, onDraft }: {
   step: FormQuestion;
   onSubmit: (value: string) => void;
   isSubmitting: boolean;
@@ -16,6 +16,8 @@ export function ChatFormAnswerBar({ step, onSubmit, isSubmitting, chatColor, cha
   isMobile?: boolean;
   /** Long option lists: what's typed here narrows the option buttons above. */
   onSearch?: (text: string) => void;
+  /** What's typed so far, so the chat doesn't nudge someone who is answering. */
+  onDraft?: (text: string) => void;
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +33,11 @@ export function ChatFormAnswerBar({ step, onSubmit, isSubmitting, chatColor, cha
     if (!choice && !isMobile) inputRef.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step.stepId, choice, isMobile]);
+
+  useEffect(() => {
+    onDraft?.(value);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
 
   const submit = (answer: string) => {
     if (searchable && answer.trim()) {

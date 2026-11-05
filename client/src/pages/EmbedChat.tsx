@@ -949,6 +949,7 @@ export default function EmbedChat() {
   const [chatOnScreen, setChatOnScreen] = useState(true);
   const [tabVisible, setTabVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden');
   const messageDraftRef = useRef('');
+  const formDraftRef = useRef(''); // what's typed in a journey question's answer box
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.data && event.data.type === 'HICHRONEY_WIDGET_VISIBILITY') setChatOnScreen(!!event.data.visible);
@@ -3836,8 +3837,10 @@ export default function EmbedChat() {
   }, [businessAccountId, settings, isLoadingSettings, isLoading, pendingMessage, introLoaded, activeFormStep]);
 
   // Inactivity nudge ("Still there?"): one quiet nudge (plus any follow-ups the business set) per
-  // conversation, only while the chat is on screen, never while the visitor is typing, filling in a
-  // form or the booking card, and only after a message that asked them something.
+  // conversation, only while the chat is on screen, never while the visitor is typing or filling in
+  // the booking card, and only after a message that asked them something. A journey form's question
+  // gets just one, with fixed wording (the AI's follow-up couldn't be answered in a locked answer
+  // box), and only once the visitor has joined in: not on a start-up form they haven't touched.
   useEffect(() => { messageDraftRef.current = message; }, [message]);
   useEffect(() => {
     if (!settings?.inactivityNudgeEnabled || settings.inactivityNudgeEnabled === 'false') return;
@@ -3848,8 +3851,9 @@ export default function EmbedChat() {
     // collides with the lockout/resend countdowns.
     if (otpState.awaiting_otp || otpState.locked) return;
     if (!chatOnScreen || !tabVisible) return; // closed chat / background tab: wait until they're back
-    if (activeFormStep) return; // a form question is waiting for an answer
-    if (!lastAIMessageTimeRef.current) return;
+    const formQuestion = activeFormStep && !hasOwnCard(activeFormStep) && !isClosingStep(activeFormStep) ? activeFormStep : null;
+    if (activeFormStep && !formQuestion) return; // the calendar, or the closing message: nothing to answer here
+    if (formQuestion ? !messages.some(m => m.role === 'user') : !lastAIMessageTimeRef.current) return;
     if (messages.length < 1) return; // Need at least the intro message
     if (message.trim()) return; // they're writing a reply
     
@@ -3873,22 +3877,27 @@ export default function EmbedChat() {
     const lastReal = [...messages].reverse().find(m => m.role === 'assistant' && !m.isNudge);
     const lastText = (lastReal?.content || '').replace(/[*_`~>#\s]+$/g, '').replace(/(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF\uFE0F\s])+$/, '');
     const invitesReply = !!lastReal && (/[?？؟]$/.test(lastText) || (lastReal.quickReplies?.length ?? 0) > 0);
-    if (!invitesReply) return;
+    if (!formQuestion && !invitesReply) return;
     
     // Build full message sequence: first message + additional messages
     // When Smart Nudge is enabled, we support 2 nudges: AI-generated first, then "Are you there?"
-    const isSmartNudgeEnabled = settings.smartNudgeEnabled === 'true';
+    const isSmartNudgeEnabled = !formQuestion && settings.smartNudgeEnabled === 'true';
     const baseDelay = parseInt(settings.inactivityNudgeDelay || "90");
     
     const allNudgeMessages: { message: string; delay: number }[] = [
-      { 
+      formQuestion ? {
+        message: isChoiceQuestion(formQuestion) ? "Still there? Just tap an option to continue." : "Still there? Just type your answer below.",
+        delay: Math.max(30, baseDelay || 0) // time to read the question and its options
+      } : { 
         message: settings.inactivityNudgeMessage || "Still there? Let me know if you need any help!", 
         delay: baseDelay 
       }
     ];
     
     // When Smart Nudge is enabled, add a second "Are you there?" nudge
-    if (isSmartNudgeEnabled) {
+    if (formQuestion) {
+      // Journey questions stop at the one nudge
+    } else if (isSmartNudgeEnabled) {
       allNudgeMessages.push({
         message: "Are you still there? I'm here to help if you need anything!",
         delay: baseDelay
@@ -3917,7 +3926,7 @@ export default function EmbedChat() {
     // Set new timer for current message in sequence
     inactivityTimerRef.current = setTimeout(async () => {
       // Still quiet? (typing started, or the chat/tab went away, since the timer was set)
-      if (messageDraftRef.current.trim() || document.visibilityState === 'hidden') return;
+      if (messageDraftRef.current.trim() || (formQuestion && formDraftRef.current.trim()) || document.visibilityState === 'hidden') return;
       // Check if user hasn't sent a message since last AI response
       const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
       const lastAIMessage = [...messages].reverse().find(m => m.role === 'assistant');
@@ -4132,9 +4141,11 @@ export default function EmbedChat() {
     }, 60));
     if (hasOwnCard(step) || !step.questionText) { scroll(); return; }
     scroll();
-    setMessages(prev => {
+    setMessages(all => {
+      // A "Still there?" line under the question doesn't count as the chat's last message.
+      const prev = all.slice(0, all.map(m => !m.isNudge).lastIndexOf(true) + 1);
       const last = prev.at(-1);
-      if (last?.formStepId === step.stepId) return prev; // already asked, waiting for the answer
+      if (last?.formStepId === step.stepId) return all; // already asked, waiting for the answer
       const quickReplies = isClosingStep(step)
         ? (step.completionButtonText ? [step.completionButtonText] : undefined)
         : isChoiceQuestion(step) ? step.options : undefined;
@@ -4159,6 +4170,8 @@ export default function EmbedChat() {
   }, [activeFormStep]);
 
   const hasVisitorMessage = messages.some(m => m.role === 'user');
+  // The message being replied to: a "Still there?" line under it doesn't take its options away.
+  const replyMessageIndex = messages.map(m => !m.isNudge).lastIndexOf(true);
 
   // Whenever the message list changes size (the chat opening, a phone's keyboard, rotating),
   // never leave the visitor looking at the empty space kept under the last message. On iPhones
@@ -6596,7 +6609,7 @@ export default function EmbedChat() {
 
                 {/* Conversational journey dropdown/radio choices as tappable buttons.
                     Only show on the most recent message so old choices don't linger. */}
-                {msg.role === 'assistant' && msg.quickReplies && msg.quickReplies.length > 0 && msgIndex === messages.length - 1 && (
+                {msg.role === 'assistant' && msg.quickReplies && msg.quickReplies.length > 0 && msgIndex === replyMessageIndex && (
                   msg.formStepId ? (
                     // Options of the form question being asked: tapping one answers it.
                     activeFormStep && msg.formStepId === activeFormStep.stepId && !isLoading && (
@@ -6631,7 +6644,7 @@ export default function EmbedChat() {
                 )}
 
                 {/* Picked the wrong option? Back to the previous question of the form. */}
-                {msg.formStepId && activeFormStep && msg.formStepId === activeFormStep.stepId && msgIndex === messages.length - 1
+                {msg.formStepId && activeFormStep && msg.formStepId === activeFormStep.stepId && msgIndex === replyMessageIndex
                   && formCanGoBack && !isLoading && !isClosingStep(activeFormStep) && (
                   <button
                     type="button"
@@ -6852,6 +6865,7 @@ export default function EmbedChat() {
             chatColorEnd={chatColorEnd}
             isMobile={isMobileDevice}
             onSearch={setFormChoiceSearch}
+            onDraft={(text) => { formDraftRef.current = text; }}
           />
         </div>
       )}
