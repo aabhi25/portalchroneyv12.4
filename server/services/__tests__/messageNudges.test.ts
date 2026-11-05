@@ -47,9 +47,40 @@ if (process.env.MESSAGE_NUDGE_TEST_DB) {
     // A chat that has messages already is left alone.
     assert.deepEqual(await saveShownMessageNudges(businessAccountId, conversation.id, [2]), []);
     assert.deepEqual(await texts(), ["First **one**", "Second\nline"]);
+    // Publishing from a group.
+    const { rows: [{ id: groupId }] } = await pool.query("INSERT INTO account_groups (name, owner_user_id) SELECT 'Message nudge test', id FROM users LIMIT 1 RETURNING id");
+    try {
+      await pool.query("INSERT INTO account_group_members (group_id, business_account_id) VALUES ($1, $2)", [groupId, businessAccountId]);
+      // A group with no messages leaves the account's own alone.
+      await storage.upsertGroupExtraSettings(groupId, { messageNudgeEnabled: "false", messageNudgeItems: normalizeMessageNudgeItems(null) });
+      await storage.publishGroupExtraSettingsToMembers(groupId);
+      let account = await storage.getWidgetSettings(businessAccountId);
+      assert.equal(account?.messageNudgeEnabled, "true");
+      assert.equal(shownMessageNudges(account?.messageNudgeItems, [0])[0].text, "First **one**");
+      // A group with messages replaces them; switching it off turns them off everywhere.
+      await storage.upsertGroupExtraSettings(groupId, { messageNudgeEnabled: "true", messageNudgeItems: [{ message: "From the group", delay: 15 }] });
+      await storage.publishGroupExtraSettingsToMembers(groupId);
+      account = await storage.getWidgetSettings(businessAccountId);
+      assert.deepEqual(normalizeMessageNudgeItems(account?.messageNudgeItems)[0], { message: "From the group", delay: 15 });
+      await storage.upsertGroupExtraSettings(groupId, { messageNudgeEnabled: "false" });
+      await storage.publishGroupExtraSettingsToMembers(groupId);
+      account = await storage.getWidgetSettings(businessAccountId);
+      assert.equal(account?.messageNudgeEnabled, "false");
+    } finally {
+      await pool.query("DELETE FROM account_groups WHERE id = $1", [groupId]);
+    }
     console.log("messageNudges database tests passed");
   } finally {
     await storage.upsertWidgetSettings(businessAccountId, {
+      // Publishing also copies these from the group.
+      responseLength: before?.responseLength,
+      autoOpenChat: before?.autoOpenChat,
+      openingSoundEnabled: before?.openingSoundEnabled,
+      openingSoundStyle: before?.openingSoundStyle,
+      inactivityNudgeEnabled: before?.inactivityNudgeEnabled,
+      inactivityNudgeDelay: before?.inactivityNudgeDelay,
+      inactivityNudgeMessage: before?.inactivityNudgeMessage,
+      smartNudgeEnabled: before?.smartNudgeEnabled,
       messageNudgeEnabled: before?.messageNudgeEnabled ?? "false",
       messageNudgeItems: before?.messageNudgeItems ?? null,
     });

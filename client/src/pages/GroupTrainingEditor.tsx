@@ -3,6 +3,8 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useLocation } from "wouter";
 import { useInHubFrame } from "@/components/hub/hubContext";
+import { MessageNudgesCard } from "@/components/MessageNudgesCard";
+import { normalizeMessageNudgeItems, type MessageNudgeItem } from "@shared/messageNudges";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -444,6 +446,8 @@ export default function GroupTrainingEditor() {
   const [extraInactivityNudgeDelay, setExtraInactivityNudgeDelay] = useState("90");
   const [extraInactivityNudgeMessage, setExtraInactivityNudgeMessage] = useState("Still there? Let me know if you need any help!");
   const [extraSmartNudgeEnabled, setExtraSmartNudgeEnabled] = useState(false);
+  const [extraMessageNudgeEnabled, setExtraMessageNudgeEnabled] = useState(false);
+  const [extraMessageNudgeItems, setExtraMessageNudgeItems] = useState<MessageNudgeItem[]>(() => normalizeMessageNudgeItems(null));
   const [savingExtra, setSavingExtra] = useState(false);
   const [publishingExtra, setPublishingExtra] = useState(false);
   const [extraLoaded, setExtraLoaded] = useState(false);
@@ -1001,6 +1005,8 @@ export default function GroupTrainingEditor() {
       setExtraInactivityNudgeDelay(data.inactivityNudgeDelay || "90");
       setExtraInactivityNudgeMessage(data.inactivityNudgeMessage || "Still there? Let me know if you need any help!");
       setExtraSmartNudgeEnabled(data.smartNudgeEnabled === "true");
+      setExtraMessageNudgeEnabled(data.messageNudgeEnabled === "true");
+      setExtraMessageNudgeItems(normalizeMessageNudgeItems(data.messageNudgeItems));
       setExtraLoaded(true);
     } catch (error) {
       console.error("Error fetching extra settings:", error);
@@ -1026,6 +1032,8 @@ export default function GroupTrainingEditor() {
         inactivityNudgeDelay: extraInactivityNudgeDelay,
         inactivityNudgeMessage: extraInactivityNudgeMessage,
         smartNudgeEnabled: extraSmartNudgeEnabled ? "true" : "false",
+        messageNudgeEnabled: extraMessageNudgeEnabled ? "true" : "false",
+        messageNudgeItems: extraMessageNudgeItems,
       });
       if (!opts?.quiet) toast({ title: "Extra settings saved" });
       return true;
@@ -3916,7 +3924,7 @@ export default function GroupTrainingEditor() {
                   <Settings className="w-5 h-5 text-purple-600" />
                   Extra Settings
                 </h2>
-                <p className="text-sm text-gray-500 mt-1">Configure response length, chat behavior, and inactivity nudge for all group members</p>
+                <p className="text-sm text-gray-500 mt-1">Configure response length, chat behavior, inactivity nudge and Message nudges for all group members</p>
               </div>
               <div className="flex gap-2">
                 <Button onClick={() => handleSaveExtraSettings()} disabled={savingExtra} variant="outline">
@@ -4118,6 +4126,16 @@ export default function GroupTrainingEditor() {
                 )}
               </CardContent>
             </Card>
+
+            {/* Message nudges */}
+            <MessageNudgesCard
+              enabled={extraMessageNudgeEnabled}
+              onEnabledChange={setExtraMessageNudgeEnabled}
+              items={extraMessageNudgeItems}
+              onItemsChange={setExtraMessageNudgeItems}
+              intro="Messages that appear one after another above the chat button on every account in this group. When a visitor opens the chat, it starts with only the messages they have already seen."
+              notes={["If you leave all three empty, publishing doesn't change the accounts' own Message nudges. To turn them off everywhere, keep the messages, switch this off and publish."]}
+            />
 
             {/* Bottom action buttons */}
             <div className="flex gap-3 justify-end pt-2">
@@ -4627,7 +4645,7 @@ export default function GroupTrainingEditor() {
               ) : (
                 <div className="space-y-2 text-sm text-muted-foreground">
                   <span className="block">
-                    This saves and then overwrites response length, auto-open, opening sound and inactivity nudge on all {groupTraining?.memberCount ?? 0} member accounts.
+                    This saves and then overwrites response length, auto-open, opening sound, inactivity nudge and any Message nudges you wrote on all {groupTraining?.memberCount ?? 0} member accounts.
                   </span>
                   <span className="block text-destructive font-medium">Any different values set on individual accounts will be replaced.</span>
                 </div>

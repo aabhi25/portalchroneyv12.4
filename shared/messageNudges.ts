@@ -28,6 +28,11 @@ export function normalizeMessageNudgeItems(raw: unknown): MessageNudgeItem[] {
   });
 }
 
+/** Whether a group has written any: publishing a group without messages leaves its accounts' own alone. */
+export function hasMessageNudgeText(raw: unknown): boolean {
+  return normalizeMessageNudgeItems(raw).some((item) => item.message.trim());
+}
+
 /** The text of the messages at these numbers, in order; unknown numbers and empty slots are dropped. */
 export function shownMessageNudges(raw: unknown, indexes: unknown): { index: number; text: string }[] {
   if (!Array.isArray(indexes)) return [];

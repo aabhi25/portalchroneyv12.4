@@ -1798,6 +1798,9 @@ export const accountGroupExtraSettings = pgTable("account_group_extra_settings",
   inactivityNudgeMessage: text("inactivity_nudge_message").notNull().default("Still there? Let me know if you need any help!"),
   smartNudgeEnabled: text("smart_nudge_enabled").notNull().default("false"),
 
+  messageNudgeEnabled: text("message_nudge_enabled").notNull().default("false"),
+  messageNudgeItems: jsonb("message_nudge_items"), // Same shape as widget_settings (see shared/messageNudges.ts)
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [

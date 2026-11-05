@@ -1,0 +1,2 @@
+ALTER TABLE "account_group_extra_settings" ADD COLUMN IF NOT EXISTS "message_nudge_enabled" text DEFAULT 'false' NOT NULL;--> statement-breakpoint
+ALTER TABLE "account_group_extra_settings" ADD COLUMN IF NOT EXISTS "message_nudge_items" jsonb;

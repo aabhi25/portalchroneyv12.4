@@ -22,7 +22,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { MESSAGE_NUDGE_MAX_CHARS, MESSAGE_NUDGE_MAX_DELAY, MESSAGE_NUDGE_MIN_DELAY, normalizeMessageNudgeItems, type MessageNudgeItem } from "@shared/messageNudges";
+import { MessageNudgesCard } from "@/components/MessageNudgesCard";
+import { normalizeMessageNudgeItems, type MessageNudgeItem } from "@shared/messageNudges";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
@@ -377,7 +378,6 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
   const [proactiveNudgeTextColor, setProactiveNudgeTextColor] = useState("#1f2937");
   const [messageNudgeEnabled, setMessageNudgeEnabled] = useState(false);
   const [messageNudgeItems, setMessageNudgeItems] = useState<MessageNudgeItem[]>(() => normalizeMessageNudgeItems(null));
-  const messageNudgeRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
   
   // Center Banner settings
   const [centerBannerEnabled, setCenterBannerEnabled] = useState(false);
@@ -2978,79 +2978,12 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
 
               {/* Nudges Tab - Redesigned */}
               <TabsContent value="message-nudges" className="mt-4">
-                <Card className="border border-gray-200 bg-white shadow-sm">
-                  <CardContent className="py-5 px-6 space-y-5">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <h3 className="text-base font-semibold text-gray-900">Message nudges</h3>
-                        <p className="mt-1 text-sm text-gray-500">
-                          Messages that appear one after another above the chat button. When a visitor opens the chat, it starts with only the messages they have already seen, and replying continues from there.
-                        </p>
-                      </div>
-                      <Switch checked={messageNudgeEnabled} onCheckedChange={setMessageNudgeEnabled} aria-label="Message nudges" />
-                    </div>
-                    {messageNudgeEnabled && !messageNudgeItems.some((item) => item.message.trim()) && (
-                      <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">Write at least one message: nothing shows until you do.</p>
-                    )}
-                    <div className="space-y-4">
-                      {messageNudgeItems.map((item, index) => {
-                        const update = (changes: Partial<MessageNudgeItem>) =>
-                          setMessageNudgeItems((all) => all.map((other, i) => (i === index ? { ...other, ...changes } : other)));
-                        return (
-                          <div key={index} className="rounded-lg border border-gray-200 p-4 space-y-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <Label htmlFor={`message-nudge-${index}`} className="text-sm font-semibold text-gray-800">
-                                Message {index + 1}{index > 0 ? " (optional)" : ""}
-                              </Label>
-                              <button
-                                type="button"
-                                onMouseDown={(e) => {
-                                  e.preventDefault();
-                                  applyBold(messageNudgeRefs.current[index], item.message, (message) => update({ message }));
-                                }}
-                                className="rounded border border-gray-200 px-2 py-0.5 text-xs font-bold text-gray-700 hover:bg-gray-50"
-                                title="Bold"
-                              >
-                                B
-                              </button>
-                            </div>
-                            <Textarea
-                              id={`message-nudge-${index}`}
-                              ref={(el) => { messageNudgeRefs.current[index] = el; }}
-                              value={item.message}
-                              onChange={(e) => update({ message: e.target.value })}
-                              placeholder={index === 0 ? "Early-bird scholarship closes soon. Want to know if you qualify?" : "Leave empty to skip this message"}
-                              maxLength={MESSAGE_NUDGE_MAX_CHARS}
-                              className="min-h-[90px]"
-                            />
-                            <p className="text-right text-xs text-gray-500">{item.message.length}/{MESSAGE_NUDGE_MAX_CHARS}</p>
-                            <div>
-                              <Label className="text-xs text-gray-600">
-                                {index === 0 ? "Show after the visitor starts browsing" : `Show after message ${index}`}
-                              </Label>
-                              <div className="mt-2 flex items-center gap-3">
-                                <Slider
-                                  value={[item.delay]}
-                                  onValueChange={(value) => update({ delay: value[0] })}
-                                  min={MESSAGE_NUDGE_MIN_DELAY}
-                                  max={MESSAGE_NUDGE_MAX_DELAY}
-                                  step={5}
-                                  className="flex-1"
-                                />
-                                <span className="w-12 text-right text-sm font-semibold text-purple-700">{item.delay}s</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <ul className="list-disc space-y-1 pl-5 text-xs text-gray-500">
-                      <li>Shown once per visit. Closing a bubble with ✕ stops them for a day, and that visitor gets your normal greeting.</li>
-                      <li>While this is on, the Proactive bubble in Nudges &amp; banners is paused.</li>
-                      <li>If a journey starts every chat, its first question appears right after these messages, and the visitor's reply answers that question.</li>
-                    </ul>
-                  </CardContent>
-                </Card>
+                <MessageNudgesCard
+                  enabled={messageNudgeEnabled}
+                  onEnabledChange={setMessageNudgeEnabled}
+                  items={messageNudgeItems}
+                  onItemsChange={setMessageNudgeItems}
+                />
               </TabsContent>
 
               <TabsContent value="nudges" className="mt-4">

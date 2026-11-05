@@ -12831,6 +12831,8 @@ Return ONLY the refined instruction, nothing else.`
         inactivityNudgeDelay: "90",
         inactivityNudgeMessage: "Still there? Let me know if you need any help!",
         smartNudgeEnabled: "false",
+        messageNudgeEnabled: "false",
+        messageNudgeItems: null,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -12856,6 +12858,8 @@ Return ONLY the refined instruction, nothing else.`
         inactivityNudgeDelay: z.coerce.number().int().min(5).max(600).transform(String),
         inactivityNudgeMessage: z.string().trim().min(1).max(500),
         smartNudgeEnabled: onOff,
+        messageNudgeEnabled: onOff,
+        messageNudgeItems: z.unknown().transform(normalizeMessageNudgeItems),
       }).partial().strip().safeParse(req.body || {});
       if (!parsed.success) {
         const issue = parsed.error.issues[0];

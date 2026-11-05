@@ -1,4 +1,5 @@
 // Reference: javascript_database blueprint - updated for chat application
+import { hasMessageNudgeText, normalizeMessageNudgeItems } from "@shared/messageNudges";
 import { stripProtectedFields } from './lib/safeUpdate';
 import { channelCondition } from './services/chatContext/channelSql';
 import type { KnowledgeChannel } from '@shared/knowledgeChannels';
@@ -4705,6 +4706,11 @@ export class DatabaseStorage implements IStorage {
           inactivityNudgeDelay: extraSettings.inactivityNudgeDelay,
           inactivityNudgeMessage: extraSettings.inactivityNudgeMessage,
           smartNudgeEnabled: extraSettings.smartNudgeEnabled,
+          // A group that has written no message nudges leaves each account's own alone.
+          ...(hasMessageNudgeText(extraSettings.messageNudgeItems) ? {
+            messageNudgeEnabled: extraSettings.messageNudgeEnabled,
+            messageNudgeItems: normalizeMessageNudgeItems(extraSettings.messageNudgeItems),
+          } : {}),
         };
         await this.upsertWidgetSettings(member.businessAccountId, updateData);
         businessContextCache.invalidateBusinessCache(member.businessAccountId);

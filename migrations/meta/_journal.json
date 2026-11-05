@@ -358,6 +358,13 @@
       "when": 1793896743086,
       "tag": "0050_message_nudges",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1793900599183,
+      "tag": "0051_group_message_nudges",
+      "breakpoints": true
     }
   ]
 }
