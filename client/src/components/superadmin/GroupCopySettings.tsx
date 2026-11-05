@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,7 +21,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { COPY_ITEM_GROUPS, copyItem, type CopyPreviewTarget, type CopyRequest, type CopyResultTarget } from "@shared/settingsCopy";
+import { COPY_ITEM_GROUPS, copyItem, type CopyPreviewTarget, type CopyRequest, type CopyResultTarget, type DetailRow, type DetailSection } from "@shared/settingsCopy";
 
 interface Member { businessAccountId: string; name: string }
 interface HistoryRow {
@@ -34,7 +35,7 @@ interface HistoryRow {
   undoneByName: string | null;
   canUndo: boolean;
 }
-interface SourceItem { key: string; group: string; label: string; description: string; summary: string; empty: boolean }
+interface SourceItem { key: string; group: string; label: string; description: string; summary: string; empty: boolean; sections: DetailSection[] }
 interface SourceJourney { id: string; name: string; status: string; journeyType: string; startFromScratch: boolean; steps: number }
 
 function StepTitle({ number, title, hint }: { number: number; title: string; hint?: string }) {
@@ -47,6 +48,21 @@ function StepTitle({ number, title, hint }: { number: number; title: string; hin
       </div>
     </div>
   );
+}
+
+function DetailValue({ row }: { row: DetailRow }) {
+  if (row.kind === "color") {
+    return (
+      <span className="flex items-center gap-2">
+        <span className="h-4 w-4 shrink-0 rounded border border-gray-200" style={{ background: row.value }} />
+        {row.value}
+      </span>
+    );
+  }
+  if (row.kind === "image") {
+    return <img src={row.value} alt="" className="max-h-32 max-w-full rounded border border-gray-200 object-contain" />;
+  }
+  return <span className="whitespace-pre-wrap break-words">{row.value}</span>;
 }
 
 /** Copy settings tab of an account group: pick one account, what to copy, and which accounts get it. */
@@ -73,6 +89,7 @@ export default function GroupCopySettings({ groupId }: { groupId: string }) {
   const [results, setResults] = useState<{ request: CopyRequest; rows: CopyResultTarget[] } | null>(null);
   const [undoRow, setUndoRow] = useState<HistoryRow | null>(null);
   const [undoing, setUndoing] = useState(false);
+  const [detailKey, setDetailKey] = useState<string | null>(null);
 
   const { data: source, isLoading: sourceLoading } = useQuery<{ items: SourceItem[]; journeys: SourceJourney[] }>({
     queryKey: [`${baseUrl}/source/${sourceId}`],
@@ -99,6 +116,8 @@ export default function GroupCopySettings({ groupId }: { groupId: string }) {
   const visibleOthers = others.filter((m) => m.name.toLowerCase().includes(targetSearch.trim().toLowerCase()));
   const request: CopyRequest = { sourceAccountId: sourceId, targetIds, items: Array.from(picked), instructionsMode, journeyIds: Array.from(journeyIds) };
   const needsJourney = picked.has("journeys") && journeyIds.size === 0;
+  const detailItem = source?.items.find((item) => item.key === detailKey) ?? null;
+  const sourceName = members.find((m) => m.businessAccountId === sourceId)?.name;
   const canReview = !!sourceId && picked.size > 0 && targetIds.length > 0 && !needsJourney;
 
   const toggle = <T,>(set: Set<T>, value: T, on: boolean) => {
@@ -213,7 +232,7 @@ export default function GroupCopySettings({ groupId }: { groupId: string }) {
                     <div className="space-y-1">
                       {source.items.filter((item) => item.group === group).map((item) => (
                         <div key={item.key}>
-                          <label className={`flex items-start gap-3 rounded-lg p-2 ${item.empty ? "opacity-50" : "cursor-pointer hover:bg-gray-50"}`}>
+                          <div className="flex items-start gap-3 rounded-lg p-2 hover:bg-gray-50">
                             <Checkbox
                               className="mt-0.5"
                               aria-label={item.label}
@@ -221,12 +240,20 @@ export default function GroupCopySettings({ groupId }: { groupId: string }) {
                               checked={picked.has(item.key)}
                               onCheckedChange={(on) => { setPicked((set) => toggle(set, item.key, !!on)); stale(); }}
                             />
-                            <span className="min-w-0 flex-1">
-                              <span className="block text-sm font-medium text-gray-800">{item.label}</span>
-                              <span className="block text-xs text-gray-500">{item.description}</span>
-                            </span>
-                            <span className="max-w-[40%] truncate text-right text-xs text-gray-500" title={item.summary}>{item.summary}</span>
-                          </label>
+                            <button
+                              type="button"
+                              onClick={() => setDetailKey(item.key)}
+                              aria-label={`See details of ${item.label}`}
+                              className={`flex min-w-0 flex-1 items-start gap-3 text-left ${item.empty ? "opacity-50" : ""}`}
+                            >
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-sm font-medium text-gray-800">{item.label}</span>
+                                <span className="block text-xs text-gray-500">{item.description}</span>
+                              </span>
+                              <span className="max-w-[40%] truncate text-right text-xs text-gray-500">{item.summary}</span>
+                              <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
+                            </button>
+                          </div>
 
                           {item.key === "instructions" && picked.has("instructions") && (
                             <RadioGroup
@@ -455,6 +482,46 @@ export default function GroupCopySettings({ groupId }: { groupId: string }) {
           </CardContent>
         </Card>
       )}
+
+      <Sheet open={!!detailItem} onOpenChange={(open) => { if (!open) setDetailKey(null); }}>
+        <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-lg">
+          {detailItem && (
+            <>
+              <SheetHeader className="border-b border-gray-100 p-6 text-left">
+                <SheetTitle>{detailItem.label}</SheetTitle>
+                <SheetDescription>{detailItem.description}. This is what {sourceName} has now.</SheetDescription>
+              </SheetHeader>
+              <div className="flex-1 space-y-6 overflow-y-auto p-6">
+                {detailItem.sections.length === 0 && <p className="text-sm text-gray-500">Nothing is set up here on this account, so there is nothing to copy.</p>}
+                {detailItem.sections.map((section, index) => (
+                  <div key={section.title ?? index}>
+                    {section.title && <h4 className="mb-2 text-sm font-semibold text-gray-900">{section.title}</h4>}
+                    <dl className="divide-y divide-gray-100 rounded-lg border border-gray-200">
+                      {section.rows.map((row, rowIndex) => (
+                        <div key={`${row.label}${rowIndex}`} className="px-3 py-2">
+                          <dt className="text-xs text-gray-500">{row.label}</dt>
+                          <dd className="mt-0.5 text-sm text-gray-900"><DetailValue row={row} /></dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                ))}
+              </div>
+              {!detailItem.empty && (
+                <div className="border-t border-gray-100 p-4">
+                  <Button
+                    className="w-full"
+                    variant={picked.has(detailItem.key) ? "outline" : "default"}
+                    onClick={() => { setPicked((set) => toggle(set, detailItem.key, !set.has(detailItem.key))); stale(); }}
+                  >
+                    {picked.has(detailItem.key) ? "Remove from this copy" : "Add to this copy"}
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
 
       <AlertDialog open={confirmCopy} onOpenChange={setConfirmCopy}>
         <AlertDialogContent>

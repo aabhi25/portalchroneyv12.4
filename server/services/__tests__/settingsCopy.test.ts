@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describeValue, mentionedNames, mergeInstructions, sameValue, stableStringify, websiteHost } from "@shared/settingsCopy";
+import { describeValue, fieldDetailRows, mentionedNames, mergeInstructions, sameValue, stableStringify, websiteHost } from "@shared/settingsCopy";
 
 // Comparing.
 assert.equal(stableStringify({ b: 1, a: [{ d: 1, c: 2 }] }), stableStringify({ a: [{ c: 2, d: 1 }], b: 1 }));
@@ -30,6 +30,21 @@ assert.deepEqual(mentionedNames("Welcome to Jaro!", ["Jaro"], "Jaro Delhi"), [])
 assert.deepEqual(mentionedNames("Hello", ["Jaro"], "Other"), []);
 assert.equal(websiteHost("https://www.jaro.in/mba"), "jaro.in");
 assert.equal(websiteHost("jaro.in"), "jaro.in");
+// The details panel.
+assert.deepEqual(fieldDetailRows("chatColor", "#111111"), [{ label: "Main colour", value: "#111111", kind: "color" }]);
+assert.deepEqual(fieldDetailRows("messageNudgeEnabled", "false"), [{ label: "Message nudges", value: "Off" }]);
+assert.deepEqual(fieldDetailRows("inactivityNudgeDelay", "90"), [{ label: "After", value: "90 seconds" }]);
+assert.deepEqual(fieldDetailRows("messageNudgeItems", [{ message: "One", delay: 20 }, { message: " ", delay: 20 }, { message: "Three", delay: 5 }]), [
+  { label: "Message 1, after 20 seconds", value: "One" },
+  { label: "Message 3, after 5 seconds", value: "Three" },
+]);
+assert.deepEqual(fieldDetailRows("conversationStarters", '["Fees?","Syllabus?"]'), [
+  { label: "Question 1", value: "Fees?" },
+  { label: "Question 2", value: "Syllabus?" },
+]);
+assert.equal(fieldDetailRows("availableLanguages", ["auto", "hi", "hinglish"])[0].value, "Detect automatically, Hindi, Hinglish");
+assert.equal(fieldDetailRows("welcomeMessage", null)[0].value, "(empty)");
+
 console.log("settingsCopy tests passed");
 
 // Copying between accounts, against a test database: SETTINGS_COPY_TEST_DB=1 and DATABASE_URL.
@@ -95,6 +110,15 @@ if (process.env.SETTINGS_COPY_TEST_DB) {
     const described = await describeSource(sourceId);
     assert.equal(described.journeys.length, 2);
     assert.equal(described.items.find((i) => i.key === "menu")?.empty, false);
+    // The details panel has the complete values.
+    const details = (key: string) => JSON.stringify(described.items.find((i) => i.key === key)?.sections);
+    assert.ok(details("instructions").includes("Mention scholarships"));
+    assert.ok(details("lead-training").includes("Mandatory, asked at the start"));
+    assert.ok(details("journeys").includes("First question?"));
+    assert.ok(details("menu").includes('Programs \u203a Apply'));
+    assert.ok(details("menu").includes('Opens the form \\"Admission form\\"'));
+    assert.ok(!details("assistant-picture").includes("must-not-travel"));
+    assert.ok(!JSON.stringify(described).includes("must-not-travel")); // No secrets, anywhere.
 
     const request = {
       sourceAccountId: sourceId,

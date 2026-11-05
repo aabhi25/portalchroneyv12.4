@@ -67,6 +67,119 @@ export function humanizeField(field: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+const FIELD_LABELS: Record<string, string> = {
+  chatColor: "Main colour",
+  chatColorEnd: "Second colour",
+  widgetHeaderText: "Chat title",
+  buttonStyle: "Button style",
+  buttonAnimation: "Button animation",
+  sizePreset: "Size",
+  widgetWidth: "Chat width",
+  widgetHeight: "Chat height",
+  widgetPosition: "Position",
+  bubbleSize: "Button size",
+  pillBottomOffset: "Distance from the bottom",
+  pillSideOffset: "Distance from the side",
+  panelTopOffset: "Distance from the top",
+  chatFontSize: "Text size",
+  footerLabelEnabled: "Footer text shown",
+  footerLabelText: "Footer text",
+  avatarType: "Picture type",
+  avatarUrl: "Picture",
+  welcomeMessageType: "Welcome type",
+  responseLength: "Reply length",
+  autoOpenChat: "Opens by itself",
+  languageSelectorEnabled: "Language picker shown",
+  availableLanguages: "Languages offered",
+  conversationStarters: "Questions",
+  conversationStartersEnabled: "Starter questions shown",
+  showStartersOnPill: "Also shown on the chat button",
+  messageNudgeEnabled: "Message nudges",
+  messageNudgeItems: "Messages",
+  proactiveNudgeMessage: "First message",
+  proactiveNudgeDelay: "First message after",
+  proactiveNudgeMessages: "Follow-up messages",
+  proactiveNudgeRepeat: "On every page load",
+  inactivityNudgeMessage: "Message",
+  inactivityNudgeDelay: "After",
+  inactivityNudgeMessages: "Follow-up messages",
+  smartNudgeEnabled: "AI writes the follow-up",
+};
+
+/** The name of a setting as people know it. */
+export const fieldLabel = (field: string) => FIELD_LABELS[field] ?? humanizeField(field);
+
+/** One line of the details panel. */
+export interface DetailRow {
+  label: string;
+  value: string;
+  kind?: "color" | "image";
+}
+
+export interface DetailSection {
+  title?: string;
+  rows: DetailRow[];
+}
+
+function languageName(code: string): string {
+  if (code === "auto") return "Detect automatically";
+  if (code === "hinglish") return "Hinglish";
+  try {
+    return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+const seconds = (value: unknown) => `${value} second${Number(value) === 1 ? "" : "s"}`;
+
+function plainValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "(empty)";
+  if (value === "true") return "On";
+  if (value === "false") return "Off";
+  return typeof value === "string" ? value : stableStringify(value);
+}
+
+function asList(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value.trim().startsWith("[")) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* plain text */ }
+  }
+  return null;
+}
+
+/** The complete value of one setting, as lines for the details panel. */
+export function fieldDetailRows(field: string, value: unknown): DetailRow[] {
+  const label = fieldLabel(field);
+  if (field === "availableLanguages") {
+    const list = asList(value) ?? [];
+    return [{ label, value: list.length ? list.map((code) => languageName(String(code))).join(", ") : "(empty)" }];
+  }
+  const list = asList(value);
+  if (list) {
+    if (list.length === 0) return [{ label, value: "(none)" }];
+    const rows: DetailRow[] = [];
+    list.forEach((entry, index) => {
+      const record = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
+      if (record && "delay" in record && "message" in record) {
+        const text = String(record.message ?? "").trim();
+        if (text) rows.push({ label: `Message ${index + 1}, after ${seconds(record.delay)}`, value: text });
+        return;
+      }
+      const text = record ? record.question ?? record.text ?? record.label ?? record.message ?? stableStringify(record) : entry;
+      rows.push({ label: label === "Questions" ? `Question ${index + 1}` : `${label} ${index + 1}`, value: String(text) });
+    });
+    return rows.length ? rows : [{ label, value: "(none written)" }];
+  }
+  if (/color/i.test(field) && typeof value === "string" && value.trim()) return [{ label, value, kind: "color" }];
+  if (/(imageUrl|avatarUrl)$/.test(field) && typeof value === "string" && value.trim()) return [{ label, value, kind: "image" }];
+  if (/delay/i.test(field) && value !== null && value !== undefined && value !== "") return [{ label, value: seconds(value) }];
+  return [{ label, value: plainValue(value) }];
+}
+
 /** A short version of a value for the review screen. */
 export function describeValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "(empty)";

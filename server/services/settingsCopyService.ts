@@ -20,6 +20,8 @@ import {
   COPY_ITEMS,
   copyItem,
   describeValue,
+  fieldDetailRows,
+  fieldLabel,
   humanizeField,
   mentionedNames,
   mergeInstructions,
@@ -28,6 +30,8 @@ import {
   stableStringify,
   websiteHost,
   type CopyChange,
+  type DetailRow,
+  type DetailSection,
   type CopyItem,
   type CopyPreviewTarget,
   type CopyRequest,
@@ -108,7 +112,97 @@ function fieldsSummary(item: CopyItem, settings: Row): string {
   return parts.join(" · ") || describeValue(settings[fields[0]]);
 }
 
-/** What the source account has for each item, for the "what to copy" list. */
+function leadSections(raw: unknown): DetailSection[] {
+  const fields = Array.isArray((raw as Row)?.fields) ? ((raw as Row).fields as Row[]) : [];
+  if (fields.length === 0) return [];
+  const timing = (field: Row) => {
+    if (field.captureStrategy === "custom" || field.captureStrategy === "smart") return `asked after reply ${field.customAskAfter ?? 2}`;
+    if (field.captureStrategy === "start") return "asked at the start";
+    return `asked: ${humanizeField(String(field.captureStrategy ?? "custom")).toLowerCase()}`;
+  };
+  const sorted = [...fields].sort((a, b) => Number(a.priority ?? 0) - Number(b.priority ?? 0));
+  return [{
+    title: "What gets copied",
+    rows: sorted.map((field) => ({
+      label: humanizeField(String(field.id)),
+      value: field.enabled
+        ? [field.required ? "Mandatory" : "Optional", timing(field), field.phoneValidation ? `digit check: ${field.phoneValidation}` : ""].filter(Boolean).join(", ")
+        : "Not asked",
+    })),
+  }];
+}
+
+function instructionSections(raw: unknown): DetailSection[] {
+  const list = parseInstructionList(typeof raw === "string" ? raw : null);
+  if (list.length === 0) return [];
+  return [{
+    rows: list.map((item, index) => {
+      const keywords = Array.isArray(item.keywords) && item.keywords.length ? `, when: ${item.keywords.join(", ")}` : "";
+      return { label: `${index + 1}. ${humanizeField(String(item.type ?? "always"))}${keywords}`, value: String(item.text ?? "") };
+    }),
+  }];
+}
+
+function journeySections(journeys: JourneyBundle[]): DetailSection[] {
+  return journeys.map(({ journey, steps }) => {
+    const keywords = (() => {
+      try { return (JSON.parse(journey.triggerKeywords || "[]") as string[]).join(", "); } catch { return ""; }
+    })();
+    const rows: DetailRow[] = [
+      { label: "Status", value: journey.status === "active" ? "On" : "Off" },
+      { label: "Type", value: journey.journeyType === "form" ? "Form, one question at a time" : "Guided conversation" },
+    ];
+    if (journey.startFromScratch === "true") rows.push({ label: "Starts", value: "Every chat" });
+    if (keywords) rows.push({ label: "Starts on these words", value: keywords });
+    if (journey.description) rows.push({ label: "Description", value: journey.description });
+    if (journey.conversationalGuidelines) rows.push({ label: "AI guidelines", value: journey.conversationalGuidelines });
+    steps.forEach((step, index) => {
+      let options = "";
+      try {
+        const parsed = step.multipleChoiceOptions ? JSON.parse(step.multipleChoiceOptions) : null;
+        if (Array.isArray(parsed) && parsed.length) options = `\nOptions: ${parsed.join(", ")}`;
+      } catch { /* no options */ }
+      rows.push({ label: `Question ${index + 1}${step.isRequired === "true" ? " (required)" : ""}`, value: `${step.questionText}${options}` });
+    });
+    return { title: journey.name, rows };
+  });
+}
+
+function menuSections(menu: MenuBundle, journeys: JourneyBundle[]): DetailSection[] {
+  const sections: DetailSection[] = [];
+  if (menu.config) {
+    const rows: DetailRow[] = [
+      { label: "Menu start screen", value: menu.config.enabled === "true" ? "On" : "Off" },
+      { label: "Welcome message", value: menu.config.welcomeMessage || "(empty)" },
+    ];
+    if (Array.isArray(menu.config.quickChips) && menu.config.quickChips.length) rows.push({ label: "Quick chips", value: menu.config.quickChips.map((chip: unknown) => (typeof chip === "string" ? chip : (chip as Row)?.label)).join(", ") });
+    if (menu.config.persistentCtaEnabled === "true") rows.push({ label: "Main button", value: [menu.config.persistentCtaLabel, menu.config.persistentCtaValue].filter(Boolean).join(": ") });
+    if (menu.config.footerText) rows.push({ label: "Footer", value: [menu.config.footerText, menu.config.footerLinkText, menu.config.footerLinkUrl].filter(Boolean).join(" · ") });
+    sections.push({ title: "Start screen", rows });
+  }
+  if (menu.items.length) {
+    const byId = new Map(menu.items.map((item) => [item.id, item]));
+    const pathOf = (item: Row): string => (item.parentId && byId.has(item.parentId) ? `${pathOf(byId.get(item.parentId)!)} › ${item.title}` : String(item.title));
+    const opens = (item: Row): string => {
+      if (item.itemType === "form") return `Opens the form "${journeys.find((b) => b.journey.id === item.actionValue)?.journey.name ?? "not found"}"`;
+      if (item.itemType === "navigate") return "Opens a submenu";
+      if (item.itemType === "chat") return "Opens the chat";
+      if (item.itemType === "detail") return "Opens a details page";
+      if (item.itemType === "url") return `Opens the link ${item.actionValue ?? ""}`.trim();
+      if (item.itemType === "phone") return `Calls ${item.actionValue ?? ""}`.trim();
+      return [humanizeField(String(item.itemType)), item.actionValue].filter(Boolean).join(": ");
+    };
+    sections.push({
+      title: "Buttons",
+      rows: menu.items
+        .map((item) => ({ label: pathOf(item), value: [opens(item), item.subtitle, item.isActive === "false" ? "Hidden" : ""].filter(Boolean).join("\n") }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    });
+  }
+  return sections;
+}
+
+/** What the source account has for each item, for the "what to copy" list and its details panel. */
 export async function describeSource(sourceAccountId: string) {
   const settings: Row = (await storage.getWidgetSettings(sourceAccountId)) ?? {};
   const journeys = await loadJourneys(sourceAccountId);
@@ -116,6 +210,18 @@ export async function describeSource(sourceAccountId: string) {
   const items = COPY_ITEMS.map((item) => {
     let summary = "";
     let empty = false;
+    let sections: DetailSection[] = [];
+    if (item.kind === "fields" || item.kind === "avatar") {
+      sections = [{ rows: (item.fields ?? []).flatMap((field) => fieldDetailRows(field, settings[field])) }];
+    } else if (item.kind === "lead") {
+      sections = leadSections(settings.leadTrainingConfig);
+    } else if (item.kind === "instructions") {
+      sections = instructionSections(settings.customInstructions);
+    } else if (item.kind === "journeys") {
+      sections = journeySections(journeys);
+    } else if (item.kind === "menu") {
+      sections = menuSections(menu, journeys);
+    }
     if (item.kind === "fields") {
       summary = fieldsSummary(item, settings);
     } else if (item.kind === "avatar") {
@@ -135,7 +241,7 @@ export async function describeSource(sourceAccountId: string) {
       empty = !menu.config && menu.items.length === 0;
       summary = empty ? "No menu" : `${menu.config?.enabled === "true" ? "On" : "Off"} · ${menu.items.length} button${menu.items.length === 1 ? "" : "s"}`;
     }
-    return { key: item.key, group: item.group, label: item.label, description: item.description, summary, empty };
+    return { key: item.key, group: item.group, label: item.label, description: item.description, summary, empty, sections };
   });
   return {
     items,
@@ -300,7 +406,7 @@ async function planTarget(source: Source, request: CopyRequest, target: { busine
       for (const field of changed) setField(field, source.settings[field]);
       plan.changes.push({
         key, label: item.label,
-        details: changed.map((field) => ({ field: humanizeField(field), from: describeValue(settings[field]), to: describeValue(source.settings[field]) })),
+        details: changed.map((field) => ({ field: fieldLabel(field), from: describeValue(settings[field]), to: describeValue(source.settings[field]) })),
       });
       warnIfNamed(item, (item.fields ?? []).map((field) => {
         const value = source.settings[field];
