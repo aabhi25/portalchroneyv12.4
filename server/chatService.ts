@@ -236,6 +236,11 @@ export interface ChatContext {
  * profile (always in the prompt), so the knowledge search (0.4-1.1 s on self-calls) is skipped.
  */
 const PHONE_QUESTION_WORD = /\?|\b(what|which|how|why|when|where|who|whom|whose|is|are|do|does|did|can|could|will|would|should|kya|kaun|kaunsa|kitna|kitne|kitni|kaise|kab|kahan|kyun|kyon|batao|bataiye|bata do)\b|क्या|कौन|कितना|कितने|कितनी|कैसे|कब|कहाँ|क्यों|बताइए|बताओ/i;
+/** The website widget asks a journey form's question as a chat bubble with its options under it, so that bubble is the whole reply. The calendar step has its own card instead. */
+function formQuestionIsReply(step?: { questionText?: string; stepType?: string }): boolean {
+  return !!step?.questionText && step.stepType !== 'book_appointment';
+}
+
 function isShortPhoneAnswer(msg: string): boolean {
   const words = msg.trim().split(/\s+/).filter(Boolean);
   return words.length > 0 && words.length <= 5 && !PHONE_QUESTION_WORD.test(msg);
@@ -3905,11 +3910,12 @@ Response:`;
           }
 
           // For form journeys, emit form_step SSE event for visual UI
+          const questionIsReply = formQuestionIsReply(engineResult.formStep);
           if (engineResult.formStep) {
             console.log('[Chat Stream] Engine returned form step - emitting form_step:', engineResult.formStep.questionText?.substring(0, 30));
             // Include conversationId so client can track which conversation to use for form step submission
             // Include isComplete flag so widget knows when to disable chat input after journey ends
-            yield { type: 'form_step' as const, data: JSON.stringify({ ...engineResult.formStep, conversationId, journeyComplete: engineResult.isComplete }) };
+            yield { type: 'form_step' as const, data: JSON.stringify({ ...engineResult.formStep, conversationId, journeyComplete: engineResult.isComplete, questionIsReply }) };
           }
 
           // For conversational journeys with dropdown/radio steps, emit the choices as
@@ -3919,10 +3925,12 @@ Response:`;
             yield { type: 'journey_options' as const, data: JSON.stringify({ options: engineResult.options }) };
           }
           
-          // Store engine's response
-          conversationMemory.storeMessage(context.userId, 'assistant', engineResult.response);
-          await this.storeMessageInDB(conversationId, 'assistant', engineResult.response);
-          
+          // Store engine's response (a form question is stored as itself, so the transcript and
+          // the AI's history show what was asked, and a reloaded widget finds it as the live question)
+          const storedReply = questionIsReply ? engineResult.formStep!.questionText : engineResult.response;
+          conversationMemory.storeMessage(context.userId, 'assistant', storedReply);
+          await this.storeMessageInDB(conversationId, 'assistant', storedReply);
+
           // Stream the response word-by-word for natural typing effect
           const words = engineResult.response.split(' ');
           for (let i = 0; i < words.length; i++) {
@@ -3949,16 +3957,22 @@ Response:`;
         // Return early to prevent AI from asking the same question as text
         if (journeyResult.formStep) {
           console.log('[Chat Stream] Form journey triggered by keyword - emitting form_step:', journeyResult.formStep.questionText?.substring(0, 30));
+          const questionIsReply = formQuestionIsReply(journeyResult.formStep);
+          const formStep = replyLanguageActive(context.replyLanguage) && journeyResult.formStep.questionText
+            ? { ...journeyResult.formStep, questionText: await this.fixedText(context, journeyResult.formStep.questionText) }
+            : journeyResult.formStep;
           // Include conversationId so client can track which conversation to use for form step submission
-          yield { type: 'form_step' as const, data: JSON.stringify({ ...journeyResult.formStep, conversationId }) };
-          
-          // Store a brief acknowledgment as AI response (not the question itself)
+          yield { type: 'form_step' as const, data: JSON.stringify({ ...formStep, conversationId, questionIsReply }) };
+
+          // A brief acknowledgment for the chats that show the question as a card; a question
+          // the widget asks as a bubble is stored as itself (same as the engine path above).
           const acknowledgment = await this.fixedText(context, "Great! Let me help you with that. Please select from the options below:");
           if (!context.deferAssistantPersistence) {
-            conversationMemory.storeMessage(context.userId, 'assistant', acknowledgment);
-            await this.storeMessageInDB(conversationId, 'assistant', acknowledgment);
+            const storedReply = questionIsReply ? formStep.questionText : acknowledgment;
+            conversationMemory.storeMessage(context.userId, 'assistant', storedReply);
+            await this.storeMessageInDB(conversationId, 'assistant', storedReply);
           }
-          
+
           // Stream the acknowledgment and return - form UI handles the question
           yield { type: 'content' as const, data: acknowledgment };
           yield { type: 'final' as const, data: acknowledgment };

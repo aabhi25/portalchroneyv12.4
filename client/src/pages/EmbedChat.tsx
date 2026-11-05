@@ -162,6 +162,8 @@ interface FormStepData {
   completionButtonText?: string;
   journeyId?: string;
   conversationId?: string;
+  /** Sent with a journey's next question: this question's bubble is the turn's whole reply. */
+  questionIsReply?: boolean;
 }
 
 interface ChatMessage {
@@ -3455,6 +3457,10 @@ export default function EmbedChat() {
       let buffer = '';
       let pendingUpdate = false;
       let lookupOptionsActive = false;
+      // The form question's bubble is the reply: the server's short "select from the options
+      // below" (for chats that show the question as a card) would be a second bubble after it,
+      // and options only show on the last bubble.
+      let formQuestionIsReply = false;
 
       const updateStreamingMessage = () => {
         if (pendingUpdate) return;
@@ -3574,6 +3580,7 @@ export default function EmbedChat() {
                 // the visitor's Google Ads conversion tag fires in their browser.
                 fireConversion(conversationIdRef.current);
               } else if (data.type === 'content') {
+                if (formQuestionIsReply) continue;
                 if (isResumeFlow && !resumeProgressCleared) {
                   resumeProgressCleared = true;
                   setResumeUploadStage('idle');
@@ -3668,6 +3675,7 @@ export default function EmbedChat() {
                 console.log('[Form Journey] Received form step:', data.data);
                 const formStepData = typeof data.data === 'string' ? JSON.parse(data.data) : data.data;
                 setActiveFormStep(formStepData);
+                formQuestionIsReply = !!formStepData.questionIsReply;
                 // Set active journey ID so form step submission works
                 if (formStepData.journeyId) {
                   setActiveJourneyId(formStepData.journeyId);
@@ -3687,11 +3695,12 @@ export default function EmbedChat() {
                 setChatEnded(true);
               } else if (data.type === 'final') {
                 const finalText = typeof data.data === 'string' ? data.data : '';
-                if (!finalText.trim() && !streamedContent) {
+                if (formQuestionIsReply || (!finalText.trim() && !streamedContent)) {
                   // Task #9 (Option A): the server suppressed the assistant text
                   // for this turn (e.g. a mid-chat OTP challenge was just issued and
                   // the OTP dialog is the only verification surface). Remove the
                   // typing placeholder so no empty assistant bubble is rendered.
+                  // Same when a form question's bubble is this turn's reply.
                   setMessages(prev => prev.filter(m => m.id !== aiMessageId));
                 } else if (streamedContent) {
                   // Content was already streamed token-by-token — just commit the

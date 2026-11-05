@@ -8,7 +8,8 @@
  *  - starting another form (from the menu) answers that form, not the one in progress;
  *  - an answer for a question that isn't the one in progress is not saved: the widget is moved
  *    to the right question (or, for the form's first question, the form starts over);
- *  - after the server forgets its in-memory state (a restart), the form carries on from the DB.
+ *  - after the server forgets its in-memory state (a restart), the form carries on from the DB;
+ *  - a form started by a trigger keyword sends its question as the whole reply.
  *
  *   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55495/postgres?sslmode=disable \
  *   FORM_JOURNEY_TEST_DB=1 DB_POOL_MAX=5 npx tsx server/services/__tests__/formJourney.integration.test.ts
@@ -79,6 +80,7 @@ async function main() {
   const answersOf = async (conversationId: string) =>
     (await db.select().from(schema.journeyResponses).where(eq(schema.journeyResponses.conversationId, conversationId))).map((r: any) => `${r.journeyId === A.id ? "A" : "B"}:${r.response}`).sort();
 
+  let kwBiz: string | undefined;
   try {
     // ── the start-up form is the greeting ──
     let r = await get(`/api/chat/widget/intro?businessAccountId=${biz}`);
@@ -187,8 +189,32 @@ async function main() {
     for await (const ch of chatService.streamMessage("hi, what are the fees?", { existingConversationId: ec, userId: `widget_session_${ec}`, businessAccountId: biz, openaiApiKey: "sk-test-not-real", channel: "widget" } as any)) chunks.push(ch);
     expect(chunks.some((c) => c.type === "chat_ended") && chunks.some((c) => c.type === "final" && /has ended/.test(c.data)), "typing in the ended chat gets a fixed line, no AI", chunks.map((c) => c.type));
     expect(await journeyService.chatEndedByJourney(conv) === null, "a chat whose journey lets it carry on is not ended");
+
+    // A form started by a trigger keyword: the question's bubble is the widget's whole reply.
+    const [kwAccount] = await db.insert(schema.businessAccounts).values({ name: `Keyword test ${crypto.randomUUID().slice(0, 8)}`, website: "https://example.test" } as any).returning();
+    kwBiz = kwAccount.id as string;
+    const mkKeywordJourney = async (keyword: string, step: Record<string, unknown>) => {
+      const [j] = await db.insert(schema.conversationJourneys).values({ businessAccountId: kwBiz, name: keyword, journeyType: "form", status: "active", triggerMode: "keyword", triggerKeywords: JSON.stringify([keyword]) } as any).returning();
+      await db.insert(schema.journeySteps).values({ journeyId: j.id, stepOrder: "0", isRequired: "true", ...step } as any);
+    };
+    await mkKeywordJourney("fees", { questionText: "Which would you like to do first?", questionType: "radio", multipleChoiceOptions: JSON.stringify(["Explore", "Check eligibility"]) });
+    await mkKeywordJourney("appointment", { questionText: "Pick a time", questionType: "text", toolTrigger: "book_appointment" });
+    const typeKeyword = async (message: string) => {
+      const [c] = await db.insert(schema.conversations).values({ businessAccountId: kwBiz, title: "Keyword test" } as any).returning();
+      const chunks: any[] = [];
+      for await (const ch of chatService.streamMessage(message, { existingConversationId: c.id, userId: `widget_session_${c.id}`, businessAccountId: kwBiz, openaiApiKey: "sk-test-not-real", channel: "widget" } as any)) chunks.push(ch);
+      const formStep = JSON.parse(chunks.find((ch) => ch.type === "form_step")?.data ?? "{}");
+      const stored = (await db.select().from(schema.messages).where(eq(schema.messages.conversationId, c.id))).filter((m: any) => m.role === "assistant").map((m: any) => m.content);
+      return { formStep, stored };
+    };
+    const kw = await typeKeyword("fees");
+    expect(kw.formStep.questionIsReply === true && kw.formStep.options?.length === 2, "a keyword start sends the question, with its options, as the whole reply", kw.formStep);
+    expect(kw.stored.length === 1 && kw.stored[0] === "Which would you like to do first?", "the chat's history holds the question, not an acknowledgement", kw.stored);
+    const cal = await typeKeyword("appointment");
+    expect(cal.formStep.stepType === "book_appointment" && cal.formStep.questionIsReply === false, "the calendar step has its own card, so the short reply stays", cal.formStep);
   } finally {
     await db.delete(schema.businessAccounts).where(eq(schema.businessAccounts.id, biz)).catch(() => {});
+    if (kwBiz) await db.delete(schema.businessAccounts).where(eq(schema.businessAccounts.id, kwBiz)).catch(() => {});
     server.close();
   }
 
