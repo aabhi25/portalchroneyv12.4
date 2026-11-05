@@ -181,6 +181,7 @@ export const GROUP_TABS = [
   { key: "overview", label: "Accounts & admins" },
   { key: "insights", label: "Insights" },
   { key: "training", label: "Training" },
+  { key: "copy", label: "Copy settings" },
   { key: "privacy", label: "Auto-delete" },
 ] as const;
 export type GroupTabKey = typeof GROUP_TABS[number]["key"];

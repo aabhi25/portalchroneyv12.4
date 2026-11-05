@@ -1807,6 +1807,24 @@ export const accountGroupExtraSettings = pgTable("account_group_extra_settings",
   index("account_group_extra_settings_group_idx").on(table.groupId),
 ]);
 
+// Copy settings (account group page): each copy between accounts, with the old values so it can be undone.
+export const settingsCopyLog = pgTable("settings_copy_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  groupId: varchar("group_id").notNull().references(() => accountGroups.id, { onDelete: "cascade" }),
+  sourceAccountId: varchar("source_account_id").notNull(),
+  sourceName: text("source_name").notNull(),
+  request: jsonb("request").notNull(), // What was asked for (see CopyRequest in shared/settingsCopy.ts)
+  results: jsonb("results").notNull().default(sql`'[]'::jsonb`), // Per account: what changed, warnings, errors
+  snapshots: jsonb("snapshots").notNull().default(sql`'{}'::jsonb`), // Per account: the old values, for undo
+  createdBy: varchar("created_by"),
+  createdByName: text("created_by_name"),
+  undoneAt: timestamp("undone_at"),
+  undoneByName: text("undone_by_name"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  index("settings_copy_log_group_idx").on(table.groupId, table.createdAt),
+]);
+
 // Model Pricing - Store current OpenAI pricing for cost calculation
 export const modelPricing = pgTable("model_pricing", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

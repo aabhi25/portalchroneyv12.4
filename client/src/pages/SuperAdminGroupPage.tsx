@@ -6,6 +6,7 @@ import { GROUP_TABS, groupHref, type GroupTabKey } from "@/navigation/superAdmin
 import SuperAdminAccountGroups from "@/pages/SuperAdminAccountGroups";
 import GroupInsightsPage from "@/pages/GroupInsightsPage";
 import GroupTrainingEditor from "@/pages/GroupTrainingEditor";
+import GroupCopySettings from "@/components/superadmin/GroupCopySettings";
 
 interface GroupLite {
   id: string;
@@ -40,6 +41,7 @@ export default function SuperAdminGroupPage({ groupId, tab }: { groupId: string;
             {active === "overview" && <SuperAdminAccountGroups groupId={groupId} />}
             {active === "insights" && <GroupInsightsPage />}
             {active === "training" && <GroupTrainingEditor />}
+            {active === "copy" && <GroupCopySettings groupId={groupId} />}
             {active === "privacy" && group && (
               <DataRetentionDialog bare open onOpenChange={() => {}} scopeType="group" scopeId={group.id} scopeName={group.name} />
             )}

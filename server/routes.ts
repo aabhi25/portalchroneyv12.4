@@ -105,6 +105,8 @@ function cleanLandingUrl(value: unknown): string | undefined {
 }
 import dataRetentionRoutes from "./routes/dataRetention";
 import merittoRoutes from "./routes/meritto";
+import settingsCopyRoutes from "./routes/settingsCopy";
+import { imageUsedByOtherAccount } from "./services/settingsCopyService";
 import accountSetupRoutes from "./routes/accountSetup";
 import aiUsageRoutes from "./routes/aiUsage";
 import agencyRoutes from "./routes/agencies";
@@ -645,6 +647,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(whatsappHandoffRoutes);
   app.use(dataRetentionRoutes);
   app.use(merittoRoutes);
+  app.use(settingsCopyRoutes);
   app.use(accountSetupRoutes);
   app.use(aiUsageRoutes);
   app.use(agencyRoutes);
@@ -26970,7 +26973,10 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       // Ensure R2 is initialized to check if it's enabled and get proper URL matching
       await r2Storage.ensureInitialized();
       
-      if (avatarUrl.startsWith('http')) {
+      // Copy settings shares one picture file between accounts: keep it while another uses it.
+      if (await imageUsedByOtherAccount(businessAccountId, avatarUrl)) {
+        console.log('[Avatar Delete] Keeping the file: another account uses it:', avatarUrl);
+      } else if (avatarUrl.startsWith('http')) {
         // R2 storage - try to extract key and delete
         const r2Key = r2Storage.extractKeyFromUrl(avatarUrl);
         console.log('[Avatar Delete] Attempting R2 deletion for URL:', avatarUrl, 'Extracted key:', r2Key);
