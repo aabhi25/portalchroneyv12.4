@@ -635,7 +635,7 @@ class JourneyService {
   }
 
   // Primary method: Get or start journey by conversationId
-  async getOrStartJourney(conversationId: string, userId: string, businessAccountId: string, userMessage?: string): Promise<JourneyState | null> {
+  async getOrStartJourney(conversationId: string, userId: string, businessAccountId: string, userMessage?: string, opts?: { firstQuestionHidden?: boolean }): Promise<JourneyState | null> {
     console.log('[Journey] getOrStartJourney called for conversation:', conversationId, 'message:', userMessage);
     
     // CRITICAL: Clear any stale journeys for this user/business with DIFFERENT conversationIds
@@ -713,7 +713,9 @@ class JourneyService {
       if (earlierSession.length === 0) {
         console.log('[Journey] ✓ Auto-starting startFromScratch journey:', startFromScratchJourney.id);
         const newState = await this.startJourney(conversationId, userId, businessAccountId, startFromScratchJourney.id);
-        if (newState) {
+        // With message nudges the chat opened without the greeting: this message doesn't answer
+        // the first question, which is asked now.
+        if (newState && !opts?.firstQuestionHidden) {
           // First question was already shown as the greeting
           newState.awaitingFirstUserResponse = false;
           newState.firstQuestionShownAsGreeting = true;

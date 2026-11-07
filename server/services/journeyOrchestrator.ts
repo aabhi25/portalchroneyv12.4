@@ -291,7 +291,13 @@ export interface LeadOrigin {
 export interface JourneyRunOpts {
   channel?: string | null;
   origin?: LeadOrigin;
+  /** The chat opened with message nudges instead of a start-up journey's first question. */
+  firstQuestionHidden?: boolean;
 }
+
+/** A reply to a message nudge that only says yes: nothing for the AI to answer when the journey ends. */
+const isPlainYes = (message: string) =>
+  /^(y|yes+|yeah|yep|yup|ok+|okay|sure|please|go ahead|haa*n?|ji|interested|👍)[\s.!]*$/i.test(message.trim());
 
 export class JourneyOrchestrator {
   /**
@@ -329,7 +335,7 @@ export class JourneyOrchestrator {
   ): Promise<EngineJourneyResponse> {
     try {
       // Check if a conversation journey is active
-      const journeyState = await journeyService.getOrStartJourney(conversationId, userId, businessAccountId, userMessage);
+      const journeyState = await journeyService.getOrStartJourney(conversationId, userId, businessAccountId, userMessage, { firstQuestionHidden: opts.firstQuestionHidden });
       
       if (!journeyState || journeyState.completed) {
         // No active journey - let AI handle normally
@@ -343,7 +349,7 @@ export class JourneyOrchestrator {
       const isFirstInteraction = journeyState.awaitingFirstUserResponse;
       if (isFirstInteraction) {
         await journeyService.markJourneyPrompted(conversationId);
-        journeyState.triggerMessage ??= userMessage;
+        if (!(opts.firstQuestionHidden && isPlainYes(userMessage))) journeyState.triggerMessage ??= userMessage;
       }
       const prefill = await autoFillKnownSteps(conversationId, businessAccountId);
       const currentStep = await journeyService.getCurrentStep(conversationId);

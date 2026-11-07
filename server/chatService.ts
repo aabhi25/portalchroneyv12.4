@@ -3453,9 +3453,11 @@ Response:`;
       timing.stage('history', (historyResumed - historyStarted) + (Date.now() - historyResumed));
 
       // The message nudges the visitor saw open this chat: saved before the reply, and the AI reads them.
+      let chatOpenedWithNudges = false;
       if (repliesToMessageNudge && isFirstMessage) {
         const nudgeTexts = await saveShownMessageNudges(context.businessAccountId, conversationId, context.shownMessageNudges);
         for (const text of nudgeTexts) conversationMemory.storeMessage(context.userId, 'assistant', text);
+        chatOpenedWithNudges = nudgeTexts.length > 0;
       }
 
       // Yield conversationId first so client can store it for persistence
@@ -3884,7 +3886,7 @@ Response:`;
           context.userId,
           context.businessAccountId,
           userMessage,
-          { channel: context.channel, origin: { city: context.visitorCity, sourceUrl: context.pageUrl, landingUrl: context.landingUrl } }
+          { firstQuestionHidden: chatOpenedWithNudges, channel: context.channel, origin: { city: context.visitorCity, sourceUrl: context.pageUrl, landingUrl: context.landingUrl } }
         );
 
         // A mobile number the journey just saved locked the chat: show the CAPTCHA now.

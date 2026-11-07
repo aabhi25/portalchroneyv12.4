@@ -4133,7 +4133,7 @@ export default function GroupTrainingEditor() {
               onEnabledChange={setExtraMessageNudgeEnabled}
               items={extraMessageNudgeItems}
               onItemsChange={setExtraMessageNudgeItems}
-              intro="Messages that appear one after another above the chat button on every account in this group. When a visitor opens the chat, it starts with only the messages they have already seen."
+              intro="Messages that appear above the chat button one at a time, each taking the place of the last, on every account in this group. When a visitor opens the chat, it starts with only the messages they have already seen."
               notes={["If you leave all three empty, publishing doesn't change the accounts' own Message nudges. To turn them off everywhere, keep the messages, switch this off and publish."]}
             />
 

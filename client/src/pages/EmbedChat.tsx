@@ -176,8 +176,6 @@ interface ChatMessage {
   isNudge?: boolean;
   /** A message nudge the visitor saw on the website (its number in the settings), not saved until they reply. */
   messageNudgeIndex?: number;
-  /** The greeting is a start-up journey's first question, so it stays after message nudges. */
-  isStartupQuestion?: boolean;
   products?: any[];
   productPagination?: ProductPagination;
   productSearchQuery?: string;
@@ -668,6 +666,10 @@ export default function EmbedChat() {
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
   const [activeFormStep, setActiveFormStep] = useState<FormStepData | null>(null);
   const [shownMessageNudgeIndexes, setShownMessageNudgeIndexes] = useState<number[]>([]);
+  const messageNudgesOpenChatRef = useRef(false);
+  // What the start-up journey put on screen, so message nudges can take its place.
+  const startupFormStepIdRef = useRef<string | null>(null);
+  const startupJourneyIdRef = useRef<string | null>(null);
   // Text typed in the answer box to narrow a long list of form options.
   const [formChoiceSearch, setFormChoiceSearch] = useState("");
   const [activeJourneyId, setActiveJourneyId] = useState<string | null>(null);
@@ -1889,6 +1891,7 @@ export default function EmbedChat() {
     setIsFormJourneyComplete(false); // Reset journey complete state for new conversation
     setChatEnded(false);
     setShownMessageNudgeIndexes([]);
+    messageNudgesOpenChatRef.current = false;
     
     // Reset inactivity nudge state to prevent old nudges from appearing
     inactivityNudgeSentRef.current = false;
@@ -2019,8 +2022,9 @@ export default function EmbedChat() {
   };
   const currencySymbol = currencySymbols[currency] || "$";
 
-  // Message nudges the visitor saw open the chat, in place of the greeting and its extras. Closing
-  // them brings the normal greeting back. A chat already under way is never touched.
+  // Message nudges the visitor saw open the chat, in place of the greeting and its extras. A journey
+  // that starts every chat waits for the visitor's first reply (the server then asks its first
+  // question). Closing them brings the normal start back. A chat already under way is never touched.
   useEffect(() => {
     if (!settings || isRestoringHistory || anyPreChatGateActive || externalGuidanceModeRef.current) return;
     const nudges = settings.messageNudgeEnabled === 'true'
@@ -2029,8 +2033,18 @@ export default function EmbedChat() {
     const hadNudges = messages.some(m => m.messageNudgeIndex !== undefined);
     if (nudges.length === 0 && !hadNudges) return;
     if (messages.some(m => m.role === 'user' || (m.id !== '1' && !m.formStepId && m.messageNudgeIndex === undefined))) return;
+    messageNudgesOpenChatRef.current = nudges.length > 0;
+    const heldFormStepId = nudges.length > 0 ? startupFormStepIdRef.current : null;
+    if (nudges.length > 0) {
+      if (heldFormStepId) setActiveFormStep(current => (current?.stepId === heldFormStepId ? null : current));
+      if (startupJourneyIdRef.current) setActiveJourneyId(current => (current === startupJourneyIdRef.current ? null : current));
+      startupFormStepIdRef.current = null;
+      startupJourneyIdRef.current = null;
+    }
     setMessages(prev => {
-      const others = prev.filter(m => m.messageNudgeIndex === undefined && (nudges.length === 0 || m.id !== '1' || m.isStartupQuestion));
+      const others = prev.filter(m => m.messageNudgeIndex === undefined
+        && (nudges.length === 0 || m.id !== '1')
+        && (!heldFormStepId || m.formStepId !== heldFormStepId));
       const carried: ChatMessage[] = nudges.map(({ index, text }) => ({
         id: `message-nudge-${index}`,
         role: 'assistant',
@@ -2104,6 +2118,14 @@ export default function EmbedChat() {
         const response = await fetch(`/api/chat/widget/intro?businessAccountId=${encodeURIComponent(businessAccountId)}${langParam}${welcomeBackParam}${studentMediumRef.current ? `&medium=${encodeURIComponent(studentMediumRef.current)}` : ''}`);
         if (response.ok) {
           const data = await response.json();
+          // Message nudges opened this chat while the greeting was loading: nothing else to show.
+          if (messageNudgesOpenChatRef.current) {
+            setIsOnline(true);
+            setIntroLoaded(true);
+            return;
+          }
+          if (data.formStep) startupFormStepIdRef.current = data.formStep.stepId;
+          if (data.journeyId) startupJourneyIdRef.current = data.journeyId;
           // A start-up form shows even when its greeting text is empty.
           if (data.formStep && !data.intro) {
             setActiveFormStep(data.formStep);
@@ -2129,16 +2151,8 @@ export default function EmbedChat() {
                     role: 'assistant',
                     content: data.intro,
                     timestamp: new Date(),
-                    quickReplies: journeyOptions,
-                    isStartupQuestion: !!data.startFromScratch
+                    quickReplies: journeyOptions
                   }];
-                }
-                // Message nudges open the chat instead of a greeting; a start-up journey's first
-                // question still follows them.
-                if (prev.some(m => m.messageNudgeIndex !== undefined)) {
-                  return data.startFromScratch && !prev.some(m => m.id === '1')
-                    ? [...prev, { id: '1', role: 'assistant', content: data.intro, timestamp: new Date(), quickReplies: journeyOptions, isStartupQuestion: true }]
-                    : prev;
                 }
                 // If first message exists and is assistant (intro), update it
                 if (prev[0]?.role === 'assistant' && prev[0]?.id === '1') {

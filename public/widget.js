@@ -4936,7 +4936,7 @@
             if (verticalPos === 'bottom' && isPhone) nudgeStack.dataset.baseBottom = String(baseOffset);
             document.body.appendChild(nudgeStack);
           }
-          if (isPhone) nudgeStack.innerHTML = ''; // one at a time
+          nudgeStack.innerHTML = ''; // one at a time: the next message takes the place of the last
 
           const bubble = document.createElement('div');
           bubble.style.cssText = `

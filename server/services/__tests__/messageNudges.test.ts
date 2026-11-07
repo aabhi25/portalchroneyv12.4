@@ -47,6 +47,36 @@ if (process.env.MESSAGE_NUDGE_TEST_DB) {
     // A chat that has messages already is left alone.
     assert.deepEqual(await saveShownMessageNudges(businessAccountId, conversation.id, [2]), []);
     assert.deepEqual(await texts(), ["First **one**", "Second\nline"]);
+    // A journey that starts every chat waits: the first reply doesn't answer its question, which is asked now.
+    const { journeyOrchestrator } = await import("../journeyOrchestrator");
+    const { journeyService } = await import("../journeyService");
+    const [{ id: startupJourney }] = (await pool.query(
+      "INSERT INTO conversation_journeys (business_account_id, name, journey_type, status, start_from_scratch) VALUES ($1, 'Nudge start-up', 'form', 'active', 'true') RETURNING id",
+      [businessAccountId],
+    )).rows;
+    await pool.query("INSERT INTO journey_steps (journey_id, step_order, question_text, question_type, multiple_choice_options) VALUES ($1, 0, 'Which course?', 'radio', '[\"MBA\",\"MCA\"]')", [startupJourney]);
+    const startupRun = async (firstQuestionHidden: boolean, message: string) => {
+      const chat = await storage.createConversation({ businessAccountId, title: "Message nudge test" });
+      const result = await journeyOrchestrator.processUserMessageEngineDriven(chat.id, `nudge-test-${chat.id}`, businessAccountId, message, { firstQuestionHidden });
+      const state = await journeyService.getJourneyState(chat.id);
+      const { rows: answers } = await pool.query("SELECT 1 FROM journey_responses WHERE conversation_id = $1", [chat.id]);
+      await pool.query("DELETE FROM conversations WHERE id = $1", [chat.id]);
+      return { result, state, answers: answers.length };
+    };
+    try {
+      journeyService.invalidateJourneyCache(businessAccountId);
+      const hidden = await startupRun(true, "YES");
+      assert.equal(hidden.result.formStep?.questionText, "Which course?");
+      assert.equal(hidden.answers, 0);
+      assert.equal(hidden.state?.triggerMessage, undefined); // A plain yes leaves the AI nothing to answer later.
+      assert.equal((await startupRun(true, "What are the fees?")).state?.triggerMessage, "What are the fees?");
+      // Without nudges the first question was the greeting, so this message is its answer.
+      assert.equal((await startupRun(false, "MBA")).answers, 1);
+    } finally {
+      await pool.query("DELETE FROM conversation_journeys WHERE id = $1", [startupJourney]);
+      journeyService.invalidateJourneyCache(businessAccountId);
+    }
+
     // Publishing from a group.
     const { rows: [{ id: groupId }] } = await pool.query("INSERT INTO account_groups (name, owner_user_id) SELECT 'Message nudge test', id FROM users LIMIT 1 RETURNING id");
     try {

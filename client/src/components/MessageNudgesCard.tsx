@@ -41,7 +41,7 @@ export function MessageNudgesCard({ enabled, onEnabledChange, items, onItemsChan
           <div>
             <h3 className="text-base font-semibold text-gray-900">Message nudges</h3>
             <p className="mt-1 text-sm text-gray-500">
-              {intro || "Messages that appear one after another above the chat button. When a visitor opens the chat, it starts with only the messages they have already seen, and replying continues from there."}
+              {intro || "Messages that appear above the chat button one at a time, each taking the place of the last. When a visitor opens the chat, it starts with only the messages they have already seen, and replying continues from there."}
             </p>
           </div>
           <Switch checked={enabled} onCheckedChange={onEnabledChange} aria-label="Message nudges" />
@@ -104,7 +104,7 @@ export function MessageNudgesCard({ enabled, onEnabledChange, items, onItemsChan
         <ul className="list-disc space-y-1 pl-5 text-xs text-gray-500">
           <li>Shown once per visit. Closing a bubble with ✕ stops them for a day, and that visitor gets the normal greeting.</li>
           <li>While this is on, the Proactive bubble in Nudges &amp; banners is paused.</li>
-          <li>If a journey starts every chat, its first question appears right after these messages, and the visitor's reply answers that question.</li>
+          <li>If a journey starts every chat, it waits: its first question appears after the visitor's first reply.</li>
           {notes.map((note) => <li key={note}>{note}</li>)}
         </ul>
       </CardContent>
